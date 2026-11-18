@@ -631,6 +631,88 @@ pub(crate) fn noop_instance(
     ))
 }
 
+/// A platform's wait for the owner thread that stands for Win32's
+/// ([`flui_platform::OwnerWait`], ADR-0305 §9): a call queued with
+/// [`serve_next_wait`](Self::serve_next_wait) runs inside the owner's next
+/// wait, as a message the raster thread sent to the window's thread does,
+/// and ends it; otherwise a wait ends when notified or at its timeout.
+#[derive(Default)]
+pub struct ScriptedOwnerWait {
+    state: Mutex<OwnerWaitState>,
+    notified: parking_lot::Condvar,
+}
+
+#[derive(Default)]
+struct OwnerWaitState {
+    notified: bool,
+    served: VecDeque<Box<dyn FnOnce() + Send>>,
+    panic_on_notify: bool,
+    waits: usize,
+    notifications: usize,
+}
+
+impl std::fmt::Debug for ScriptedOwnerWait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock();
+        f.debug_struct("ScriptedOwnerWait")
+            .field("waits", &state.waits)
+            .field("notifications", &state.notifications)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ScriptedOwnerWait {
+    /// Run `serve` inside the owner's next wait, on the owner's thread.
+    pub fn serve_next_wait(&self, serve: impl FnOnce() + Send + 'static) {
+        self.state.lock().served.push_back(Box::new(serve));
+    }
+
+    /// Panic in the next notification, as a platform's wait that fails.
+    pub fn panic_next_notify(&self) {
+        self.state.lock().panic_on_notify = true;
+    }
+
+    /// How many waits the owner made through it.
+    #[must_use]
+    pub fn waits(&self) -> usize {
+        self.state.lock().waits
+    }
+
+    /// How many times the raster thread notified it.
+    #[must_use]
+    pub fn notifications(&self) -> usize {
+        self.state.lock().notifications
+    }
+}
+
+impl flui_platform::OwnerWait for ScriptedOwnerWait {
+    fn notify(&self) {
+        let mut state = self.state.lock();
+        state.notified = true;
+        state.notifications += 1;
+        if std::mem::take(&mut state.panic_on_notify) {
+            drop(state);
+            panic!("scripted owner wait notification panic");
+        }
+        drop(state);
+        self.notified.notify_all();
+    }
+
+    fn wait(&self, timeout: Duration) {
+        let mut state = self.state.lock();
+        state.waits += 1;
+        if let Some(serve) = state.served.pop_front() {
+            drop(state);
+            serve();
+            return;
+        }
+        if !state.notified {
+            let _timed_out = self.notified.wait_for(&mut state, timeout);
+        }
+        state.notified = false;
+    }
+}
+
 /// The display a test's [`FakeWindow`]s are on: an Xlib display handle
 /// without a connection pointer, for [`noop_surface_factory`]. Nothing reads
 /// through it; the no-op backend never opens a display.

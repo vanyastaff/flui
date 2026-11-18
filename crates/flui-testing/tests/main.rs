@@ -259,6 +259,8 @@ mod motion_gate;
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
 mod multi_presentation_clock;
+#[path = "occluded_window.rs"]
+mod occluded_window;
 #[path = "owner_local_write_paths.rs"]
 mod owner_local_write_paths;
 

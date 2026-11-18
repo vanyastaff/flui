@@ -831,10 +831,9 @@ bound. A refused operation preserves the installed run, its displayed value
 and its original future. [ADR-0198](../../docs/adr/ADR-0198-typed-animation-admission-errors.md)
 records the input, range and physical-construction error boundaries.
 
-With optional serde, human-readable error diagnostics encode finite values as
-numbers and non-finite values as the exact strings `NaN`, `Infinity` and
-`-Infinity`, including nested simulation causes. Decoding rejects null and other
-strings. NaN payload bits are canonicalized; binary formats retain native floats.
+Error types are not serialized ([ADR-0381](../../docs/adr/ADR-0381-animation-errors-are-not-serialized.md)):
+a refusal is matched where it happens or converted at the application's own
+boundary.
 
 ---
 

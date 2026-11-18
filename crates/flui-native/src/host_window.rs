@@ -157,6 +157,14 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// ```
     fn text_store_host(&self, owner: OwnerThreadToken) -> Option<Rc<dyn TextStoreHost>>;
 
+    /// What the window system does with this window's last frame while it
+    /// keeps the window off the screen: kept and shown again on uncovering
+    /// by AppKit's compositor; discarded or never drawn on every other host
+    /// (X11 without a compositing manager keeps no image, a suspended Wayland
+    /// toplevel's frames are held, and Win32, mobile and the Web tell no
+    /// covering). Every host names its own.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface;
+
     /// This window as its host's own type, which the crate's OS extensions
     /// (`WindowsWindowExt`, `MacOSWindowExt`) downcast to: a window of another
     /// host is not that type, and they answer `None` for it (ADR-0151 §8).

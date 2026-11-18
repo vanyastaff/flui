@@ -43,6 +43,7 @@
 //! back into canvas clips — correctness is identical, so the API does
 //! not expose the choice.)
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -282,6 +283,10 @@ pub struct FragmentRecorder {
     open: bool,
     origin: Offset,
     anchor: Option<PaintAnchor>,
+    /// Whether the node recording read its `anchor`: a recording that
+    /// did depends on where the anchor is, which its own flags do not
+    /// follow (ADR-0304 §2).
+    anchor_read: Cell<bool>,
     /// Currently open `Push` scopes; must be 0 at `finish` (the
     /// closure-based `with_*` API makes imbalance unreachable from
     /// safe user code, the counter turns an internal bug into a loud
@@ -301,6 +306,7 @@ impl FragmentRecorder {
             open: false,
             origin,
             anchor: None,
+            anchor_read: Cell::new(false),
             open_scopes: 0,
             dpr,
         }
@@ -319,6 +325,12 @@ impl FragmentRecorder {
         self.origin = origin;
         self.dpr = dpr;
         self.anchor = anchor;
+        self.anchor_read.set(false);
+    }
+
+    /// Whether the node since [`Self::begin`] read its paint anchor.
+    pub(crate) fn anchor_read(&self) -> bool {
+        self.anchor_read.get()
     }
 
     /// Ends the recording [`Self::begin`] started, sealing its open run:
@@ -530,6 +542,7 @@ impl<'a, A: Arity> PaintContext<'a, A> {
     /// it, with the anchor's size; `None` when no ancestor is an anchor.
     /// See [`PaintAnchor`].
     pub fn paint_anchor(&self) -> Option<PaintAnchor> {
+        self.rec.anchor_read.set(true);
         self.rec.anchor
     }
 

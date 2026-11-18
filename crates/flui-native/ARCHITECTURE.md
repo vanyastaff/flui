@@ -26,7 +26,7 @@ trait depends on `flui-platform` instead.
   (`platform.rs`), `HostWindow` (`host_window.rs`), the error vocabulary
   (`error.rs`), the table-test runner (`table_test.rs`), `executor.rs` (the
   runtime the Linux and Windows hosts marshal their own I/O on, not part of `Platform`),
-  `task.rs`, one OS's window extensions (`os.rs`), the process-wide calls
+  one OS's window extensions (`os.rs`), the process-wide calls
   (`process.rs`), the page's endpoint for a development agent
   (`page_export.rs`), the display connections of hosts whose window system
   has no connection object (`display_connection.rs`) and the test support
@@ -113,10 +113,12 @@ trait depends on `flui-platform` instead.
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
-  whose loop it is. The application path, the launch values (an
-  Android intent's extras, the environment elsewhere; ADR-0288 §7), URL and path opening,
-  the file prompts and the compositor name are no position: the loop carries
-  them (`host::Services`) until the system capability crate takes them.
+  whose loop it is. The launch values (an Android intent's extras, the
+  environment elsewhere; ADR-0288 §7) and the page's origin are no position:
+  the loop answers them (`host::Launch`). Opening a URL or a path, the file
+  dialogs and the user's folders are not the core host's at all: they are
+  `flui_platform::launch` and `flui-system`'s providers (ADR-0151 §9), and an
+  application finds its executable with `std::env::current_exe`.
   The Android host has no public platform name: it starts over the Activity
   the system hands only to `android_main`, through `android_platform(app)`.
 - **No public path names an OS type (ADR-0151 §8).** The crate's public API,
@@ -827,9 +829,8 @@ trait depends on `flui-platform` instead.
     `host_notices`, which take the executor and the signal). The native Linux
     loops share one shape for the session (`owner::linux`): the portal as
     `LinuxPreferences` behind a `PortalSlot` their windows read the colour
-    scheme from, the logind and pressure sources as `LinuxNotices`, which
-    deliver to either loop as a `SessionLoop`, and `xdg_open` for the
-    services.
+    scheme from, and the logind and pressure sources as `LinuxNotices`, which
+    deliver to either loop as a `SessionLoop`.
   - Each loop is its table's preference position, and its lifecycle position
     on every host but headless, whose position is its test handle
     (`HeadlessPreferences`, `HeadlessHostEvents`). The loops that hear the
@@ -879,7 +880,7 @@ trait depends on `flui-platform` instead.
   `isVisible` or `isMiniaturized`, and on Wayland, Android, iOS and the Web,
   where the application cannot hide its window, open. Occluded is what
   each window system tells of a shown window kept off the screen: a DWM
-  cloak or a locked session, an X11
+  cloak, a locked session or one without a display, an X11
   `VisibilityNotify` of `FullyObscured` or
   an unviewable map state, AppKit's `occlusionState` without its visible
   bit, a Wayland toplevel unconfigured, on no output or
@@ -887,7 +888,8 @@ trait depends on `flui-platform` instead.
   document. Whether a covering by other windows is among them is the
   capabilities' `reports_occlusion` (ADR-0357): native on AppKit; on X11
   while no compositing manager owns `_NET_WM_CM_S<n>` (the server reads a
-  redirected window unobscured); on Wayland where the window's
+  redirected window unobscured), each change of its owner heard through
+  XFixes; on Wayland where the window's
   `xdg_toplevel` is version 6 or newer (`SUSPENSION_VERSION`), whose
   `suspended` covers a toplevel the compositor does not show; absent on
   Win32, which tells no covering and tracks none, and on Android, iOS and the
@@ -1550,8 +1552,7 @@ trait depends on `flui-platform` instead.
   `xdg_activation_v1`. The launcher's `XDG_ACTIVATION_TOKEN` is read once by
   the loop and given to the first window its table holds (`WindowTable::register`),
   so a window that failed to open leaves it; the variable stays set, as unsetting it
-  races every thread reading the environment, and `xdg_open` leaves it out
-  of the opener it starts. `current_host` picks the native Wayland host
+  races every thread reading the environment. `current_host` picks the native Wayland host
   for a Wayland session (`choose_linux_host`).
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
@@ -2847,14 +2848,14 @@ another notification, foreign-thread refusal and reentrant capture retirement.
 Cargo/nextest protocol. These tests execute Linux D-Bus and the X11 host, but do not change a desktop's
 actual OS settings or establish live behavior of the other native platforms.
 
-Thread-safe residual handles may outlive the event-loop owner. The background
-executor's final shared owner requests nonblocking runtime shutdown, so releasing
-a retired proxy inside another async runtime or inside the executor's own task
-cannot invoke Tokio's blocking runtime destructor. This retains normal runtime
-cancellation of queued async work; already executing blocking work finishes
-independently. `background_executor_retirement` exercises both contexts through
-the public executor, and the Linux table's `late-proxy` case covers the actual
-preference source and stopped host.
+Thread-safe residual handles may outlive the event-loop owner. The last clone
+of a runtime the host owns (`NativeExecutor::own`) requests nonblocking runtime
+shutdown, so releasing a retired proxy inside another async runtime or inside
+the executor's own task cannot invoke Tokio's blocking runtime destructor. This
+retains normal runtime cancellation of queued async work; already executing
+blocking work finishes independently. `the_last_own_executor_retires_inside_a_task`
+exercises both contexts, and the Linux table's `late-proxy` case covers the
+actual preference source and stopped host.
 
 AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
 Android observes public `ViewConfiguration` timeouts and physical touch/fling
@@ -4394,17 +4395,6 @@ readable without touching UIKit. A native weak-view check verified both
 retention through logical close and eventual release after a worker's final drop.
 OwnerSignal/GCD carries typed process wake/quit independently of display links;
 it grants no operating-system background execution entitlement.
-
-### A ready task imposes no executor bounds on its result
-
-`Task<T>` moves its result out and never exposes a pinned borrow to it.
-The handle is therefore `Unpin` independently of `T`, as is the native
-`JoinHandle<T>` variant. Its `Future` implementation accepts local, borrowed
-and non-`Unpin` results; `Send + 'static` belongs to executor admission,
-where work crosses threads, rather than to polling a completed value.
-Dropping a spawned handle detaches the Tokio task; it does not cancel it.
-Pinned by `ready_tasks_return_results_without_executor_bounds` through the
-public API.
 
 ### Browser display units, held buttons and callback reentry
 

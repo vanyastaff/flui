@@ -1,12 +1,10 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 120 закрыты и 14 открыты (сверено с `main` @ `5b4e3202b` и закрытием
-  LY139 и LY69); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут
-  закрытые задачи, — строки
+  Из 134 задач серии 122 закрыты и 12 открыты (сверено с `main` @ `5b4e3202b` и закрытием
+  LY139, LY61, LY148 и LY69); записи — в разделе «Ход исполнения». Прогоны на устройствах,
+  которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
-    провайдеры Android;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
@@ -18,9 +16,7 @@
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
   - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
-  - LY145 — шаги закрытия, выхода и конца сеанса и сборка возможностей в `flui-runtime`;
-  - LY148 — долг кадра у перекрытого окна, уход композитного менеджера X11, отключённый удалённый
-    сеанс Win32.
+  - LY145 — шаги закрытия, выхода и конца сеанса и сборка возможностей в `flui-runtime`.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -283,7 +279,7 @@ graph LR
 | **LY58** [P] | **`flui-system`: macOS** (D18). Провайдеры на objc2: `NSOpenPanel`/`NSSavePanel`, `NSWorkspace` (URL, открыть путь, reveal), trash через `NSFileManager`, `NSAlert`, `NSSharingServicePicker`, `SMAppService`, глобальные сочетания, прогресс и значок Dock, пути | LY57 | `crates/flui-system/src/macos/*` | `workspace`, `cross-typecheck` | таблица против симулятора; macOS — T | L + T; Dev: macOS |
 | **LY59** [P] | **`flui-system`: Linux** (D18, D19). Порталы через `ashpd`/`zbus`: FileChooser, OpenURI, OpenDirectory (reveal), Trash, GlobalShortcuts, Background (автозапуск); прогресс — сигнал Unity LauncherEntry; message box и share — `Unsupported` с причиной, где портала нет; пути — XDG. Родитель портала из `WindowRef`: `WindowRef` получает `portal_parent()`, его заполняют хосты (Wayland — ручка экспорта `xdg-foreign`, которую окно держит с LY81 как `PortalParent`; X11 — `x11:<XID>`); поправка к ADR-0152 (что несёт `WindowRef`) — в том же PR (решение владельца 2026-10-28: родитель портала — межплатформенное понятие, не OS-расширение) | LY57 | `crates/flui-system/src/linux/*`, `crates/flui-platform/src/capability/*` (`WindowRef`), `crates/flui-native/src/window/linux/*`, `docs/adr/ADR-0152-*` | `workspace`, `reach`, `deps` | таблица против симулятора; портал-заглушка на сессионной шине в CI | L; Dev: Linux |
 | **LY60** [P] | **`flui-system`: Web** (D18). Файловые диалоги (`showOpenFilePicker`, где есть, иначе `<input type=file>` и загрузка), `window.open`, share через `navigator.share`, message box через `<dialog>`; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported(NotOnThisPlatform)`; пути — `Unsupported` | LY57 | `crates/flui-system/src/web/*` | `workspace`, `wasm-check` | таблица против симулятора; `wasm-test`; браузерные тесты | L (wasm32); Dev: Web |
-| **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (живут в `flui-system`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
+| **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (первые пять живут в `flui-system`, `app_path` — `std::env::current_exe`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
 
 ### Хосты
 
@@ -5745,17 +5741,24 @@ GPU-память простаивающего или невидимого окн
   ленивого доступа к большой папке и записи в неё нет (папка читается целиком); на движке без
   `cancel` (Chromium до 113, Safari до 16.4), а также в Firefox до 112 и Safari до 17, которые от
   него не отличить, поздний выбор ввода остаётся отменой.
-- [ ] **LY61** (открыта: ждёт LY67) — исполнителя на `Platform` нет: хост ведёт IO на runtime,
-  который одалживает создатель (`NativeExecutor`, ADR-0327 §3; нить `flui-native-bg` — его
-  собственные рабочие). Провайдеры `flui-system` есть на Windows, macOS, Linux, Web и iOS
-  (LY57–LY60, LY73); у сервисов `Platform` нет production-вызовов. Остаётся код, когда LY67 даст
-  провайдеры Android: удалить `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`,
-  `prompt_for_new_path`, `app_path` из `Platform` (`crates/flui-native/src/platform.rs:412–442`,
-  `:496`, реализация `:718–773`) и из таблицы хоста (`crates/flui-native/src/host.rs:184–208`) с
-  реализациями в каждом `owner/*`; типы `PathPromptOptions`, `Task`, `TaskLabel`
-  (`crates/flui-native/src/task.rs`); фикстуры trybuild
-  `tests/ui/{platform_and_host_window_are_sealed,host_table_names_every_position}.rs` и чтение
-  `app_path` в `tests/launch_values.rs`.
+- [x] **LY61** (закрыта веткой `platform/services-leave-platform`) — исполнителя на `Platform`
+  нет: хост ведёт IO на runtime, который одалживает создатель (`NativeExecutor`, ADR-0327 §3).
+  `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path` и `app_path`
+  удалены из `Platform`, из таблицы хоста и из каждого `owner/*` (Windows, X11, Wayland, macOS,
+  iOS, Android, Web, headless); удалены `task.rs` (`Task`, `TaskLabel`), `PathPromptOptions`,
+  варианты `PlatformError::{AppPath, Dialog}`, оболочка Windows (`shell_open`,
+  `foreground_recipient`, STA-нить диалогов), `xdg_open` Linux и список открытых URL headless.
+  Production-вызовов не было ни в `crates/`, ни в `packages/`, `examples/`, фасаде, книге и
+  шаблонах CLI; замена — `flui_platform::launch` и провайдеры `flui-system` (передача переднего
+  плана запущенному обработчику на Windows уже в `flui-system`), `app_path` — `std::env::current_exe`
+  (у FLUI своей формы нет: вызывал её только тест; путь бандла Apple — `NSBundle`). Трейт таблицы
+  `host::Services` стал `host::Launch` (`launch_value`, `page_origin`). Фикстуры trybuild
+  `host_table_names_every_position` и `platform_and_host_window_are_sealed` переписаны без
+  удалённых методов (ожидания — те же ошибки, сдвиг строк), тест `app_path` в
+  `tests/launch_values.rs` и `ready_tasks_return_results_without_executor_bounds` удалены вместе с
+  API. ADR-0039 §2 (`app_path`, оболочка, диалоги) — `Superseded-by` ADR-0151 §9, §9 переписан
+  (`Revised`), ADR-0327 §3 без диалогов Windows; `docs/gaps.md`, строка parity «App folders and
+  storage», ARCHITECTURE ядра.
 - [x] **LY67** (закрыта веткой `system/android-providers-2`: провайдеры Android лаунчера, файловых
   диалогов, message box, share, папок пользователя и сведений о системе; прогоны на Galaxy S21 и
   эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел
@@ -8741,8 +8744,8 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   — изменение до первого хода, до появления хука, замена хука, паника доставки. Каждую строку валит
   своя мутация (сохранение порога ревизии, насыщение вместо отказа, слияние или вытеснение
   предпочтений в очереди, хук без восстановления после паники, зажим масштаба и т. д.).
-- [ ] **LY148** (открыта: кадр при раскрытии, уход композитного менеджера X11, отключённый
-  удалённый сеанс) — решение ADR-0357, на `main`. Построено: `WindowCapabilities::reports_occlusion`
+- [x] **LY148** — решение ADR-0357, на `main`; остаток кода — ветка `native/occlusion-owed-frame`.
+  Построено: `WindowCapabilities::reports_occlusion`
   на каждом хосте (AppKit — `Native`; X11 — `Native`, пока selection `_NET_WM_CM_S<n>` никто не
   держит; Wayland — `Native` при `xdg_toplevel` версии 6; Win32 — `NOT_YET_ON_THIS_HOST`; iOS,
   Android, Web — `NOT_ON_THIS_PLATFORM`); один график отступа `flui_platform::Backoff` для повтора
@@ -8755,12 +8758,50 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered`,
   `a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows`,
   `a_surface_that_keeps_withholding_frames_is_reported_once`,
-  `an_unseen_window_with_nothing_asked_runs_no_frame`. Остаётся код (та же запись gaps): перекрытое
-  окно рисует один долг после тишины, чтобы раскрытие не показывало старый кадр (тест строки
-  таблицы); X11 слышит уход композитного менеджера (сейчас уход ничего не объявляет, и окна до
-  следующего чтения поддержки оконного менеджера говорят, что перекрытие не различают); Win32
-  считает отключённый удалённый сеанс невидимым, как заблокированный. Прогон Wayland с композитором,
-  не отвечающим на callback, — заметка строки parity `event-loop-startup-and-wake-ups`.
+  `an_unseen_window_with_nothing_asked_runs_no_frame`. Долг кадра (`flui-runtime`,
+  `occluded_frame`; правило в `ARCHITECTURE.md` крейта): невидимая презентация больше не считается
+  работой дерева, по которой хост будит цикл (раньше перекрытое окно с грязным деревом просило кадр
+  на каждом пробуждении и ничего не рисовало; повтор отброшенного кадра невидимого окна тоже ждёт
+  показа). Долг есть только там, где кадр будет показан при раскрытии: окно может быть перекрыто
+  (видимо, не свёрнуто, работает, `occluded`, `reports_occlusion` доступна), хост хранит последний
+  кадр перекрытого окна (`OccludedSurface::Kept`, хост называет его через `PresentationWindow`:
+  только AppKit; X11 без композитного менеджера образа не хранит, Wayland держит кадры
+  приостановленного окна) и сеанс показывает окна (блокировка и сон машины — два флага
+  `occluded_frame::Session`, так что блокировка, пережившая сон, остаётся). После
+  `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше повтора отброшенного кадра, окно
+  рисует один кадр через `FrameClock::grant_hidden_frame`; срок — в `next_wake`, раннеры и
+  headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
+  остаётся должным, пока не исполнится, как бы поздно ни пришло пробуждение; удержание (отсрочка,
+  подготовка текста) его не снимает, а при полном приёмнике срок не просится (будит
+  урегулирование); следующая тишина начинается только с исполненного кадра. Долг пересчитывается
+  на каждом снимке окна, крае видимости и уведомлении сеанса (`follow_sight`); долг кончает отказ
+  или сброс поверхностью именно кадра, нарисованного невидимым (`PendingFrame::drawn_unseen`), а не
+  любого урегулирования. Запрос перерисовки и повтор отброшенного кадра невидимой презентации не
+  поднимают флаг перерисовки и не будят хост. Насос AppKit (`WakePump::after_owner_turn`) после
+  хода владельца один раз смотрит срок и планирует тик только при нём. Тесты (`flui-testing`,
+  `occluded_window`): `an_occluded_window_draws_its_change_in_exactly_one_frame` (четыре строки),
+  `a_covered_window_owes_by_its_sight_on_every_snapshot`, `a_late_wake_still_draws_the_owed_frame`,
+  `an_owed_frame_the_surface_refuses_is_not_drawn_again`,
+  `a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep` (шесть строк);
+  (`flui-runtime`, `occluded_frame`) `a_hidden_window_raises_no_redraw_flag`,
+  `an_owed_frame_is_refused_by_its_own_settlement_only`, `a_hold_leaves_the_owed_frame_due`;
+  каждый падает со своим откатом (пересчёт на снимке, отсрочка по времени, отказ, флаги сеанса,
+  отказ по любому урегулированию, тишина с удержанной попытки, флаг перерисовки, долг в
+  `runs_frames`). X11
+  (`window/linux/x11/window/compositing.rs`): XFixes `SelectSelectionInput` на
+  `_NET_WM_CM_S<n>` (смена владельца, уничтожение окна, уход клиента) перечитывает поддержку;
+  тест `a_compositing_manager_that_goes_gives_the_covering_report_back` под Xvfb и openbox с
+  клиентом-заменителем, который берёт и отдаёт selection и уходит. Win32: `SessionChange` и
+  `SessionSight` (`lifecycle::windows::messages`), `WTS_*_DISCONNECT` скрывает окна до
+  `WTS_*_CONNECT`, блокировка и отключение независимы; начальное состояние из `WTSSessionInfoEx`.
+  Тесты: модель `a_disconnected_session_hides_its_windows_until_it_connects` (каждый хост) и
+  проводка `a_disconnected_session_occludes_a_shown_window_until_it_connects` (nextest на Windows,
+  сообщения посланы вручную, без RDP); обе падают, если `WTS_REMOTE_DISCONNECT` ничего не меняет.
+  Таблица кодов `WM_WTSSESSION_CHANGE` одна (`session_change`, ею пользуется и `classify`).
+  Прогоны настоящего отключённого RDP-сеанса, быстрой смены пользователя Windows и долга кадра на
+  macOS (проход отображения перекрытого окна, сон дисплеев и заставка без блокировки, быстрая
+  смена пользователя) — заметки строки parity `visibility-minimize-occlusion`. Прогон Wayland с
+  композитором, не отвечающим на callback, — заметка строки parity `event-loop-startup-and-wake-ups`.
 - [x] **LY142** — ветка `app/owner-thread-state`. Находки подтверждены на `main` @ `817b30989`
   чтением: роутер закрытия лежит в `Rc` (`NativeBindings`) и держит `Weak<dyn PlatformWindow>`,
   `GpuLossLedger` — только поток страницы, `FirstReveal`, `HostMemory` — поток цикла, а все за

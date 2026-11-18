@@ -2,7 +2,6 @@
 
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use super::{Builtin, BuiltinCurve, Curve};
 /// A curve that is the flipped version of another curve: the 180° rotation
@@ -154,23 +153,9 @@ impl fmt::Debug for SharedCurve {
     }
 }
 
-/// Blanket impl so `Arc<dyn Curve>` can itself be used as a
-/// `Curve` where object-safety is all that matters. Use [`SharedCurve`] when a
-/// stable concrete handle with configuration equality is needed.
-impl<C: Curve + ?Sized> Curve for Arc<C> {
-    fn transform(&self, t: f64) -> f64 {
-        (**self).transform(t)
-    }
-
-    fn slope(&self, t: f64) -> f64 {
-        (**self).slope(t)
-    }
-
-    fn builtin(&self) -> Option<BuiltinCurve> {
-        (**self).builtin()
-    }
-}
-
+/// Blanket impl so `Rc<dyn Curve>` can itself be used as a `Curve` where
+/// object safety is all that matters. Use [`SharedCurve`] when a stable
+/// concrete handle with configuration equality is needed.
 impl<C: Curve + ?Sized> Curve for std::rc::Rc<C> {
     fn transform(&self, t: f64) -> f64 {
         (**self).transform(t)

@@ -91,10 +91,10 @@ fn running(registry: &Vsync, panic: Option<&'static str>) -> DrivenController {
         Some(message) => controller.animate_to_curved(
             1.0,
             Some(Duration::from_secs(1)),
-            Arc::new(PanicsOnce {
+            PanicsOnce {
                 message,
                 armed: AtomicBool::new(true),
-            }),
+            },
         ),
         None => controller.forward(),
     }

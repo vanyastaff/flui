@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-11-12)
 - **Date:** 2026-11-12
+- **Revised:** 2026-11-18 — §3 no longer has the Windows file dialogs answer through `Task<T>`:
+  the dialogs and `Task` left the core host (ADR-0151 §9).
 - **Supersedes:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §8 only (the clause
   that makes `tokio::runtime::Handle` `pub(crate)` in the core host: `NativeExecutor::from_tokio`
   takes one); [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 only (an owner-only
@@ -146,9 +148,9 @@ reports at start. `BackgroundExecutor` becomes `pub(crate)` as `Inner::Own`, and
 `spawn` are deleted.
 
 Only the Wayland and X11 hosts start sources on the runtime (XIM, IBus, logind, the settings
-portal), so only they take an executor. The Windows file dialogs run on an STA thread of their own
-and answer through a `tokio::sync::oneshot` that `Task<T>` waits on: they need no runtime, and no
-runtime worker blocks on a dialog. The macOS, iOS, Android, web and headless hosts run no IO task.
+portal), so only they take an executor. The core host shows no file dialog: the dialogs are
+`flui-system`'s providers (ADR-0151 §9), so no runtime worker of the host blocks on one. The macOS,
+iOS, Android, web and headless hosts run no IO task.
 
 `flui-app`'s runner starts the execution services before the host: `install_host_executors`
 and `ensure_execution` move ahead of `platform()`, and on Wayland and X11 the runner calls

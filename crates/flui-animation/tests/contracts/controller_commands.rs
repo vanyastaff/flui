@@ -428,12 +428,8 @@ fn repeat_reverse_leg_velocity_is_negative() {
 
 fn animate_to_curved_eases_through_the_given_curve() {
     let (_owner, c) = controller(100);
-    c.animate_to_curved(
-        1.0,
-        Some(Duration::from_millis(100)),
-        Arc::new(curves::EASE_IN_QUINT),
-    )
-    .unwrap();
+    c.animate_to_curved(1.0, Some(Duration::from_millis(100)), curves::EASE_IN_QUINT)
+        .unwrap();
     c.tick_at(Duration::from_millis(50));
     let expected = curves::EASE_IN_QUINT.transform(0.5);
     assert!((c.value() - expected).abs() < 1e-3);

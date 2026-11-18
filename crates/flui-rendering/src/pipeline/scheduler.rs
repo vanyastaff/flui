@@ -386,7 +386,14 @@ impl DirtyTracker {
     }
 
     /// Complete the canonical paint walk and queue admission without callouts.
+    ///
+    /// `id` alone also receives `PAINT_CHANGED`, before the idempotence rule
+    /// below: a node a descendant's walk already marked still has to tell
+    /// the paint walk that its own paint changed (ADR-0304 §2).
     pub(super) fn commit_needs_paint(&mut self, tree: &RenderTree, id: RenderId) -> bool {
+        if let Some(node) = tree.get(id) {
+            node.mark_paint_changed();
+        }
         let mut current = id;
         loop {
             let Some(node) = tree.get(current) else {

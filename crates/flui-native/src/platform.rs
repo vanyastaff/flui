@@ -3,7 +3,6 @@
 //! §10).
 
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -16,14 +15,13 @@ use flui_platform::{
 
 use crate::error::{BootstrapError, PlatformError};
 use crate::host::{
-    self, Clipboard as _, Displays as _, Drag as _, Host, Lifecycle as _, Loop as _,
-    Preferences as _, PrimarySelection as _, Services as _, Storage as _, Window as _,
-    WindowPositions, WindowRefOf,
+    self, Clipboard as _, Displays as _, Drag as _, Host, Launch as _, Lifecycle as _, Loop as _,
+    Preferences as _, PrimarySelection as _, Storage as _, Window as _, WindowPositions,
+    WindowRefOf,
 };
 use crate::host_window::HostWindow;
 use crate::owner::{OpenWindowError, OwnerPlatform};
 use crate::storage::DataStore;
-use crate::task::Task;
 
 /// What the platform tells and asks the application it runs, passed once to
 /// [`Platform::run`] (ADR-0254 §4).
@@ -414,39 +412,6 @@ pub trait Platform: sealed::Sealed + 'static {
     /// no way to.
     fn activate(&self, ignoring_other_apps: bool);
 
-    // ==================== File Operations ====================
-
-    /// Open a URL with the system's default handler
-    fn open_url(&self, url: &str);
-
-    /// Reveal a path in the platform's file manager
-    fn reveal_path(&self, path: &Path);
-
-    /// Open a path with the system's default application
-    fn open_path(&self, path: &Path);
-
-    /// Show a file/directory picker dialog
-    ///
-    /// Returns selected paths, or `None` if the user cancelled (cancelling
-    /// is not an error). The dialog runs asynchronously on a background
-    /// thread; a dialog that could not run to completion resolves to
-    /// [`PlatformError::Dialog`].
-    fn prompt_for_paths(
-        &self,
-        options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>>;
-
-    /// Show a "Save As" dialog for selecting a new file path
-    ///
-    /// Returns the selected path, or `None` if the user cancelled
-    /// (cancelling is not an error); a dialog that could not run to
-    /// completion resolves to [`PlatformError::Dialog`].
-    fn prompt_for_new_path(
-        &self,
-        directory: &Path,
-        suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>>;
-
     /// Tell the platform the application is done holding a session end it
     /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
     /// last [`SessionEndBlock`](flui_platform::SessionEndBlock) was
@@ -492,16 +457,18 @@ pub trait Platform: sealed::Sealed + 'static {
     /// handle, and headless answers none.
     fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection>;
 
+    /// How the windows' thread waits for a raster thread of the application
+    /// (ADR-0305 §9): `None` where a plain wait does, and on Win32 a wait
+    /// that serves the messages the raster thread's DXGI calls send to the
+    /// windows meanwhile.
+    fn owner_wait(&self) -> Option<Arc<dyn flui_platform::OwnerWait>> {
+        None
+    }
+
     // ==================== Platform Info ====================
 
     /// Get the platform's name for debugging/logging
     fn name(&self) -> &'static str;
-
-    /// Get the application's executable path
-    ///
-    /// # Errors
-    /// [`PlatformError::AppPath`] when the backend's own lookup fails.
-    fn app_path(&self) -> Result<PathBuf, PlatformError>;
 
     /// The value the process was launched with under `key` (ADR-0288 §7): on Android the
     /// launching intent's string extra of that name; elsewhere the environment variable
@@ -529,27 +496,6 @@ pub trait Platform: sealed::Sealed + 'static {
     /// in memory unless a test gives it a root
     /// ([`HeadlessPlatform::with_data_root`](crate::HeadlessPlatform::with_data_root)).
     fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore>;
-}
-
-/// Options for the file/directory picker dialog
-#[derive(Debug, Clone)]
-pub struct PathPromptOptions {
-    /// Allow selecting files
-    pub files: bool,
-    /// Allow selecting directories
-    pub directories: bool,
-    /// Allow selecting multiple items
-    pub multiple: bool,
-}
-
-impl Default for PathPromptOptions {
-    fn default() -> Self {
-        Self {
-            files: true,
-            directories: false,
-            multiple: false,
-        }
-    }
 }
 
 /// The platform of host `H`: every [`Platform`] method answered by the
@@ -727,33 +673,6 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::Lifecycle::activate(&self.owner, ignoring_other_apps);
     }
 
-    fn open_url(&self, url: &str) {
-        self.owner.open_url(url);
-    }
-
-    fn reveal_path(&self, path: &Path) {
-        self.owner.reveal_path(path);
-    }
-
-    fn open_path(&self, path: &Path) {
-        self.owner.open_path(path);
-    }
-
-    fn prompt_for_paths(
-        &self,
-        options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        self.owner.prompt_for_paths(options)
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        directory: &Path,
-        suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        self.owner.prompt_for_new_path(directory, suggested_name)
-    }
-
     fn release_session_end(&self) {
         H::Lifecycle::release_session_end(&self.owner);
     }
@@ -777,12 +696,12 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::Window::display_connection(&self.owner, &self.window_shared)
     }
 
-    fn name(&self) -> &'static str {
-        H::NAME
+    fn owner_wait(&self) -> Option<Arc<dyn flui_platform::OwnerWait>> {
+        H::Window::owner_wait(&self.owner, &self.window_shared)
     }
 
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        self.owner.app_path()
+    fn name(&self) -> &'static str {
+        H::NAME
     }
 
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
