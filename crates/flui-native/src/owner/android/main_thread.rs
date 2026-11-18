@@ -9,8 +9,8 @@
 //! report on every exit but success: the body's error, a panic in it, and
 //! being dropped unrun. The report runs inside the boundary too, so a panic
 //! there is logged and the thread goes on. [`post`] hands one to the Java
-//! main thread; every closure the Android host posts there goes through it,
-//! which `cargo xtask panic-boundary` holds. Java receives nothing from a
+//! main thread; every closure the Android host posts there goes through it.
+//! Java receives nothing from a
 //! posted closure, and an exception its JNI calls leave pending is caught by
 //! android-activity's attachment of the thread, so the Activity goes on.
 //!

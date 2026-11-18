@@ -58,9 +58,8 @@ so a test-only API never has to be smuggled into a shipped crate behind a
 
 **Dependency rule.** Runtime and framework crates may take a *development*
 edge into this crate and nothing more; a normal edge would link the test
-driver into production binaries. `cargo xtask workspace` rejects one from any
-crate below it, and `flui-widgets` forbids reaching it (`reach-forbid`). The
-facade takes it only as an optional `testing` dependency.
+driver into production binaries. No crate below it takes one, and
+`flui-widgets` forbids reaching it (`reach-forbid`). The
 
 ## Checking an interaction
 

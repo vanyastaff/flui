@@ -180,8 +180,7 @@ host.
   names none of `flui-native`, `winit`, `android-activity`, `ndk`,
   `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` or
   `flui-app`: tier K's forbid set in the root
-  `[workspace.metadata.flui.reach]`, checked by `cargo xtask reach` over
-  every root build. A seam that needs a
+  `[workspace.metadata.flui.reach]`, over every root build. A seam that needs a
   host type (the frame sink, the platform window) crosses as a trait this
   crate defines or one from `flui-platform`; a window's accessibility
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
@@ -315,8 +314,8 @@ host.
   `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
   except the `execution` host-injection seam below.
   `allowed-dependents = ["flui-app", "flui-testing"]` makes the application
-  host and the headless test driver the only crates allowed a normal edge,
-  checked by `cargo xtask workspace`. That rule is what keeps ADR-0047's
+  host and the headless test driver the only crates allowed a normal edge.
+  That rule is what keeps ADR-0047's
   invariant true now that `ExecutionServices` is `pub`: only a host crate, one
   of the runtime's `allowed-dependents`, constructs the services, and no other
   workspace crate reaches the pools. `flui-testing` is the host of its own

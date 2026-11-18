@@ -3,7 +3,7 @@
 //! A package such as a design system depends on this crate instead of on the
 //! internal crates one by one, and it never pulls in the host, the engine or
 //! the GPU stack: `flui-app`, `flui-engine` and `wgpu` are outside its normal
-//! dependency closure, which `cargo xtask reach` checks.
+//! dependency closure.
 //!
 //! The crate is **Evolving**: it has its own `0.N` version, bumped on every
 //! train, and its surface may change on any train without a `flui` major.

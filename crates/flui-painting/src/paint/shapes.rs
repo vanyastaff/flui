@@ -14,7 +14,7 @@
 use std::f64::consts::{PI, TAU};
 
 use flui_foundation::geometry::{Point, Rect};
-use kurbo::{Affine, CubicBez, ParamCurve, ParamCurveArclen, Vec2};
+use kurbo::{Affine, CubicBez, ParamCurveArclen, Vec2};
 
 use crate::paint::Path;
 

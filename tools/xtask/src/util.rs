@@ -71,19 +71,6 @@ pub(crate) fn metadata(root: &Path) -> anyhow::Result<cargo_metadata::Metadata> 
         .context("running `cargo metadata`")
 }
 
-/// `cargo metadata --locked --all-features` for the workspace at `root`, with
-/// no platform filter: every edge any root build can activate, which
-/// `cargo xtask reach` resolves per root. Needs the registry sources of every
-/// package in the lock file.
-pub(crate) fn resolved_metadata(root: &Path) -> anyhow::Result<cargo_metadata::Metadata> {
-    cargo_metadata::MetadataCommand::new()
-        .current_dir(root)
-        .features(cargo_metadata::CargoOpt::AllFeatures)
-        .other_options(vec!["--locked".to_owned()])
-        .exec()
-        .context("running `cargo metadata --locked --all-features`")
-}
-
 /// Whether `exit` is spelled `ADR-NNNN`, as an allowlist entry's exit is.
 pub(crate) fn is_adr_number(exit: &str) -> bool {
     static ADR_NUMBER: LazyLock<Regex> =
