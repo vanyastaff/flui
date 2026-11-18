@@ -28,6 +28,7 @@ import android.view.DragEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.BaseInputConnection;
@@ -107,6 +108,12 @@ public final class FluiView extends View {
             int action, Bundle arguments);
 
     /**
+     * Whether any accessibility service is enabled: the semantics tree is built
+     * only while one is.
+     */
+    static native void nativeAccessibilityServices(long handle, boolean enabled);
+
+    /**
      * The secure, system and global settings behind FLUI's preferences:
      * configuration changes (locales, font scale and weight, density) reach the
      * native side as the activity's own configuration change instead.
@@ -158,12 +165,19 @@ public final class FluiView extends View {
     private int reportedCompositionEnd = -1;
     /** Reports a change of {@link #OBSERVED_SETTINGS}, on this thread. */
     private final ContentObserver settings;
-    /** Whether {@link #settings} and the contrast listener are registered. */
+    /** Whether {@link #settings}, the contrast listener and {@link #services} are registered. */
     private boolean observing;
     /** The contrast listener on API 34 and above, while {@link #observing}. */
     private Object contrast;
     /** The node provider, while the native side has an accessibility bridge for this view. */
     private AccessibilityNodeProvider nodes;
+    /** The system's accessibility manager; {@code null} where the context has none. */
+    private final AccessibilityManager accessibility;
+    /**
+     * Reports a change of whether any accessibility service is enabled, on this
+     * thread, while {@link #observing}.
+     */
+    private final AccessibilityManager.AccessibilityStateChangeListener services;
 
     private FluiView(Activity activity, long handle) {
         super(activity);
@@ -192,6 +206,14 @@ public final class FluiView extends View {
                 settingsChanged();
             }
         };
+        accessibility =
+                (AccessibilityManager) activity.getSystemService(Context.ACCESSIBILITY_SERVICE);
+        services = new AccessibilityManager.AccessibilityStateChangeListener() {
+            @Override
+            public void onAccessibilityStateChanged(boolean enabled) {
+                servicesChanged();
+            }
+        };
     }
 
     void settingsChanged() {
@@ -202,10 +224,27 @@ public final class FluiView extends View {
     }
 
     /**
-     * Observe the settings only while in the window: a view that never gets
-     * there, or a bridge that freed its handle after failing to keep the view,
-     * leaves nothing behind that could call it. Registration comes first, then
-     * one report, so a change made before observation began is read too.
+     * The services enabled may have changed: tell the native side whether any
+     * is. The manager is asked now rather than the notice believed, so a
+     * notice that arrives after the state moved on cannot end the tree of a
+     * service still running, nor start one for a service gone. The native
+     * side builds the tree only while one is enabled, starting it with a
+     * service's first question to the node provider. Touch exploration alone
+     * is not asked: other services read the tree without it.
+     */
+    void servicesChanged() {
+        long handle = this.handle;
+        if (handle != 0) {
+            nativeAccessibilityServices(handle, accessibility != null && accessibility.isEnabled());
+        }
+    }
+
+    /**
+     * Observe the settings and the accessibility services only while in the
+     * window: a view that never gets there, or a bridge that freed its handle
+     * after failing to keep the view, leaves nothing behind that could call
+     * it. Registration comes first, then one report of each, so a change made
+     * before observation began is read too.
      */
     @Override
     protected void onAttachedToWindow() {
@@ -220,8 +259,12 @@ public final class FluiView extends View {
         if (Build.VERSION.SDK_INT >= 34) {
             contrast = Api34.observeContrast(this);
         }
+        if (accessibility != null) {
+            accessibility.addAccessibilityStateChangeListener(services);
+        }
         observing = true;
         settingsChanged();
+        servicesChanged();
     }
 
     @Override
@@ -236,6 +279,9 @@ public final class FluiView extends View {
         }
         observing = false;
         activity.getContentResolver().unregisterContentObserver(settings);
+        if (accessibility != null) {
+            accessibility.removeAccessibilityStateChangeListener(services);
+        }
         if (contrast != null) {
             Api34.forgetContrast(this, contrast);
             contrast = null;
@@ -1181,12 +1227,15 @@ public final class FluiView extends View {
     /**
      * Install the accessibility delegate or take it out: the native side calls
      * this once the window's accessibility bridge exists, and again when it
-     * goes away. A view without one answers as a plain view.
+     * goes away. A view without one answers as a plain view. A new bridge is
+     * told at once whether any service is enabled, since the report made as
+     * the view entered the window reached no bridge.
      */
     public void provideNodes(boolean provide) {
         if (provide) {
             nodes = new Nodes();
             setAccessibilityDelegate(new NodesDelegate());
+            servicesChanged();
         } else {
             nodes = null;
             setAccessibilityDelegate(null);

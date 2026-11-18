@@ -11,7 +11,7 @@
 //! **No semver promise.** Anything here may change or disappear in any release.
 //! The module is always compiled and `#[doc(hidden)]`.
 
-use crate::{ExecutionError, IdleDeadline, Instant, OwnerFrame};
+use crate::{ExecutionError, Instant, OwnerFrame};
 
 mod sealed {
     pub trait Sealed {}
@@ -19,15 +19,15 @@ mod sealed {
 }
 
 /// Drives a complete frame on an [`OwnerFrame`], off the public surface
-/// (ADR-0081 §4). A frame runs the scheduler's begin, persistent-callback,
-/// end-frame and idle phases around `prepare` and `pipeline`.
+/// (ADR-0081 §4). A frame runs `prepare`, then the scheduler's frame phase
+/// around `pipeline` and its post-frame phase, and returns to idle.
 ///
 /// Sealed: [`OwnerFrame`] is its only implementation. Callers import it as
 /// `use flui_scheduler::__runtime::DriveFrame as _;` and keep calling the
 /// method on the owner frame.
 pub trait DriveFrame: sealed::Sealed {
-    /// Run one frame at `timestamp` with `deadline` as the idle-slice
-    /// bound, `prepare` before and `pipeline` in the persistent slot.
+    /// Run one frame at `timestamp`: `prepare` before the frame opens and
+    /// `pipeline` inside it.
     ///
     /// # Errors
     /// Refuses a recursive, retired or closed execution, as the sealed
@@ -35,7 +35,6 @@ pub trait DriveFrame: sealed::Sealed {
     fn drive_frame<R>(
         &self,
         timestamp: Instant,
-        deadline: IdleDeadline,
         prepare: impl FnMut(),
         pipeline: impl FnMut() -> R,
     ) -> Result<R, ExecutionError>;
@@ -45,10 +44,9 @@ impl DriveFrame for OwnerFrame {
     fn drive_frame<R>(
         &self,
         timestamp: Instant,
-        deadline: IdleDeadline,
         prepare: impl FnMut(),
         pipeline: impl FnMut() -> R,
     ) -> Result<R, ExecutionError> {
-        crate::OwnerFrame::drive_frame(self, timestamp, deadline, prepare, pipeline)
+        crate::OwnerFrame::drive_frame(self, timestamp, prepare, pipeline)
     }
 }

@@ -17,6 +17,7 @@
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §9 for §1's `active_window` and
   `keyboard_layout` entries only (nothing above the host read them: `active_window` is gone, and
   the keyboard layout stays inside the core host until the menu feature publishes it).
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for the phase names of the scoped-access rule only: `with_owner_platform` refuses to run during `SchedulerPhase::Frame`.
 
 ## Context
 

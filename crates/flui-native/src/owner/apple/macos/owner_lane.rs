@@ -24,22 +24,18 @@
 //!   probe rescues only same-lane nesting, and the `is_main` shortcut rescues
 //!   only **main-lane** instances — never nest across lanes.
 //!
-//! The reentrancy probe's exactness depends on the `OnceLock` caching in
-//! [`owner_queue`] (and, under `#[cfg(test)]`, its sibling `test_owner_queue`):
-//! the marker is the lane queue's ADDRESS, so a per-call re-created
-//! `Queue::main()` / `Queue::create` would break the identity comparison. Keep
-//! the statics.
-
-use objc2::msg_send;
-use objc2::runtime::AnyClass;
+//! The reentrancy probe compares the lane queue's ADDRESS, so each lane is one
+//! queue for the process: [`owner_queue`] is GCD's main queue, a static of
+//! libdispatch's own, and the test lane (`test_owner_queue`, under
+//! `#[cfg(test)]`) is created once and kept in a static. A queue created per
+//! call would break the identity comparison.
 
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// The production owner lane: the dispatch queue bound to the AppKit main
 /// thread. Calls from other threads are dispatched here synchronously.
-pub(crate) fn owner_queue() -> &'static dispatch::Queue {
-    static Q: std::sync::OnceLock<dispatch::Queue> = std::sync::OnceLock::new();
-    Q.get_or_init(dispatch::Queue::main)
+pub(crate) fn owner_queue() -> &'static dispatch2::DispatchQueue {
+    dispatch2::DispatchQueue::main()
 }
 
 /// The test-instance owner lane: one process-wide serial queue shared by every
@@ -48,11 +44,11 @@ pub(crate) fn owner_queue() -> &'static dispatch::Queue {
 /// traffic exactly as the main lane does for production. Every test instance
 /// routes through this same lane so test traffic never straddles lanes.
 #[cfg(test)]
-pub(crate) fn test_owner_queue() -> &'static dispatch::Queue {
-    static Q: std::sync::OnceLock<dispatch::Queue> = std::sync::OnceLock::new();
-    Q.get_or_init(|| {
-        dispatch::Queue::create("flui.owner-lane.test", dispatch::QueueAttribute::Serial)
-    })
+pub(crate) fn test_owner_queue() -> &'static dispatch2::DispatchQueue {
+    static Q: std::sync::OnceLock<dispatch2::DispatchRetained<dispatch2::DispatchQueue>> =
+        std::sync::OnceLock::new();
+    // No attribute is a serial queue.
+    Q.get_or_init(|| dispatch2::DispatchQueue::new("flui.owner-lane.test", None))
 }
 
 thread_local! {
@@ -60,7 +56,7 @@ thread_local! {
     /// recorded by [`OnOwnerQueueGuard`]. GCD pools worker threads across
     /// queues, so a sticky flag would route a later call on a reused thread
     /// off-lane; the guard's `Drop` clears the marker when the block returns.
-    static ON_OWNER_QUEUE: std::cell::Cell<Option<*const dispatch::Queue>> =
+    static ON_OWNER_QUEUE: std::cell::Cell<Option<*const dispatch2::DispatchQueue>> =
         const { std::cell::Cell::new(None) };
 }
 
@@ -71,7 +67,7 @@ thread_local! {
 /// and all test instances share `test_owner_queue` (a `#[cfg(test)]` sibling,
 /// absent from non-test doc builds, hence the plain-font reference), so the
 /// probe is exact for every instance of either kind.
-pub(super) fn on_owner_queue(owner: &'static dispatch::Queue) -> bool {
+pub(super) fn on_owner_queue(owner: &'static dispatch2::DispatchQueue) -> bool {
     ON_OWNER_QUEUE.with(std::cell::Cell::get) == Some(std::ptr::from_ref(owner))
 }
 
@@ -88,11 +84,11 @@ pub(super) fn on_owner_queue(owner: &'static dispatch::Queue) -> bool {
 /// self-deadlock. Never nest across lanes; the `is_main` shortcut rescues only
 /// main-lane instances.
 struct OnOwnerQueueGuard {
-    owner: *const dispatch::Queue,
+    owner: *const dispatch2::DispatchQueue,
 }
 
 impl OnOwnerQueueGuard {
-    fn new(owner: &'static dispatch::Queue) -> Self {
+    fn new(owner: &'static dispatch2::DispatchQueue) -> Self {
         let owner = std::ptr::from_ref(owner);
         ON_OWNER_QUEUE.with(|on_lane| on_lane.set(Some(owner)));
         OnOwnerQueueGuard { owner }
@@ -121,17 +117,11 @@ impl Drop for OnOwnerQueueGuard {
 /// thread — `exec_on_owner`'s inline arm, which deliberately covers a main
 /// thread that never entered the lane. It is not a claim that a guard was
 /// installed; `on_owner_queue` is that, and is strictly narrower.
-pub(crate) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bool) -> bool {
-    on_owner_queue(owner)
-        || (owner_is_main && {
-            let cls = AnyClass::get(c"NSThread").expect("BUG: NSThread is always registered");
-            // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
-            // class method with no arguments and a BOOL return; it may be
-            // called from any thread at any time. objc2's `msg_send!` takes
-            // the class object itself as the receiver for a class method.
-            let is_main: bool = unsafe { msg_send![cls, isMainThread] };
-            is_main
-        })
+pub(crate) fn on_owner_thread(
+    owner: &'static dispatch2::DispatchQueue,
+    owner_is_main: bool,
+) -> bool {
+    on_owner_queue(owner) || (owner_is_main && objc2::MainThreadMarker::new().is_some())
 }
 
 /// Run `f` ON the owner lane.
@@ -144,7 +134,7 @@ pub(crate) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bo
 /// callers must never capture a raw Objective-C `id` into `f` for exactly that
 /// reason.
 pub(crate) fn exec_on_owner<R: Send>(
-    owner: &'static dispatch::Queue,
+    owner: &'static dispatch2::DispatchQueue,
     owner_is_main: bool,
     f: impl FnOnce() -> R + Send,
 ) -> R {
@@ -157,14 +147,19 @@ pub(crate) fn exec_on_owner<R: Send>(
         // returns. Only the guard could panic outside that catch, and it is
         // infallible (`Cell::set`); were it to, the lane's state is torn and
         // the process ends.
-        let result = owner.exec_sync(move || {
+        // `exec_sync` returns once the closure has run, so the slot the
+        // closure fills is read only after its write.
+        let mut result = None;
+        let slot = &mut result;
+        owner.exec_sync(move || {
             os_entry("the owner lane", (), AfterPanic::Abort, move || {
                 let _guard = OnOwnerQueueGuard::new(owner);
                 #[expect(clippy::disallowed_methods, reason = "ADR-0287: the closure's panic is replayed on the caller after exec_sync returns")]
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
-            })
+                let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+                *slot = Some(ran);
+            });
         });
-        match result {
+        match result.expect("BUG: exec_sync returns after its closure ran") {
             Ok(value) => value,
             Err(payload) => std::panic::resume_unwind(payload),
         }
@@ -191,7 +186,7 @@ pub(crate) fn exec_on_owner<R: Send>(
 /// `exec_on_owner`'s shield exists for); a caught panic is logged here —
 /// fire-and-forget has no caller frame to resume to.
 pub(crate) fn exec_async_on_owner(
-    owner: &'static dispatch::Queue,
+    owner: &'static dispatch2::DispatchQueue,
     f: impl FnOnce() + Send + 'static,
 ) {
     // The guard is installed before the body runs, so `on_owner_queue` reports
@@ -214,12 +209,24 @@ pub(crate) fn exec_async_on_owner(
 
 /// Run `f` on the owner lane after `delay`, fire-and-forget, under the same
 /// boundary and on-lane guard as [`exec_async_on_owner`].
+///
+/// A delay past what a dispatch time counts (about 292 years of nanoseconds)
+/// is a time that never comes: `f` is dropped at once, as it would be with the
+/// loop, rather than handed to GCD with a time it cannot represent.
 pub(crate) fn exec_after_on_owner(
-    owner: &'static dispatch::Queue,
+    owner: &'static dispatch2::DispatchQueue,
     delay: std::time::Duration,
     f: impl FnOnce() + Send + 'static,
 ) {
-    owner.exec_after(delay, move || {
+    let Ok(when) = dispatch2::DispatchTime::try_from(delay) else {
+        tracing::debug!(
+            ?delay,
+            "an owner-lane task past the dispatch time range lapsed"
+        );
+        return;
+    };
+    // `after` answers no error: it cannot refuse the work.
+    let _ = owner.after(when, move || {
         os_entry(
             "a delayed owner-lane turn",
             (),

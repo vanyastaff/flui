@@ -216,7 +216,7 @@ pub use surface_target::{
     RedrawRequester, SurfaceTarget, SwapChainStatistics,
 };
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
-pub use system_failure::SystemFailure;
+pub use system_failure::{BrowserException, SystemFailure};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};

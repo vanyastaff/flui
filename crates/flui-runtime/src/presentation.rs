@@ -389,7 +389,7 @@ pub struct PresentationState {
     pub(super) window_closer: flui_platform::capability::WindowCloser,
     /// The request of the frame being delivered, on the event timeline
     /// (`HostInput::Frame`): the interaction layer samples motion at its vsync and the pump takes
-    /// the frame's time and idle deadline from it (ADR-0347).
+    /// the frame's time from it (ADR-0347).
     pub(super) frame_request: Cell<Option<flui_platform::FrameRequest>>,
     /// The soft keyboard's occlusion as the window last reported it: sampled
     /// at each frame's vsync into `MediaQueryData::view_insets` while it moves

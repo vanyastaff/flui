@@ -31,6 +31,9 @@ extend-ignore-identifiers-re = [
     "Transitionable",
     # Hex color literals + similar
     "0x[0-9a-fA-F]+",
+    # The shell's file operation flags (`FOF_ALLOWUNDO`, `FOF_WANTNUKEWARNING`),
+    # which flui-system's Windows trash sets: Win32's names, not a typo of "for".
+    "FOF_[A-Z_]+",
 ]
 
 [default.extend-words]

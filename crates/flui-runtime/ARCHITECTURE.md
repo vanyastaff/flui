@@ -276,9 +276,9 @@ host.
 - **A UI runtime's frame runs only through `UiRuntime::pump`.** The pump takes
   `&mut self`, so no second frame on the same UI runtime can start while one runs,
   and it enters the UI runtime itself for the whole transaction, in this order:
-  apply commands (the owner inbox, at the Idle boundary) → begin frame →
-  draw frame (persistent callbacks, then the pipeline and the submit through
-  the sink) → end frame (both post-frame queues, the UI runtime's owner-local lane
+  apply commands (the owner inbox, at the Idle boundary) → begin frame (the
+  frame's async tasks) → the pipeline and the submit through
+  the sink → end frame (both post-frame queues, the UI runtime's owner-local lane
   included). Its clock is read once: that timestamp is the scheduler's
   frame time projected through each presentation's motion clock before `Vsync`
   controllers tick (see "`Vsync` controllers tick at the
@@ -814,24 +814,19 @@ owners in two presentations, stops through the public runtime entry and pumps
 past both deadlines. Source evaluation and displayed values stay held; removing
 the stop entry's lifecycle commit fails the same scenario.
 
-### `Vsync` ticks in the persistent phase, not among the transient callbacks
+### `Vsync` ticks with the pipeline, after the frame's tasks
 
-Scheduler tickers are retired under ADR-0175. Transient frame callbacks run
-in begin frame, before the microtask flush and before any persistent callback.
-The UI runtime's `Vsync` registry is ticked by `draw_frame_entered` before a new
-presentation segment in the scheduler's persistent phase: after the transient
-callbacks and microtasks, and after any persistent callback registered before
-the pipeline. A controller's listener that schedules a microtask therefore
-sees it flushed at the next frame's begin, not this one's. The two sets are
-separate from the animation registry, so a controller has no second scheduler
-ticker admission. The registry tick precedes that segment's build. Registered text preparation retains its
+Scheduler tickers are retired under ADR-0175, and the scheduler keeps no frame-callback lane
+(ADR-0368). A frame polls its ready async tasks first; the UI runtime's `Vsync` registry is then
+ticked by `draw_frame_entered` before a new presentation segment, ahead of that segment's build.
+A controller's listener that spawns a task therefore sees it polled at the next frame's begin, not
+this one's. The registry is separate from the animation registry, so a controller has no second
+ticker admission. Registered text preparation retains its
 original tick and resumes only its layout/fixpoint tail; an intervening pump does
 not advance that controller or reenter its widget build. Healthy presentations
 can enter their own new segments. The public row
 `an_animated_size_resumes_its_original_tick_after_host_service_yields` pins the
-retained tick and resulting fractional glyph/IME geometry. Relative ordering
-against arbitrary scheduler transient callbacks and microtasks remains unasserted.
-Moving the registry tick into begin frame is a separate change.
+retained tick and resulting fractional glyph/IME geometry.
 
 ### Addressed dispatch retains redraw demand across unwind
 
@@ -1016,7 +1011,7 @@ already answers at the drain; after each frame `drive_frame` ran, which also cou
 for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`), so a deadline or a
 timer that ran out is seen. The tree part of a condition is a pure function of the committed tree
 (`SemanticsOwner::evaluate_wait`); `Settled` and the unsettled causes come from the runtime's own
-predicates (`needs_redraw`, a scheduled frame, pending work, transient callbacks, the next timer),
+predicates (`needs_redraw`, a scheduled frame, pending work, the next timer),
 which `UiRuntime::unsettled_causes` reads without the agent's own waits, so a parked wait is never
 why the window is busy. A condition that counts frames asks for a redraw while it is parked,
 because an idle window presents none. The deadline is on the presentation's clock (a manual clock
@@ -1306,11 +1301,11 @@ value, applies it again; an unchanged value does nothing.
 `UiRuntime::refresh_interval` is the one reader's answer: the display's period, or
 `DEFAULT_REFRESH_PERIOD` (60 Hz, a policy of this crate, never a value the snapshot
 carries) while it is unknown, and it falls back when the window moves to a display that
-reports nothing. The scheduler's frame budget is set to the shortest interval among the
-runtime's presentations in the pump's preparation, before the frame begins, because the
-frame copies the budget's target when it starts
-(`jank_is_judged_against_the_current_period`,
-`shared_frame_budget_uses_the_shortest_period`). The presentation shares its stored
+reports nothing. The scheduler labels its frames with the shortest interval among the
+runtime's shown presentations in the pump's preparation, before the frame begins, so the
+frame's span carries the period of the display it is produced for
+(`frame_period_follows_the_current_display`,
+`shared_frame_period_is_the_shortest_one`). The presentation shares its stored
 `WindowDisplay` with its haptics host, whose frame deadline is ADR-0212's metric:
 `flui_interaction::haptic_frame_deadline` multiplies the display's period by the
 preset's factor, and a period that is unknown or whose product overflows uses the 60 Hz

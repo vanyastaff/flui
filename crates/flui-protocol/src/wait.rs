@@ -176,16 +176,12 @@ vocabulary! {
         FrameScheduled => "frame_scheduled",
         /// The owner has queued work.
         PendingWork => "pending_work",
-        /// Animations and other per-frame callbacks are registered.
-        TransientCallbacks => "transient_callbacks",
         /// A timer is due.
         Timer => "timer",
-        /// Images are still loading.
-        ImageLoads => "image_loads",
     }
 }
 
-/// One reason a window had not settled, with how much of it there was.
+/// One reason a window had not settled, with when a timer is due.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -193,12 +189,6 @@ vocabulary! {
 pub struct UnsettledCause {
     /// The reason.
     pub reason: UnsettledReason,
-    /// How many: callbacks registered, loads pending.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    pub count: Option<u32>,
     /// When the next timer is due, in milliseconds from the answer.
     #[cfg_attr(
         feature = "serde",
@@ -208,12 +198,11 @@ pub struct UnsettledCause {
 }
 
 impl UnsettledCause {
-    /// `reason`, with no count.
+    /// `reason`, with no due time.
     #[must_use]
     pub const fn new(reason: UnsettledReason) -> Self {
         Self {
             reason,
-            count: None,
             due_in_ms: None,
         }
     }

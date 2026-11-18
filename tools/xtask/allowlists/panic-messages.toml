@@ -53,14 +53,6 @@ path = "crates/flui-interaction/src/pointer/sampling_clock.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-native/src/owner/apple/macos/content_view.rs"
-count = 2
-
-[[allow]]
-path = "crates/flui-native/src/window/apple/macos/delegate.rs"
-count = 2
-
-[[allow]]
 path = "crates/flui-objects/src/layout/custom_multi_child_layout.rs"
 count = 2
 
@@ -106,10 +98,6 @@ count = 2
 
 [[allow]]
 path = "crates/flui-scheduler/src/frame_clock.rs"
-count = 1
-
-[[allow]]
-path = "crates/flui-scheduler/src/task.rs"
 count = 1
 
 [[allow]]

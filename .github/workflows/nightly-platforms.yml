@@ -118,7 +118,7 @@ jobs:
           FLUI_REQUIRE_INPUT_DESKTOP: "1"
         run: >-
           cargo nextest run -p flui-native --locked --all-features --no-fail-fast
-          -E 'test(=contract::test_window_lifecycle_contract) | test(/^windows_foreground::/) | test(/^windows_test_desktop::/)'
+          -E 'test(=contract::test_window_lifecycle_contract) | test(/^windows_foreground::/) | test(/^windows_test_desktop::/) | test(=drag::windows::tests::ole_drag_and_drop_on_real_windows)'
 
       # `FLUI_REQUIRE_GPU` (set by the task) turns a missing adapter into a
       # failure. A Windows runner has no GPU, so Direct3D 12 answers with

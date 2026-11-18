@@ -23,6 +23,10 @@ pub struct FakeAccessibility {
 struct FakeAccessibilityState {
     active: bool,
     published: usize,
+    /// Every update sent, attached or not.
+    sent: usize,
+    /// Of `sent`, the self-contained trees.
+    sent_whole: usize,
     activation_listener: Option<flui_semantics::platform::AccessibilityActivationListener>,
 }
 
@@ -37,6 +41,21 @@ impl FakeAccessibility {
     #[must_use]
     pub fn published_count(&self) -> usize {
         self.state.lock().published
+    }
+
+    /// How many updates the window sent, attached or not: what a composition
+    /// root built for assistive technology.
+    #[must_use]
+    pub fn sent_count(&self) -> usize {
+        self.state.lock().sent
+    }
+
+    /// How many of those were whole trees, which stand alone, rather than
+    /// changes to the last one: what a fresh assistive technology is answered
+    /// with.
+    #[must_use]
+    pub fn sent_whole_count(&self) -> usize {
+        self.state.lock().sent_whole
     }
 
     /// Simulate assistive technology attaching or detaching, notifying the
@@ -70,13 +89,18 @@ impl std::fmt::Debug for FakeAccessibility {
         f.debug_struct("FakeAccessibility")
             .field("active", &state.active)
             .field("published_count", &state.published)
+            .field("sent_count", &state.sent)
             .finish_non_exhaustive()
     }
 }
 
 impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
-    fn publish(&self, _update: accesskit::TreeUpdate) {
+    fn publish(&self, update: accesskit::TreeUpdate) {
         let mut state = self.state.lock();
+        state.sent = state.sent.saturating_add(1);
+        if update.tree.is_some() {
+            state.sent_whole = state.sent_whole.saturating_add(1);
+        }
         // Inactive means nothing is listening: the update is dropped rather
         // than counted, mirroring the real adapter's `update_if_active`.
         if state.active {

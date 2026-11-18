@@ -57,7 +57,7 @@ use flui_foundation::{ElementId, Identifier, LayerId, RenderId, TreeId, ViewId};
 // `Identifier`. Its ids address slab storage (ViewId, LayerId,
 // SemanticsId) and are the slot plus one. `zip` takes the public (non-zero)
 // value; the slab offset is the caller's. Ids with no slot behind them
-// (ListenerId, FrameCallbackId, TaskId) are not in this family: they are
+// (ListenerId, FrameCallbackId) are not in this family: they are
 // opaque, and only an `IdMint` issues one.
 let slab_index = 2;
 let layer_id = LayerId::zip(slab_index + 1);  // slot 2 → ID 3
@@ -95,7 +95,7 @@ any_tree_id(render_id);
 | Kind | Types |
 |------|-------|
 | **Plain `Id<T>`**, slab slot + 1 | `ViewId`, `LayerId`, `SemanticsId` |
-| **Minted**, opaque `NonZeroU64` (no slot, no numeric constructor) | `ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId` |
+| **Minted**, opaque `NonZeroU64` (no slot, no numeric constructor) | `ListenerId`, `FrameCallbackId`, `InputSequenceId` |
 | **Generational** (slab index + generation) | `ElementId`, `RenderId`, `UiRuntimeId`, `DataTransferId`, `PresentationId` |
 | **Composite** | `PresentationAddress` (a `UiRuntimeId` plus a `PresentationId`) |
 

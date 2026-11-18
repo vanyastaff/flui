@@ -7,6 +7,7 @@
   only where cleanup retains the produced frame result, refused envelopes and wakers after a
   failure, and the paragraph calling ADR-0127's exceptional retention deliberate leakage: they
   are destroyed under the turn's containment.
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for "before transient callbacks" only: preparation runs before the frame's tasks are polled.
 - **Related:** [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md), [ADR-0127](ADR-0127-exceptional-path-retention.md), [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md), [ADR-0178](ADR-0178-notification-first-failure-custody.md).
 
 ## Decision

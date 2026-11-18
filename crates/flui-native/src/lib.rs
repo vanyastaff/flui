@@ -120,16 +120,18 @@
 //!
 //! ```rust
 //! use flui_native::headless_platform;
-//! use flui_platform::WindowOptions;
+//! use flui_platform::{WindowExtent, WindowOptions};
 //! use flui_foundation::geometry::Size;
 //! use flui_testing::window_handler::RecordingWindowHandler;
 //!
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
 //!
+//!     let size = WindowExtent::try_new(Size::new(800.0, 600.0))
+//!         .expect("800 × 600 is a finite, non-negative extent");
 //!     let options = WindowOptions::default()
 //!         .title("Test")
-//!         .size(Size::new(800.0, 600.0))
+//!         .size(size)
 //!         .visible(true);
 //!
 //!     let handler = RecordingWindowHandler::new();

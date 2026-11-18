@@ -16,7 +16,7 @@
 //! 1. **The hook re-enters `flui-app` and `APP_RUNTIME` is thread-local**, so
 //!    it may only be consulted on the owner (main) thread — which rules out a
 //!    background deadline thread and picks the main queue as the actuator.
-//!    [`owner_queue`] is that queue and `exec_after` schedules onto it without
+//!    [`owner_queue`] is that queue and `exec_after_on_owner` schedules onto it without
 //!    an Objective-C target class, so `[NSApp run]` keeps draining it
 //!    unchanged.
 //! 2. **A redraw request is not an idle point.** `request_redraw` runs inside
@@ -40,10 +40,9 @@ use std::{
     time::Duration,
 };
 
-use super::owner_lane::owner_queue;
+use super::owner_lane::{exec_after_on_owner, owner_queue};
 
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// How long after a redraw request the pump looks at the hook a second time
 /// when the first look found no deadline.
@@ -170,15 +169,8 @@ impl WakePump {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let delay = target.saturating_duration_since(web_time::Instant::now());
         let pump = Arc::clone(self);
-        owner_queue().exec_after(delay, move || {
-            os_entry(
-                "the AppKit wake pump's tick",
-                (),
-                AfterPanic::Answer(|()| ()),
-                move || {
-                    pump.fire(generation, look);
-                },
-            );
+        exec_after_on_owner(owner_queue(), delay, move || {
+            pump.fire(generation, look);
         });
     }
 

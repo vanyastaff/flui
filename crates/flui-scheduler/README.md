@@ -1,6 +1,7 @@
 # FLUI Scheduler
 
-Frame scheduling, task prioritization, and animation coordination for FLUI.
+Owner-local frame execution, frame demand, post-frame callbacks, lifecycle state
+and async tasks for FLUI.
 
 Standalone `rust` blocks in this document are compiled as doctests. Blocks
 marked `rust,ignore` are integration sketches that depend on an external
@@ -8,31 +9,30 @@ render pipeline or event loop.
 
 ## Features
 
-- **Frame Scheduling** - Complete owner turns and frame lifecycle management
-- **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Frame Budget Statistics** - Measure phase durations and bound Idle-priority work
-- **Type-Safe Durations** - Newtype wrappers prevent unit confusion
-- **Type-Safe IDs** - PhantomData markers prevent ID type mixing
-- **Optional Serde Support** - Serialization for supported duration, priority and statistics values
+- **Frame execution** - one complete owner turn per frame: the frame's async
+  tasks, the driver's pipeline, then post-frame callbacks and `end_of_frame`
+  waiters
+- **Frame demand** - `request_frame` from the owner, `FrameWaker` from any
+  thread, one platform wake per false-to-true edge
+- **Frame telemetry** - per-phase durations of every frame (`FrameClock`,
+  `FrameSnapshot`)
+- **Optional Serde support** - serialization for the frame and lifecycle enums
 
 ## Architecture
 
 ```text
 Application
     ↓
-UpdateScheduler (frame phases and owner turns)
-    ├─ TaskQueue (priority-based execution)
-    └─ FrameBudget (phase-duration stats)
+OwnerFrame (executes complete frames and background turns)
+    └─ UpdateScheduler (admits work and observes logical frame state)
 
-Frame Timeline:
-BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
+Frame timeline:
+Idle → Frame (async tasks, pipeline) → PostFrame (post-frame callbacks) → Idle
 ```
 
-`UpdateScheduler` makes no refresh-rate, display, or surface assumption of
-its own — a caller supplies the frame's vsync timestamp and an Idle-slice
-deadline to [`drive_frame`](#basic-frame-scheduling). Physical pacing
-(vsync coordination) is a presentation-owned concern that lives outside
-this crate.
+`UpdateScheduler` makes no refresh-rate, display or surface assumption of its
+own: a caller supplies the frame's vsync timestamp to the frame drive. Physical
+pacing is a presentation-owned concern that lives outside this crate.
 
 ## Installation
 
@@ -49,292 +49,105 @@ the [flui facade's README](../../README.md).
 
 ## Usage
 
-### Migrating performance-mode requests
-
-The scheduler no longer exposes `PerformanceMode`, `PerformanceModeRequestHandle`,
-`request_performance_mode`, `current_performance_mode`, `set_performance_mode`,
-`performance_mode_request_count`, or `debug_assert_no_pending_performance_mode_requests`.
-Remove their imports, requests, handle disposal and mode bookkeeping from callers.
-Persisted application configuration using the removed serde enum needs its own
-application-owned representation if it still serves an application policy.
-
-These requests counted handles and stored a label without changing scheduling,
-polling, latency or power behavior. There is no replacement scheduling hint, and
-removing the API does not claim a performance improvement. Physical presentation
-pacing remains the presentation host's responsibility; task priority continues to
-control logical execution order.
-
-### Basic Frame Scheduling
+### Driving a frame
 
 ```rust
 use flui_scheduler::__runtime::DriveFrame as _;
-use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
 // The owner thread's frame state (owner-local post-frame callbacks and
 // async tasks); complete execution belongs to this owner.
 let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 
-// Schedule a one-time frame callback (animation tick)
-scheduler.schedule_frame_callback(Box::new(|vsync_time| {
-    println!("Frame started at {:?}", vsync_time);
+scheduler.add_post_frame_callback(Box::new(|timing| {
+    println!("frame {} committed", timing.id);
 }));
 
-// Add tasks with different priorities
-scheduler.add_task(Priority::Animation, || {
-    // Update animations
-});
-
-scheduler.add_task(Priority::Build, || {
-    // Rebuild widgets
-});
-
-// Execute frame (called by event loop)
+// Execute a frame (called by the event loop when a frame is scheduled).
 let now = flui_scheduler::Instant::now();
-owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+owner
+    .drive_frame(now, || {}, || { /* build, layout, paint */ })
     .expect("the owner accepts the frame");
 ```
 
-### Migrating execution
+`OwnerFrame::pump_background(prepare)` runs a turn without a frame: the ready
+async tasks only. The frame drive
+`flui_scheduler::__runtime::DriveFrame::drive_frame(timestamp, prepare, pipeline)`
+is `#[doc(hidden)]`, sealed and carries no semver promise; a composition root
+calls it. Both return typed admission errors, and neither accepts another
+scheduler's owner. Preparation runs after admission, before the frame's tasks
+are polled. A failure closes the frame's bookkeeping before it propagates.
 
-`UpdateScheduler` registers work and requests delivery. Its owner executes
-`OwnerFrame::pump_background(prepare)`, or, from a composition root, the frame drive
-`flui_scheduler::__runtime::DriveFrame::drive_frame(timestamp, deadline, prepare, pipeline)`
-(`#[doc(hidden)]`, sealed, no semver promise; the method is not inherent on `OwnerFrame`). Both return typed admission errors;
-neither accepts another scheduler's owner. Preparation runs after admission,
-before frame phases or ready-task polling.
-
-Replace `execute_frame` and synchronous warm-up calls with a complete owner
-frame, using a no-op pipeline only when no render pipeline is needed. Observe
-frame identity and timing from `current_frame()` inside the pipeline or from
-`end_of_frame()` afterward. Replace manual begin/draw/end/abort sequences and
-`finish_async_pump` plus `poll_ready` with the corresponding complete operation.
-Failures close started frame bookkeeping before propagation; callers cannot
-manually abort an enclosing operation.
-
-The unused idle-callback lane (`schedule_idle_callback`, `execute_idle_callbacks`,
-`has_idle_callbacks`) was removed. `Priority::Idle` tasks remain supported and
-run within the frame's supplied deadline. Direct access to the scheduler's
-`TaskQueue` and manual timing-phase mutation were removed; standalone `TaskQueue`
-is still available as a separate queue, without authority over an owner's frame.
-
-### Frame Budget Management
+### Builder
 
 ```rust
-use std::num::NonZeroU32;
+use flui_foundation::ManualClock;
+use flui_scheduler::{ClockSource, SchedulerBuilder};
 
-use flui_scheduler::{BudgetPolicy, FrameBudget, Instant, Milliseconds};
-
-let mut budget = FrameBudget::new(NonZeroU32::new(60).expect("60 is non-zero"));
-budget.set_policy(BudgetPolicy::SkipIdle);
-
-// Instants come from the clock your frames are stamped with.
-let start = Instant::now();
-budget.reset(start); // Start new frame
-
-// Record phase times
-budget.record_build_duration(Milliseconds::new(5.0));
-budget.record_layout_duration(Milliseconds::new(3.0));
-budget.record_paint_duration(Milliseconds::new(4.0));
-
-if budget.is_over_budget(Instant::now()) {
-    println!("Frame is over budget!");
-}
-
-// Get statistics
-let build_stats = budget.build_stats();
-// `BudgetPercentage`'s Display already renders one decimal and the `%` sign.
-println!("Build took {:.2}ms ({} of budget)",
-         build_stats.duration_ms(), build_stats.budget_percent);
-```
-
-### Priority-based Task Queue
-
-```rust
-use flui_scheduler::{TaskQueue, Priority};
-
-let queue = TaskQueue::new();
-
-// Add tasks in any order
-queue.add(Priority::Idle, || println!("Background work"));
-queue.add(Priority::UserInput, || println!("Handle mouse click"));
-queue.add(Priority::Animation, || println!("Update animation"));
-
-// Execute in priority order: UserInput > Animation > Idle
-queue.execute_all();
-```
-
-## Safety Features
-
-This crate uses small, explicit Rust types for correctness at API boundaries.
-
-### Type-Safe Duration Wrappers
-
-Newtype pattern prevents unit mixing:
-
-```rust
-use flui_scheduler::duration::{Milliseconds, Seconds, FrameDuration};
-
-let elapsed = Milliseconds::new(10.0);        // 10ms
-let timeout = Seconds::new(1.5);              // 1.5s
-let budget = FrameDuration::try_from_fps(60)  // ~60fps
-    .expect("fps > 0");
-
-// Type-safe comparisons
-assert!(!budget.is_over_budget(elapsed));
-
-// Conversions are explicit
-let as_seconds: Seconds = elapsed.to_seconds();
-```
-
-### Type-Safe IDs
-
-Callback and task ids are distinct opaque types; only a mint issues one, and
-none is built from a number:
-
-```rust
-use flui_scheduler::{Priority, Task};
-
-let first = Task::new(Priority::Build, || {});
-let second = Task::new(Priority::Build, || {});
-// Ids of one domain are never issued twice; a `TaskId` and a
-// `CallbackId` are different types and can't be mixed.
-assert_ne!(first.id(), second.id());
-```
-
-### Builder Pattern
-
-```rust
-use flui_scheduler::{FrameBudgetBuilder, SchedulerBuilder};
-use flui_scheduler::duration::FrameDuration;
-
-// Fluent builder for FrameBudget
-let budget = FrameBudgetBuilder::new()
-    .target_fps(std::num::NonZeroU32::new(120).expect("120 is non-zero"))
-    .build();
-
-// Builder for UpdateScheduler. `target_fps` only labels the seeded
-// `FrameBudget`'s stats (see `UpdateScheduler::new`'s doc) — it has no
-// effect on frame gating, which `drive_frame`'s own `deadline` controls.
+// A scheduler that reads time from a test's manual clock, so timers and the
+// frame telemetry are measured on the frames' own timeline.
 let scheduler = SchedulerBuilder::new()
-    .target_fps(std::num::NonZeroU32::new(60).expect("60 is non-zero"))
+    .clock(ClockSource::Manual(ManualClock::new()))
     .build();
+assert_eq!(scheduler.frame_count(), 0);
 ```
 
-## Prelude
-
-The prelude exports common scheduler types:
-
-```rust
-use flui_scheduler::prelude::*;
-```
-
-## Priority Levels
-
-Tasks execute in strict priority order:
-
-| Priority | Use Case | Examples |
-|----------|----------|----------|
-| **UserInput** | Immediate response | Mouse clicks, keyboard, touch |
-| **Animation** | Time-sensitive UI work | Animation samples, transitions |
-| **Build** | Widget rebuilds | State changes, layout |
-| **Idle** | Background work | Deferred cleanup, telemetry, preloading |
-
-## Integration with FLUI
-
-### In flui-rendering's `PipelineOwner`
-
-`flui-rendering::pipeline::owner::PipelineOwner` is the real consumer —
-there is no `flui_core` crate in this workspace. The sketch below is
-illustrative shape, not the real struct (the actual `PipelineOwner` is
-typestate-generic over its pipeline phase and carries a `DirtyTracker`,
-not a bare `UpdateScheduler` field — see `flui-rendering`'s own docs for the
-real definition):
+### In an event loop
 
 ```rust,ignore
-use flui_scheduler::{UpdateScheduler, FramePhase};
-
-struct PipelineOwner {
-    scheduler: UpdateScheduler,
-}
-
-impl PipelineOwner {
-    pub fn build_frame(&mut self) {
-        // Execute frame phases in order
-        self.flush_build();
-        self.flush_layout();
-        self.flush_paint();
-    }
-}
-```
-
-### In Event Loop
-
-```rust,ignore
-use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
+use flui_scheduler::__runtime::DriveFrame as _;
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
 let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 
-// In your event loop
 match event {
     Event::MainEventsCleared => {
         if scheduler.is_frame_scheduled() {
             let now = flui_scheduler::Instant::now();
-            owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+            owner
+                .drive_frame(now, || {}, || pipeline.run())
                 .expect("the owner accepts the frame");
             window.request_redraw();
         }
     }
     Event::UserInput(input) => {
-        scheduler.add_task(Priority::UserInput, move || {
-            handle_input(input);
-        });
+        handle_input(input);
         scheduler.request_frame();
     }
     _ => {}
 }
 ```
 
-## Performance
+## Frame telemetry
 
-### Frame Budget Statistics
-
-| Target FPS | Frame Duration |
-|------------|-----------------|
-| 60 FPS | ~16.7ms |
-| 120 FPS | ~8.3ms |
-| 144 FPS | ~6.9ms |
-
-`FrameBudget` reports timing statistics (jank, phase durations, over-budget)
-against whichever target the caller chose — `UpdateScheduler` itself makes
-no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is the frame drive's own `deadline`
-parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
-and `Priority::Build` always run to completion.
+`UpdateScheduler` makes no frame-rate assumption and does not skip work by how
+long a frame took. The runtime labels frames with the refresh period of the
+display they are produced for (`UpdateScheduler::set_display_period`); the
+`frame` span carries it as `period_us`, and a profiler judges a frame late
+against it. Per-phase durations of each frame come from the `FrameSnapshot`s
+`FrameClock::frames_since` returns.
 
 ## Feature Flags
 
 | Feature | Description |
 |---------|-------------|
-| `serde` | Enable serialization for duration types, priorities, and statistics |
+| `serde` | Enable serialization for the frame and lifecycle enums |
 
 ## Platform Support
 
 Hosts provide display pacing and sampled timestamps. `web-time` supplies a
 portable monotonic clock; it does not coordinate display refresh or prevent tearing.
 
-`UpdateScheduler`, its callback queues and `OwnerFrame` belong to one UI owner.
+`UpdateScheduler`, its callback storage and `OwnerFrame` belong to one UI owner.
 Callbacks accept owner-local captures. Workers request frames through
 `FrameWaker`; wake infrastructure does not retain UI callback storage (ADR-0175).
 
 ## Testing
 
 ```bash
-# Run all tests
 cargo test -p flui-scheduler
-
-# Run with serde feature
 cargo test -p flui-scheduler --features serde
 ```
 

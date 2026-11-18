@@ -9,7 +9,8 @@
 //! the dependent's `edge-exceptions`, as for the tier rule, and an entry that
 //! admits nothing either rule refuses is stale. A capability crate is the
 //! facade's optional normal dependency, enabled alone by its service feature
-//! (ADR-0154 §8).
+//! (ADR-0154 §8), and has no build script unless it declares `links`
+//! (ADR-0154 §6).
 //!
 //! The rule itself is pure over [`Members`], so `--self-test` runs it on a
 //! built-in graph without cargo or a disk; only the exit citations of
@@ -173,6 +174,11 @@ pub(super) enum Finding {
         rel: String,
         tier: String,
     },
+    /// A capability crate without `links`, or with an empty one, has a build
+    /// script (ADR-0154 §6): a root `build.rs` that `build = false` does not
+    /// switch off, or `build = "<path>"`. Only a crate that exports a global
+    /// native symbol, which `links` names, needs one.
+    CapabilityBuildScript { name: String, script: String },
     /// A capability crate has a normal or build dependency outside
     /// [`SDK_SURFACE`] (ADR-0154 §1).
     CapabilityOffContract { from: String, to: String },
@@ -220,58 +226,71 @@ pub(super) struct Position {
     order: u64,
 }
 
+/// What the self-test compares of a finding.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Identity {
+    /// The crate the finding is about, or the dependent of an edge.
+    subject: String,
+    /// The key, tier, kind, file or dependency the finding names.
+    object: String,
+    /// Which rule produced it.
+    kind: &'static str,
+}
+
+impl Identity {
+    fn new(subject: &str, object: &str, kind: &'static str) -> Self {
+        Self {
+            subject: subject.to_owned(),
+            object: object.to_owned(),
+            kind,
+        }
+    }
+}
+
 impl Finding {
-    /// `(subject, object, kind)`: what the self-test compares.
-    fn identity(&self) -> (String, String, &'static str) {
+    fn identity(&self) -> Identity {
         match self {
-            Self::Missing { name, key, .. } => (name.clone(), (*key).to_owned(), "missing"),
-            Self::NotForTools { name, key, .. } => {
-                (name.clone(), (*key).to_owned(), "not for tools")
-            }
-            Self::NotToolKind { name, kind, .. } => (name.clone(), kind.clone(), "not tool kind"),
-            Self::UnknownTier { name, tier, .. } => (name.clone(), tier.clone(), "unknown tier"),
-            Self::UnknownKind { name, kind, .. } => (name.clone(), kind.clone(), "unknown kind"),
-            Self::DuplicateOrder { names, .. } => (
-                names.first().cloned().unwrap_or_default(),
-                names[1..].join(","),
+            Self::Missing { name, key, .. } => Identity::new(name, key, "missing"),
+            Self::NotForTools { name, key, .. } => Identity::new(name, key, "not for tools"),
+            Self::NotToolKind { name, kind, .. } => Identity::new(name, kind, "not tool kind"),
+            Self::UnknownTier { name, tier, .. } => Identity::new(name, tier, "unknown tier"),
+            Self::UnknownKind { name, kind, .. } => Identity::new(name, kind, "unknown kind"),
+            Self::DuplicateOrder { names, .. } => Identity::new(
+                names.first().map_or("", String::as_str),
+                &names[1..].join(","),
                 "duplicate order",
             ),
-            Self::Upward { from, to } => (from.name.clone(), to.name.clone(), "upward"),
-            Self::OnTool { from, to } => (from.clone(), to.clone(), "on tool"),
-            Self::NamesOfficial { from, to } => (from.clone(), to.clone(), "names official"),
-            Self::OffSdk { from, to } => (from.clone(), to.clone(), "off sdk"),
+            Self::Upward { from, to } => Identity::new(&from.name, &to.name, "upward"),
+            Self::OnTool { from, to } => Identity::new(from, to, "on tool"),
+            Self::NamesOfficial { from, to } => Identity::new(from, to, "names official"),
+            Self::OffSdk { from, to } => Identity::new(from, to, "off sdk"),
             Self::OfficialOnOfficial { from, to } => {
-                (from.clone(), to.clone(), "official on official")
+                Identity::new(from, to, "official on official")
             }
             Self::PackageNotOfficial { name, kind, .. } => {
-                (name.clone(), kind.clone(), "package not official")
+                Identity::new(name, kind, "package not official")
             }
-            Self::PackageExcepted { name, .. } => (
-                name.clone(),
-                "edge-exceptions".to_owned(),
-                "package excepted",
-            ),
-            Self::CapabilityTier { name, tier, .. } => {
-                (name.clone(), tier.clone(), "capability tier")
+            Self::PackageExcepted { name, .. } => {
+                Identity::new(name, "edge-exceptions", "package excepted")
+            }
+            Self::CapabilityTier { name, tier, .. } => Identity::new(name, tier, "capability tier"),
+            Self::CapabilityBuildScript { name, script } => {
+                Identity::new(name, script, "capability build script")
             }
             Self::CapabilityOffContract { from, to } => {
-                (from.clone(), to.clone(), "capability off contract")
+                Identity::new(from, to, "capability off contract")
             }
-            Self::CapabilityNotLeaf { from, to } => {
-                (from.clone(), to.clone(), "capability not leaf")
-            }
+            Self::CapabilityNotLeaf { from, to } => Identity::new(from, to, "capability not leaf"),
             Self::CapabilityNotOptional { from, to } => {
-                (from.clone(), to.clone(), "capability not optional")
+                Identity::new(from, to, "capability not optional")
             }
             Self::CapabilityFeature { name, feature, .. } => {
-                (name.clone(), feature.clone(), "capability feature")
+                Identity::new(name, feature, "capability feature")
             }
-            Self::Stale { from, to } => (from.clone(), to.clone(), "stale exception"),
-            Self::BadExit { from, to, .. } => (from.clone(), to.clone(), "bad exit"),
-            Self::NoTrainGuard { name, .. } => (name.clone(), TRAIN_LINKS.to_owned(), "no guard"),
-            Self::SecondTrainGuard { name, .. } => {
-                (name.clone(), TRAIN_LINKS.to_owned(), "second guard")
-            }
+            Self::Stale { from, to } => Identity::new(from, to, "stale exception"),
+            Self::BadExit { from, to, .. } => Identity::new(from, to, "bad exit"),
+            Self::NoTrainGuard { name, .. } => Identity::new(name, TRAIN_LINKS, "no guard"),
+            Self::SecondTrainGuard { name, .. } => Identity::new(name, TRAIN_LINKS, "second guard"),
         }
     }
 }
@@ -354,6 +373,15 @@ impl fmt::Display for Finding {
                 f,
                 "{rel} is a capability crate in tier \"{tier}\"; capability crates sit in tier \
                  \"{CAPABILITY_TIER}\" (ADR-0154 §1)"
+            ),
+            Self::CapabilityBuildScript { name, script } => write!(
+                f,
+                "{name} is a capability crate with the build script {script} and no `links` \
+                 naming a symbol: a \
+                 capability crate that exports no global native symbol has no build script \
+                 (ADR-0154 §6); its Java, Kotlin, Swift and Objective-C sources and its dex are \
+                 built by `flui build` from the sources it declares (ADR-0154 §5). Remove the \
+                 script, or set `build = false` beside a `build.rs` that is not one"
             ),
             Self::CapabilityOffContract { from, to } => write!(
                 f,
@@ -489,6 +517,21 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
                 name: name.clone(),
                 rel: rel.clone(),
                 tier: tier.clone(),
+            });
+        }
+        // `links` marks the crate that exports a global native symbol, whose
+        // build script ADR-0154 §6 admits (Cargo requires one for `links`).
+        // Cargo accepts `links = ""`, which names no symbol and admits nothing.
+        if member.tier_kind.as_deref() == Some(CAPABILITY)
+            && member
+                .links
+                .as_deref()
+                .is_none_or(|links| links.trim().is_empty())
+            && let Some(script) = &member.build_script
+        {
+            findings.push(Finding::CapabilityBuildScript {
+                name: name.clone(),
+                script: script.clone(),
             });
         }
         if let Some(kind) = &member.tier_kind
@@ -791,6 +834,7 @@ fn node(rel: &str, flui: &Json, deps: &[(&str, DependencyKind)]) -> Node {
         rel: rel.to_owned(),
         flui: flui.clone(),
         links: None,
+        build_script: None,
         deps: deps
             .iter()
             .map(|&(name, kind)| Dep {
@@ -871,6 +915,14 @@ fn self_test_members() -> Members {
     let (cap_wrong_feature_rel, cap_wrong_feature) =
         krate("cap-wrong-feature", "pkg", 14, CAPABILITY);
     let (cap_service_rel, cap_service) = krate("flui-system", "pkg", 15, CAPABILITY);
+    let (cap_build_rel, cap_build) = krate("cap-build", "pkg", 16, CAPABILITY);
+    let (cap_build_path_rel, cap_build_path) = krate("cap-build-path", "pkg", 17, CAPABILITY);
+    let (cap_links_rel, cap_links) = krate("cap-links", "pkg", 18, CAPABILITY);
+    let (cap_links_empty_rel, cap_links_empty) = krate("cap-links-empty", "pkg", 19, CAPABILITY);
+    let with_build_script = |mut node: Node, script: &str| {
+        node.build_script = Some(script.to_owned());
+        node
+    };
     let expose = |facade: &mut Node, capability: &str, optional: bool, enables: Option<&str>| {
         facade.deps.push(Dep {
             name: capability.to_owned(),
@@ -901,6 +953,19 @@ fn self_test_members() -> Members {
         true,
         Some("dep:cap1"),
     );
+    for capability in [
+        "cap-build",
+        "cap-build-path",
+        "cap-links",
+        "cap-links-empty",
+    ] {
+        expose(
+            &mut facade_node,
+            capability,
+            true,
+            Some(&format!("dep:{capability}")),
+        );
+    }
     expose(&mut facade_node, "flui-system", true, None);
     facade_node
         .features
@@ -911,8 +976,12 @@ fn self_test_members() -> Members {
     };
 
     let nodes = vec![
-        // silent: the train guard where it belongs
-        guard(crate_node(TRAIN_GUARD, "V", 4, &[])),
+        // silent: the train guard where it belongs, with the build script its
+        // `links` requires
+        with_build_script(
+            guard(crate_node(TRAIN_GUARD, "V", 4, &[])),
+            "crates/flui-foundation/build.rs",
+        ),
         // planted: a second crate with the guard's `links`
         guard(crate_node("v-guard", "V", 5, &[])),
         crate_node("v1", "V", 1, &[]),
@@ -930,8 +999,12 @@ fn self_test_members() -> Members {
         // planted: order 1 depends on order 2 in one tier
         crate_node("k-low", "K", 1, &[("k-high", Normal)]),
         crate_node("k-high", "K", 2, &[("s1", Normal)]),
-        // silent: a dev edge may point up
-        crate_node("k1", "K", 3, &[("h1", Dev), ("k-high", Normal)]),
+        // silent: a dev edge may point up, and a crate of another kind keeps
+        // its build script without `links`
+        with_build_script(
+            crate_node("k1", "K", 3, &[("h1", Dev), ("k-high", Normal)]),
+            "crates/k1/build.rs",
+        ),
         crate_node("h1", "H", 1, &[("k-high", Normal), ("k-high", Normal)]),
         // silent: H -> pkg with an exception; planted: its second H -> pkg
         // edge, which the exception does not name (upward, and names an
@@ -984,6 +1057,35 @@ fn self_test_members() -> Members {
         node(&cap_wrong_feature_rel, &cap_wrong_feature, &[]),
         // silent: the crate's `flui-` prefix is not part of its feature
         node(&cap_service_rel, &cap_service, &[]),
+        // planted: a capability crate with a root `build.rs`
+        with_build_script(
+            node(&cap_build_rel, &cap_build, &[]),
+            "crates/cap-build/build.rs",
+        ),
+        // planted: a capability crate with `build = "gen.rs"`
+        with_build_script(
+            node(&cap_build_path_rel, &cap_build_path, &[]),
+            "crates/cap-build-path/gen.rs",
+        ),
+        // silent: a capability crate that exports a global native symbol
+        // (`links`) keeps its build script
+        with_build_script(
+            {
+                let mut native = node(&cap_links_rel, &cap_links, &[]);
+                native.links = Some("cap_links_native".to_owned());
+                native
+            },
+            "crates/cap-links/build.rs",
+        ),
+        // planted: an empty `links`, which Cargo accepts, names no symbol
+        with_build_script(
+            {
+                let mut opted_out = node(&cap_links_empty_rel, &cap_links_empty, &[]);
+                opted_out.links = Some(" ".to_owned());
+                opted_out
+            },
+            "crates/cap-links-empty/build.rs",
+        ),
         // planted: a core crate names a capability crate (upward, and not
         // the facade)
         crate_node("k-cap", "K", 7, &[("cap1", Normal)]),
@@ -994,7 +1096,22 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 25] = [
+const EXPECTED: [(&str, &str, &str); 28] = [
+    (
+        "cap-links-empty",
+        "crates/cap-links-empty/build.rs",
+        "capability build script",
+    ),
+    (
+        "cap-build",
+        "crates/cap-build/build.rs",
+        "capability build script",
+    ),
+    (
+        "cap-build-path",
+        "crates/cap-build-path/gen.rs",
+        "capability build script",
+    ),
     (FACADE, "cap-mandatory", "capability not optional"),
     ("cap-no-feature", "cap-no-feature", "capability feature"),
     (
@@ -1026,8 +1143,6 @@ const EXPECTED: [(&str, &str, &str); 25] = [
     ("h-pkg", "pkg2", "upward"),
 ];
 
-type Identity = (String, String, &'static str);
-
 /// `(missed, false positives)` of the tier rule over the self-test graph.
 pub(super) fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
     let tiers: Vec<String> = ["V", "C", "S", "R", "K", "H", "pkg"]
@@ -1041,7 +1156,7 @@ pub(super) fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
         .collect();
     let expected: BTreeSet<Identity> = EXPECTED
         .iter()
-        .map(|&(from, to, kind)| (from.to_owned(), to.to_owned(), kind))
+        .map(|&(subject, object, kind)| Identity::new(subject, object, kind))
         .collect();
     (
         expected.difference(&seen).cloned().collect(),
@@ -1052,11 +1167,21 @@ pub(super) fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
 /// `cargo xtask workspace --self-test`.
 pub(super) fn self_test() -> ExitCode {
     let (missed, extra) = self_test_diff();
-    for (from, to, kind) in &missed {
-        println!("self-test: MISSED ({from}, {to}, {kind})");
+    for Identity {
+        subject,
+        object,
+        kind,
+    } in &missed
+    {
+        println!("self-test: MISSED ({subject}, {object}, {kind})");
     }
-    for (from, to, kind) in &extra {
-        println!("self-test: FALSE POSITIVE ({from}, {to}, {kind})");
+    for Identity {
+        subject,
+        object,
+        kind,
+    } in &extra
+    {
+        println!("self-test: FALSE POSITIVE ({subject}, {object}, {kind})");
     }
     if !missed.is_empty() || !extra.is_empty() {
         return ExitCode::FAILURE;
