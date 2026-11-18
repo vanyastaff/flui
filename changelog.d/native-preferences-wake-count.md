@@ -4,7 +4,7 @@
   tell the host that the preferences `preferences()` returned reached the application. On macOS
   and Android a change counts as delivered only then, and one the application drops is read
   again in the next owner turn
-  ([ADR-0377](/docs/adr/ADR-0377-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)).
+  ([ADR-0378](/docs/adr/ADR-0378-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)).
 
 ### Fixed
 

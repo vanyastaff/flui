@@ -1813,7 +1813,7 @@ physical size matches the current native window; a reply taken at an older size
 is asked for once more. The window asks on every resize, configuration change,
 new native window, the loop's first turn, `Start` and inset change `FluiView`
 reports from `onApplyWindowInsets`, which the system also calls as the view
-enters the window; nothing asks on a timer (ADR-0377). From API 30 the insets are the
+enters the window; nothing asks on a timer (ADR-0378). From API 30 the insets are the
 visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
 outstanding; a request while it is out asks once more after its reply settles,
@@ -2878,7 +2878,7 @@ long-press timeout is read from its secure setting, since `ViewConfiguration`'s
 copy can still be old when the observer fires.
 
 The Android and AppKit sources are one model, `preferences::read::NoticedPreferences`
-(ADR-0377), over what each system supplies (`SystemReads`: the read, the clock,
+(ADR-0378), over what each system supplies (`SystemReads`: the read, the clock,
 and `Retrying`, a timer while the application is active on AppKit, the loop's
 deadline on Android). The Android loop decides which notices read in
 `poll::LoopReads::hear` (`ConfigChanged` and a view report read at once, `Start`
@@ -6403,7 +6403,7 @@ the window's `frame_rate_hint` capability is `Unavailable` and the hint answers
 **Alternatives considered:**
 - `DisplayManager.DisplayListener` — it needs a Java object implementing the
   interface, which a `NativeActivity` app without Java code does not have.
-- Polling `Display.getRefreshRate` — the loop polls nothing (ADR-0249, ADR-0377),
+- Polling `Display.getRefreshRate` — the loop polls nothing (ADR-0249, ADR-0378),
   and a display read on a timer would cost a round trip each time for a value
   the choreographer announces.
 - Linking `android_get_device_api_level` or the API 30 functions directly — the

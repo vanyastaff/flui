@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-11-03)
 - **Date:** 2026-10-08
 - **Revised:** 2026-11-18 — the Android owner reads the text weight on notices, with no polling
-  cadence ([ADR-0377](ADR-0377-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)).
+  cadence ([ADR-0378](ADR-0378-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)).
 - **Revised:** 2026-11-03 — Android native execution ran on a Galaxy S21 (`docs/platform-parity.md:342`).
 - **Revised:** 2026-10-11 — motion consumer integration is implemented independently under ADR-0195; native text-weight execution limits remain.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -64,7 +64,7 @@ zero is known `NoPreference`, and other signed values retain their exact numeric
 meaning. A failed available query fails the aggregate read, preserving existing
 accepted-observation and retry ownership instead of manufacturing an off value.
 The owner reads it with the rest of the preferences, on the notices
-[ADR-0377](ADR-0377-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)
+[ADR-0378](ADR-0378-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)
 names (`ConfigChanged` among them); nothing samples it on a timer.
 Geometry-only reads skip the text query, so a text-field failure cannot prevent
 an otherwise valid presentation geometry query.

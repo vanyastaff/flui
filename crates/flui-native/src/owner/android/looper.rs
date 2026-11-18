@@ -277,7 +277,7 @@ pub struct AndroidLoop {
     /// The application's wake callback between owner turns.
     turn: Rc<crate::owner::signal::OwnerTurnSlot>,
     /// When the loop reads preferences, scroll factors and insets on its own;
-    /// every other read follows a notice (ADR-0377).
+    /// every other read follows a notice (ADR-0378).
     loop_reads: Cell<LoopReads>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).

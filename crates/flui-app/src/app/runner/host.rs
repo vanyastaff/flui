@@ -186,7 +186,7 @@ pub(super) fn refresh_preferences_with(
     let preference_read = APP_RUNTIME.with(|slot| slot.borrow().begin_preference_read());
     // The host learns of the delivery only once it is accepted: a read whose
     // delivery is dropped above or fails here is read again in the next
-    // owner turn (ADR-0377).
+    // owner turn (ADR-0378).
     let delivered = values.clone();
     host.logical().update_preferences(values, host.effects())?;
     owner.preferences_delivered(&delivered);

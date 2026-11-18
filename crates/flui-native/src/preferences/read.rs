@@ -1,5 +1,5 @@
 //! How the AppKit and Android preference sources read the system and wake
-//! their owner: told, never polled (ADR-0377).
+//! their owner: told, never polled (ADR-0378).
 //!
 //! [`NoticedPreferences`] is the one model both sources are. What differs per
 //! system sits behind [`SystemReads`]: the read itself, the clock, and how a

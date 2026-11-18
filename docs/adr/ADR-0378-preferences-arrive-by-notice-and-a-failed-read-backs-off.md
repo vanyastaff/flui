@@ -1,4 +1,4 @@
-# ADR-0377: Preferences arrive by notice, are accepted once delivered, and a failed read backs off
+# ADR-0378: Preferences arrive by notice, are accepted once delivered, and a failed read backs off
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18

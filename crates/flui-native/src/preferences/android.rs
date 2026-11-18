@@ -20,7 +20,7 @@ mod configuration {
     //!
     //! The host reads them again on `ConfigChanged`, after `Start` and when
     //! `FluiView` reports a changed setting or contrast level, even without a
-    //! user surface (ADR-0377).
+    //! user surface (ADR-0378).
 
     use std::sync::Arc;
     use std::time::Duration;
