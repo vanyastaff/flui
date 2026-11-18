@@ -7,7 +7,6 @@
 
 use std::{
     cell::Cell,
-    num::NonZeroU32,
     rc::Rc,
     sync::{
         Arc,
@@ -19,10 +18,9 @@ use std::{
 use flui_foundation::{ManualClock, MonotonicClock as _};
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
-    ClockSource, DemandKind, FrameBudget, FrameClock, FrameId, FramePhase, FramePhaseDurations,
-    FrameTimes, IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Milliseconds, PresentOutcome,
-    PresentationAddress, PresentationId, Priority, SchedulerBuilder, UiRuntimeId, UpdateScheduler,
-    frame_pace,
+    ClockSource, DemandKind, FrameClock, FrameId, FramePhase, FramePhaseDurations, FrameTimes,
+    IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, PresentOutcome, PresentationAddress,
+    PresentationId, Priority, SchedulerBuilder, UiRuntimeId, UpdateScheduler, frame_pace,
 };
 
 /// Tiny-deadline exploit: a `deadline` that has already passed defers
@@ -180,16 +178,8 @@ fn update_scheduler_bounds_matrix() {
                 idle_tasks_stop_at_the_deadline_one_task_at_a_time as fn(),
             ),
             (
-                "jank_is_measured_on_the_schedulers_clock",
-                jank_is_measured_on_the_schedulers_clock as fn(),
-            ),
-            (
                 "frame_ids_count_per_scheduler",
                 frame_ids_count_per_scheduler as fn(),
-            ),
-            (
-                "a_frame_budget_refuses_non_finite_samples",
-                a_frame_budget_refuses_non_finite_samples as fn(),
             ),
             (
                 "a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs",
@@ -345,34 +335,6 @@ fn idle_tasks_stop_at_the_deadline_one_task_at_a_time() {
     );
 }
 
-/// Jank is measured on the scheduler's clock: a frame whose pipeline
-/// advances a virtual clock 30 ms is janky at 60 Hz, one that advances 5 ms
-/// is not, however long either took on the wall clock.
-fn jank_is_measured_on_the_schedulers_clock() {
-    let clock = ManualClock::new();
-    let scheduler = SchedulerBuilder::new()
-        .clock(ClockSource::Manual(clock.clone()))
-        .build();
-    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler)
-        .expect("the scheduler has no live owner frame");
-    for (work, janky_after) in [(30, 1), (5, 1)] {
-        let now = clock.now();
-        owner
-            .drive_frame(
-                now,
-                IdleDeadline::far_future(now),
-                || {},
-                || clock.advance(Duration::from_millis(work)),
-            )
-            .expect("live owner frame");
-        assert_eq!(
-            scheduler.janky_frame_count(),
-            janky_after,
-            "after a frame of {work} ms"
-        );
-    }
-}
-
 /// Frame numbers belong to their scheduler: every scheduler's first frame is
 /// frame 1, however many frames other schedulers ran.
 fn frame_ids_count_per_scheduler() {
@@ -395,18 +357,6 @@ fn frame_ids_count_per_scheduler() {
             .expect("live owner frame");
         assert_eq!(observed.get(), Some(FrameId::FIRST));
     }
-}
-
-/// A non-finite or negative sample is refused and cannot poison the rolling
-/// average.
-fn a_frame_budget_refuses_non_finite_samples() {
-    let mut budget = FrameBudget::new(NonZeroU32::new(60).expect("60 is non-zero"));
-    assert!(budget.record_frame_duration(Milliseconds::new(10.0)));
-    for sample in [f64::NAN, f64::INFINITY, -1.0] {
-        assert!(!budget.record_frame_duration(Milliseconds::new(sample)));
-    }
-    assert_eq!(budget.frame_count(), 1);
-    assert_eq!(budget.avg_frame_time(), Milliseconds::new(10.0));
 }
 
 /// A snapshot names the phase that made a late frame late, including the

@@ -92,9 +92,8 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         current_vsync_time,
         next_frame_id: _,
         clock: _,
-        budget,
+        display_period: _,
         frame_count: _,
-        janky_frame_count: _,
         idle_deadline,
         completion_waiters,
         frame_thread,
@@ -116,10 +115,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         current_vsync_time.try_borrow_mut().is_ok(),
         "current_vsync_time is locked during a callback"
-    );
-    assert!(
-        budget.try_borrow_mut().is_ok(),
-        "budget is locked during a callback"
     );
     assert!(
         frame_thread.try_lock().is_some(),
