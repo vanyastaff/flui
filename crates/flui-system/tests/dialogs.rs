@@ -15,8 +15,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult, PickedFile, PickedForm,
-    Picks, SaveLocation, SaveRequest, SaveResult,
+    FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult,
+    PickedFile, PickedForm, Picks, SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -190,6 +190,64 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
     turn(&mut host);
     turn(&mut host);
     assert_eq!(*one.borrow(), Some(Ok(Ok(Some(picks(&["a"]))))));
+}
+
+/// A folder a system handed over without a path, holding one file.
+fn handed_folder() -> PickedFile {
+    let notes = folder_file("notes.txt", b"words");
+    PickedFile::try_from_folder("Project", vec![notes]).expect("a folder")
+}
+
+#[test]
+fn a_pick_of_a_form_the_request_cannot_have_is_a_malformed_answer() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let handed_file = || {
+        PickedFile::try_from_contents("notes.txt", Arc::from(&b"words"[..])).expect("a file name")
+    };
+    let download = || PickedFile::try_download("notes.txt").expect("a file name");
+
+    let opens: [(OpenRequest, PickedFile, bool); 8] = [
+        (OpenRequest::files(), file("notes.txt"), true),
+        (OpenRequest::files(), handed_file(), true),
+        (OpenRequest::files(), handed_folder(), false),
+        (OpenRequest::files(), download(), false),
+        // Whether a path names a file or a folder is the file system's to say.
+        (OpenRequest::folders(), file("Project"), true),
+        (OpenRequest::folders(), handed_folder(), true),
+        (OpenRequest::folders(), handed_file(), false),
+        (OpenRequest::folders(), download(), false),
+    ];
+    for (request, pick, admitted) in opens {
+        let picked = Picks::try_new(vec![pick]).expect("one pick");
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let shown = format!("{request:?} answered {picked:?}");
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        let expected = if admitted {
+            Ok(Some(picked))
+        } else {
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer))
+        };
+        assert_eq!(*answered.borrow(), Some(Ok(expected)), "{shown}");
+    }
+
+    // A save writes a file: a download is its answer, a folder is not.
+    for (pick, admitted) in [(download(), true), (handed_folder(), false)] {
+        let location = SaveLocation::new(pick, None);
+        dialogs.answer_next_save(Ok(Some(location.clone())));
+        let answered = land(handle.save(SaveRequest::new()));
+        turn(&mut host);
+        turn(&mut host);
+        let expected = if admitted {
+            Ok(Some(location))
+        } else {
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer))
+        };
+        assert_eq!(*answered.borrow(), Some(Ok(expected)));
+    }
 }
 
 #[test]
@@ -942,6 +1000,224 @@ fn a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate
         PickedForm::Path(at_path.path().expect("a path"))
     );
     assert_eq!(PickedFile::try_download("a/b"), None);
+}
+
+/// The file at `path` under a handed-over folder, holding `contents`.
+fn folder_file(path: &str, contents: &'static [u8]) -> FolderFile {
+    FolderFile::new(
+        FolderPath::try_new(path).expect("a path under a folder"),
+        Arc::from(contents),
+    )
+}
+
+#[test]
+fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they_are() {
+    // In no order, as a browser lists a folder.
+    let folder = PickedFile::try_from_folder(
+        "Project",
+        vec![
+            folder_file("src/main.rs", b"fn main() {}"),
+            folder_file("src.txt", b"beside the folder"),
+            folder_file("README.md", b"private words"),
+            folder_file("src/lib.rs", b""),
+        ],
+    )
+    .expect("a folder");
+
+    assert_eq!(folder.path(), None, "a browser hands over no path");
+    assert_eq!(folder.contents(), None, "a folder's files hold theirs");
+    assert_eq!(folder.file_name(), Some(OsStr::new("Project")));
+    let files = folder.files().expect("a folder has files");
+    assert_eq!(
+        folder.form(),
+        PickedForm::Folder {
+            name: "Project",
+            files
+        }
+    );
+    let read: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|file| (file.path().as_str(), file.contents()))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            ("README.md", &b"private words"[..]),
+            ("src/lib.rs", &b""[..]),
+            ("src/main.rs", &b"fn main() {}"[..]),
+            ("src.txt", &b"beside the folder"[..]),
+        ],
+        "name by name from the folder down, whatever order they were listed in: \
+         a folder's files come before the file named after it"
+    );
+    let shown = format!("{folder:?} {files:?}");
+    assert!(
+        shown.contains("Project") && shown.contains("README.md") && !shown.contains("private"),
+        "a folder shows its name and its files' paths, never what they hold: {shown}"
+    );
+
+    for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+        assert_eq!(
+            PickedFile::try_from_folder(name, Vec::new()),
+            None,
+            "{name:?} names no folder"
+        );
+    }
+    assert_eq!(
+        PickedFile::try_from_folder(
+            "Project",
+            vec![folder_file("a.txt", b"1"), folder_file("a.txt", b"2")]
+        ),
+        None,
+        "two files at one path"
+    );
+    assert_eq!(
+        PickedFile::try_from_folder("Empty", Vec::new())
+            .expect("a folder")
+            .files(),
+        Some(&[][..]),
+        "a folder may hold no file"
+    );
+    assert_eq!(
+        file("Project").files(),
+        None,
+        "a folder at a path is read by its application"
+    );
+}
+
+#[test]
+fn a_path_under_a_folder_is_its_names_and_none_climbs_out() {
+    let path = FolderPath::try_new("src/web/mod.rs").expect("a path");
+    assert_eq!(path.as_str(), "src/web/mod.rs");
+    assert_eq!(
+        path.components().collect::<Vec<&str>>(),
+        ["src", "web", "mod.rs"]
+    );
+    assert_eq!(path.file_name(), "mod.rs");
+
+    // As a walk builds it: an entry of the folder, then entries under it.
+    let walked = FolderPath::try_from_name("src")
+        .and_then(|folder| folder.try_child("web"))
+        .and_then(|folder| folder.try_child("mod.rs"));
+    assert_eq!(walked, Some(path));
+    assert_eq!(
+        FolderPath::try_from_name("README.md").map(|path| path.file_name().to_owned()),
+        Some("README.md".to_owned())
+    );
+
+    // The same rule on every host: no empty name, none that stays or climbs,
+    // no separator of any host, no NUL.
+    for path in [
+        "", "/a", "a/", "a//b", ".", "a/./b", "..", "a/../b", "a\\b", "a\0b",
+    ] {
+        assert_eq!(FolderPath::try_new(path), None, "{path:?} is not a path");
+    }
+    let folder = FolderPath::try_from_name("src").expect("a name");
+    for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+        assert_eq!(FolderPath::try_from_name(name), None, "{name:?}");
+        assert_eq!(folder.try_child(name), None, "{name:?}");
+    }
+    // A folder holds what its file system allows, and a name is kept as it
+    // is on every host, whatever one of them would read into it.
+    for path in [
+        " ",
+        "docs/Icon\r",
+        ".git/config",
+        "NUL",
+        "C:",
+        "a.",
+        "aux.c",
+    ] {
+        assert_eq!(
+            FolderPath::try_new(path).as_ref().map(FolderPath::as_str),
+            Some(path),
+            "{path:?} is a path under a folder"
+        );
+    }
+}
+
+#[test]
+fn what_a_system_hands_over_is_held_to_the_requests_bounds_on_every_host() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let three_files = || {
+        PickedFile::try_from_folder(
+            "Project",
+            vec![
+                folder_file("a.txt", b"12"),
+                folder_file("src/b.txt", b"345"),
+                folder_file("src/c.txt", b"6789"),
+            ],
+        )
+        .expect("a folder")
+    };
+    let handed = |name: &str, contents: &'static [u8]| {
+        PickedFile::try_from_contents(name, Arc::from(contents)).expect("a file name")
+    };
+
+    let cases: [(OpenRequest, Vec<PickedFile>, Result<(), DialogError>); 8] = [
+        (
+            OpenRequest::folders().max_entries(2),
+            vec![three_files()],
+            Err(DialogError::TooManyEntries { limit: 2 }),
+        ),
+        (
+            OpenRequest::folders().max_entries(3),
+            vec![three_files()],
+            Ok(()),
+        ),
+        (
+            OpenRequest::folders().max_bytes(8),
+            vec![three_files()],
+            Err(DialogError::TooLarge {
+                actual: 9,
+                limit: 8,
+            }),
+        ),
+        (
+            OpenRequest::folders().max_bytes(9),
+            vec![three_files()],
+            Ok(()),
+        ),
+        (
+            OpenRequest::files().allow_multiple().max_bytes(8),
+            vec![handed("a.txt", b"12345"), handed("b.txt", b"6789")],
+            Err(DialogError::TooLarge {
+                actual: 9,
+                limit: 8,
+            }),
+        ),
+        (
+            OpenRequest::files().allow_multiple().max_bytes(9),
+            vec![handed("a.txt", b"12345"), handed("b.txt", b"6789")],
+            Ok(()),
+        ),
+        // A pick at a path is read by its application: nothing bounds it.
+        (
+            OpenRequest::folders().max_entries(0).max_bytes(0),
+            vec![file("Project")],
+            Ok(()),
+        ),
+        (
+            OpenRequest::folders().max_entries(0).max_bytes(0),
+            vec![PickedFile::try_from_folder("Empty", Vec::new()).expect("a folder")],
+            Ok(()),
+        ),
+    ];
+    for (request, picks, admitted) in cases {
+        let picked = Picks::try_new(picks).expect("the case names a pick");
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let shown = format!("{request:?} answered {picked:?}");
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        assert_eq!(
+            *answered.borrow(),
+            Some(Ok(admitted.map(|()| Some(picked)))),
+            "{shown}"
+        );
+    }
 }
 
 #[test]
