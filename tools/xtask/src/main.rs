@@ -18,6 +18,7 @@ mod table_test;
 
 mod tasks;
 
+mod adr_numbers;
 mod android_dex;
 mod api_closure;
 mod bench;
@@ -35,6 +36,7 @@ mod public_api;
 mod recording_vocabulary;
 mod send_positions;
 mod toolchain;
+mod unmounted_tests;
 mod wasm;
 mod worktree;
 
@@ -105,6 +107,10 @@ enum Command {
     CiVerify(change_scope::CiVerifyArgs),
     /// Check that every declared MSRV matches rust-toolchain.toml.
     Toolchain(toolchain::ToolchainArgs),
+    /// Check that every `tests/*.rs` file of an `autotests = false` crate is compiled.
+    UnmountedTests(unmounted_tests::UnmountedTestsArgs),
+    /// Check that no two records in `docs/adr/` share a number.
+    AdrNumbers(adr_numbers::AdrNumbersArgs),
     /// Check that every place the public API names `Send` or `Sync` is listed under
     /// ADR-0323 §3.
     SendPositions(send_positions::SendPositionsArgs),
@@ -180,6 +186,8 @@ fn main() -> ExitCode {
         Command::PathsFilter(args) => change_scope::paths_filter(&args),
         Command::CiVerify(args) => change_scope::ci_verify(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
+        Command::UnmountedTests(args) => unmounted_tests::unmounted_tests(&args),
+        Command::AdrNumbers(args) => adr_numbers::adr_numbers(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::PublicApi(args) => public_api::public_api(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),

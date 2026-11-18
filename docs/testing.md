@@ -130,7 +130,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), toolchain, the docs-only allowlist, changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), toolchain, unmounted-tests (every test file of an `autotests = false` crate is compiled), adr-numbers, the docs-only allowlist, changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -1208,7 +1208,7 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, toolchain, changelog fragments, the generated files against their sources; a missing tool fails
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, toolchain, unmounted-tests, adr-numbers, changelog fragments, the generated files against their sources; a missing tool fails
 cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit

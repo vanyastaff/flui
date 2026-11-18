@@ -202,6 +202,8 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
 | A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
+| Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | `xtask unmounted-tests` (in `xtask checks`; ADR-0371 §3) |
+| No two records in `docs/adr/` share a number | `xtask adr-numbers` (in `xtask checks`; ADR-0371 §3) |
 | A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 
@@ -216,11 +218,16 @@ reader of "Before a merge" looks for a change that breaks one:
 - A crate's top-level modules import in one direction (ADR-0081 §5; ADR-0151 §10 for the core
   host), and a Rust source file has at most 3000 production lines.
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
-  private ID counter, or granted by ADR-0097.
+  private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
+  `docs/gaps.md`.
 - Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit
   handler, a closure handed to the OS) is a constant or one call of
   `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16).
 - No new `unsafe impl Send` or `Sync` (ADR-0136 §3).
+- A WGSL derivative (`dpdx`, `dpdy`, `fwidth`, an implicit-LOD `textureSample`) is taken in
+  uniform control flow, before the first branch on a per-fragment value; a branch on a uniform
+  value above one carries a `// wgsl-uniformity: uniform` comment saying why. Native naga
+  accepts a shader that breaks this and Tint, in every browser, refuses it.
 - Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a
   `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code lives in a kit (ADR-0243).
 - A constructor that can fail is `try_new`, a context is bound as `ctx`, never `cx`, and a

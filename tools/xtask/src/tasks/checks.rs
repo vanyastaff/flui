@@ -9,8 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    android_dex, change_scope, changelog, docs_links, fonts, icon_import, key_vocabulary,
-    platform_floor, recording_vocabulary, toolchain,
+    adr_numbers, android_dex, change_scope, changelog, docs_links, fonts, icon_import,
+    key_vocabulary, platform_floor, recording_vocabulary, toolchain, unmounted_tests,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -103,7 +103,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// `--self-test` is not here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 12] {
     [
         (
             if strict {
@@ -114,6 +114,12 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
             |args| docs_links::docs_links(&parsed(args)?),
         ),
         ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
+        ("unmounted-tests", |args| {
+            unmounted_tests::unmounted_tests(&parsed(args)?)
+        }),
+        ("adr-numbers", |args| {
+            adr_numbers::adr_numbers(&parsed(args)?)
+        }),
         ("paths-filter", |args| {
             change_scope::paths_filter(&parsed(args)?)
         }),
@@ -222,6 +228,8 @@ mod tests {
             [
                 "docs-links",
                 "toolchain",
+                "unmounted-tests",
+                "adr-numbers",
                 "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",

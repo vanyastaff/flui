@@ -67,7 +67,8 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate: `cargo xtask checks --strict` (fmt, typos,
-  # Taplo, markdown links, toolchain, the docs-only allowlist, changelog
+  # Taplo, markdown links, toolchain, unmounted test files, ADR numbers, the
+  # docs-only allowlist, changelog
   # fragments, the generated files against their sources),
   # xtask's own tests (which include each self-test, the lane classification and
   # the `ci` aggregator's skip rule), and the workflow linters. It builds only

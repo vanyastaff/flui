@@ -10,21 +10,11 @@ The FLUI workspace contains 24 crates under `crates/`, the official packages und
 
 > **Reach.** The rule covers what each crate's resolved graph contains, not just its direct edges ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §2): in every root build (the facade under each supported feature combination and each feature alone, every crate at its defaults and with all features), no crate reaches a package its tier forbids in the root `[workspace.metadata.flui.reach]`, or that its own `reach-forbid` adds. A crate that must reach one lists `reach-exceptions = [{ to = "<package>", exit = "ADR-NNNN", reason = "…" }]` (`grant` in place of `exit` for a standing permission): the entry excuses the paths that run through that crate.
 
-> **No process-global state.** A crate keeps no `static` or `thread_local!` outside `#[cfg(test)]`, except immutable data, private `fetch_add`-only 64-bit ID counters, and state of a class [ADR-0097](adr/ADR-0097-no-process-global-state-gate.md) grants (a trampoline, a counter, immutable data, state the process has once, a diagnostic).
+> **No process-global state.** A crate keeps no `static` or `thread_local!` outside `#[cfg(test)]`, except immutable data, private `fetch_add`-only 64-bit ID counters, and state of a class [ADR-0097](adr/ADR-0097-no-process-global-state-gate.md) grants (a trampoline, a counter, immutable data, state the process has once, a diagnostic). A `static` an ADR is to remove is debt, listed in [`gaps.md`](gaps.md) with that ADR.
 
 ## Tiers
 
-<!-- BEGIN crates-map -->
-| Tier | Crates, by `order` and `tier-kind` |
-|------|------------------|
-| V values | `flui-macros` (3, internal), `flui-foundation` (4, internal) |
-| C contracts | `flui-platform` (1, stable), `flui-protocol` (2, stable) |
-| S substrate | `flui-log` (1, internal), `flui-scheduler` (2, internal), `flui-painting` (3, internal), `flui-interaction` (4, internal), `flui-semantics` (5, internal), `flui-animation` (6, internal), `flui-assets` (7, internal) |
-| R render machine | `flui-layer` (1, internal), `flui-rendering` (2, internal), `flui-objects` (3, internal), `flui-engine` (4, internal) |
-| K spine and runtime | `flui-view` (1, internal), `flui-widgets` (3, internal), `flui-runtime` (4, internal), `flui-sdk` (5, evolving), `flui-testing` (6, internal) |
-| H hosts | `flui-native` (1, internal), `flui-app` (2, internal), `flui-cli` (3, tool), `flui` (4, stable) |
-| pkg official packages and capability crates | `flui-material` (1, official, under packages/, on `flui-sdk`), `flui-cupertino` (2, official, under packages/, on `flui-sdk`), `flui-devtools` (3, official, under packages/, on `flui-sdk`), `flui-hot-reload` (4, official, under packages/, on `flui-sdk`), `flui-system` (5, capability) |
-<!-- END crates-map -->
+The root `Cargo.toml` names the tiers bottom to top in `[workspace.metadata.flui] tiers` (V values, C contracts, S substrate, R render machine, K spine and runtime, H hosts, pkg official packages and capability crates), and each manifest's `[package.metadata.flui]` gives its crate's `tier`, `tier-kind` and `order`. The tables below group the crates by tier.
 
 The `edge-exceptions` in force are the facade's optional re-exports, `flui → flui-material`,
 `flui → flui-cupertino` and `flui → flui-devtools`, each with its exit in
@@ -128,7 +118,7 @@ A new crate is a topology change, so it starts with the contract, not the direct
 1. Decide its tier, kind and order from what it depends on: a dependency points to a lower tier, or to a smaller `order` in the same tier. The kind states what it promises ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3).
 2. Add the directory under `crates/<flui-name>/` (an official package that builds on `flui-sdk` alone goes under `packages/<flui-name>/`, with `tier-kind = "official"` and no `edge-exceptions`) with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`). The manifest inherits the shared `[workspace.package]` keys and the workspace lints, and declares `[package.metadata.flui] tier`, `tier-kind` and `order` (unique in the tier) (plus `wasm = false`, with the reason beside it, if it cannot build for wasm32).
 3. Add the path to `[workspace.members]` in the root `Cargo.toml`.
-4. Read the manifest against the rules above: a tier, kind and order, an order no other crate of the tier has, dependencies that point down the tier order, the workspace keys and lints, and for a capability crate no build script without `links`. No program checks them before the first release ([ADR-0371](adr/ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)).
+4. Read the manifest against the rules above: a tier, kind and order, an order no other crate of the tier has, dependencies that point down the tier order, the workspace keys and lints, and for a capability crate no build script without `links`. No program checks them before the first release ([ADR-0371](adr/ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)); `cargo xtask unmounted-tests` does check that a crate with `autotests = false` compiles every file under its `tests/`.
 5. Update this page (`docs/crates.md`) and the tier diagram in [`architecture.md`](architecture.md), the human-readable graph. If the crate changes what an agent should read first, extend the decision tables in [`AGENTS.md`](../AGENTS.md).
 
 ## See Also
