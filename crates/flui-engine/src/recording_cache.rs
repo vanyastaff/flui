@@ -37,7 +37,7 @@ use crate::instancing::{
     ArcInstance, CircleInstance, ClippableInstance, GlyphInstance, LinearGradientInstance,
     RadialGradientInstance, RectInstance, ShadowInstance, SweepGradientInstance,
 };
-use crate::pixel_shift::{PixelOrigin, PixelShift, Shift};
+use crate::pixel_shift::{PixelOrigin, PixelShift, Shift, split_translation};
 use crate::state_stack::ResolvedClip;
 use crate::vertex::Vertex;
 
@@ -117,14 +117,9 @@ impl RasterKey {
         {
             return None;
         }
-        // `t - floor(t)` is exact but for a `t` in (-1/2, 0), where it rounds,
-        // and to 1.0 when `-t` is at most 2^-54; clamped below 1, so that `t`
-        // keys apart from a whole one. A whole `t` of either sign has the
-        // fraction `+0.0`.
         let key = Self {
             linear: [m[0], m[1], m[4], m[5]].map(canonical_bits_f64),
-            fraction: [m[12], m[13]]
-                .map(|t| canonical_bits_f64((t - t.floor()).min(1.0_f64.next_down()))),
+            fraction: [m[12], m[13]].map(|t| canonical_bits_f64(split_translation(t).1)),
         };
         Some((key, PixelOrigin::of_bounded(m[12], m[13])))
     }

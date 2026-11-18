@@ -2422,6 +2422,32 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
             )
         },
         MoveRow {
+            target: (64, 1088),
+            ..row(
+                "text just above a row, moved far down",
+                // Its offset would round onto the row at 1044 pixels.
+                |canvas| {
+                    let y = 3.0 - 2.0_f64.powi(-25) - 2.0_f64.powi(-45);
+                    paint_text(canvas, "Moved", Offset::new(2.0, y));
+                },
+                (10.0, 20.0),
+                (10.0, 1_044.0),
+            )
+        },
+        MoveRow {
+            target: (1152, 32),
+            ..row(
+                "text just below a bin edge, moved far right",
+                // Its offset would round onto the bin edge at 1024 pixels.
+                |canvas| {
+                    let x = 2.125 - 2.0_f64.powi(-28) - 2.0_f64.powi(-45);
+                    paint_text(canvas, "Moved", Offset::new(x, 2.0));
+                },
+                (10.0, 4.0),
+                (1_034.0, 4.0),
+            )
+        },
+        MoveRow {
             ratio: 2.0,
             ..row("text at a ratio of 2", text, (10.0, 20.0), (13.0, 17.0))
         },
@@ -2557,15 +2583,6 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         );
         let cached_two = full_frame(&mut cached, &two, FullReason::FirstFrame);
         let recorded_two = full_frame(&mut recorded, &two, FullReason::DamageOff);
-        eprintln!(
-            "ROW {row}: hits={} ir={} px={}",
-            cached_two.counters.recording_cache_hits,
-            cached_two.ir == recorded_two.ir,
-            pixels_differing(&cached_two.pixels, &recorded_two.pixels)
-        );
-        if std::env::var_os("ROWS").is_some() {
-            continue;
-        }
         assert_eq!(
             (
                 cached_two.counters.chunks_recorded,

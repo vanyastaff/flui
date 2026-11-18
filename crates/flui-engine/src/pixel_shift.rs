@@ -18,11 +18,19 @@
 //! The shift is a whole number below 2^24, so it is exact in `f32`, and
 //! adding it to a whole or dyadic position of that range is exact. Any other
 //! position rounds once, within one `f32` ulp of what recording at the new
-//! origin computes. A glyph on the device grid is placed from the fraction
-//! of its paragraph's origin alone, split in `f64` before any `f32`
-//! arithmetic (`ShapedRun::placed_glyphs`), so its column, row and subpixel
-//! bin after a shift are the ones a recording at the new origin picks, at
-//! every magnitude the key admits.
+//! origin computes.
+//!
+//! A glyph on the device grid is placed in whole pixels and a subpixel bin
+//! from an offset that holds no whole pixel of the translation: the
+//! translation's fraction, `split_translation`, plus the linear part's image
+//! of the paragraph's position (`ShapedRun::placed_glyphs`). A replay shares
+//! those bits with a recording at the new origin, so its glyphs are the
+//! ones that recording places, at every magnitude the key admits, as long as
+//! the translation the paragraph is drawn under is the chunk's own. A
+//! translation pushed inside the chunk is composed with the chunk's in `f64`
+//! at the device magnitude, so its fraction can round to other bits at
+//! another whole pixel, and a glyph at a rounding boundary can then land a
+//! bin or a row from where a fresh recording puts it.
 
 use crate::effects::{
     LinearGradientInstance, RadialGradientInstance, ShadowInstance, SweepGradientInstance,
@@ -47,8 +55,8 @@ impl PixelOrigin {
     pub(crate) fn of_bounded(tx: f64, ty: f64) -> Self {
         debug_assert!(tx.abs() < 8_388_608.0 && ty.abs() < 8_388_608.0);
         Self {
-            x: tx.floor() as i64,
-            y: ty.floor() as i64,
+            x: split_translation(tx).0 as i64,
+            y: split_translation(ty).0 as i64,
         }
     }
 
@@ -69,6 +77,19 @@ impl PixelOrigin {
             dy: dy as f32,
         })
     }
+}
+
+/// A device translation `t` as its whole pixels and the rest, `floor(t)` and
+/// a fraction in `[0, 1)`: the fraction the recording cache keys a chunk by
+/// and the one text is placed from, so a recording and its replay at another
+/// whole pixel compute the same bits.
+pub(crate) fn split_translation(t: f64) -> (f64, f64) {
+    let whole = t.floor();
+    // `t - floor(t)` is exact but for a `t` in (-1/2, 0), where it rounds,
+    // and to 1.0 when `-t` is at most 2^-54; clamped below 1, so that `t`
+    // keys apart from a whole one. A whole `t` of either sign has the
+    // fraction `+0.0`.
+    (whole, (t - whole).min(1.0_f64.next_down()))
 }
 
 /// A move by whole device pixels, right and down; never zero.
