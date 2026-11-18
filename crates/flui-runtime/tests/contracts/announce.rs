@@ -1,4 +1,5 @@
-//! A mounted widget announces through its presentation (ADR-0204 §4).
+//! A mounted widget announces through its presentation (ADR-0204 §4), and a
+//! presentation builds what assistive technology reads only while it listens.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -213,5 +214,88 @@ fn an_idle_presentation_speaks_an_announcement() {
                 "Message sent"
             ),
         ]
+    );
+}
+
+/// Once the last assistive technology leaves, the presentation builds and
+/// sends nothing more, an announcement included; when one attaches again,
+/// the next frame sends the whole tree once. The bridges that drop their tree
+/// when the last one leaves (Android, AT-SPI, iOS) rely on both: a fragment
+/// sent after the attach would reach an adapter holding no tree.
+#[test]
+fn semantics_stop_with_the_last_listener_and_restart_whole() {
+    let bridge = Arc::new(flui_native::FakeAccessibility::new());
+    let window = flui_native::headless_platform()
+        .open_window(
+            flui_platform::WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("headless window");
+    let mut runtime = UiRuntime::try_new(
+        PresentationWindow::new(window, Some(Arc::clone(&bridge) as Arc<_>)),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let slot = Slot::default();
+    runtime
+        .attach_root_widget_with_size(
+            &Announcing {
+                slot: Arc::clone(&slot),
+            },
+            40.0,
+            40.0,
+        )
+        .expect("mount");
+    let pump = |runtime: &mut UiRuntime| {
+        let _ = runtime.pump(
+            &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+            &mut Sink,
+        );
+    };
+    pump(&mut runtime);
+    assert_eq!(
+        bridge.sent_count(),
+        0,
+        "nothing is built before anyone listens"
+    );
+
+    bridge.set_active(true);
+    pump(&mut runtime);
+    assert_eq!(
+        (bridge.sent_count(), bridge.sent_whole_count()),
+        (1, 1),
+        "the attach is answered with the whole tree"
+    );
+
+    bridge.set_active(false);
+    pump(&mut runtime);
+    let detached = (bridge.sent_count(), bridge.sent_whole_count());
+    let announcer = slot
+        .lock()
+        .clone()
+        .expect("a presentation hands its widgets an announcer");
+    announcer
+        .announce("Nobody hears this", Urgency::Polite)
+        .expect("an open presentation accepts");
+    pump(&mut runtime);
+    pump(&mut runtime);
+    assert_eq!(
+        (bridge.sent_count(), bridge.sent_whole_count()),
+        detached,
+        "no update is built while nobody listens"
+    );
+
+    bridge.set_active(true);
+    pump(&mut runtime);
+    assert_eq!(
+        (bridge.sent_count(), bridge.sent_whole_count()),
+        (detached.0 + 1, detached.1 + 1),
+        "the reattach is answered with one update, the whole tree"
     );
 }
