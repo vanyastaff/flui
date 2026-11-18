@@ -5771,6 +5771,79 @@ GPU-память простаивающего или невидимого окн
   `prompt_for_new_path`, `app_path`, типы `PathPromptOptions`, `Task` и `TaskLabel`; имя нити
   `flui-native-bg` живёт в `executor.rs`. Их удаление ждёт провайдеров `flui-system` на каждой ОС
   (LY57–LY60, LY67, LY73).
+- [x] **LY67** (закрыта веткой `system/android-providers-2`: провайдеры Android лаунчера, файловых
+  диалогов, message box, share, папок пользователя и сведений о системе; прогоны на Galaxy S21 и
+  эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел
+  «Android» в `crates/flui-system/ARCHITECTURE.md`. Классы Android зовутся из Rust через JNI
+  (`jni` 0.22 по сырым указателям, которые хост одалживает на вызов; своего `static` `JavaVM`
+  нет: VM, загрузчик классов, два класса и `ContentResolver` приложения первый провайдер runtime
+  читает в кадре Activity и держит в `runtime_local`). Java — только там, где JNI её не заменяет:
+  `FluiDocuments` — content provider, компонент, который Android создаёт по имени из манифеста;
+  `FluiCallback` — обработчик `java.lang.reflect.Proxy` (JNI не определяет классов, а колбэку
+  Android нужен объект Java-типа): один на все интерфейсы — `Runnable` для главного потока Java и
+  три слушателя диалога, вызов приходит в один нативный метод с именем метода, финализатор
+  возвращает дескриптор. Dex крейта (`android/classes.dex`, запись, правила R8) объявлен в
+  `[package.metadata.flui.declares]`; `cargo xtask android-dex` держит dex каждого крейта (таблица
+  `TREES`), workflow `Android dex` собирает оба; `FluiCallback.PROTOCOL` сверяется до привязки,
+  APK без классов или с другим протоколом — `NotDeclared`. Новый ключ объявлений
+  `android.providers` (схема 4, ADR-0307): класс и суффикс authority под id приложения,
+  `flui build` пишет `<provider>` в манифест (не экспортирован, `grantUriPermissions`).
+  Оба нативных метода — один вызов `owner::android::native_call::jni_native` крейта
+  (`xtask panic-boundary` читает и его). Файловые диалоги — `ACTION_OPEN_DOCUMENT` и
+  `ACTION_CREATE_DOCUMENT` через `Activity::launch_for_result` под ключом на вид; удержание
+  диалога — `ResultTicket` (сброс кончает пикер, ADR-0344, и отменяет чтение через
+  `CancellationSignal`), `ActivityEnded` отвечает `WindowClosed`, ответ прежней Activity забирает
+  первый диалог следующего runtime (`reattach` под каждым ключом): `Intent` открытия отпускается,
+  пустой документ сохранения удаляется. Выбор — имя и содержимое (`PickedForm::Contents`), читается
+  по content URI на рабочей нити: сначала описываются все документы, выбор сверяется с фильтрами
+  (имя и тип провайдера), заявленные размеры — с `OpenRequest::max_bytes`, и только потом чтение,
+  со счётом байтов; правила общие с Web (`dialog::handed_over`: `admit_picks`, `admit_declared`,
+  `admit_read`, `named_after_first_filter`; `web::rules` зовёт их). Пикер фильтрует только по MIME:
+  расширение без типа у `MimeTypeMap` расширяет пикер до всех документов, выбор всё равно сверяется
+  (ADR-0360 §4). Сохранение пишет содержимое запроса в выбранный документ; тип документа — по
+  расширению предложенного имени, иначе первого фильтра, так что провайдер Android сам добавляет
+  расширение к имени, набранному без него. Диалог папок — `NotYetOnThisHost`, сохранение без
+  содержимого — `NotOnThisPlatform`. Лаунчер: URI — `ACTION_VIEW` под `CATEGORY_BROWSABLE` без
+  гранта; файл открывается на рабочей нити (`O_NONBLOCK | O_NOCTTY`), судится то, что держит
+  дескриптор, и итоговое имя (`/proc/self/fd`): только обычный файл, который не запускается и не
+  ставит пакет (`.apk`), и уходит он content URI `FluiDocuments` со случайным токеном и грантом
+  чтения одной activity, никогда `file:` (ADR-0360 §2); reveal, trash и папка —
+  `NotOnThisPlatform`. Share — `ACTION_SEND`/`ACTION_SEND_MULTIPLE` через chooser, текст и ссылка
+  в `EXTRA_TEXT`, файлы — теми же content URI, грант в `ClipData`. Message box — `AlertDialog` на
+  главном потоке Java, отвечает один раз (кнопка, уход пользователя, не показан), Yes/No не
+  закрывается, удержание снимает ответ и закрывает окно. Папки пользователя —
+  `Environment.getExternalStoragePublicDirectory`, сведения о системе — системные свойства.
+  Автозапуск, глобальные сочетания, значок лаунчера и jump list — `NotOnThisPlatform`. Контракт
+  служб не менялся.
+  Тесты (каждый падает без своего правила, проверено изъятием правила):
+  `the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read` (без сверки заявленных
+  размеров и без лишнего байта в чтении), `a_dialog_let_go_finishes_its_picker_and_stops_the_read_of_its_answer`
+  (без сброса билета и без прерывания), `a_save_completes_once_the_user_chose_whoever_still_waits`,
+  `an_earlier_activitys_answers_are_claimed_once_and_hold_nothing`,
+  `a_filter_becomes_the_types_android_maps_it_to_or_every_document`,
+  `a_save_proposes_a_name_and_a_type_after_the_first_filter`,
+  `a_save_writes_the_document_the_user_chose_and_deletes_one_it_could_not_write`,
+  `only_a_regular_file_that_neither_runs_nor_installs_is_a_document`,
+  `a_box_answers_its_button_what_leaving_means_or_nobody`,
+  `the_text_and_the_link_travel_together_the_link_on_its_own_line`,
+  `a_runtime_runs_a_bounded_number_of_workers_and_refuses_the_next`,
+  `the_java_classes_state_what_the_library_and_the_manifest_name`; ещё
+  `an_open_dialog_answers_the_documents_the_picker_named_as_their_contents`,
+  `a_request_the_activity_refuses_or_ends_answers_the_dialog_its_reason`,
+  `a_launch_judges_the_file_it_opened_by_its_final_name` (настоящие файлы и ссылки, Linux),
+  `several_files_are_typed_by_what_their_types_have_in_common`,
+  `a_listeners_call_is_a_button_the_user_leaving_or_the_box_going`; в `flui-cli` —
+  `a_provider_names_a_java_class_and_an_authority_suffix`, `a_provider_is_joined_by_its_authority`,
+  `a_provider_authority_has_one_class`, `the_application_declares_the_providers_its_crates_ship`.
+  Запущено: `flui-system` на Windows (nextest) и в WSL (Linux), проверка типов
+  `aarch64-linux-android` на nightly в WSL (только `--lib`: dev-зависимостям нужен clang NDK);
+  каждое имя и сигнатура JNI сверены с `android.jar` платформы 35 через `javap`; dex собран
+  локально теми же JDK и build-tools, что в записи. Не запущено: ничего на устройстве и эмуляторе;
+  clippy для Android — только CI (`cross-typecheck`). Чего не достаёт до контракта (выбор без
+  доступа, переживающего диалог; диалог папок; фильтр только по MIME; ответ прежней Activity не
+  доставляется приложению) — `docs/gaps.md`. Прогоны — строки parity «Open a URL», «Open a file,
+  reveal it in the file manager», «Open, save and folder dialogs», «Message box», «Share», «User
+  folders», «OS name, version and architecture».
 - [ ] **LY65** (не закрыта: мост на `main`; идентификатор не доходит до `viewIdResourceName`,
   тестов потоков и пробуждения моста нет, TalkBack не запускался) — #2013 (`ff2e33c71`), смена
   маршрута #2135. `accessibility/android.rs` держит низкоуровневый `accesskit_android`
