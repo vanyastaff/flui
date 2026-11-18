@@ -30,8 +30,9 @@ no device behind them; Weston 13 offers no `cursor-shape`, so the cursor ran fro
 only. The X11 host has its input too: XInput 2's pointers, touches, pens, touchpad pinches and
 swipes and unphased smooth scrolling, XKB's keys,
 compose and layout, and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it
-on Xvfb under openbox and held against a native recording, while touch, pen, pinch, swipe and smooth
-scrolling are checked by their decoder only (no such device on Xvfb). The Wayland host reads and
+on Xvfb under openbox and held against a native recording, and a real window passed the backend
+conformance table from XTest (`the_x11_window_input_conforms`), while touch, pen, pinch, swipe and
+smooth scrolling are checked by their decoder only (no such device on Xvfb). The Wayland host reads and
 writes its seats' selection through `wl_data_device`: two clients of one Weston 13 (X11 backend
 under Xvfb, 2026-10-30) read each other's text through the compositor, and its primary selection
 through `zwp_primary_selection_device_manager_v1`, which two clients of a sway 1.9 read the same way
@@ -518,14 +519,14 @@ evidence = "The iPad pointer hovers, scrolls with phases, pinches, rotates and r
 id = "touch"
 feature = 'Touch'
 status = { windows = "partial", macos = "na", wayland = "partial", x11 = "partial", ios = "yes", android = "yes", web = "partial", headless = "yes" }
-note = 'Linux translates `wl_touch` and XInput 2 touches, held by their translation tests only; no touch device ran on either.'
+note = 'Linux translates `wl_touch` and XInput 2 touches, held by their translation tests only; no touch device ran on either: Xvfb lists no device with a touch class and XTest sends no touch, so the real X11 window passed the backend conformance table (`the_x11_window_input_conforms`) without its touch rows. Owed: a touch screen under a GNOME and a KDE session.'
 evidence = "Runs: a manual Windows run (a synthetic touch from `InjectSyntheticPointerInput` into a real window, recorded and replayed), a hosted Windows runner (two synthetic touches injected as one frame arrive as one pointer frame, down, move and lift, each pointer at its own position: `two_injected_touches_arrive_as_one_pointer_frame`; no Windows touch screen has run), a manual iOS run, an Android emulator tap, a manual Android run on a Galaxy S21 (`adb shell input` taps and swipes, recorded and replayed), and a manual Web run (two trusted touches in headless Chrome, recorded and replayed); a manual Android run drives the interaction widgets's widgets on the same phone with a `uinput` multi-touch screen (swipes, flings, a pull, pages, the sheet, double taps, a spread, a pinch, long presses and a carried drag), each outcome read through the development agent and the screen's pixels; a manual Web run drove the same widgets in headless Chrome with trusted touch swipes, drags, long presses, double taps, spreads and pinches, which the canvas keeps from the browser's own panning (`touch-action: none`). Linux touch has run on neither native host (no touch device on Xvfb or a headless Weston); their translation tests hold it"
 
 [[group.section.row]]
 id = "pen-and-stylus"
 feature = 'Pen and stylus'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
-note = "macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2 pens) are held by their decoders only; no hardware pen has run on Windows, Android or the Web."
+note = "macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2 pens) are held by their decoders only: XTest's devices report only x and y and Xvfb loads no tablet driver, so the real X11 window's conformance run (`the_x11_window_input_conforms`) leaves the pen row to the decoder. Owed: a tablet under a GNOME and a KDE session. No hardware pen has run on Windows, Android or the Web."
 evidence = "macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2) decode pens, held by their decoders only. Windows runs a synthetic pen (pressure and tilt) from `InjectSyntheticPointerInput` through a manual Windows run, recorded and replayed; its position comes from the himetric location through the device's rectangles, finer than a pixel (the synthetic pen ran through that mapping, but it is injected at whole pixels). Android runs a manual Android run on a Galaxy S21: `input stylus` taps and a `uinput` pen the system's `InputReader` reads, hovering, touching with pressure and tilt and leaving under one pointer identity, recorded and replayed. No hardware pen has run on either (the S21 takes no S Pen); a manual Android run taps the gesture pad with `input stylus` after a mouse hovered on the same injected device, which the pointer assembly now ends as a hover rather than refusing the pen; Android has no property revisions. The Web reads pressure, spherical angles or the tilt planes, twist and coalesced and predicted samples; constructed pen events and a trusted BiDi pen stroke (pressure, angles, twist, recorded and replayed) ran in headless Chrome, no hardware pen"
 
 [[group.section.row]]
@@ -546,7 +547,7 @@ evidence = "a precise, phased scroll that begins over a `GestureDetector` with a
 id = "trackpad-pinch-and-rotate"
 feature = 'Trackpad pinch and rotate'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
-note = 'Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only.'
+note = 'Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only: on X11 only the input driver of a touchpad sends a pinch, which Xvfb does not load and XTest cannot stand in for, so the conformance run of the real X11 window (`the_x11_window_input_conforms`) leaves the pinch rows to the decoder. Owed: a libinput touchpad under a GNOME and a KDE session.'
 evidence = "Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); Android (API 34+) decodes a touchpad's pinch gesture as `PanZoom` scale about its cursor, ran by a manual Android run on a Galaxy S21 from a `uinput` touchpad, not a hardware one (Android has no touchpad rotation); the Web decodes the Control-held wheel events Chromium and Firefox send for a pinch (`Emulated`, classified by a sequence's first event, End at a deadline on the event timeline, refused in favour of the browser's zoom) and WebKit's `gesture*` events (scale and rotation): run in headless Chrome with constructed events through a manual Web run, never with a trackpad or in Safari; Wayland (`pointer-gestures`) and X11 (XInput 2.4) decode a pinch, held by their decoders only. `PanZoom` carries only scale and rotation about a focal point"
 
 [[group.section.row]]
