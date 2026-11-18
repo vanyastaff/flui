@@ -221,10 +221,12 @@ jobs:
   #   pull_request                           docs when every changed file is
   #                                          documentation, otherwise wide
   # Documentation is a root `*.md` or licence text, anything under docs/ or
-  # changelog.d/, a crate's own ARCHITECTURE.md, CHANGELOG.md or licence text,
+  # changelog.d/, a crate's ARCHITECTURE.md (or docs/ARCHITECTURE.md), CHANGELOG.md
+  # or licence text (LICENSE, LICENSE-APACHE, LICENSE-MIT, NOTICE),
   # and the issue templates and CODEOWNERS. docs/gaps.md and
   # docs/platform-parity.md are not: flui-native's tests read them. Neither is
-  # book/: its chapters are doctests of the facade (src/book.rs). Renames count
+  # book/: the facade's unit tests check its chapters (src/book.rs; its doctests
+  # run on main, in doc-test). Renames count
   # both paths, so a file moved into docs/ still runs the gate. A file another
   # crate's code includes with include_str! later is not caught here, and
   # main's run finds what the skipped jobs would have (ADR-0376).
@@ -275,15 +277,15 @@ jobs:
                 docs/gaps.md | docs/platform-parity.md) lane=wide ;;
                 docs/* | changelog.d/* | .github/ISSUE_TEMPLATE/* | .github/CODEOWNERS) ;;
                 crates/*/* | packages/*/*)
-                  # a crate's own top-level documentation and licence texts
+                  # a crate's own architecture notes, changelog and licence texts
                   case "${file#*/*/}" in
-                    */*) lane=wide ;;
-                    ARCHITECTURE.md | CHANGELOG.md | LICENSE* | NOTICE*) ;;
+                    ARCHITECTURE.md | docs/ARCHITECTURE.md | CHANGELOG.md) ;;
+                    LICENSE | LICENSE-APACHE | LICENSE-MIT | NOTICE) ;;
                     *) lane=wide ;;
                   esac
                   ;;
                 */*) lane=wide ;;
-                *.md | LICENSE* | NOTICE*) ;;
+                *.md | LICENSE | LICENSE-APACHE | LICENSE-MIT | NOTICE) ;;
                 *) lane=wide ;;
               esac
             done <<< "$files"

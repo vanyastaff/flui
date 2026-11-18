@@ -53,10 +53,12 @@ documentation lane, which most documentation pull requests take.
 
 `plan` lists the pull request's changed files, a rename by both its paths, and takes `docs` when
 every one is documentation (a root `*.md` or licence text, `docs/` but `docs/gaps.md` and
-`docs/platform-parity.md`, `changelog.d/`, a crate's own `ARCHITECTURE.md`, `CHANGELOG.md` or
-licence text, the issue templates, `CODEOWNERS`), `wide` otherwise, and `full` for every other
-event. `book/` is not documentation: its chapters are doctests of the facade (`src/book.rs`). A
-listing that fails stops the step; it never leaves a lane. There is no `tooling` lane: a change to
+`docs/platform-parity.md`, `changelog.d/`, a crate's `ARCHITECTURE.md` or
+`docs/ARCHITECTURE.md`, `CHANGELOG.md` or licence text, the issue templates, `CODEOWNERS`; a
+licence text is `LICENSE`, `LICENSE-APACHE`, `LICENSE-MIT` or `NOTICE`), `wide` otherwise, and
+`full` for every other event. `book/` is not documentation: the facade's unit tests check its
+chapters (`src/book.rs`), and its doctests run on main. A listing that fails stops the step; it
+never leaves a lane. There is no `tooling` lane: a change to
 repository tooling runs the gate.
 
 ### §2. The `ci` job is a shell step
