@@ -1009,6 +1009,14 @@ impl PostFrameHandle {
     ///
     /// Eligible registrations run in callback identity order. A blocked
     /// presentation never holds back a completed sibling or runtime callback.
+    ///
+    /// # Panics
+    ///
+    /// A registration made while a retained segment waits to resume asks for
+    /// its successor frame, which runs the scheduler's frame-scheduled hook;
+    /// a panic from that hook propagates after the callback is queued and its
+    /// successor's demand committed, so the callback still runs. Outside a
+    /// retained segment registering runs no host code.
     pub fn schedule(
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
@@ -1040,6 +1048,11 @@ impl PostFrameHandle {
     /// # Errors
     ///
     /// [`PostFrameRejection`] when the owning UI runtime is gone or retired.
+    ///
+    /// # Panics
+    ///
+    /// As [`schedule`](Self::schedule): a panic from the frame-scheduled hook
+    /// propagates after `value` is queued, so `run` still receives it.
     pub fn schedule_or_return<T: 'static>(
         &self,
         value: T,

@@ -72,7 +72,10 @@ Option 1.
 - `a_focused_text_field_settles_after_typing` and `a_focused_text_field_runs_no_frame_while_idle`
   (flui-testing) fail when registering asks for a frame.
 - `a_requested_completion_survives_wake_failure_and_host_clearing` (flui-scheduler) checks that
-  registering asks for no frame and leaves no demand, and that `schedule_frame` does.
+  registering outside a retained segment asks for no frame and leaves no demand, and that
+  `schedule_frame` does.
+- `a_registration_while_a_segment_is_retained_asks_for_its_successor` (flui-scheduler) checks
+  that a registration while suspended or servicing asks for the successor it joins.
 - `a_clean_presentation_delivers_successor_callbacks_without_rebuilding` (flui-runtime) checks
   that a registered callback alone leaves the presentation idle and runs after the requested
   frame without a rebuild or a submitted scene.
