@@ -1,6 +1,7 @@
 //! Box border types for styling
 
 use crate::styling::BorderSide;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::traits::{NumericUnit, Unit};
 
 /// A border for a box, with a separate side for each edge.
@@ -170,13 +171,15 @@ where
 /// # Examples
 ///
 /// ```
+/// use flui_foundation::TextDirection;
 /// use flui_painting::styling::{BorderDirectional, BorderSide, BorderStyle, Color};
 ///
 /// let border = BorderDirectional::all(BorderSide::new(Color::BLACK, 2.0, BorderStyle::Solid));
 ///
 /// // Resolve to physical border based on text direction
-/// let ltr_border = border.resolve(true); // left-to-right
-/// let rtl_border = border.resolve(false); // right-to-left
+/// let ltr_border = border.resolve(TextDirection::Ltr);
+/// let rtl_border = border.resolve(TextDirection::Rtl);
+/// assert_eq!(ltr_border.left, rtl_border.right);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -238,11 +241,10 @@ impl<T: Unit> BorderDirectional<T> {
     ///
     /// # Arguments
     ///
-    /// * `ltr` - If true, uses left-to-right layout. If false, uses
-    ///   right-to-left.
+    /// * `direction` - the text direction `start` and `end` follow.
     #[inline]
-    pub const fn resolve(self, ltr: bool) -> Border<T> {
-        if ltr {
+    pub const fn resolve(self, direction: TextDirection) -> Border<T> {
+        if direction.is_ltr() {
             Border {
                 top: self.top,
                 right: self.end,

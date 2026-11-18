@@ -1254,3 +1254,68 @@ pub(crate) fn a_fingerprint_reads_what_the_commands_draw() {
         assert_ne!(before, after, "a change of {what} reads apart");
     }
 }
+
+/// Counts the spans and events a subscriber at the default `info` filter
+/// would hear.
+struct InfoCounter {
+    spans: std::sync::atomic::AtomicU64,
+    events: std::sync::atomic::AtomicU64,
+}
+
+impl tracing::Subscriber for InfoCounter {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= tracing::Level::INFO
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        let count = self
+            .spans
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        tracing::span::Id::from_u64(count + 1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {
+        self.events
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// A recording runs on every repaint of every frame: under the default
+/// `info` filter it opens no span and reports nothing while it is balanced
+/// and finite.
+pub(crate) fn a_balanced_recording_is_silent_at_the_default_filter() {
+    let counter = Arc::new(InfoCounter {
+        spans: std::sync::atomic::AtomicU64::new(0),
+        events: std::sync::atomic::AtomicU64::new(0),
+    });
+    tracing::subscriber::with_default(Arc::clone(&counter), || {
+        // Interest cached by an earlier dispatcher would hide this one.
+        tracing::callsite::rebuild_interest_cache();
+        let paint = Paint::fill(Color::RED);
+        let mut canvas = Canvas::new();
+        canvas.save_layer(None, &paint);
+        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
+        canvas.restore();
+        let _taken = canvas.take_recording();
+        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
+        let _finished = canvas.finish();
+    });
+    assert_eq!(
+        counter.spans.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "recording opened a span at the default filter"
+    );
+    assert_eq!(
+        counter.events.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a balanced, finite recording reported an event at the default filter"
+    );
+}

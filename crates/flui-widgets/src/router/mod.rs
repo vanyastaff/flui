@@ -14,8 +14,8 @@
 //! admitting pageless popups such as dialogs, and every pop it makes reaches
 //! the router's stack through an internal observer.
 //!
-//! This module sits above `navigator` and below `app` (`cargo xtask
-//! module-dag`): it drives the navigator, and the app builds on it.
+//! This module sits above `navigator` and below `app`: it drives the
+//! navigator, and the app builds on it.
 
 mod handle;
 mod routable;

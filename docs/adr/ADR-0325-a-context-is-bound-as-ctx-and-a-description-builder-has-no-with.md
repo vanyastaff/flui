@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-11-12)
 - **Date:** 2026-11-12
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask context-names` and `xtask builder-names` gates only (§1, §2, Confirmation): the
+  rule stands and its reader confirms it.
 - **Related:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
   (the ladder the gates are admitted under); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   §4 (the conditions a gate meets); `docs/plans/specs/naming/requirements.md` N1 and N11 (one

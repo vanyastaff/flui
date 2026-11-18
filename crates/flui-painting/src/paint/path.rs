@@ -1399,7 +1399,7 @@ mod tests {
     fn quadrant_arc_circle(diameter: f64) -> Path {
         use core::f64::consts::FRAC_PI_2;
         let rect = Rect::from_xywh(0.0, 0.0, diameter, diameter);
-        let mid = (diameter / 2.0);
+        let mid = diameter / 2.0;
         let end = diameter;
 
         let mut path = Path::new();

@@ -292,6 +292,14 @@ fn parley_oracle_contract() {
                 "placed_glyphs_keep_cancelling_vertical_coordinates",
                 parley_oracle::placed_glyphs_keep_cancelling_vertical_coordinates,
             ),
+            (
+                "placed_glyphs_move_with_whole_pixels",
+                parley_oracle::placed_glyphs_move_with_whole_pixels,
+            ),
+            (
+                "placed_glyphs_omit_a_pen_the_split_would_saturate",
+                parley_oracle::placed_glyphs_omit_a_pen_the_split_would_saturate,
+            ),
         ],
     );
 }
@@ -608,6 +616,10 @@ fn recording_contract() {
             (
                 "a_destructor_that_panics_during_clear_leaves_the_list_empty",
                 recording::a_destructor_that_panics_during_clear_leaves_the_list_empty,
+            ),
+            (
+                "a_balanced_recording_is_silent_at_the_default_filter",
+                recording::a_balanced_recording_is_silent_at_the_default_filter,
             ),
         ],
     );

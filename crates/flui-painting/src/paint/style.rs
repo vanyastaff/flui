@@ -247,39 +247,11 @@ impl Paint {
         self
     }
 
-    /// Returns true if a dash pattern is set.
-    #[must_use]
-    #[inline]
-    pub const fn has_dash(&self) -> bool {
-        self.dash_pattern.is_some()
-    }
-
-    /// Returns true if this is a fill paint.
-    #[must_use]
-    #[inline]
-    pub const fn is_fill(&self) -> bool {
-        matches!(self.style, PaintStyle::Fill)
-    }
-
-    /// Returns true if this is a stroke paint.
-    #[must_use]
-    #[inline]
-    pub const fn is_stroke(&self) -> bool {
-        matches!(self.style, PaintStyle::Stroke)
-    }
-
     /// Returns true if a shader is set.
     #[must_use]
     #[inline]
     pub const fn has_shader(&self) -> bool {
         self.shader.is_some()
-    }
-
-    /// Returns true if anti-aliasing is enabled.
-    #[must_use]
-    #[inline]
-    pub const fn is_anti_aliased(&self) -> bool {
-        self.anti_alias
     }
 
     /// Returns the effective stroke width (0 for fill).
@@ -344,22 +316,6 @@ pub enum PaintStyle {
     Fill,
     /// Stroke the outline.
     Stroke,
-}
-
-impl PaintStyle {
-    /// Returns true if this is a fill style.
-    #[must_use]
-    #[inline]
-    pub const fn is_fill(&self) -> bool {
-        matches!(self, PaintStyle::Fill)
-    }
-
-    /// Returns true if this is a stroke style.
-    #[must_use]
-    #[inline]
-    pub const fn is_stroke(&self) -> bool {
-        matches!(self, PaintStyle::Stroke)
-    }
 }
 
 /// Builder for constructing `Paint` instances.

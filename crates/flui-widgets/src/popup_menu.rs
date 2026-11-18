@@ -354,7 +354,7 @@ fn menu_row(
     let content = ConstrainedBox::new(BoxConstraints::new(0.0, f64::INFINITY, side, f64::INFINITY))
         .child(
             Padding::symmetric(12.0, 8.0).child(
-                Align::new(AlignmentDirectional::CENTER_START.resolve(direction.is_ltr())).child(
+                Align::new(AlignmentDirectional::CENTER_START.resolve(direction)).child(
                     ExcludeSemantics::new().child(
                         Text::new(label.to_owned())
                         .direction(direction)
@@ -561,7 +561,7 @@ fn toolbar_button(
                     ))
                     .child(
                         Padding::symmetric(12.0, 8.0).child(
-                            Align::new(AlignmentDirectional::CENTER.resolve(direction.is_ltr()))
+                            Align::new(AlignmentDirectional::CENTER.resolve(direction))
                                 .width_factor(1.0)
                                 .height_factor(1.0)
                                 .child(

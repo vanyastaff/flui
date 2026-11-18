@@ -883,16 +883,6 @@ impl Color {
         Color::lerp(color1, color2, f64::from(local_t))
     }
 
-    /// Blends each color over the given background.
-    #[must_use]
-    #[inline]
-    pub fn blend_over_batch(colors: &[Color], background: Color) -> Vec<Color> {
-        colors
-            .iter()
-            .map(|color| color.blend_over(background))
-            .collect()
-    }
-
     /// Composites `self` (the **source**) over `dst` (the **destination**)
     /// using `mode`, returning the straight-alpha result.
     ///

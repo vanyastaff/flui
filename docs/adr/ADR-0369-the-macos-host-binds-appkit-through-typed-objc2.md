@@ -5,6 +5,9 @@
 - **Supersedes:** [ADR-0071](ADR-0071-macos-binds-appkit-through-objc2.md) §2 (macOS keeps
   the raw `msg_send!` shape, and `FLUIContentView` and `FLUIWindowDelegate` are built with
   `ClassBuilder`)
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask panic-boundary` gate only (Decision drivers, Confirmation): the rule stands and
+  its reader confirms it.
 - **Related:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)
   §1 (state only the owner thread touches), [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
   §16 (the OS enters the crate through one boundary), [ADR-0254](ADR-0254-window-contract.md) §5

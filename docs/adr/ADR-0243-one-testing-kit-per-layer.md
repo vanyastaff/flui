@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask testing` gate only (D7, Verification): the rule stands and its reader confirms it.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
