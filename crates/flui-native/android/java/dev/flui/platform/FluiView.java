@@ -97,6 +97,13 @@ public final class FluiView extends View {
     /** The keyboard's motion ended or was cancelled (API 30). */
     static native void nativeKeyboardSettled(long handle);
 
+    /**
+     * The window took the mouse ({@code hasCapture}) or let it go (API 26):
+     * the system's answer to {@link #requestPointerCapture}, its release, or
+     * the focus leaving the window.
+     */
+    static native void nativePointerCaptureChanged(long handle, boolean hasCapture);
+
     /** The node info of a virtual view, {@code HOST_VIEW_ID} for this view itself, or null. */
     static native AccessibilityNodeInfo nativeNodeInfo(long handle, View host, int virtualViewId);
 
@@ -326,6 +333,18 @@ public final class FluiView extends View {
 
     long handle() {
         return handle;
+    }
+
+    /**
+     * Every view of the window hears a change of its pointer capture; the
+     * captured mouse's relative motion itself reaches the native input queue.
+     */
+    @Override
+    public void onPointerCaptureChange(boolean hasCapture) {
+        long handle = this.handle;
+        if (handle != 0) {
+            nativePointerCaptureChanged(handle, hasCapture);
+        }
     }
 
     /** The view covers the window, so every inset change reaches it. */

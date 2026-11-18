@@ -243,8 +243,11 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   and widget `listener_unmount_preserves_one_captured_contact_terminal` pin the
   lifecycle, failure and accepted-motion boundaries.
 - **An arrow request differs from deferring a cursor (ADR-0158).** `CursorRequest::Defer`
-  leaves the choice to the next hit target; `Icon(CursorIcon::Default)` selects
-  the arrow even when an ancestor asks for another icon. Render objects without
+  leaves the choice to the next hit target; `Show(Cursor::Icon(CursorIcon::Default))`
+  selects the arrow even when an ancestor asks for another cursor, as an image
+  or a hidden cursor (`Show(Cursor::Image(_))`, `Show(Cursor::Hidden)`) does.
+  The tracker publishes the whole `Cursor`, and the presentation shows the
+  arrow where its window refuses an image `Unsupported`. Render objects without
   a cursor contribution and unconfigured `MouseRegion` widgets defer.
   `explicit_arrow_cursor_wins` pins both hit-path resolution and tracker delivery.
 - **Hover annotations survive until every device leaves.** The tracker keeps a

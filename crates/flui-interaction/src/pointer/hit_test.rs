@@ -19,7 +19,7 @@ use flui_platform::pointer::{
 
 use crate::{
     containment::{FirstPanic, caught, try_run},
-    events::{CursorIcon, PointerEvent},
+    events::{Cursor, CursorIcon, PointerEvent},
     pointer::MouseTrackerAnnotation,
     pointer::interaction_lane::{
         PanZoomDispatch, PanZoomTarget, PointerTarget, ScrollTarget, SmartZoomDispatch,
@@ -207,17 +207,24 @@ impl HitTestBehavior {
 // ============================================================================
 
 /// A hit target's mouse cursor contribution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// The first target along the leaf-first hit path that asks for a cursor
+/// chooses what the window shows while the pointer is over it
+/// ([`HitTestResult::resolve_cursor`]). A window that shows no application
+/// image (its `cursor_image` capability) shows the arrow over a target that
+/// asks for one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "a target defers or names a cursor, and the icon set is CursorIcon's"
+    reason = "a target defers or names a cursor, and the cursor kinds are Cursor's"
 )]
 pub enum CursorRequest {
     /// Let the next target in the hit path choose the cursor.
     #[default]
     Defer,
-    /// Select this icon, including the platform's default arrow.
-    Icon(CursorIcon),
+    /// Show this cursor: one of the system's icons (the default arrow
+    /// included), an image of the application's, or none at all.
+    Show(Cursor),
 }
 
 /// An opaque value a render object attaches to every hit that lands on it.
@@ -370,10 +377,10 @@ impl HitTestEntry {
         self.metadata.as_ref()?.downcast_ref::<T>()
     }
 
-    /// Builder: set cursor.
+    /// Builder: show `cursor` over this target (an icon, an image or none).
     #[must_use]
-    pub fn cursor(mut self, cursor: CursorIcon) -> Self {
-        self.cursor = CursorRequest::Icon(cursor);
+    pub fn cursor(mut self, cursor: impl Into<Cursor>) -> Self {
+        self.cursor = CursorRequest::Show(cursor.into());
         self
     }
 
@@ -977,17 +984,17 @@ impl HitTestResult {
         false
     }
 
-    /// Resolves the active mouse cursor.
-    ///
-    /// Returns the first explicit cursor in the path, or
-    /// `CursorIcon::Default`.
-    pub fn resolve_cursor(&self) -> CursorIcon {
-        for entry in &self.path {
-            if let CursorRequest::Icon(cursor) = entry.cursor {
-                return cursor;
-            }
-        }
-        CursorIcon::Default
+    /// Resolves the active mouse cursor: the first cursor a target along the
+    /// path asks for, or the default arrow when none asks.
+    #[must_use]
+    pub fn resolve_cursor(&self) -> Cursor {
+        self.path
+            .iter()
+            .find_map(|entry| match &entry.cursor {
+                CursorRequest::Show(cursor) => Some(cursor.clone()),
+                CursorRequest::Defer => None,
+            })
+            .unwrap_or(Cursor::Icon(CursorIcon::Default))
     }
 }
 

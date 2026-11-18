@@ -186,6 +186,11 @@ pub(crate) trait ViewTouches {
         location: (f64, f64),
         stamp: Option<f64>,
     ) -> Vec<PlatformInput>;
+
+    /// What the locked mouse's motion by `delta` (right and down positive,
+    /// GameController's counts) carries: one raw motion of the indirect
+    /// pointer, at the place it rests.
+    fn locked_motion(&mut self, delta: (f64, f64)) -> Vec<PlatformInput>;
 }
 
 /// The system preference source the UIKit loop keeps, on the main thread

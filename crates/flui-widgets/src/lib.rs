@@ -383,8 +383,11 @@ pub use flui_rendering::delegates::{
 // pointer event types its callbacks receive (`on_pointer_move` also receives
 // `PointerEvent::ButtonChange`).
 pub use flui_interaction::events::ButtonChange;
+// What `MouseRegion::cursor` takes: a system icon, an application's image, or
+// none.
 pub use flui_rendering::hit_testing::{
-    CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
+    Cursor, CursorIcon, CursorImage, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch,
+    PointerEvent,
 };
 // The shared scroll state `ScrollController::position()` returns,
 // `Scrollable::new`'s closure receives and `Viewport::new` takes — a widget

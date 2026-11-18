@@ -169,6 +169,10 @@ pub(crate) enum ViewEvent {
     KeyboardMotion(KeyboardReport),
     /// The keyboard's motion ended or was cancelled (API 30).
     KeyboardSettled,
+    /// The window took the mouse (`true`) or let it go (API 26): the
+    /// system's answer to [`JavaView::capture_pointer`], its release, or the
+    /// focus leaving the window.
+    PointerCaptureChanged(bool),
 }
 
 /// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
@@ -519,6 +523,25 @@ impl JavaView {
         });
     }
 
+    /// Ask the window for the mouse (`View.requestPointerCapture`, API 26) or
+    /// give it back (`releasePointerCapture`). The system answers through the
+    /// view's `onPointerCaptureChange`, reported as
+    /// [`ViewEvent::PointerCaptureChanged`]; it gives the mouse only to a
+    /// window with the focus, and takes it back when the focus goes. Owner
+    /// thread; the call runs on the Java main thread, and one the view finds
+    /// gone changes nothing.
+    pub(crate) fn capture_pointer(self: &Arc<Self>, capture: bool) {
+        self.post(move |env, view| {
+            let method = if capture {
+                jni_str!("requestPointerCapture")
+            } else {
+                jni_str!("releasePointerCapture")
+            };
+            env.call_method(view, method, jni_sig!("()V"), &[])
+                .map(drop)
+        });
+    }
+
     /// The bridge answering the node provider, cloned out of the lock so no
     /// JNI call runs under it.
     fn accessibility(&self) -> Option<Arc<dyn ViewAccessibility>> {
@@ -791,6 +814,11 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 jni_str!("nativeKeyboardSettled"),
                 jni_str!("(J)V"),
                 native_keyboard_settled as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativePointerCaptureChanged"),
+                jni_str!("(JZ)V"),
+                native_pointer_capture_changed as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeNodeInfo"),
@@ -1106,6 +1134,25 @@ extern "system" fn native_keyboard_settled<'local>(
         |_| {
             if let Some(view) = bridge(handle) {
                 view.push_event(ViewEvent::KeyboardSettled);
+            }
+            Ok(())
+        },
+    );
+}
+
+extern "system" fn native_pointer_capture_changed<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    has_capture: jboolean,
+) {
+    jni_native(
+        "nativePointerCaptureChanged",
+        &mut env,
+        |()| (),
+        |_| {
+            if let Some(view) = bridge(handle) {
+                view.push_event(ViewEvent::PointerCaptureChanged(has_capture));
             }
             Ok(())
         },

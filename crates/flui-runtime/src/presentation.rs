@@ -53,6 +53,56 @@ fn format_millis(duration: Duration) -> String {
     format!("{:.1}ms", duration.as_secs_f64() * 1_000.0)
 }
 
+/// Show `cursor`, the cursor the hovered region asks for, on `window`.
+///
+/// A window that shows no application image (its `cursor_image` capability)
+/// refuses one `Unsupported`; it then shows the arrow, so the region does not
+/// keep the cursor of the region the pointer came from. A window with no
+/// pointer cursor at all refuses both, which is no failure.
+fn show_cursor(
+    window: &dyn PlatformWindow,
+    cursor: &Cursor,
+    id: PresentationId,
+    device_id: flui_platform::pointer::PointerSource,
+) {
+    let refused = match window.set_cursor(cursor) {
+        Ok(()) => return,
+        Err(CursorError::Unsupported(unsupported)) if matches!(cursor, Cursor::Image(_)) => {
+            tracing::trace!(
+                ?id,
+                ?device_id,
+                reason = %unsupported.reason,
+                "the window shows no cursor image: it shows the arrow over the region"
+            );
+            match window.set_cursor(&Cursor::Icon(CursorIcon::Default)) {
+                Ok(()) => return,
+                Err(error) => error,
+            }
+        }
+        Err(error) => error,
+    };
+    match refused {
+        CursorError::Unsupported(unsupported) => {
+            tracing::trace!(
+                ?id,
+                ?device_id,
+                ?cursor,
+                reason = %unsupported.reason,
+                "window backend has no pointer-cursor facility"
+            );
+        }
+        error => {
+            tracing::warn!(
+                ?id,
+                ?device_id,
+                ?cursor,
+                ?error,
+                "failed to apply the presentation cursor"
+            );
+        }
+    }
+}
+
 /// Runtime-supplied capabilities threaded into a presentation at assembly
 /// time (ADR-0043 §1): [`Self::global_key_scope`] is installed FIRST — the
 /// underlying `BuildOwner::set_global_key_scope` setter panics with `BUG:`
@@ -804,28 +854,7 @@ impl PresentationState {
                     );
                     return;
                 };
-                if let Err(error) = window.set_cursor(&Cursor::Icon(cursor)) {
-                    match error {
-                        CursorError::Unsupported(unsupported) => {
-                            tracing::trace!(
-                                ?id,
-                                ?device_id,
-                                ?cursor,
-                                reason = %unsupported.reason,
-                                "window backend has no pointer-cursor facility"
-                            );
-                        }
-                        _ => {
-                            tracing::warn!(
-                                ?id,
-                                ?device_id,
-                                ?cursor,
-                                ?error,
-                                "failed to apply the presentation cursor"
-                            );
-                        }
-                    }
-                }
+                show_cursor(&*window, cursor, id, device_id);
             }));
         gestures
     }

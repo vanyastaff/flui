@@ -120,6 +120,9 @@ pub struct HeadlessWindow {
     /// Whether the simulated platform reports when frames reached the screen
     /// ([`HeadlessWindow::with_presentation_reports`]).
     reports_presentation: bool,
+    /// Whether the simulated platform shows an application's cursor image
+    /// ([`HeadlessWindow::without_cursor_images`]).
+    shows_cursor_images: bool,
     /// The commands the window honours, published once for what the window plays
     /// ([`HeadlessWindow::published_capabilities`]): what its commands are
     /// admitted against and opened under.
@@ -203,14 +206,21 @@ impl HeadlessWindow {
 
     /// The commands a window honours: its frame and its mode, which have no
     /// window system to refuse them, and the presentation report where it plays
-    /// one; published, as a host's first snapshot is.
-    fn published_capabilities(reports_presentation: bool) -> flui_platform::WindowCapabilities {
+    /// one; published, as a host's first snapshot is. It shows an
+    /// application's cursor image where it plays a platform that does.
+    fn published_capabilities(
+        reports_presentation: bool,
+        shows_cursor_images: bool,
+    ) -> flui_platform::WindowCapabilities {
         use flui_platform::WindowCapability::Native;
         let mut capabilities = flui_platform::WindowCapabilities::NONE.into_parts();
         capabilities.sets_frame = Native;
         capabilities.app_title_bar = Native;
         capabilities.minimizes = Native;
         capabilities.maximizes = Native;
+        if shows_cursor_images {
+            capabilities.cursor_image = flui_platform::Availability::Native;
+        }
         if reports_presentation {
             capabilities.reports_presentation = Native;
         }
@@ -294,7 +304,8 @@ impl HeadlessWindow {
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
-            capabilities: Self::published_capabilities(false),
+            shows_cursor_images: true,
+            capabilities: Self::published_capabilities(false, true),
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
             portal_exports: None,
@@ -388,7 +399,19 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_presentation_reports(mut self) -> Self {
         self.reports_presentation = true;
-        self.capabilities = Self::published_capabilities(true);
+        self.capabilities = Self::published_capabilities(true, self.shows_cursor_images);
+        self
+    }
+
+    /// Play a platform that shows no application's cursor image (a Wayland
+    /// compositor without shared memory, a phone): the window's
+    /// `cursor_image` capability is unavailable and it refuses an image
+    /// `Unsupported`, as such a host does. Without it the window shows every
+    /// cursor.
+    #[must_use]
+    pub fn without_cursor_images(mut self) -> Self {
+        self.shows_cursor_images = false;
+        self.capabilities = Self::published_capabilities(self.reports_presentation, false);
         self
     }
 
@@ -497,7 +520,15 @@ impl PlatformWindow for HeadlessWindow {
             .map(|input| Arc::clone(input) as Arc<dyn PlatformTextInput>)
     }
 
+    /// Records `cursor`; an image is refused, as `set_cursor` answers, exactly
+    /// when the window's `cursor_image` capability is unavailable.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        if matches!(cursor, Cursor::Image(_)) && !self.capabilities.cursor_image().is_available() {
+            return Err(flui_platform::Unsupported::from(
+                flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+            )
+            .into());
+        }
         cursor.clone_into(&mut self.cursor.lock());
         Ok(())
     }

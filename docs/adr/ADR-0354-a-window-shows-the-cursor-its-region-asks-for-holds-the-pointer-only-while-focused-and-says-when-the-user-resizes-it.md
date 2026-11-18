@@ -139,8 +139,10 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   on every host that can, through `WindowHandle` and the snapshot; every other host says why not.
 - Good: a grab cannot outlive the focus in the snapshot, and the conformance check
   `a_grab_ends_with_the_focus` holds each host's window system to it.
-- Bad: a widget cannot yet ask for an image or a hidden cursor (the framework's cursor request
-  carries an icon); `docs/gaps.md` records it with the consumer that brings it.
+- Good: a region asks for any cursor the way it asks for an icon (`CursorRequest::Show(Cursor)`,
+  `MouseRegion::cursor`); a window that shows no image refuses it `Unsupported`, and the
+  presentation then shows the arrow, so the region does not keep the cursor of the one the
+  pointer left.
 
 ## Compliance
 
@@ -155,4 +157,11 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   `a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`
   (`crates/flui-native/tests/windows_window_commands.rs`).
 - Each host's capability table names every new field (`a_wayland_window_has_the_capabilities_it_names`,
-  `an_x11_window_has_the_capabilities_it_names`, `crates/flui-native/src/window/capabilities.rs`).
+  `an_x11_window_has_the_capabilities_it_names`, `crates/flui-native/src/window/capabilities.rs`
+  and its `native_capability_absences`, where UIKit locks from iPadOS 14 on an iPad and an
+  Activity from API 26).
+- Android: `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests`
+  (`crates/flui-native/src/input/android/motion/tests.rs`).
+- A region's cursor reaches the window: `mouse_region_cursor_reaches_the_window_through_the_ui_runtime`
+  and `an_image_cursor_over_a_window_without_images_shows_the_arrow`
+  (`crates/flui-testing/tests/runtime_driver.rs`).
