@@ -603,6 +603,10 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
         .post_frame_handle()
         .schedule(move |_| completion.push("coherent completion"))
         .expect("accepted completion");
+    presentation
+        .post_frame_handle()
+        .schedule_frame()
+        .expect("a frame for the completion");
     clock.mark_demand(DemandKind::Completion);
     clock.mark_demand(DemandKind::Completion);
     clock.mark_demand(DemandKind::Dirty);
@@ -651,7 +655,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
     assert_eq!(log.get(), ["coherent completion"]);
 }
 
-fn successor_completion_demand_survives_wake_failure_and_host_clearing() {
+fn a_requested_completion_survives_wake_failure_and_host_clearing() {
     for failing_wake in [false, true] {
         let scheduler = UpdateScheduler::new();
         let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
@@ -673,17 +677,33 @@ fn successor_completion_demand_survives_wake_failure_and_host_clearing() {
 
         let first = log.clone();
         let successor = presentation.post_frame_handle();
+        presentation
+            .post_frame_handle()
+            .schedule(move |_| {
+                first.push("first completion");
+                let second = first.clone();
+                successor
+                    .schedule(move |_| second.push("successor completion"))
+                    .expect("completion registers successor");
+                successor
+                    .schedule_frame()
+                    .expect("completion asks for the successor's frame");
+            })
+            .expect("scoped admission");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "registering asks for no frame"
+        );
+        assert!(
+            !presentation.has_completion_demand(),
+            "registering leaves no completion demand"
+        );
         let admission = catch_unwind(AssertUnwindSafe(|| {
             presentation
                 .post_frame_handle()
-                .schedule(move |_| {
-                    first.push("first completion");
-                    let second = first.clone();
-                    successor
-                        .schedule(move |_| second.push("successor completion"))
-                        .expect("completion registers successor");
-                })
-                .expect("scoped admission");
+                .schedule_frame()
+                .expect("scoped frame request");
         }));
         assert_eq!(admission.is_err(), failing_wake);
         if let Err(failure) = admission {
@@ -1198,8 +1218,8 @@ fn post_frame_ordering_matrix() {
                 completion_demand_coalesces_and_survives_hidden_presentation_gating as fn(),
             ),
             (
-                "successor_completion_demand_survives_wake_failure_and_host_clearing",
-                successor_completion_demand_survives_wake_failure_and_host_clearing as fn(),
+                "a_requested_completion_survives_wake_failure_and_host_clearing",
+                a_requested_completion_survives_wake_failure_and_host_clearing as fn(),
             ),
             (
                 "reentrant_partial_geometry_blocks_an_already_selected_tail",

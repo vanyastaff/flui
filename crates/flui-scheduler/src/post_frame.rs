@@ -989,6 +989,13 @@ impl PostFrameHandle {
     /// the successor segment. Self-registration therefore never runs twice in
     /// one completion batch.
     ///
+    /// Registering asks for no frame: the callback runs after the next frame
+    /// that completes its segment, whatever asked for that frame. A caller
+    /// whose callback waits on a frame nothing else asks for requests one
+    /// itself (a rebuild, a render invalidation, `UpdateScheduler::request_frame`).
+    /// A loop that re-registers from its own callback therefore runs once per
+    /// frame while frames run and costs nothing while the presentation is idle.
+    ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
     /// UI runtime is gone or retired) the callback is never invoked; it is
     /// dropped under containment, and a panic from its destructor propagates
@@ -1039,6 +1046,40 @@ impl PostFrameHandle {
         }
     }
 
+    /// Ask for a frame of this handle's presentation, as Flutter's
+    /// `scheduleFrame`: the frame completes the presentation's next segment,
+    /// so the callbacks waiting for it run, without rebuilding its tree or
+    /// submitting a scene when nothing in it changed. The request stands
+    /// until that segment completes; a hidden presentation keeps it until it
+    /// is shown. An unscoped handle asks its scheduler for a frame.
+    ///
+    /// # Errors
+    ///
+    /// [`PostFrameScheduleError::Closed`] when the owning UI runtime or the
+    /// presentation is gone or retired.
+    pub fn schedule_frame(&self) -> Result<(), PostFrameScheduleError> {
+        let (Some(lane), Some(scheduler)) = (self.lane.upgrade(), self.scheduler.upgrade()) else {
+            return Err(PostFrameScheduleError::Closed);
+        };
+        if lane.closed.get() {
+            return Err(PostFrameScheduleError::Closed);
+        }
+        if let Some(scope) = &self.scope {
+            let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
+                return Err(PostFrameScheduleError::Closed);
+            };
+            // A running segment completes in the frame under way. Otherwise
+            // the demand is committed before the wake, which runs host code:
+            // a wake that fails leaves the request standing.
+            if scope.phase.get() == SegmentPhase::Running {
+                return Ok(());
+            }
+            scope.next_demand.set(true);
+        }
+        scheduler.request_frame();
+        Ok(())
+    }
+
     /// Queue `into_entry(value)`, or hand `value` back, unwrapped, with the
     /// closed lane whose failure custody decides its fate (`None`: the lane
     /// itself is gone).
@@ -1056,7 +1097,6 @@ impl PostFrameHandle {
         let Some(scheduler) = self.scheduler.upgrade() else {
             return Err((value, Some(lane)));
         };
-        let mut successor_scope = None;
         let target = if let Some(scope) = &self.scope {
             let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
                 return Err((value, Some(lane)));
@@ -1064,7 +1104,6 @@ impl PostFrameHandle {
             let epoch = if scope.phase.get() == SegmentPhase::Running {
                 scope.current.borrow().clone()
             } else {
-                successor_scope = Some(scope.clone());
                 scope.next.borrow().clone()
             };
             CallbackTarget::Presentation {
@@ -1081,13 +1120,7 @@ impl PostFrameHandle {
                 callback,
                 target,
             });
-            if let Some(scope) = &successor_scope {
-                scope.next_demand.set(true);
-            }
         });
-        if successor_scope.is_some() {
-            scheduler.request_frame();
-        }
         Ok(())
     }
 

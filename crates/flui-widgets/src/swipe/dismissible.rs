@@ -659,7 +659,12 @@ impl DismissEvents {
             return;
         };
         let events = Rc::clone(self);
-        if let Err(error) = post_frame.schedule(move |_| events.dispatch(event)) {
+        // An event from a status change may come with nothing to redraw, so
+        // the frame it is delivered after is asked for.
+        let scheduled = post_frame
+            .schedule(move |_| events.dispatch(event))
+            .and_then(|()| post_frame.schedule_frame());
+        if let Err(error) = scheduled {
             tracing::warn!(
                 ?error,
                 "Dismissible: event dropped because the owner post-frame lane is closed"

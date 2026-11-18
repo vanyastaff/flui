@@ -103,13 +103,16 @@ presentation, a failed frame's backoff).
 
 `PresentationScopeFactory` is the weak assembly capability. It can mint scopes
 only for the original live owner; a scoped widget handle cannot mint siblings.
-Successor registration commits completion demand before requesting a host wake,
-outside queue guards. A failed or cleared wake cannot erase that accepted debt.
+Registering a callback, scoped or unscoped, asks for no frame (ADR-0367): it
+runs after the next frame that completes its segment, so a callback that
+re-registers itself costs nothing while no frame runs. A caller that needs that
+frame asks with `PostFrameHandle::schedule_frame`, which outside a running
+segment commits completion demand before requesting a host wake, outside queue
+guards. A failed or cleared wake cannot erase that accepted request.
 The runtime admits a completion-only segment only for an eligible presentation
 with previously coherent geometry and no pending tree work or retained segment;
 it does not manufacture a widget rebuild or dirty layout. The runtime re-arms
-remaining eligible demand after its host wake clear. Unscoped registration keeps
-its previous host-frame behavior and does not automatically request a frame.
+remaining eligible demand after its host wake clear.
 
 Cancellation withdraws geometry and retains the current epoch for a replacement
 to resume. It cannot silently begin a fresh epoch and discard accepted completion
@@ -151,7 +154,7 @@ sibling recovery through the public close and frame-drive APIs.
 `closing_a_scope_retires_its_active_tail_without_losing_siblings` pin these
 owner operations through scheduled callbacks and actual host frame drives.
 `reentrant_partial_geometry_blocks_an_already_selected_tail` pins the invocation
-boundary recheck; `successor_completion_demand_survives_wake_failure_and_host_clearing`
+boundary recheck; `a_requested_completion_survives_wake_failure_and_host_clearing`
 pins retained wake debt, clean completion admission and weak factory lifetime.
 `DemandKind::Completion` carries this accepted work through the presentation's
 ordinary `FrameClock` coalescing, visibility and capacity gates independently of

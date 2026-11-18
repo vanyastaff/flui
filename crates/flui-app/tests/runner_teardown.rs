@@ -1915,12 +1915,14 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
         .expect("the main window");
     let ran = Rc::new(std::cell::Cell::new(false));
     let marked = Rc::clone(&ran);
+    let handle = handle.borrow().clone().expect("init_state kept the handle");
     handle
-        .borrow()
-        .as_ref()
-        .expect("init_state kept the handle")
         .schedule(move |_| marked.set(true))
         .expect("the scheduler still takes callbacks");
+    // A post-frame callback asks for no frame; the one it runs after is asked for.
+    handle
+        .schedule_frame()
+        .expect("the window's presentation is alive");
     flui_platform::PlatformWindow::request_redraw(&window);
     run.run_owner_turn();
     assert!(ran.get(), "the next frame ran its post-frame callback");

@@ -445,6 +445,10 @@ fn application_frame_names_do_not_hide_real_animation_work() {
                 assert!(!run.is_complete());
             })
             .expect("animation callback");
+        // A post-frame callback asks for no frame; the one it runs in is asked for.
+        laid.post_frame_handle()
+            .schedule_frame()
+            .expect("the presentation is alive");
         laid.pump_for(Duration::from_millis(16));
         let frame = profiler.frame_stats().expect("scheduler frame");
         for phase in ["Animation sampling", "Animation listeners"] {
