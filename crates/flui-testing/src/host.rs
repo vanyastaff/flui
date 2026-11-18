@@ -109,6 +109,9 @@ pub struct HeadlessWindow {
     display: Mutex<Option<DisplayId>>,
     /// Whether the platform lets the window run, as the test last reported it.
     execution: Mutex<flui_platform::WindowExecutionState>,
+    /// Whether the window system keeps the window off the screen, as the test
+    /// last reported it ([`HeadlessHost::set_window_occluded`]).
+    occluded: Mutex<bool>,
     /// What covers the window, as the test last reported it.
     insets: Mutex<flui_platform::WindowInsets>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
@@ -202,19 +205,21 @@ impl HeadlessWindow {
     }
 
     /// The commands a window honours: its frame and its mode, which have no
-    /// window system to refuse them, and the presentation report where it plays
-    /// one; published, as a host's first snapshot is.
-    fn published_capabilities(reports_presentation: bool) -> flui_platform::WindowCapabilities {
+    /// window system to refuse them; published, as a host's first snapshot
+    /// is. The reports a test asks for are added by its builders.
+    fn published_capabilities() -> flui_platform::WindowCapabilities {
         use flui_platform::WindowCapability::Native;
         let mut capabilities = flui_platform::WindowCapabilities::NONE.into_parts();
         capabilities.sets_frame = Native;
         capabilities.app_title_bar = Native;
         capabilities.minimizes = Native;
         capabilities.maximizes = Native;
-        if reports_presentation {
-            capabilities.reports_presentation = Native;
-        }
-        capabilities
+        Self::publish(capabilities)
+    }
+
+    /// `parts` as a new publication.
+    fn publish(parts: flui_platform::CapabilityParts) -> flui_platform::WindowCapabilities {
+        parts
             .into_capabilities()
             .publish()
             .expect("BUG: a test opens far fewer than u64::MAX windows")
@@ -288,13 +293,14 @@ impl HeadlessWindow {
             platform: flui_platform::TargetPlatform::Unknown,
             display: Mutex::new(None),
             execution: Mutex::new(flui_platform::WindowExecutionState::Running),
+            occluded: Mutex::new(false),
             insets: Mutex::new(flui_platform::WindowInsets::ZERO),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
-            capabilities: Self::published_capabilities(false),
+            capabilities: Self::published_capabilities(),
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
             portal_exports: None,
@@ -388,7 +394,23 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_presentation_reports(mut self) -> Self {
         self.reports_presentation = true;
-        self.capabilities = Self::published_capabilities(true);
+        let mut parts = self.capabilities.into_parts();
+        parts.reports_presentation = flui_platform::WindowCapability::Native;
+        self.capabilities = Self::publish(parts);
+        self
+    }
+
+    /// Play a window system that tells a covering by other windows
+    /// ([`WindowCapabilities::reports_occlusion`](flui_platform::WindowCapabilities::reports_occlusion)),
+    /// as AppKit does: an occluded snapshot
+    /// ([`HeadlessHost::set_window_occluded`]) may then be a covering. Without
+    /// it the window plays one whose occlusion is never a covering (a locked
+    /// session, a background app).
+    #[must_use]
+    pub fn with_occlusion_reports(mut self) -> Self {
+        let mut parts = self.capabilities.into_parts();
+        parts.reports_occlusion = flui_platform::WindowCapability::Native;
+        self.capabilities = Self::publish(parts);
         self
     }
 
@@ -563,6 +585,7 @@ impl PlatformWindow for HeadlessWindow {
         .with_display(*self.display.lock())
         .with_insets(*self.insets.lock())
         .with_execution(*self.execution.lock())
+        .with_occluded(*self.occluded.lock())
         .with_metrics(
             flui_foundation::geometry::WindowMetrics::from_logical(
                 extent.get(),
@@ -2202,6 +2225,26 @@ impl HeadlessHost {
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Execution(execution),
+        );
+    }
+
+    /// Report whether the window system keeps `window` off the screen
+    /// ([`WindowState::occluded`](flui_platform::WindowState::occluded)), as a
+    /// host reports a covering, a lock or a background app: the window's state
+    /// says so, and the host delivers whether the window is now seen
+    /// (`WindowObservation::Visibility`). Whether the occlusion may be a
+    /// covering is the window's
+    /// [`with_occlusion_reports`](HeadlessWindow::with_occlusion_reports). A
+    /// window that closed hears nothing, as on a real host.
+    pub fn set_window_occluded(&self, window: HeadlessWindowId, occluded: bool) {
+        let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
+            return;
+        };
+        *open.window.occluded.lock() = occluded;
+        let seen = open.window.state().is_seen();
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Visibility(seen),
         );
     }
 

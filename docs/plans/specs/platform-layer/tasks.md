@@ -8472,8 +8472,8 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   — изменение до первого хода, до появления хука, замена хука, паника доставки. Каждую строку валит
   своя мутация (сохранение порога ревизии, насыщение вместо отказа, слияние или вытеснение
   предпочтений в очереди, хук без восстановления после паники, зажим масштаба и т. д.).
-- [ ] **LY148** (открыта: кадр при раскрытии, уход композитного менеджера X11, отключённый
-  удалённый сеанс) — решение ADR-0357, на `main`. Построено: `WindowCapabilities::reports_occlusion`
+- [x] **LY148** — решение ADR-0357, на `main`; остаток кода — ветка `native/occlusion-owed-frame`.
+  Построено: `WindowCapabilities::reports_occlusion`
   на каждом хосте (AppKit — `Native`; X11 — `Native`, пока selection `_NET_WM_CM_S<n>` никто не
   держит; Wayland — `Native` при `xdg_toplevel` версии 6; Win32 — `NOT_YET_ON_THIS_HOST`; iOS,
   Android, Web — `NOT_ON_THIS_PLATFORM`); один график отступа `flui_platform::Backoff` для повтора
@@ -8486,12 +8486,31 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered`,
   `a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows`,
   `a_surface_that_keeps_withholding_frames_is_reported_once`,
-  `an_unseen_window_with_nothing_asked_runs_no_frame`. Остаётся код (та же запись gaps): перекрытое
-  окно рисует один долг после тишины, чтобы раскрытие не показывало старый кадр (тест строки
-  таблицы); X11 слышит уход композитного менеджера (сейчас уход ничего не объявляет, и окна до
-  следующего чтения поддержки оконного менеджера говорят, что перекрытие не различают); Win32
-  считает отключённый удалённый сеанс невидимым, как заблокированный. Прогон Wayland с композитором,
-  не отвечающим на callback, — заметка строки parity `event-loop-startup-and-wake-ups`.
+  `an_unseen_window_with_nothing_asked_runs_no_frame`. Долг кадра (`flui-runtime`,
+  `occluded_frame`; правило в `ARCHITECTURE.md` крейта): невидимая презентация больше не считается
+  работой дерева, по которой хост будит цикл (раньше перекрытое окно с грязным деревом просило кадр
+  на каждом пробуждении и ничего не рисовало); окно, перекрытое там, где хост различает перекрытие
+  (видимо, не свёрнуто, работает, `occluded`, `reports_occlusion` доступна), после
+  `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе рисует один кадр через
+  `FrameClock::grant_hidden_frame`, срок — в `next_wake` и `has_pending_due_work`, десктопный
+  раннер с выключенными кадрами рисует его по `owes_occluded_frame`; состояние окна читается при
+  скрытии и снова к сроку. Тест `an_occluded_window_draws_its_change_in_exactly_one_frame`
+  (`flui-testing`, четыре строки): изменение под перекрытием кадра не рисует, после тишины — ровно
+  один кадр с новым содержимым, при раскрытии — ровно один; перекрытие без отчёта о перекрытии
+  (блокировка, фон) не рисует до показа. С откатом runtime и планировщика падают строки
+  «перекрытие» и «не перекрытие» (`time_to_next_frame` — ноль вместо тишины). X11
+  (`window/linux/x11/window/compositing.rs`): XFixes `SelectSelectionInput` на
+  `_NET_WM_CM_S<n>` (смена владельца, уничтожение окна, уход клиента) перечитывает поддержку;
+  тест `a_compositing_manager_that_goes_gives_the_covering_report_back` под Xvfb и openbox с
+  клиентом-заменителем, который берёт и отдаёт selection и уходит. Win32: `SessionChange` и
+  `SessionSight` (`lifecycle::windows::messages`), `WTS_*_DISCONNECT` скрывает окна до
+  `WTS_*_CONNECT`, блокировка и отключение независимы; начальное состояние из `WTSSessionInfoEx`.
+  Тесты: модель `a_disconnected_session_hides_its_windows_until_it_connects` (каждый хост) и
+  проводка `a_disconnected_session_occludes_a_shown_window_until_it_connects` (nextest на Windows,
+  сообщения посланы вручную, без RDP); обе падают, если `WTS_REMOTE_DISCONNECT` ничего не меняет.
+  Прогоны настоящего отключённого RDP-сеанса, быстрой смены пользователя и долга кадра на macOS и
+  X11-рабочем столе — заметки строки parity `visibility-minimize-occlusion`. Прогон Wayland с
+  композитором, не отвечающим на callback, — заметка строки parity `event-loop-startup-and-wake-ups`.
 - [x] **LY142** — ветка `app/owner-thread-state`. Находки подтверждены на `main` @ `817b30989`
   чтением: роутер закрытия лежит в `Rc` (`NativeBindings`) и держит `Weak<dyn PlatformWindow>`,
   `GpuLossLedger` — только поток страницы, `FirstReveal`, `HostMemory` — поток цикла, а все за

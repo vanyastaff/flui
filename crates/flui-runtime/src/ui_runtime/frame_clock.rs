@@ -527,14 +527,17 @@ impl UiRuntime {
     /// Whether a presentation's tree waits for a frame: a pending build, a
     /// dirty render node, or a completion the next frame takes. A
     /// presentation waiting out a dropped frame's backoff, one whose sink
-    /// holds as many frames as it may and one whose device rebuild was given
-    /// up have none: the backoff's deadline is
-    /// [due work](Self::has_pending_due_work), and a settlement or a new
-    /// rebuild asks for the frame. A frame that showed nothing and left tree
-    /// work behind is what a runner paces (ADR-0353 decision 4).
+    /// holds as many frames as it may, one whose device rebuild was given
+    /// up and one that cannot be seen have none: the backoff's deadline and
+    /// the frame an unseen window owes its surface are
+    /// [due work](Self::has_pending_due_work), a settlement or a new
+    /// rebuild asks for the frame, and a window seen again asks for its own.
+    /// A frame that showed nothing and left tree work behind is what a runner
+    /// paces (ADR-0353 decision 4).
     pub fn has_pending_tree_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
-            presentation.failure_retry_at().is_none()
+            !presentation.clock().is_hidden()
+                && presentation.failure_retry_at().is_none()
                 && !presentation.frames_in_flight().is_saturated()
                 && !presentation.device_abandoned()
                 && (presentation.has_pending_work_snapshot()
@@ -556,9 +559,10 @@ impl UiRuntime {
     }
 
     /// Whether work is due now, at an instant of its own: a due task deadline,
-    /// a dropped frame whose backoff is over, a gesture deadline that came
-    /// due, a haptic delivery, or a frame-rate hold that ran out. A runner
-    /// serves it on the wake its deadline brings, never behind a pacing
+    /// a dropped frame whose backoff is over, the frame an unseen window owes
+    /// its surface ([`Self::owes_occluded_frame`]), a gesture deadline that
+    /// came due, a haptic delivery, or a frame-rate hold that ran out. A
+    /// runner serves it on the wake its deadline brings, never behind a pacing
     /// deferral (ADR-0353 decision 4).
     pub fn has_pending_due_work(&self) -> bool {
         // A deadline a task sleeps until is owner work once it is due.
@@ -567,6 +571,7 @@ impl UiRuntime {
             .next_deadline()
             .is_some_and(|due| flui_foundation::MonotonicClock::now(&self.clock) >= due);
         deadline_due
+            || self.owes_occluded_frame()
             || self.presentations.iter().any(|presentation| {
                 // A sink at its in-flight limit or a given-up device asks for
                 // no frame until a settlement or a new rebuild does.
@@ -582,6 +587,22 @@ impl UiRuntime {
                         .frame_rate_hold()
                         .is_some_and(|due| presentation.clock().now() >= due)
             })
+    }
+
+    /// Whether a window that cannot be seen, occluded by what may be a
+    /// covering, has had its quiet period end with work waiting: its next
+    /// frame draws what changed, so the surface the window system shows on
+    /// uncovering is current (ADR-0357). A runner whose frames are off
+    /// because no window is seen runs that frame all the same; every other
+    /// frame of an unseen window waits until it is seen.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn owes_occluded_frame(&self) -> bool {
+        self.presentations.iter().any(|presentation| {
+            presentation
+                .occluded_frame_at()
+                .is_some_and(|at| presentation.clock().now() >= at)
+        })
     }
 
     /// Whether `presentation`'s earliest armed gesture deadline (a long
@@ -688,6 +709,8 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
+                    // The frame an unseen window owes its surface (ADR-0357).
+                    presentation.occluded_frame_at(),
                     // A presentation at its in-flight limit attempts no frame when its backoff
                     // ends; the settlement that frees a place wakes it, and the in-flight floor
                     // bounds the sleep until then (ADR-0305 §5).

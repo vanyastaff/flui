@@ -634,8 +634,11 @@ impl DesktopFrameDriver {
                 merge_wake_deadlines(raster_deadline, first_reveal.next_deadline()),
                 fallback_gate,
             );
+            // Frames are off while no window is seen, but a covered window
+            // whose quiet period is over draws the frame it owes its surface
+            // (ADR-0357), as due work.
             let action = wake_action(
-                scheduler.frames_enabled(),
+                scheduler.frames_enabled() || ui_runtime.owes_occluded_frame(),
                 dirty,
                 scheduler.is_frame_scheduled(),
                 fallback_gate,

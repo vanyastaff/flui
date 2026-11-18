@@ -671,13 +671,25 @@ impl UiRuntime {
         };
         let shown_again = presentation.clock().is_hidden() && !hidden;
         presentation.clock().set_hidden(hidden);
+        if hidden {
+            // Whether the window owes its surface a frame while unseen is read now, from the
+            // state that made it unseen (ADR-0357).
+            presentation.begin_unseen(presentation.clock().now());
+        } else {
+            presentation.end_unseen();
+        }
         if shown_again {
             // A withdrawal of its surface from here on is a new one, ridden out at the display
             // rate once any dropped-frame wait already running ends (ADR-0335 §2).
             presentation.clear_not_shown_streak();
         }
         presentation.sync_haptics_visibility();
-        if !hidden && !presentation.clock().demand_mask().is_empty() {
+        // An unseen presentation asks for no frame, so the tree work it gathered meanwhile may
+        // never have reached its clock's demand: either is what the shown window draws now.
+        if !hidden
+            && (!presentation.clock().demand_mask().is_empty()
+                || (shown_again && presentation.has_retained_frame_work()))
+        {
             self.wake_frame();
         }
     }

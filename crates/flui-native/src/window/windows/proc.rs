@@ -54,6 +54,7 @@ use super::record::WindowRecord;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 
+use crate::lifecycle::windows::messages::{SessionChange, SessionSight};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::windows::HostDisplays;
@@ -831,12 +832,12 @@ impl WindowChrome for WindowProc {
 }
 
 impl WindowMessages for WindowProc {
-    /// A locked session hides the window; every other step is the window's
-    /// own.
+    /// A locked or disconnected session hides the window; every other step
+    /// is the window's own.
     fn step(&self, window: WindowRef, step: WindowStep) {
         match step {
-            WindowStep::SessionLocked(locked) => {
-                window.with_context("session lock", |ctx| ctx.set_session_locked(locked));
+            WindowStep::Session(change) => {
+                window.with_context("session change", |ctx| ctx.change_session(change));
             }
             WindowStep::Resized(_)
             | WindowStep::Minimized
@@ -2527,8 +2528,8 @@ pub(crate) struct KeptLogical {
 pub(crate) struct Occlusion {
     /// The desktop window manager cloaks the window.
     pub(crate) cloaked: bool,
-    /// The user's session is locked.
-    pub(crate) session_locked: bool,
+    /// Whether the user's session is locked or has no display.
+    pub(crate) session: SessionSight,
 }
 
 /// What occludes a shown window in its snapshot.
@@ -2537,12 +2538,13 @@ pub(crate) struct Visibility {
 }
 
 impl Visibility {
-    /// A window in a session that is locked now or not.
+    /// A window in a session as it is now: locked or not, with a display or
+    /// not.
     pub(crate) fn new() -> Self {
         Self {
             occlusion: Cell::new(Occlusion {
                 cloaked: false,
-                session_locked: session_locked_now(),
+                session: session_now(),
             }),
         }
     }
@@ -2550,17 +2552,17 @@ impl Visibility {
     /// Whether something hides the window whatever its surface.
     pub(crate) fn occluded(&self) -> bool {
         let occlusion = self.occlusion.get();
-        occlusion.cloaked || occlusion.session_locked
+        occlusion.cloaked || occlusion.session.hides_windows()
     }
 }
 
 impl WindowContext {
-    /// The session locked (`true`) or unlocked, as the lifecycle's hook tells
-    /// the window ([`WindowStep::SessionLocked`]).
-    pub(crate) fn set_session_locked(&self, locked: bool) {
+    /// The session locked or unlocked, lost its display or got it back, as
+    /// the lifecycle's hook tells the window ([`WindowStep::Session`]).
+    pub(crate) fn change_session(&self, change: SessionChange) {
         let occlusion = self.visibility.occlusion.get();
         self.visibility.occlusion.set(Occlusion {
-            session_locked: locked,
+            session: occlusion.session.after(change),
             ..occlusion
         });
         self.settle_visibility();
@@ -2591,19 +2593,21 @@ impl WindowContext {
     }
 
     fn settle_visibility(&self) {
-        // A cloak or a lock occludes a shown window in its snapshot: read it
-        // again and publish it, which says nothing when nothing changed.
+        // A cloak, a lock or a session without a display occludes a shown
+        // window in its snapshot: read it again and publish it, which says
+        // nothing when nothing changed.
         self.snapshot.invalidate();
         self.delivery.publish_state();
     }
 }
 
-/// Whether the session this process runs in is locked: a window opened while
-/// it is gets no lock message. Unknown counts as unlocked.
-fn session_locked_now() -> bool {
+/// Whether the session this process runs in is locked and whether it has a
+/// display: a window opened while it is gets no message of either. Unknown
+/// counts as unlocked and connected.
+fn session_now() -> SessionSight {
     use windows::Win32::System::RemoteDesktop::{
-        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK, WTSFreeMemory,
-        WTSINFOEXW, WTSQuerySessionInformationW, WTSSessionInfoEx,
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK, WTSDisconnected,
+        WTSFreeMemory, WTSINFOEXW, WTSQuerySessionInformationW, WTSSessionInfoEx,
     };
 
     let mut buffer = windows::core::PWSTR::null();
@@ -2620,21 +2624,26 @@ fn session_locked_now() -> bool {
         )
     };
     if queried.is_err() || buffer.is_null() {
-        return false;
+        return SessionSight::default();
     }
-    let locked = (bytes as usize >= size_of::<WTSINFOEXW>()).then(|| {
+    let sight = (bytes as usize >= size_of::<WTSINFOEXW>()).then(|| {
         // SAFETY: for `WTSSessionInfoEx` the buffer holds a `WTSINFOEXW`, at
         // least as many bytes as checked above, read without assuming the
         // allocation's alignment; level 1 is the union's only member.
         let info = unsafe { std::ptr::read_unaligned(buffer.0.cast::<WTSINFOEXW>()) };
-        info.Level == 1
+        (info.Level == 1).then(|| {
             // SAFETY: `Level == 1` names the union's active member, which is
             // also its only one.
-            && unsafe { info.Data.WTSInfoExLevel1 }.SessionFlags as u32 == WTS_SESSIONSTATE_LOCK
+            let level = unsafe { info.Data.WTSInfoExLevel1 };
+            SessionSight {
+                locked: level.SessionFlags as u32 == WTS_SESSIONSTATE_LOCK,
+                disconnected: level.SessionState == WTSDisconnected,
+            }
+        })
     });
     // SAFETY: the buffer the query allocated, freed once.
     unsafe { WTSFreeMemory(buffer.0.cast()) };
-    locked.unwrap_or(false)
+    sight.flatten().unwrap_or_default()
 }
 
 /// Wake deadlines while the system runs a modal loop for the window (moving

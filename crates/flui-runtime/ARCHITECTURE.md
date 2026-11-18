@@ -722,6 +722,27 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_waits_out_the_backoff`.
 
+### An unseen window waits, and a covered one owes its surface a frame
+
+A presentation whose window is not seen (`WindowState::is_seen`) has a hidden clock: its polls
+skip, the demand and tree work it gathers wait, and none of it is tree work a host wakes for
+(`has_pending_tree_work`), so a covered window with a dirty tree asks the loop for nothing.
+Shown again, it asks for a frame when anything waits, its clock's demand or its tree's. Where
+its occlusion may be a covering by other windows (`occluded_frame::may_be_covered`: shown,
+unminimized, running, occluded, on a host whose `reports_occlusion` is available) the window
+system shows the surface again the moment the window is uncovered, before a frame drawn then
+reaches it, so the presentation owes the surface a frame: once `OCCLUDED_FRAME_QUIET` has
+passed since it stopped being seen or since its last owed frame, with work waiting, the
+deadline is due work in `next_wake`, `FrameClock::grant_hidden_frame` lets one poll produce,
+and the quiet period starts again. A host whose frames are off because no window is seen runs
+that frame (`owes_occluded_frame`). The state is read when the window stops being seen and
+again when the frame comes due, since a covered window minimized or locked meanwhile reports
+no visibility change; such a window owes nothing more until it is next hidden. An occlusion
+that is never a covering (a locked session, a background app or page, Win32's cloak) owes
+nothing. The rule records what ADR-0357 leaves open, that a covered window's uncovering shows
+the frame of before the covering. **Test:** `an_occluded_window_draws_its_change_in_exactly_one_frame`
+(`flui-testing`).
+
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
 `QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose
 record folds then, so a presentation keeps no more records pending than the sink holds frames.

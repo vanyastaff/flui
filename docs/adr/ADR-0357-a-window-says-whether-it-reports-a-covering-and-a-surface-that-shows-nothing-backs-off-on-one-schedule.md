@@ -52,13 +52,16 @@ in every snapshot, and option 3 is the tracker read above.
 1. **`WindowCapabilities::reports_occlusion`** (a `WindowCapability` with its absence reason) says
    whether a covering by other windows reaches `occluded`. AppKit reports it (`occlusionState`).
    X11 reports it while no compositing manager owns `_NET_WM_CM_S<n>`, read with the window
-   manager's support and again when a manager announces the selection; under one, the server reads
+   manager's support and again whenever the selection's owner changes (a manager announcing it, and
+   XFixes selection events for a manager that takes it, gives it up or goes with its window or
+   client, which announce nothing); under one, the server reads
    every redirected window unobscured, and it is absent (`NOT_ON_THIS_DEVICE`). Wayland reports it
    where the window's `xdg_toplevel` is version 6 or newer, whose `suspended` state covers a
    toplevel the compositor does not show; before it, absent. iOS, Android and the Web never tell a
    covering (`NOT_ON_THIS_PLATFORM`). Headless reports what the test sets.
 2. **Win32 tracks no covering.** It states "not seen" from what it knows for certain: hidden,
-   minimized, cloaked by DWM, the session locked; a covering is `NOT_YET_ON_THIS_HOST`. A tracker
+   minimized, cloaked by DWM, the session locked or without a display (its remote client
+   disconnected, the console taken by another session); a covering is `NOT_YET_ON_THIS_HOST`. A tracker
    that would be correct runs off the owner thread and excludes what covers nothing (tool windows,
    per-pixel transparent windows, a capture in progress), in one pixel space, and follows its own
    windows' moves; `docs/gaps.md` holds that entry.
@@ -91,12 +94,15 @@ in every snapshot, and option 3 is the tracker read above.
 
 - The capability tests of each host:
   `an_x11_window_has_the_capabilities_it_names` and
-  `a_compositing_manager_takes_away_the_covering_report` (X11),
+  `a_compositing_manager_takes_away_the_covering_report` and
+  `a_compositing_manager_that_goes_gives_the_covering_report_back` (X11),
   `a_wayland_window_has_the_capabilities_it_names` and `the_capabilities_follow_the_compositor`
   (Wayland), `a_window_state_round_trips_through_its_parts` (the contract).
 - `unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered` (the Wayland model) and
   `the_record_backs_off_unanswered_callbacks_and_matches_answers_by_ticket` (its seam in the host).
 - `a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows` and
   `a_surface_that_keeps_withholding_frames_is_reported_once` (`flui-runtime`).
-- `an_unseen_window_with_nothing_asked_runs_no_frame` (Win32) and
+- `an_unseen_window_with_nothing_asked_runs_no_frame` and
+  `a_disconnected_session_occludes_a_shown_window_until_it_connects` (Win32),
+  `a_disconnected_session_hides_its_windows_until_it_connects` (the session model), and
   `an_unseen_window_asks_for_no_wake_until_it_is_seen` (headless).

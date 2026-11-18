@@ -858,7 +858,7 @@ trait depends on `flui-platform` instead.
   `isVisible` or `isMiniaturized`, and on Wayland, Android, iOS and the Web,
   where the application cannot hide its window, open. Occluded is what
   each window system tells of a shown window kept off the screen: a DWM
-  cloak or a locked session, an X11
+  cloak, a locked session or one without a display, an X11
   `VisibilityNotify` of `FullyObscured` or
   an unviewable map state, AppKit's `occlusionState` without its visible
   bit, a Wayland toplevel unconfigured, on no output or
@@ -866,7 +866,8 @@ trait depends on `flui-platform` instead.
   document. Whether a covering by other windows is among them is the
   capabilities' `reports_occlusion` (ADR-0357): native on AppKit; on X11
   while no compositing manager owns `_NET_WM_CM_S<n>` (the server reads a
-  redirected window unobscured); on Wayland where the window's
+  redirected window unobscured), each change of its owner heard through
+  XFixes; on Wayland where the window's
   `xdg_toplevel` is version 6 or newer (`SUSPENSION_VERSION`), whose
   `suspended` covers a toplevel the compositor does not show; absent on
   Win32, which tells no covering and tracks none, and on Android, iOS and the

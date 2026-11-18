@@ -43,6 +43,7 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
+use crate::occluded_frame::OccludedFrame;
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -544,6 +545,9 @@ pub struct PresentationState {
     /// ([`Self::first_withdrawal_past_budget`]): once per presentation, so a
     /// window covered again and again does not repeat it.
     withheld_reported: Cell<bool>,
+    /// Whether this presentation owes its surface a frame while it cannot be
+    /// seen, and since when it has drawn none ([`OccludedFrame`]).
+    occluded_frame: Cell<OccludedFrame>,
     /// Whether the performance overlay is drawn. Its numbers come from the
     /// clock's frame history, which is kept either way.
     performance_overlay: Cell<bool>,
@@ -1147,6 +1151,7 @@ impl PresentationState {
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
+            occluded_frame: Cell::new(OccludedFrame::NotOwed),
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
@@ -1297,6 +1302,7 @@ impl PresentationState {
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
+            occluded_frame: Cell::new(OccludedFrame::NotOwed),
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
@@ -1757,6 +1763,65 @@ impl PresentationState {
     /// burst (ADR-0335 §2).
     pub(crate) fn clear_not_shown_streak(&self) {
         self.not_shown_streak.set(0);
+    }
+
+    /// The presentation stopped being seen at `now`: from the window's state
+    /// as it is now, whether it owes its surface a frame
+    /// ([`OccludedFrame::for_window`]). A presentation that already owes one
+    /// keeps its quiet period.
+    pub(crate) fn begin_unseen(&self, now: Instant) {
+        if self.occluded_frame.get() != OccludedFrame::NotOwed {
+            return;
+        }
+        let owed = self
+            .with_window(|window| OccludedFrame::for_window(&window.state(), now))
+            .unwrap_or_default();
+        self.occluded_frame.set(owed);
+    }
+
+    /// The presentation is seen again: it owes its surface nothing.
+    pub(crate) fn end_unseen(&self) {
+        self.occluded_frame.set(OccludedFrame::NotOwed);
+    }
+
+    /// Whether frame work waits on this presentation: a demand its clock
+    /// keeps, a redraw mark, or tree work.
+    pub(crate) fn has_retained_frame_work(&self) -> bool {
+        !self.clock.demand_mask().is_empty()
+            || self.redraw_pending.get()
+            || self.has_pending_work_snapshot()
+    }
+
+    /// When this presentation, unseen with frame work waiting, draws the
+    /// frame it owes its surface; `None` when it is seen, owes none or has no
+    /// work.
+    pub(crate) fn occluded_frame_at(&self) -> Option<Instant> {
+        if !self.clock.is_hidden() || self.closing_requested.get() {
+            return None;
+        }
+        let due = self.occluded_frame.get().due_at()?;
+        self.has_retained_frame_work().then_some(due)
+    }
+
+    /// At `now`, grant the owed frame of a presentation whose quiet period
+    /// is over, if the window may still be covered: the window may have been
+    /// minimized or locked since it was hidden, which no visibility change
+    /// says, and then it owes nothing more until it is next hidden. The quiet
+    /// period starts again at `now`. Returns whether a frame was granted.
+    pub(crate) fn grant_occluded_frame(&self, now: Instant) -> bool {
+        if self.occluded_frame_at().is_none_or(|due| now < due) {
+            return false;
+        }
+        let covered = self
+            .with_window(|window| crate::occluded_frame::may_be_covered(&window.state()))
+            .unwrap_or(false);
+        if !covered {
+            self.occluded_frame.set(OccludedFrame::NotOwed);
+            return false;
+        }
+        self.occluded_frame.set(OccludedFrame::QuietSince(now));
+        self.clock.grant_hidden_frame();
+        true
     }
 
     /// Whether this is the first time the presentation's surface withheld
