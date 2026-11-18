@@ -18,13 +18,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
-use std::process::ExitCode;
 
 use anyhow::Context;
 use cargo_metadata::DependencyKind;
 use serde_json::{Value as Json, json};
 
-use super::{Dep, Member, Members, Node};
+use super::{Dep, Identity, Member, Members, Node, SelfTest};
 use crate::util;
 
 /// The root manifest's `[workspace.metadata.flui] tiers`, bottom to top.
@@ -1026,10 +1025,8 @@ const EXPECTED: [(&str, &str, &str); 25] = [
     ("h-pkg", "pkg2", "upward"),
 ];
 
-type Identity = (String, String, &'static str);
-
-/// `(missed, false positives)` of the tier rule over the self-test graph.
-pub(super) fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
+/// The tier rule and the train guard over the self-test graph.
+pub(super) fn self_test() -> SelfTest {
     let tiers: Vec<String> = ["V", "C", "S", "R", "K", "H", "pkg"]
         .map(str::to_owned)
         .into();
@@ -1043,27 +1040,9 @@ pub(super) fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
         .iter()
         .map(|&(from, to, kind)| (from.to_owned(), to.to_owned(), kind))
         .collect();
-    (
-        expected.difference(&seen).cloned().collect(),
-        seen.difference(&expected).cloned().collect(),
-    )
-}
-
-/// `cargo xtask workspace --self-test`.
-pub(super) fn self_test() -> ExitCode {
-    let (missed, extra) = self_test_diff();
-    for (from, to, kind) in &missed {
-        println!("self-test: MISSED ({from}, {to}, {kind})");
+    SelfTest {
+        planted: expected.len(),
+        missed: expected.difference(&seen).cloned().collect(),
+        extra: seen.difference(&expected).cloned().collect(),
     }
-    for (from, to, kind) in &extra {
-        println!("self-test: FALSE POSITIVE ({from}, {to}, {kind})");
-    }
-    if !missed.is_empty() || !extra.is_empty() {
-        return ExitCode::FAILURE;
-    }
-    println!(
-        "workspace: self-test ok ({} expected findings, no others)",
-        EXPECTED.len()
-    );
-    ExitCode::SUCCESS
 }

@@ -164,6 +164,14 @@ deny = [
     # The native hosts replaced winit on every desktop (ADR-0151 §11); a host
     # comes back as a native one, not as a fallback that hides its gaps.
     { crate = "winit", reason = "the native hosts replaced winit (ADR-0151 §11)" },
+
+    # No build script runs a platform compiler (ADR-0154 decision 5, ADR-0255
+    # decision 21): `flui build` builds Java, Kotlin, Swift and the dex from the
+    # sources a crate declares. These crates exist to run `javac`, `d8` or
+    # `swift build` from a build script; `cargo xtask workspace` refuses a
+    # build script that spawns the tools itself.
+    { crate = "android-build", reason = "runs javac and d8 from a build script (ADR-0154 decision 5)" },
+    { crate = "swift-rs", reason = "runs swift build from a build script (ADR-0154 decision 5)" },
 ]
 
 # Crates whose job std or core now does (once_cell → OnceLock/LazyLock,

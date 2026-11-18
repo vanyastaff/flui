@@ -5381,8 +5381,8 @@ GPU-память простаивающего или невидимого окн
   `an_intent_opens_its_link_or_documents` и trybuild-снимок `owner_platform_is_not_send`. Не
   собирались здесь macOS, iOS, Android и wasm32 (CI `cross-typecheck`); тесты X11 и Wayland не
   запускались.
-- [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
-  #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
+- [x] **LY53** — #2150 (`9450db8e1`), #2325 (`75872fc6e`), ветка `xtask/capability-build-script`
+  от `main` @ `7b596b26b`. kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
   (`CapabilityTier`), зависит только от `flui-sdk`, `flui-platform` и `flui-protocol`
   (`CapabilityOffContract`), его не называет ни другой крейт возможности, ни член workspace, кроме
@@ -5391,8 +5391,32 @@ GPU-память простаивающего или невидимого окн
   `[workspace.metadata.flui.reach.kind.capability]` запрещает `flui-native`, `flui-app`,
   `flui-engine`, `winit`, `wgpu` и `tokio`. `workspace --self-test` сажает нарушение на каждое
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
-  kind нет. Остаётся правило про `build.rs` с посаженным нарушением: `rg 'javac|swiftc|d8'
-  tools/xtask/src/workspace` пуст.
+  kind нет. Запрет платформенного компилятора в сборочном скрипте (ADR-0154 решение 5, ADR-0255
+  решение 21; оба ADR распространяют его на каждый `build.rs`, поэтому правило проверяет скрипт
+  любого члена workspace, крейты возможностей в том числе): `tools/xtask/src/workspace/build_scripts.rs`
+  читает `custom-build`-цель, которую сообщает Cargo (и `build = "…"`), с файлами её `mod`, как
+  синтаксис Rust и находит `javac`, `kotlinc`, `jar`, `d8`, `r8`, `dx`, `swiftc`, `swift`,
+  `xcrun`, `xcodebuild`, `aapt`, `aapt2`, `apksigner`, `zipalign`, `bundletool`, `gradle` и
+  `gradlew` в программе `Command::new(…)` и в операндах `.arg`/`.args` — литералом, путём с
+  `.exe`/`.bat`/`.cmd`/`.jar`, строкой формата, через `const`, `static`, `let` или функцию
+  файла; комментарий и строка `cargo:` находкой не являются. Крейты-обёртки (`android-build`,
+  `swift-rs`) запрещены в `deny.toml` — инструмент, который CI уже запускает, ступень раньше
+  xtask (ADR-0303). Правило живёт в `workspace`, потому что этот гейт уже загружает
+  `cargo metadata`, читает манифест и разбирает исходники каждого члена; `android-dex`, который
+  ADR-0154 и ADR-0255 называли, держит одну запись dex и метаданных не читает — их строки
+  подтверждения переписаны на `workspace` и `deny.toml`. `workspace --self-test` сажает семь
+  нарушений (литерал, путь `kotlinc.exe`, `const` с `d8.bat`, функция с `format!` для
+  `swiftc`, `sh -c "xcodebuild …"`, `java -jar r8.jar` внутри `assert!`, `./gradlew` в
+  смонтированном файле крейта другого kind) и тихий скрипт (компилятор в комментариях и строках
+  `cargo:`, запуск `rustc`). Тесты таблицы `workspace_gate_contract`:
+  `a_build_script_that_runs_a_platform_compiler_is_reported` (`build = "build/main.rs"`, `javac`
+  в `mod java`), `a_build_script_that_names_a_compiler_only_in_comments_passes`,
+  `each_self_test_reports_exactly_its_planted_findings`. С отключённым правилом самотест
+  печатает `MISSED` на все семь, а первый и третий тесты падают. На `main` все пять сборочных
+  скриптов (`flui-app`, `flui-engine`, `flui-foundation`, `flui-native`, `flui-hot-reload`)
+  проходят; единственный крейт возможности, `flui-system`, скрипта не имеет. Проверки на Windows:
+  `workspace`, `workspace --self-test`, `deps`, clippy `-D warnings` и nextest `xtask`,
+  `checks`.
 - [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
   дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
   Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:

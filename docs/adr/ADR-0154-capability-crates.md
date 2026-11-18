@@ -383,9 +383,11 @@ first capability crate that needs them.
   otherwise "type-checked" (decision 10).
 - The aggregation rule for Apple's per-SDK privacy bundle, which is read from the references and
   not from Apple's text, is the one ADR-0307 §4 settled (decision 7).
-- `cargo xtask android-dex` extends to every `build.rs` of the workspace: a build script that names
-  `javac`, `d8` or `swiftc` fails it (decision 5); the `capability` kind rule of `cargo xtask
-  workspace` refuses a declaration that claims a menu or incoming activation (decision 4). A crate
+- `cargo xtask workspace` reads every member's build script, with the files it mounts, as Rust
+  syntax and fails one that spawns a platform compiler or packager (`javac`, `d8`, `swiftc`, …),
+  with a planted spawn of each shape in its `--self-test`; `deny.toml` bans the crates that run
+  them from a build script (`android-build`, `swift-rs`) (decision 5). The `capability` kind rule
+  of `cargo xtask workspace` refuses a declaration that claims a menu or incoming activation (decision 4). A crate
   outside the repository is not gated: its conformance table (decision 10) is the only check it
   runs (decision 1).
 
