@@ -23,7 +23,7 @@
 //! The adapter is borrowed only on the main thread and never across an
 //! event raise: TalkBack answers an event by asking for node info, which
 //! re-enters the provider. A call that finds it borrowed anyway is
-//! [`Busy`] and answers as a view with no tree.
+//! [`Busy`](crate::accessibility::provided_tree::Busy) and answers as a view with no tree.
 //!
 //! # While a service listens
 //!
@@ -71,7 +71,7 @@ use accesskit_android::jni::sys as jni021;
 use accesskit_android::{Adapter, PlatformAction, QueuedEvents};
 
 use crate::accessibility::bridge::BridgeShared;
-use crate::accessibility::provided_tree::{Busy, Provided, ProvidedAdapter, ProvidedTree};
+use crate::accessibility::provided_tree::{Provided, ProvidedAdapter, ProvidedTree};
 use crate::owner::android::ActivityRef;
 use crate::owner::android::java_view::{JavaView, ViewAccessibility};
 use crate::owner::android::native_call::{ClearsPending, EnvSlot};
@@ -123,7 +123,7 @@ impl NodeProvider {
     /// is already inside it. Java main thread.
     fn with<R>(&self, f: impl FnOnce(&mut Provided<Adapter>) -> R) -> Option<R> {
         let answer = self.tree()?.with(f);
-        if answer == Err(Busy) {
+        if answer.is_err() {
             tracing::warn!(
                 target: "flui_native::android",
                 "TalkBack re-entered the node provider while a call was inside the adapter"

@@ -45,6 +45,7 @@ use std::sync::Arc;
 use accesskit::{ActivationHandler, TreeUpdate};
 
 use crate::accessibility::bridge::{Action, Activation, BridgeShared};
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// What the tree needs of an AccessKit adapter: its first state, which holds
 /// no tree, and an update applied only while a tree is held.
@@ -86,17 +87,24 @@ pub(crate) struct ServiceActivation {
 
 impl ActivationHandler for ServiceActivation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        let answer = if self.watch.services_enabled.get() {
-            self.activation.request_initial_tree()
-        } else {
-            None
-        };
-        self.watch.held.set(if answer.is_some() {
-            Held::Tree
-        } else {
-            Held::Placeholder
-        });
-        answer
+        os_entry(
+            "AccessKit's activation",
+            (),
+            AfterPanic::Answer(|()| None),
+            || {
+                let answer = if self.watch.services_enabled.get() {
+                    self.activation.request_initial_tree()
+                } else {
+                    None
+                };
+                self.watch.held.set(if answer.is_some() {
+                    Held::Tree
+                } else {
+                    Held::Placeholder
+                });
+                answer
+            },
+        )
     }
 }
 
