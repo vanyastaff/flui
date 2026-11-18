@@ -55,6 +55,9 @@ pub(crate) struct PendingFrame {
     haptics: HapticCut,
     /// The system-bar style the frame's scene asks for, delivered once the frame is shown.
     overlay_style: Option<SystemUiOverlayStyle>,
+    /// The frame was drawn while its window could not be seen: it is the frame the window owed
+    /// its surface, which a refusal of this frame, and of no other, ends (ADR-0357).
+    drawn_unseen: bool,
 }
 
 impl PendingFrame {
@@ -131,6 +134,7 @@ impl UiRuntime {
             layer_reads,
             haptics: producer.haptics().frame_cut(),
             overlay_style: producer.overlay_style.take_staged(),
+            drawn_unseen: producer.clock().is_hidden(),
         }
     }
 
@@ -312,7 +316,10 @@ impl UiRuntime {
                 if retry_needs_repaint {
                     self.mark_needs_full_repaint_for(producer);
                 }
-                self.wake_frame();
+                // An unseen presentation retries once it is seen, which wakes it.
+                if !producer.clock().is_hidden() {
+                    self.wake_frame();
+                }
             } else if !producer.failure_backoff_holds(producer.clock().now())
                 && !producer.device_abandoned()
                 && !producer.frames_in_flight().is_saturated()
@@ -363,6 +370,7 @@ impl UiRuntime {
             layer_reads,
             haptics,
             overlay_style,
+            drawn_unseen,
         } = frame;
         // Input held for a commit replays against the tree this frame shows only if no later
         // frame was painted since; a settlement of an older frame leaves it for the newer one.
@@ -373,6 +381,11 @@ impl UiRuntime {
             render_verdict,
             SubmitVerdict::Presented | SubmitVerdict::NoPresent
         );
+        // The owed frame of a covered window that its surface did not take ends the owing; a
+        // frame drawn while the window was seen and settled after the covering does not.
+        if drawn_unseen && !shown_on_screen {
+            producer.refuse_occluded_frame();
+        }
         // A shown version is the raster side's new base: the log before it is let go.
         // What the log held drops at the end of this function, after the replies and the
         // commit, with no borrow held: an annotation's `Drop` is user code.

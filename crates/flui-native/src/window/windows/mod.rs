@@ -67,6 +67,8 @@ mod record;
 #[cfg(any(windows, test))]
 mod rescale;
 #[cfg(windows)]
+mod sent_messages;
+#[cfg(windows)]
 mod set;
 pub(crate) mod sizing;
 #[cfg(windows)]

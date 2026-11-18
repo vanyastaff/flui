@@ -20,9 +20,10 @@ pub(crate) use session::SessionWindows;
 #[cfg(windows)]
 mod session {
     //! The lifecycle's hook on FLUI's window class: each window hears its
-    //! session lock and unlock, decoded by [`messages`](super::messages), and
-    //! the hook tells the class's hooks of it as the window's step, which the
-    //! window follows (a locked session hides it).
+    //! session lock and unlock, and its session losing its display and
+    //! getting it back, decoded by [`messages`](super::messages), and the
+    //! hook tells the class's hooks of it as the window's step, which the
+    //! window follows (a locked or disconnected session hides it).
 
     // Win32 calls: each window's session notification. Each `unsafe` block
     // states its invariant.
@@ -36,7 +37,7 @@ mod session {
     };
     use windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY;
 
-    use super::messages::{HostEvent, HostMessage, WM_WTSSESSION_CHANGE, classify};
+    use super::messages::{WM_WTSSESSION_CHANGE, session_change};
     use crate::owner::windows::{
         CreatedWindow, WindowMessages, WindowRef, WindowStep, WindowTable, window_step,
     };
@@ -109,15 +110,16 @@ mod session {
             msg == WM_WTSSESSION_CHANGE
         }
 
-        /// The session locked or unlocked: the window takes the step. A
-        /// window's last message forgets what is left of a window whose
-        /// destruction was not announced (heard, not answered).
+        /// The session locked or unlocked, lost its display or got it back:
+        /// the window takes the step. A window's last message forgets what is
+        /// left of a window whose destruction was not announced (heard, not
+        /// answered).
         unsafe fn message(
             &self,
             hwnd: HWND,
             msg: u32,
             wparam: WPARAM,
-            lparam: LPARAM,
+            _lparam: LPARAM,
         ) -> Option<LRESULT> {
             if msg == WM_NCDESTROY {
                 if let Some((window, kept)) = self.windows.take_handle(hwnd) {
@@ -128,19 +130,14 @@ mod session {
             if msg != WM_WTSSESSION_CHANGE {
                 return None;
             }
-            let locked = match classify(msg, wparam.0, lparam.0) {
-                HostMessage::Event(HostEvent::SessionLocked) => Some(true),
-                HostMessage::Event(HostEvent::SessionUnlocked) => Some(false),
-                _ => None,
-            };
-            if let Some(locked) = locked
+            if let Some(change) = session_change(wparam.0)
                 && let Some(window) = self.windows.window_of(hwnd)
                 && let Some(hooks) = self
                     .windows
                     .read(window, |kept| kept.hooks.upgrade())
                     .flatten()
             {
-                window_step(&hooks, window, WindowStep::SessionLocked(locked));
+                window_step(&hooks, window, WindowStep::Session(change));
             }
             Some(LRESULT(0))
         }
@@ -701,6 +698,16 @@ pub(crate) mod messages {
     /// user triggered the resume, and would deliver a second wake.
     const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
 
+    /// `WTS_CONSOLE_CONNECT`: the session was connected to the console.
+    const WTS_CONSOLE_CONNECT: usize = 0x0001;
+    /// `WTS_CONSOLE_DISCONNECT`: the session was disconnected from the
+    /// console (another user's session took it).
+    const WTS_CONSOLE_DISCONNECT: usize = 0x0002;
+    /// `WTS_REMOTE_CONNECT`: the session was connected to a remote client.
+    const WTS_REMOTE_CONNECT: usize = 0x0003;
+    /// `WTS_REMOTE_DISCONNECT`: the session was disconnected from its remote
+    /// client.
+    const WTS_REMOTE_DISCONNECT: usize = 0x0004;
     /// `WTS_SESSION_LOCK`.
     const WTS_SESSION_LOCK: usize = 0x0007;
     /// `WTS_SESSION_UNLOCK`.
@@ -764,12 +771,89 @@ pub(crate) mod messages {
                 PBT_APMRESUMEAUTOMATIC => HostMessage::Event(HostEvent::Wake),
                 _ => HostMessage::Ignored,
             },
-            WM_WTSSESSION_CHANGE => match wparam {
-                WTS_SESSION_LOCK => HostMessage::Event(HostEvent::SessionLocked),
-                WTS_SESSION_UNLOCK => HostMessage::Event(HostEvent::SessionUnlocked),
-                _ => HostMessage::Ignored,
+            // One table for the session's codes (`session_change`): the lock
+            // and the unlock are notices; a display lost or regained is each
+            // window's step alone.
+            WM_WTSSESSION_CHANGE => match session_change(wparam) {
+                Some(SessionChange::Locked) => HostMessage::Event(HostEvent::SessionLocked),
+                Some(SessionChange::Unlocked) => HostMessage::Event(HostEvent::SessionUnlocked),
+                Some(SessionChange::Disconnected | SessionChange::Connected) | None => {
+                    HostMessage::Ignored
+                }
             },
             _ => HostMessage::Ignored,
+        }
+    }
+
+    /// A change of the user's session that decides whether its windows can be
+    /// seen, as `WM_WTSSESSION_CHANGE` reports it to each window.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum SessionChange {
+        /// The session locked.
+        Locked,
+        /// The session unlocked.
+        Unlocked,
+        /// The session lost its display: its remote client disconnected, or
+        /// another session took the console.
+        Disconnected,
+        /// The session has a display again, at the console or a remote
+        /// client.
+        Connected,
+    }
+
+    /// What a `WM_WTSSESSION_CHANGE` whose `wParam` is `code` changes of
+    /// whether the session's windows can be seen; `None` for a logon, a
+    /// logoff, a remote control or a session created or ended elsewhere.
+    pub(crate) fn session_change(code: usize) -> Option<SessionChange> {
+        match code {
+            WTS_SESSION_LOCK => Some(SessionChange::Locked),
+            WTS_SESSION_UNLOCK => Some(SessionChange::Unlocked),
+            WTS_CONSOLE_DISCONNECT | WTS_REMOTE_DISCONNECT => Some(SessionChange::Disconnected),
+            WTS_CONSOLE_CONNECT | WTS_REMOTE_CONNECT => Some(SessionChange::Connected),
+            _ => None,
+        }
+    }
+
+    /// Whether the user's session shows its windows: a locked session shows
+    /// the lock screen, and a disconnected one shows nothing anywhere, until
+    /// it connects again to the console or a remote client. The two are
+    /// independent: a remote session usually locks as it disconnects, and is
+    /// seen only once it is both connected and unlocked.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct SessionSight {
+        /// The session is locked.
+        pub(crate) locked: bool,
+        /// The session has no display.
+        pub(crate) disconnected: bool,
+    }
+
+    impl SessionSight {
+        /// The session after `change`.
+        #[must_use]
+        pub(crate) fn after(self, change: SessionChange) -> Self {
+            match change {
+                SessionChange::Locked => Self {
+                    locked: true,
+                    ..self
+                },
+                SessionChange::Unlocked => Self {
+                    locked: false,
+                    ..self
+                },
+                SessionChange::Disconnected => Self {
+                    disconnected: true,
+                    ..self
+                },
+                SessionChange::Connected => Self {
+                    disconnected: false,
+                    ..self
+                },
+            }
+        }
+
+        /// Whether the session hides every window, whatever its surface.
+        pub(crate) fn hides_windows(self) -> bool {
+            self.locked || self.disconnected
         }
     }
 
@@ -824,9 +908,11 @@ pub(crate) mod messages {
     mod tests {
         use super::{
             FALLBACK_BLOCK_REASON, HostEvent, HostMessage, MAX_BLOCK_REASON_UNITS,
-            PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, QueryAnswer, WM_ENDSESSION, WM_POWERBROADCAST,
-            WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
-            block_reason, classify, query_answer,
+            PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, QueryAnswer, SessionChange, SessionSight,
+            WM_ENDSESSION, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE,
+            WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT,
+            WTS_SESSION_LOCK, WTS_SESSION_UNLOCK, block_reason, classify, query_answer,
+            session_change,
         };
 
         fn utf16(text: &str) -> Vec<u16> {
@@ -905,6 +991,71 @@ pub(crate) mod messages {
                     "WTS code {other}"
                 );
             }
+        }
+
+        /// The session's lock and its display decide apart whether its windows
+        /// can be seen: a disconnected session hides them until it connects
+        /// again, at the console or a remote client, and a session that is
+        /// both is seen only once it is connected and unlocked. Logon, logoff,
+        /// remote control and other sessions change nothing. Red-check: map
+        /// `WTS_REMOTE_DISCONNECT` to nothing, and the remote rows fail.
+        fn a_disconnected_session_hides_its_windows_until_it_connects() {
+            const LOGON: usize = 0x0005;
+            const LOGOFF: usize = 0x0006;
+            const REMOTE_CONTROL: usize = 0x0009;
+            const CREATE: usize = 0x000A;
+            const TERMINATE: usize = 0x000B;
+            let rows: [(&str, &[usize], bool); 9] = [
+                ("remote disconnect", &[WTS_REMOTE_DISCONNECT], true),
+                (
+                    "remote reconnect",
+                    &[WTS_REMOTE_DISCONNECT, WTS_REMOTE_CONNECT],
+                    false,
+                ),
+                ("console disconnect", &[WTS_CONSOLE_DISCONNECT], true),
+                (
+                    "taken back at the console",
+                    &[WTS_REMOTE_DISCONNECT, WTS_CONSOLE_CONNECT],
+                    false,
+                ),
+                (
+                    "disconnected and locked, then connected",
+                    &[WTS_REMOTE_DISCONNECT, WTS_SESSION_LOCK, WTS_REMOTE_CONNECT],
+                    true,
+                ),
+                (
+                    "connected and unlocked again",
+                    &[
+                        WTS_REMOTE_DISCONNECT,
+                        WTS_SESSION_LOCK,
+                        WTS_REMOTE_CONNECT,
+                        WTS_SESSION_UNLOCK,
+                    ],
+                    false,
+                ),
+                (
+                    "unlocked while still disconnected",
+                    &[WTS_SESSION_LOCK, WTS_REMOTE_DISCONNECT, WTS_SESSION_UNLOCK],
+                    true,
+                ),
+                ("locked", &[WTS_SESSION_LOCK], true),
+                (
+                    "logon, logoff, remote control, other sessions",
+                    &[LOGON, LOGOFF, REMOTE_CONTROL, CREATE, TERMINATE],
+                    false,
+                ),
+            ];
+            for (name, codes, hidden) in rows {
+                let sight = codes
+                    .iter()
+                    .filter_map(|&code| session_change(code))
+                    .fold(SessionSight::default(), SessionSight::after);
+                assert_eq!(sight.hides_windows(), hidden, "{name}: {sight:?}");
+            }
+            assert_eq!(
+                session_change(WTS_REMOTE_DISCONNECT),
+                Some(SessionChange::Disconnected)
+            );
         }
 
         fn other_messages_are_ignored() {
@@ -1003,6 +1154,10 @@ pub(crate) mod messages {
                         only_lock_and_unlock_are_session_events as fn(),
                     ),
                     (
+                        "a_disconnected_session_hides_its_windows_until_it_connects",
+                        a_disconnected_session_hides_its_windows_until_it_connects as fn(),
+                    ),
+                    (
                         "other_messages_are_ignored",
                         other_messages_are_ignored as fn(),
                     ),
@@ -1035,8 +1190,9 @@ pub(crate) mod messages {
         fn the_numbers_are_the_documented_win32_values() {
             use windows::Win32::UI::WindowsAndMessaging::{
                 ENDSESSION_CRITICAL, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, WM_ENDSESSION,
-                WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK,
-                WTS_SESSION_UNLOCK,
+                WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE, WTS_CONSOLE_CONNECT,
+                WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT,
+                WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
             };
 
             assert_eq!(super::WM_QUERYENDSESSION, WM_QUERYENDSESSION);
@@ -1050,6 +1206,13 @@ pub(crate) mod messages {
             );
             assert_eq!(super::WTS_SESSION_LOCK, WTS_SESSION_LOCK as usize);
             assert_eq!(super::WTS_SESSION_UNLOCK, WTS_SESSION_UNLOCK as usize);
+            assert_eq!(super::WTS_CONSOLE_CONNECT, WTS_CONSOLE_CONNECT as usize);
+            assert_eq!(
+                super::WTS_CONSOLE_DISCONNECT,
+                WTS_CONSOLE_DISCONNECT as usize
+            );
+            assert_eq!(super::WTS_REMOTE_CONNECT, WTS_REMOTE_CONNECT as usize);
+            assert_eq!(super::WTS_REMOTE_DISCONNECT, WTS_REMOTE_DISCONNECT as usize);
             assert_eq!(super::ENDSESSION_CRITICAL, ENDSESSION_CRITICAL);
         }
     }
