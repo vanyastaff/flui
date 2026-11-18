@@ -31413,7 +31413,7 @@ impl<'a> Copy for flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::coords(&self) -> &'a [i16] // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::face(&self) -> &'a flui_painting::display_list::paragraph::FontFace // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::glyphs(&self) -> &'a [flui_painting::display_list::paragraph::ShapedGlyph] // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
-pub fn flui_painting::display_list::paragraph::ShapedRun::placed_glyphs(&self, key: flui_painting::glyphs::registry::RunKey, origin: (f32, f32), scale: f32) -> impl Iterator<Item = flui_painting::glyphs::PlacedGlyph> + 'a // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
+pub fn flui_painting::display_list::paragraph::ShapedRun::placed_glyphs(&self, key: flui_painting::glyphs::registry::RunKey, origin: (f64, f64), scale: f32) -> impl Iterator<Item = flui_painting::glyphs::PlacedGlyph> + 'a // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub trait flui_painting::display_list::payload::private::Sealed: Sized
 fn flui_painting::display_list::payload::private::Sealed::from_stored(stored: &flui_painting::display_list::payload::private::StoredPayload) -> Option<&Self>
 fn flui_painting::display_list::payload::private::Sealed::into_stored(self) -> flui_painting::display_list::payload::private::StoredPayload
