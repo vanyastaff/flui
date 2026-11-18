@@ -44,10 +44,10 @@ mod measured {
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
         DrivenController as _, Interval as _, JumpAt as _, Keyframes as _, MotionPolicy as _,
         MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _,
-        RunCanceled as _, SharedCurve as _, Stagger as _, StaggerOrigin as _,
-        StatusSubscription as _, Steps as _, Tween as _, TwoWayConverter as _, ValueRange as _,
-        Vsync as _, VsyncPublication as _, VsyncRegistration as _, VsyncRegistrationError as _,
-        VsyncRetirement as _, VsyncUpdate as _, curves as _,
+        RunCanceled as _, SharedCurve as _, Stagger as _, StaggerOrigin as _, Steps as _,
+        Tween as _, TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
+        VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
+        VsyncUpdate as _, curves as _,
     };
     // The spring a loading indicator's morph follows.
     use flui_sdk::animation::{

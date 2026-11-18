@@ -231,7 +231,7 @@ let value_listening = controller.listen(Rc::new(move || {
 drop(value_listening);
 
 // Status changes
-let subscription = controller.subscribe_status(Rc::new(|status| {
+let subscription = controller.listen_status(Rc::new(|status| {
     match status {
         AnimationStatus::ForwardSettled => println!("forward phase settled"),
         AnimationStatus::ReverseSettled => println!("reverse phase settled"),
@@ -741,7 +741,7 @@ controller.forward()?;
 if controller.status() == AnimationStatus::ForwardSettled { /* ... */ }
 
 // Good: react to changes
-let _subscription = controller.subscribe_status(Rc::new(|status| {
+let _subscription = controller.listen_status(Rc::new(|status| {
     if status == AnimationStatus::ForwardSettled { /* ... */ }
 }));
 # drop(controller);

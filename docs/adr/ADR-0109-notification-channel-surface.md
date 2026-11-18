@@ -46,8 +46,8 @@ move or borrow its value.
    recovery custody); each returns a `Subscription`, `#[must_use]` and
    `!Send`, whose drop detaches through its own channel — or, for a custom
    source whose storage is no foundation listener set, through the removal the
-   subscription was built with (`Subscription::for_removal`, the twin of
-   ADR-0180's status guard's removal function). An inert source answers
+   subscription was built with (`Subscription::for_source`: the source held
+   weakly, a `Copy` token and its removal function, ADR-0379). An inert source answers
    `Subscription::inert()`. No id-based registration or withdrawal is a
    `Listenable` method at all: the id is the channel's own identity, its
    removal machinery the concrete channel's (`ChangeNotifier::take_listener`, `take_listeners`,

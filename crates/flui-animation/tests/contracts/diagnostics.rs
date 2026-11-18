@@ -1888,8 +1888,8 @@ fn competing_status_panics(fails: bool) -> (String, Vec<(String, String, String)
                 Rc::new(move |_| assert!(!armed.replace(false), "{message}"))
                     as flui_animation::StatusCallback
             };
-            let _first = controller.subscribe_status(once("first"));
-            let _second = controller.subscribe_status(once("second"));
+            let _first = controller.listen_status(once("first"));
+            let _second = controller.listen_status(once("second"));
             let payload =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.forward()))
                     .expect_err("the first listener's failure escapes");

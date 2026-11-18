@@ -1,6 +1,7 @@
 //! `assert_gesture_alternatives` passes a row whose every path performs the
 //! gesture's intent, and names the path of a row that breaks it.
 
+use flui_foundation::Subscription;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -8,7 +9,6 @@ use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationBehavior, AnimationController, AnimationStatus, DrivenController,
-    StatusSubscription,
 };
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
@@ -142,7 +142,7 @@ struct AnimatedRemoval {
 
 struct AnimatedRemovalState {
     driven: DrivenController,
-    _settled: StatusSubscription,
+    _settled: Subscription,
 }
 
 impl StatefulView for AnimatedRemoval {
@@ -153,7 +153,7 @@ impl StatefulView for AnimatedRemoval {
             .behavior(AnimationBehavior::Preserve)
             .build_on(None);
         let removed = Rc::clone(&self.removed);
-        let settled = driven.controller().subscribe_status(Rc::new(move |status| {
+        let settled = driven.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 removed.set(removed.get() + 1);
             }

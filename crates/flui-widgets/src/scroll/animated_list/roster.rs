@@ -1,6 +1,7 @@
 //! The keyed diff the animated lists share: which entries a new item list
 //! keeps, which it adds, and where the ones it dropped stay while they leave.
 
+use flui_foundation::Subscription;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -9,7 +10,7 @@ use std::rc::Rc;
 
 use flui_animation::{
     Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus,
-    CurvedAnimation, DrivenController, StatusSubscription, Vsync,
+    CurvedAnimation, DrivenController, Vsync,
 };
 use flui_foundation::RebuildReason;
 use flui_objects::PlacementSlot;
@@ -165,7 +166,7 @@ pub(super) struct Entry<T, K> {
     pub(super) shown: Rc<Shown<T>>,
     /// Drives `shown.progress`.
     driver: DrivenController,
-    status: Option<StatusSubscription>,
+    status: Option<Subscription>,
     /// Set once a leaving entry's exit has run out.
     dismissed: Rc<Cell<bool>>,
     leaving: bool,
@@ -219,7 +220,7 @@ impl<T, K> Entry<T, K> {
         let subscription =
             self.driver
                 .controller()
-                .subscribe_status(Rc::new(move |status: AnimationStatus| {
+                .listen_status(Rc::new(move |status: AnimationStatus| {
                     if status == AnimationStatus::ReverseSettled {
                         dismissed.set(true);
                         rebuild.schedule(RebuildReason::AnimationTick);
