@@ -1288,12 +1288,11 @@ fn post_frame_ordering_matrix() {
 /// Fails when such a registration, in either retained phase, asks for nothing,
 /// so the callback waits past the resumed segment for a frame nothing asks for.
 fn a_registration_while_a_segment_is_retained_asks_for_its_successor() {
-    let retains: [(
-        &str,
-        fn(
-            &flui_scheduler::PresentationFrameScope,
-        ) -> Result<(), flui_scheduler::PresentationFrameError>,
-    ); 2] = [
+    /// Puts a running segment into one of the phases that retain it.
+    type Retain = fn(
+        &flui_scheduler::PresentationFrameScope,
+    ) -> Result<(), flui_scheduler::PresentationFrameError>;
+    let retains: [(&str, Retain); 2] = [
         ("suspended", |presentation| presentation.suspend_segment()),
         ("servicing", |presentation| presentation.service_segment()),
     ];
