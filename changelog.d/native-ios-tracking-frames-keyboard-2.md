@@ -2,15 +2,18 @@
 
 - `KeyboardPlacement` says where the soft keyboard rests over a window: hidden, docked with the
   inset it covers, or floating with its frame (an iPad's floating, undocked or split keyboard).
-  `KeyboardInset::placement` and `KeyboardInset::floating_frame` read it, and
-  `MediaQueryData::floating_keyboard` carries a floating keyboard's frame, so a layout can keep a
-  field or a toolbar clear of it.
+  `SoftKeyboard::placement` and `SoftKeyboard::floating_frame` read it.
+- `MediaQuery::floating_keyboard_of` reads the frame of a keyboard floating over the window, so
+  a layout can keep a field or a toolbar clear of it; `FloatingKeyboard` publishes one to a
+  subtree, as the runtime does for each window. `MediaQueryData` is unchanged.
+- `HeadlessWindow::with_insets` opens a test window with insets already covering it.
 
 ### Changed
 
-- `KeyboardInset::try_at_rest`, `KeyboardInset::try_moving` and `HeadlessHost::move_keyboard`
-  take a `KeyboardPlacement` in place of the covered edges; a docked placement that covers no
-  edge is hidden, and a floating frame that is not finite or has no area is refused with
+- `KeyboardInset` is `SoftKeyboard`: it also holds keyboards that cover no edge.
+- `SoftKeyboard::try_at_rest`, `SoftKeyboard::try_moving` and `HeadlessHost::move_keyboard` take
+  a `KeyboardPlacement` in place of the covered edges; a docked placement that covers no edge is
+  hidden, and a floating frame that is not finite or has no area is refused with
   `InvalidInsets::NonFinite` or the new `InvalidInsets::EmptyFrame`.
 - The agent protocol is revision 0.27: a recorded keyboard carries its floating frame, and a
   recording without it reads as before.

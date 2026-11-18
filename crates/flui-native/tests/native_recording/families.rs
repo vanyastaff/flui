@@ -1155,7 +1155,7 @@ fn keyboard_placements_keep_their_wire_values_and_replay() {
     use flui_foundation::geometry::{EdgeInsets, Rect};
     use flui_native::journal::codec::{Backend, Header, Stream};
     use flui_platform::{
-        EventTime, InsetCurve, InsetMotion, KeyboardInset, KeyboardPlacement, PlatformWindow as _,
+        EventTime, InsetCurve, InsetMotion, KeyboardPlacement, PlatformWindow as _, SoftKeyboard,
         WindowInsets,
     };
 
@@ -1163,7 +1163,9 @@ fn keyboard_placements_keep_their_wire_values_and_replay() {
         inset: EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
     };
     let floating = KeyboardPlacement::Floating {
-        frame: Rect::from_xywh(40.0, 300.0, 320.0, 260.0),
+        // Corners that the frame's width and height do not add back to: the
+        // row holds the corners themselves, and reads back to the bit.
+        frame: Rect::from_ltrb(220.1, 24.9, 493.8, 105.8),
     };
     let undocking = InsetMotion::try_new(
         EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
@@ -1174,18 +1176,18 @@ fn keyboard_placements_keep_their_wire_values_and_replay() {
     .expect("a valid motion");
     let cases = [
         (
-            KeyboardInset::try_at_rest(docked).expect("a docked keyboard"),
+            SoftKeyboard::try_at_rest(docked).expect("a docked keyboard"),
             serde_json::json!({"target": [0.0, 0.0, 336.0, 0.0]}),
         ),
         (
-            KeyboardInset::try_at_rest(floating).expect("a floating keyboard"),
+            SoftKeyboard::try_at_rest(floating).expect("a floating keyboard"),
             serde_json::json!({
                 "target": [0.0, 0.0, 0.0, 0.0],
-                "floating": [40.0, 300.0, 320.0, 260.0],
+                "floating": [220.1, 24.9, 493.8, 105.8],
             }),
         ),
         (
-            KeyboardInset::try_moving(floating, undocking).expect("a keyboard that undocks"),
+            SoftKeyboard::try_moving(floating, undocking).expect("a keyboard that undocks"),
             serde_json::json!({
                 "target": [0.0, 0.0, 0.0, 0.0],
                 "motion": {
@@ -1194,7 +1196,7 @@ fn keyboard_placements_keep_their_wire_values_and_replay() {
                     "duration_ns": 250_000_000,
                     "curve": {"curve": "system_keyboard"},
                 },
-                "floating": [40.0, 300.0, 320.0, 260.0],
+                "floating": [220.1, 24.9, 493.8, 105.8],
             }),
         ),
     ];

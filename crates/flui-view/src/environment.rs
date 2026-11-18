@@ -14,9 +14,8 @@
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
-//! `padding`, `view_insets`, `floating_keyboard`, `system_gesture_insets`,
-//! `platform_brightness`, `high_contrast`, `preferred_locales`, `regional_formats`, `motion`,
-//! `accent_color`, `scroll_bars` —
+//! `padding`, `view_insets`, `system_gesture_insets`, `platform_brightness`, `high_contrast`,
+//! `preferred_locales`, `regional_formats`, `motion`, `accent_color`, `scroll_bars` —
 //! presentation and preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
@@ -69,7 +68,6 @@ use crate::{FieldMask, impl_inherited_view};
 /// - [`view_padding`](Self::view_padding)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
-/// - [`floating_keyboard`](Self::floating_keyboard)
 /// - [`system_gesture_insets`](Self::system_gesture_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
@@ -110,16 +108,9 @@ pub struct MediaQueryData {
     /// such as the software keyboard when it is docked. Unlike
     /// [`padding`](Self::padding), these areas are hidden, not just reserved.
     /// While the keyboard moves, each frame carries its inset at that
-    /// frame's time.
+    /// frame's time. A keyboard that floats covers no edge and is not here:
+    /// [`MediaQuery::floating_keyboard_of`] reads its frame.
     pub view_insets: EdgeInsets,
-
-    /// The soft keyboard floating over the window (an iPad's floating,
-    /// undocked or split keyboard), its frame in logical pixels in the
-    /// window's content coordinates; `None` while no keyboard floats
-    /// (ADR-0372). A floating keyboard covers no edge, so it is not in
-    /// [`view_insets`](Self::view_insets): a widget that must stay in view (a
-    /// focused field, a toolbar) reads this and moves out from under it.
-    pub floating_keyboard: Option<Rect>,
 
     /// Edges where a system gesture (back, home, the notification shade)
     /// takes precedence over the application's own drag: a horizontal drag or
@@ -176,7 +167,6 @@ impl Default for MediaQueryData {
             font_weight_adjustment: 0,
             view_padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
-            floating_keyboard: None,
             system_gesture_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
@@ -371,6 +361,24 @@ impl MediaQuery {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_VIEW_INSETS, |d| d.view_insets)
     }
 
+    /// The frame of the soft keyboard floating over the window (an iPad's
+    /// floating, undocked or split keyboard), in logical pixels in the
+    /// window's content coordinates; `None` while no keyboard floats or no
+    /// ancestor publishes one (ADR-0372). A floating keyboard covers no edge,
+    /// so it is not in [`view_insets_of`](Self::view_insets_of): a widget that
+    /// must stay in view (a focused field, a toolbar) reads this and moves out
+    /// from under the frame.
+    ///
+    /// The frame is the window's and is published once above its root as a
+    /// [`FloatingKeyboard`], not as a field of [`MediaQueryData`]: every
+    /// `MediaQuery` a widget nests would copy it. The dependency is on the
+    /// frame alone.
+    #[must_use]
+    pub fn floating_keyboard_of(ctx: &dyn BuildContext) -> Option<Rect> {
+        ctx.depend_on::<FloatingKeyboard, _>(|published| published.frame)
+            .flatten()
+    }
+
     /// The system-gesture edges, depending on `system_gesture_insets` only.
     #[must_use]
     pub fn system_gesture_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
@@ -447,6 +455,60 @@ impl InheritedView for MediaQuery {
 }
 
 impl_inherited_view!(MediaQuery);
+
+// ---------------------------------------------------------------------------
+// The soft keyboard floating over the window.
+
+/// Publishes the frame of the soft keyboard floating over the window to a
+/// subtree, in logical pixels in the window's content coordinates (ADR-0372).
+///
+/// The runtime installs one above every root with what the window reports;
+/// a test or a preview wraps a subtree in its own to show a layout under a
+/// floating keyboard. A widget reads it with
+/// [`MediaQuery::floating_keyboard_of`].
+#[derive(Clone)]
+pub struct FloatingKeyboard {
+    frame: Option<Rect>,
+    child: BoxedView,
+}
+
+impl FloatingKeyboard {
+    /// Wrap `child` in a subtree over which the keyboard floats at `frame`;
+    /// `None` while none floats.
+    #[must_use]
+    pub fn new(frame: Option<Rect>, child: impl IntoView) -> Self {
+        Self {
+            frame,
+            child: BoxedView::new(child.into_view()),
+        }
+    }
+}
+
+impl std::fmt::Debug for FloatingKeyboard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FloatingKeyboard")
+            .field("frame", &self.frame)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for FloatingKeyboard {
+    type Data = Option<Rect>;
+
+    fn data(&self) -> &Self::Data {
+        &self.frame
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.frame != old.frame
+    }
+}
+
+impl_inherited_view!(FloatingKeyboard);
 
 // ---------------------------------------------------------------------------
 // The platform whose conventions the subtree follows.

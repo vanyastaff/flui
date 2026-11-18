@@ -500,7 +500,7 @@ impl UiRuntime {
     pub(crate) fn hold_keyboard_inset_for(
         &self,
         id: PresentationId,
-        keyboard: flui_platform::KeyboardInset,
+        keyboard: flui_platform::SoftKeyboard,
     ) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.keyboard.set(keyboard);

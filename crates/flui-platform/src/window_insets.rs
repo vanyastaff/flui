@@ -16,7 +16,7 @@ use crate::EventTime;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowInsets {
     safe_area: EdgeInsets,
-    keyboard: KeyboardInset,
+    keyboard: SoftKeyboard,
     system_gestures: EdgeInsets,
 }
 
@@ -24,7 +24,7 @@ impl WindowInsets {
     /// No inset on any edge, the keyboard hidden.
     pub const ZERO: Self = Self {
         safe_area: EdgeInsets::ZERO,
-        keyboard: KeyboardInset::HIDDEN,
+        keyboard: SoftKeyboard::HIDDEN,
         system_gestures: EdgeInsets::ZERO,
     };
 
@@ -35,7 +35,7 @@ impl WindowInsets {
     /// is not finite or is negative.
     pub fn try_new(
         safe_area: EdgeInsets,
-        keyboard: KeyboardInset,
+        keyboard: SoftKeyboard,
         system_gestures: EdgeInsets,
     ) -> Result<Self, InvalidInsets> {
         check_edges(safe_area)?;
@@ -58,7 +58,7 @@ impl WindowInsets {
 
     /// These insets with `keyboard` in place of theirs.
     #[must_use]
-    pub const fn with_keyboard(mut self, keyboard: KeyboardInset) -> Self {
+    pub const fn with_keyboard(mut self, keyboard: SoftKeyboard) -> Self {
         self.keyboard = keyboard;
         self
     }
@@ -86,7 +86,7 @@ impl WindowInsets {
     /// The soft keyboard, and any input-method panel docked with it, where it
     /// covers the content.
     #[must_use]
-    pub const fn keyboard(&self) -> KeyboardInset {
+    pub const fn keyboard(&self) -> SoftKeyboard {
         self.keyboard
     }
 
@@ -122,7 +122,7 @@ pub enum KeyboardPlacement {
     },
     /// Floating over the content at `frame`: an iPad's floating, undocked or
     /// split keyboard, whose bottom lies above the window's. It covers no
-    /// edge, so it is not part of [`KeyboardInset::target`]; a layout that
+    /// edge, so it is not part of [`SoftKeyboard::target`]; a layout that
     /// keeps something in view (a focused field, a toolbar) moves it out from
     /// under the frame itself.
     Floating {
@@ -141,7 +141,7 @@ impl KeyboardPlacement {
         }
     }
 
-    /// This placement as [`KeyboardInset`] holds it: a docked keyboard that
+    /// This placement as [`SoftKeyboard`] holds it: a docked keyboard that
     /// covers no edge is [`Hidden`](Self::Hidden), so one placement has one
     /// spelling.
     fn checked(self) -> Result<Self, InvalidInsets> {
@@ -172,12 +172,12 @@ impl KeyboardPlacement {
 /// The soft keyboard over the content: where it comes to rest, and how the
 /// inset it covers moves there.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct KeyboardInset {
+pub struct SoftKeyboard {
     placement: KeyboardPlacement,
     motion: Option<InsetMotion>,
 }
 
-impl KeyboardInset {
+impl SoftKeyboard {
     /// The keyboard hidden and at rest.
     pub const HIDDEN: Self = Self {
         placement: KeyboardPlacement::Hidden,
@@ -295,7 +295,7 @@ impl KeyboardInset {
     }
 }
 
-impl Default for KeyboardInset {
+impl Default for SoftKeyboard {
     fn default() -> Self {
         Self::HIDDEN
     }

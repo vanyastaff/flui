@@ -41,11 +41,12 @@ use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
     NSValueUIGeometryExtensions, UIEvent, UIGestureRecognizer, UIGestureRecognizerDelegate,
     UIGestureRecognizerState, UIHoverGestureRecognizer, UIKeyboardAnimationCurveUserInfoKey,
-    UIKeyboardAnimationDurationUserInfoKey, UIKeyboardFrameEndUserInfoKey,
-    UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification,
-    UIKeyboardWillShowNotification, UIPanGestureRecognizer, UIPinchGestureRecognizer, UIRectEdge,
-    UIRotationGestureRecognizer, UIScreen, UIScrollTypeMask, UITouch, UITouchType,
-    UITraitCollection, UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
+    UIKeyboardAnimationDurationUserInfoKey, UIKeyboardDidChangeFrameNotification,
+    UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification,
+    UIKeyboardWillHideNotification, UIKeyboardWillShowNotification, UIPanGestureRecognizer,
+    UIPinchGestureRecognizer, UIRectEdge, UIRotationGestureRecognizer, UIScreen, UIScrollTypeMask,
+    UITouch, UITouchType, UITraitCollection, UITraitEnvironment, UIUserInterfaceStyle, UIView,
+    UIWindow, UIWindowScene,
 };
 
 use crate::host;
@@ -387,7 +388,20 @@ define_class!(
             os_entry("keyboardWillChangeFrame:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 crate::owner::panic_boundary::contain_owner_callback(|| {
-                    self.keyboard_noticed(note, keyboard::Notice::FrameChange);
+                    self.keyboard_noticed(note, keyboard::Notice::Moving);
+                });
+            });
+        }
+
+        /// `UIKeyboardDidChangeFrameNotification`'s observer: where the
+        /// keyboard came to rest, the only notice of where one the user
+        /// dragged or undocked ended up.
+        #[unsafe(method(keyboardDidChangeFrame:))]
+        fn keyboard_did_change_frame(&self, note: &NSNotification) {
+            os_entry("keyboardDidChangeFrame:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                crate::owner::panic_boundary::contain_owner_callback(|| {
+                    self.keyboard_noticed(note, keyboard::Notice::Moved);
                 });
             });
         }
@@ -400,19 +414,19 @@ define_class!(
             os_entry("keyboardWillShow:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 crate::owner::panic_boundary::contain_owner_callback(|| {
-                    self.keyboard_noticed(note, keyboard::Notice::Show);
+                    self.keyboard_noticed(note, keyboard::Notice::Showing);
                 });
             });
         }
 
         /// `UIKeyboardWillHideNotification`'s observer: the keyboard leaves
-        /// the content however far its end frame says it went.
+        /// its dock however far its end frame says it went.
         #[unsafe(method(keyboardWillHide:))]
         fn keyboard_will_hide(&self, note: &NSNotification) {
             os_entry("keyboardWillHide:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 crate::owner::panic_boundary::contain_owner_callback(|| {
-                    self.keyboard_noticed(note, keyboard::Notice::Hide);
+                    self.keyboard_noticed(note, keyboard::Notice::Hiding);
                 });
             });
         }
@@ -549,19 +563,24 @@ impl FluiView {
         this.addGestureRecognizer(&hover);
         this.install_indirect_recognizers(mtm);
         // SAFETY: the live view declares `keyboardWillChangeFrame:`,
-        // `keyboardWillShow:` and `keyboardWillHide:` above, each taking the
-        // one `NSNotification` argument the center sends, and the three names
-        // are UIKit's constant strings, set before any code of the app runs
-        // and never written. The center does not retain its observer and
-        // drops a selector observer when it deallocates (iOS 9 and later,
-        // below the iOS 13 floor), so no removal is owed; a `nil` object
-        // observes every sender's keyboard.
+        // `keyboardDidChangeFrame:`, `keyboardWillShow:` and
+        // `keyboardWillHide:` above, each taking the one `NSNotification`
+        // argument the center sends, and the four names are UIKit's constant
+        // strings, set before any code of the app runs and never written. The
+        // center does not retain its observer and drops a selector observer
+        // when it deallocates (iOS 9 and later, below the iOS 13 floor), so
+        // no removal is owed; a `nil` object observes every sender's
+        // keyboard.
         unsafe {
             let center = NSNotificationCenter::defaultCenter();
             for (selector, name) in [
                 (
                     sel!(keyboardWillChangeFrame:),
                     UIKeyboardWillChangeFrameNotification,
+                ),
+                (
+                    sel!(keyboardDidChangeFrame:),
+                    UIKeyboardDidChangeFrameNotification,
                 ),
                 (sel!(keyboardWillShow:), UIKeyboardWillShowNotification),
                 (sel!(keyboardWillHide:), UIKeyboardWillHideNotification),
@@ -964,11 +983,11 @@ impl FluiView {
 
     /// Takes the keyboard notification `note`, a `notice`, starting now from
     /// where the keyboard's inset is, and samples the metrics that publish
-    /// it when it replaces the note that stood. `keyboard::Note::replacing`
-    /// decides that: a notification that says nothing of where the keyboard
-    /// ends up (no end frame, UIKit's zero frame while the user drags a
-    /// floating keyboard, the show that repeats its frame change) leaves the
-    /// note standing and publishes nothing.
+    /// it when it changes the note that stood. `keyboard::Heard::kept`
+    /// decides that: a notification that says nothing new of where the
+    /// keyboard ends up (no end frame, UIKit's zero frame while the user
+    /// drags a floating keyboard, a later notice of a move already under
+    /// way) leaves the note standing and publishes nothing.
     fn keyboard_noticed(&self, note: &NSNotification, notice: keyboard::Notice) {
         let info = note.userInfo();
         let value = |key: &NSString| info.as_ref()?.objectForKey(key.as_ref());
@@ -1001,7 +1020,7 @@ impl FluiView {
         let curve = number(curve_key).map_or(isize::MAX, |curve| curve.integerValue());
         let start = flui_platform::EventTime::now();
         let from = self.ivars().metrics.borrow().keyboard.at(start);
-        let arriving = keyboard::Note {
+        let heard = keyboard::Heard {
             notice,
             end,
             change: keyboard::Change {
@@ -1012,7 +1031,7 @@ impl FluiView {
             },
         };
         let standing = self.ivars().keyboard.get();
-        let kept = arriving.replacing(standing);
+        let kept = heard.kept(standing);
         if kept == standing {
             return;
         }
@@ -1022,9 +1041,9 @@ impl FluiView {
 
     /// The keyboard the standing notification puts over this view as it lies
     /// in `window` now, `size` in points; hidden before any.
-    fn keyboard_over(&self, window: &UIWindow, size: Size<f64>) -> flui_platform::KeyboardInset {
+    fn keyboard_over(&self, window: &UIWindow, size: Size<f64>) -> flui_platform::SoftKeyboard {
         let Some(note) = self.ivars().keyboard.get() else {
-            return flui_platform::KeyboardInset::HIDDEN;
+            return flui_platform::SoftKeyboard::HIDDEN;
         };
         // The end frame is in screen coordinates: into the window, then into
         // this view.
@@ -1046,7 +1065,7 @@ impl FluiView {
                 ?note,
                 "UIKit reported a keyboard FLUI cannot publish; none is"
             );
-            flui_platform::KeyboardInset::HIDDEN
+            flui_platform::SoftKeyboard::HIDDEN
         })
     }
 
@@ -1135,7 +1154,7 @@ struct WindowMetrics {
     size: Size<f64>,
     scale: flui_foundation::geometry::DevicePixelRatio,
     safe_area: EdgeInsets,
-    keyboard: flui_platform::KeyboardInset,
+    keyboard: flui_platform::SoftKeyboard,
 }
 
 /// UIKit's edge set for the edges the exclusion regions reach.
@@ -1252,7 +1271,7 @@ impl IOSWindow {
             size: Size::new(0.0, 0.0),
             scale: flui_foundation::geometry::DevicePixelRatio::ONE,
             safe_area: EdgeInsets::ZERO,
-            keyboard: flui_platform::KeyboardInset::HIDDEN,
+            keyboard: flui_platform::SoftKeyboard::HIDDEN,
         }));
         let dark = Rc::new(Cell::new(false));
         let pointer = pointer_absence(displays.version(), displays.shows_a_pointer());

@@ -501,7 +501,9 @@ fn is_zero_insets(insets: &[f64; 4]) -> bool {
 }
 
 /// Where the soft keyboard rests over a window, and how the inset it covers
-/// gets there (ADR-0372).
+/// gets there (ADR-0372). The name is the published schema's, from before a
+/// keyboard could float, and a schema's names are not respelled;
+/// `flui_platform::SoftKeyboard` is the value it records.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -516,9 +518,10 @@ pub struct KeyboardInset {
     )]
     pub motion: Option<InsetMotion>,
     /// A floating keyboard's frame in logical pixels in the content's
-    /// coordinates: x, y, width, height; absent for one docked or hidden, and
-    /// in recordings older than the fact, which a reader takes as not
-    /// floating.
+    /// coordinates, as its edges: left, top, right, bottom, the numbers the
+    /// frame is kept as, so a recording reads back to the bit. Absent for
+    /// one docked or hidden, and in recordings older than the fact, which a
+    /// reader takes as not floating.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")

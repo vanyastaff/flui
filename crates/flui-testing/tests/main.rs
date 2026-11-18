@@ -406,6 +406,7 @@ fn containment_and_isolation_matrix() {
             ("window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time", window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time as fn()),
             ("window_insets::reported_insets_reach_their_media_query_fields", window_insets::reported_insets_reach_their_media_query_fields as fn()),
             ("window_insets::a_floating_keyboard_reaches_the_media_query_as_a_frame", window_insets::a_floating_keyboard_reaches_the_media_query_as_a_frame as fn()),
+            ("window_insets::a_window_opened_under_a_floating_keyboard_reads_its_frame", window_insets::a_window_opened_under_a_floating_keyboard_reads_its_frame as fn()),
         ],
     );
 }

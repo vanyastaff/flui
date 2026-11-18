@@ -12020,6 +12020,7 @@ impl core::error::Error for flui::platform::InvalidInsets
 impl core::fmt::Debug for flui::platform::InvalidInsets
 impl core::fmt::Display for flui::platform::InvalidInsets
 impl core::marker::StructuralPartialEq for flui::platform::InvalidInsets
+variant flui::platform::InvalidInsets::EmptyFrame // at 4
 variant flui::platform::InvalidInsets::InvalidCurve // at 3
 variant flui::platform::InvalidInsets::Negative // at 1
 variant flui::platform::InvalidInsets::NonFinite // at 0
@@ -12082,21 +12083,15 @@ impl core::error::Error for flui::platform::InvalidWindowOption
 impl core::fmt::Debug for flui::platform::InvalidWindowOption
 impl core::fmt::Display for flui::platform::InvalidWindowOption
 impl core::marker::StructuralPartialEq for flui::platform::InvalidWindowOption
-pub struct flui::platform::KeyboardInset { .. }
-impl Clone for flui::platform::KeyboardInset
-impl Copy for flui::platform::KeyboardInset
-impl Default for flui::platform::KeyboardInset
-impl PartialEq for flui::platform::KeyboardInset
-impl core::fmt::Debug for flui::platform::KeyboardInset
-impl core::marker::StructuralPartialEq for flui::platform::KeyboardInset
-pub const flui::platform::KeyboardInset::HIDDEN: Self = _
-pub const fn flui::platform::KeyboardInset::motion(&self) -> Option<flui::platform::InsetMotion>
-pub const fn flui::platform::KeyboardInset::settled(self) -> Self
-pub const fn flui::platform::KeyboardInset::target(&self) -> flui::geometry::EdgeInsets
-pub fn flui::platform::KeyboardInset::at(&self, time: flui::interaction::EventTime) -> flui::geometry::EdgeInsets
-pub fn flui::platform::KeyboardInset::settles_at(&self) -> Option<flui::interaction::EventTime>
-pub fn flui::platform::KeyboardInset::try_at_rest(target: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
-pub fn flui::platform::KeyboardInset::try_moving(target: flui::geometry::EdgeInsets, motion: flui::platform::InsetMotion) -> Result<Self, flui::platform::InvalidInsets>
+#[non_exhaustive] pub enum flui::platform::KeyboardPlacement
+impl Clone for flui::platform::KeyboardPlacement
+impl Copy for flui::platform::KeyboardPlacement
+impl PartialEq for flui::platform::KeyboardPlacement
+impl core::fmt::Debug for flui::platform::KeyboardPlacement
+impl core::marker::StructuralPartialEq for flui::platform::KeyboardPlacement
+variant flui::platform::KeyboardPlacement::Docked { inset: flui::geometry::EdgeInsets } // at 1
+variant flui::platform::KeyboardPlacement::Floating { frame: flui::geometry::Rect<f64> } // at 2
+variant flui::platform::KeyboardPlacement::Hidden // at 0
 #[non_exhaustive] pub enum flui::platform::Launch
 impl Clone for flui::platform::Launch
 impl Copy for flui::platform::Launch
@@ -12539,6 +12534,23 @@ impl core::marker::StructuralPartialEq for flui::platform::SizeConstraints
 pub const flui::platform::SizeConstraints::NONE: Self = _
 pub const fn flui::platform::SizeConstraints::new(min: Option<flui::platform::WindowExtent>, max: Option<flui::platform::WindowExtent>) -> Self
 pub fn flui::platform::SizeConstraints::try_new(min: Option<flui::geometry::Size<f64>>, max: Option<flui::geometry::Size<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
+pub struct flui::platform::SoftKeyboard { .. }
+impl Clone for flui::platform::SoftKeyboard
+impl Copy for flui::platform::SoftKeyboard
+impl Default for flui::platform::SoftKeyboard
+impl PartialEq for flui::platform::SoftKeyboard
+impl core::fmt::Debug for flui::platform::SoftKeyboard
+impl core::marker::StructuralPartialEq for flui::platform::SoftKeyboard
+pub const flui::platform::SoftKeyboard::HIDDEN: Self = _
+pub const fn flui::platform::SoftKeyboard::floating_frame(&self) -> Option<flui::geometry::Rect<f64>>
+pub const fn flui::platform::SoftKeyboard::motion(&self) -> Option<flui::platform::InsetMotion>
+pub const fn flui::platform::SoftKeyboard::placement(&self) -> flui::platform::KeyboardPlacement
+pub const fn flui::platform::SoftKeyboard::settled(self) -> Self
+pub const fn flui::platform::SoftKeyboard::target(&self) -> flui::geometry::EdgeInsets
+pub fn flui::platform::SoftKeyboard::at(&self, time: flui::interaction::EventTime) -> flui::geometry::EdgeInsets
+pub fn flui::platform::SoftKeyboard::settles_at(&self) -> Option<flui::interaction::EventTime>
+pub fn flui::platform::SoftKeyboard::try_at_rest(placement: flui::platform::KeyboardPlacement) -> Result<Self, flui::platform::InvalidInsets>
+pub fn flui::platform::SoftKeyboard::try_moving(placement: flui::platform::KeyboardPlacement, motion: flui::platform::InsetMotion) -> Result<Self, flui::platform::InvalidInsets>
 pub struct flui::platform::SrgbColor { .. }
 impl Clone for flui::platform::SrgbColor
 impl Copy for flui::platform::SrgbColor
@@ -13045,11 +13057,11 @@ impl PartialEq for flui::platform::WindowInsets
 impl core::fmt::Debug for flui::platform::WindowInsets
 impl core::marker::StructuralPartialEq for flui::platform::WindowInsets
 pub const flui::platform::WindowInsets::ZERO: Self = _
-pub const fn flui::platform::WindowInsets::keyboard(&self) -> flui::platform::KeyboardInset
+pub const fn flui::platform::WindowInsets::keyboard(&self) -> flui::platform::SoftKeyboard
 pub const fn flui::platform::WindowInsets::safe_area(&self) -> flui::geometry::EdgeInsets
 pub const fn flui::platform::WindowInsets::system_gestures(&self) -> flui::geometry::EdgeInsets
-pub const fn flui::platform::WindowInsets::with_keyboard(self, keyboard: flui::platform::KeyboardInset) -> Self
-pub fn flui::platform::WindowInsets::try_new(safe_area: flui::geometry::EdgeInsets, keyboard: flui::platform::KeyboardInset, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
+pub const fn flui::platform::WindowInsets::with_keyboard(self, keyboard: flui::platform::SoftKeyboard) -> Self
+pub fn flui::platform::WindowInsets::try_new(safe_area: flui::geometry::EdgeInsets, keyboard: flui::platform::SoftKeyboard, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::WindowInsets::try_with_safe_area(self, safe_area: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::WindowInsets::try_with_system_gestures(self, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 #[non_exhaustive] pub enum flui::platform::WindowInteraction
@@ -16930,6 +16942,7 @@ impl flui::prelude::View for flui::prelude::MediaQuery
 pub fn flui::prelude::MediaQuery::accent_color_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::Color>
 pub fn flui::prelude::MediaQuery::depend_on_fields<R>(ctx: &dyn flui::prelude::BuildContext, mask: flui::view::FieldMask<flui::prelude::MediaQueryData>, f: impl FnOnce(&flui::prelude::MediaQueryData) -> R) -> Option<R>
 pub fn flui::prelude::MediaQuery::device_pixel_ratio_of(ctx: &dyn flui::prelude::BuildContext) -> Option<f64>
+pub fn flui::prelude::MediaQuery::floating_keyboard_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::Rect>
 pub fn flui::prelude::MediaQuery::font_weight_adjustment_of(ctx: &dyn flui::prelude::BuildContext) -> Option<i32>
 pub fn flui::prelude::MediaQuery::high_contrast_of(ctx: &dyn flui::prelude::BuildContext) -> Option<bool>
 pub fn flui::prelude::MediaQuery::maybe_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::MediaQueryData>
@@ -25135,6 +25148,12 @@ pub fn flui::view::element::probe_item_count(builder: &dyn Fn(usize) -> Option<f
 pub mod flui::view::element::unified
 reexport flui::view::element::unified::Element => flui::view::element::Element
 pub mod flui::view::environment
+pub struct flui::view::environment::FloatingKeyboard { .. }
+impl Clone for flui::view::environment::FloatingKeyboard
+impl core::fmt::Debug for flui::view::environment::FloatingKeyboard
+impl flui::prelude::InheritedView for flui::view::environment::FloatingKeyboard { type Data = Option<flui::geometry::Rect>; }
+impl flui::prelude::View for flui::view::environment::FloatingKeyboard
+pub fn flui::view::environment::FloatingKeyboard::new(frame: Option<flui::geometry::Rect>, child: impl flui::prelude::IntoView) -> Self
 pub struct flui::view::environment::FocusTreeRoot { .. }
 impl Clone for flui::view::environment::FocusTreeRoot
 impl core::fmt::Debug for flui::view::environment::FocusTreeRoot
@@ -32831,7 +32850,7 @@ variant flui_protocol::input_recording::WindowObservation::Brightness(flui_proto
 variant flui_protocol::input_recording::WindowObservation::Execution(flui_protocol::input_recording::Execution) // at 3
 variant flui_protocol::input_recording::WindowObservation::Focus(bool) // at 1
 variant flui_protocol::input_recording::WindowObservation::Hover(bool) // at 5
-variant flui_protocol::input_recording::WindowObservation::Insets { safe_area: [f64; 4], keyboard: Option<flui_protocol::native_recording::window::KeyboardInset>, system_gestures: [f64; 4] } // at 7
+variant flui_protocol::input_recording::WindowObservation::Insets { safe_area: [f64; 4], keyboard: Option<Box<flui_protocol::native_recording::window::KeyboardInset>>, system_gestures: [f64; 4] } // at 7
 variant flui_protocol::input_recording::WindowObservation::Metrics { width: i32, height: i32, scale_factor: f64 } // at 0
 variant flui_protocol::input_recording::WindowObservation::Moved // at 6
 variant flui_protocol::input_recording::WindowObservation::Snapshot { execution: flui_protocol::input_recording::Execution, focused: bool, visible: bool } // at 4
@@ -34267,6 +34286,7 @@ impl schemars::JsonSchema for flui_protocol::native_recording::window::InsetMoti
 impl serde_core::ser::Serialize for flui_protocol::native_recording::window::InsetMotion
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::window::InsetMotion
 pub struct flui_protocol::native_recording::window::KeyboardInset
+field flui_protocol::native_recording::window::KeyboardInset::floating: Option<[f64; 4]> // at 2
 field flui_protocol::native_recording::window::KeyboardInset::motion: Option<flui_protocol::native_recording::window::InsetMotion> // at 1
 field flui_protocol::native_recording::window::KeyboardInset::target: [f64; 4] // at 0
 impl Clone for flui_protocol::native_recording::window::KeyboardInset

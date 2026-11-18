@@ -227,13 +227,15 @@ fn sample_state(
 /// it. Where the keyboard rests is `keyboard::placement`'s rule, shared with
 /// iOS: a docked keyboard's rectangle reaches the layout viewport's bottom,
 /// or the canvas's where the canvas ends above it, and one that ends above
-/// that floats. The keyboard is in the logical pixels of a window
-/// `logical_height` tall, whatever transform scales the canvas on screen.
+/// that floats. The rule is read in the page's own CSS pixels, and the
+/// keyboard then goes out in the logical pixels of a window `logical_height`
+/// tall, whatever transform scales the canvas on screen.
 fn keyboard_over(
     canvas: &web_sys::HtmlCanvasElement,
     logical_height: f64,
-) -> flui_platform::KeyboardInset {
-    let hidden = flui_platform::KeyboardInset::HIDDEN;
+) -> flui_platform::SoftKeyboard {
+    use crate::window::keyboard;
+    let hidden = flui_platform::SoftKeyboard::HIDDEN;
     let Some(window) = web_sys::window() else {
         return hidden;
     };
@@ -245,30 +247,25 @@ fn keyboard_over(
     else {
         return hidden;
     };
+    // The frames are in client coordinates: into the canvas's.
     let bounds = canvas.get_bounding_client_rect();
+    let layout = layout_bottom(&window).map_or(f64::INFINITY, |bottom| bottom - bounds.top());
+    let placement = keyboard::placement(
+        Size::new(bounds.width(), bounds.height()),
+        keyboard::Frame {
+            x: frame.x - bounds.left(),
+            y: frame.y - bounds.top(),
+            ..frame
+        },
+        layout.min(bounds.height()),
+    );
     // The box a transform scales is measured scaled, and the window's size
-    // is not: the keyboard goes out in the window's logical pixels.
+    // is not.
     let scale = logical_height / bounds.height();
-    if !(scale.is_finite() && scale > 0.0) {
+    if !scale.is_finite() || scale <= 0.0 {
         return hidden;
     }
-    // The frames are in client coordinates: into the canvas's, in logical
-    // pixels.
-    let across = |client: f64| (client - bounds.left()) * scale;
-    let down = |client: f64| (client - bounds.top()) * scale;
-    let canvas_bottom = bounds.top() + bounds.height();
-    let floor = layout_bottom(&window).map_or(canvas_bottom, |layout| layout.min(canvas_bottom));
-    let placement = crate::window::keyboard::placement(
-        Size::new(bounds.width() * scale, logical_height),
-        crate::window::keyboard::Frame {
-            x: across(frame.x),
-            y: down(frame.y),
-            width: frame.width * scale,
-            height: frame.height * scale,
-        },
-        down(floor),
-    );
-    flui_platform::KeyboardInset::try_at_rest(placement).unwrap_or(hidden)
+    flui_platform::SoftKeyboard::try_at_rest(keyboard::scaled(placement, scale)).unwrap_or(hidden)
 }
 
 /// The safe area of `canvas`, a window `logical` in size: the bands of the

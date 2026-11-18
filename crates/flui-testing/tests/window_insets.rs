@@ -2,24 +2,33 @@
 //! area as `view_padding`, the system gesture regions as
 //! `system_gesture_insets`, a docked keyboard as `view_insets` sampled at each
 //! frame's time until it settles, after which no frame is asked for, and a
-//! floating keyboard as `floating_keyboard`.
+//! floating keyboard's frame beside it, as `MediaQuery::floating_keyboard_of`
+//! reads it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::{EdgeInsets, Rect};
-use flui_platform::{EventTime, InsetCurve, KeyboardInset, KeyboardPlacement, WindowInsets};
+use flui_platform::{EventTime, InsetCurve, KeyboardPlacement, SoftKeyboard, WindowInsets};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_widgets::SizedBox;
 
 const FRAME: Duration = Duration::from_millis(16);
 
-/// Records the `MediaQuery` each of its builds reads.
+/// What one build of the reader read: the `MediaQuery`, and the frame of the
+/// keyboard floating over the window.
+#[derive(Clone)]
+struct Read {
+    media: MediaQueryData,
+    floating_keyboard: Option<Rect>,
+}
+
+/// Records what each of its builds reads.
 #[derive(Clone, flui_view::prelude::StatelessView)]
 struct MediaQueryReader {
-    seen: Rc<RefCell<Vec<MediaQueryData>>>,
+    seen: Rc<RefCell<Vec<Read>>>,
 }
 
 impl flui_view::prelude::StatelessView for MediaQueryReader {
@@ -27,13 +36,16 @@ impl flui_view::prelude::StatelessView for MediaQueryReader {
         &self,
         ctx: &dyn flui_view::prelude::BuildContext,
     ) -> impl flui_view::prelude::IntoView {
-        self.seen.borrow_mut().push(MediaQuery::of(ctx));
+        self.seen.borrow_mut().push(Read {
+            media: MediaQuery::of(ctx),
+            floating_keyboard: MediaQuery::floating_keyboard_of(ctx),
+        });
         SizedBox::new(10.0, 10.0)
     }
 }
 
 /// A 400 × 800 window showing a reader, after its first frame.
-fn reading_host() -> (HeadlessHost, Rc<RefCell<Vec<MediaQueryData>>>) {
+fn reading_host() -> (HeadlessHost, Rc<RefCell<Vec<Read>>>) {
     let mut host = HeadlessHost::new(HeadlessWindow::new(400, 800));
     let seen = Rc::new(RefCell::new(Vec::new()));
     host.attach(&MediaQueryReader {
@@ -51,7 +63,7 @@ fn now(host: &HeadlessHost) -> EventTime {
     )
 }
 
-fn latest(seen: &Rc<RefCell<Vec<MediaQueryData>>>) -> MediaQueryData {
+fn latest(seen: &Rc<RefCell<Vec<Read>>>) -> Read {
     seen.borrow().last().cloned().expect("the reader built")
 }
 
@@ -76,7 +88,7 @@ pub(crate) fn a_keyboard_motion_lays_out_each_frame_at_its_time() {
         let _ = host.pump(FRAME);
         frames += 1;
         let vsync = now(&host);
-        let shown = latest(&seen).view_insets;
+        let shown = latest(&seen).media.view_insets;
         assert_eq!(
             shown,
             keyboard.at(vsync),
@@ -91,7 +103,7 @@ pub(crate) fn a_keyboard_motion_lays_out_each_frame_at_its_time() {
     }
     assert!(frames > 2, "the motion spans several frames, ran {frames}");
     assert_eq!(
-        latest(&seen).view_insets,
+        latest(&seen).media.view_insets,
         target,
         "the last frame is at rest"
     );
@@ -113,14 +125,14 @@ pub(crate) fn reported_insets_reach_their_media_query_fields() {
         host.primary_window(),
         WindowInsets::try_new(
             safe_area,
-            KeyboardInset::try_at_rest(KeyboardPlacement::Docked { inset: keyboard })
+            SoftKeyboard::try_at_rest(KeyboardPlacement::Docked { inset: keyboard })
                 .expect("a valid keyboard"),
             gestures,
         )
         .expect("valid insets"),
     );
     let _ = host.pump(FRAME);
-    let data = latest(&seen);
+    let data = latest(&seen).media;
     assert_eq!(data.view_padding, safe_area);
     assert_eq!(data.view_insets, keyboard);
     assert_eq!(data.system_gesture_insets, gestures);
@@ -140,12 +152,12 @@ pub(crate) fn a_floating_keyboard_reaches_the_media_query_as_a_frame() {
     host.set_window_insets(
         host.primary_window(),
         WindowInsets::ZERO.with_keyboard(
-            KeyboardInset::try_at_rest(KeyboardPlacement::Docked { inset: docked })
+            SoftKeyboard::try_at_rest(KeyboardPlacement::Docked { inset: docked })
                 .expect("a valid keyboard"),
         ),
     );
     let _ = host.pump(FRAME);
-    assert_eq!(latest(&seen).view_insets, docked);
+    assert_eq!(latest(&seen).media.view_insets, docked);
     assert_eq!(latest(&seen).floating_keyboard, None);
 
     let frame = Rect::from_xywh(40.0, 300.0, 320.0, 240.0);
@@ -162,18 +174,61 @@ pub(crate) fn a_floating_keyboard_reaches_the_media_query_as_a_frame() {
         Some(frame),
         "the frame is published when the keyboard is reported"
     );
-    assert_eq!(undocking.view_insets, keyboard.at(now(&host)));
+    assert_eq!(undocking.media.view_insets, keyboard.at(now(&host)));
     let end = keyboard.settles_at().expect("a moving keyboard settles");
     while now(&host) < end {
         let _ = host.pump(FRAME);
     }
     assert_eq!(
-        latest(&seen).view_insets,
+        latest(&seen).media.view_insets,
         EdgeInsets::ZERO,
         "a floating keyboard covers no edge"
     );
 
+    // The user drags it: nothing the `MediaQuery` holds changes, and the
+    // frame alone brings the next build.
+    let builds = seen.borrow().len();
+    let dropped = Rect::from_xywh(60.0, 120.0, 320.0, 240.0);
+    host.set_window_insets(
+        host.primary_window(),
+        WindowInsets::ZERO.with_keyboard(
+            SoftKeyboard::try_at_rest(KeyboardPlacement::Floating { frame: dropped })
+                .expect("a valid keyboard"),
+        ),
+    );
+    let _ = host.pump(FRAME);
+    assert_eq!(latest(&seen).floating_keyboard, Some(dropped));
+    assert_eq!(seen.borrow().len(), builds + 1, "one build for the move");
+
     host.set_window_insets(host.primary_window(), WindowInsets::ZERO);
     let _ = host.pump(FRAME);
     assert_eq!(latest(&seen).floating_keyboard, None);
+}
+
+/// A window opened while a keyboard floats over it shows the frame in its
+/// first build: the presentation is made from what the window reports as it
+/// opens, with no change to hear of.
+pub(crate) fn a_window_opened_under_a_floating_keyboard_reads_its_frame() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 800));
+    let frame = Rect::from_xywh(40.0, 300.0, 320.0, 240.0);
+    let second = host.open_window(
+        HeadlessWindow::new(400, 800).with_insets(
+            WindowInsets::ZERO.with_keyboard(
+                SoftKeyboard::try_at_rest(KeyboardPlacement::Floating { frame })
+                    .expect("a valid keyboard"),
+            ),
+        ),
+    );
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    host.attach_to(
+        second,
+        &MediaQueryReader {
+            seen: Rc::clone(&seen),
+        },
+    )
+    .expect("a fresh window has no root yet");
+    let _ = host.pump(FRAME);
+    let first = seen.borrow().first().cloned().expect("the reader built");
+    assert_eq!(first.floating_keyboard, Some(frame));
+    assert_eq!(first.media.view_insets, EdgeInsets::ZERO);
 }

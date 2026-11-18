@@ -537,11 +537,11 @@ async fn keyboard_page(virtual_keyboard: bool) -> (Probe, Running, PageWindow) {
 async fn web_window_reads_the_keyboard_from_the_visual_viewport() {
     let (_probe, running, window) = keyboard_page(false).await;
     let keyboard = || window.state().insets.keyboard();
-    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    assert_eq!(keyboard(), flui_platform::SoftKeyboard::HIDDEN);
     // A page zoomed in by a pinch has a smaller visual viewport and no
     // keyboard.
     set_visual_viewport(70.0, 2.0);
-    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    assert_eq!(keyboard(), flui_platform::SoftKeyboard::HIDDEN);
     // A keyboard that shrinks the visual viewport takes the layout viewport
     // below it.
     set_visual_viewport(70.0, 1.0);
@@ -558,7 +558,7 @@ async fn web_window_reads_the_keyboard_from_the_visual_viewport() {
     assert_eq!(keyboard().target().bottom, 10.0);
     scale_canvas(1.0);
     set_visual_viewport(150.0, 1.0);
-    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    assert_eq!(keyboard(), flui_platform::SoftKeyboard::HIDDEN);
     remove_keyboard();
     running.quit();
     settle().await;
@@ -599,7 +599,7 @@ async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
     assert_eq!(keyboard().placement(), floating(80.0, 20.0, 200.0, 60.0));
     scale_canvas(1.0);
     move_virtual_keyboard(150.0);
-    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    assert_eq!(keyboard(), flui_platform::SoftKeyboard::HIDDEN);
     // The page gets its own setting back once the window goes.
     window
         .admit_and_apply(flui_platform::WindowCommand::Close)

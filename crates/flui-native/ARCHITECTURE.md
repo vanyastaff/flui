@@ -4223,14 +4223,19 @@ the tracking ends; the owner's wakes already run there, since the GCD main
 queue is served in the common modes.
 
 The view observes `UIKeyboardWillChangeFrameNotification`,
-`UIKeyboardWillShowNotification` and `UIKeyboardWillHideNotification` and keeps
-one of them standing (`window::keyboard::Note`), its end frame in screen
-coordinates; each metrics sample converts that frame into the view as it lies
-then and publishes the keyboard's placement (ADR-0372). Which notification
-replaces the standing one is `Note::replacing`'s rule and which placement a frame
-names is `window::keyboard::placement`'s, both pure and tested on every host
-(`a_notice_keeps_or_replaces_the_keyboard`,
-`a_frame_names_where_the_keyboard_rests`).
+`UIKeyboardDidChangeFrameNotification`, `UIKeyboardWillShowNotification` and
+`UIKeyboardWillHideNotification` and keeps one note of them
+(`window::keyboard::Note`): the frame the keyboard goes to, in screen
+coordinates, or that it left its dock and where it then came to rest. Each
+metrics sample converts that frame into the view as it lies then and publishes
+the keyboard's placement (ADR-0372). What a notification makes of the note
+standing is `Heard::kept`'s rule and which placement a frame names is
+`window::keyboard::placement`'s, both pure and tested on every host
+(`the_notifications_heard_name_where_the_keyboard_rests`,
+`a_frame_names_where_the_keyboard_rests`). The finished frame change is
+observed because it alone says where a keyboard the user dragged or undocked
+ended up: UIKit sends its zero frame while the drag lasts and announces an
+undocking as a hide.
 
 `MainThreadBound` protects native storage. Final worker drops enqueue retirement
 on main rather than synchronously waiting for it. Plain cached metrics remain

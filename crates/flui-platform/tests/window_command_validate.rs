@@ -5,8 +5,8 @@ use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, AspectRatio, Availability,
     Brightness, CapabilityAbsence, CapabilityParts, ControlsOffset, CursorGrab, DisplayId,
-    DisplayKey, DisplayRegistry, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
-    KeyboardPlacement, SizeConstraints, SystemControls, Unsupported, UnsupportedReason,
+    DisplayKey, DisplayRegistry, InvalidControlsOffset, InvalidGeometry, KeyboardPlacement,
+    SizeConstraints, SoftKeyboard, SystemControls, Unsupported, UnsupportedReason,
     WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
     WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowInteraction, WindowLevel,
     WindowMaterial, WindowMode, WindowOption, WindowOptions, WindowPosition, WindowRevision,
@@ -841,7 +841,7 @@ fn each_window_fact_advances_the_revision() {
             "keyboard",
             base_state().with_insets(
                 WindowInsets::ZERO.with_keyboard(
-                    KeyboardInset::try_at_rest(KeyboardPlacement::Docked {
+                    SoftKeyboard::try_at_rest(KeyboardPlacement::Docked {
                         inset: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
                     })
                     .expect("a finite keyboard inset"),

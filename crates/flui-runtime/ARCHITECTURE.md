@@ -259,7 +259,14 @@ host.
   batch. `resize_and_surface_restore_reach_the_product_frame` reads the new ratio
   from a mounted consumer. The headless host's `set_scale_factor` sends the same
   observation. The pipeline holds its ratio as a `DevicePixelRatio`, so no reader
-  checks it again.
+  checks it again. The source also holds the frame of a keyboard floating over
+  the window (ADR-0372), which its root wrapper publishes as a
+  `FloatingKeyboard` above the `MediaQuery` and not as a field of
+  `MediaQueryData`: a `MediaQuery` a widget nests copies the data, and the
+  frame is the window's alone. An insets observation commits the media data and
+  the frame, then wakes the root once
+  (`a_floating_keyboard_reaches_the_media_query_as_a_frame`,
+  `a_window_opened_under_a_floating_keyboard_reads_its_frame`).
 - **Every entry composes every presentation.** `UiRuntime::enter` activates a
   `GlobalKey` registry composite over all the UI runtime's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own

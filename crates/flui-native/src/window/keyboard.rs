@@ -1,9 +1,9 @@
 //! The soft keyboard over a window, from the frame its platform reports in
 //! the window's coordinates (ADR-0277 §4, ADR-0372): UIKit's
-//! `UIKeyboardWillChangeFrameNotification`, `UIKeyboardWillShowNotification`
-//! and `UIKeyboardWillHideNotification`, which also carry the animation's
-//! duration and `UIViewAnimationCurve`, and a browser's visual viewport or
-//! `navigator.virtualKeyboard`.
+//! `UIKeyboardWillChangeFrameNotification`, `UIKeyboardDidChangeFrameNotification`,
+//! `UIKeyboardWillShowNotification` and `UIKeyboardWillHideNotification`,
+//! which also carry the animation's duration and `UIViewAnimationCurve`, and
+//! a browser's visual viewport or `navigator.virtualKeyboard`.
 
 #[cfg(any(target_os = "ios", test))]
 use std::time::Duration;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{EdgeInsets, Rect, Size};
 use flui_platform::KeyboardPlacement;
 #[cfg(any(target_os = "ios", test))]
-use flui_platform::{EventTime, InsetCurve, InsetMotion, KeyboardInset};
+use flui_platform::{EventTime, InsetCurve, InsetMotion, SoftKeyboard};
 
 /// The keyboard's frame in the window's coordinates: its origin and size.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,6 +34,13 @@ impl Frame {
     };
 }
 
+/// How far above the floor a keyboard's bottom lies before the keyboard
+/// floats, in the frame's own unit (points on iOS, CSS pixels on the Web). A
+/// keyboard extension reports a docked frame a fraction of a point off, and
+/// the arithmetic that brings a frame into a view leaves an error far below
+/// this.
+const FLOATING_CLEARANCE: f64 = 0.5;
+
 /// Where the keyboard at `frame` rests over a view `view` in size, `floor`
 /// being the bottom a docked keyboard reaches in the view's coordinates: the
 /// view's own bottom on iOS (an iPad reports a Slide Over window's keyboard
@@ -43,13 +50,14 @@ impl Frame {
 ///
 /// - hidden for a frame that is no number, has no area, or overlaps the view
 ///   nowhere (off screen, or beside the view in an iPad's Split View);
-/// - floating for one whose bottom lies above `floor` (an iPad's floating,
-///   undocked or split keyboard, or a shortcuts bar dragged up): it covers
-///   what lies under its frame and no edge;
+/// - floating for one whose bottom lies [`FLOATING_CLEARANCE`] or more above
+///   `floor` (an iPad's floating, undocked or split keyboard, or a shortcuts
+///   bar dragged up): it covers what lies under its frame and no edge;
 /// - docked otherwise, covering the view from the keyboard's top down.
 ///
-/// The bottoms are compared rounded to the point, since a keyboard extension
-/// can report a docked frame a fraction of a point off.
+/// All of it is in the unit the platform reports the frame in: a caller that
+/// scales the result ([`scaled`]) does so afterwards, so the clearance is
+/// never measured in scaled units.
 #[must_use]
 pub(crate) fn placement(view: Size<f64>, frame: Frame, floor: f64) -> KeyboardPlacement {
     let finite = [
@@ -70,13 +78,42 @@ pub(crate) fn placement(view: Size<f64>, frame: Frame, floor: f64) -> KeyboardPl
     if !finite || !overlaps || frame.width <= 0.0 || frame.height <= 0.0 {
         return KeyboardPlacement::Hidden;
     }
-    if (frame.y + frame.height).round() < floor.round() {
+    if floor - (frame.y + frame.height) >= FLOATING_CLEARANCE {
         return KeyboardPlacement::Floating {
             frame: Rect::from_xywh(frame.x, frame.y, frame.width, frame.height),
         };
     }
     KeyboardPlacement::Docked {
         inset: EdgeInsets::new(0.0, 0.0, (view.height - frame.y.max(0.0)).max(0.0), 0.0),
+    }
+}
+
+/// `placement` with every length multiplied by `scale`: a placement read in
+/// the box a page measures goes out in the window's logical pixels, since a
+/// transform on the canvas or an ancestor scales what the page measures and
+/// not the window's size.
+#[cfg(any(target_arch = "wasm32", test))]
+#[must_use]
+pub(crate) fn scaled(placement: KeyboardPlacement, scale: f64) -> KeyboardPlacement {
+    match placement {
+        KeyboardPlacement::Docked { inset } => KeyboardPlacement::Docked {
+            inset: EdgeInsets::new(
+                inset.top * scale,
+                inset.right * scale,
+                inset.bottom * scale,
+                inset.left * scale,
+            ),
+        },
+        KeyboardPlacement::Floating { frame } => KeyboardPlacement::Floating {
+            frame: Rect::from_ltrb(
+                frame.left() * scale,
+                frame.top() * scale,
+                frame.right() * scale,
+                frame.bottom() * scale,
+            ),
+        },
+        // Hidden, which has nothing to scale.
+        unscaled => unscaled,
     }
 }
 
@@ -134,7 +171,7 @@ impl Change {
     /// make a valid motion. `None` for a placement the platform's types
     /// refuse.
     #[must_use]
-    pub(crate) fn keyboard(self, placement: KeyboardPlacement) -> Option<KeyboardInset> {
+    pub(crate) fn keyboard(self, placement: KeyboardPlacement) -> Option<SoftKeyboard> {
         let duration = Duration::try_from_secs_f64(self.seconds)
             .ok()
             .filter(|duration| !duration.is_zero());
@@ -142,33 +179,37 @@ impl Change {
             .and_then(|duration| {
                 InsetMotion::try_new(self.from, self.start, duration, self.curve).ok()
             })
-            .and_then(|motion| KeyboardInset::try_moving(placement, motion).ok());
-        moving.or_else(|| KeyboardInset::try_at_rest(placement).ok())
+            .and_then(|motion| SoftKeyboard::try_moving(placement, motion).ok());
+        moving.or_else(|| SoftKeyboard::try_at_rest(placement).ok())
     }
 }
 
 #[cfg(any(target_os = "ios", test))]
-/// Which of UIKit's keyboard notifications a [`Note`] is.
+/// Which of UIKit's keyboard notifications a view heard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Notice {
     /// `UIKeyboardWillChangeFrameNotification`: the keyboard moves to its end
     /// frame.
-    FrameChange,
+    Moving,
+    /// `UIKeyboardDidChangeFrameNotification`: the keyboard came to rest at
+    /// its end frame. It is the only notice of where a keyboard the user
+    /// dragged or undocked ended up.
+    Moved,
     /// `UIKeyboardWillShowNotification`: the keyboard comes to its end frame.
     /// UIKit's zero frame here is a shortcuts bar dropped where the user
     /// dragged it: it floats, and UIKit does not say where.
-    Show,
+    Showing,
     /// `UIKeyboardWillHideNotification`, which UIKit posts after the hide's
-    /// frame change: the keyboard leaves the content, whatever its end frame
+    /// frame change: the keyboard leaves its dock, whatever its end frame
     /// says (one not yet fully off screen is a hide all the same).
-    Hide,
+    Hiding,
 }
 
 #[cfg(any(target_os = "ios", test))]
-/// A keyboard notification as a view keeps it: which one, its end frame in
+/// A keyboard notification as it arrives: which one, its end frame in
 /// screen coordinates if it carried one, and the change it starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Note {
+pub(crate) struct Heard {
     pub(crate) notice: Notice,
     /// `UIKeyboardFrameEndUserInfoKey`.
     pub(crate) end: Option<Frame>,
@@ -176,50 +217,98 @@ pub(crate) struct Note {
 }
 
 #[cfg(any(target_os = "ios", test))]
-impl Note {
-    /// The note a view keeps once this one arrives while `standing` stands:
-    /// this one, unless it says nothing of where the keyboard ends up, and
-    /// then `standing` stays. A hide always says. A frame change or a show
-    /// that names no end frame is not the keyboard's. A frame change that
-    /// names UIKit's zero frame is the one it sends while the user drags a
-    /// floating keyboard. A show that names the end frame of the frame
-    /// change standing is the second notice of one show, and its motion is
-    /// already under way.
-    #[must_use]
-    pub(crate) fn replacing(self, standing: Option<Self>) -> Option<Self> {
-        let says_nothing = match (self.notice, self.end) {
-            (Notice::Hide, _) => false,
-            (Notice::FrameChange | Notice::Show, None) => true,
-            (Notice::FrameChange, Some(end)) => end == Frame::ZERO,
-            (Notice::Show, Some(_)) => standing.is_some_and(|standing| {
-                standing.notice != Notice::Hide && standing.end == self.end
-            }),
-        };
-        if says_nothing { standing } else { Some(self) }
-    }
+/// What a view keeps of the keyboard notifications it heard: where the
+/// keyboard ends up, in screen coordinates, and the change that takes its
+/// inset there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Note {
+    /// The keyboard goes to `end`.
+    At { end: Frame, change: Change },
+    /// The keyboard left its dock along `change`. `came_to_rest` is the frame
+    /// UIKit named once it had, if it named one: a keyboard the user undocked
+    /// is announced as a hide and then rests floating.
+    Undocked {
+        change: Change,
+        came_to_rest: Option<Frame>,
+    },
+}
 
+#[cfg(any(target_os = "ios", test))]
+impl Heard {
+    /// The note a view keeps once this notification arrives while `standing`
+    /// stands: `standing` itself when the notification says nothing new of
+    /// where the keyboard ends up.
+    ///
+    /// - A hide always stands, and starts its change.
+    /// - A notification with no end frame is not the keyboard's.
+    /// - UIKit's zero frame on a frame change, before or after it, is what it
+    ///   sends while the user drags a floating keyboard; on a show it is a
+    ///   shortcuts bar dropped floating, which stands (with no area, so no
+    ///   placement).
+    /// - A show or a finished frame change that names the frame standing is a
+    ///   later notice of the same move, whose motion is already under way.
+    /// - A finished frame change after a hide keeps the hide and its motion,
+    ///   and adds where the keyboard came to rest.
+    #[must_use]
+    pub(crate) fn kept(self, standing: Option<Note>) -> Option<Note> {
+        let Self {
+            notice,
+            end,
+            change,
+        } = self;
+        match (notice, end) {
+            (Notice::Hiding, _) => Some(Note::Undocked {
+                change,
+                came_to_rest: None,
+            }),
+            (Notice::Moving | Notice::Moved | Notice::Showing, None) => standing,
+            (Notice::Moving | Notice::Moved, Some(end)) if end == Frame::ZERO => standing,
+            (Notice::Moving, Some(end)) => Some(Note::At { end, change }),
+            (Notice::Moved | Notice::Showing, Some(end)) => match standing {
+                Some(Note::At { end: resting, .. }) if resting == end => standing,
+                Some(Note::Undocked { change, .. }) if notice == Notice::Moved => {
+                    Some(Note::Undocked {
+                        change,
+                        came_to_rest: Some(end),
+                    })
+                }
+                Some(Note::At { .. } | Note::Undocked { .. }) | None => {
+                    Some(Note::At { end, change })
+                }
+            },
+        }
+    }
+}
+
+#[cfg(any(target_os = "ios", test))]
+impl Note {
     /// The keyboard this note puts over a view `view` in size, `to_view`
-    /// taking its end frame from screen coordinates into the view's: hidden
-    /// for a hide, the end frame's [`placement`] for a frame change or a
-    /// show. A show with UIKit's zero frame is a keyboard that floats where
-    /// UIKit does not say: it covers no edge and has no frame to publish, so
-    /// its placement is hidden, as any frame with no area is. `None` for a
-    /// placement the platform's types refuse.
+    /// taking a frame from screen coordinates into the view's: the
+    /// [`placement`] of the frame the keyboard goes to. A keyboard that left
+    /// its dock is hidden unless the frame it came to rest at floats: a hide
+    /// whose frame still lies on the bottom of the screen is a hide all the
+    /// same. `None` for a placement the platform's types refuse.
     #[must_use]
     pub(crate) fn keyboard(
         self,
         view: Size<f64>,
         to_view: impl FnOnce(Frame) -> Frame,
-    ) -> Option<KeyboardInset> {
-        let placement = match (self.notice, self.end) {
-            (Notice::FrameChange | Notice::Show, Some(end)) => {
-                placement(view, to_view(end), view.height)
-            }
-            (Notice::Hide, _) | (Notice::FrameChange | Notice::Show, None) => {
-                KeyboardPlacement::Hidden
-            }
+    ) -> Option<SoftKeyboard> {
+        let (placement, change) = match self {
+            Self::At { end, change } => (placement(view, to_view(end), view.height), change),
+            Self::Undocked {
+                change,
+                came_to_rest: Some(end),
+            } => match placement(view, to_view(end), view.height) {
+                floating @ KeyboardPlacement::Floating { .. } => (floating, change),
+                _ => (KeyboardPlacement::Hidden, change),
+            },
+            Self::Undocked {
+                change,
+                came_to_rest: None,
+            } => (KeyboardPlacement::Hidden, change),
         };
-        self.change.keyboard(placement)
+        change.keyboard(placement)
     }
 }
 
@@ -351,9 +440,14 @@ mod tests {
         }
     }
 
+    fn floating(x: f64, y: f64, width: f64, height: f64) -> KeyboardPlacement {
+        KeyboardPlacement::Floating {
+            frame: Rect::from_xywh(x, y, width, height),
+        }
+    }
+
     #[test]
     fn a_frame_names_where_the_keyboard_rests() {
-        let floating = frame(40.0, 300.0, 310.0, 260.0);
         let rows = [
             (
                 "docked at the bottom",
@@ -372,10 +466,13 @@ mod tests {
             ),
             (
                 "a frame whose bottom is above the view's bottom floats and covers no edge",
-                floating,
-                KeyboardPlacement::Floating {
-                    frame: Rect::from_xywh(40.0, 300.0, 310.0, 260.0),
-                },
+                frame(40.0, 300.0, 310.0, 260.0),
+                floating(40.0, 300.0, 310.0, 260.0),
+            ),
+            (
+                "half a point above the view's bottom floats",
+                frame(0.0, 508.0, 390.0, 335.5),
+                floating(0.0, 508.0, 390.0, 335.5),
             ),
             (
                 "below the screen",
@@ -410,96 +507,289 @@ mod tests {
         );
     }
 
+    /// The clearance is a difference, never two roundings: bottoms that
+    /// straddle a half read docked however close they lie.
     #[test]
-    fn a_notice_keeps_or_replaces_the_keyboard() {
-        let change = Change {
+    fn a_docked_keyboard_a_fraction_off_its_floor_is_docked() {
+        // A canvas drawn at three tenths of its size: the keyboard's bottom
+        // comes out one unit in the last place under the floor.
+        let bottom = 115.499_999_999_999_99_f64;
+        assert!(bottom < 115.5 && bottom.round() < 115.5_f64.round());
+        assert_eq!(
+            placement(
+                Size::new(90.0, 115.5),
+                frame(0.0, 60.0, 90.0, bottom - 60.0),
+                115.5
+            ),
+            KeyboardPlacement::Docked {
+                inset: EdgeInsets::new(0.0, 0.0, 55.5, 0.0)
+            },
+            "a scaled canvas"
+        );
+        // A view half a point taller than the screen's whole points, and a
+        // keyboard extension's frame three tenths short of it.
+        assert_eq!(
+            placement(
+                Size::new(390.0, 844.5),
+                frame(0.0, 508.5, 390.0, 335.7),
+                844.5
+            ),
+            docked(336.0),
+            "a view on a half point"
+        );
+    }
+
+    #[test]
+    fn a_placement_scales_into_the_windows_pixels() {
+        assert_eq!(scaled(docked(5.0), 2.0), docked(10.0));
+        assert_eq!(
+            scaled(floating(40.0, 10.0, 100.0, 30.0), 2.0),
+            floating(80.0, 20.0, 200.0, 60.0)
+        );
+        assert_eq!(
+            scaled(KeyboardPlacement::Hidden, 2.0),
+            KeyboardPlacement::Hidden
+        );
+    }
+
+    const DOCKED: Frame = Frame {
+        x: 0.0,
+        y: 508.0,
+        width: 390.0,
+        height: 336.0,
+    };
+    const FLOATING: Frame = Frame {
+        x: 40.0,
+        y: 300.0,
+        width: 310.0,
+        height: 260.0,
+    };
+    const DROPPED: Frame = Frame {
+        x: 60.0,
+        y: 120.0,
+        width: 310.0,
+        height: 260.0,
+    };
+    const OFF_SCREEN: Frame = Frame {
+        x: 0.0,
+        y: 844.0,
+        width: 390.0,
+        height: 336.0,
+    };
+
+    fn change_at(nanos: u64) -> Change {
+        Change {
             from: EdgeInsets::ZERO,
-            start: EventTime::from_nanos(1_000),
+            start: EventTime::from_nanos(nanos),
             seconds: 0.0,
             curve: InsetCurve::SystemKeyboard,
-        };
-        let note = |notice, end| Note {
-            notice,
-            end,
-            change,
-        };
-        let shown = note(Notice::FrameChange, Some(frame(0.0, 508.0, 390.0, 336.0)));
-        let rows = [
+        }
+    }
+
+    /// A notification as a test announces it: which one, and its end frame.
+    type Announced = (Notice, Option<Frame>);
+
+    /// The note standing after `heard`, each notification a tick later than
+    /// the one before it.
+    fn after(heard: &[Announced]) -> Option<Note> {
+        heard
+            .iter()
+            .zip(1_u64..)
+            .fold(None, |standing, (&(notice, end), tick)| {
+                Heard {
+                    notice,
+                    end,
+                    change: change_at(tick * 1_000),
+                }
+                .kept(standing)
+            })
+    }
+
+    #[test]
+    fn the_notifications_heard_name_where_the_keyboard_rests() {
+        use Notice::{Hiding, Moved, Moving, Showing};
+        let floats = |frame: Frame| floating(frame.x, frame.y, frame.width, frame.height);
+        let rows: [(&str, &[Announced], KeyboardPlacement); 16] = [
+            (
+                "a show",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Showing, Some(DOCKED)),
+                    (Moved, Some(DOCKED)),
+                ],
+                docked(336.0),
+            ),
             (
                 "a zero frame while a floating keyboard is dragged keeps the inset",
-                note(Notice::FrameChange, Some(Frame::ZERO)),
+                &[(Moving, Some(DOCKED)), (Moving, Some(Frame::ZERO))],
                 docked(336.0),
             ),
             (
                 "a change with no end frame keeps the inset",
-                note(Notice::FrameChange, None),
+                &[(Moving, Some(DOCKED)), (Moving, None)],
                 docked(336.0),
             ),
             (
                 "a later frame replaces it",
-                note(Notice::FrameChange, Some(frame(0.0, 544.0, 390.0, 300.0))),
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Moving, Some(frame(0.0, 544.0, 390.0, 300.0))),
+                ],
                 docked(300.0),
             ),
             (
                 "a show with no end frame keeps the inset",
-                note(Notice::Show, None),
+                &[(Moving, Some(DOCKED)), (Showing, None)],
                 docked(336.0),
             ),
             (
-                "a show at another frame replaces it",
-                note(Notice::Show, Some(frame(0.0, 544.0, 390.0, 300.0))),
-                docked(300.0),
-            ),
-            (
                 "a show with a zero frame is a shortcuts bar dropped floating: no inset",
-                note(Notice::Show, Some(Frame::ZERO)),
+                &[(Moving, Some(DOCKED)), (Showing, Some(Frame::ZERO))],
                 KeyboardPlacement::Hidden,
             ),
             (
                 "a hide notification is hidden with its frame still on screen",
-                note(Notice::Hide, Some(frame(0.0, 600.0, 390.0, 336.0))),
+                &[
+                    (Moving, Some(frame(0.0, 600.0, 390.0, 336.0))),
+                    (Hiding, Some(frame(0.0, 600.0, 390.0, 336.0))),
+                    (Moved, Some(frame(0.0, 600.0, 390.0, 336.0))),
+                ],
                 KeyboardPlacement::Hidden,
             ),
             (
                 "a hide notification is hidden with a zero frame",
-                note(Notice::Hide, Some(Frame::ZERO)),
+                &[(Moving, Some(DOCKED)), (Hiding, Some(Frame::ZERO))],
                 KeyboardPlacement::Hidden,
             ),
             (
                 "a hide notification is hidden with no frame",
-                note(Notice::Hide, None),
+                &[(Moving, Some(DOCKED)), (Hiding, None)],
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "a hide",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Moving, Some(OFF_SCREEN)),
+                    (Hiding, Some(OFF_SCREEN)),
+                    (Moved, Some(OFF_SCREEN)),
+                ],
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "a keyboard that comes back after a hide",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Hiding, Some(OFF_SCREEN)),
+                    (Moving, Some(DOCKED)),
+                    (Showing, Some(DOCKED)),
+                ],
+                docked(336.0),
+            ),
+            (
+                "a floating keyboard dragged and dropped rests where it was dropped",
+                &[
+                    (Moving, Some(FLOATING)),
+                    (Moved, Some(FLOATING)),
+                    (Moving, Some(Frame::ZERO)),
+                    (Moved, Some(Frame::ZERO)),
+                    (Moving, Some(Frame::ZERO)),
+                    (Moved, Some(DROPPED)),
+                ],
+                floats(DROPPED),
+            ),
+            (
+                "an undocked keyboard is announced as a hide and floats where it came to rest",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Moving, Some(FLOATING)),
+                    (Hiding, Some(FLOATING)),
+                    (Moved, Some(FLOATING)),
+                ],
+                floats(FLOATING),
+            ),
+            (
+                "an undocked keyboard dragged on rests where it was dropped",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Hiding, Some(FLOATING)),
+                    (Moved, Some(FLOATING)),
+                    (Moving, Some(Frame::ZERO)),
+                    (Moved, Some(DROPPED)),
+                ],
+                floats(DROPPED),
+            ),
+            (
+                "a docked keyboard dragged off its dock floats where it was dropped",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Moved, Some(DOCKED)),
+                    (Moving, Some(Frame::ZERO)),
+                    (Moved, Some(DROPPED)),
+                ],
+                floats(DROPPED),
+            ),
+            (
+                "a zero frame before any other is no keyboard",
+                &[(Moving, Some(Frame::ZERO)), (Moved, Some(Frame::ZERO))],
                 KeyboardPlacement::Hidden,
             ),
         ];
-        for (case, arriving, expected) in rows {
-            let kept = arriving.replacing(Some(shown)).expect("a note is kept");
-            let keyboard = kept
-                .keyboard(VIEW, |end| end)
-                .expect("a placement the platform takes");
-            assert_eq!(keyboard.placement(), expected, "{case}");
+        for (case, heard, expected) in rows {
+            let placement = after(heard).map_or(KeyboardPlacement::Hidden, |note| {
+                note.keyboard(VIEW, |end| end)
+                    .expect("a placement the platform takes")
+                    .placement()
+            });
+            assert_eq!(placement, expected, "{case}");
         }
-        assert_eq!(
-            note(Notice::FrameChange, Some(Frame::ZERO)).replacing(None),
-            None,
-            "a zero frame before any other is no keyboard"
-        );
+    }
 
-        // The show UIKit posts after a frame change names the same end
-        // frame: the motion the frame change started is not started again.
-        let later = Change {
-            start: EventTime::from_nanos(2_000),
-            ..change
-        };
-        let second = Note {
-            notice: Notice::Show,
-            end: shown.end,
-            change: later,
-        };
-        assert_eq!(second.replacing(Some(shown)), Some(shown));
+    /// One move starts one motion: the notices that repeat its frame leave
+    /// the change the first of them started, and a frame that comes to rest
+    /// after a hide leaves the hide's.
+    #[test]
+    fn a_later_notice_of_one_move_starts_no_second_motion() {
+        use Notice::{Hiding, Moved, Moving, Showing};
+        let shown = after(&[(Moving, Some(DOCKED))]);
+        assert_eq!(
+            shown,
+            Some(Note::At {
+                end: DOCKED,
+                change: change_at(1_000)
+            })
+        );
+        assert_eq!(
+            after(&[
+                (Moving, Some(DOCKED)),
+                (Showing, Some(DOCKED)),
+                (Moved, Some(DOCKED))
+            ]),
+            shown
+        );
+        assert_eq!(
+            after(&[
+                (Moving, Some(DOCKED)),
+                (Hiding, Some(OFF_SCREEN)),
+                (Moved, Some(FLOATING))
+            ]),
+            Some(Note::Undocked {
+                change: change_at(2_000),
+                came_to_rest: Some(FLOATING)
+            })
+        );
         // After a hide the same frame is a keyboard that comes back.
-        let hidden = note(Notice::Hide, shown.end);
-        assert_eq!(second.replacing(Some(hidden)), Some(second));
-        assert_eq!(second.replacing(None), Some(second));
+        assert_eq!(
+            after(&[
+                (Moving, Some(DOCKED)),
+                (Hiding, Some(OFF_SCREEN)),
+                (Showing, Some(DOCKED))
+            ]),
+            Some(Note::At {
+                end: DOCKED,
+                change: change_at(3_000)
+            })
+        );
     }
 
     #[test]
