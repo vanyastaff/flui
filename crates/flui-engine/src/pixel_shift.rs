@@ -18,8 +18,11 @@
 //! The shift is a whole number below 2^24, so it is exact in `f32`, and
 //! adding it to a whole or dyadic position of that range is exact. Any other
 //! position rounds once, within one `f32` ulp of what recording at the new
-//! origin computes; a glyph keeps the subpixel bin of the fraction it was
-//! recorded at, which that rounding cannot reach below 2^22 pixels.
+//! origin computes. A glyph on the device grid is placed from the fraction
+//! of its paragraph's origin alone, split in `f64` before any `f32`
+//! arithmetic (`ShapedRun::placed_glyphs`), so its column, row and subpixel
+//! bin after a shift are the ones a recording at the new origin picks, at
+//! every magnitude the key admits.
 
 use crate::effects::{
     LinearGradientInstance, RadialGradientInstance, ShadowInstance, SweepGradientInstance,
@@ -294,5 +297,149 @@ impl Shift for Vertex {
         } = &mut self;
         by.apply(position);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::offset_of;
+
+    use super::{
+        ArcInstance, CircleInstance, GlyphInstance, IDENTITY, LinearGradientInstance, PixelOrigin,
+        RadialGradientInstance, RectInstance, ShadowInstance, Shift, SweepGradientInstance,
+        TextureInstance, Vertex,
+    };
+
+    /// `T` with every word a distinct whole float.
+    fn patterned<T: bytemuck::Pod>() -> T {
+        let mut item = T::zeroed();
+        let words: &mut [f32] = bytemuck::cast_slice_mut(bytemuck::bytes_of_mut(&mut item));
+        for (index, word) in (0_u16..).zip(words.iter_mut()) {
+            *word = 10.0 + f32::from(index);
+        }
+        item
+    }
+
+    /// The words `item` shifted by `(3, -2)` changes: each one's byte offset
+    /// and how far it moved.
+    fn moved<T: Shift + bytemuck::Pod>(item: T) -> Vec<(usize, f32)> {
+        let by = PixelOrigin { x: 1, y: 5 }
+            .shift_to(PixelOrigin { x: 4, y: 3 })
+            .expect("the origins differ");
+        let shifted = item.shifted(by);
+        let before: &[f32] = bytemuck::cast_slice(bytemuck::bytes_of(&item));
+        let after: &[f32] = bytemuck::cast_slice(bytemuck::bytes_of(&shifted));
+        before
+            .iter()
+            .zip(after)
+            .enumerate()
+            .filter(|(_, (was, is))| was.to_bits() != is.to_bits())
+            .map(|(index, (was, is))| (index * 4, is - was))
+            .collect()
+    }
+
+    /// The words a shift by `(3, -2)` moves: the x and y of each position at
+    /// `offsets`.
+    fn positions(offsets: &[usize]) -> Vec<(usize, f32)> {
+        let mut words: Vec<(usize, f32)> = offsets
+            .iter()
+            .flat_map(|&offset| [(offset, 3.0), (offset + 4, -2.0)])
+            .collect();
+        words.sort_by_key(|&(offset, _)| offset);
+        words
+    }
+
+    /// Each instance type moves exactly its device positions, every other
+    /// word untouched: a placement by translation unless the instance is in
+    /// the baked layout, whose bounds are device pixels.
+    #[test]
+    fn a_shift_moves_exactly_the_device_positions() {
+        let baked_rect = RectInstance {
+            transform: IDENTITY,
+            transform_translate: [0.0; 4],
+            ..patterned()
+        };
+        let uniform_glyph = GlyphInstance {
+            transform: IDENTITY,
+            origin: [0.0; 4],
+            ..patterned()
+        };
+        type Row = (&'static str, Vec<(usize, f32)>, Vec<usize>);
+        let rows: [Row; 13] = [
+            (
+                "an affine rect",
+                moved(patterned::<RectInstance>()),
+                vec![offset_of!(RectInstance, transform_translate)],
+            ),
+            (
+                "a baked rect",
+                moved(baked_rect),
+                vec![offset_of!(RectInstance, bounds)],
+            ),
+            (
+                "a circle",
+                moved(patterned::<CircleInstance>()),
+                vec![offset_of!(CircleInstance, transform_translate)],
+            ),
+            (
+                "an arc",
+                moved(patterned::<ArcInstance>()),
+                vec![offset_of!(ArcInstance, transform_translate)],
+            ),
+            (
+                "a shadow",
+                moved(patterned::<ShadowInstance>()),
+                vec![
+                    offset_of!(ShadowInstance, bounds),
+                    offset_of!(ShadowInstance, rect_pos),
+                ],
+            ),
+            (
+                "a linear gradient",
+                moved(patterned::<LinearGradientInstance>()),
+                vec![offset_of!(LinearGradientInstance, transform_translate)],
+            ),
+            (
+                "a radial gradient",
+                moved(patterned::<RadialGradientInstance>()),
+                vec![offset_of!(RadialGradientInstance, transform_translate)],
+            ),
+            (
+                "a sweep gradient",
+                moved(patterned::<SweepGradientInstance>()),
+                vec![offset_of!(SweepGradientInstance, transform_translate)],
+            ),
+            (
+                "an affine glyph",
+                moved(patterned::<GlyphInstance>()),
+                vec![offset_of!(GlyphInstance, origin)],
+            ),
+            (
+                "a glyph on the device grid",
+                moved(uniform_glyph),
+                vec![offset_of!(GlyphInstance, dst_rect)],
+            ),
+            (
+                "an image",
+                moved(patterned::<TextureInstance>()),
+                vec![offset_of!(TextureInstance, origin_and_x)],
+            ),
+            (
+                "a tessellated vertex",
+                moved(patterned::<Vertex>()),
+                vec![offset_of!(Vertex, position)],
+            ),
+            (
+                "a rect at the device origin",
+                moved(RectInstance {
+                    bounds: [0.0, 0.0, 4.0, 4.0],
+                    ..baked_rect
+                }),
+                vec![offset_of!(RectInstance, bounds)],
+            ),
+        ];
+        for (row, words, offsets) in rows {
+            assert_eq!(words, positions(&offsets), "{row}");
+        }
     }
 }

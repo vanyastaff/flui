@@ -80,9 +80,12 @@ pub(crate) struct ResourceEpoch(NonZeroU64);
 /// The device transform a chunk is recorded under, as far as its IR depends
 /// on it, in canonical bits (ADR-0098 §4): the linear part and the fraction
 /// of the translation. The whole pixels of the translation are the chunk's
-/// [`PixelOrigin`], which a replay shifts its IR by, so a chunk moved by
-/// whole device pixels keeps its key and one moved by a fraction records
-/// again.
+/// [`PixelOrigin`], which a replay shifts its IR by. A chunk moved by whole
+/// device pixels keeps its key when the fraction keeps its bits, which it
+/// does for a translation on a dyadic grid (whole pixels, or a quarter
+/// pixel); a non-dyadic fraction can round to other bits once the
+/// translation crosses a power of two, and that move records again, as one
+/// by a fraction of a pixel does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RasterKey {
     linear: [u64; 4],
@@ -114,11 +117,14 @@ impl RasterKey {
         {
             return None;
         }
-        // `t - floor(t)` is exact in f64, and in [0, 1): a whole `t` of
-        // either sign has the fraction `+0.0`.
+        // `t - floor(t)` is exact but for a `t` in (-1/2, 0), where it rounds,
+        // and to 1.0 when `-t` is at most 2^-54; clamped below 1, so that `t`
+        // keys apart from a whole one. A whole `t` of either sign has the
+        // fraction `+0.0`.
         let key = Self {
             linear: [m[0], m[1], m[4], m[5]].map(canonical_bits_f64),
-            fraction: [m[12], m[13]].map(|t| canonical_bits_f64(t - t.floor())),
+            fraction: [m[12], m[13]]
+                .map(|t| canonical_bits_f64((t - t.floor()).min(1.0_f64.next_down()))),
         };
         Some((key, PixelOrigin::of_bounded(m[12], m[13])))
     }
@@ -1616,6 +1622,19 @@ mod tests {
         assert_eq!(origin(-0.5, 2.25), (-1, 2));
         assert_eq!(origin(-0.0, 7.999), (0, 7));
         assert_eq!(origin(-8_388_606.5, 8_388_607.0), (-8_388_607, 8_388_607));
+        // A translation just below 0 rounds `t - floor(t)` to 1.0; the key
+        // holds a fraction below 1 there, apart from a whole translation's.
+        for tiny in [
+            -(2.0_f64.powi(-60)),
+            -(2.0_f64.powi(-54)),
+            -f64::MIN_POSITIVE,
+        ] {
+            let (key, origin) = split(tiny, 0.0);
+            let fraction = f64::from_bits(key.fraction[0]);
+            assert!((0.0..1.0).contains(&fraction), "{tiny}: {fraction}");
+            assert_eq!(origin.pixels(), (-1, 0), "{tiny}");
+            assert_ne!(key, split(0.0, 0.0).0, "{tiny}");
+        }
     }
 
     /// The move between two origins is their difference in whole pixels,

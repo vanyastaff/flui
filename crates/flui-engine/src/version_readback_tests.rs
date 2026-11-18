@@ -2184,22 +2184,22 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
 /// A chunk moved by whole device pixels replays its recording with every
 /// device position shifted, which is the IR recording it at the new position
 /// builds (ADR-0304 §9). Each row draws one boundary of one chunk at one
-/// offset and then at another, under a hard-edged clip when it has one: one
-/// capture reads the cache, the other draws with damage off and so records
-/// the chunk each frame. A scissor that cuts the chunk is in its key relative
-/// to the chunk's pixel origin, so a chunk cut by a clip that moves with it
-/// replays and one moved under a fixed one records again, as does a chunk
-/// moved by a fraction of a pixel.
+/// offset and then at another, under a hard-edged clip or a device-pixel
+/// ratio when it has one: one capture reads the cache, the other draws with
+/// damage off and so records the chunk each frame. A scissor that cuts the
+/// chunk is in its key relative to the chunk's pixel origin, so a chunk cut by
+/// a clip that moves with it replays and one moved under a fixed one records
+/// again, as does a chunk moved by a fraction of a pixel. Text placed across
+/// 0, at a tie between subpixel bins and far from 0 replays as it records.
 #[test]
 fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
-    use flui_foundation::geometry::{Point, RRect, Radius};
-    use flui_layer::{ClipRectLayer, FullReason, Layer};
-    use flui_painting::paint::Clip;
+    use flui_foundation::geometry::{Matrix4, Point, RRect, Radius};
+    use flui_layer::{ClipRectLayer, FullReason, Layer, TransformLayer};
+    use flui_painting::paint::{Clip, Path, Shader, TileMode};
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
     type Painting = fn(&mut Canvas);
-    let text: Painting = |canvas| paint_text(canvas, "Moved", Offset::new(2.0, 2.0));
     // A hard-edged clip of the chunk: in the root, so the chunk moves under
     // it, or in the boundary, so it moves with the chunk.
     #[derive(Clone, Copy)]
@@ -2208,34 +2208,54 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         Fixed(Rect<f64>),
         Moving(Rect<f64>),
     }
-    // (row, the chunk, its clip, the boundary's offset in frame one and in
-    // frame two, whether frame two replays the chunk)
     type Move = (f64, f64);
-    type MoveRow = (&'static str, Painting, Cut, Move, Move, bool);
-    let rows: [MoveRow; 10] = [
-        ("text", text, Cut::None, (10.0, 20.0), (13.0, 17.0), true),
-        (
+    struct MoveRow {
+        row: &'static str,
+        painting: Painting,
+        cut: Cut,
+        /// The boundary's offset in frame one and in frame two.
+        before: Move,
+        after: Move,
+        /// Whether frame two replays the chunk.
+        hits: bool,
+        /// The device-pixel ratio the root scales by.
+        ratio: f64,
+        target: (u32, u32),
+    }
+    let row = |row, painting, before, after| MoveRow {
+        row,
+        painting,
+        cut: Cut::None,
+        before,
+        after,
+        hits: true,
+        ratio: 1.0,
+        target: (SIDE, SIDE),
+    };
+    let text: Painting = |canvas| paint_text(canvas, "Moved", Offset::new(2.0, 2.0));
+    let shapes: Painting = |canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+            &Paint::fill(Color::RED),
+        );
+        canvas.draw_rrect(
+            RRect::from_rect_and_radius(
+                Rect::from_xywh(0.0, 14.0, 20.0, 10.0),
+                Radius::circular(4.0),
+            ),
+            &Paint::fill(Color::BLUE),
+        );
+        canvas.draw_circle(Point::new(30.0, 10.0), 6.0, &Paint::fill(Color::GREEN));
+    };
+    let rows = [
+        row("text", text, (10.0, 20.0), (13.0, 17.0)),
+        row(
             "a rect, a rounded rect and a circle",
-            |canvas| {
-                canvas.draw_rect(
-                    Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
-                    &Paint::fill(Color::RED),
-                );
-                canvas.draw_rrect(
-                    RRect::from_rect_and_radius(
-                        Rect::from_xywh(0.0, 14.0, 20.0, 10.0),
-                        Radius::circular(4.0),
-                    ),
-                    &Paint::fill(Color::BLUE),
-                );
-                canvas.draw_circle(Point::new(30.0, 10.0), 6.0, &Paint::fill(Color::GREEN));
-            },
-            Cut::None,
+            shapes,
             (10.0, 20.0),
             (14.0, 25.0),
-            true,
         ),
-        (
+        row(
             "a rotated rect and circle",
             |canvas| {
                 canvas.save();
@@ -2248,12 +2268,22 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
                 canvas.draw_circle(Point::new(0.0, 0.0), 4.0, &Paint::fill(Color::BLUE));
                 canvas.restore();
             },
-            Cut::None,
             (20.0, 20.0),
             (17.0, 26.0),
-            true,
         ),
-        (
+        row(
+            "rotated text",
+            |canvas| {
+                canvas.save();
+                canvas.translate(8.0, 4.0);
+                canvas.rotate(0.5);
+                paint_text(canvas, "Moved", Offset::ZERO);
+                canvas.restore();
+            },
+            (20.0, 20.0),
+            (17.0, 26.0),
+        ),
+        row(
             "a gradient",
             |canvas| {
                 paint_gradient(
@@ -2262,61 +2292,194 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
                     [Color::RED, Color::BLUE],
                 );
             },
-            Cut::None,
             (10.0, 20.0),
             (12.0, 29.0),
-            true,
         ),
-        (
+        row(
+            "a gradient on a rounded rect and on a path",
+            |canvas| {
+                let rect = Rect::from_xywh(0.0, 0.0, 40.0, 12.0);
+                let shader = Shader::linear_gradient(
+                    Offset::new(0.0, 0.0),
+                    Offset::new(40.0, 0.0),
+                    vec![Color::RED, Color::BLUE],
+                    None,
+                    TileMode::Clamp,
+                );
+                canvas.draw_rrect(
+                    RRect::from_rect_and_radius(rect, Radius::circular(5.0)),
+                    &Paint::fill(Color::WHITE).with_shader(shader.clone()),
+                );
+                let mut path = Path::new();
+                path.move_to(Point::new(0.0, 16.0));
+                path.line_to(Point::new(30.0, 16.0));
+                path.line_to(Point::new(15.0, 34.0));
+                path.close();
+                canvas.draw_path(&path, &Paint::fill(Color::WHITE).with_shader(shader));
+            },
+            (10.0, 20.0),
+            (13.0, 26.0),
+        ),
+        row(
+            "a radial and a sweep gradient",
+            |canvas| {
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 24.0, 24.0),
+                    &Paint::fill(Color::WHITE).with_shader(Shader::radial_gradient(
+                        Offset::new(12.0, 12.0),
+                        12.0,
+                        vec![Color::RED, Color::BLUE],
+                        None,
+                        TileMode::Clamp,
+                        None,
+                        None,
+                    )),
+                );
+                canvas.draw_rect(
+                    Rect::from_xywh(30.0, 0.0, 24.0, 24.0),
+                    &Paint::fill(Color::WHITE).with_shader(Shader::sweep_gradient(
+                        Offset::new(42.0, 12.0),
+                        vec![Color::RED, Color::GREEN, Color::BLUE],
+                        None,
+                        TileMode::Clamp,
+                        0.0,
+                        std::f64::consts::TAU,
+                    )),
+                );
+            },
+            (10.0, 20.0),
+            (15.0, 17.0),
+        ),
+        row(
+            "a shadow and an arc",
+            |canvas| {
+                let mut path = Path::new();
+                path.add_rect(Rect::from_xywh(4.0, 4.0, 20.0, 12.0));
+                canvas.draw_shadow(&path, Color::BLACK, 4.0);
+                canvas.draw_arc(
+                    Rect::from_xywh(30.0, 0.0, 20.0, 20.0),
+                    0.0,
+                    2.0,
+                    false,
+                    &Paint::fill(Color::GREEN),
+                );
+            },
+            (10.0, 20.0),
+            (14.0, 27.0),
+        ),
+        row(
             "a path",
             |canvas| paint_triangle(canvas, Offset::new(2.0, 2.0)),
-            Cut::None,
             (10.0, 20.0),
             (7.0, 21.0),
-            true,
         ),
-        (
+        row(
             "an image",
             |canvas| paint_image(canvas, Rect::from_xywh(0.0, 0.0, 8.0, 8.0)),
-            Cut::None,
             (10.0, 20.0),
             (15.0, 18.0),
-            true,
         ),
-        (
-            "text under a clip that holds it",
+        row(
+            "text at a fractional offset",
             text,
-            Cut::Fixed(Rect::from_xywh(4.0, 4.0, 120.0, 120.0)),
-            (24.0, 20.0),
-            (27.0, 17.0),
-            true,
+            (10.25, 20.5),
+            (13.25, 17.5),
         ),
-        (
-            "text a fixed clip cuts",
+        row(
+            "shapes at a fractional offset",
+            shapes,
+            (10.375, 20.75),
+            (6.375, 23.75),
+        ),
+        row(
+            "shapes moved up and left",
+            shapes,
+            (30.0, 30.0),
+            (25.0, 24.0),
+        ),
+        row("text up across 0", text, (10.0, -1.5), (10.0, -3.5)),
+        row("text down across 0", text, (10.0, -3.5), (10.0, -1.5)),
+        row("text left across 0", text, (-1.125, 20.0), (-2.125, 20.0)),
+        row(
+            "text left across 0 at a tie",
             text,
-            Cut::Fixed(Rect::from_xywh(0.0, 0.0, 40.0, 128.0)),
-            (24.0, 20.0),
-            (27.0, 17.0),
-            false,
+            (-1.375, 20.0),
+            (-2.375, 20.0),
         ),
-        (
-            "text a clip moving with it cuts",
-            text,
-            Cut::Moving(Rect::from_xywh(0.0, 0.0, 30.0, 40.0)),
-            (24.0, 20.0),
-            (27.0, 17.0),
-            true,
-        ),
-        (
-            "text moved by half a pixel",
-            text,
-            Cut::None,
-            (10.0, 20.0),
-            (10.5, 20.0),
-            false,
-        ),
+        MoveRow {
+            target: (4224, 32),
+            ..row(
+                "text moved far right",
+                text,
+                (6.374_877_929_687_5, 4.0),
+                (4_102.374_877_929_687_5, 4.0),
+            )
+        },
+        MoveRow {
+            ratio: 2.0,
+            ..row("text at a ratio of 2", text, (10.0, 20.0), (13.0, 17.0))
+        },
+        MoveRow {
+            ratio: 1.25,
+            ..row(
+                "shapes at a ratio of 1.25",
+                shapes,
+                (8.0, 16.0),
+                (12.0, 12.0),
+            )
+        },
+        MoveRow {
+            ratio: 1.25,
+            ..row("text at a ratio of 1.25", text, (8.0, 16.0), (12.0, 12.0))
+        },
+        MoveRow {
+            cut: Cut::Fixed(Rect::from_xywh(4.0, 4.0, 120.0, 120.0)),
+            ..row(
+                "text under a clip that holds it",
+                text,
+                (24.0, 20.0),
+                (27.0, 17.0),
+            )
+        },
+        MoveRow {
+            cut: Cut::Fixed(Rect::from_xywh(0.0, 0.0, 40.0, 128.0)),
+            hits: false,
+            ..row("text a fixed clip cuts", text, (24.0, 20.0), (27.0, 17.0))
+        },
+        MoveRow {
+            cut: Cut::Moving(Rect::from_xywh(0.0, 0.0, 30.0, 40.0)),
+            ..row(
+                "text a clip moving with it cuts",
+                text,
+                (24.0, 20.0),
+                (27.0, 17.0),
+            )
+        },
+        MoveRow {
+            hits: false,
+            ..row(
+                "text moved by half a pixel",
+                text,
+                (10.0, 20.0),
+                (10.5, 20.0),
+            )
+        },
     ];
-    for (row, painting, cut, before, after, hits) in rows {
+    for MoveRow {
+        row,
+        painting,
+        cut,
+        before,
+        after,
+        hits,
+        ratio,
+        target,
+    } in rows
+    {
+        let surface = SurfaceKey {
+            size: target,
+            generation: flui_foundation::SurfaceGeneration::ZERO,
+        };
         let place = |writer: &mut SceneWriter<'_>, node, (x, y): Move| {
             writer.push(SceneOp::Place {
                 node,
@@ -2347,6 +2510,14 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
             content: Arc::new(content.finish()),
         });
         let mut top = BoundaryContent::builder();
+        let scaled = ratio != 1.0;
+        if scaled {
+            top.push_effect(
+                Layer::from(TransformLayer::new(Matrix4::scaling(ratio, ratio, 1.0))),
+                RenderId::new(3),
+                0,
+            );
+        }
         if let Cut::Fixed(rect) = cut {
             clipped(&mut top, rect);
         }
@@ -2354,20 +2525,23 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         if let Cut::Fixed(_) = cut {
             top.pop_effect();
         }
+        if scaled {
+            top.pop_effect();
+        }
         writer.push(SceneOp::Publish {
             node: root,
             content: Arc::new(top.finish()),
         });
         place(&mut writer, node, before);
-        owner.apply(SURFACE).expect("the boundary applies");
+        owner.apply(surface).expect("the boundary applies");
         let one = owner.current().clone();
         place(&mut owner.writer(), node, after);
-        owner.apply(SURFACE).expect("the move applies");
+        owner.apply(surface).expect("the move applies");
         let two = owner.current().clone();
 
-        let mut cached = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        let mut cached = renderer.retained_capture(target).expect("capture");
         cached.keep_recorded_ir();
-        let mut recorded = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        let mut recorded = renderer.retained_capture(target).expect("capture");
         recorded.keep_recorded_ir();
         let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
         let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
