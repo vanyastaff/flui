@@ -2,7 +2,7 @@
 //! and binary payloads behind a header of their id and length, each a little-endian `u64`,
 //! refused when it announces more than the reader takes.
 
-use flui_protocol::{BlobHeader, BlobId, FramingError};
+use flui_protocol::{framing::BlobHeader, framing::BlobId, framing::FramingError};
 
 #[test]
 fn a_payload_header_round_trips_and_refuses_what_the_reader_does_not_take() {
@@ -111,7 +111,7 @@ fn a_line_reader_takes_whole_lines_however_the_bytes_arrive() {
         ),
     ];
     for (case, pushes, lines, too_long) in table {
-        let mut reader = flui_protocol::LineReader::new(8);
+        let mut reader = flui_protocol::framing::LineReader::new(8);
         let mut taken = Vec::new();
         let mut refused = false;
         for push in *pushes {

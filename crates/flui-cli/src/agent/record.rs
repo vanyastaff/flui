@@ -19,11 +19,12 @@ pub(crate) mod native;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use flui_protocol::Event;
+use flui_protocol::events::Event;
 use flui_protocol::input_recording::Row;
 use flui_protocol::method::{Method, RecordStart, RecordStop};
 use flui_protocol::{
-    RecordEvent, RecordNativeEvent, RecordParams, RecordStopParams, RecordSummary, Recording,
+    record::RecordEvent, record::RecordNativeEvent, record::RecordParams, record::RecordStopParams,
+    record::RecordSummary, record::Recording,
 };
 
 use self::native::NativeFiles;

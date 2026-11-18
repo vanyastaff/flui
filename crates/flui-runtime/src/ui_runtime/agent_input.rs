@@ -29,8 +29,10 @@ use flui_platform::pointer::{
 use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::method::{self, Method};
 use flui_protocol::{
-    ActOutcome, ActionSequence, Effect, EffectKind, ImeAction, InputPath, InputSource, JournalSpan,
-    KeyAction, LogicalPoint, PointerAction, PointerDevice, Released, Snapshot, WheelAction,
+    act::ActOutcome, act::Effect, act::EffectKind, act::JournalSpan, geometry::LogicalPoint,
+    input::ActionSequence, input::ImeAction, input::InputPath, input::InputSource,
+    input::KeyAction, input::PointerAction, input::PointerDevice, input::Released,
+    input::WheelAction, snapshot::Snapshot,
 };
 use flui_semantics::TreeSnapshot;
 use flui_view::__runtime::LeaseId;
@@ -178,7 +180,7 @@ pub(super) fn plan(sequence: &ActionSequence) -> Result<Plan, AgentError> {
                             unit,
                         } => {
                             let unit = match unit {
-                                flui_protocol::ScrollUnit::Line => ScrollUnit::Lines,
+                                flui_protocol::input::ScrollUnit::Line => ScrollUnit::Lines,
                                 _ => ScrollUnit::Pixels,
                             };
                             let delta = ScrollDelta::try_new(unit, *delta_x, *delta_y)
@@ -311,12 +313,12 @@ fn plan_pointer(tick: &mut Tick, source: usize, action: &PointerAction) -> Resul
     Ok(())
 }
 
-fn button_of(button: flui_protocol::PointerButton) -> PointerButton {
+fn button_of(button: flui_protocol::input::PointerButton) -> PointerButton {
     match button {
-        flui_protocol::PointerButton::Secondary => PointerButton::SECONDARY,
-        flui_protocol::PointerButton::Middle => PointerButton::AUXILIARY,
-        flui_protocol::PointerButton::Back => PointerButton::BACK,
-        flui_protocol::PointerButton::Forward => PointerButton::FORWARD,
+        flui_protocol::input::PointerButton::Secondary => PointerButton::SECONDARY,
+        flui_protocol::input::PointerButton::Middle => PointerButton::AUXILIARY,
+        flui_protocol::input::PointerButton::Back => PointerButton::BACK,
+        flui_protocol::input::PointerButton::Forward => PointerButton::FORWARD,
         _ => PointerButton::PRIMARY,
     }
 }

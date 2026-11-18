@@ -245,7 +245,11 @@ impl PortableCoveragePipeline {
         Ok(())
     }
 
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        gpu: crate::pipeline_device::PipelineDevice<'_>,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        let device = gpu.device();
         let mut entries = Vec::with_capacity(4);
         for binding in 0..3 {
             entries.push(wgpu::BindGroupLayoutEntry {
@@ -305,7 +309,7 @@ impl PortableCoveragePipeline {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
-            cache: None,
+            cache: gpu.cache(),
         });
         Self {
             layout,

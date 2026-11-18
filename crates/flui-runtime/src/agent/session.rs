@@ -11,8 +11,9 @@ use flui_protocol::framing::{LineReader, MAX_LINE};
 use flui_protocol::method::{Method as _, RecordStart};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
-    Capabilities, ClientRole, ErrorCode, ErrorObject, Greeting, Hello, HelloReply, InputPath,
-    Request, RequestId, ServerLine,
+    envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
+    error::ErrorCode, error::ErrorObject, input::InputPath, session::Capabilities,
+    session::ClientRole, session::Hello, session::HelloReply,
 };
 use flui_view::__runtime::WakeSlot;
 use serde::Serialize;
@@ -367,14 +368,16 @@ impl Session {
             .iter()
             .any(|method| method == RecordStart::NAME)
         {
-            capabilities.record = vec![flui_protocol::RecordLayer::Input];
+            capabilities.record = vec![flui_protocol::record::RecordLayer::Input];
             if self.shared.records_native {
-                capabilities.record.push(flui_protocol::RecordLayer::Native);
+                capabilities
+                    .record
+                    .push(flui_protocol::record::RecordLayer::Native);
             }
         }
         let welcome = HelloReply::new(PROTOCOL_VERSION)
-            .with_app(self.shared.app.clone())
-            .with_capabilities(capabilities);
+            .app(self.shared.app.clone())
+            .capabilities(capabilities);
         let Some(bytes) = encode(&Line::hello(welcome)) else {
             self.close();
             return;
@@ -394,7 +397,7 @@ impl Session {
                     ErrorCode::NotDriver,
                     "the app has a driver; connect as an observer, or once it goes",
                 )
-                .with_retry(flui_protocol::Retry::Soon),
+                .retry(flui_protocol::error::Retry::Soon),
             };
             self.refuse_and_close(&Line::refusal(error), now);
             return;
@@ -441,7 +444,7 @@ impl Session {
                 ErrorCode::Busy,
                 "the connection holds as many requests as it takes",
             )
-            .with_retry(flui_protocol::Retry::Soon);
+            .retry(flui_protocol::error::Retry::Soon);
             self.refuse(&Line::answer(id, Err(error)));
             return;
         }

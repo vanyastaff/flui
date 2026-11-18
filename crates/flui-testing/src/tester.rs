@@ -38,10 +38,13 @@ use flui_protocol::method::{
     SemanticsLocate, SemanticsRead,
 };
 use flui_protocol::{
-    ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ElementId,
-    ErrorObject, ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction,
-    LocateParams, Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton,
-    PointerDevice, ReadParams, Role, Tree, TreeDiagnostic, WindowParams, outline,
+    act::Actionability, act::ActionabilityCheck, act::ActionabilityParams, error::ErrorObject,
+    geometry::LogicalPoint, geometry::LogicalRect, input::ActionSequence, input::ImeAction,
+    input::InputParams, input::InputSource, input::KeyAction, input::PointerAction,
+    input::PointerButton, input::PointerDevice, inspect::InspectParams, inspect::InspectReading,
+    locator::LocateParams, locator::Locator, locator::Match, session::WindowParams,
+    tree::ElementId, tree::Node, tree::ReadParams, tree::Tree, tree::TreeDiagnostic, tree::outline,
+    wire::Checked, wire::Role,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
@@ -856,13 +859,13 @@ impl Tester {
         &mut self,
         root: flui_foundation::RenderId,
         max_depth: Option<u32>,
-    ) -> Result<flui_protocol::InspectNode, TestError> {
+    ) -> Result<flui_protocol::inspect::InspectNode, TestError> {
         let mut params = InspectParams::new(self.window.id());
         params.root = Some(flui_foundation::inspect::Link::Render(root).to_string());
         params.max_depth = max_depth;
         let call = self.window.call::<InspectRender>(params)?;
         let reading = self.answered(call)?;
-        let [node] = <[flui_protocol::InspectNode; 1]>::try_from(reading.roots)
+        let [node] = <[flui_protocol::inspect::InspectNode; 1]>::try_from(reading.roots)
             .expect("BUG: an inspection from one root reads one root");
         Ok(node)
     }
@@ -1917,7 +1920,7 @@ fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
 
 /// `node` as one outline line.
 /// The render object an `inspect.render` node names.
-fn render_of(node: &flui_protocol::InspectNode) -> flui_foundation::RenderId {
+fn render_of(node: &flui_protocol::inspect::InspectNode) -> flui_foundation::RenderId {
     match node.id.parse::<flui_foundation::inspect::Link>() {
         Ok(flui_foundation::inspect::Link::Render(id)) => id,
         _ => panic!(

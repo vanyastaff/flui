@@ -153,10 +153,11 @@ impl AdvancedBlendPipeline {
     /// error surfaces at this call site, which the synthetic-op GPU test
     /// exercises before any production caller exists.
     pub(crate) fn new(
-        device: &wgpu::Device,
+        gpu: crate::pipeline_device::PipelineDevice<'_>,
         surface_format: wgpu::TextureFormat,
         mask_layout: &wgpu::BindGroupLayout,
     ) -> Self {
+        let device = gpu.device();
         // The bind-group layout is sourced from the generated bindings, which
         // derive it directly from the WGSL source — no hand-maintained descriptor.
         let bind_group_layout = advanced_blend::WgpuBindGroup0::get_bind_group_layout(device);
@@ -214,7 +215,7 @@ impl AdvancedBlendPipeline {
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
-            cache: None,
+            cache: gpu.cache(),
         });
 
         Self { pipeline }

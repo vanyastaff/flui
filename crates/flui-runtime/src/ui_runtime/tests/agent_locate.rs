@@ -5,8 +5,9 @@
 
 use flui_protocol::method;
 use flui_protocol::{
-    ActionName, Actionability, ActionabilityParams, ElementRef, ErrorCode, ErrorObject, HandleKind,
-    LocateParams, Locator, LogicalPoint, Matches, Role, WindowId,
+    act::Actionability, act::ActionabilityParams, error::ErrorCode, error::ErrorObject,
+    error::HandleKind, geometry::LogicalPoint, locator::LocateParams, locator::Locator,
+    locator::Matches, tree::ElementRef, tree::WindowId, wire::ActionName, wire::Role,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
 use std::sync::atomic::AtomicU32;
@@ -117,7 +118,7 @@ fn a_located_element_acts_through_the_owner_and_its_handle_goes_gone_with_it() {
     assert!(!facts.attached);
     assert_eq!(
         facts.first_failed(),
-        Some(flui_protocol::ActionabilityCheck::Attached)
+        Some(flui_protocol::act::ActionabilityCheck::Attached)
     );
 }
 

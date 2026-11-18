@@ -22,10 +22,12 @@ use std::sync::{Arc, Weak};
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
-    EffectUnit, ElementId, ElementRef, ErrorCode, ErrorObject, EventFilter, HandleKind, InputPath,
-    LocateParams, Matches, ReadQuery, RecordParams, Retry, Snapshot, SnapshotReading, Tree,
-    WaitOutcome, WindowId,
+    act::ActOutcome, act::ActionRequest, act::Actionability, act::ActionabilityParams, act::Effect,
+    act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject, error::HandleKind,
+    error::Retry, events::EventFilter, input::InputPath, locator::LocateParams, locator::Matches,
+    record::RecordParams, snapshot::Snapshot, snapshot::SnapshotReading, tree::ElementId,
+    tree::ElementRef, tree::ReadQuery, tree::Tree, tree::WindowId, wait::WaitOutcome,
+    wire::ActionName,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
@@ -288,37 +290,39 @@ impl AgentError {
     pub(crate) fn into_error(self, window: WindowId) -> ErrorObject {
         let (code, retry, may_have_run) = (self.code(), self.retry(), self.may_have_run());
         let message = self.to_string();
-        let mut error =
-            match self {
-                // Part of the input went out: the effect counts the ticks.
-                Self::InputPartial {
-                    failure,
+        let mut error = match self {
+            // Part of the input went out: the effect counts the ticks.
+            Self::InputPartial {
+                failure,
+                played,
+                total,
+            } => {
+                return failure.into_error(window).effect(Effect::partial(
                     played,
                     total,
-                } => {
-                    return failure.into_error(window).with_effect(Effect::partial(
-                        played,
-                        total,
-                        EffectUnit::Tick,
-                    ));
-                }
-                Self::Ambiguous { candidates, .. } => ErrorObject::ambiguous(message, candidates),
-                Self::PresentationGone => ErrorObject::new(code, message)
-                    .with_handle(HandleKind::Window, window.to_string()),
-                Self::UnknownPresentation { window: named } => ErrorObject::new(code, message)
-                    .with_handle(HandleKind::Window, named.to_string()),
-                Self::NodeNotFound { element, .. } => ErrorObject::new(code, message)
-                    .with_handle(HandleKind::Element, element.to_string()),
-                Self::NotSupported { capability, .. } => {
-                    let mut error = ErrorObject::new(code, message);
-                    error.capability = Some(capability.to_owned());
-                    error
-                }
-                _ => ErrorObject::new(code, message),
+                    EffectUnit::Tick,
+                ));
             }
-            .with_retry(retry);
+            Self::Ambiguous { candidates, .. } => ErrorObject::ambiguous(message, candidates),
+            Self::PresentationGone => {
+                ErrorObject::new(code, message).handle(HandleKind::Window, window.to_string())
+            }
+            Self::UnknownPresentation { window: named } => {
+                ErrorObject::new(code, message).handle(HandleKind::Window, named.to_string())
+            }
+            Self::NodeNotFound { element, .. } => {
+                ErrorObject::new(code, message).handle(HandleKind::Element, element.to_string())
+            }
+            Self::NotSupported { capability, .. } => {
+                let mut error = ErrorObject::new(code, message);
+                error.capability = Some(capability.to_owned());
+                error
+            }
+            _ => ErrorObject::new(code, message),
+        }
+        .retry(retry);
         if may_have_run {
-            error = error.with_effect(Effect::new(EffectKind::MayHaveRun));
+            error = error.effect(Effect::new(EffectKind::MayHaveRun));
         }
         error
     }
@@ -530,7 +534,7 @@ impl IssuedHandles {
 /// Records the element handles a read reported, so a later call naming one
 /// that is no longer in the tree answers `gone` rather than `unknown_handle`.
 pub(super) fn record_issued(tree: &Tree, issued: &mut IssuedHandles) {
-    fn walk(nodes: &[flui_protocol::Node], issued: &mut IssuedHandles) {
+    fn walk(nodes: &[flui_protocol::tree::Node], issued: &mut IssuedHandles) {
         for node in nodes {
             issued.record(node.id);
             walk(&node.children, issued);
@@ -684,7 +688,7 @@ impl AgentPort for DevAgentPort {
                     ErrorCode::Busy,
                     "the window has handed out every input lease",
                 )
-                .with_retry(Retry::Never)
+                .retry(Retry::Never)
             })?;
         let minted = last
             .checked_add(1)

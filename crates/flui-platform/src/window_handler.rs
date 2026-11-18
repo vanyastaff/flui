@@ -127,7 +127,7 @@ pub trait WindowHandler {
     /// It is not the snapshot's focus or execution state under another name:
     /// those change when a window loses focus or is suspended, and the surface
     /// must not be dropped for that. Android releases at `TerminateWindow` and
-    /// `Pause` and asks for a rebuild at `InitWindow` and `Resume`; iOS at a
+    /// `Stop` and asks for a rebuild at `InitWindow` and `Start`; iOS at a
     /// true move to the background and back, never at a passing loss of focus.
     /// A host whose surface never goes away while its window is open never
     /// calls it, which costs nothing; a host that releases must also ask for a

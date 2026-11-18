@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use flui_protocol::{ElementRef, LogicalRect};
+use flui_protocol::{geometry::LogicalRect, tree::ElementRef};
 
 use crate::epoch::TreeRevision;
 

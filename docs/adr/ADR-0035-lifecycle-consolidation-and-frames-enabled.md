@@ -8,7 +8,10 @@
   "the first panic resumes after restoration and notification" only: a quit observer's panic is
   contained and reported, and resumes only when it is terminal. The rest of §5 stands.
   [ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md)
-  for §4 whole.
+  for §4 whole;
+  [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
+  for §4's Android sentence in particular: `onStart`/`onStop` give the execution state and
+  `onResume`/`onPause` the foreground, which refines the focus.
 
 ## Context
 

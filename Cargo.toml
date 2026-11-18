@@ -992,6 +992,13 @@ name = "navigation"
 path = "examples/navigation.rs"
 required-features = ["material"]
 
+# The application the book's tutorial builds (book/src/tutorial/), in one
+# program.
+[[example]]
+name = "notes"
+path = "examples/notes.rs"
+required-features = ["material"]
+
 # The escape hatch from a widget: its window's Win32 or AppKit view
 # (ADR-0254 §8).
 [[example]]

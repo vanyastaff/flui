@@ -11,9 +11,9 @@
 //!   action or error code) needs nothing more: the same test checks that every
 //!   published schema is a subset of the next one. A reader built on an older
 //!   schema still reads the newer reply: an unknown field is ignored, an
-//!   unknown role reads as [`Role::Unknown`](crate::Role::Unknown), an
+//!   unknown role reads as [`Role::Unknown`](crate::wire::Role::Unknown), an
 //!   unknown action name is dropped from a node's `actions`, and an unknown
-//!   error code reads as [`ErrorCode::Platform`](crate::ErrorCode::Platform).
+//!   error code reads as [`ErrorCode::Platform`](crate::error::ErrorCode::Platform).
 //! - A change that is not additive (a field renamed or removed, a name
 //!   respelled, an optional field made required, an existing field given a
 //!   new meaning, or a variant or value added to a union whose reader has no

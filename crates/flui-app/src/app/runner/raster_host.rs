@@ -110,6 +110,11 @@ impl Default for SharedRasterHost {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod bounded_wait;
+#[cfg(not(target_arch = "wasm32"))]
+use bounded_wait::{PIPELINE_CACHE_LOAD_BOUND, wait_within};
+
 /// What a window's detach needs of a raster thread without the host: the
 /// thread, its sender and each window's slot. The host writes it as it
 /// places the executor and attaches and detaches slots, with no code of
@@ -615,7 +620,7 @@ struct HostSlot {
     /// (ADR-0304 §7). Moved only by a frame the slot showed.
     base: RasterBase,
     /// Whether the platform gives the window a surface: `false` from the
-    /// platform's release (Android's `Pause` and `TerminateWindow`, a UIKit
+    /// platform's release (Android's `Stop` and `TerminateWindow`, a UIKit
     /// scene's backgrounding) until it gives one back. Only then is a
     /// surface the owner released made again.
     available: bool,
@@ -1133,7 +1138,10 @@ impl RasterHost {
     }
 
     /// The application's GPU context over `first`, the first window,
-    /// bootstrapped on the owner thread, which waits for it.
+    /// bootstrapped on the owner thread, which waits for it, its pipeline
+    /// cache loaded from the host's storage before any window attaches, so
+    /// a driver without a disk cache of its own does not compile every
+    /// pipeline again at each launch.
     #[cfg(not(target_arch = "wasm32"))]
     fn bootstrap_now(
         first: Arc<dyn SurfaceTarget>,
@@ -1141,7 +1149,27 @@ impl RasterHost {
         let display =
             super::host::with_owner_platform(flui_native::OwnerPlatform::display_connection)
                 .ok_or_else(|| refused("no platform owns this thread"))?;
-        pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))
+        let mut bootstrap =
+            pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))?;
+        if let Some(storage) = super::host::host_storage() {
+            // The read runs on the application's IO pool, which may be one
+            // the owner thread itself drives: past the bound the context
+            // starts with a cold cache rather than wait for a read that
+            // cannot come, and its warm-up still saves for the next launch.
+            let loaded = wait_within(
+                bootstrap.context.load_pipeline_cache(Arc::clone(&storage)),
+                PIPELINE_CACHE_LOAD_BOUND,
+            );
+            if loaded.is_none() {
+                tracing::warn!(
+                    target: "flui.gpu",
+                    event = "pipeline_cache_load_timed_out",
+                    "the pipeline cache was not read in time; the GPU context starts it cold"
+                );
+                bootstrap.context.start_pipeline_cache_cold(storage);
+            }
+        }
+        Ok(bootstrap)
     }
 
     /// The web cannot wait on its owner thread: its runner awaits the

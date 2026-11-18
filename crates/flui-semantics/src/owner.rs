@@ -10,7 +10,7 @@ use std::{
 
 use flui_foundation::SemanticsId;
 use flui_foundation::panic::FirstPanic;
-use flui_protocol::TreeRevision;
+use flui_protocol::tree::TreeRevision;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -1845,8 +1845,8 @@ impl SemanticsOwner {
     #[must_use]
     pub fn announcement_journal(
         &self,
-        params: &flui_protocol::AnnouncementsParams,
-    ) -> flui_protocol::AnnouncementJournal {
+        params: &flui_protocol::events::AnnouncementsParams,
+    ) -> flui_protocol::events::AnnouncementJournal {
         self.announcements
             .as_ref()
             .map_or_default(|announcements| announcements.journal(params.since, params.max_entries))

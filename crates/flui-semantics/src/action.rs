@@ -11,7 +11,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Offset, Rect};
 use thiserror::Error;
 
-pub use flui_protocol::SemanticsAction;
+pub use flui_protocol::semantics::SemanticsAction;
 
 use crate::identity::AccessibilityNodeId;
 

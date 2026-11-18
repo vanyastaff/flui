@@ -176,7 +176,7 @@ pub(crate) fn a_stopping_realm_ticks_no_presentation() {
 
 pub(crate) fn step_during_a_tick_applies_next_frame() {
     use flui_foundation::Listenable as _;
-    use flui_protocol::{MotionParams, MotionRequest, method};
+    use flui_protocol::{method, motion::MotionParams, motion::MotionRequest};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 

@@ -33,11 +33,13 @@ use flui_protocol::method::{
     RecordStop, WindowMethod, WindowsList,
 };
 use flui_protocol::{
-    ClientRole, Effect, EffectKind, ErrorCode, ErrorObject, Event, EventFilter, HandleKind,
-    METHODS, MethodEffect, MethodInfo, RecordEvent, RecordParams, RecordSummary, Recording,
-    RequestId, Retry, ServedBy, Subscription, WindowId, WindowList,
+    act::Effect, act::EffectKind, envelope::RequestId, error::ErrorCode, error::ErrorObject,
+    error::HandleKind, error::Retry, events::Event, events::EventFilter, events::Subscription,
+    method::METHODS, method::MethodEffect, method::MethodRow, method::ServedBy,
+    record::RecordEvent, record::RecordParams, record::RecordSummary, record::Recording,
+    session::ClientRole, session::WindowList, tree::WindowId,
 };
-use flui_protocol::{RecordNativeEvent, RecordRow, native_recording};
+use flui_protocol::{native_recording, record::RecordNativeEvent, record::RecordRow};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow, InputLease};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -58,14 +60,14 @@ const APPS_OWN: &[&str] = &[
 
 /// Whether the agent answers `method`: one of the app's own, or a window method this build's
 /// windows answer.
-pub(super) fn serves(method: &MethodInfo) -> bool {
+pub(super) fn serves(method: &MethodRow) -> bool {
     method.served_by == ServedBy::Agent
         && (APPS_OWN.contains(&method.name) || crate::ui_runtime::window_answers(method.name))
 }
 
 /// Whether a connection admitted as `role` may call `method`: the driver anything, an observer
 /// only what reads (ADR-0288 §8).
-pub(super) fn may_call(role: ClientRole, method: &MethodInfo) -> bool {
+pub(super) fn may_call(role: ClientRole, method: &MethodRow) -> bool {
     role.is_driver() || method.effect == MethodEffect::ReadOnly
 }
 
@@ -79,7 +81,7 @@ pub(super) fn served(role: ClientRole) -> Vec<String> {
 }
 
 /// `method` acts, and the connection only observes.
-pub(super) fn not_driver(method: &MethodInfo) -> ErrorObject {
+pub(super) fn not_driver(method: &MethodRow) -> ErrorObject {
     ErrorObject::new(
         ErrorCode::NotDriver,
         format!(
@@ -90,7 +92,7 @@ pub(super) fn not_driver(method: &MethodInfo) -> ErrorObject {
 }
 
 /// `method` is in the table but not answered here: by another side, or not yet by this agent.
-pub(super) fn not_supported(method: &MethodInfo) -> ErrorObject {
+pub(super) fn not_supported(method: &MethodRow) -> ErrorObject {
     let mut error = ErrorObject::new(
         ErrorCode::NotSupported,
         format!("this app's agent does not answer {}", method.name),
@@ -102,14 +104,14 @@ pub(super) fn not_supported(method: &MethodInfo) -> ErrorObject {
 /// A request admitted to a conversation, waiting for its turn.
 pub(super) struct Admitted {
     pub(super) id: RequestId,
-    pub(super) method: &'static MethodInfo,
+    pub(super) method: &'static MethodRow,
     pub(super) params: Value,
 }
 
 /// The request a conversation runs: started, and answered once [`Self::poll`] says so.
 pub(super) struct Running {
     pub(super) id: RequestId,
-    pub(super) method: &'static MethodInfo,
+    pub(super) method: &'static MethodRow,
     pub(super) started: Instant,
     /// When it answers `timeout`; `None` waits without a deadline.
     pub(super) deadline: Option<Instant>,
@@ -160,17 +162,16 @@ impl Running {
 
 /// What a timeout answers: retry `soon` for a method that only reads, and the `may_have_run`
 /// effect for one that acts, which is still queued.
-fn timed_out(method: &MethodInfo) -> ErrorObject {
+fn timed_out(method: &MethodRow) -> ErrorObject {
     if method.effect == MethodEffect::ReadOnly {
-        ErrorObject::new(ErrorCode::Timeout, "the window did not answer in time")
-            .with_retry(Retry::Soon)
+        ErrorObject::new(ErrorCode::Timeout, "the window did not answer in time").retry(Retry::Soon)
     } else {
         ErrorObject::new(
             ErrorCode::Timeout,
             "the window did not answer in time; the request is still queued",
         )
-        .with_retry(Retry::Never)
-        .with_effect(Effect::new(EffectKind::MayHaveRun))
+        .retry(Retry::Never)
+        .effect(Effect::new(EffectKind::MayHaveRun))
     }
 }
 
@@ -232,7 +233,7 @@ fn done(outcome: Result<Value, ErrorObject>) -> (Work, Duration) {
 fn window_route(
     shared: &Shared,
     leases: &mut Leases,
-    method: &MethodInfo,
+    method: &MethodRow,
     params: Value,
 ) -> Option<(Work, Duration)> {
     match method.name {
@@ -363,13 +364,13 @@ fn window(registry: &Registry, id: WindowId) -> Result<AgentWindow, ErrorObject>
     match registry.lookup(id) {
         Lookup::Open(window) => Ok(window),
         Lookup::Closed => Err(ErrorObject::new(ErrorCode::Gone, "the window has closed")
-            .with_retry(Retry::Never)
-            .with_handle(HandleKind::Window, id.to_string())),
+            .retry(Retry::Never)
+            .handle(HandleKind::Window, id.to_string())),
         Lookup::Unknown => Err(ErrorObject::new(
             ErrorCode::UnknownHandle,
             format!("window {id} was never issued"),
         )
-        .with_handle(HandleKind::Window, id.to_string())),
+        .handle(HandleKind::Window, id.to_string())),
     }
 }
 
@@ -379,7 +380,7 @@ fn only_window(registry: &Registry) -> Result<AgentWindow, ErrorObject> {
         [only] => window(registry, *only),
         [] => Err(
             ErrorObject::new(ErrorCode::NotFound, "the app has no window open")
-                .with_retry(Retry::WhenAppears),
+                .retry(Retry::WhenAppears),
         ),
         _ => Err(ErrorObject::new(
             ErrorCode::InvalidArgument,
@@ -507,7 +508,7 @@ impl Subscriptions {
                 ErrorCode::UnknownHandle,
                 format!("subscription {subscription} is not this connection's"),
             )
-            .with_handle(HandleKind::Subscription, subscription.to_string()))
+            .handle(HandleKind::Subscription, subscription.to_string()))
         }
     }
 
@@ -744,7 +745,7 @@ impl Recordings {
                 ErrorCode::UnknownHandle,
                 format!("recording {number} is not this connection's"),
             )
-            .with_handle(HandleKind::Recording, number.to_string())
+            .handle(HandleKind::Recording, number.to_string())
         })?;
         if let Some(recording) = &mut recorded.recording {
             recording.stop();
@@ -759,7 +760,7 @@ impl Recordings {
                 ErrorCode::UnknownHandle,
                 format!("recording {number} is not this connection's"),
             )
-            .with_handle(HandleKind::Recording, number.to_string())));
+            .handle(HandleKind::Recording, number.to_string())));
         };
         if recorded.get().recording.is_some() {
             return None;

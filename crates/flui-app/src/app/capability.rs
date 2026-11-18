@@ -445,6 +445,12 @@ impl StorageSlot {
         drop(replaced);
     }
 
+    /// The run's storage, when it has one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn current(&self) -> Option<Arc<dyn Storage>> {
+        self.storage.borrow().as_ref().ok().map(Arc::clone)
+    }
+
     /// Release the run's storage at loop exit, leaving none installed.
     pub(crate) fn take(&self) -> Option<Arc<dyn Storage>> {
         self.storage

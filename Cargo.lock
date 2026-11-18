@@ -1955,6 +1955,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
+ "flui-testing",
  "glam",
  "image",
  "lyon",

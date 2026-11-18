@@ -404,7 +404,7 @@ impl GpuReplay {
         }
         let pipeline = self
             .clip_mask_pipeline
-            .get_or_insert_with(|| ClipMaskPipeline::new(device));
+            .get_or_insert_with(|| ClipMaskPipeline::new(pipelines.pipeline_device(device)));
         let mask = pipeline.prepare(
             device,
             resources,

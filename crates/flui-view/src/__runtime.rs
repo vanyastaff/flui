@@ -31,10 +31,12 @@ use std::task::Waker;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
-use flui_protocol::RecordRow;
 use flui_protocol::input_recording::Header;
 use flui_protocol::method::WindowMethod;
-use flui_protocol::{ErrorObject, Event, EventFilter, RecordParams, WindowId};
+use flui_protocol::record::RecordRow;
+use flui_protocol::{
+    error::ErrorObject, events::Event, events::EventFilter, record::RecordParams, tree::WindowId,
+};
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;

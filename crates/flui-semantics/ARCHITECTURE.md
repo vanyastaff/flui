@@ -345,7 +345,7 @@ text's name through `accesskit_consumer` the way the adapters do. For the joined
 an `ActionCall`, the action fused with exactly its payload; `semantics_action_request_for`
 decodes a platform request into one or refuses it with `ActionDecodeError` (a missing or
 mismatched payload, an unrouted action, an id FLUI never publishes) before any handler runs.
-The tools an agent calls (ADR-0080, `flui_protocol::ActionName`) arrive through
+The tools an agent calls (ADR-0080, `flui_protocol::wire::ActionName`) arrive through
 accesskit_windows 0.35.0 as: `invoke`, `toggle` and `select` → `Click`; `set_value` →
 `SetValue` with its text, or `SetNumericValue` with its number when the request carries
 `ActionData::NumericValue` (a slider through UI Automation's `RangeValue`) or, on the wire,

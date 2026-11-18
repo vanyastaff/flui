@@ -290,10 +290,10 @@ which the workspace has left. Invariants:
 - **A description says what the object holds, infinity and NaN included.** An unconstrained
   maximum is infinity, which is meaningful, and a NaN is usually a bug worth seeing, so `Fields`
   never turns either into an absent value. The wire carries them as a typed value
-  (`flui_protocol::InspectValue::NonFinite`), a composite holding one as its `Debug` text.
+  (`flui_protocol::inspect::InspectValue::NonFinite`), a composite holding one as its `Debug` text.
   `a_non_finite_number_is_described_as_itself` pins it.
 - **The value set is closed.** A consumer that handles every `Value` handles every description,
-  which is what lets the owned snapshot be a wire contract (`flui_protocol::InspectNode`). The
+  which is what lets the owned snapshot be a wire contract (`flui_protocol::inspect::InspectNode`). The
   colour type lives in `flui-painting`, so a description carries `Rgba` channels.
 - **Values compare by value; `Value::Debug` equals nothing,** itself included, because its type
   is unknown. A snapshot counts `Debug` fields per node so a ratchet can drive them down.

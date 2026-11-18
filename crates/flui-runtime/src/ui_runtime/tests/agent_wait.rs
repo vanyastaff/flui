@@ -7,8 +7,8 @@ use std::time::Duration;
 use flui_foundation::ManualClock;
 use flui_protocol::method;
 use flui_protocol::{
-    ActionName, Condition, ErrorCode, HandleKind, Locator, Retry, UnsettledReason, WaitOutcome,
-    WaitParams, WindowId,
+    error::ErrorCode, error::HandleKind, error::Retry, locator::Locator, tree::WindowId,
+    wait::Condition, wait::UnsettledReason, wait::WaitOutcome, wait::WaitParams, wire::ActionName,
 };
 
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
