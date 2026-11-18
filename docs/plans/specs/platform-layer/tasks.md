@@ -5777,16 +5777,17 @@ GPU-память простаивающего или невидимого окн
   эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел
   «Android» в `crates/flui-system/ARCHITECTURE.md`. Классы Android зовутся из Rust через JNI
   (`jni` 0.22 по сырым указателям, которые хост одалживает на вызов; своего `static` `JavaVM`
-  нет: VM, загрузчик классов, два класса и `ContentResolver` приложения первый провайдер runtime
-  читает в кадре Activity и держит в `runtime_local`). Java — только там, где JNI её не заменяет:
+  нет: VM, загрузчик классов и `ContentResolver` приложения первый провайдер runtime
+  читает в кадре Activity и держит в `runtime_local`). Java — только лист по ADR-0373:
   `FluiDocuments` — content provider, компонент, который Android создаёт по имени из манифеста;
-  `FluiCallback` — обработчик `java.lang.reflect.Proxy` (JNI не определяет классов, а колбэку
-  Android нужен объект Java-типа): один на все интерфейсы — `Runnable` для главного потока Java и
-  три слушателя диалога, вызов приходит в один нативный метод с именем метода, финализатор
-  возвращает дескриптор. Dex крейта (`android/classes.dex`, запись, правила R8) объявлен в
-  `[package.metadata.flui.declares]`; `cargo xtask android-dex` держит dex каждого крейта (таблица
-  `TREES`), workflow `Android dex` собирает оба; `FluiCallback.PROTOCOL` сверяется до привязки,
-  APK без классов или с другим протоколом — `NotDeclared`. Новый ключ объявлений
+  `FluiCallback` — единственный обработчик `java.lang.reflect.Proxy` для интерфейсов-слушателей
+  (три слушателя диалога), вызов приходит в один нативный метод с именем метода, дескриптор
+  возвращает фантомная ссылка после сборки объекта. Dex крейта (`android/classes.dex`, запись,
+  правила R8) объявлен в `[package.metadata.flui.declares]`; `cargo xtask android-dex` держит dex
+  каждого крейта, который его объявляет (список — из `cargo metadata`), workflow `Android dex`
+  собирает то, что называет `--list`; классы читают только лаунчер, share и message box,
+  `FluiCallback.PROTOCOL` сверяется до привязки, APK без классов, с другим протоколом или без
+  `<provider>` в манифесте — `NotDeclared` у этих трёх. Новый ключ объявлений
   `android.providers` (схема 4, ADR-0307): класс и суффикс authority под id приложения,
   `flui build` пишет `<provider>` в манифест (не экспортирован, `grantUriPermissions`).
   Оба нативных метода — один вызов `owner::android::native_call::jni_native` крейта (граница
@@ -5846,6 +5847,30 @@ GPU-память простаивающего или невидимого окн
   доставляется приложению) — `docs/gaps.md`. Прогоны — строки parity «Open a URL», «Open a file,
   reveal it in the file manager», «Open, save and folder dialogs», «Message box», «Share», «User
   folders», «OS name, version and architecture».
+  После независимого чтения: правило о не-Rust коде — ADR-0373 (Java только для подкласса,
+  переопределения или компонента манифеста; checked-in dex крейта с его компонентами; одна
+  проверка digest по списку из манифестов; authority от id приложения; типизированные привязки
+  JNI — направление, запись в `docs/gaps.md`), заменяет ADR-0154 решение 5 п. 2–3 и ADR-0255
+  решение 21 там, где расходится. Работа для главного потока Java идёт через хост
+  (`Activity::on_main_thread`, `ActivityBridge::post`, отказ `MainThreadRefused`: Activity
+  кончилась, больше `MAX_POSTED_WORK`, главный поток не взял за `HAND_OFF_LIMIT` или паника);
+  собственного `Runnable` у крейта нет. Share открывает файлы тем же `android::opened`, что
+  лаунчер (без блокировки, без терминала, `fstat`, итоговое имя), и называет файл итоговым
+  именем; Gradle пишет authority как `${applicationId}.<suffix>`, Java берёт свою из
+  `attachInfo`; `FluiDocuments` не вытесняет живое предложение: держит не больше `MAX_OFFERED`,
+  каждое `OFFER_LIFETIME_MS`, лишнее — `IllegalStateException` → `Unavailable`; чтение выбора —
+  кусками `READ_CHUNK` с проверкой отпускания между ними; `describe` снимает исключение после
+  каждой колонки; папки пользователя не требуют dex. Тесты (в скобках — с откатом):
+  `a_dialog_let_go_before_its_answer_is_read_reads_nothing` (без проверки отпускания до запуска
+  рабочей нити — документ описывается), `a_read_stops_between_chunks_once_its_dialog_is_let_go`
+  (без проверки между кусками — читается весь документ),
+  `a_share_opens_each_file_and_names_it_by_where_it_ends` (с именем по ссылке — уходит
+  `notes.pdf`; без `O_NONBLOCK` — тест висит на FIFO), `work_for_the_main_thread_answers_through_the_host`,
+  `the_trees_are_what_the_crates_declare`, случай Gradle в
+  `the_application_declares_the_providers_its_crates_ship`. Dex `flui-system` пересобран
+  `cargo xtask android-dex --write` записанными JDK 21.0.12 и build-tools 35.0.0 (dex `flui-native`
+  воспроизвёлся байт в байт). Не запущено: Java на устройстве (фантомная ссылка, `attachInfo`,
+  срок предложений) и clippy для Android — CI.
 - [ ] **LY65** (не закрыта: мост на `main`; идентификатор не доходит до `viewIdResourceName`,
   тестов потоков и пробуждения моста нет, TalkBack не запускался) — #2013 (`ff2e33c71`), смена
   маршрута #2135. `accessibility/android.rs` держит низкоуровневый `accesskit_android`

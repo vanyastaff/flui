@@ -17,6 +17,9 @@
   not is exported and owned)
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
+- **Superseded-by:** [ADR-0373](ADR-0373-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
+  for §4's provider authority only (the Gradle path writes `${applicationId}.<suffix>`, so a
+  variant's suffixed id reaches it; the SDK-tools path writes `flui.toml`'s id)
 - **Related:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
   (facade features)

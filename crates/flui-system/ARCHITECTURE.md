@@ -406,36 +406,43 @@ compiled and tested on every host (`android::*::tests`), and the dialogs' whole 
 a stand-in Activity and picker (`testing::android`); the JNI calls are the module's Android-only
 `java` module, checked by CI's Android type-check. The owed device runs are in the parity rows.
 
-**Java only where JNI cannot stand in for it.** Android's own classes (`Intent`, `ContentResolver`,
+**Java only as a leaf (ADR-0373).** Android's own classes (`Intent`, `ContentResolver`,
 `AlertDialog.Builder`, `Environment`) are called from Rust. The crate ships two classes
-(`android/java`, `dev.flui.system`), each for one reason:
+(`android/java`, `dev.flui.system`), each forced by the platform:
 
-- `FluiDocuments` is a content provider, a component Android instantiates by the class name the
-  manifest states.
-- `FluiCallback` is the handler of a `java.lang.reflect.Proxy`: JNI can define no class, and a
-  callback Android makes needs an object of a Java type. One handler serves every interface (a
-  `Runnable` posted to the main thread, a dialog's three listeners): a call reaches the native
-  `called` with the method's name, and the object's finalizer gives its handle back through
-  `released`.
+- `FluiDocuments` is a content provider, a component the manifest must name and Android
+  instantiates by that name. It serves under the authority Android attached it with
+  (`attachInfo`), never one it computes.
+- `FluiCallback` is the one handler of every `java.lang.reflect.Proxy` the crate makes for a
+  listener interface (a dialog's three listeners): JNI defines no class, and a handler is an
+  object of a Java type. A call reaches the native `called` with the method's name; once the
+  object is collected, a phantom reference hands its handle to `released` from a daemon thread of
+  the class (a `Cleaner` does that from API 33, above the floor).
 
 Their dex is checked in (`android/classes.dex`, held to the sources by `cargo xtask android-dex`)
 and declared with the sources, the R8 rules and the provider in `[package.metadata.flui.declares]`
 (ADR-0307), so `flui build` packs it beside the core host's and writes the `<provider>` element;
-no user's build runs `javac`. The library reads `FluiCallback.PROTOCOL` before it binds or calls
-anything, and an APK without the classes, or with another protocol, refuses every Android service
-with `NotDeclared`. No compiler checks the names and signatures the JNI calls spell: they were read
-against the platform's `android.jar`.
+no user's build runs `javac`. Only the providers that call the classes read them, once per runtime:
+the launcher and the share sheet (`FluiDocuments`) and the message box (`FluiCallback`). The
+library reads `FluiCallback.PROTOCOL` before it binds anything, and an APK without the classes,
+with another protocol, or whose manifest declares no `FluiDocuments`, refuses those three with
+`NotDeclared`; the file dialogs, the user's folders and the system information call Android's
+classes alone and work without them. No compiler checks the names and signatures the JNI calls
+spell: they were read against the platform's `android.jar` (typed bindings are the direction,
+[`docs/gaps.md`](../../docs/gaps.md#jni-calls-are-hand-written-signature-strings)).
 
 Threads:
 
 - **The owner thread is not Java's main thread.** The providers reach Android through the Activity
   the host lends (`ProviderContext::activity`, ADR-0154 §9): a runtime whose host offers none (the
   headless host) is refused with `NotYetOnThisHost`. The library keeps no `JavaVM` of its own: the
-  first provider of a UI runtime reads the VM, the class loader, the two classes and the
-  application's content resolver in a frame the Activity lends, and keeps them with the runtime.
-- **Starting an activity and the message box run on Java's main thread**, each a job posted with
-  `Activity.runOnUiThread` as a proxied `Runnable`. A job Android never runs is dropped with its
-  proxy, and its caller's completion ends as `ProviderDropped`.
+  first provider of a UI runtime reads the VM, the class loader and the application's content
+  resolver in a frame the Activity lends, and keeps them with the runtime.
+- **Starting an activity and the message box run on Java's main thread**, each work the host runs
+  there for the provider (`Activity::on_main_thread`, ADR-0373 §6) inside its panic boundary. Work
+  the host refuses (the Activity ended, `MAX_POSTED_WORK` pieces wait, the main thread did not take
+  it within the host's limit, or it panicked) answers a launch or a share `Unavailable`, and a
+  message box `NotShown`.
 - **Whatever reads a content provider or the file system runs on a thread of its own**
   (`android::workers`), at most `Workers::MAX_IN_FLIGHT` per runtime; a request past that answers
   `Unavailable`, and a worker gives its place back on every exit. A provider answers when it will
@@ -456,9 +463,13 @@ proposed name's extension, else by the first filter's, so Android's own provider
 extension to a name the user types without it, and a type with no extension leaves the name as
 typed. A document that could not be written is deleted. A folder dialog answers `NotYetOnThisHost`
 and a save without contents `NotOnThisPlatform`; the picker shows no title, accept label or
-starting folder. The dialog's hold is the request's `ResultTicket`: dropping it finishes the picker
-(ADR-0344) and cancels a read in progress through its `CancellationSignal`; a save the user has
-answered completes whoever still waits. When Android replaces the Activity the request ends
+starting folder. The dialog's hold is the request's `ResultTicket`: dropping it before the answer
+finishes the picker (ADR-0344); dropping it after the answer arrived and before its owner turn
+leaves the answer unread; dropping it while a worker reads cancels the provider's calls that take
+the `CancellationSignal` (a query, an open) and stops the worker before its next document and
+between two `READ_CHUNK`-sized reads, though a read the provider holds blocked inside one chunk
+keeps the worker's place until the provider writes or closes. A save the user has answered
+completes whoever still waits. When Android replaces the Activity the request ends
 `ActivityEnded`, answered as the window closing; the answer that comes later is claimed by the next
 runtime's first dialogs (`Activity::reattach` under each key), so the host holds nothing: an open's
 answer is let go and the empty document of a save deleted.
@@ -468,15 +479,21 @@ activity that declares itself reachable from a link takes it. A document never l
 a `file:` URI: it is opened on a worker without blocking and without taking a terminal, what the
 descriptor holds is judged (a regular file whose final name, read from `/proc/self/fd`, neither
 `runs_when_opened` nor installs a package), and the open file is handed to `FluiDocuments`, which
-serves it under `content://<application id>.flui.documents/<random token>/<name>` to the one
-activity the intent's read grant reaches (ADR-0360 §2). The provider is not exported, serves only
-what was offered, reopens the file through the descriptor it holds (never the path), and keeps the
-last `FluiDocuments.MAX_OFFERED` offers.
+serves it under `content://<authority>/<random token>/<name>` (the authority the manifest gave it,
+`<application id>.flui.documents`) to the one activity the intent's read grant reaches (ADR-0360
+§2). The provider is not exported, serves only what was offered, and reopens the file through the
+descriptor it holds (never the path). An offer is served for `FluiDocuments.OFFER_LIFETIME_MS`
+after it was made, then closed (a grantee that opened it keeps its own descriptor); at most
+`FluiDocuments.MAX_OFFERED` are served at once, and one more is refused rather than replacing an
+offer whose grant may be in use, which answers the launch or the share `Unavailable`.
 
 **Sharing** is `ACTION_SEND`, or `ACTION_SEND_MULTIPLE` for several files, through the chooser: the
 text and the link travel as `EXTRA_TEXT`, the link on its own line, the title is the chooser's and
-the subject, and each file is opened on a worker and offered as a launch's document is, the intent's
-clip carrying the grant to the target the user picks.
+the subject. Each file is opened on a worker as a launch's document is (`android::opened`: without
+blocking, without taking a terminal, judged by what the descriptor holds) and shared only when it
+is a regular file, under its final name (`share::open_shared`), so a link named `notes.pdf` that
+leads to `secret.db` goes out as `secret.db`; unlike a launch, any name is shared, since a share
+hands over contents. The intent's clip carries the grant to the target the user picks.
 
 **The message box** is an `AlertDialog` whose listeners are one proxy; it answers once, with the
 first of a button, the user leaving (a back press or a touch outside, which answers what closing

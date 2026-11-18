@@ -370,7 +370,8 @@ pub mod platform {
         pub use flui_platform::capability::{
             Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityId,
             CapabilityProvider, CapabilityRegistrar, Completion, CompletionSource, DataRefused,
-            HostBridge, IntentFrame, InvalidResultKey, JniFrame, OwnerJob, OwnerPoster,
+            HostBridge, IntentFrame, InvalidResultKey, JniFrame, MAX_POSTED_WORK,
+            MainThreadRefusal, MainThreadRefused, MainThreadWork, OwnerJob, OwnerPoster,
             OwnerRetired, OwnerScope, PendingCompletions, Plugin, PortalParent, ProviderContext,
             RegisteredProvider, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold,
             ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,

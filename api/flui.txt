@@ -13206,6 +13206,7 @@ pub struct flui::platform::capability::Activity { .. }
 impl Clone for flui::platform::capability::Activity
 impl core::fmt::Debug for flui::platform::capability::Activity
 pub fn flui::platform::capability::Activity::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey, intent: impl FnOnce(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+pub fn flui::platform::capability::Activity::on_main_thread<T: Send + 'static>(&self, completions: &flui::platform::capability::CompletionSource, work: impl FnOnce(flui::platform::capability::JniFrame) -> T + Send + 'static) -> flui::platform::capability::Completion<Result<T, flui::platform::capability::MainThreadRefused>>
 pub fn flui::platform::capability::Activity::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultIntent, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Result<R, flui::platform::capability::DataRefused>
 pub fn flui::platform::capability::Activity::with_java<R>(&self, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
@@ -13213,6 +13214,7 @@ pub trait flui::platform::capability::ActivityBridge: 'static
 fn flui::platform::capability::ActivityBridge::bind(&self, mint: flui::platform::capability::ResultMint)
 fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::lend(&self, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
+fn flui::platform::capability::ActivityBridge::post(&self, work: flui::platform::capability::MainThreadWork, refused: flui::platform::capability::MainThreadRefusal)
 fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::take_data(&self, capability: &flui::platform::capability::CapabilityId, data: flui::platform::capability::ResultIntent, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> Result<(), flui::platform::capability::DataRefused>
 pub struct flui::platform::capability::ActivityResult { .. }
@@ -13297,6 +13299,22 @@ pub const fn flui::platform::capability::JniFrame::env(&self) -> *mut core::ffi:
 pub const fn flui::platform::capability::JniFrame::new(vm: core::ptr::non_null::NonNull<core::ffi::c_void>, env: core::ptr::non_null::NonNull<core::ffi::c_void>, object: core::ptr::non_null::NonNull<core::ffi::c_void>) -> Self
 pub const fn flui::platform::capability::JniFrame::object(&self) -> *mut core::ffi::c_void
 pub const fn flui::platform::capability::JniFrame::vm(&self) -> *mut core::ffi::c_void
+pub const flui::platform::capability::MAX_POSTED_WORK: usize = 16
+pub type flui::platform::capability::MainThreadRefusal = Box<dyn FnOnce(flui::platform::capability::MainThreadRefused) + Send>
+#[non_exhaustive] pub enum flui::platform::capability::MainThreadRefused
+impl Clone for flui::platform::capability::MainThreadRefused
+impl Copy for flui::platform::capability::MainThreadRefused
+impl Eq for flui::platform::capability::MainThreadRefused
+impl PartialEq for flui::platform::capability::MainThreadRefused
+impl core::error::Error for flui::platform::capability::MainThreadRefused
+impl core::fmt::Debug for flui::platform::capability::MainThreadRefused
+impl core::fmt::Display for flui::platform::capability::MainThreadRefused
+impl core::hash::Hash for flui::platform::capability::MainThreadRefused
+impl core::marker::StructuralPartialEq for flui::platform::capability::MainThreadRefused
+variant flui::platform::capability::MainThreadRefused::ActivityEnded // at 0
+variant flui::platform::capability::MainThreadRefused::HandOffFailed // at 2
+variant flui::platform::capability::MainThreadRefused::TooMuchPosted // at 1
+pub type flui::platform::capability::MainThreadWork = Box<dyn FnOnce(flui::platform::capability::JniFrame) + Send>
 pub struct flui::platform::capability::OwnerJob(_)
 impl core::fmt::Debug for flui::platform::capability::OwnerJob
 pub fn flui::platform::capability::OwnerJob::run(self, scope: &flui::platform::capability::OwnerScope<'_>)

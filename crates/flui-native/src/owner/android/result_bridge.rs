@@ -566,8 +566,10 @@ impl ActivityBridge for ResultBridge {
                     Ok(())
                 })
                 .map_err(|error| error.to_string())?;
-                // Done: nothing is owed.
-                drop(on_main.lock().refused.take());
+                // Done: nothing is owed. The refusal is dropped outside the
+                // lock, since its captures are the provider's.
+                let refused = on_main.lock().refused.take();
+                drop(refused);
                 Ok(())
             },
             move |failure: PostFailure| {

@@ -137,6 +137,7 @@ pub mod platform {
         pub use flui_platform::capability::IntentFrame;
         pub use flui_platform::capability::InvalidResultKey;
         pub use flui_platform::capability::JniFrame;
+        pub use flui_platform::capability::MainThreadRefused;
         pub use flui_platform::capability::OwnerPoster;
         pub use flui_platform::capability::OwnerRetired;
         pub use flui_platform::capability::Plugin;
