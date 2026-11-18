@@ -1120,7 +1120,8 @@ fn resize_collapse_view(
 #[cfg(test)]
 mod tests {
     use super::rebind_collapse;
-    use flui_animation::{Animation, AnimationController, MotionClock, Vsync};
+    use flui_animation::__runtime::VsyncDriver;
+    use flui_animation::{Animation, AnimationController, MotionClock};
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
@@ -1132,16 +1133,18 @@ mod tests {
     #[test]
     fn collapse_owner_storage_is_committed_before_migration_callouts() {
         for fails in [false, true] {
-            let old = Vsync::new();
-            let next = Vsync::new();
+            let old_driver = VsyncDriver::new();
+            let old = old_driver.vsync().clone();
+            let next_driver = VsyncDriver::new();
+            let next = next_driver.vsync().clone();
             let resize = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
             let run = resize.controller().forward().expect("start collapse");
             let slot = Rc::new(RefCell::new(Some(resize)));
             let mut clock = MotionClock::new();
-            old.tick_all(&clock.frame(Duration::ZERO));
-            old.tick_all(&clock.frame(Duration::from_millis(100)));
+            old_driver.tick_all(&clock.frame(Duration::ZERO));
+            old_driver.tick_all(&clock.frame(Duration::from_millis(100)));
             let called = Rc::new(Cell::new(false));
-            next.set_frame_requester(Some(Rc::new({
+            next_driver.set_frame_requester(Some(Rc::new({
                 let (slot, called, old) = (Rc::downgrade(&slot), called.clone(), old);
                 move || {
                     assert!(old.is_empty(), "every owner moved before wake");
@@ -1173,9 +1176,9 @@ mod tests {
             }
             assert!(called.get());
             assert!(!run.is_canceled());
-            next.set_frame_requester(None);
-            next.tick_all(&clock.frame(Duration::from_secs(2)));
-            next.tick_all(&clock.frame(Duration::from_secs(3)));
+            next_driver.set_frame_requester(None);
+            next_driver.tick_all(&clock.frame(Duration::from_secs(2)));
+            next_driver.tick_all(&clock.frame(Duration::from_secs(3)));
             assert!(run.is_complete(), "retained collapse reaches completion");
             drop(slot);
             assert!(next.is_empty());

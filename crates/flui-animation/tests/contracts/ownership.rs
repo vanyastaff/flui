@@ -6,6 +6,7 @@
 //! The contract rows run in the ordinary suite. Hook rows use child processes
 //! to contain a possible deadlock without hanging the parent runner.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -69,8 +70,10 @@ fn vsync_admission_contract() {
 
 fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
     use flui_animation::{AnimatedValue, MotionClock, MotionOverride, MotionSpec, SharedCurve};
-    let normal = Vsync::new();
-    let reduced = Vsync::new();
+    let normal_driver = VsyncDriver::new();
+    let normal = normal_driver.vsync().clone();
+    let reduced_driver = VsyncDriver::new();
+    let reduced = reduced_driver.vsync().clone();
     let child = Vsync::new();
     normal.attach_child(&child).expect("first parent");
     let admission = reduced.attach_child(&child);
@@ -87,11 +90,11 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
     )
     .expect("finite motion");
     let run = value.animate_to(1.0).expect("finite target");
-    normal.tick_all(&normal_clock.frame(Duration::ZERO));
-    normal.tick_all(&normal_clock.frame(Duration::from_millis(250)));
+    normal_driver.tick_all(&normal_clock.frame(Duration::ZERO));
+    normal_driver.tick_all(&normal_clock.frame(Duration::from_millis(250)));
     let before = value.value();
     assert!(before > 0.0 && before < 1.0 && run.is_pending());
-    reduced.tick_all(&reduced_clock.frame(Duration::from_millis(250)));
+    reduced_driver.tick_all(&reduced_clock.frame(Duration::from_millis(250)));
     assert_eq!(
         (
             admission == Err(flui_animation::VsyncRegistrationError::AlreadyAttached),
@@ -131,20 +134,22 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
         (false, true, true),
         (true, true, true),
     ] {
-        let parent = Vsync::new();
+        let parent_driver = Rc::new(VsyncDriver::new());
+        let parent = parent_driver.vsync().clone();
         let first = Vsync::new();
         parent.attach_child(&first).expect("first registry");
         let events = Rc::new(RefCell::new(Vec::new()));
         let mut seats = Vec::new();
         for name in ["second", "third"] {
-            let child = Vsync::new();
+            let child_driver = VsyncDriver::new();
+            let child = child_driver.vsync().clone();
             let capture = Capture {
                 parent: parent.clone(),
                 events: events.clone(),
                 name,
                 fail: name == "second" && drop_failure,
             };
-            child.set_frame_requester(Some(Rc::new(move || {
+            child_driver.set_frame_requester(Some(Rc::new(move || {
                 let _ = &capture;
             })));
             seats.push(parent.attach_child(&child).expect("later registry"));
@@ -154,11 +159,12 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
         let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&first));
         owner.controller().forward().expect("first child run");
         let mut clock = MotionClock::new();
-        parent.tick_all(&clock.frame(Duration::ZERO));
+        parent_driver.tick_all(&clock.frame(Duration::ZERO));
         let tick = clock.frame(Duration::from_millis(250));
         let callback_parent = parent.clone();
         let callback_events = events.clone();
         let entered = Cell::new(false);
+        let callback_driver = parent_driver.clone();
         let _listening = owner.controller().listen(Rc::new(move || {
             if entered.replace(true) {
                 return;
@@ -167,7 +173,7 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
                 callback_parent.detach_child(seat);
             }
             callback_parent.set_muted(mute);
-            callback_parent.tick_all(&tick);
+            callback_driver.tick_all(&tick);
             assert!(
                 callback_events.borrow().is_empty(),
                 "entry custody survives reentry"
@@ -176,7 +182,7 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
             assert!(!callback_failure, "first child callback");
         }));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            parent.tick_all(&tick);
+            parent_driver.tick_all(&tick);
         }));
         assert_eq!(
             *events.borrow(),
@@ -196,7 +202,7 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
             result.expect("healthy child retirement");
         }
         parent.set_muted(false);
-        parent.tick_all(&clock.frame(Duration::from_millis(500)));
+        parent_driver.tick_all(&clock.frame(Duration::from_millis(500)));
         assert!((owner.controller().value() - 0.5).abs() < 1e-9);
         assert_eq!(
             *events.borrow(),
@@ -210,7 +216,8 @@ fn duplicate_child_is_refused() {
     use flui_animation::MotionClock;
     use std::cell::Cell;
     use std::rc::Rc;
-    let parent = Vsync::new();
+    let driver = VsyncDriver::new();
+    let parent = driver.vsync().clone();
     let child = Vsync::new();
     let first = parent.attach_child(&child).expect("first admission");
     let duplicate = parent.attach_child(&child);
@@ -222,9 +229,9 @@ fn duplicate_child_is_refused() {
         .listen(Rc::new(move || observed.set(observed.get() + 1)));
     let run = owner.controller().forward().expect("finite run");
     let mut clock = MotionClock::new();
-    parent.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     samples.set(0);
-    parent.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     assert_eq!(
         (
             duplicate == Err(flui_animation::VsyncRegistrationError::AlreadyAttached),
@@ -236,7 +243,7 @@ fn duplicate_child_is_refused() {
     parent.detach_child(&first);
     let replacement = parent.attach_child(&child).expect("reattach after detach");
     parent.detach_child(&first);
-    parent.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(
         run.is_complete(),
         "an old seat must not detach the replacement"
@@ -246,9 +253,11 @@ fn duplicate_child_is_refused() {
 
 fn cycles_are_refused_without_changing_the_tree() {
     use flui_animation::{MotionClock, VsyncRegistrationError};
-    let root = Vsync::new();
+    let root_driver = VsyncDriver::new();
+    let root = root_driver.vsync().clone();
     let middle = Vsync::new();
-    let leaf = Vsync::new();
+    let leaf_driver = VsyncDriver::new();
+    let leaf = leaf_driver.vsync().clone();
     root.attach_child(&middle).expect("middle");
     middle.attach_child(&leaf).expect("leaf");
     for (parent, child) in [(&root, &root), (&leaf, &root), (&leaf, &middle)] {
@@ -260,13 +269,13 @@ fn cycles_are_refused_without_changing_the_tree() {
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&leaf));
     let run = owner.controller().forward().expect("resident run");
     let mut clock = MotionClock::new();
-    root.tick_all(&clock.frame(Duration::ZERO));
-    root.tick_all(&clock.frame(Duration::from_secs(1)));
+    root_driver.tick_all(&clock.frame(Duration::ZERO));
+    root_driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(
         run.is_complete(),
         "refusals leave the existing tree deliverable"
     );
-    leaf.prepare_close().finish();
+    leaf_driver.prepare_close().finish();
     assert_eq!(
         root.attach_child(&leaf),
         Err(VsyncRegistrationError::Closed)
@@ -279,7 +288,8 @@ fn a_surviving_child_can_move_after_parent_release() {
     let old = Vsync::new();
     let old_seat = old.attach_child(&child).expect("first parent");
     drop(old);
-    let new = Vsync::new();
+    let driver = VsyncDriver::new();
+    let new = driver.vsync().clone();
     let new_seat = new
         .attach_child(&child)
         .expect("expired parent is not an attachment");
@@ -287,8 +297,8 @@ fn a_surviving_child_can_move_after_parent_release() {
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
     let run = owner.controller().forward().expect("finite run");
     let mut clock = MotionClock::new();
-    new.tick_all(&clock.frame(Duration::ZERO));
-    new.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(run.is_complete());
     new.detach_child(&new_seat);
 }
@@ -296,7 +306,8 @@ fn a_surviving_child_can_move_after_parent_release() {
 fn a_failed_attachment_wake_rolls_back_before_recovery() {
     use flui_animation::{MotionClock, VsyncRegistrationError};
     use std::rc::Rc;
-    let parent = Vsync::new();
+    let parent_driver = VsyncDriver::new();
+    let parent = parent_driver.vsync().clone();
     let child = Vsync::new();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
     let run = owner
@@ -304,7 +315,7 @@ fn a_failed_attachment_wake_rolls_back_before_recovery() {
         .forward()
         .expect("resident run demands a frame");
     let observed = child.clone();
-    parent.set_frame_requester(Some(Rc::new(move || {
+    parent_driver.set_frame_requester(Some(Rc::new(move || {
         assert_eq!(
             Vsync::new().attach_child(&observed),
             Err(VsyncRegistrationError::AlreadyAttached),
@@ -319,14 +330,15 @@ fn a_failed_attachment_wake_rolls_back_before_recovery() {
         failure.downcast_ref::<&str>(),
         Some(&"attachment wake failure")
     );
-    parent.set_frame_requester(None);
-    let replacement = Vsync::new();
+    parent_driver.set_frame_requester(None);
+    let replacement_driver = VsyncDriver::new();
+    let replacement = replacement_driver.vsync().clone();
     replacement
         .attach_child(&child)
         .expect("failed attachment released the parent slot");
     let mut clock = MotionClock::new();
-    replacement.tick_all(&clock.frame(Duration::ZERO));
-    replacement.tick_all(&clock.frame(Duration::from_secs(1)));
+    replacement_driver.tick_all(&clock.frame(Duration::ZERO));
+    replacement_driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(
         run.is_complete(),
         "resident work survives admission recovery"
@@ -338,7 +350,8 @@ fn moving_a_subtree_preserves_its_last_sampled_motion() {
     for origin in [Duration::ZERO, Duration::from_secs(2000)] {
         for nested in [false, true] {
             for release_parent in [false, true] {
-                let old = Vsync::new();
+                let old_driver = VsyncDriver::new();
+                let old = old_driver.vsync().clone();
                 let moving = Vsync::new();
                 let leaf = Vsync::new();
                 let old_seat = old.attach_child(&moving).expect("old parent");
@@ -353,32 +366,34 @@ fn moving_a_subtree_preserves_its_last_sampled_motion() {
                 let controller = owner.controller();
                 let run = controller.forward().expect("resident run");
                 let mut old_clock = MotionClock::new();
-                old.tick_all(&old_clock.frame(Duration::from_secs(100)));
-                old.tick_all(&old_clock.frame(Duration::from_millis(100_400)));
+                old_driver.tick_all(&old_clock.frame(Duration::from_secs(100)));
+                old_driver.tick_all(&old_clock.frame(Duration::from_millis(100_400)));
                 let before = controller.value();
                 assert!((before - 0.4).abs() < 1e-10 && run.is_pending());
                 if !release_parent {
                     old.detach_child(&old_seat);
                 }
                 drop(old);
-                let new = Vsync::new();
+                drop(old_driver);
+                let new_driver = VsyncDriver::new();
+                let new = new_driver.vsync().clone();
                 new.attach_child(&moving).expect("new parent");
                 new.detach_child(&old_seat);
                 let mut new_clock = MotionClock::new();
-                new.tick_all(&new_clock.frame(origin));
+                new_driver.tick_all(&new_clock.frame(origin));
                 assert!(
                     (controller.value() - before).abs() < 1e-10 && run.is_pending(),
                     "transfer preserves the sample and run: origin={origin:?}, nested={nested}, release={release_parent}, value={}, pending={}",
                     controller.value(),
                     run.is_pending()
                 );
-                new.tick_all(&new_clock.frame(origin + Duration::from_millis(100)));
+                new_driver.tick_all(&new_clock.frame(origin + Duration::from_millis(100)));
                 assert!(
                     (controller.value() - 0.5).abs() < 1e-10,
                     "the new clock advances motion: origin={origin:?}, nested={nested}, release={release_parent}, value={}",
                     controller.value()
                 );
-                new.tick_all(&new_clock.frame(origin + Duration::from_millis(600)));
+                new_driver.tick_all(&new_clock.frame(origin + Duration::from_millis(600)));
                 assert_eq!(controller.value(), 1.0);
                 assert!(
                     run.is_complete(),
@@ -392,10 +407,16 @@ fn moving_a_subtree_preserves_its_last_sampled_motion() {
 fn direct_child_frames_retain_their_parent_clock_authority() {
     use flui_animation::MotionClock;
     for depth in [1, 3] {
-        let root = Vsync::new();
-        let mut child = root.clone();
-        for _ in 0..depth {
-            let next = Vsync::new();
+        let driver = VsyncDriver::new();
+        let root = driver.vsync().clone();
+        let mut child = root;
+        let child_driver = VsyncDriver::new();
+        for level in 0..depth {
+            let next = if level + 1 == depth {
+                child_driver.vsync().clone()
+            } else {
+                Vsync::new()
+            };
             child
                 .attach_child(&next)
                 .expect("child belongs to this presentation");
@@ -405,17 +426,17 @@ fn direct_child_frames_retain_their_parent_clock_authority() {
         let controller = owner.controller();
         let run = controller.forward().expect("resident run");
         let mut clock = MotionClock::new();
-        root.tick_all(&clock.frame(Duration::from_secs(100)));
-        root.tick_all(&clock.frame(Duration::from_millis(100_200)));
-        child.tick_all(&clock.frame(Duration::from_millis(100_400)));
+        driver.tick_all(&clock.frame(Duration::from_secs(100)));
+        driver.tick_all(&clock.frame(Duration::from_millis(100_200)));
+        child_driver.tick_all(&clock.frame(Duration::from_millis(100_400)));
         assert!(
             (controller.value() - 0.4).abs() < 1e-10,
             "choosing a child entry point does not transfer presentation ownership: {}",
             controller.value()
         );
-        root.tick_all(&clock.frame(Duration::from_millis(100_500)));
+        driver.tick_all(&clock.frame(Duration::from_millis(100_500)));
         assert!((controller.value() - 0.5).abs() < 1e-10 && run.is_pending());
-        root.tick_all(&clock.frame(Duration::from_secs(101)));
+        driver.tick_all(&clock.frame(Duration::from_secs(101)));
         assert!(run.is_complete());
     }
 }
@@ -423,10 +444,12 @@ fn direct_child_frames_retain_their_parent_clock_authority() {
 fn a_withdrawn_child_waits_for_its_new_parent() {
     use flui_animation::MotionClock;
     use std::rc::Rc;
-    let parent = Vsync::new();
+    let parent_driver = VsyncDriver::new();
+    let parent = parent_driver.vsync().clone();
     let earlier = Vsync::new();
     let child = Vsync::new();
-    let replacement = Vsync::new();
+    let replacement_driver = VsyncDriver::new();
+    let replacement = replacement_driver.vsync().clone();
     parent.attach_child(&earlier).expect("earlier child");
     let seat = parent.attach_child(&child).expect("later child");
     let trigger = AnimationController::builder(Duration::from_millis(400)).build_on(Some(&earlier));
@@ -434,15 +457,15 @@ fn a_withdrawn_child_waits_for_its_new_parent() {
     let run = owner.controller().forward().expect("resident run");
     trigger.controller().forward().expect("trigger run");
     let mut clock = MotionClock::new();
-    parent.tick_all(&clock.frame(Duration::from_secs(100)));
-    let outgoing = parent.clone();
-    let incoming = replacement.clone();
+    parent_driver.tick_all(&clock.frame(Duration::from_secs(100)));
+    let outgoing = parent;
+    let incoming = replacement;
     let moving = child;
     let _subscription = trigger.controller().listen_status(Rc::new(move |_| {
         outgoing.detach_child(&seat);
         incoming.attach_child(&moving).expect("new parent");
     }));
-    parent.tick_all(&clock.frame(Duration::from_millis(100_400)));
+    parent_driver.tick_all(&clock.frame(Duration::from_millis(100_400)));
     assert_eq!(
         owner.controller().value(),
         0.0,
@@ -450,8 +473,8 @@ fn a_withdrawn_child_waits_for_its_new_parent() {
     );
     assert!(run.is_pending());
     let mut incoming_clock = MotionClock::new();
-    replacement.tick_all(&incoming_clock.frame(Duration::ZERO));
-    replacement.tick_all(&incoming_clock.frame(Duration::from_millis(100)));
+    replacement_driver.tick_all(&incoming_clock.frame(Duration::ZERO));
+    replacement_driver.tick_all(&incoming_clock.frame(Duration::from_millis(100)));
     assert!((owner.controller().value() - 0.1).abs() < 1e-10);
 }
 
@@ -466,10 +489,12 @@ fn a_muted_ancestor_stops_its_in_flight_descendants() {
 fn ancestor_changes_stop_descendants(mute: bool) {
     use flui_animation::MotionClock;
     use std::rc::Rc;
-    let parent = Vsync::new();
+    let parent_driver = VsyncDriver::new();
+    let parent = parent_driver.vsync().clone();
     let middle = Vsync::new();
     let leaf = Vsync::new();
-    let replacement = Vsync::new();
+    let replacement_driver = VsyncDriver::new();
+    let replacement = replacement_driver.vsync().clone();
     let seat = parent.attach_child(&middle).expect("middle");
     middle.attach_child(&leaf).expect("leaf");
     let trigger = AnimationController::builder(Duration::from_millis(400)).build_on(Some(&leaf));
@@ -477,9 +502,9 @@ fn ancestor_changes_stop_descendants(mute: bool) {
     let run = owner.controller().forward().expect("resident run");
     trigger.controller().forward().expect("trigger run");
     let mut clock = MotionClock::new();
-    parent.tick_all(&clock.frame(Duration::from_secs(100)));
+    parent_driver.tick_all(&clock.frame(Duration::from_secs(100)));
     let outgoing = parent.clone();
-    let incoming = replacement.clone();
+    let incoming = replacement;
     let moving = middle;
     let _subscription = trigger.controller().listen_status(Rc::new(move |_| {
         if mute {
@@ -489,7 +514,7 @@ fn ancestor_changes_stop_descendants(mute: bool) {
             incoming.attach_child(&moving).expect("new parent");
         }
     }));
-    parent.tick_all(&clock.frame(Duration::from_millis(100_400)));
+    parent_driver.tick_all(&clock.frame(Duration::from_millis(100_400)));
     assert_eq!(
         owner.controller().value(),
         0.0,
@@ -498,12 +523,12 @@ fn ancestor_changes_stop_descendants(mute: bool) {
     assert!(run.is_pending());
     if mute {
         parent.set_muted(false);
-        parent.tick_all(&clock.frame(Duration::from_millis(100_500)));
+        parent_driver.tick_all(&clock.frame(Duration::from_millis(100_500)));
         assert!((owner.controller().value() - 0.5).abs() < 1e-10);
     } else {
         let mut incoming_clock = MotionClock::new();
-        replacement.tick_all(&incoming_clock.frame(Duration::ZERO));
-        replacement.tick_all(&incoming_clock.frame(Duration::from_millis(100)));
+        replacement_driver.tick_all(&incoming_clock.frame(Duration::ZERO));
+        replacement_driver.tick_all(&incoming_clock.frame(Duration::from_millis(100)));
         assert!((owner.controller().value() - 0.1).abs() < 1e-10);
     }
 }
@@ -563,7 +588,8 @@ fn controller() -> AnimationController {
 }
 
 fn dropping_a_driven_controller_unregisters_then_cancels_its_run() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let mut run = owner.controller().forward().expect("bound owner");
     let observed = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -575,7 +601,7 @@ fn dropping_a_driven_controller_unregisters_then_cancels_its_run() {
             registry.is_empty(),
             "seat is absent before cancellation delivery"
         );
-        registry.tick_all(&flui_animation::MotionClock::new().frame(Duration::ZERO));
+        driver.tick_all(&flui_animation::MotionClock::new().frame(Duration::ZERO));
         let peer = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         drop(peer);
         observed_in_callback.set(observed_in_callback.get() + 1);
@@ -605,26 +631,28 @@ fn dispose_then_drop_is_one_retirement() {
 
 fn rebinding_mid_run_keeps_the_value_continuous() {
     for new_origin in [0, 100_000] {
-        let old = Vsync::new();
-        let new = Vsync::new();
+        let old_driver = VsyncDriver::new();
+        let old = old_driver.vsync().clone();
+        let new_driver = VsyncDriver::new();
+        let new = new_driver.vsync().clone();
         let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
         let mut clock = flui_animation::MotionClock::new();
         let _run = owner.controller().forward().expect("bound owner");
-        old.tick_all(&clock.frame(Duration::ZERO));
-        old.tick_all(&clock.frame(Duration::from_millis(400)));
+        old_driver.tick_all(&clock.frame(Duration::ZERO));
+        old_driver.tick_all(&clock.frame(Duration::from_millis(400)));
         let displayed = owner.controller().value();
         owner.rebind(Some(&old)).expect("same seat");
         assert_eq!(old.len(), 1);
         owner.rebind(Some(&new)).expect("fresh seat");
         assert!(old.is_empty());
         let mut new_clock = flui_animation::MotionClock::new();
-        new.tick_all(&new_clock.frame(Duration::from_millis(new_origin)));
+        new_driver.tick_all(&new_clock.frame(Duration::from_millis(new_origin)));
         assert_eq!(
             owner.controller().value(),
             displayed,
             "migration preserves the displayed sample"
         );
-        new.tick_all(&new_clock.frame(Duration::from_millis(new_origin + 100)));
+        new_driver.tick_all(&new_clock.frame(Duration::from_millis(new_origin + 100)));
         assert_eq!(owner.controller().value(), 0.5);
     }
 }
@@ -656,18 +684,20 @@ fn rebinding_retires_the_old_registry_after_committing_the_new_clock() {
         }
     }
 
-    let old = Vsync::new();
+    let old_driver = VsyncDriver::new();
+    let old = old_driver.vsync().clone();
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
     let seen = Rc::new(Cell::new(-1.0));
     let capture = Capture {
         controller: owner.controller().clone(),
         seen: seen.clone(),
     };
-    old.set_frame_requester(Some(Rc::new(move || {
+    old_driver.set_frame_requester(Some(Rc::new(move || {
         let _ = &capture;
     })));
     let mut run = owner.controller().forward().expect("bound run");
     drop(old);
+    drop(old_driver);
 
     let failure = catch_unwind(AssertUnwindSafe(|| {
         owner.rebind(None).expect("release old clock");
@@ -690,12 +720,13 @@ fn rebinding_retires_the_old_registry_after_committing_the_new_clock() {
         Poll::Ready(Ok(()))
     ));
 
-    let next = Vsync::new();
+    let next_driver = VsyncDriver::new();
+    let next = next_driver.vsync().clone();
     owner.rebind(Some(&next)).expect("recover with a new clock");
     let reverse = owner.controller().reverse().expect("next run");
     let mut clock = flui_animation::MotionClock::new();
-    next.tick_all(&clock.frame(Duration::ZERO));
-    next.tick_all(&clock.frame(Duration::from_secs(1)));
+    next_driver.tick_all(&clock.frame(Duration::ZERO));
+    next_driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!(owner.controller().value(), 0.0);
     assert!(reverse.is_complete());
 }
@@ -714,17 +745,20 @@ fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
     }
 
     for binding in ["missing", "replacement"] {
-        let old = Vsync::new();
+        let old_driver = VsyncDriver::new();
+        let old = old_driver.vsync().clone();
         let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
         let retired = Rc::new(Cell::new(0));
         let capture = Capture(retired.clone());
-        old.set_frame_requester(Some(Rc::new(move || {
+        old_driver.set_frame_requester(Some(Rc::new(move || {
             let _ = &capture;
         })));
         let run = owner.controller().forward().expect("initial bound run");
         drop(old);
+        drop(old_driver);
 
-        let replacement = Vsync::new();
+        let replacement_driver = VsyncDriver::new();
+        let replacement = replacement_driver.vsync().clone();
         let healthy = Rc::new(Cell::new(0));
         // The delivery failure lives in these listeners; their subscriptions
         // are held until the recovery path withdraws them.
@@ -734,7 +768,7 @@ fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
         )]
         let mut held = Vec::new();
         if binding == "replacement" {
-            replacement.set_frame_requester(Some(Rc::new(|| panic!("clock delivery"))));
+            replacement_driver.set_frame_requester(Some(Rc::new(|| panic!("clock delivery"))));
         } else {
             held.push(
                 owner
@@ -770,15 +804,15 @@ fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
         } else {
             assert_eq!(replacement.len(), 1);
             assert!(!run.is_complete(), "accepted run survives the failed wake");
-            replacement.set_frame_requester(None);
+            replacement_driver.set_frame_requester(None);
         }
         let next_run = owner
             .controller()
             .reverse()
             .expect("next operation after recovery");
         let mut clock = flui_animation::MotionClock::new();
-        replacement.tick_all(&clock.frame(Duration::ZERO));
-        replacement.tick_all(&clock.frame(Duration::from_secs(1)));
+        replacement_driver.tick_all(&clock.frame(Duration::ZERO));
+        replacement_driver.tick_all(&clock.frame(Duration::from_secs(1)));
         assert_eq!(owner.controller().value(), 0.0);
         assert!(next_run.is_complete());
     }
@@ -788,7 +822,8 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     for channel in ["status", "value", "continuation"] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let first = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         let peer = AnimationController::builder(Duration::from_secs(2)).build_on(Some(&registry));
         let survivor =
@@ -835,9 +870,9 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
         let _peer_run = peer_controller.forward().expect("peer run");
         let _survivor_run = survivor.controller().forward().expect("survivor run");
         let mut clock = flui_animation::MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         peer_calls.set(0);
-        registry.tick_all(&clock.frame(Duration::from_secs(1)));
+        driver.tick_all(&clock.frame(Duration::from_secs(1)));
         assert!(owners.borrow().is_none(), "{channel}: owners were released");
         assert_eq!(
             peer_calls.get(),
@@ -846,7 +881,7 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
         );
         assert_eq!(registry.len(), 1);
         assert_eq!(survivor.controller().value(), 0.5);
-        registry.tick_all(&clock.frame(Duration::from_millis(1200)));
+        driver.tick_all(&clock.frame(Duration::from_millis(1200)));
         assert_eq!(peer_calls.get(), 0);
         assert_eq!(survivor.controller().value(), 0.6);
     }
@@ -871,7 +906,8 @@ fn disposal_registry_custody(failure: &str) {
         }
     }
 
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller().clone();
     let drops = Rc::new(Cell::new(0));
@@ -882,7 +918,7 @@ fn disposal_registry_custody(failure: &str) {
         refused: refused.clone(),
         panics: failure != "none",
     };
-    registry.set_frame_requester(Some(Rc::new(move || {
+    driver.set_frame_requester(Some(Rc::new(move || {
         let _ = &capture;
     })));
     let mut run = controller.forward().expect("bound run");
@@ -896,6 +932,7 @@ fn disposal_registry_custody(failure: &str) {
         healthy.set(healthy.get() + 1);
     });
     drop(registry);
+    drop(driver);
 
     let result = catch_unwind(AssertUnwindSafe(|| owner.dispose()));
     if failure == "none" {
@@ -965,11 +1002,12 @@ fn an_unbound_infinite_repeat_parks_then_resumes_on_a_registry() {
         .expect("infinite repeat");
     assert_eq!(owner.controller().value(), 0.0);
     assert!(run.is_pending());
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     owner.rebind(Some(&registry)).expect("bind parked run");
     let mut clock = flui_animation::MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(300)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(300)));
     assert_eq!(owner.controller().value(), 0.3);
     assert!(run.is_pending());
     drop(owner);
@@ -1104,10 +1142,11 @@ fn reentrant_owner_retirement_joins_registry_custody() {
     }
     let mut observed = Vec::new();
     for earlier_failure in [false, true] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let drops = Rc::new(Cell::new(0));
         let capture = Capture(Rc::clone(&drops));
-        registry.set_frame_requester(Some(Rc::new(move || {
+        driver.set_frame_requester(Some(Rc::new(move || {
             let _keep = &capture;
         })));
         let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
@@ -1126,6 +1165,7 @@ fn reentrant_owner_retirement_joins_registry_custody() {
             })
         });
         drop(registry);
+        drop(driver);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             controller.set_value(0.25).expect("no build is running");
         }));
@@ -1160,16 +1200,16 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
     }
 
     struct HookCapture {
-        registry: Vsync,
+        driver: Rc<VsyncDriver>,
         retired: Rc<Cell<usize>>,
         failure: bool,
     }
     impl Drop for HookCapture {
         fn drop(&mut self) {
-            self.registry.prepare_close().finish();
+            self.driver.prepare_close().finish();
             let mut fresh = AnimationController::builder(Duration::from_secs(1)).build_on(None);
             assert_eq!(
-                fresh.rebind(Some(&self.registry)),
+                fresh.rebind(Some(self.driver.vsync())),
                 Err(VsyncRegistrationError::Closed)
             );
             self.retired.set(self.retired.get() + 1);
@@ -1190,7 +1230,8 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
                 // A capture that panics while the thread unwinds aborts, as in std.
                 continue;
             }
-            let root = Vsync::new();
+            let driver = Rc::new(VsyncDriver::new());
+            let root = driver.vsync().clone();
             let child = Vsync::new();
             let independent = Vsync::new();
             root.attach_child(&child).expect("nested clock");
@@ -1200,12 +1241,12 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
             let retired = Rc::new(Cell::new(0));
             let wakes = Rc::new(Cell::new(0));
             let capture = HookCapture {
-                registry: root.clone(),
+                driver: Rc::clone(&driver),
                 retired: Rc::clone(&retired),
                 failure: capture_failure,
             };
             let wake_count = Rc::clone(&wakes);
-            root.set_frame_requester(Some(Rc::new(move || {
+            driver.set_frame_requester(Some(Rc::new(move || {
                 std::hint::black_box(&capture);
                 wake_count.set(wake_count.get() + 1);
             })));
@@ -1225,6 +1266,7 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
             for (index, run) in runs.iter().enumerate() {
                 let observers = observers.clone();
                 let root = root.clone();
+                let driver = Rc::clone(&driver);
                 let child = child.clone();
                 let outcomes = Rc::clone(&outcomes);
                 run.when_complete_or_cancel(move |result| {
@@ -1233,13 +1275,13 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
                     for observer in &observers {
                         assert!(matches!(observer.forward(), Err(AnimationError::Disposed)));
                     }
-                    root.prepare_close().finish();
+                    driver.prepare_close().finish();
                     outcomes.borrow_mut().push(index);
                     assert!(!(callback_failure && index == 0), "first cancellation");
                 });
             }
             let previous_wakes = wakes.get();
-            let receipt = root.prepare_close();
+            let receipt = driver.prepare_close();
             assert!(outcomes.borrow().is_empty(), "withdrawal runs no callback");
             for run in &mut runs {
                 assert!(
@@ -1263,13 +1305,13 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
             );
             let rejected_drops = Rc::new(Cell::new(0));
             let rejected = HookCapture {
-                registry: root.clone(),
+                driver: Rc::clone(&driver),
                 retired: Rc::clone(&rejected_drops),
                 failure: capture_failure,
             };
             let rejected_wakes = Rc::clone(&wakes);
             let rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                root.set_frame_requester(Some(Rc::new(move || {
+                driver.set_frame_requester(Some(Rc::new(move || {
                     std::hint::black_box(&rejected);
                     rejected_wakes.set(rejected_wakes.get() + 1);
                 })));
@@ -1337,7 +1379,7 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
                     Poll::Ready(Err(_))
                 ));
             }
-            root.tick_all(&MotionClock::new().frame(Duration::from_secs(2)));
+            driver.tick_all(&MotionClock::new().frame(Duration::from_secs(2)));
             assert_eq!(wakes.get(), previous_wakes, "a closed clock cannot wake");
             assert!(peer.controller().is_animating());
             drop(peer_run);
@@ -1346,44 +1388,45 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
     }
 }
 
-fn counted_registry() -> (Vsync, std::rc::Rc<std::cell::Cell<usize>>) {
-    let registry = Vsync::new();
+fn counted_registry() -> (VsyncDriver, std::rc::Rc<std::cell::Cell<usize>>) {
+    let driver = VsyncDriver::new();
     let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = wakes.clone();
-    registry.set_frame_requester(Some(std::rc::Rc::new(move || {
+    driver.set_frame_requester(Some(std::rc::Rc::new(move || {
         observed.set(observed.get() + 1);
     })));
-    (registry, wakes)
+    (driver, wakes)
 }
 
 fn wake_replacement_retires_captures_outside_borrows() {
     use std::cell::Cell;
     use std::rc::Rc;
     struct Capture {
-        registry: Vsync,
+        driver: Rc<VsyncDriver>,
         retired: Rc<Cell<usize>>,
     }
     impl Drop for Capture {
         fn drop(&mut self) {
             assert!(
-                self.registry.has_running(),
+                self.driver.vsync().has_running(),
                 "capture can reenter the registry during retirement"
             );
             self.retired.set(self.retired.get() + 1);
         }
     }
-    let registry = Vsync::new();
+    let driver = Rc::new(VsyncDriver::new());
+    let registry = driver.vsync().clone();
     let retired = Rc::new(Cell::new(0));
     let capture = Capture {
-        registry: registry.clone(),
+        driver: Rc::clone(&driver),
         retired: retired.clone(),
     };
     let wakes = Rc::new(Cell::new(0));
     let replacement_wakes = wakes.clone();
-    registry.set_frame_requester(Some(Rc::new(move || {
+    driver.set_frame_requester(Some(Rc::new(move || {
         let observed = replacement_wakes.clone();
         capture
-            .registry
+            .driver
             .set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
         let _ = &capture;
     })));
@@ -1397,24 +1440,25 @@ fn wake_replacement_retires_captures_outside_borrows() {
     );
     owner.controller().forward().unwrap();
     assert_eq!(wakes.get(), 2);
-    registry.set_frame_requester(None);
+    driver.set_frame_requester(None);
     let run = owner.controller().forward().unwrap();
     let observed = wakes.clone();
-    registry.set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
+    driver.set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
     assert_eq!(
         wakes.get(),
         3,
         "missing hook keeps demand for later installation"
     );
     let mut clock = flui_animation::MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(run.is_complete());
 }
 
 fn runs_and_rate_changes_request_samples() {
     use flui_animation::{MotionClock, PlaybackRate};
-    let (registry, wakes) = counted_registry();
+    let (driver, wakes) = counted_registry();
+    let registry = driver.vsync().clone();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     assert_eq!(wakes.get(), 0, "an idle registration does not wake");
     owner.controller().forward().unwrap();
@@ -1426,25 +1470,25 @@ fn runs_and_rate_changes_request_samples() {
         "a same-status restart requests its frame; an unchanged rate adds no demand"
     );
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
     owner.controller().set_playback_rate(PlaybackRate::PAUSED);
     assert_eq!(wakes.get(), 3);
-    registry.tick_all(&clock.frame(Duration::from_millis(600)));
+    driver.tick_all(&clock.frame(Duration::from_millis(600)));
     assert!(!registry.has_running(), "pause releases continuous demand");
-    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    driver.tick_all(&clock.frame(Duration::from_secs(10)));
     owner.controller().set_playback_rate(PlaybackRate::NORMAL);
     assert_eq!(
         wakes.get(),
         4,
         "resume requests the rate application sample"
     );
-    registry.tick_all(&clock.frame(Duration::from_secs(11)));
+    driver.tick_all(&clock.frame(Duration::from_secs(11)));
     assert!(
         (owner.controller().value() - 0.6).abs() < 1e-9,
         "pause time is excluded"
     );
-    registry.tick_all(&clock.frame(Duration::from_millis(11_400)));
+    driver.tick_all(&clock.frame(Duration::from_millis(11_400)));
     assert!(run.is_complete());
     assert_eq!(owner.controller().value(), 1.0);
     assert_eq!(
@@ -1455,8 +1499,10 @@ fn runs_and_rate_changes_request_samples() {
 }
 
 fn nested_mute_and_rebind_address_the_live_driver() {
-    let (a, a_wakes) = counted_registry();
-    let (b, b_wakes) = counted_registry();
+    let (a_driver, a_wakes) = counted_registry();
+    let a = a_driver.vsync().clone();
+    let (b_driver, b_wakes) = counted_registry();
+    let b = b_driver.vsync().clone();
     let child = Vsync::new();
     let seat = a.attach_child(&child).expect("child admitted");
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
@@ -1499,7 +1545,8 @@ fn last_driven_owner_release_revokes_its_driver() {
     use std::rc::Rc;
 
     for fail in [false, true] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         let controller = driven.controller().clone();
         let mut run = controller.forward().expect("run before wake installation");
@@ -1515,7 +1562,7 @@ fn last_driven_owner_release_revokes_its_driver() {
         let callback_armed = armed.clone();
         let wakes = Rc::new(Cell::new(0));
         let observed = wakes.clone();
-        registry.set_frame_requester(Some(Rc::new(move || {
+        driver.set_frame_requester(Some(Rc::new(move || {
             if !callback_armed.get() {
                 return;
             }
@@ -1525,6 +1572,7 @@ fn last_driven_owner_release_revokes_its_driver() {
             assert!(!fail, "wake failure after owner release");
         })));
         drop(registry);
+        drop(driver);
         armed.set(true);
 
         let first = catch_unwind(AssertUnwindSafe(|| {
@@ -1556,7 +1604,8 @@ fn last_driven_owner_release_revokes_its_driver() {
             "temporary storage custody cannot revive a driver"
         );
 
-        let (replacement, replacement_wakes) = counted_registry();
+        let (replacement_driver, replacement_wakes) = counted_registry();
+        let replacement = replacement_driver.vsync().clone();
         let replacement_owner =
             AnimationController::builder(Duration::from_secs(1)).build_on(Some(&replacement));
         let mut replacement_run = replacement_owner
@@ -1565,8 +1614,8 @@ fn last_driven_owner_release_revokes_its_driver() {
             .expect("replacement owner starts");
         assert_eq!(replacement_wakes.get(), 1);
         let mut clock = flui_animation::MotionClock::new();
-        replacement.tick_all(&clock.frame(Duration::ZERO));
-        replacement.tick_all(&clock.frame(Duration::from_secs(1)));
+        replacement_driver.tick_all(&clock.frame(Duration::ZERO));
+        replacement_driver.tick_all(&clock.frame(Duration::from_secs(1)));
         assert!(matches!(
             Pin::new(&mut replacement_run).poll(&mut Context::from_waker(Waker::noop())),
             Poll::Ready(Ok(()))
@@ -1579,10 +1628,11 @@ fn wake_failure_preserves_delivery_and_recovery() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
     for competing in [false, true] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         let inspected = owner.controller().clone();
-        registry.set_frame_requester(Some(Rc::new(move || {
+        driver.set_frame_requester(Some(Rc::new(move || {
             assert!(inspected.is_animating(), "run admission precedes wake");
             assert_eq!(inspected.status(), AnimationStatus::Forward);
             panic!("wake failure");
@@ -1616,7 +1666,7 @@ fn wake_failure_preserves_delivery_and_recovery() {
         );
         let recovered = Rc::new(Cell::new(0));
         let observed = recovered.clone();
-        registry.set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
+        driver.set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
         let run = owner.controller().forward().unwrap();
         assert_eq!(
             recovered.get(),
@@ -1624,8 +1674,8 @@ fn wake_failure_preserves_delivery_and_recovery() {
             "replacement and same-status restart remain deliverable"
         );
         let mut clock = flui_animation::MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_secs(1)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_secs(1)));
         assert!(run.is_complete());
     }
 }

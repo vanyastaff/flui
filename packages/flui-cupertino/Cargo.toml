@@ -26,6 +26,9 @@ tracing = { workspace = true }
 # framework through `flui_sdk::` like any package, and these crates only for
 # what the SDK does not carry.
 [dev-dependencies]
+# `flui_animation::__runtime::VsyncDriver` ticks a registry the test owns; the
+# SDK surface does not re-export that runtime seam.
+flui-animation = { workspace = true }
 flui-painting = { workspace = true }
 # The headless harness `tests/common/mod.rs` re-exports
 # (`flui_testing::widgets`), and `a11y::Role`, which the button semantics tests

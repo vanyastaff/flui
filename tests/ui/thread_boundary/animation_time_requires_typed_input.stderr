@@ -11,17 +11,3 @@ note: method defined here
   |
   |     pub fn tick_at(&self, elapsed: Duration) {
   |            ^^^^^^^
-
-error[E0308]: mismatched types
- --> tests/ui/thread_boundary/animation_time_requires_typed_input.rs:6:27
-  |
-6 |     Vsync::new().tick_all(f64::NAN);
-  |                  -------- ^^^^^^^^ expected `&FrameTick`, found `f64`
-  |                  |
-  |                  arguments to this method are incorrect
-  |
-note: method defined here
- --> crates/flui-animation/src/vsync.rs
-  |
-  |     pub fn tick_all(&self, tick: &FrameTick) {
-  |            ^^^^^^^^
