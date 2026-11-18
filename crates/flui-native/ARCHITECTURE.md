@@ -3835,7 +3835,8 @@ is keyed by the UUID of its display (`CGDisplayCreateUUIDFromDisplayID`).
 back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the order
 taken here. Read at the version pinned in this workspace's `Cargo.lock`, not
 recalled. The Low Power Mode rule is Rune's
-(`crates/rune/src/platform/display_link.rs`, branch `dev`, read 2026-11-18):
+([`display_link.rs`](https://github.com/anomalyco/rune/blob/dev/crates/rune/src/platform/display_link.rs),
+branch `dev`, read 2026-11-18):
 `CGDisplayIsBuiltin` and `isLowPowerModeEnabled`, and the link's period held at
 1/60 s. Rune reads the flag at each change of display; this host also reads it
 again when Foundation posts the power-state notification.
