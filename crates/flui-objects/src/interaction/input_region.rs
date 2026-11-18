@@ -7,10 +7,17 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Point, Rect, Size};
+use flui_interaction::pointer::FirstClickTarget;
+use flui_rendering::hit_testing::HitMetadata;
 use flui_rendering::input_regions::{InputRegionKind, InputRegionSink};
 use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
 
 /// A render object whose box is a `kind` input region while it is enabled.
+///
+/// An enabled [`InputRegionKind::FirstClick`] region also joins every hit path that runs
+/// through its child, a translucent target's included, carrying a [`FirstClickTarget`]:
+/// that is how the gesture binding knows a press marked first click reached this box
+/// rather than a widget painted over it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderInputRegion {
     kind: InputRegionKind,
@@ -60,6 +67,11 @@ impl RenderInputRegion {
         self.enabled = enabled;
         RenderUpdateImpact::PAINT
     }
+
+    /// Whether the box accepts the first click now.
+    const fn accepts_first_click(&self) -> bool {
+        self.enabled && matches!(self.kind, InputRegionKind::FirstClick)
+    }
 }
 
 impl flui_foundation::inspect::Inspect for RenderInputRegion {
@@ -84,6 +96,18 @@ impl RenderBox for RenderInputRegion {
     flui_rendering::forward_single_child_box_queries!();
 
     flui_rendering::forward_single_child_box_hit_test!();
+
+    /// A first-click box joins the path of every hit in its child, blocking or not.
+    fn joins_hits_below(&self) -> bool {
+        self.accepts_first_click()
+    }
+
+    /// A hit in the child of an enabled first-click region carries the
+    /// [`FirstClickTarget`]. Made per hit: only a first-click box, a rare widget, pays it.
+    fn metadata(&self) -> Option<HitMetadata> {
+        self.accepts_first_click()
+            .then(|| HitMetadata::new(FirstClickTarget))
+    }
 
     fn describe_input_regions(&self, size: Size, regions: &mut InputRegionSink) {
         if self.enabled {
