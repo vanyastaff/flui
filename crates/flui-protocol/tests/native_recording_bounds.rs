@@ -114,14 +114,30 @@ fn a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit() {
             assert_eq!(budget.bytes(), before.bytes() + row + declared, "{case}");
         }
     }
+    // A writer's header is checked before anything is written.
+    assert_eq!(
+        Budget::for_header(line),
+        Ok(Budget::after_header(line)),
+        "a header at the line bound"
+    );
+    assert_eq!(Budget::for_header(line + 1), Err(Overrun::HeaderBytes));
 }
 
-/// A writer that admits each row before it writes it never writes what the reader's count of
-/// the same lines refuses: the rows and bytes it admits, with the `cut` it ends on, read whole.
+/// A live writer that admits each row before it writes it never writes what the reader's count
+/// of the same lines refuses: the rows and bytes it admits, with the `cut` it ends on, read
+/// whole. The rows are sized so that, without the room kept for the cut, the last of them would
+/// be admitted with fewer bytes or rows left than the cut takes.
+#[cfg(feature = "serde")]
 #[test]
 fn what_a_writer_admits_with_its_cut_a_reader_takes() {
-    for (row, expected) in [(1, CutReason::Rows), (4096, CutReason::Bytes)] {
-        let header = 200;
+    use flui_protocol::native_recording::Row;
+
+    // Rows of one byte against the row bound; rows of 4096 bytes after a header that brings
+    // the last of them to 10 bytes under the byte bound.
+    for (row, header, expected) in [
+        (1, 200, CutReason::Rows),
+        (4096, 4096 - 10, CutReason::Bytes),
+    ] {
         let mut writer = Budget::after_header(header);
         let mut written = Vec::new();
         let cut = loop {
@@ -131,8 +147,8 @@ fn what_a_writer_admits_with_its_cut_a_reader_takes() {
             }
         };
         assert_eq!(cut, expected);
-        // The longest `cut` line a writer ends on.
-        written.push(r#"{"row":"cut","reason":"store_journal"}"#.len() + 1);
+        let cut_line = serde_json::to_vec(&Row::Cut { reason: cut }).expect("a cut serializes");
+        written.push(cut_line.len() + 1);
         let mut reader = Budget::after_header(header);
         for (index, line) in written.iter().enumerate() {
             assert_eq!(reader.read_line(*line), Ok(()), "line {}", index + 2);

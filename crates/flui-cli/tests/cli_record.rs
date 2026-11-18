@@ -378,3 +378,230 @@ fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
     assert!(said.contains("native stream 0 lost 3 rows"), "{said}");
     assert!(said.contains("native stream 2 sent no header"), "{said}");
 }
+
+/// A native recording of `send`'s lines, all of stream 0, ended by the app: the directory, the
+/// index and what the command said.
+fn native_session(send: impl FnOnce(&mut dyn FnMut(&Value))) -> (TempDir, Value, String) {
+    let tmp = TempDir::new().unwrap();
+    let listener = UnixListener::bind(tmp.path().join("agent.sock")).unwrap();
+    let child = flui_record(tmp.path(), &["out.jsonl", "--native", "native"]);
+    let mut peer = Peer::accept(&listener);
+    started(&mut peer);
+    send(&mut |line| peer.send(&native(7, 0, line)));
+    peer.send(&row(7, &json!({ "end": { "lost_rows": 0 } })));
+    stopped(
+        &mut peer,
+        &[],
+        &json!({ "rows": 0, "lost_rows": 0, "complete": true }),
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let index = std::fs::read_to_string(tmp.path().join("native/index.json")).unwrap();
+    let index: Value = serde_json::from_str(&index).unwrap();
+    (tmp, index, stderr(&output))
+}
+
+/// The lines of native stream 0's file, each with its newline.
+fn native_lines(tmp: &TempDir) -> Vec<String> {
+    let text = std::fs::read_to_string(tmp.path().join("native/0.jsonl")).expect("stream 0");
+    text.split_inclusive('\n').map(str::to_owned).collect()
+}
+
+/// The bytes `value` takes as a line of a native file, its newline included.
+fn line_bytes(value: &impl serde::Serialize) -> usize {
+    serde_json::to_vec(value).unwrap().len() + 1
+}
+
+/// An input method's commit of `text`, as a native row.
+fn commit(text: String) -> flui_protocol::native_recording::Row {
+    use flui_protocol::native_recording::{Ime, ImeEvent, Row};
+    Row::Ime {
+        ime: Ime::Event(ImeEvent::Commit(text)),
+        redacted: false,
+    }
+}
+
+/// The native header line of an x11 stream journaling `stream`, and the bytes the file's header
+/// takes before it declares a device.
+fn native_header(stream: &str) -> (Value, usize) {
+    use flui_protocol::native_recording::Header;
+    let header = json!({ "flui_native_recording": 3, "backend": "x11", "stream": stream });
+    let bytes = line_bytes(&serde_json::from_value::<Header>(header.clone()).unwrap());
+    (json!({ "header": header }), bytes)
+}
+
+/// Commit rows that bring a file whose header takes `header` bytes to `left` bytes under the
+/// recording's bound: rows as long as a line comfortably holds, then one that fills the rest.
+fn commits_leaving(header: usize, left: usize) -> Vec<Value> {
+    use flui_protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES};
+    let empty = line_bytes(&commit(String::new()));
+    let full_text = MAX_LINE_BYTES - 128;
+    let full = empty + full_text;
+    let body = MAX_RECORDING_BYTES - left - header;
+    let fulls = (body - empty) / full;
+    let filler = body - fulls * full - empty;
+    let row = |text: String| json!({ "row": serde_json::to_value(commit(text)).unwrap() });
+    let mut rows = vec![row("x".repeat(full_text)); fulls];
+    rows.push(row("x".repeat(filler)));
+    rows
+}
+
+/// A stream past the byte bound ends at a `cut` row, its file within what a reader takes. Each
+/// row the stream sent is counted once: written, or dropped at the cut; a `gap` line is no row,
+/// and its rows are lost, also where it is the line that met the bound.
+#[test]
+fn a_native_stream_past_the_byte_bound_ends_at_a_cut_and_counts_each_row_once() {
+    use flui_protocol::native_recording::{CutReason, MAX_RECORDING_BYTES, Row};
+
+    let (header, header_bytes) = native_header("window");
+    // 70 bytes left: room for the cut a writer keeps after each row (64), not for a gap line
+    // and that room.
+    let rows = commits_leaving(header_bytes, 70);
+    let written_rows = rows.len() as u64;
+    let (tmp, index, said) = native_session(|send| {
+        send(&header);
+        for row in &rows {
+            send(row);
+        }
+        send(&json!({ "gap": { "rows": 3 } }));
+        send(&json!({ "row": serde_json::to_value(commit("after".to_owned())).unwrap() }));
+        send(&json!({ "row": { "row": "reopen" } }));
+    });
+
+    let lines = native_lines(&tmp);
+    let bytes: usize = lines.iter().map(String::len).sum();
+    assert!(bytes <= MAX_RECORDING_BYTES, "{bytes} bytes");
+    let last = lines.last().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Row>(last).ok(),
+        Some(Row::Cut {
+            reason: CutReason::Bytes
+        }),
+        "the last line, {} bytes, is the cut",
+        last.len()
+    );
+    assert_eq!(
+        lines.len() as u64,
+        written_rows + 2,
+        "the header, the rows, the cut"
+    );
+    let stream = &index["streams"][0];
+    assert_eq!(stream["rows"], json!(written_rows));
+    assert_eq!(stream["lost_rows"], json!(3), "the gap's rows, once");
+    assert_eq!(
+        stream["cut"],
+        json!({ "bound": "bytes", "dropped": 2 }),
+        "the two rows after the cut; the gap that met it is no row"
+    );
+    assert!(said.contains("reached the 67108864 bytes"), "{said}");
+    assert!(
+        said.contains("2 rows from there were not written"),
+        "{said}"
+    );
+}
+
+/// A stream with more rows than a native recording holds ends at a `cut` row that keeps the
+/// file within the row bound.
+#[test]
+fn a_native_stream_past_the_row_bound_ends_at_a_cut() {
+    use flui_protocol::native_recording::{CutReason, MAX_ROWS, Row};
+
+    let (header, _) = native_header("app");
+    let reopen = json!({ "row": { "row": "reopen" } });
+    let (tmp, index, _) = native_session(|send| {
+        send(&header);
+        for _ in 0..=MAX_ROWS {
+            send(&reopen);
+        }
+    });
+
+    let lines = native_lines(&tmp);
+    assert_eq!(lines.len() - 1, MAX_ROWS, "the rows, the cut last");
+    assert_eq!(
+        serde_json::from_str::<Row>(lines.last().unwrap()).ok(),
+        Some(Row::Cut {
+            reason: CutReason::Rows
+        })
+    );
+    let stream = &index["streams"][0];
+    assert_eq!(stream["rows"], json!(MAX_ROWS - 1));
+    assert_eq!(stream["cut"], json!({ "bound": "rows", "dropped": 2 }));
+}
+
+/// A row longer than a line may be is lost in place of a `gap`, and the rows after it are
+/// written; a header longer than a line may be opens no file, and its rows are lost.
+#[test]
+fn a_native_line_past_the_line_bound_is_not_written() {
+    use flui_protocol::native_recording::MAX_LINE_BYTES;
+
+    let (header, _) = native_header("window");
+    let (tmp, index, _) = native_session(|send| {
+        send(&header);
+        send(&json!({ "row": serde_json::to_value(commit("x".repeat(MAX_LINE_BYTES))).unwrap() }));
+        send(&json!({ "row": serde_json::to_value(commit("after".to_owned())).unwrap() }));
+    });
+    let lines = native_lines(&tmp);
+    let sizes: Vec<usize> = lines.iter().map(String::len).collect();
+    assert_eq!(sizes.len(), 3, "line sizes {sizes:?}");
+    assert_eq!(
+        lines[1], "{\"gap\":{\"rows\":1}}\n",
+        "a gap of the lost row"
+    );
+    let stream = &index["streams"][0];
+    assert_eq!(
+        (&stream["rows"], &stream["lost_rows"]),
+        (&json!(1), &json!(1))
+    );
+
+    let (tmp, index, said) = native_session(|send| {
+        send(&json!({ "header": {
+            "flui_native_recording": 3, "backend": "x11", "provenance": "x".repeat(MAX_LINE_BYTES),
+        } }));
+        send(&json!({ "row": { "row": "reopen" } }));
+        send(&json!({ "gap": { "rows": 2 } }));
+    });
+    assert!(!tmp.path().join("native/0.jsonl").exists(), "no file");
+    let stream = &index["streams"][0];
+    assert_eq!(stream["header_too_long"], json!(true));
+    assert_eq!(stream["file"], Value::Null);
+    assert_eq!(stream["lost_rows"], json!(3), "the row and the gap's two");
+    assert!(said.contains("header is longer than"), "{said}");
+}
+
+/// Near the byte bound, each row is admitted with the bytes the header grows by to declare the
+/// device it reads first, so the file, its header filled in, stays within the bound.
+#[test]
+fn a_native_file_counts_the_header_its_rows_declare() {
+    use flui_protocol::native_recording::{CutReason, Header, MAX_RECORDING_BYTES, Row};
+
+    let (header, header_bytes) = native_header("registry");
+    let filler = commits_leaving(header_bytes, 3000);
+    let (tmp, index, _) = native_session(|send| {
+        send(&header);
+        for row in &filler {
+            send(row);
+        }
+        for device in 1..=60 {
+            send(&json!({ "row": reading(device, "mouse", 9) }));
+        }
+    });
+
+    let lines = native_lines(&tmp);
+    let bytes: usize = lines.iter().map(String::len).sum();
+    assert!(bytes <= MAX_RECORDING_BYTES, "{bytes} bytes");
+    assert_eq!(
+        serde_json::from_str::<Row>(lines.last().unwrap()).ok(),
+        Some(Row::Cut {
+            reason: CutReason::Bytes
+        })
+    );
+    let readings = lines.len() - 2 - filler.len();
+    assert!(readings > 0, "some readings were written before the cut");
+    let header: Header = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(
+        header.devices.len(),
+        readings,
+        "each written reading's device is declared"
+    );
+    assert_eq!(index["streams"][0]["cut"]["bound"], json!("bytes"));
+}

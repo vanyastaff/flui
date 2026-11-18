@@ -5001,19 +5001,30 @@ GPU-память простаивающего или невидимого окн
   release-сборка счётчика в задании `size`. **Граница записи:** границы и их счёт — во
   `flui-protocol`, `native_recording::Budget` (`admit_row` писателя, `read_line` читателя) и
   типизированная `Overrun` (`LineBytes`, `HeaderBytes`, `Rows`, `RecordingBytes`; у полных —
-  `cut_reason`); `CutBudget` ядра удалён, рекордер, `NativeRecording::write` и `read` считают тем же
-  `Budget`, `write` отвечает на слишком длинную строку `CodecError::LineTooLong`, ничего не
-  записав. `flui record --native` держит `Budget` на поток с заголовка, принимает строку вместе с
-  ростом заголовка на её устройства, первую строку за `MAX_ROWS`/`MAX_RECORDING_BYTES` заменяет
-  строкой `cut` и дальше не пишет (индекс: `cut: {reason, dropped}`, отчёт предупреждает), строку
-  длиннее `MAX_LINE_BYTES` заменяет `gap`. Тесты (в скобках — с откатом границы в `write_row`):
-  `a_stream_past_the_byte_bound_ends_at_a_cut` (файл больше границы, без `cut`),
-  `a_stream_past_the_row_bound_ends_at_a_cut` (`MAX_ROWS + 1` строк, без `cut`),
-  `a_row_past_the_line_bound_leaves_a_gap` (строка записана как пришла); новые во `flui-protocol`:
+  `cut_reason`), `Budget::for_header` проверяет заголовок писателя до записи; `CutBudget` ядра
+  удалён, рекордер, `NativeRecording::write` и `read` считают тем же `Budget`. `write` сначала
+  проверяет заголовок, отвечает на слишком длинный заголовок или строку `CodecError::LineTooLong`,
+  ничего не записав, запись в границах пишет целиком (место под `cut` не держит: при отказе строки
+  снимает строки с конца, пока `cut` не поместится). Строку длиннее строки записи рекордер хранит
+  как `Row::Gap { rows: 1 }` (считается как строка; пишется строкой `gap`, читается обратно,
+  replay останавливается на ней `ReplayError::Gap`). `flui record --native` держит `Budget` на
+  поток с заголовка (слишком длинный заголовок файла не открывает, `header_too_long` в индексе),
+  принимает строку вместе с ростом заголовка на её устройства, первую строку за
+  `MAX_ROWS`/`MAX_RECORDING_BYTES` заменяет строкой `cut` и дальше не пишет (индекс:
+  `cut: {bound, dropped}`), строку, которую файл не держит, заменяет `gap`; счёт один: строка потока
+  считается один раз (записана, потеряна или отброшена на `cut`), строка `gap` — не строка.
+  Тесты (в скобках — с откатом): `the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole`
+  (без проверки заголовка заголовок записан; с местом под `cut` у каждой строки запись в
+  границах обрезана), `a_live_row_past_the_line_bound_is_held_as_a_gap` (рекордер хранит строки по
+  мегабайту, `write` отвергает запись), `what_a_writer_admits_with_its_cut_a_reader_takes` (без
+  места под `cut` читатель отвергает строку 16385); в `tests/cli_record.rs` (Linux):
+  `a_native_stream_past_the_byte_bound_ends_at_a_cut_and_counts_each_row_once` (`gap` на границе
+  посчитан и потерянным, и отброшенным), `a_native_file_counts_the_header_its_rows_declare` (без
+  счёта роста заголовка файл больше границы), `a_native_stream_past_the_row_bound_ends_at_a_cut`,
+  `a_native_line_past_the_line_bound_is_not_written`; во `flui-protocol` ещё
   `a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit`,
-  `what_a_writer_admits_with_its_cut_a_reader_takes`, `a_reader_refuses_the_line_past_either_bound`,
-  `an_overrun_names_its_limit_and_its_cut`; перенос счёта держат прежние
-  `native_recording_contracts` (в нём `a_native_recording_past_its_bounds_is_refused`,
+  `a_reader_refuses_the_line_past_either_bound`, `an_overrun_names_its_limit_and_its_cut`; перенос
+  счёта держат прежние `native_recording_contracts` (`a_native_recording_past_its_bounds_is_refused`,
   `a_recording_past_its_bound_is_written_cut`). Заблокировано:
   чтение записи крейтом `flui-driver` без ребра к ядру ждёт FD6 спеки
   [flui-driver](../flui-driver/tasks.md); сегодня запись читает `flui record` через

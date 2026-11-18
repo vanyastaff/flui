@@ -9,13 +9,19 @@
 //! input recording spells one, so a replay refuses the file there rather than run past it.
 //!
 //! A file is held to the bounds its reader holds it to, counted as the lines arrive with the
-//! format's [`Budget`]: each row is admitted with the bytes the header grows by to declare the
-//! devices it reads first, and the first row past [`MAX_ROWS`] or [`MAX_RECORDING_BYTES`] is
-//! replaced by a `cut` row that ends the file, so a replay of it stops at the cut instead of the
-//! reader refusing the whole file. A row longer than a line may be is lost in place of a `gap`.
+//! format's [`Budget`]. A header longer than a line may be opens no file. Each row is admitted
+//! with the bytes the header grows by to declare the devices it reads first, and the first row
+//! past [`MAX_ROWS`] or [`MAX_RECORDING_BYTES`] is replaced by a `cut` row that ends the file, so
+//! a replay of it stops at the cut instead of the reader refusing the whole file. A row the file
+//! cannot hold on its own (longer than a line, or declaring a device the header has no room
+//! for) is lost in place of a `gap`.
 //!
-//! `<dir>/index.json` names each file's stream, backend, what it journals, its rows, the rows
-//! it lost and where it was cut.
+//! The counts follow one rule: every row the stream sent is counted once, as written, lost or
+//! dropped at the cut; a `gap` line is no row, and the rows it stands for are lost; a line this
+//! CLI does not know is one row lost.
+//!
+//! `<dir>/index.json` names each file's stream, backend, what it journals, those counts and
+//! where it was cut.
 //!
 //! [`MAX_ROWS`]: flui_protocol::native_recording::MAX_ROWS
 //! [`MAX_RECORDING_BYTES`]: flui_protocol::native_recording::MAX_RECORDING_BYTES
@@ -26,7 +32,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use flui_protocol::native_recording::{
-    Backend, Budget, CutReason, Device, Header, Line, PointerKind, Reading, Row, Stream,
+    Backend, Budget, CutReason, Device, Header, Line, Overrun, PointerKind, Reading, Row, Stream,
 };
 use serde::Serialize;
 
@@ -40,8 +46,7 @@ pub(crate) struct NativeFiles {
 /// One stream, as it is written.
 #[derive(Debug)]
 struct StreamFile {
-    /// Its header and what the file has taken of its bounds, once the header arrived.
-    opened: Option<Opened>,
+    state: State,
     /// Every device its written rows read, with the kinds they read it as, in the order first
     /// read.
     devices: Vec<Device>,
@@ -49,27 +54,64 @@ struct StreamFile {
     part: BufWriter<File>,
     /// The rows written, `gap` lines and the `cut` aside.
     rows: u64,
-    /// The rows it lost before its cut: as its `gap` lines count them, the rows that came before
-    /// its header, and rows too long to write.
+    /// The rows it lost: as its `gap` lines count them, the rows before its header or after a
+    /// header no file holds, rows the file could not hold on their own, and lines this CLI does
+    /// not know.
     lost_rows: u64,
-    /// Where it was cut, once it was.
-    cut: Option<StreamCut>,
 }
 
-/// A stream's header, once it arrived, and the bounds its file has taken.
+/// Where a stream's file stands.
 #[derive(Debug)]
-struct Opened {
-    /// The header, its devices left for [`NativeFiles::finish`] to fill in.
-    header: Header,
-    budget: Budget,
+enum State {
+    /// No header yet: a row is lost.
+    Unopened,
+    /// The header longer than a line may be: no file, and every row is lost.
+    HeaderTooLong,
+    /// Rows are written while the file's bounds admit them.
+    Open {
+        /// The header, its devices left for [`NativeFiles::finish`] to fill in.
+        header: Header,
+        budget: Budget,
+    },
+    /// Ended at a `cut` row: every row after it is dropped.
+    Cut { header: Header, cut: StreamCut },
+}
+
+/// The bound a stream's file reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FullBound {
+    /// [`MAX_ROWS`](flui_protocol::native_recording::MAX_ROWS).
+    Rows,
+    /// [`MAX_RECORDING_BYTES`](flui_protocol::native_recording::MAX_RECORDING_BYTES).
+    Bytes,
+}
+
+impl FullBound {
+    /// The bound `overrun` says a recording is full at, if it says so.
+    const fn of(overrun: Overrun) -> Option<Self> {
+        match overrun {
+            Overrun::Rows => Some(Self::Rows),
+            Overrun::RecordingBytes => Some(Self::Bytes),
+            _ => None,
+        }
+    }
+
+    const fn cut_reason(self) -> CutReason {
+        match self {
+            Self::Rows => CutReason::Rows,
+            Self::Bytes => CutReason::Bytes,
+        }
+    }
 }
 
 /// Where a stream's file ends at a `cut` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct StreamCut {
-    /// The bound the next row would have passed.
-    pub(crate) reason: CutReason,
-    /// The rows not written from there: the one the cut replaced and every row after it.
+    /// The bound the next line would have passed.
+    pub(crate) bound: FullBound,
+    /// The rows the stream sent from there that were not written: the one the cut replaced,
+    /// when a row (not a `gap`) met the bound, and every row after it.
     pub(crate) dropped: u64,
 }
 
@@ -78,19 +120,23 @@ pub(crate) struct StreamCut {
 pub(crate) struct WrittenStream {
     /// The stream's number, in the order the backend opened them.
     pub(crate) stream: u32,
-    /// The file, relative to the directory; none for a stream whose header never came.
+    /// The file, relative to the directory; none for a stream whose header never came, or was
+    /// longer than a line may be.
     pub(crate) file: Option<String>,
-    /// The backend it was taken on, when its header came.
+    /// The backend it was taken on, when it has a file.
     pub(crate) backend: Option<Backend>,
-    /// What it journals, when its header came.
+    /// What it journals, when it has a file.
     pub(crate) journals: Option<Stream>,
-    /// Its rows, `gap` lines and the `cut` aside.
+    /// Its rows written, `gap` lines and the `cut` aside.
     pub(crate) rows: u64,
-    /// The rows it lost before any cut.
+    /// The rows it lost.
     pub(crate) lost_rows: u64,
     /// Where its file ends at a `cut` row, when it does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cut: Option<StreamCut>,
+    /// Its header was longer than a line may be, so it has no file.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) header_too_long: bool,
 }
 
 /// The index file's shape.
@@ -130,12 +176,11 @@ impl NativeFiles {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 let part = File::create(&path).map_err(|e| at(&path, e))?;
                 entry.insert(StreamFile {
-                    opened: None,
+                    state: State::Unopened,
                     devices: Vec::new(),
                     part: BufWriter::new(part),
                     rows: 0,
                     lost_rows: 0,
-                    cut: None,
                 })
             }
         };
@@ -152,29 +197,34 @@ impl NativeFiles {
         let mut written = Vec::with_capacity(self.streams.len());
         for (stream, file) in self.streams {
             let StreamFile {
-                opened,
+                state,
                 devices,
                 part,
                 rows,
                 lost_rows,
-                cut,
             } = file;
             let part_path = self.dir.join(part_name(stream));
             part.into_inner()
                 .map_err(io::IntoInnerError::into_error)
                 .map_err(|e| at(&part_path, e))?;
-            let Some(Opened { mut header, .. }) = opened else {
-                fs::remove_file(&part_path).map_err(|e| at(&part_path, e))?;
-                written.push(WrittenStream {
-                    stream,
-                    file: None,
-                    backend: None,
-                    journals: None,
-                    rows,
-                    lost_rows,
-                    cut,
-                });
-                continue;
+            let mut entry = WrittenStream {
+                stream,
+                file: None,
+                backend: None,
+                journals: None,
+                rows,
+                lost_rows,
+                cut: None,
+                header_too_long: matches!(state, State::HeaderTooLong),
+            };
+            let (mut header, cut) = match state {
+                State::Open { header, .. } => (header, None),
+                State::Cut { header, cut } => (header, Some(cut)),
+                State::Unopened | State::HeaderTooLong => {
+                    fs::remove_file(&part_path).map_err(|e| at(&part_path, e))?;
+                    written.push(entry);
+                    continue;
+                }
             };
             header.devices = devices;
             let name = format!("{stream}.jsonl");
@@ -187,15 +237,11 @@ impl NativeFiles {
             out.flush().map_err(|e| at(&path, e))?;
             drop(rows_in);
             fs::remove_file(&part_path).map_err(|e| at(&part_path, e))?;
-            written.push(WrittenStream {
-                stream,
-                file: Some(name),
-                backend: Some(header.backend),
-                journals: Some(header.stream),
-                rows,
-                lost_rows,
-                cut,
-            });
+            entry.file = Some(name);
+            entry.backend = Some(header.backend);
+            entry.journals = Some(header.stream);
+            entry.cut = cut;
+            written.push(entry);
         }
         let path = self.dir.join("index.json");
         let mut index = BufWriter::new(File::create(&path).map_err(|e| at(&path, e))?);
@@ -210,38 +256,34 @@ impl NativeFiles {
 
 impl StreamFile {
     /// Takes `line`: a header opens the file, a row or a gap is written while the file's bounds
-    /// admit it.
+    /// admit it, and each is counted by the module's rule.
     fn take(&mut self, line: &Line) -> io::Result<()> {
-        let lost = match line {
-            Line::Row(_) => 1,
-            Line::Gap { rows } => *rows,
-            _ => 0,
-        };
-        if let Some(cut) = &mut self.cut {
-            // Nothing follows a cut.
-            cut.dropped = cut.dropped.saturating_add(lost);
-            return Ok(());
-        }
         match line {
             // A stream sends its header once; a second one would restart it, which no stream
             // does, so the first stands.
             Line::Header(header) => {
-                if self.opened.is_none() {
-                    let mut header = (**header).clone();
-                    header.devices.clear();
-                    let budget = Budget::after_header(encode_line(&header)?.len());
-                    self.opened = Some(Opened { header, budget });
+                if matches!(self.state, State::Unopened) {
+                    self.open(header)?;
                 }
                 Ok(())
             }
-            Line::Row(_) | Line::Gap { .. } if self.opened.is_none() => {
-                self.lost_rows = self.lost_rows.saturating_add(lost);
+            Line::Row(row) => match self.state {
+                State::Open { .. } => self.write_row(row),
+                State::Cut { ref mut cut, .. } => {
+                    cut.dropped = cut.dropped.saturating_add(1);
+                    Ok(())
+                }
+                State::Unopened | State::HeaderTooLong => {
+                    self.lost_rows = self.lost_rows.saturating_add(1);
+                    Ok(())
+                }
+            },
+            Line::Gap { rows } => {
+                self.lost_rows = self.lost_rows.saturating_add(*rows);
+                if matches!(self.state, State::Open { .. }) {
+                    self.write_gap(line)?;
+                }
                 Ok(())
-            }
-            Line::Row(row) => self.write_row(row),
-            Line::Gap { .. } => {
-                self.lost_rows = self.lost_rows.saturating_add(lost);
-                self.write_gap(line)
             }
             // A line this CLI does not know is not one it can place in the file.
             _ => {
@@ -251,51 +293,68 @@ impl StreamFile {
         }
     }
 
-    /// Writes `row` and declares its devices, or cuts the file where it is full, or writes a
-    /// `gap` in place of a row no file can hold.
+    /// Opens the file with `header`, unless it is longer than a line may be.
+    fn open(&mut self, header: &Header) -> io::Result<()> {
+        let mut header = header.clone();
+        header.devices.clear();
+        self.state = match Budget::for_header(encode_line(&header)?.len()) {
+            Ok(budget) => State::Open { header, budget },
+            Err(_) => State::HeaderTooLong,
+        };
+        Ok(())
+    }
+
+    /// Writes `row` and declares its devices, cuts the file where it is full, or writes a `gap`
+    /// in place of a row the file cannot hold on its own.
     fn write_row(&mut self, row: &Row) -> io::Result<()> {
         let encoded = encode_line(row)?;
         let undeclared = undeclared(row, &self.devices);
         let declared = declared_bytes(&undeclared, &self.devices)?;
-        let budget = &mut self.opened_mut().budget;
-        let Err(overrun) = budget.admit_row(encoded.len(), declared, true) else {
+        let Err(overrun) = self.budget().admit_row(encoded.len(), declared, true) else {
             write_flushed(&mut self.part, &encoded)?;
             declare(&mut self.devices, &undeclared);
             self.rows += 1;
             return Ok(());
         };
-        if let Some(reason) = overrun.cut_reason() {
-            return self.write_cut(reason);
+        if let Some(bound) = FullBound::of(overrun) {
+            return self.write_cut(bound, 1);
         }
         self.lost_rows = self.lost_rows.saturating_add(1);
         self.write_gap(&Line::Gap { rows: 1 })
     }
 
-    /// Writes `gap`, or cuts the file where it is full.
+    /// Writes `gap`, whose rows are counted lost already, or cuts the file where it is full.
     fn write_gap(&mut self, gap: &Line) -> io::Result<()> {
         let encoded = encode_line(gap)?;
-        match self.opened_mut().budget.admit_row(encoded.len(), 0, true) {
+        match self.budget().admit_row(encoded.len(), 0, true) {
             Ok(()) => write_flushed(&mut self.part, &encoded),
-            Err(overrun) => match overrun.cut_reason() {
-                Some(reason) => self.write_cut(reason),
-                // A header past a line's length, which no line after it fixes: the rows are
-                // counted lost all the same.
-                None => Ok(()),
-            },
+            // A gap fits any line and declares nothing: only a full file refuses it, and a gap
+            // is no row the cut drops.
+            Err(overrun) => self.write_cut(FullBound::of(overrun).unwrap_or(FullBound::Bytes), 0),
         }
     }
 
-    /// Ends the file with a `cut` row naming `reason`, in place of the row it could not take.
-    /// The budget keeps room for it after every row it admits.
-    fn write_cut(&mut self, reason: CutReason) -> io::Result<()> {
-        self.cut = Some(StreamCut { reason, dropped: 1 });
-        write_flushed(&mut self.part, &encode_line(&Row::Cut { reason })?)
+    /// Ends the file with a `cut` row naming `bound`, in place of the line it could not take,
+    /// which was `dropped` rows. The budget keeps room for it after every line it admits.
+    fn write_cut(&mut self, bound: FullBound, dropped: u64) -> io::Result<()> {
+        let State::Open { header, .. } = std::mem::replace(&mut self.state, State::Unopened) else {
+            unreachable!("BUG: a stream cuts only an open file");
+        };
+        self.state = State::Cut {
+            header,
+            cut: StreamCut { bound, dropped },
+        };
+        let cut = Row::Cut {
+            reason: bound.cut_reason(),
+        };
+        write_flushed(&mut self.part, &encode_line(&cut)?)
     }
 
-    fn opened_mut(&mut self) -> &mut Opened {
-        self.opened
-            .as_mut()
-            .expect("BUG: a stream writes rows only once its header opened it")
+    fn budget(&mut self) -> &mut Budget {
+        let State::Open { budget, .. } = &mut self.state else {
+            unreachable!("BUG: a stream writes lines only while its file is open");
+        };
+        budget
     }
 }
 
@@ -399,146 +458,4 @@ fn write_flushed(out: &mut impl Write, line: &[u8]) -> io::Result<()> {
 /// `error`, naming `path`.
 fn at(path: &Path, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", path.display()))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::BufRead as _;
-
-    use flui_protocol::native_recording::{
-        Backend, CutReason, Header, Ime, ImeEvent, Line, MAX_LINE_BYTES, MAX_RECORDING_BYTES,
-        MAX_ROWS, Row, Stream,
-    };
-
-    use super::{NativeFiles, StreamCut};
-
-    fn header(stream: Stream) -> Line {
-        Line::Header(Box::new(Header {
-            flui_native_recording: 3,
-            backend: Backend::X11,
-            stream,
-            epoch_ns: None,
-            uptime_ns: None,
-            counter: None,
-            reserved_contact: None,
-            first_pointer: None,
-            first_device: None,
-            click_settings: None,
-            provenance: None,
-            joined_late: false,
-            devices: Vec::new(),
-        }))
-    }
-
-    fn commit(text: String) -> Line {
-        Line::Row(Box::new(Row::Ime {
-            ime: Ime::Event(ImeEvent::Commit(text)),
-            redacted: false,
-        }))
-    }
-
-    /// The lines of `file` in `dir`, each with its newline.
-    fn lines(dir: &std::path::Path, file: &str) -> Vec<String> {
-        let reader = std::io::BufReader::new(std::fs::File::open(dir.join(file)).unwrap());
-        reader
-            .split(b'\n')
-            .map(|line| String::from_utf8(line.unwrap()).unwrap() + "\n")
-            .collect()
-    }
-
-    /// A stream longer than a native recording may be is written up to the last row that fits
-    /// with a `cut` row after it, so the file stays within what its reader takes; the rows past
-    /// the cut are counted, not written.
-    #[test]
-    fn a_stream_past_the_byte_bound_ends_at_a_cut() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut files = NativeFiles::create(tmp.path()).unwrap();
-        files.take(0, &header(Stream::Window)).unwrap();
-        let text = "x".repeat(MAX_LINE_BYTES - 128);
-        let sent = MAX_RECORDING_BYTES / text.len() + 3;
-        for _ in 0..sent {
-            files.take(0, &commit(text.clone())).unwrap();
-        }
-        let written = files.finish().unwrap();
-
-        let lines = lines(tmp.path(), "0.jsonl");
-        let bytes: usize = lines.iter().map(String::len).sum();
-        assert!(bytes <= MAX_RECORDING_BYTES, "{bytes} bytes");
-        let last = lines.last().unwrap();
-        assert!(
-            matches!(
-                serde_json::from_str::<Row>(last),
-                Ok(Row::Cut {
-                    reason: CutReason::Bytes
-                })
-            ),
-            "the last line, {} bytes, is not a byte cut",
-            last.len()
-        );
-        let kept = lines.len() as u64 - 2;
-        assert_eq!(written[0].rows, kept);
-        assert_eq!(
-            written[0].cut,
-            Some(StreamCut {
-                reason: CutReason::Bytes,
-                dropped: sent as u64 - kept,
-            })
-        );
-        assert_eq!(written[0].lost_rows, 0);
-    }
-
-    /// A stream with more rows than a native recording holds ends at a `cut` row that keeps the
-    /// file within the row bound.
-    #[test]
-    fn a_stream_past_the_row_bound_ends_at_a_cut() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut files = NativeFiles::create(tmp.path()).unwrap();
-        files.take(0, &header(Stream::App)).unwrap();
-        let reopen = Line::Row(Box::new(Row::Reopen));
-        for _ in 0..=MAX_ROWS {
-            files.take(0, &reopen).unwrap();
-        }
-        let written = files.finish().unwrap();
-
-        let lines = lines(tmp.path(), "0.jsonl");
-        assert_eq!(lines.len() - 1, MAX_ROWS, "the rows, the cut last");
-        let last: Row = serde_json::from_str(lines.last().unwrap()).unwrap();
-        assert_eq!(
-            last,
-            Row::Cut {
-                reason: CutReason::Rows
-            }
-        );
-        assert_eq!(
-            written[0].cut,
-            Some(StreamCut {
-                reason: CutReason::Rows,
-                dropped: 2,
-            })
-        );
-    }
-
-    /// A row longer than a line may be is lost in place of a `gap`, and the rows after it are
-    /// written.
-    #[test]
-    fn a_row_past_the_line_bound_leaves_a_gap() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut files = NativeFiles::create(tmp.path()).unwrap();
-        files.take(0, &header(Stream::Window)).unwrap();
-        files.take(0, &commit("x".repeat(MAX_LINE_BYTES))).unwrap();
-        files.take(0, &commit("after".to_owned())).unwrap();
-        let written = files.finish().unwrap();
-
-        let lines = lines(tmp.path(), "0.jsonl");
-        let sizes: Vec<usize> = lines.iter().map(String::len).collect();
-        assert_eq!(sizes.len(), 3, "line sizes {sizes:?}");
-        assert!(
-            lines[1] == "{\"gap\":{\"rows\":1}}\n",
-            "line 2, {} bytes, is not a gap of one row",
-            sizes[1]
-        );
-        assert_eq!(written[0].rows, 1);
-        assert_eq!(written[0].lost_rows, 1);
-        assert_eq!(written[0].cut, None);
-    }
 }

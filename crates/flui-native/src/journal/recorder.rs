@@ -6,13 +6,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use flui_platform::ImeEvent;
-use flui_protocol::native_recording::Budget;
+use flui_protocol::native_recording::{Budget, Line};
 use parking_lot::Mutex;
 
 use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use super::codec::{
-    Backend, DisplayRead, Header, NativeRecording, PreferenceRead, ReadFailure, RecordedDisplay,
-    RecordedWindowState, Row,
+    Backend, CodecError, CutReason, DisplayRead, Header, NativeRecording, PreferenceRead,
+    ReadFailure, RecordedDisplay, RecordedWindowState, Row,
 };
 use super::order::line_bytes;
 use super::store::{StoreDocument, StoreLock};
@@ -154,18 +154,34 @@ fn journal(
         .budget
         .get_or_insert_with(|| Budget::after_header(line_bytes(header.to_wire())));
     // Room is always kept for a `cut` row, so a cut always fits: a row that
-    // is one stands in for nothing after it. A row no recording can hold
-    // (longer than a line may be) is kept, so `NativeRecording::write`
-    // refuses the recording with the line's error rather than cut a
-    // recording that is not full.
+    // is one stands in for nothing after it.
     let row = match row {
         Row::Cut(_) => row,
-        row => match budget.admit_row(line_bytes(row.to_wire()), 0, true) {
-            Ok(()) => row,
-            Err(overrun) => overrun.cut_reason().map_or(row, Row::Cut),
-        },
+        row => admitted(budget, line_bytes(row.to_wire()), row),
     };
     recording.rows.push(row);
+}
+
+/// `row`, of `line` bytes, if `budget` admits it; otherwise the row that
+/// stands in its place and is counted instead: a `cut` where the recording is
+/// full, and a `gap` of one row for a row no recording holds (longer than a
+/// line may be), so what the recorder keeps is bounded and always written.
+fn admitted(budget: &mut Budget, line: usize, row: Row) -> Row {
+    let Err(overrun) = budget.admit_row(line, 0, true) else {
+        return row;
+    };
+    if let Some(reason) = overrun.cut_reason() {
+        return Row::Cut(reason);
+    }
+    let gap = Row::Gap { rows: 1 };
+    let gap_line = line_bytes(Ok::<_, CodecError>(Line::Gap { rows: 1 }));
+    match budget.admit_row(gap_line, 0, true) {
+        Ok(()) => gap,
+        // The gap passes a bound of its own: the recording is full (a gap is
+        // never longer than a line, and the recorder's header declares no
+        // device, so no other bound refuses it).
+        Err(overrun) => Row::Cut(overrun.cut_reason().unwrap_or(CutReason::Bytes)),
+    }
 }
 
 /// The header a call that opens its source starts it with.

@@ -99,7 +99,8 @@ pub struct Budget {
 }
 
 impl Budget {
-    /// A recording whose header line takes `header` bytes, its line ending included.
+    /// A recording a reader read the header line of, `header` bytes with its line ending: the
+    /// line's own length is the reader's to check as it reads it.
     #[must_use]
     pub const fn after_header(header: usize) -> Self {
         Self {
@@ -107,6 +108,20 @@ impl Budget {
             body: 0,
             rows: 0,
         }
+    }
+
+    /// A recording a writer is about to write, whose header line takes `header` bytes, newline
+    /// included. A writer checks its header here before it writes anything, so it never starts a
+    /// recording no reader takes.
+    ///
+    /// # Errors
+    ///
+    /// [`Overrun::HeaderBytes`] when the header is longer than [`MAX_LINE_BYTES`].
+    pub const fn for_header(header: usize) -> Result<Self, Overrun> {
+        if header.saturating_sub(1) > MAX_LINE_BYTES {
+            return Err(Overrun::HeaderBytes);
+        }
+        Ok(Self::after_header(header))
     }
 
     /// The bytes taken, the header's included.
@@ -124,10 +139,12 @@ impl Budget {
     /// Take a row a writer is about to write: its line of `line` bytes, newline included, and the
     /// `declared` bytes its header grows by to declare the devices the row reads first (zero for a
     /// writer whose header already declares every row's devices). `follows` says whether a row may
-    /// come after this one, which a live stream always may: then room stays for the `cut` row a
-    /// writer ends the recording with in that one's place, so a writer that admits every row it
-    /// writes, and ends the recording with a `cut` row at the first it is refused, never writes
-    /// past a bound.
+    /// come after this one: then room stays for the `cut` row a writer ends the recording with in
+    /// that one's place, so a live writer, which never knows whether another row comes, admits
+    /// every row with `follows`, ends the recording with a `cut` row at the first it is refused,
+    /// and never writes past a bound. A writer that holds every row admits them without `follows`
+    /// and, at the first refused, takes back rows until the cut fits, so a recording within the
+    /// bounds is written whole.
     ///
     /// # Errors
     ///
