@@ -1,6 +1,6 @@
 //! Trackpad pinch and rotate as one gesture stream about a focal point.
 
-use super::PointerInfo;
+use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite, within};
 use crate::EventTime;
 use crate::keyboard::Modifiers;
@@ -94,7 +94,7 @@ pub enum PanZoomPhase {
 /// One event of a trackpad pinch/rotate gesture.
 ///
 /// A gesture is `Start`, any number of `Update`s, then `End` or `Cancelled`, all with the same
-/// [`PointerInfo::id`], which no contact uses while the gesture runs. A two-finger pan is never
+/// [`PointerSource::id`], which no contact uses while the gesture runs. A two-finger pan is never
 /// a `PanZoom`: it arrives as [`ScrollEvent`](super::ScrollEvent)s with a
 /// [`ScrollPhase`](super::ScrollPhase) on every backend.
 ///
@@ -102,7 +102,7 @@ pub enum PanZoomPhase {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct PanZoomEvent {
-    pointer: PointerInfo,
+    pointer: PointerSource,
     /// When the platform observed the event.
     pub time: EventTime,
     /// The focal point the gesture scales and rotates about, refreshed on every event: when it
@@ -120,7 +120,7 @@ impl PanZoomEvent {
     /// carried, so the event cannot classify itself two ways.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: EventTime,
         position: PointerPosition,
         phase: PanZoomPhase,
@@ -145,7 +145,7 @@ impl PanZoomEvent {
     /// The gesture's pointer; its kind is always
     /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
     #[must_use]
-    pub const fn pointer(&self) -> &PointerInfo {
+    pub const fn pointer(&self) -> &PointerSource {
         &self.pointer
     }
 }
@@ -161,7 +161,7 @@ impl PanZoomEvent {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct SmartZoomEvent {
-    pointer: PointerInfo,
+    pointer: PointerSource,
     /// When the platform observed the event.
     pub time: EventTime,
     /// Where the pointer rests: the point to zoom about.
@@ -175,7 +175,7 @@ impl SmartZoomEvent {
     /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad) whatever `pointer` carried, as
     /// [`PanZoomEvent::new`] does.
     #[must_use]
-    pub const fn new(pointer: PointerInfo, time: EventTime, position: PointerPosition) -> Self {
+    pub const fn new(pointer: PointerSource, time: EventTime, position: PointerPosition) -> Self {
         let mut pointer = pointer;
         pointer.kind = super::PointerKind::Trackpad;
         Self {
@@ -195,7 +195,7 @@ impl SmartZoomEvent {
     /// The gesture's pointer; its kind is always
     /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
     #[must_use]
-    pub const fn pointer(&self) -> &PointerInfo {
+    pub const fn pointer(&self) -> &PointerSource {
         &self.pointer
     }
 }

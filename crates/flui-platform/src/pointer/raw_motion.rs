@@ -1,6 +1,6 @@
 //! A locked pointer's motion.
 
-use super::PointerInfo;
+use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite};
 use crate::EventTime;
 
@@ -76,7 +76,7 @@ pub enum MotionAcceleration {
 #[non_exhaustive]
 pub struct RawMotion {
     /// The pointer that moved.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// When the platform observed the motion.
     pub time: EventTime,
     /// Where the locked pointer rests, in the window's logical pixels: what
@@ -92,7 +92,7 @@ impl RawMotion {
     /// A motion of `delta` from `pointer` at `time`, with no resting position.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: EventTime,
         delta: MotionDelta,
         acceleration: MotionAcceleration,

@@ -24,7 +24,9 @@ use flui_interaction::{
     PointerDispatch, RecognizerSet, TapDetails, TapDownDetails, TapGestureRecognizer, TapUpDetails,
     TransformLock, cancel_all,
 };
-use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerKindSet};
+use flui_interaction::{
+    PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerKindSet, PointerSource,
+};
 use flui_platform::EventTime;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -1670,7 +1672,7 @@ fn composition_diagnostic(error: &flui_interaction::gesture::CompositionError) {
 #[derive(Default)]
 struct NativeScaleRoute {
     pending: Option<PendingNativeScale>,
-    active: Option<(PointerInfo, Rc<()>)>,
+    active: Option<(PointerSource, Rc<()>)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1682,7 +1684,7 @@ enum NativeBeginAdmission {
 
 #[derive(Clone)]
 struct PendingNativeScale {
-    source: PointerInfo,
+    source: PointerSource,
     time: EventTime,
     /// The local focal point at Start: translation is measured from it.
     focal: Point<f64>,
@@ -1690,7 +1692,7 @@ struct PendingNativeScale {
     generation: Rc<()>,
 }
 
-fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
+fn same_native_source(left: &PointerSource, right: &PointerSource) -> bool {
     left.id == right.id && left.device == right.device
 }
 

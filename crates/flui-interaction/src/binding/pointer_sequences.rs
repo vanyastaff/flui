@@ -12,7 +12,7 @@ use flui_platform::EventTime;
 use smallvec::SmallVec;
 
 use crate::{
-    events::{DeviceId, PointerInfo},
+    events::{DeviceId, PointerSource},
     ids::{InputSurface, PointerId},
     pointer::{PointerEventResampler, ResolvedRouteToken, pointer_capture::ContactCapture},
 };
@@ -50,7 +50,7 @@ pub(super) struct CachedPointerRoute {
     pub(super) resampler: PointerEventResampler,
     /// Latest admitted source metadata, so lifecycle cancellation preserves
     /// the tool and role most recently observed on this contact.
-    pub(super) pointer: PointerInfo,
+    pub(super) pointer: PointerSource,
     /// Last accepted measured contact timestamp, retained for lifecycle
     /// cancellation that has no new platform timestamp of its own.
     pub(super) time: EventTime,
@@ -60,7 +60,7 @@ pub(super) struct CachedPointerRoute {
 /// before any callback runs.
 #[derive(Clone, Copy)]
 pub(super) struct ContactSnapshot {
-    pub(super) pointer: PointerInfo,
+    pub(super) pointer: PointerSource,
     pub(super) surface: InputSurface,
     pub(super) time: EventTime,
     pub(super) sequence: PointerSequence,
@@ -372,7 +372,7 @@ impl PointerSequences {
     /// Refuses (returns `false`) a packet from another device: the map key
     /// already matches `PointerId`, and device identity completes the source,
     /// while kind/tool and primary role may change during contact.
-    pub(super) fn observe(&self, pointer: &PointerInfo, time: Option<EventTime>) -> bool {
+    pub(super) fn observe(&self, pointer: &PointerSource, time: Option<EventTime>) -> bool {
         let mut routes = self.routes.borrow_mut();
         let Some(cached) = routes.get_mut(&pointer.id) else {
             return true;
@@ -458,7 +458,7 @@ impl PointerSequences {
 
     /// A released capture: the rest of this contact is refused until a fresh
     /// Down from the same device.
-    pub(super) fn refuse_released(&self, pointer: PointerInfo) {
+    pub(super) fn refuse_released(&self, pointer: PointerSource) {
         self.refused
             .borrow_mut()
             .insert(pointer.id, RefusalPolicy::FreshDown(pointer.device));

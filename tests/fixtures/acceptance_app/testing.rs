@@ -17,7 +17,7 @@ use std::time::Duration;
 use flui::foundation::RebuildReason;
 use flui::interaction::FocusManager;
 use flui::platform::ImeEvent;
-use flui::platform::keyboard::{Modifiers, NamedKey};
+use flui::interaction::{Modifiers, NamedKey};
 use flui::prelude::*;
 use flui::testing::{
     InspectNode, InspectValue, Locator, MemoryStorage, Node, Role, TestWindow, Tester, TextMatch,

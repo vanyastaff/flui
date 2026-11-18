@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
-    Availability, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
+    Availability, DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot,
     PlacementError, ResolvedPlacement, WindowCapabilities, WindowCapability, WindowExtent,
     WindowGeometry, WindowMode, WindowPlacement, WindowState,
 };
@@ -32,7 +32,7 @@ fn build_desk() -> Desk {
     let registry = DisplayRegistry::new();
     let left = registry.mint(&DisplayKey::Injected(1)).expect("id");
     let right = registry.mint(&DisplayKey::Injected(2)).expect("id");
-    let primary = DisplayInfo::new(
+    let primary = DisplayDescription::new(
         left,
         "left",
         bounds(0, 0, 1920, 1080),
@@ -41,7 +41,7 @@ fn build_desk() -> Desk {
     .with_usable_bounds(bounds(0, 0, 1920, 1040))
     .with_primary(true)
     .with_persistent_key("key-left");
-    let hidpi = DisplayInfo::new(right, "right", bounds(1920, 0, 3840, 2160), two())
+    let hidpi = DisplayDescription::new(right, "right", bounds(1920, 0, 3840, 2160), two())
         .with_persistent_key("key-right");
     Desk {
         displays: DisplaySnapshot::empty()
@@ -252,7 +252,7 @@ fn a_placement_without_a_position_stays_unpositioned() {
 fn displays_that_cannot_hold_a_window_are_not_candidates() {
     let registry = DisplayRegistry::new();
     let make = |number, usable: Bounds<i32>, primary| {
-        DisplayInfo::new(
+        DisplayDescription::new(
             registry.mint(&DisplayKey::Injected(number)).expect("id"),
             "display",
             bounds(0, 0, 1920, 1080),

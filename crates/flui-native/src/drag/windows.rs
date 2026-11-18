@@ -1229,7 +1229,9 @@ fn native_of(format: u16) -> Option<NativeFormat> {
         // Registered formats live in 0xC000..=0xFFFF; predefined ones FLUI
         // does not announce.
         format if format >= 0xC000 => {
-            let mut name = [0_u16; 256];
+            // Room for the longest name a registered format has, which is
+            // the longest type every host's drag reads, and its NUL.
+            let mut name = [0_u16; crate::drag::offers::MAX_TYPE_LEN + 1];
             // SAFETY: the call writes at most `name.len()` units into the
             // live buffer and returns how many.
             let written = unsafe { GetClipboardFormatNameW(u32::from(format), &mut name) };
@@ -1262,13 +1264,10 @@ const fn global_format(format: u16) -> FORMATETC {
 #[cfg(windows)]
 const IDENTITY_MAX_BYTES: u64 = 4096;
 
-/// The most entries read from a foreign data object's format enumerator:
-/// far more than any source offers.
-#[cfg(windows)]
-const MAX_ENUMERATED_FORMATS: usize = 256;
-
 /// What a foreign data object offers: its formats in its order, and the
-/// session identity when it carries FLUI's.
+/// session identity when it carries FLUI's. Of its format enumerator, the
+/// first [`MAX_OFFERED_TYPES`](crate::drag::offers::MAX_OFFERED_TYPES)
+/// entries are read, as every host's drag reads its source's types.
 #[cfg(windows)]
 fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor)> {
     let mut formats = Vec::new();
@@ -1279,7 +1278,7 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
     {
         // The other process's enumerator decides when it ends; a bound keeps
         // one that never does from holding `DragEnter`, and its source, here.
-        for _ in 0..MAX_ENUMERATED_FORMATS {
+        for _ in 0..crate::drag::offers::MAX_OFFERED_TYPES {
             let mut entry = [FORMATETC::default()];
             let mut fetched = 0;
             // SAFETY: `entry` has room for the one entry asked for and

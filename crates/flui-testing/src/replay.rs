@@ -57,8 +57,8 @@ use flui_interaction::events::{
 use flui_interaction::{PointerEvent, PointerId};
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
-    PointerButtons, PointerCancel, PointerInfo, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
+    PointerButtons, PointerCancel, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, PointerSource, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
     TouchpadSwipeEvent, TouchpadSwipePhase,
 };
@@ -166,7 +166,8 @@ impl ScriptedPointer {
     #[must_use]
     pub fn to_event_at(self, base: EventTime) -> PointerEvent {
         let time = base + self.at;
-        let mut info = PointerInfo::new(self.pointer, self.device).with_role(PointerRole::Primary);
+        let mut info =
+            PointerSource::new(self.pointer, self.device).with_role(PointerRole::Primary);
         if let Some(hardware) = self.hardware {
             info = info.with_device(hardware);
         }
@@ -374,7 +375,7 @@ impl ScriptStep {
             }
             Self::Scroll(step) => {
                 let mut event = ScrollEvent::new(
-                    PointerInfo::new(step.pointer, step.device).with_role(PointerRole::Primary),
+                    PointerSource::new(step.pointer, step.device).with_role(PointerRole::Primary),
                     base + step.at,
                     position(step.position),
                     ScrollDelta::try_new(step.unit, step.delta.dx, step.delta.dy)
@@ -397,7 +398,7 @@ impl ScriptStep {
                 };
                 HostInput::Platform(PlatformInput::Pointer(PointerEvent::PanZoom(
                     PanZoomEvent::new(
-                        PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                        PointerSource::new(step.pointer, PointerKind::Trackpad)
                             .with_role(PointerRole::Primary),
                         base + step.at,
                         position(step.position),
@@ -407,7 +408,7 @@ impl ScriptStep {
             }
             Self::SmartZoom(step) => HostInput::Platform(PlatformInput::Pointer(
                 PointerEvent::SmartZoom(SmartZoomEvent::new(
-                    PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                    PointerSource::new(step.pointer, PointerKind::Trackpad)
                         .with_role(PointerRole::Primary),
                     base + step.at,
                     position(step.position),
@@ -415,7 +416,7 @@ impl ScriptStep {
             )),
             Self::TouchpadHold(step) => HostInput::Platform(PlatformInput::Pointer(
                 PointerEvent::TouchpadHold(TouchpadHoldEvent::new(
-                    PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                    PointerSource::new(step.pointer, PointerKind::Trackpad)
                         .with_role(PointerRole::Primary),
                     base + step.at,
                     position(step.position),
@@ -433,7 +434,7 @@ impl ScriptStep {
                 };
                 HostInput::Platform(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
                     TouchpadSwipeEvent::new(
-                        PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                        PointerSource::new(step.pointer, PointerKind::Trackpad)
                             .with_role(PointerRole::Primary),
                         base + step.at,
                         position(step.position),

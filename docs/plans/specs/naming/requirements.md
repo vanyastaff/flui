@@ -201,7 +201,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
   (`Color`, `TextStyle`, `Size`, `BoxConstraints`, `SliverGeometry`, `SliverConstraints`), парный к сеттеру метод
   объекта для чтения и записи (`Render*`, `Paint`, `*ParentData`, `WindowState`: голое имя — геттер, `set_x` — сеттер),
   конструктор без `self` (`with_capacity`), замыкание в области (`Canvas::with_transform`), снимок ОС для тестов
-  (`SystemPreferences`, `DisplayInfo`). [C-GETTER; конструкторы Flutter]. (`xtask builder-names`, ADR-0325)
+  (`SystemPreferences`, `DisplayDescription`). [C-GETTER; конструкторы Flutter]. (`xtask builder-names`, ADR-0325)
 
 ## Принуждение
 

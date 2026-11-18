@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.CancellationSignal;
+import android.os.OperationCanceledException;
 import android.os.ParcelFileDescriptor;
 import android.os.Parcelable;
 import android.provider.OpenableColumns;
@@ -53,7 +55,7 @@ public final class FluiHost {
      * calls, the entries of the queue, and what each means. Raised with every
      * change to any of them, together with the library's constant.
      */
-    public static final int PROTOCOL = 5;
+    public static final int PROTOCOL = 6;
 
     /** An entry for {@code onTrimMemory}; its value is the level. */
     static final int TRIM_MEMORY = 1;
@@ -328,32 +330,50 @@ public final class FluiHost {
         }
     }
 
+    /** {@link #openDocument}: the provider refused or failed. */
+    static final int OPEN_FAILED = -1;
+
+    /** {@link #openDocument}: the read grant the intent carried has ended. */
+    static final int OPEN_GRANT_ENDED = -2;
+
+    /** {@link #openDocument}: the library cancelled the open. */
+    static final int OPEN_CANCELLED = -3;
+
     /**
      * The descriptor of the document {@code uri} names, opened for reading
      * through {@code context}'s content resolver and detached, so that the
-     * library owns and closes it; {@code -1}, logged, when the provider
-     * refuses or fails. The library calls it on its own thread: a provider
-     * can take long.
+     * library owns and closes it; {@link #OPEN_FAILED}, logged, when the
+     * provider refuses or fails, {@link #OPEN_GRANT_ENDED} when the grant to
+     * read it has ended ({@code SecurityException}), {@link #OPEN_CANCELLED}
+     * when {@code signal} was cancelled. The library calls it on a thread of
+     * its own: a provider can take long, and the library cancels {@code
+     * signal} from its owner thread when the open passes its deadline.
      */
-    static int openDocument(Context context, String uri) {
+    static int openDocument(Context context, String uri, CancellationSignal signal) {
         try {
-            ParcelFileDescriptor descriptor =
-                    context.getContentResolver().openFileDescriptor(Uri.parse(uri), "r");
-            return descriptor == null ? -1 : descriptor.detachFd();
+            ParcelFileDescriptor descriptor = context.getContentResolver()
+                    .openFileDescriptor(Uri.parse(uri), "r", signal);
+            return descriptor == null ? OPEN_FAILED : descriptor.detachFd();
+        } catch (SecurityException error) {
+            Log.w(TAG, "the grant to read a document an intent opened has ended", error);
+            return OPEN_GRANT_ENDED;
+        } catch (OperationCanceledException cancelled) {
+            return OPEN_CANCELLED;
         } catch (Exception error) {
             Log.w(TAG, "a document an intent opened could not be read", error);
-            return -1;
+            return OPEN_FAILED;
         }
     }
 
     /**
      * The name the provider shows for the document {@code uri} names, or
      * {@code null} when it shows none, or one longer than
-     * {@link #MAX_NAME_LENGTH}.
+     * {@link #MAX_NAME_LENGTH}, or when {@code signal} was cancelled. On the
+     * library's thread, as {@link #openDocument}.
      */
-    static String documentName(Context context, String uri) {
-        try (Cursor cursor = context.getContentResolver().query(
-                Uri.parse(uri), new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+    static String documentName(Context context, String uri, CancellationSignal signal) {
+        try (Cursor cursor = context.getContentResolver().query(Uri.parse(uri),
+                new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null, signal)) {
             if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
                 String name = cursor.getString(0);
                 return name.length() <= MAX_NAME_LENGTH ? name : null;

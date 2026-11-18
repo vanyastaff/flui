@@ -3024,6 +3024,53 @@ file list, the locale), never forcing another owner's delayed rendering of
 anything else and never setting OLE's private formats again; a restore that
 fails is reported, never panicked on.
 
+### A host clears an expiring entry only while the system still shows it
+
+`NativeClipboard::clear_expired` clears the clipboard for an expiring write's
+entry (`ClipboardWrite::expires_after`) only while the clipboard still holds it
+(ADR-0363 §3); when to ask is the composition root's rule, not a host's. A
+clear is served in order with the writes, so one asked after a write is
+checked against what that write left (the X11 thread holds a clear behind a
+write that waits for its timestamp). When an expiring write lands the host
+records its entry with the system's token; any other write that lands forgets
+it; an entry whose token no longer matches is forgotten for good
+(`host::clipboard::ExpiringRecord`, the part Win32, AppKit, UIKit, Android and
+the in-memory clipboard share).
+
+- **Win32.** The token is the sequence number with the owner, read after the
+  write's session closed, since closing a session that changed the clipboard
+  moves the number once more; a clipboard the thread's window no longer owns by
+  then lost the entry, and nothing is recorded. The owner is read before the
+  number, so a copy landing between the two reads moves the number past any
+  stamp that could equal it. The clear reads the stamp and empties the
+  clipboard inside one session, which no other process can change.
+- **AppKit and UIKit.** The change count, which moves when the pasteboard
+  changes hands. The check and `clearContents` (`setItems:` on UIKit) are two
+  calls: a copy made between them is cleared too. UIKit also sets
+  `UIPasteboardOptionExpirationDate`, so the system removes the item at its time
+  after the process too.
+- **Android.** A writer mark (the process's random hash seed) and the entry's
+  number in the clip description's extras; the clear reads the description and
+  clears in a second binder call. Without input focus the system hands no
+  description: `ExpiredClear::Unseen`, which the composition root asks again when
+  the application is next in front (`ExpiryClearing::AtTimeOrInFront`).
+- **X11.** The window gives the selection up at the time it took it, which the
+  server ignores once another client took it later: one step of the server.
+- **Wayland.** The entry's source is destroyed; the compositor serves requests
+  in order, so a selection another client set first already cancelled it.
+- **The loop's end.** Win32 queues the clear and waits for it within the bound
+  it is given, since the window station's clipboard outlives the process;
+  AppKit, UIKit and Android clear at once; X11 and Wayland answer `NotHeld`,
+  since the selection ends with the connection the loop releases.
+
+Tests: `an_expiring_entry_is_cleared_only_under_its_stamp` and
+`an_expiring_entry_clears_only_while_the_clipboard_still_holds_it` (Win32, the
+second on the real clipboard, saved and put back),
+`an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it` (X11),
+the expiring step of `wayland_clipboard`'s `the_selection_crosses_between_clients`,
+`an_expiring_entry_is_cleared_only_while_it_is_still_there` and
+`a_record_forgets_an_entry_its_token_no_longer_matches`.
+
 ### Win32 callbacks live in the window's owner-thread context
 
 `WindowsPlatform`, `WindowsLoop` and `WindowsWindow` are neither `Send` nor
@@ -5814,7 +5861,7 @@ the library does not know settles it as `AnswerUnreadable`, and one whose `Inten
 not keep as `DataLost` with its code, each logged: every record taken off the queue ends a request
 or is reported. The result `Intent` never leaves the owner thread or the host: the router holds it
 by a global reference under its request's token and capability, and that capability's provider
-reads it once by handing the answer's `ResultData` to `Activity::take_data`. A `ResultData`
+reads it once by handing the answer's `ResultIntent` to `Activity::take_data`. A `ResultIntent`
 dropped unread (a completion nobody receives, a retired runtime, a provider that went) releases
 it, which the router sweeps. A request lives while its provider holds its `ResultTicket`; the drop
 records the release and wakes the owner through its signal, and that turn's sweep ends it as
@@ -5971,6 +6018,60 @@ them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
 the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::storage_dir`
 is the one switch.
+
+### Another application's content is read off the owner thread, its size first
+
+What another application hands the host (a clip, a drag, the documents an intent names) is
+untrusted: its size and its timing are the other application's. The rules, on every host that
+reads such content:
+
+- **No provider on the owner thread.** A content provider answers when its application does (a
+  cloud provider once it has downloaded the file), and the Android owner thread drains
+  NativeActivity's input queue and runs frames. The clipboard read takes the text the primary
+  clip's first item holds (`ClipData.Item.getText`, `clipboard::android::item_text`); an item that
+  is a URI or an intent holds none and reads `Ok(None)`, as a clipboard on every other host answers
+  one with no text representation, so no stream is opened. A paste on the Java side takes the same
+  text (`FluiView.clipText`, below API 31 and through the content receiver from it), and the
+  receiver hands back what it does not take. No class calls `coerceToText`.
+- **The limit is the clipboard's.** Text read or pasted is refused whole past
+  `host::MAX_TEXT` bytes, the limit of every host's clipboard read, on its UTF-8 length, counted
+  in Java before anything is copied (`FluiView.utf8Length`; `FluiView.MAX_PASTED_BYTES` states the
+  same value, and a test holds them equal). A read then copies the text three times, each within
+  the limit and at most two at once: the UTF-8 array Java encodes (`FluiView.utf8`), the bytes JNI
+  copies out of it, and the shared text the answer holds.
+- **Size first, then a read that stops.** A dropped URI's bytes are read on a thread of their own
+  (above); the size the provider states (`AssetFileDescriptor.getLength`, the file's size when it
+  states none) is asked before anything is read and one past the request's limit is refused, and
+  the read stops at the limit however much was stated. It holds one buffer of the bytes (two while
+  it grows and while the answer is copied out), the Rust side one more and the payload's shared
+  bytes, each made before the previous is dropped.
+- **Documents open on workers.** An intent's `content:` documents are opened
+  (`FluiHost.openDocument`, `documentName`) on worker threads of the loop's
+  (`owner::android::documents`): the owner accepts each intent, at most `MAX_WAITING_INTENTS` at
+  once, each document a job under a ticket of its own, and delivers the intents in the order they
+  arrived, each once every document has an outcome, so a slow provider holds back the later intents
+  and never the owner's turn. An outcome finds its document by its ticket alone; one for a document
+  already refused reaches no other and is dropped, which closes its descriptor. Every accepted
+  document ends with exactly one outcome: the file, or an `OpenRefusal` naming why (the provider
+  failed; the read grant ended with the Activity, `SecurityException`; the intent's
+  `OPEN_DEADLINE` passed, and the owner cancels the open through its `CancellationSignal`, a
+  one-way binder call that never waits for the provider; the platform retired; no thread could
+  start). The poll wakes for the earliest deadline (`LoopTurn::open_deadline`). One worker runs
+  while it keeps up; `ContentProvider.openFile` ignores the cancellation unless a provider
+  overrides it, so once every worker is inside an abandoned open, a job waiting starts another, up
+  to `MAX_WORKERS` (`host::MAX_PROVIDER_READS`, the bound of the drop reads too); past them the
+  jobs are refused at their own deadlines. What a worker finishes after the platform retired it
+  drops itself. An intent is heard after the trim levels `FluiHost` queued in the same turn: a
+  trim level never waits for another application's provider.
+- **A drag's types are bounded the same everywhere.** Every host's drag reads the first
+  `host::MAX_OFFERED_TYPES` types its source names and none past them, and leaves out a
+  type longer than `host::MAX_TYPE_LEN` bytes, which counts toward them
+  (`drag::offers::offered_types`): X11 reads that many atoms of `XdndTypeList`, Wayland that many
+  `wl_data_offer.offer` events (a repeated name counts), Windows that many entries of the format
+  enumerator, the Web that many `DataTransfer` types and files, and Android copies that many out of
+  the `ClipDescription` in Java (`FluiView.mimeTypes`) and reads them one local reference at a time
+  (`drag::android::clip::read_type_names`), so the native frame stays bounded on API 23 to 25,
+  whose local reference table holds 512 for the thread.
 
 ### Android samples its displays through JNI and refreshes them on announced change only
 

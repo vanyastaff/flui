@@ -399,7 +399,7 @@ impl PlatformWindow for RecordingWindow {
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

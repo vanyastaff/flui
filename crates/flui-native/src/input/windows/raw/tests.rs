@@ -85,11 +85,11 @@ mod message_clock_contract {
     fn a_coarse_stamp_never_precedes_a_delivered_precise_one() {
         use flui_platform::EventTime;
         use flui_platform::pointer::{
-            CancelReason, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
+            CancelReason, PointerCancel, PointerEvent, PointerId, PointerKind, PointerSource,
         };
         let clock = MessageClock::anchored(100, None, 1_000_000);
         let precise = PointerEvent::Cancel(PointerCancel::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::new(std::num::NonZeroU64::MIN),
                 PointerKind::Touch,
             ),
@@ -161,7 +161,7 @@ mod native_pointer_contracts {
     }
 
     /// The sample of the move `packet` makes for a hovering contact.
-    fn sampled(packet: PointerPacket) -> (flui_platform::pointer::PointerInfo, PointerSample) {
+    fn sampled(packet: PointerPacket) -> (flui_platform::pointer::PointerSource, PointerSample) {
         let events = assemble(&mut registry(), &[packet], WM_POINTERUPDATE);
         events
             .into_iter()
@@ -412,7 +412,7 @@ mod native_pointer_contracts {
         })
     }
 
-    fn down(registry: &mut ContactRegistry, id: u32) -> flui_platform::pointer::PointerInfo {
+    fn down(registry: &mut ContactRegistry, id: u32) -> flui_platform::pointer::PointerSource {
         assemble(
             registry,
             &[touch_packet(

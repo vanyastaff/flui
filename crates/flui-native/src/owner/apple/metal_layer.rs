@@ -367,7 +367,9 @@ mod tests {
     use std::time::Duration;
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, RefreshPeriod};
+    use flui_platform::{
+        DisplayDescription, DisplayKey, DisplayRegistry, DisplaySnapshot, RefreshPeriod,
+    };
 
     use super::{LayerRefresh, NewRefresh, presented};
 
@@ -423,7 +425,7 @@ mod tests {
             .mint(&DisplayKey::AndroidId(2))
             .expect("ids are not exhausted");
         let at = |hz: f64| {
-            let mut display = DisplayInfo::new(
+            let mut display = DisplayDescription::new(
                 id,
                 "panel",
                 Bounds::new(Point::new(0, 0), Size::new(1440, 900)),

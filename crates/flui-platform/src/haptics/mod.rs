@@ -47,7 +47,7 @@ pub use request::{
     HapticCapabilities, HapticOutcome, HapticRequest, HapticTicket, HapticTiming, PatternPlayback,
 };
 
-use crate::{DeviceId, HapticFeedback};
+use crate::{HapticFeedback, pointer::DeviceId};
 
 /// Platform capability for haptic feedback on one window.
 ///

@@ -490,7 +490,7 @@ impl Renderer {
     /// The request is met as far as the surface, the adapter and the display
     /// allow and falls back down `Hdr` → `WideGamut` → `Srgb8`;
     /// [`Self::surface_color`] says what was granted. `display` is the
-    /// [`DisplayInfo::color`](flui_platform::DisplayInfo::color) of the
+    /// [`DisplayDescription::color`](flui_platform::DisplayDescription::color) of the
     /// display the window is on, `None` where the platform reports none: an
     /// extended-range surface is granted only on a display in high range, and
     /// its tone mapping is bounded by the display's headroom (ADR-0256). A

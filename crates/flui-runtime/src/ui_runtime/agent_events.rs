@@ -310,7 +310,7 @@ impl PresentationState {
             pipeline
                 .semantics_owner()
                 .map(flui_semantics::SemanticsOwner::revision)
-                .filter(|revision| revision.0 != 0)
+                .filter(|revision| *revision != flui_protocol::TreeRevision::ZERO)
         });
         if let Some(revision) = revision {
             let changed = {

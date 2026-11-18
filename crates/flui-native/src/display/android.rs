@@ -20,8 +20,8 @@ pub(crate) mod sample {
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
-        Availability, CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, FrameRateHint,
-        Headroom, RefreshPeriod,
+        Availability, CapabilityAbsence, DisplayColor, DisplayDescription, DisplayId,
+        FrameRateHint, Headroom, RefreshPeriod,
     };
 
     use crate::display::scale::{RefusedScale, ScaleStreaks};
@@ -129,12 +129,16 @@ pub(crate) mod sample {
         /// The snapshot entry for this display under `id` at `scale`; `None`
         /// for a display that reports no size, which nothing could be laid out
         /// on.
-        pub(crate) fn info(&self, id: DisplayId, scale: DevicePixelRatio) -> Option<DisplayInfo> {
+        pub(crate) fn info(
+            &self,
+            id: DisplayId,
+            scale: DevicePixelRatio,
+        ) -> Option<DisplayDescription> {
             if self.width <= 0 || self.height <= 0 {
                 return None;
             }
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
-            let mut info = DisplayInfo::new(id, &self.name, bounds, scale)
+            let mut info = DisplayDescription::new(id, &self.name, bounds, scale)
                 .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID)
                 .with_color(display_color(self.color));
             info.refresh_period = RefreshPeriod::from_hz(f64::from(self.refresh_hz)).ok();
@@ -152,7 +156,7 @@ pub(crate) mod sample {
         displays: &'a [RawDisplay],
         mut mint: impl FnMut(i32) -> Option<DisplayId>,
         streaks: &mut ScaleStreaks<DisplayId>,
-    ) -> (Vec<(&'a RawDisplay, DisplayInfo)>, Vec<RefusedScale>) {
+    ) -> (Vec<(&'a RawDisplay, DisplayDescription)>, Vec<RefusedScale>) {
         let mut listed = Vec::with_capacity(displays.len());
         let mut read = Vec::with_capacity(displays.len());
         let mut refusals = Vec::new();

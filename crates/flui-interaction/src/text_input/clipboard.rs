@@ -13,7 +13,7 @@ use std::{fmt, rc::Rc};
 use flui_platform::capability::{
     Capability, Completion, CompletionSource, ProviderContext, Resolver,
 };
-use flui_platform::{ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
+use flui_platform::{ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing};
 
 use super::shared_read::SharedRead;
 
@@ -54,6 +54,12 @@ pub trait ClipboardBackend: 'static {
 
     /// What this host does with a concealed write. Constant for a backend.
     fn concealment(&self) -> Concealment;
+
+    /// What this host does with an
+    /// [expiring](ClipboardWrite::expires_after) write: whether the entry is
+    /// cleared at its time and when the session locks, if the clipboard
+    /// still holds it then (ADR-0363). Constant for a backend.
+    fn expiry_clearing(&self) -> ExpiryClearing;
 }
 
 /// Widget-facing plain-text clipboard for one presentation.
@@ -116,6 +122,15 @@ impl ClipboardHandle {
     #[must_use]
     pub fn concealment(&self) -> Concealment {
         self.backend.concealment()
+    }
+
+    /// What this host does with an
+    /// [expiring](ClipboardWrite::expires_after) write, so an app can tell
+    /// its user whether a secret it copies clears itself at its time and
+    /// when the session locks, or stays until something replaces it.
+    #[must_use]
+    pub fn expiry_clearing(&self) -> ExpiryClearing {
+        self.backend.expiry_clearing()
     }
 
     /// Read the clipboard's text: `Ok(None)` when it holds none, an error

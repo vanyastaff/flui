@@ -14,6 +14,14 @@ mod android;
 #[cfg(any(windows, test))]
 mod associations;
 #[cfg(all(
+    test,
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod clipboard_expiry_tests;
+#[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
@@ -237,7 +245,7 @@ fn presented_host_window(
 
 fn text_store_host_of(
     window: &Rc<dyn flui_native::HostWindow>,
-) -> Option<std::rc::Rc<dyn flui_platform::TextStoreHost>> {
+) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
@@ -743,13 +751,16 @@ mod tests {
     struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
 
     impl flui_platform::text_store::TextStoreHost for FocusLog {
-        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform::TextStore>>) {
+        fn focus_store(
+            &self,
+            store: Option<std::rc::Rc<dyn flui_platform::text_store::TextStore>>,
+        ) {
             self.0.lock().push(store.is_some());
         }
 
         fn complete_composition(
             &self,
-            _: &std::rc::Rc<dyn flui_platform::TextStore>,
+            _: &std::rc::Rc<dyn flui_platform::text_store::TextStore>,
         ) -> Result<
             flui_platform::text_store::CompositionEnd,
             flui_platform::text_store::TextStoreHostError,
@@ -757,7 +768,7 @@ mod tests {
             Ok(flui_platform::text_store::CompositionEnd::Committed)
         }
 
-        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::TextStore>) {}
+        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::text_store::TextStore>) {}
     }
 
     /// A pull-model window's host reaches the presentation the runner builds
