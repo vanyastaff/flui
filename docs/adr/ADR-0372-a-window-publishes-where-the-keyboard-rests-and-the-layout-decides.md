@@ -41,7 +41,8 @@ move out from under, a form wants to scroll its focused field clear of it.
 - A host that cannot tell a floating keyboard from a docked one publishes what it knows,
   faithfully: docked or hidden.
 - A fact of the window that few layouts read costs the others nothing: a `MediaQuery` a widget
-  nests copies `MediaQueryData`, and the control-cost baselines hold its size.
+  nests copies `MediaQueryData`, every provider above a node lengthens the chain its inherited
+  lookups walk, and the control-cost baselines hold both.
 - A recording made before the change still reads.
 
 ## Considered options
