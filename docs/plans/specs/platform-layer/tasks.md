@@ -3508,22 +3508,33 @@ GPU-память простаивающего или невидимого окн
   фоне, запись до `android_main`, образ API 23–25, ввод с dex из APK) записаны в
   `platform-parity.toml` («Memory pressure», «Activity results for capability providers», «IME
   composition»).
-- [ ] **LY63** (открыта: смена языка) — `targetSdk` закреплён в `platform-support.toml`
-  (`android.target-sdk`); путь Gradle и правила R8 `dev.flui.**`
-  (`a_minified_release_keeps_what_the_crates_rules_keep`); golden манифеста и `build.gradle.kts`
-  (`the_generated_manifest_matches_its_golden`, `the_scaffolded_gradle_script_matches_its_golden`);
-  `windowSoftInputMode` — ADR-0340 §3. Шаблон объявляет
-  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
-  (`the_android_activity_handles_the_configuration_changes_the_host_follows`); тема, `font_scale`,
-  `font_weight_adjustment`, плотность и поворот прогнаны на Galaxy S21 одним `android_main`.
-  Причин не объявлять `locale` больше нет: хост читает языки заново на `ConfigChanged`
-  (`crates/flui-native/src/preferences/android.rs`), а порядок резервных шрифтов следует за сменой
-  языка (`crates/flui-app/src/app/runtime/fallback_rescan.rs`, ADR-0271 §4). Остаётся код:
-  `locale|layoutDirection` в `configChanges` шаблона
-  (`crates/flui-cli/templates/android/AndroidManifest.xml:34`), в `HANDLED_CONFIG_CHANGES` с его
-  комментарием (`crates/flui-cli/tests/cli_platform.rs:61`) и в проверке манифеста
-  (`crates/flui-cli/src/build/android_manifest.rs:384`). Прогон смены языка на устройстве —
-  строка parity «Configuration changes reach the running app».
+- [x] **LY63** (`windowSoftInputMode` решён, ADR-0340 §3; `configChanges` —
+  #1845, `targetSdk` — #2231, правила R8 и golden — #2287), часть `configChanges` — ветка
+  `android/config-changes`. Шаблон `flui create`
+  объявляет все изменения, которые хост читает на `ConfigChanged`:
+  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|keyboard|keyboardHidden|navigation`
+  (тест `the_android_activity_handles_the_configuration_changes_the_host_follows`). `locale` и
+  `layoutDirection` объявлены: `ConfigChanged` перечитывает настройки, языки приходят из
+  `Configuration.getLocales` (`preferences/android.rs`, `language_tags`), резервные шрифты
+  следуют первому языку (`flui-app`, `fallback_rescan.rs`); направление письма платформа не
+  публикует, оно выводится из локали (`docs/gaps.md`, «Locale edge»). Прогон на устройстве
+  (смена языка, Activity жива) — долг в `platform-parity.toml` («Configuration changes reach
+  the running app»). Упаковщик без
+  Gradle отказывает `android.jar` ниже `targetSdk` (не ниже API 31 из-за флага `fontWeightAdjustment`). Ночной режим хост
+  читает из Java `Configuration.uiMode`: нативный `AConfiguration` android-activity после
+  изменения на месте остаётся прежним. Прогон на Galaxy S21 (Android 15, проба `flui create
+  --local`): тема в обе стороны, `font_scale` 1.3, `font_weight_adjustment` 300, `wm density`
+  480, поворот — один `android_main`, значения в `MediaQuery`. `targetSdk` закреплён в `platform-support.toml` (`android.target-sdk = 36`; упаковщик без Gradle и `flui.targetSdk` в `gradle.properties`, 2026-11-03). Путь Gradle сделан в LY62
+  (исходники крейтов через `flui.javaSources`), список `configChanges` в генерируемом манифесте
+  `FluiActivity` — там же. Правила R8 (2026-11-03, ветка `claude/project-thread-op0kt3`): ключ
+  `android.proguard` схемы 2, `flui-native` объявляет `android/proguard-rules.pro`
+  (`-keep class dev.flui.** { *; }`), Gradle получает `flui.proguardFiles` в release, скрипт без
+  чтения свойства отклоняется (`a_minified_release_keeps_what_the_crates_rules_keep`); `flui create`
+  кладёт свой `app/proguard-rules.pro`. Golden: `the_generated_manifest_matches_its_golden`,
+  `the_scaffolded_gradle_script_matches_its_golden` (insta). `windowSoftInputMode` решён в ветке
+  `native/android-activity-results` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края
+  до края, ставит `FluiActivity.onCreate` (таблица — `owner::android::window_setup`), счёт `WindowResized` — прогон
+  в parity «Soft-keyboard insets».
 - [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`
   @ `e617f109a` (#1923, #1924, #1925). **Контракт.** `PlatformWindow` без `Send + Sync`; окна
   отдаются как `Rc<dyn HostWindow>`/`Rc<dyn PlatformWindow>`, слабые ссылки — `std::rc::Weak`.
@@ -6666,8 +6677,7 @@ GPU-память простаивающего или невидимого окн
   Дальше: тесты маршрутизатора держат свой владелец (очередь заданий, `turn`, `retire`) и время
   через `Instant`; сценарный примитив `flui_platform::capability::scripted` (`Scenario`,
   `ManualClock`) может их заменить отдельным изменением.
-  LY63 не закрыта: `locale|layoutDirection` в `configChanges` и доставка смены языка хостом
-  остаются (запись LY63). Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
+  Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
   results for capability providers» (выбор через SAF, старт при остановленной Activity, два
   запроса, ответ после «Don't keep activities» и после `am kill`, ответ до `android_main`),
   «Memory pressure», «Soft-keyboard insets» (счёт `WindowResized`), «IME composition» (ввод с dex из
