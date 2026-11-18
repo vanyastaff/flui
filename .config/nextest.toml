@@ -69,7 +69,9 @@ run-wrapper = 'test-desktop'
 # twice or not at all. `test-trybuild` runs the trybuild group in three
 # shards, whose binaries the job's matrix in .github/workflows/ci.yml lists;
 # together they must equal the group's filter, so a suite added here goes
-# into one shard there.
+# into one shard there. `test-nested` builds only the packages its filter
+# names (`-p flui -p flui-cli` in the job): a nested-cargo test of another
+# package joins that list there, or no job runs it.
 # `cargo nextest show-config test-groups` lists the members. Keep these
 # overrides first: a test takes its group from the first override that
 # matches it and sets one, so only here is each group exactly its filter.
@@ -161,7 +163,7 @@ priority = 100
 # way locally once the facade gained a readback test of its own, and all nine
 # passed immediately when re-run serially.
 #
-# CI's dedicated `gpu-test` job already passes `--test-threads 1` for this
+# The `test` job's GPU readback steps already pass `--test-threads 1` for this
 # reason. That flag does not help the `test` job, where these same tests run
 # (they are gated on `cfg(test)` alone, not on `testing`) alongside
 # thousands of others that SHOULD stay parallel. A test group is the targeted

@@ -30,8 +30,8 @@ name: Nightly platforms
 # `the_acceptance_app_builds_and_answers_on_the_desktop`, which nextest runs first with a
 # build's budget (.config/nextest.toml), so the scenario's budget covers only driving the app.
 #
-# Each leg runs the local command, so a run here and one on a developer's
-# machine cannot drift. A row of crates/flui-native/platform-parity.toml that
+# Each leg's commands are the ones a developer runs on that host
+# (docs/testing.md). A row of crates/flui-native/platform-parity.toml that
 # one of these runs holds names the run in its `nightly` table, and the
 # document marks that cell as passed on a runner.
 #

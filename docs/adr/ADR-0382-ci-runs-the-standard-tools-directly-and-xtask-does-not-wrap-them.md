@@ -63,7 +63,9 @@ contributor runs, and the job holds them.
 
 `test-trybuild`'s matrix lists each shard's test targets and binaries. Together they are the
 `trybuild` group's filter in `.config/nextest.toml`, which a suite joins first; its comment says a
-suite added there goes into one shard. cargo-deny's advisories read the RustSec database
+suite added there goes into one shard. The same comment says `test-nested` builds only the
+packages the `nested-cargo` filter names, so a test of another package joins the job's `-p`
+list. cargo-deny's advisories read the RustSec database
 cargo-audit reads, so cargo-audit is not added beside them.
 
 ### Consequences

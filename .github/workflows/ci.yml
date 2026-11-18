@@ -415,8 +415,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # The nested jobs keep their own entries: this one is saved from
-          # `test --fast`, which never builds their nested target dirs.
+          # The nested jobs keep their own entries: this job's runs never
+          # build their nested target dirs.
           shared-key: workspace-tests-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -440,7 +440,7 @@ jobs:
       #
       # Mesa's lavapipe (Vulkan) and llvmpipe (GL, through EGL) are the GPU the
       # readback suites render on: without an adapter they skip, and the
-      # gpu-test steps below run them on each backend with a missing adapter
+      # "GPU readbacks" steps below run them on each backend with a missing adapter
       # as a failure (ADR-0244 §1).
       #
       # Weston, sway and libwayland are the Wayland host's, started in the next step.

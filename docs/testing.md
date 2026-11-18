@@ -147,9 +147,10 @@ macro expansion or conditional module graphs.
 Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-native step
-of the `test` job needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
-Windows, on the run's own desktop ([The Windows test desktop](#the-windows-test-desktop)),
-and is skipped with a message on macOS. Its `x11_window` harness, the
+of the `test` job needs `xvfb-run` on Linux (`apt install xvfb`). On Windows
+flui-native's suite runs without it, on the run's own desktop
+([The Windows test desktop](#the-windows-test-desktop)), and on macOS with
+`FLUI_HEADLESS=1`, as `nightly-platforms.yml` runs both. Its `x11_window` harness, the
 native X11 host's window conformance, starts an Xvfb and an openbox of its own
 and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
 host's tests (`wayland_window::`) run in a step of their own against the
@@ -1321,7 +1322,7 @@ The other workflows (`weekly.yml`, `release.yml`, `docs.yml`, `fuzz.yml`,
 `xtask-native.yml`) are scheduled, manual or event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime suites run every
 night on main in `nightly-platforms.yml` (below) and locally through
-through the `desktop` job's commands of that workflow; no pull request waits for them.
+the `desktop` job's commands of that workflow; no pull request waits for them.
 The GPU readback suites run in `test` on Mesa's software rasterizers, once on
 Vulkan and once on GL, and locally on the host's adapter with the same two
 `cargo nextest run` lines and `FLUI_REQUIRE_GPU=1`.
@@ -1367,7 +1368,7 @@ the nightly runs above run them.
 The two nested jobs keep their own cache entries, saved on main
 beside `test`'s: their builds live in nested target directories
 (`target/tests/trybuild`, `target/cli-template-check`,
-`target/facade-consumer-check`) that `test --fast` never fills, and
+`target/facade-consumer-check`) that the `test` job never fills, and
 rust-cache keeps their dependency artifacts. `weekly.yml` saves no cache: an
 entry unused for seven days is dropped before the next weekly run would
 restore it.

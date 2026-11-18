@@ -77,7 +77,8 @@ rest of the workspace stays `unsafe`-free. Every unsafe block carries a
 The suite runs under nextest in CI on Linux (the `test` job's dedicated step,
 headless + Xvfb). Native Windows/macOS suites run locally through
 `cargo nextest run -p flui-native --locked --no-fail-fast -E 'not (group(trybuild))'`,
-with default features and with `--all-features`. Run it with
+with default features and with `--all-features`; on macOS with `FLUI_HEADLESS=1`, since a bare
+test process cannot own an AppKit run loop (`nightly-platforms.yml` runs both). Run it with
 nextest, not `cargo test`: the tests that drive a real event loop expect a
 process of their own. macOS and the mobile backends are lint-only in CI
 (`cross-typecheck`).

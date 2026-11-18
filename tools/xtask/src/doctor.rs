@@ -21,7 +21,7 @@ use crate::wasm::repo_locked_version;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Mode {
     /// What the everyday local checks need.
-    Ci,
+    Local,
     /// Also what the heavier jobs need.
     Full,
 }
@@ -30,7 +30,7 @@ impl Mode {
     /// What the summary names as the reason a tool is needed.
     fn needed_for(self) -> &'static str {
         match self {
-            Mode::Ci => "the local checks",
+            Mode::Local => "the local checks",
             Mode::Full => "the full local checks",
         }
     }
@@ -39,9 +39,9 @@ impl Mode {
 /// Arguments for `cargo xtask doctor`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct DoctorArgs {
-    /// `ci` checks what the everyday local checks need; `full` also what the
+    /// `local` checks what the everyday local checks need; `full` also what the
     /// heavier jobs need.
-    #[arg(value_enum, default_value_t = Mode::Ci)]
+    #[arg(value_enum, default_value_t = Mode::Local)]
     mode: Mode,
 }
 
@@ -49,7 +49,7 @@ pub(crate) struct DoctorArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope {
     /// The everyday local checks.
-    Ci,
+    Local,
     /// Only the heavier jobs.
     Full,
     /// No check; reported for information.
@@ -59,7 +59,7 @@ enum Scope {
 impl Scope {
     fn label(self) -> &'static str {
         match self {
-            Scope::Ci => "ci",
+            Scope::Local => "local",
             Scope::Full => "full",
             Scope::Info => "info",
         }
@@ -113,7 +113,7 @@ impl Doctor {
         if !install.is_empty() {
             println!("  {:<5} {:<34} {:<8}   install: {install}", "", "", "");
         }
-        if scope == Scope::Ci || (scope == Scope::Full && self.mode == Mode::Full) {
+        if scope == Scope::Local || (scope == Scope::Full && self.mode == Mode::Full) {
             self.missing_required += 1;
         } else {
             self.missing_optional += 1;
@@ -178,7 +178,7 @@ impl Doctor {
                 self.missing_required
             )
         } else if self.missing_optional > 0 {
-            let full = if self.mode == Mode::Ci {
+            let full = if self.mode == Mode::Local {
                 " (`cargo xtask doctor full` also checks the heavier jobs)"
             } else {
                 ""
@@ -324,7 +324,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
         missing_optional: 0,
     };
     let mode_name = match args.mode {
-        Mode::Ci => "ci",
+        Mode::Local => "local",
         Mode::Full => "full",
     };
     println!(
@@ -338,7 +338,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     if let Some(python) = find_python() {
         let version = succeeded_first_line(&python, &["--version"]).unwrap_or_default();
         doctor.row(
-            Scope::Ci,
+            Scope::Local,
             "python >= 3.10",
             true,
             &format!("{python} ({version})"),
@@ -347,7 +347,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     } else {
         let hint = doctor.brew_or("python@3.12", "apt-get install python3");
         doctor.row(
-            Scope::Ci,
+            Scope::Local,
             "python >= 3.10",
             false,
             "none on PATH (tools/decoy-face/generate.py, run by `cargo xtask font-assets`)",
@@ -357,26 +357,30 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
 
     // The everyday local checks.
     doctor.check_bin(
-        Scope::Ci,
+        Scope::Local,
         "cargo",
         "https://rustup.rs (then: rustup show, in this repo, installs the pinned toolchain)",
         &["--version"],
     );
-    doctor.check_cargo_sub(Scope::Ci, "nextest", "cargo install --locked cargo-nextest");
+    doctor.check_cargo_sub(
+        Scope::Local,
+        "nextest",
+        "cargo install --locked cargo-nextest",
+    );
     doctor.check_bin(
-        Scope::Ci,
+        Scope::Local,
         "typos",
         "cargo install --locked typos-cli",
         &["--version"],
     );
     doctor.check_bin(
-        Scope::Ci,
+        Scope::Local,
         "taplo",
         "cargo install --locked taplo-cli",
         &["--version"],
     );
     doctor.check_bin(
-        Scope::Ci,
+        Scope::Local,
         "lychee",
         &docs_links::install_hint(),
         &["--version"],
@@ -506,12 +510,12 @@ mod tests {
     }
 
     fn full_rows_are_required_only_in_full_mode() {
-        let mut ci = doctor(Mode::Ci);
-        ci.row(Scope::Ci, "a", false, "", "");
-        ci.row(Scope::Full, "b", false, "", "");
-        ci.row(Scope::Info, "c", false, "", "");
-        ci.row(Scope::Ci, "d", true, "", "");
-        assert_eq!((ci.missing_required, ci.missing_optional), (1, 2));
+        let mut local = doctor(Mode::Local);
+        local.row(Scope::Local, "a", false, "", "");
+        local.row(Scope::Full, "b", false, "", "");
+        local.row(Scope::Info, "c", false, "", "");
+        local.row(Scope::Local, "d", true, "", "");
+        assert_eq!((local.missing_required, local.missing_optional), (1, 2));
 
         let mut full = doctor(Mode::Full);
         full.row(Scope::Full, "b", false, "", "");
@@ -520,16 +524,16 @@ mod tests {
     }
 
     fn a_failing_binary_probe_is_not_an_available_tool() {
-        let mut report = doctor(Mode::Ci);
+        let mut report = doctor(Mode::Local);
         report.check_bin(
-            Scope::Ci,
+            Scope::Local,
             "cargo",
             "install cargo",
             &["--no-such-flag-xtask"],
         );
         assert!(report.summary().contains("1 missing for the local checks"));
-        let mut healthy = doctor(Mode::Ci);
-        healthy.check_bin(Scope::Ci, "cargo", "install cargo", &["--version"]);
+        let mut healthy = doctor(Mode::Local);
+        healthy.check_bin(Scope::Local, "cargo", "install cargo", &["--version"]);
         assert!(
             healthy
                 .summary()

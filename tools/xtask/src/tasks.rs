@@ -1,5 +1,6 @@
-//! Composite tasks: what the CI jobs run, as one command each, so a local run
-//! and CI cannot drift.
+//! The tasks that choose packages, features or targets from the workspace:
+//! `checks`, `feature-matrix`, `facade-combos`, `cross-typecheck` and the
+//! `wasm-*` steps, and `clean-nested`.
 //!
 //! Each task prints every command before it runs it and stops at the first
 //! failure, except `checks` and `feature-matrix`, which run every step and then

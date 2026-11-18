@@ -163,8 +163,8 @@ leaves its windows open (`no_case_leaves_a_window_shown` in `drag::windows::test
   fails.
 - `a_command_line_parses_back_into_its_arguments` (in `test-desktop.rs`) pins the quoting that
   hands the test its arguments.
-- The nightly Windows run (`nightly-platforms.yml`) runs `platform-test` and `gpu-test` on the run's
-  desktop and the interactive cases with `FLUI_TEST_VISIBLE_DESKTOP=1` and
+- The nightly Windows run (`nightly-platforms.yml`) runs flui-native's suite and the GPU readbacks
+  on the run's desktop and the interactive cases with `FLUI_TEST_VISIBLE_DESKTOP=1` and
   `FLUI_REQUIRE_INPUT_DESKTOP=1`.
 
 ## Pros and cons of the options

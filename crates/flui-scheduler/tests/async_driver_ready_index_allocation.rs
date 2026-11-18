@@ -1,6 +1,6 @@
 //! The complexity proof for the async driver's ready index:
 //! [`OwnerFrame::pump_background`] must cost allocations proportional to *ready*
-//! work, not resident tasks. no CI job has a bench step, so this test — not
+//! work, not resident tasks. No CI job runs a bench, so this test — not
 //! `benches/async_driver_pump.rs` — is the merge-blocking gate.
 //!
 //! A dedicated integration-test binary (never the crate's `--lib` unit

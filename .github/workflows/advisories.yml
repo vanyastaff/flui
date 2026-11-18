@@ -66,7 +66,7 @@ jobs:
           title: RustSec advisory on main
           outcome: ${{ steps.deny.outcome }}
           body: |
-            `cargo deny check advisories` failed on main: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            `cargo deny --workspace --locked check advisories` failed on main: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Bump the dependency, or add an `ignore` with its reason to deny.toml. The next clean run closes this issue.
 
       - name: Fail the run on an open advisory
