@@ -297,8 +297,8 @@ fn reading(device: u64, kind: &str, contact: u64) -> Value {
 fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
     use flui_protocol::native_recording::Row as NativeRow;
 
-    let tmp = TempDir::new().unwrap();
-    let listener = UnixListener::bind(tmp.path().join("agent.sock")).unwrap();
+    let tmp = TempDir::new().expect("a temporary directory");
+    let listener = UnixListener::bind(tmp.path().join("agent.sock")).expect("the agent socket");
     let child = flui_record(tmp.path(), &["out.jsonl", "--native", "native"]);
 
     let mut peer = Peer::accept(&listener);
@@ -382,8 +382,8 @@ fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
 /// A native recording of `send`'s lines, all of stream 0, ended by the app: the directory, the
 /// index and what the command said.
 fn native_session(send: impl FnOnce(&mut dyn FnMut(&Value))) -> (TempDir, Value, String) {
-    let tmp = TempDir::new().unwrap();
-    let listener = UnixListener::bind(tmp.path().join("agent.sock")).unwrap();
+    let tmp = TempDir::new().expect("a temporary directory");
+    let listener = UnixListener::bind(tmp.path().join("agent.sock")).expect("the agent socket");
     let child = flui_record(tmp.path(), &["out.jsonl", "--native", "native"]);
     let mut peer = Peer::accept(&listener);
     started(&mut peer);
@@ -394,10 +394,10 @@ fn native_session(send: impl FnOnce(&mut dyn FnMut(&Value))) -> (TempDir, Value,
         &[],
         &json!({ "rows": 0, "lost_rows": 0, "complete": true }),
     );
-    let output = child.wait_with_output().unwrap();
+    let output = child.wait_with_output().expect("flui record ends");
     assert!(output.status.success(), "{}", stderr(&output));
-    let index = std::fs::read_to_string(tmp.path().join("native/index.json")).unwrap();
-    let index: Value = serde_json::from_str(&index).unwrap();
+    let index = std::fs::read_to_string(tmp.path().join("native/index.json")).expect("the index");
+    let index: Value = serde_json::from_str(&index).expect("the index is JSON");
     (tmp, index, stderr(&output))
 }
 
@@ -409,7 +409,10 @@ fn native_lines(tmp: &TempDir) -> Vec<String> {
 
 /// The bytes `value` takes as a line of a native file, its newline included.
 fn line_bytes(value: &impl serde::Serialize) -> usize {
-    serde_json::to_vec(value).unwrap().len() + 1
+    serde_json::to_vec(value)
+        .expect("a native line serializes")
+        .len()
+        + 1
 }
 
 /// An input method's commit of `text`, as a native row.
@@ -426,7 +429,8 @@ fn commit(text: String) -> flui_protocol::native_recording::Row {
 fn native_header(stream: &str) -> (Value, usize) {
     use flui_protocol::native_recording::Header;
     let header = json!({ "flui_native_recording": 3, "backend": "x11", "stream": stream });
-    let bytes = line_bytes(&serde_json::from_value::<Header>(header.clone()).unwrap());
+    let bytes =
+        line_bytes(&serde_json::from_value::<Header>(header.clone()).expect("a native header"));
     (json!({ "header": header }), bytes)
 }
 
@@ -440,7 +444,7 @@ fn commits_leaving(header: usize, left: usize) -> Vec<Value> {
     let body = MAX_RECORDING_BYTES - left - header;
     let fulls = (body - empty) / full;
     let filler = body - fulls * full - empty;
-    let row = |text: String| json!({ "row": serde_json::to_value(commit(text)).unwrap() });
+    let row = |text: String| json!({ "row": serde_json::to_value(commit(text)).expect("a row serializes") });
     let mut rows = vec![row("x".repeat(full_text)); fulls];
     rows.push(row("x".repeat(filler)));
     rows
