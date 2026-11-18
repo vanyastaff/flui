@@ -341,20 +341,6 @@ pub fn make_move_event_for_id_with_button(
     )))
 }
 
-/// Construct a checked synthetic Move for a specific held button.
-#[cfg(any(test, feature = "testing"))]
-pub fn make_move_event_with_button(
-    position: Offset<f64>,
-    kind: PointerKind,
-    button: PointerButton,
-) -> Result<PointerEvent, InputValueError> {
-    Ok(PointerEvent::Move(PointerMove::new(
-        PointerSource::new(test_pointer_id(), kind).with_role(PointerRole::Primary),
-        PointerButtons::only(button),
-        test_sample(position)?,
-    )))
-}
-
 /// Construct a synthetic cancellation without inventing a position or sensor value.
 #[cfg(any(test, feature = "testing"))]
 pub fn make_cancel_event(kind: PointerKind) -> PointerEvent {

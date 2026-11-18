@@ -14,10 +14,11 @@
 //!
 //! The picker filters by MIME type alone. A filter's MIME types pass as
 //! they are, and each extension as the type Android maps its last part to;
-//! when Android maps an extension to none, or the types are more than an
-//! `Intent` should carry, the picker shows every document, and the picks
-//! are held to the filters all the same (ADR-0360 §4). The picker shows no
-//! title, accept label or starting folder of the request's.
+//! when Android maps an extension to none, a filter admits every file or
+//! names a file exactly (ADR-0372), or the types are more than an `Intent`
+//! should carry, the picker shows every document, and the picks are held to
+//! the filters all the same (ADR-0360 §4). The picker shows no title, accept
+//! label, starting folder or hidden files of the request's.
 //!
 //! The request lasts by its [`ResultTicket`]. Dropping an open dialog's hold
 //! before the picker answers drops the ticket, which finishes the picker
@@ -163,6 +164,11 @@ pub(crate) fn open_types(
     let every = || vec![ANY_TYPE.to_owned()];
     let mut types: Vec<String> = Vec::new();
     for filter in filters {
+        // A filter of every file, or one that names a file exactly (which
+        // has no type to show it by), shows every document (ADR-0372).
+        if filter.is_all_files() || !filter.file_names().is_empty() {
+            return every();
+        }
         let of_extensions = filter.extensions().iter().map(|extension| {
             let last_part = extension.rsplit('.').next().unwrap_or(extension);
             type_of(last_part)

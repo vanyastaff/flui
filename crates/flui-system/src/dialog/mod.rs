@@ -17,11 +17,12 @@
 pub(crate) mod handed_over;
 mod message;
 mod request;
+#[cfg(not(target_arch = "wasm32"))]
+mod write;
 
+#[cfg(target_arch = "wasm32")]
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Mutex;
 use std::{any::Any, cell::Cell, cell::RefCell, fmt, future::Future, rc::Rc, rc::Weak};
 
 use flui_platform::capability::{
@@ -36,9 +37,15 @@ pub use message::{
     MessageBoxes, MessageButtons, MessageLevel,
 };
 pub use request::{
-    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
-    SaveLocation, SaveRequest,
+    FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile,
+    PickedForm, Picks, SaveLocation, SaveRequest,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use write::write_file;
+// The web provider lists a folder before it reads a byte, by the type a
+// folder pick is made of.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) use request::FolderListing;
 // What a provider that names a save's file itself, or hands over a pick's
 // contents, decides the same way on the web, on iOS and on Android.
 #[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
@@ -93,7 +100,8 @@ pub enum DialogError {
     NotInFilter,
     /// The picks hold more than the request's
     /// [`max_bytes`](OpenRequest::max_bytes), on a system that hands over a
-    /// pick's contents (a browser, iOS). Nothing was read past the check.
+    /// pick's contents (a browser, iOS), which read nothing past the check;
+    /// the handle holds every backend's answer to the same bound.
     #[error("the picks hold {actual} bytes, more than the {limit} the request reads")]
     TooLarge {
         /// The picks' size, as the system declared it or as far as it was
@@ -106,6 +114,16 @@ pub enum DialogError {
     /// [`SystemFailure`] says where the failure came from, for diagnostics.
     #[error("the system failed: {0}")]
     Failed(#[from] SystemFailure),
+    /// A picked folder holds more than the request's
+    /// [`max_entries`](OpenRequest::max_entries), on a system that hands
+    /// over a folder's files (a browser). A backend that walks the folder
+    /// stops at the bound, so how many it holds is not known, and reads
+    /// nothing.
+    #[error("the folder holds more than the {limit} entries the request takes")]
+    TooManyEntries {
+        /// The request's [`max_entries`](OpenRequest::max_entries).
+        limit: usize,
+    },
 }
 
 impl DialogError {
@@ -120,7 +138,8 @@ impl DialogError {
             | Self::NotAFile
             | Self::NotInFilter
             | Self::TooLarge { .. }
-            | Self::Failed(_) => None,
+            | Self::Failed(_)
+            | Self::TooManyEntries { .. } => None,
         }
     }
 }
@@ -386,6 +405,77 @@ impl DialogScope {
     }
 }
 
+/// What an open dialog's answer is held to, whichever backend gave it: kept
+/// from the request, which the backend takes.
+struct OpenAnswerRule {
+    multiple: bool,
+    folders: bool,
+    filters: Vec<FileFilter>,
+    max_entries: usize,
+    max_bytes: u64,
+}
+
+impl OpenAnswerRule {
+    fn of(request: &OpenRequest) -> Self {
+        Self {
+            multiple: request.is_multiple(),
+            folders: request.picks_folders(),
+            filters: request.filters.clone(),
+            max_entries: request.max_entries,
+            max_bytes: request.max_bytes,
+        }
+    }
+
+    /// Admit `picks` as an answer of the request, or the first thing that
+    /// keeps them from being one: more picks than it allowed or a pick of a
+    /// form it does not ask for ([`SystemFailure::MalformedAnswer`]), a
+    /// handed-over folder past [`max_entries`](OpenRequest::max_entries), a
+    /// name none of its filters means, handed-over contents past
+    /// [`max_bytes`](OpenRequest::max_bytes) together.
+    fn admit(&self, picks: &Picks) -> Result<(), DialogError> {
+        if !self.multiple && picks.len() > 1 {
+            return Err(SystemFailure::MalformedAnswer.into());
+        }
+        let held = |contents: &[u8]| u64::try_from(contents.len()).unwrap_or(u64::MAX);
+        let mut handed_over: u64 = 0;
+        for picked in picks {
+            match picked.form() {
+                // Whether a path names a file or a folder is the file
+                // system's to say.
+                PickedForm::Path(_) => {}
+                PickedForm::Contents { contents, .. } if !self.folders => {
+                    handed_over = handed_over.saturating_add(held(contents));
+                }
+                PickedForm::Folder { files, .. } if self.folders => {
+                    if files.len() > self.max_entries {
+                        return Err(DialogError::TooManyEntries {
+                            limit: self.max_entries,
+                        });
+                    }
+                    for file in files {
+                        handed_over = handed_over.saturating_add(held(file.contents()));
+                    }
+                }
+                PickedForm::Contents { .. }
+                | PickedForm::Folder { .. }
+                | PickedForm::Download { .. } => {
+                    return Err(SystemFailure::MalformedAnswer.into());
+                }
+            }
+        }
+        if !request::names_admit(&self.filters, picks) {
+            return Err(DialogError::NotInFilter);
+        }
+        if handed_over > self.max_bytes {
+            return Err(DialogError::TooLarge {
+                actual: handed_over,
+                limit: self.max_bytes,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Widget-facing file dialogs for one window.
 ///
 /// Owner-thread (`!Send`), cheap to clone. A dialog answers through its
@@ -417,33 +507,40 @@ impl FileDialogs {
 
     /// Show an open dialog.
     ///
-    /// A backend that answers several picks to a request that allowed one
+    /// A backend that answers several picks to a request that allowed one,
+    /// or a pick of a form the request cannot have (a handed-over folder to
+    /// a file dialog, a handed-over file to a folder dialog, a download),
     /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
-    /// request can have.
+    /// request can have. A pick at a path is taken either way: whether it
+    /// names a file or a folder is the file system's to say.
     ///
     /// Every pick is held to the request's filters by its name, on every
     /// host: a system's dialog may let the user past them (a name typed
     /// into it, a link whose target has another name, a type that only
-    /// conforms to an allowed one). When the filters name extensions only
-    /// and a pick's name ends in none of them, the whole answer is
-    /// [`DialogError::NotInFilter`], and no pick is handed out. A request
-    /// with a MIME type among its filters is not checked here: a file's
-    /// type is its system's to tell, so the backend that mapped the pattern
-    /// judges the pick by it.
+    /// conforms to an allowed one). When the filters name extensions and
+    /// file names only and no filter names a pick ([`FileFilter::matches`]),
+    /// the whole answer is [`DialogError::NotInFilter`], and no pick is
+    /// handed out. A request that offers a filter of
+    /// [every file](FileFilter::all_files) admits every pick. A request with
+    /// a MIME type among its filters is not checked here: a file's type is
+    /// its system's to tell, so the backend that mapped the pattern judges
+    /// the pick by it.
+    ///
+    /// What a system hands over rather than names by a path is held to the
+    /// request's bounds, on every host: a handed-over folder of more files
+    /// than [`max_entries`](OpenRequest::max_entries) is
+    /// [`DialogError::TooManyEntries`], and handed-over files, a folder's
+    /// among them, that hold more than
+    /// [`max_bytes`](OpenRequest::max_bytes) together are
+    /// [`DialogError::TooLarge`].
     pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
         let checked = request.check();
-        let multiple = request.is_multiple();
-        let filters = request.filters.clone();
+        let rule = OpenAnswerRule::of(&request);
         self.scope.show(
             checked,
             |window, answer| self.backend.open(window, request, answer),
             move |result| match result {
-                Ok(Some(picks)) if !multiple && picks.len() > 1 => {
-                    Err(SystemFailure::MalformedAnswer.into())
-                }
-                Ok(Some(picks)) if !request::names_admit(&filters, &picks) => {
-                    Err(DialogError::NotInFilter)
-                }
+                Ok(Some(picks)) => rule.admit(&picks).map(|()| Some(picks)),
                 result => result,
             },
         )
@@ -451,8 +548,8 @@ impl FileDialogs {
 
     /// Show a save dialog.
     ///
-    /// A backend that names a selected filter the request does not have
-    /// answers [`SystemFailure::MalformedAnswer`].
+    /// A backend that names a selected filter the request does not have, or
+    /// answers a folder, answers [`SystemFailure::MalformedAnswer`].
     ///
     /// A request that carries [`contents`](SaveRequest::contents) answers
     /// once they are written: a backend that hands over no path (a browser,
@@ -461,6 +558,12 @@ impl FileDialogs {
     /// chose, the handle writes them on a thread of its own, since no file
     /// system call runs on the owner thread (ADR-0360 §2), and a failed
     /// write answers [`DialogError::Failed`] with the system's code. The
+    /// contents replace the chosen file whole or not at all, through a new
+    /// file beside it that takes its name: a chosen link is written through
+    /// to the file it leads to, and the replaced file's mode is kept. Where
+    /// no new file can be made beside the chosen one (a sandbox's document
+    /// folder, a read-only folder) the contents are written into the file
+    /// itself, and a write that fails midway there leaves it cut short. The
     /// window is free for the next dialog once the user has chosen; the
     /// write itself cannot be called back, so dropping the [`Dialog`] while
     /// it runs drops only the answer.
@@ -472,7 +575,10 @@ impl FileDialogs {
             checked,
             |window, answer| self.backend.save(window, request, answer),
             move |result| match result {
-                Ok(Some(location)) if location.filter().is_some_and(|index| index >= filters) => {
+                Ok(Some(location))
+                    if location.filter().is_some_and(|index| index >= filters)
+                        || matches!(location.file().form(), PickedForm::Folder { .. }) =>
+                {
                     Err(SystemFailure::MalformedAnswer.into())
                 }
                 result => result,
@@ -526,62 +632,6 @@ impl FileDialogs {
     }
 }
 
-/// Write `contents` to `path` on a thread of its own, then answer `caller`
-/// with `location`, or with the failure of the write.
-#[cfg(not(target_arch = "wasm32"))]
-fn write_file(
-    completions: &CompletionSource,
-    path: PathBuf,
-    contents: Arc<[u8]>,
-    location: SaveLocation,
-    caller: Resolver<SaveResult>,
-) {
-    let (written, answer) = completions.pending::<Result<(), DialogError>>();
-    let mut waiting = Some((caller, location));
-    written.on_complete(move |outcome| {
-        let Some((caller, location)) = waiting.take() else {
-            return;
-        };
-        match outcome {
-            Ok(Ok(())) => {
-                // A retired owner has nobody left to answer.
-                let _ = caller.resolve(Ok(Some(location)));
-            }
-            Ok(Err(error)) => {
-                // A retired owner has nobody left to answer.
-                let _ = caller.resolve(Err(error));
-            }
-            Err(_) => drop(caller),
-        }
-    });
-    // The thread answers through the slot; a thread that cannot start leaves
-    // the resolver there, and the failure is answered here.
-    let slot = Arc::new(Mutex::new(Some(answer)));
-    let writer = Arc::clone(&slot);
-    let started = std::thread::Builder::new()
-        .name("flui-system-save".to_owned())
-        .spawn(move || {
-            let written = write_replacing(&path, &contents).map_err(|error| write_failure(&error));
-            let answer = writer
-                .lock()
-                .expect("BUG: the save slot's holders run no code under its lock")
-                .take();
-            if let Some(answer) = answer {
-                // A retired owner has nobody left to answer.
-                let _ = answer.resolve(written);
-            }
-        });
-    if let Err(error) = started {
-        let answer = slot
-            .lock()
-            .expect("BUG: the save slot's holders run no code under its lock")
-            .take();
-        if let Some(answer) = answer {
-            let _ = answer.resolve(Err(write_failure(&error)));
-        }
-    }
-}
-
 /// A save to a path on a system with no file system of its own: a backend
 /// of this platform hands over no path, so only a stand-in answers one.
 #[cfg(target_arch = "wasm32")]
@@ -598,60 +648,6 @@ fn write_file(
     >(
         UnsupportedReason::NotOnThisPlatform,
     ))));
-}
-
-/// How many names beside the chosen file a save tries for its new file
-/// before it gives up: each is taken only by one this process is writing.
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_TEMPORARY_NAMES: u32 = 16;
-
-/// Write `contents` to `path` whole or not at all: into a new file beside
-/// it, synced, then renamed over it, so a write that fails leaves the file
-/// the user chose as it was, and a reader never sees it half written.
-#[cfg(not(target_arch = "wasm32"))]
-fn write_replacing(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::{ErrorKind, Write as _};
-
-    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(ErrorKind::InvalidInput.into());
-    };
-    let mut taken = None;
-    for attempt in 0..MAX_TEMPORARY_NAMES {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(name);
-        temporary_name.push(format!(".{}-{attempt}.flui-save", std::process::id()));
-        let temporary = folder.join(temporary_name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(mut file) => {
-                let written = file.write_all(contents).and_then(|()| file.sync_all());
-                drop(file);
-                let replaced = written.and_then(|()| std::fs::rename(&temporary, path));
-                if replaced.is_err() {
-                    // The write's failure is the answer; the clean-up's is not.
-                    let _ = std::fs::remove_file(&temporary);
-                }
-                return replaced;
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => taken = Some(error),
-            Err(error) => return Err(error),
-        }
-    }
-    Err(taken.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
-}
-
-/// The failure a write reports: the system's code, or a write that took no
-/// bytes without one ([`SystemFailure::MalformedAnswer`]).
-#[cfg(not(target_arch = "wasm32"))]
-fn write_failure(error: &std::io::Error) -> DialogError {
-    DialogError::Failed(
-        error
-            .raw_os_error()
-            .map_or(SystemFailure::MalformedAnswer, SystemFailure::Os),
-    )
 }
 
 impl fmt::Debug for FileDialogs {

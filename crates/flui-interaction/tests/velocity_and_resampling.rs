@@ -12,7 +12,7 @@ use flui_interaction::events::{
     make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     pointer::ScrollUnit,
 };
-use flui_interaction::gesture::{VelocityEstimator, VelocityTracker};
+use flui_interaction::gesture::{GestureValues, VelocityEstimator, VelocityTracker};
 use flui_interaction::pointer::{PointerEventResampler, SamplingClock};
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
@@ -548,27 +548,13 @@ fn invalid_settings_are_rejected() {
         invalid("min_fling_velocity", -1.0)
     );
     assert!(base().try_with_fling_velocity(50.0, f64::NAN).is_err());
-    let built = GestureSettings::try_new(
-        18.0,
-        18.0,
-        0.05,
-        100.0,
-        Duration::from_millis(300),
-        Duration::from_millis(500),
-        50.0,
-        8000.0,
-    );
+    let built = GestureSettings::try_from_values(GestureSettings::default().values());
     assert_eq!(built, Ok(GestureSettings::default()));
-    let rejected = GestureSettings::try_new(
-        18.0,
-        18.0,
-        0.05,
-        100.0,
-        Duration::from_millis(300),
-        Duration::from_millis(500),
-        9000.0,
-        8000.0,
-    );
+    let rejected = GestureSettings::try_from_values(GestureValues {
+        min_fling_velocity: 9000.0,
+        max_fling_velocity: 8000.0,
+        ..GestureSettings::default().values()
+    });
     assert!(matches!(
         rejected,
         Err(GestureSettingsError::InvertedFlingRange { .. })

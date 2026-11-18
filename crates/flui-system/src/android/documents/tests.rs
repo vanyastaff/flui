@@ -77,6 +77,16 @@ fn a_filter_becomes_the_types_android_maps_it_to_or_every_document() {
         every,
         "an extension Android has no type for widens the picker; the picks are still checked"
     );
+    for widening in [
+        FileFilter::all_files("Everything"),
+        FileFilter::new("Make").with_file_name("Makefile"),
+    ] {
+        assert_eq!(
+            open_types(&[images(), widening.clone()], known),
+            every,
+            "a filter of every file, or of a file by its name, shows every document: {widening:?}"
+        );
+    }
     let numbered = |count: usize| {
         (0..count).fold(FileFilter::new("Many"), |filter, index| {
             filter.with_mime_type(format!("application/x-{index}"))

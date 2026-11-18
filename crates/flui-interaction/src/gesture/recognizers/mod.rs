@@ -51,7 +51,6 @@ pub(crate) mod callback_containment;
 pub(crate) mod contact;
 pub(crate) mod double_tap;
 pub(crate) mod drag;
-pub(crate) mod drag_variants;
 pub(crate) mod force_press;
 pub(crate) mod hold;
 pub(crate) mod long_press;
@@ -76,10 +75,6 @@ pub use drag::{
     DragCancelCallback, DragDownCallback, DragDownDetails, DragEndCallback, DragEndDetails,
     DragGestureRecognizer, DragGestureRecognizerBuilder, DragPointerStrategy, DragStartBehavior,
     DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails, GestureEndReason,
-};
-pub use drag_variants::{
-    HorizontalDragGestureRecognizer, PanGestureRecognizer, VerticalDragGestureRecognizer,
-    horizontal_drag, pan, vertical_drag,
 };
 pub use force_press::{
     FORCE_PRESS_PEAK_PRESSURE, FORCE_PRESS_START_PRESSURE, ForcePressEndCallback,

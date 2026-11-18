@@ -7,7 +7,7 @@ use flui_platform::capability::{Activity, Completion, CompletionSource, MainThre
 use jni::objects::{Global, JObject};
 use jni::{Env, JValue, jni_sig, jni_str};
 
-use super::super::message_box::{BoxEvent, BoxLayout, event_of};
+use super::super::message_box::{BoxEvent, BoxLayout, body, event_of};
 use super::{CallbackSlot, Java, in_frame};
 use crate::dialog::{MessageBoxRequest, MessageLevel};
 
@@ -55,7 +55,7 @@ impl Java {
             jni_sig!("(Landroid/content/Context;)V"),
             &[JValue::Object(activity)],
         )?;
-        let message = env.new_string(&request.message)?;
+        let message = env.new_string(body(request))?;
         env.call_method(
             &builder,
             jni_str!("setMessage"),
@@ -89,7 +89,7 @@ impl Java {
             jni_str!("setNegativeButton"),
             jni_str!("setNeutralButton"),
         ];
-        for (label, setter) in layout.labels().into_iter().zip(setters) {
+        for (label, setter) in layout.labels(request).into_iter().zip(setters) {
             let Some(label) = label else {
                 continue;
             };
@@ -142,6 +142,21 @@ impl Java {
         )?;
         let shown = env.new_global_ref(&dialog)?;
         env.call_method(&dialog, jni_str!("show"), jni_sig!("()V"), &[])?;
+        // The default answer's button takes the focus once the dialog is up
+        // (its buttons exist only then), so Return presses it.
+        if let Some(which) = layout.button_of(request.default_answer()) {
+            let button = env
+                .call_method(
+                    &dialog,
+                    jni_str!("getButton"),
+                    jni_sig!("(I)Landroid/widget/Button;"),
+                    &[JValue::Int(which)],
+                )?
+                .l()?;
+            if !button.is_null() {
+                env.call_method(&button, jni_str!("requestFocus"), jni_sig!("()Z"), &[])?;
+            }
+        }
         Ok(shown)
     }
 

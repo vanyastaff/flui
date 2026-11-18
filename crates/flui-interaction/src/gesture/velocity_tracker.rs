@@ -345,14 +345,6 @@ impl VelocityTracker {
         self.samples.iter().filter(|s| s.is_some()).count()
     }
 
-    /// Returns `true` when the tracker has at least `MIN_SAMPLE_SIZE` (3)
-    /// contiguous samples since the last stationary signal — enough data
-    /// to attempt a least-squares fit.
-    #[inline]
-    pub fn has_sufficient_data(&self) -> bool {
-        self.estimate_sample_count() >= MIN_SAMPLE_SIZE
-    }
-
     /// The velocity estimate as of `now`, on the clock that stamped the
     /// samples.
     ///
@@ -577,11 +569,6 @@ impl VelocityTracker {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Number of contiguous samples in the walk window. O(HISTORY_SIZE).
-    fn estimate_sample_count(&self) -> usize {
-        self.walk_window(|_, _| {}).map_or(0, |(_, _, n)| n)
     }
 }
 

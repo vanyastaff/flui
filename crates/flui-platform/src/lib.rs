@@ -234,7 +234,9 @@ pub use window_geometry::{
     InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry, WindowPosition,
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
-pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
+pub use window_insets::{
+    InsetCurve, InsetMotion, InvalidInsets, KeyboardPlacement, SoftKeyboard, WindowInsets,
+};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, AspectRatio, CommandRefusal, PlatformFailure,
     SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFocus, WindowInteraction,

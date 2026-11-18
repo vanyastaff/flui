@@ -5,9 +5,12 @@
 //! (`FluiCallback`), and the box answers once, with whichever comes first:
 //! a button, the user leaving (a back press, a touch outside), or a box
 //! that could not be shown. Leaving answers what closing means for the
-//! box's buttons, and a Yes or No box cannot be left. The buttons are
-//! labelled in English, as on the other hosts: Android's own `yes` and `no`
-//! strings read "OK" and "Cancel".
+//! box's buttons, and a Yes or No box cannot be left. A button shows the
+//! request's label for it, else its English word, as on the other hosts:
+//! Android's own `yes` and `no` strings read "OK" and "Cancel". The detail
+//! follows the message after an empty line ([`body`]), and the button of the
+//! default answer takes the focus, so Return on a hardware keyboard presses
+//! it.
 //!
 //! The box ends with its window and with its caller's dialog (ADR-0344):
 //! the hold's drop takes the caller's answer away first, so nothing answers
@@ -19,7 +22,8 @@
 use flui_platform::{Unsupported, UnsupportedReason};
 
 use crate::dialog::{
-    DialogError, MessageAnswer, MessageBoxCapability, MessageBoxResult, MessageButtons,
+    DialogError, MessageAnswer, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
+    MessageButtons,
 };
 
 /// How a box ended, as its listeners heard it.
@@ -111,14 +115,29 @@ impl BoxLayout {
         }
     }
 
-    /// The labels of the positive, negative and neutral buttons, `None` for
-    /// a button the box does not have.
-    pub(crate) fn labels(&self) -> [Option<&'static str>; 3] {
+    /// The labels of the positive, negative and neutral buttons for
+    /// `request`: the request's label for the button's answer, else the
+    /// English word; `None` for a button the box does not have.
+    pub(crate) fn labels<'a>(&self, request: &'a MessageBoxRequest) -> [Option<&'a str>; 3] {
+        let label = |(word, answer): Button| Some(request.label(answer).unwrap_or(word));
         [
-            Some(self.positive.0),
-            self.negative.map(|(label, _)| label),
-            self.neutral.map(|(label, _)| label),
+            label(self.positive),
+            self.negative.and_then(label),
+            self.neutral.and_then(label),
         ]
+    }
+
+    /// The `DialogInterface.BUTTON_*` of the button that answers `answer`,
+    /// which takes the focus so Return on a hardware keyboard presses it;
+    /// `None` for an answer the box does not offer.
+    pub(crate) fn button_of(&self, answer: MessageAnswer) -> Option<i32> {
+        [
+            (Some(self.positive), BUTTON_POSITIVE),
+            (self.negative, BUTTON_NEGATIVE),
+            (self.neutral, BUTTON_NEUTRAL),
+        ]
+        .into_iter()
+        .find_map(|(button, which)| button.filter(|(_, of)| *of == answer).map(|_| which))
     }
 
     /// Whether a back press or a touch outside leaves the box.
@@ -141,6 +160,15 @@ impl BoxLayout {
             BoxEvent::Dismissed => None,
             BoxEvent::NotShown => Some(Err(not_shown())),
         }
+    }
+}
+
+/// The text an `AlertDialog` shows for `request`: its message, and its
+/// detail below it after an empty line, since the dialog has one message.
+pub(crate) fn body(request: &MessageBoxRequest) -> String {
+    match &request.detail {
+        Some(detail) => format!("{}\n\n{detail}", request.message),
+        None => request.message.clone(),
     }
 }
 
@@ -249,8 +277,8 @@ mod provider {
 mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
-    use super::{BoxEvent, BoxLayout, event_of};
-    use crate::dialog::{DialogError, MessageAnswer, MessageButtons};
+    use super::{BoxEvent, BoxLayout, body, event_of};
+    use crate::dialog::{DialogError, MessageAnswer, MessageBoxRequest, MessageButtons};
 
     /// Each button answers its answer, leaving answers what closing means
     /// for the buttons, a box that went answers nobody, and no event
@@ -290,7 +318,8 @@ mod tests {
         ];
         for (buttons, labels, answers, left) in rows {
             let layout = BoxLayout::of(buttons);
-            assert_eq!(layout.labels(), labels, "{buttons:?}");
+            let request = MessageBoxRequest::new("Go on?").buttons(buttons);
+            assert_eq!(layout.labels(&request), labels, "{buttons:?}");
             let clicks = [BoxEvent::Positive, BoxEvent::Negative, BoxEvent::Neutral];
             for (event, expected) in clicks.into_iter().zip(answers) {
                 assert_eq!(
@@ -320,6 +349,35 @@ mod tests {
                 Some(UnsupportedReason::Unavailable)
             );
         }
+    }
+
+    /// A box shows the detail below its message after an empty line, each
+    /// button under the request's label or its English word, and gives the
+    /// focus to the button of the default answer, so Return presses it.
+    #[test]
+    fn a_box_shows_its_detail_its_labels_and_focuses_its_default() {
+        let request = MessageBoxRequest::new("Delete the draft?")
+            .detail("It cannot be brought back.")
+            .buttons(MessageButtons::YesNoCancel)
+            .button_label(MessageAnswer::Yes, "Delete")
+            .default_button(MessageAnswer::No);
+        assert_eq!(
+            body(&request),
+            "Delete the draft?\n\nIt cannot be brought back."
+        );
+        assert_eq!(body(&MessageBoxRequest::new("Saved.")), "Saved.");
+        let layout = BoxLayout::of(request.buttons);
+        assert_eq!(
+            layout.labels(&request),
+            [Some("Delete"), Some("No"), Some("Cancel")]
+        );
+        assert_eq!(layout.button_of(request.default_answer()), Some(-2));
+        assert_eq!(layout.button_of(MessageAnswer::Yes), Some(-1));
+        assert_eq!(layout.button_of(MessageAnswer::Cancel), Some(-3));
+        assert_eq!(
+            BoxLayout::of(MessageButtons::Ok).button_of(MessageAnswer::No),
+            None
+        );
     }
 
     /// A listener's call is a click by its button, the user leaving, or the

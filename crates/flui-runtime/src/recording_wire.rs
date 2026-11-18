@@ -22,7 +22,9 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::generation::Generation;
-use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Offset, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{
+    DevicePixelRatio, EdgeInsets, Offset, Point, Rect, Size, WindowMetrics,
+};
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
@@ -47,11 +49,11 @@ use flui_platform::pointer::{
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
-    InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, ScrollBarParts, ScrollBarVisibility, ScrollTrackClick,
-    SrgbColor, SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep,
-    WindowExecutionState, WindowInsets,
+    InsetMotion, KeyboardPlacement, Locale, MeasurementSystem, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    RefreshPeriod, RegionOverride, RegionalParts, ScrollBarParts, ScrollBarVisibility,
+    ScrollTrackClick, SoftKeyboard, SrgbColor, SystemPreferences, TextWeightPreference, Weekday,
+    WheelParts, WheelStep, WindowExecutionState, WindowInsets,
 };
 use flui_protocol::input_recording as rec;
 use flui_protocol::native_recording as wire;
@@ -1392,7 +1394,7 @@ impl TryConvert<&WindowObservation> for rec::WindowObservation {
             WindowObservation::Moved => Self::Moved,
             WindowObservation::Insets(insets) => Self::Insets {
                 safe_area: edges_to_wire(insets.safe_area()),
-                keyboard: keyboard_to_wire(insets.keyboard())?,
+                keyboard: keyboard_to_wire(insets.keyboard())?.map(Box::new),
                 system_gestures: edges_to_wire(insets.system_gestures()),
             },
             WindowObservation::Brightness(brightness) => Self::Brightness(match brightness {
@@ -1440,9 +1442,9 @@ impl TryConvert<rec::WindowObservation> for WindowObservation {
                 WindowInsets::try_new(
                     edges_from_wire(safe_area),
                     keyboard
-                        .map(keyboard_from_wire)
+                        .map(|keyboard| keyboard_from_wire(*keyboard))
                         .transpose()?
-                        .unwrap_or(KeyboardInset::HIDDEN),
+                        .unwrap_or(SoftKeyboard::HIDDEN),
                     edges_from_wire(system_gestures),
                 )
                 .map_err(invalid)?,
@@ -1464,8 +1466,8 @@ fn edges_from_wire([top, right, bottom, left]: [f64; 4]) -> EdgeInsets {
 }
 
 /// `keyboard` in the recording; `None` for a hidden keyboard at rest.
-fn keyboard_to_wire(keyboard: KeyboardInset) -> Result<Option<wire::KeyboardInset>> {
-    if keyboard == KeyboardInset::HIDDEN {
+fn keyboard_to_wire(keyboard: SoftKeyboard) -> Result<Option<wire::KeyboardInset>> {
+    if keyboard == SoftKeyboard::HIDDEN {
         return Ok(None);
     }
     let motion = keyboard
@@ -1487,17 +1489,36 @@ fn keyboard_to_wire(keyboard: KeyboardInset) -> Result<Option<wire::KeyboardInse
             })
         })
         .transpose()?;
+    let floating = match keyboard.placement() {
+        KeyboardPlacement::Floating { frame } => {
+            Some([frame.left(), frame.top(), frame.right(), frame.bottom()])
+        }
+        KeyboardPlacement::Hidden | KeyboardPlacement::Docked { .. } => None,
+        _ => return Err(unmirrored("KeyboardPlacement")),
+    };
     Ok(Some(wire::KeyboardInset {
         target: edges_to_wire(keyboard.target()),
         motion,
+        floating,
     }))
 }
 
-/// The keyboard `wire` describes, validated as its types validate it.
-fn keyboard_from_wire(wire: wire::KeyboardInset) -> Result<KeyboardInset> {
+/// The keyboard `wire` describes, validated as its types validate it: a
+/// floating keyboard covers no edge, so one that names an inset as well is
+/// refused.
+fn keyboard_from_wire(wire: wire::KeyboardInset) -> Result<SoftKeyboard> {
     let target = edges_from_wire(wire.target);
+    let placement = match wire.floating {
+        Some(_) if target != EdgeInsets::ZERO => {
+            return Err(invalid("a floating keyboard with a docked inset"));
+        }
+        Some([left, top, right, bottom]) => KeyboardPlacement::Floating {
+            frame: Rect::from_ltrb(left, top, right, bottom),
+        },
+        None => KeyboardPlacement::Docked { inset: target },
+    };
     let Some(motion) = wire.motion else {
-        return KeyboardInset::try_at_rest(target).map_err(invalid);
+        return SoftKeyboard::try_at_rest(placement).map_err(invalid);
     };
     let curve = match motion.curve {
         wire::InsetCurve::Linear => InsetCurve::Linear,
@@ -1514,7 +1535,7 @@ fn keyboard_from_wire(wire: wire::KeyboardInset) -> Result<KeyboardInset> {
         curve,
     )
     .map_err(invalid)?;
-    KeyboardInset::try_moving(target, motion).map_err(invalid)
+    SoftKeyboard::try_moving(placement, motion).map_err(invalid)
 }
 
 // ============================================================================

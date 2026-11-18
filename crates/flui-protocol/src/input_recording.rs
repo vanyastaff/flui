@@ -1365,7 +1365,7 @@ pub enum WindowObservation {
             feature = "serde",
             serde(default, skip_serializing_if = "Option::is_none")
         )]
-        keyboard: Option<crate::native_recording::KeyboardInset>,
+        keyboard: Option<Box<crate::native_recording::KeyboardInset>>,
         /// The system gesture regions, as top, right, bottom, left.
         #[cfg_attr(feature = "serde", serde(default))]
         system_gestures: [f64; 4],

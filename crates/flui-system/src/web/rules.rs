@@ -1,17 +1,18 @@
 //! What the web providers decide without a page: how a dialog's filters
-//! become the browser's, what a download is named, where a launched URI
-//! goes, which answer a message box's button is, and what a browser's
-//! exception means. Kept apart from the DOM so the rules are tested on every
-//! host.
+//! become the browser's, which folder a file input answered, what a download
+//! is named, where a launched URI goes, which answer a message box's button
+//! is, and what a browser's exception means. Kept apart from the DOM so the
+//! rules are tested on every host.
 
-use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
+use flui_platform::{BrowserException, SystemFailure, Unsupported, UnsupportedReason};
 
 // A browser's file is handed over without a path: the picks' filter check
 // and the bound on what is read are the rules of every such host.
 use crate::dialog::handed_over::admit_declared;
 pub(crate) use crate::dialog::handed_over::admit_picks;
 use crate::dialog::{
-    DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons, save_file_name,
+    DialogError, FileDialogCapability, FileFilter, FolderListing, FolderPath, MessageAnswer,
+    MessageButtons, save_file_name,
 };
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
@@ -38,8 +39,14 @@ const ANY_TYPE: &str = "*/*";
 ///
 /// One input offers one filter, so the request's filters become their
 /// union: the attribute matches exactly the files one of them matches, and
-/// the filters' names are not shown.
+/// the filters' names are not shown. A filter of every file or one that
+/// names a file exactly makes it empty, every file: no attribute value
+/// names a file by its whole name, and the handle holds each pick to the
+/// filters (ADR-0372 §4).
 pub(crate) fn accept_attribute(filters: &[FileFilter]) -> String {
+    if filters.iter().any(shows_every_file) {
+        return String::new();
+    }
     let mut patterns: Vec<String> = Vec::new();
     for filter in filters {
         for extension in filter.extensions() {
@@ -57,6 +64,12 @@ pub(crate) fn accept_attribute(filters: &[FileFilter]) -> String {
     patterns.join(",")
 }
 
+/// Whether `filter` is one a browser can only meet by showing every file:
+/// a filter of every file, or one that names a file exactly.
+fn shows_every_file(filter: &FileFilter) -> bool {
+    filter.is_all_files() || !filter.file_names().is_empty()
+}
+
 /// One entry of a File System Access picker's `types`: a filter's name, and
 /// its `accept` record of MIME types to the extensions under each.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,18 +78,35 @@ pub(crate) struct PickerType<'a> {
     pub(crate) accept: Vec<(&'a str, Vec<String>)>,
 }
 
+/// What a File System Access picker is given for a request's filters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PickerTypes<'a> {
+    /// Its `types`, one per filter that has an extension or a MIME type.
+    pub(crate) types: Vec<PickerType<'a>>,
+    /// Whether it keeps its own entry of every file (its
+    /// `excludeAcceptAllOption` is the opposite): where the request has no
+    /// filter, or one of every file, or one that names a file exactly, which
+    /// no type expresses and which the picker reaches through that entry.
+    pub(crate) accepts_all: bool,
+}
+
 /// The `types` of a File System Access picker for `filters`, one per
-/// filter in order; `None` when an extension is one the API refuses (a `-`
-/// or `_`, or longer than [`MAX_PICKER_EXTENSION_LEN`] with its `.`), so the
-/// request goes to `<input type=file>`, whose `accept` takes any.
+/// filter in order, and whether it keeps its entry of every file; `None`
+/// when an extension is one the API refuses (a `-` or `_`, or longer than
+/// [`MAX_PICKER_EXTENSION_LEN`] with its `.`), so the request goes to
+/// `<input type=file>`, whose `accept` takes any.
 ///
 /// A filter's extensions go under its first MIME type, or under `*/*` when
 /// it has none; its other MIME types carry none. The picker matches the
 /// union of what each key and extension names, which is the filter's
-/// meaning (ADR-0360).
-pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<Vec<PickerType<'_>>> {
-    filters
+/// meaning (ADR-0360). A filter of every file is the picker's own entry of
+/// every file rather than a type; one that names a file is a type of its
+/// extensions and MIME types, when it has any, and its file names are
+/// reached through that entry (ADR-0372 §4).
+pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<PickerTypes<'_>> {
+    let types = filters
         .iter()
+        .filter(|filter| !filter.extensions().is_empty() || !filter.mime_types().is_empty())
         .map(|filter| {
             let extensions = filter
                 .extensions()
@@ -99,7 +129,11 @@ pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<Vec<PickerType<'_>>
                 accept,
             })
         })
-        .collect::<Option<Vec<PickerType<'_>>>>()
+        .collect::<Option<Vec<PickerType<'_>>>>()?;
+    Some(PickerTypes {
+        types,
+        accepts_all: filters.is_empty() || filters.iter().any(shows_every_file),
+    })
 }
 
 /// Whether the File System Access API takes `dotted` (an extension with its
@@ -149,6 +183,70 @@ pub(crate) fn admit_sizes(
     )]
     let sizes = sizes.into_iter().map(|size| size as u64);
     admit_declared(sizes, limit)
+}
+
+/// Refuse a folder of which `met` files and folders were met, past `limit`,
+/// with [`DialogError::TooManyEntries`]: asked as each entry is met, so a
+/// folder is walked no further than its bound.
+pub(crate) fn admit_entries(met: usize, limit: usize) -> Result<(), DialogError> {
+    if met > limit {
+        Err(DialogError::TooManyEntries { limit })
+    } else {
+        Ok(())
+    }
+}
+
+/// The dialog's answer where the browser has no folder chooser.
+pub(crate) fn no_folder_chooser() -> DialogError {
+    DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
+        UnsupportedReason::NotOnThisDevice,
+    ))
+}
+
+/// The folder an `<input type=file webkitdirectory>` answered, from its
+/// files, each beside its `webkitRelativePath` (`Photos/2024/a.jpg`: the
+/// picked folder's name, then where the file is under it): the folder
+/// listed, each file at its path, before a byte is read.
+///
+/// - No file is `None`, a cancel: what the input answers for a dismissed
+///   chooser, and for a folder that holds no file, which it cannot tell
+///   apart.
+/// - Files that all have an empty path were picked by a file chooser: the
+///   browser's input reflects `webkitdirectory` and shows no folder chooser
+///   (Chrome for Android before 132, Safari on iOS before 18.4), or shows
+///   one and does not say where its files are (Firefox for Android 141).
+///   That is [`no_folder_chooser`], since no later call fares better.
+/// - A path with no folder before its file, files of two folders, a name
+///   no folder holds or two files at one path are not an answer an input
+///   picking one folder has ([`SystemFailure::MalformedAnswer`]).
+pub(crate) fn input_folder<F>(
+    files: impl IntoIterator<Item = (String, F)>,
+) -> Result<Option<FolderListing<F>>, DialogError> {
+    let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
+    let mut name: Option<String> = None;
+    let mut placed: Vec<(FolderPath, F)> = Vec::new();
+    let mut unplaced = 0_usize;
+    for (relative_path, file) in files {
+        if relative_path.is_empty() {
+            unplaced += 1;
+            continue;
+        }
+        let (folder, path) = relative_path.split_once('/').ok_or(malformed)?;
+        match &name {
+            Some(name) if name != folder => return Err(malformed),
+            Some(_) => {}
+            None => name = Some(folder.to_owned()),
+        }
+        placed.push((FolderPath::try_new(path).ok_or(malformed)?, file));
+    }
+    match (name, unplaced) {
+        (None, 0) => Ok(None),
+        (None, _) => Err(no_folder_chooser()),
+        (Some(name), 0) => FolderListing::try_new(name, placed)
+            .map(Some)
+            .ok_or(malformed),
+        (Some(_), _) => Err(malformed),
+    }
 }
 
 /// How a picker of the File System Access API ended without picks.
@@ -451,11 +549,10 @@ mod tests {
     fn a_picker_type_keeps_each_filter_and_puts_extensions_under_a_type() {
         let images = images();
         let text = FileFilter::new("Text").with_extension("txt");
-        let types = picker_types(std::slice::from_ref(&images))
-            .into_iter()
-            .chain(picker_types(std::slice::from_ref(&text)))
-            .flatten()
-            .collect::<Vec<PickerType<'_>>>();
+        let filters = [images, text];
+        let types = picker_types(&filters)
+            .expect("every extension is taken")
+            .types;
         assert_eq!(
             types,
             [
@@ -473,8 +570,47 @@ mod tests {
             .with_mime_type("image/png")
             .with_mime_type("image/*");
         assert_eq!(
-            picker_types(std::slice::from_ref(&two_types)).expect("mime types are taken")[0].accept,
+            picker_types(std::slice::from_ref(&two_types))
+                .expect("mime types are taken")
+                .types[0]
+                .accept,
             vec![("image/png", Vec::new()), ("image/*", Vec::new())]
+        );
+    }
+
+    #[test]
+    fn every_file_and_a_named_file_keep_the_browsers_entry_of_every_file() {
+        let every = FileFilter::all_files("All files");
+        let build = FileFilter::new("Build files")
+            .with_file_name("Makefile")
+            .with_extension("mk");
+        let make_only = FileFilter::new("Makefiles").with_file_name("Makefile");
+        // The filters, the descriptions of the picker's types, whether it
+        // keeps its entry of every file, and the input's `accept`.
+        let cases: [(Vec<FileFilter>, &[&str], bool, &str); 5] = [
+            (vec![images()], &["Images"], false, ".png,.jpg,image/webp"),
+            (vec![images(), every.clone()], &["Images"], true, ""),
+            (vec![every], &[], true, ""),
+            (vec![images(), build], &["Images", "Build files"], true, ""),
+            (vec![make_only], &[], true, ""),
+        ];
+        for (filters, descriptions, accepts_all, accept) in cases {
+            let picker = picker_types(&filters).expect("every extension is taken");
+            assert_eq!(
+                picker
+                    .types
+                    .iter()
+                    .map(|picker_type| picker_type.description)
+                    .collect::<Vec<&str>>(),
+                descriptions,
+                "{filters:?}"
+            );
+            assert_eq!(picker.accepts_all, accepts_all, "{filters:?}");
+            assert_eq!(accept_attribute(&filters), accept, "{filters:?}");
+        }
+        assert!(
+            picker_types(&[]).expect("no filter").accepts_all,
+            "no filter shows every file"
         );
     }
 
@@ -504,7 +640,11 @@ mod tests {
         let filters = [images()];
         assert_eq!(save_name(Some("photo"), &filters), "photo.png");
         assert_eq!(save_name(Some("photo.jpeg"), &filters), "photo.jpeg");
-        assert_eq!(save_name(Some(".profile"), &filters), ".profile.png");
+        assert_eq!(
+            save_name(Some(".profile"), &filters),
+            ".profile",
+            "a hidden file's name keeps its leading dot and gets no extension, as on Windows"
+        );
         assert_eq!(save_name(Some("notes."), &filters), "notes.png");
         assert_eq!(save_name(None, &filters), "download.png");
         assert_eq!(save_name(None, &[]), "download");
@@ -547,6 +687,63 @@ mod tests {
                 limit: 4
             })
         );
+        assert_eq!(admit_entries(2, 2), Ok(()), "a folder may fill its bound");
+        assert_eq!(
+            admit_entries(3, 2),
+            Err(DialogError::TooManyEntries { limit: 2 })
+        );
+        assert_eq!(
+            admit_entries(1, 0),
+            Err(DialogError::TooManyEntries { limit: 0 })
+        );
+    }
+
+    const MALFORMED: DialogError = DialogError::Failed(SystemFailure::MalformedAnswer);
+
+    /// The folder named `name` whose files are at `paths`, each file its
+    /// own place in the list the input gave.
+    fn listed(name: &str, paths: &[(&str, usize)]) -> Option<FolderListing<usize>> {
+        let files = paths
+            .iter()
+            .map(|(path, at)| Some((FolderPath::try_new(path)?, *at)))
+            .collect::<Option<Vec<(FolderPath, usize)>>>()?;
+        FolderListing::try_new(name, files)
+    }
+
+    /// What an input's files answer for a folder dialog.
+    type InputAnswer = Result<Option<FolderListing<usize>>, DialogError>;
+
+    #[test]
+    fn a_folder_input_names_one_folder_and_where_each_file_is_under_it() {
+        let project = listed("Project", &[("a.txt", 1), ("src/main.rs", 0)]);
+        assert!(project.is_some(), "the expected folder is one");
+        let cases: [(&[&str], InputAnswer); 13] = [
+            // Each file stays with its path, whatever order the input gave.
+            (&["Project/src/main.rs", "Project/a.txt"], Ok(project)),
+            // A dismissed chooser, or a folder that holds no file.
+            (&[], Ok(None)),
+            // The input took `webkitdirectory` and showed a file chooser, or
+            // did not say where the folder's files are.
+            (&[""], Err(no_folder_chooser())),
+            (&["", ""], Err(no_folder_chooser())),
+            (&["a.txt"], Err(MALFORMED)),
+            (&["Project/a.txt", "Other/b.txt"], Err(MALFORMED)),
+            (&["Project/a.txt", ""], Err(MALFORMED)),
+            (&["", "Project/a.txt"], Err(MALFORMED)),
+            // Names no folder holds, and two files at one path.
+            (&["Project/../secret"], Err(MALFORMED)),
+            (&["Project/src//main.rs"], Err(MALFORMED)),
+            (&["Project/src\\main.rs"], Err(MALFORMED)),
+            (&["../a.txt"], Err(MALFORMED)),
+            (&["Project/a.txt", "Project/a.txt"], Err(MALFORMED)),
+        ];
+        for (relative_paths, folder) in cases {
+            let files = relative_paths
+                .iter()
+                .enumerate()
+                .map(|(at, relative_path)| ((*relative_path).to_owned(), at));
+            assert_eq!(input_folder(files), folder, "{relative_paths:?}");
+        }
     }
 
     #[test]

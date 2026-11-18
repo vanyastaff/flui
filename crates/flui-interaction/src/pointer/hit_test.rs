@@ -49,12 +49,6 @@ pub enum EventPropagation {
 }
 
 impl EventPropagation {
-    /// Returns `true` if dispatch should continue to the next entry.
-    #[inline]
-    pub const fn should_continue(self) -> bool {
-        matches!(self, Self::Continue)
-    }
-
     /// Returns `true` if dispatch should stop at this entry.
     #[inline]
     pub const fn should_stop(self) -> bool {
@@ -421,27 +415,6 @@ impl HitTestEntry {
     #[must_use]
     pub fn smart_zoom_target(mut self, target: SmartZoomTarget) -> Self {
         self.smart_zoom_target = Some(target);
-        self
-    }
-
-    /// Builder: set the entry's transform directly, bypassing the
-    /// `HitTestResult`'s transform stack.
-    ///
-    /// Use this when the caller has already computed the
-    /// global-to-local transform out-of-band (for example, from a
-    /// protocol-side `BoxHitTestResult` adapter that owns the
-    /// transform graph itself). The standard `HitTestResult::add`
-    /// captures the current transform stack via `last_transform()`;
-    /// this builder lets callers preserve a transform that the stack
-    /// does not currently hold.
-    ///
-    /// "Unchecked" here means the transform is not validated against
-    /// the result's transform stack -- not that it bypasses any
-    /// safety invariant. The receiver is still `&mut self` because
-    /// the field is private.
-    #[must_use]
-    pub fn with_transform_unchecked(mut self, transform: Matrix4) -> Self {
-        self.transform = Some(transform);
         self
     }
 }

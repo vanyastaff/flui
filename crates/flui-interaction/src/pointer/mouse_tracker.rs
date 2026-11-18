@@ -193,7 +193,7 @@ type Latched<C> = (C, OwnerLatch);
 struct DeviceState {
     /// Authority retained by ambient probes across their reentrant hit-test call.
     observation: Rc<()>,
-    /// Latest source metadata for callbacks and the `mouse_is_connected` query.
+    /// Latest source metadata for callbacks.
     pointer: PointerSource,
     /// Last known position.
     last_position: Offset<f64>,
@@ -1085,13 +1085,6 @@ impl MouseTracker {
             work.invoke(&mut failure);
         }
         failure.finish();
-    }
-
-    /// Checks if any mouse is currently connected.
-    #[inline]
-    #[must_use]
-    pub fn mouse_is_connected(&self) -> bool {
-        self.inner.borrow().mouse_connected
     }
 
     /// Gets the last known window position for reported hardware, excluding fallback contacts.

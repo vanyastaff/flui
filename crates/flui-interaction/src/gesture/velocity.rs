@@ -109,37 +109,6 @@ impl Velocity {
         Self::new(Offset::from_direction(direction, magnitude))
     }
 
-    /// Create a velocity from an offset traveled over a duration.
-    ///
-    /// This is the inverse of `distance_over_duration()`. Useful for
-    /// calculating velocity from gesture tracking data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
-    ///
-    /// // Moved 100px right and 50px down in 100ms
-    /// let velocity =
-    ///     Velocity::from_offset_over_duration(Offset::new(100.0, 50.0), Duration::from_millis(100));
-    ///
-    /// // Velocity should be 1000px/s right, 500px/s down
-    /// assert!((velocity.dx() - 1000.0).abs() < 0.1);
-    /// assert!((velocity.dy() - 500.0).abs() < 0.1);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn from_offset_over_duration(offset: Offset<f64>, duration: Duration) -> Self {
-        let seconds = duration.as_secs_f64();
-        if seconds == 0.0 {
-            return Self::ZERO;
-        }
-        Self::new(offset / seconds)
-    }
-
     /// Returns the magnitude (speed) of the velocity
     ///
     /// This is the Euclidean distance in pixels per second.
@@ -289,24 +258,6 @@ impl Velocity {
         // axis stays zero instead of becoming NaN.
         let scale = |u: f64| if u == 0.0 { 0.0 } else { u * clamped };
         Self::from_components(scale(ux), scale(uy))
-    }
-
-    /// Negates the velocity (reverses direction)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
-    ///
-    /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
-    /// let negated = velocity.negate();
-    /// assert_eq!(negated.pixels_per_second, Offset::new(-100.0, 50.0));
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn negate(&self) -> Self {
-        Self::new(-self.pixels_per_second)
     }
 
     /// Scales the velocity by a factor
@@ -489,28 +440,6 @@ impl VelocityEstimate {
     #[must_use]
     pub fn velocity(&self) -> Velocity {
         Velocity::new(self.pixels_per_second)
-    }
-
-    /// Returns whether this estimate is reliable
-    ///
-    /// An estimate is considered reliable if the confidence is above 0.5.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::VelocityEstimate;
-    ///
-    /// let reliable =
-    ///     VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::from_millis(16), 0.8);
-    /// assert!(reliable.is_reliable());
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn is_reliable(&self) -> bool {
-        self.confidence > 0.5
     }
 
     /// Returns whether all values are finite

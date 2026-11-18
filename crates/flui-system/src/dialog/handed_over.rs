@@ -73,25 +73,15 @@ pub(crate) fn save_file_name(
     named_after_first_filter(suggested.unwrap_or(unnamed), filters)
 }
 
-/// `name` with the first filter's first extension added when it has none,
-/// as a desktop save dialog names a typed file after the selected filter.
+/// `name` completed by the first filter, as a desktop save dialog completes
+/// a typed name by the selected one (the rule of `FileFilter::completes`).
 pub(crate) fn named_after_first_filter(name: &str, filters: &[FileFilter]) -> String {
-    let has_extension = name
-        .rsplit_once('.')
-        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
     match filters
         .first()
-        .and_then(|filter| filter.extensions().first())
+        .and_then(|filter| filter.completion(name.as_bytes()))
     {
-        Some(extension) if !has_extension => {
-            // `notes.` is `notes` with an empty extension: the filter's
-            // replaces it rather than following a second dot.
-            let stem = match name.trim_end_matches('.') {
-                "" => name,
-                stem => stem,
-            };
-            format!("{stem}.{extension}")
-        }
-        _ => name.to_owned(),
+        // The stem ends before ASCII dots, on a character boundary.
+        Some((stem, extension)) => format!("{}.{extension}", &name[..stem]),
+        None => name.to_owned(),
     }
 }

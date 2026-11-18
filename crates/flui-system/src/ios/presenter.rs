@@ -355,7 +355,9 @@ mod uikit {
             presenter.presentViewController_animated_completion(controller, true, None);
             let taken = presenter
                 .presentedViewController()
-                .is_some_and(|presented| std::ptr::eq(&*presented, controller));
+                .is_some_and(|presented| {
+                    std::ptr::eq(Retained::as_ptr(&presented), std::ptr::from_ref(controller))
+                });
             if taken {
                 anchor_popover(controller, presenter);
             }
