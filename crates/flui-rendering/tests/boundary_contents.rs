@@ -702,10 +702,12 @@ fn a_repaint_keeps_the_chunks_of_the_render_objects_that_owe_no_paint() {
     );
 }
 
-/// A render object that owes no paint but moved in its boundary records its
-/// chunk again: its origin is a recording input (ADR-0304 §2).
+/// A render object that laid out, or that owes no paint but moved in its
+/// boundary, records its chunk again: layout leaves it unmarked, and its
+/// origin is a recording input (ADR-0304 §2).
 ///
-/// Red-check: keep a clean render object's chunk whatever its origin.
+/// Red-check: keep an unmarked render object's chunk whether it laid out, or
+/// whatever its origin.
 #[test]
 fn a_chunk_that_moved_in_its_boundary_is_a_new_recording() {
     let (owner, root, [a, b, c]) = three_leaves();
@@ -769,5 +771,89 @@ fn the_pass_after_a_failed_one_keeps_no_chunk() {
         chunk_version(&content(&scene, &owner, root), a),
         before,
         "the recoloured chunk is a new recording"
+    );
+}
+
+/// A parent that paints its one child at its origin, and once more beside it
+/// while the flag it holds is set.
+#[derive(Debug)]
+struct PaintsChildTwiceWhen(std::rc::Rc<std::cell::Cell<bool>>);
+
+impl flui_foundation::inspect::Inspect for PaintsChildTwiceWhen {
+    fn kind(&self) -> &'static str {
+        "PaintsChildTwiceWhen"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for PaintsChildTwiceWhen {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Single,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<Size> {
+        let constraints = *ctx.constraints();
+        ctx.layout_child(0, constraints.loosen())?;
+        Ok(constraints.biggest())
+    }
+
+    flui_rendering::forward_single_child_box_queries!();
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Single>) {
+        ctx.paint_child_at(flui_foundation::geometry::Offset::ZERO);
+        if self.0.get() {
+            ctx.paint_child_at(flui_foundation::geometry::Offset::new(20.0, 0.0));
+        }
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_foundation::Single,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// A render object painted twice in a row by its parent leaves one chunk
+/// holding both paints: its first paint's inputs are not the chunk's, so a
+/// chunk the first paint alone recorded before is not kept for it.
+///
+/// Red-check: let a run of another paint of the owner join the open chunk
+/// with its inputs kept.
+#[test]
+fn a_chunk_holding_two_paints_of_its_render_object_is_a_new_recording() {
+    let twice = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).label("root").child(
+            box_node(PaintsChildTwiceWhen(std::rc::Rc::clone(&twice)))
+                .label("parent")
+                .child(leaf().label("child")),
+        ),
+    );
+    let root = registry.get("root").expect("labelled");
+    let parent = registry.get("parent").expect("labelled");
+    let child = registry.get("child").expect("labelled");
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = chunk_version(&content(&scene, &owner, root), child);
+
+    twice.set(true);
+    owner.mark_needs_paint(parent);
+    let owner = frame(&mut scene, owner);
+    assert_ne!(
+        chunk_version(&content(&scene, &owner, root), child),
+        before,
+        "the chunk that now draws the child twice is a new recording"
     );
 }
