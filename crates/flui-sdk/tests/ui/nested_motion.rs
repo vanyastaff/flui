@@ -1,5 +1,5 @@
-use flui_sdk::animation::prelude::TwoWayConverter;
-use flui_sdk::animation::{AnimationVector, Lerp};
+use flui_sdk::animation::TwoWayConverter;
+use flui_sdk::{animation::AnimationVector, geometry::Lerp};
 use flui_sdk::geometry::Offset;
 use flui_sdk::painting::Color;
 

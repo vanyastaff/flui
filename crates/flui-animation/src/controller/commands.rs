@@ -84,9 +84,7 @@ impl AnimationController {
         )
     }
 
-    /// Start animation forward from a specific value.
-    ///
-    /// If `from` is `None`, starts from the current value.
+    /// Jump to `from`, then run forward to the upper bound.
     ///
     /// The run covers the REMAINING distance at the full-range velocity:
     /// its duration is the forward duration scaled by
@@ -105,10 +103,10 @@ impl AnimationController {
     /// toward a bound this controller does not have, or
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
-    pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
+    pub fn forward_from(&self, from: f64) -> Result<AnimationRunFuture, AnimationError> {
         self.reported(
             "AnimationController::forward_from",
-            self.drive_to_bound(AnimationDirection::Forward, from),
+            self.drive_to_bound(AnimationDirection::Forward, Some(from)),
         )
     }
 
@@ -126,9 +124,7 @@ impl AnimationController {
         )
     }
 
-    /// Start animation in reverse from a specific value.
-    ///
-    /// If `from` is `None`, starts from the current value.
+    /// Jump to `from`, then run in reverse to the lower bound.
     ///
     /// The run covers the REMAINING distance at the full-range velocity:
     /// its duration is the reverse duration (falling back to the forward
@@ -146,10 +142,10 @@ impl AnimationController {
     /// toward a bound this controller does not have, or
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
-    pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
+    pub fn reverse_from(&self, from: f64) -> Result<AnimationRunFuture, AnimationError> {
         self.reported(
             "AnimationController::reverse_from",
-            self.drive_to_bound(AnimationDirection::Reverse, from),
+            self.drive_to_bound(AnimationDirection::Reverse, Some(from)),
         )
     }
 
@@ -205,7 +201,7 @@ impl AnimationController {
         // `from` may have jumped `value` above without a settle (a real run
         // still starts). Notification fires "iff it actually moved" (the
         // same entry-value rule `settle_at_target` uses), so
-        // `forward_from(Some(x))` from `x` itself does not fire a spurious
+        // `forward_from(x)` from `x` itself does not fire a spurious
         // notification for a value that never changed.
         let value_change = if inner.value == entry_value {
             ValueChange::Unchanged
@@ -542,9 +538,9 @@ impl AnimationController {
     /// (issue #1171).
     ///
     /// `entry_value` is the value at the METHOD's entry, before
-    /// `forward_from(Some(x))`/`reverse_from(Some(x))` apply `from` —
+    /// `forward_from(x)`/`reverse_from(x)` apply `from` —
     /// comparing against the post-`from` value here would miss a jump
-    /// (`forward_from(Some(1.0))` from `0.3` would report no value change).
+    /// (`forward_from(1.0)` from `0.3` would report no value change).
     /// Value listeners fire only when `entry_value` actually differs from
     /// where this settle lands.
     ///
@@ -870,11 +866,11 @@ impl AnimationController {
     pub fn fling_with(
         &self,
         velocity: f64,
-        spring: Option<SpringDescription>,
+        spring: SpringDescription,
     ) -> Result<AnimationRunFuture, AnimationError> {
         self.reported(
             "AnimationController::fling_with",
-            self.admit_fling(velocity, spring),
+            self.admit_fling(velocity, Some(spring)),
         )
     }
 
@@ -970,8 +966,8 @@ impl AnimationController {
     /// # Example
     ///
     /// ```
-    /// # use flui_animation::{AnimationController, simulation::SpringSimulation};
-    /// # use flui_animation::simulation::{SpringDescription, Tolerance};
+    /// # use flui_animation::{AnimationController, SpringSimulation};
+    /// # use flui_animation::{SpringDescription, Tolerance};
     /// # use std::time::Duration;
     /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5).unwrap();

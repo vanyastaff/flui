@@ -1729,6 +1729,12 @@ impl host::Preferences<X11Loop> for X11Loop {
             .ok_or(PlatformError::PreferencesDeferred)?
             .sample()
     }
+
+    fn delivered(owner: &X11Loop, values: &SystemPreferences) {
+        if let Some(source) = owner.portal.source() {
+            source.delivered(values);
+        }
+    }
 }
 
 impl host::Launch for X11Loop {

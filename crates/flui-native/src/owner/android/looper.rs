@@ -56,7 +56,6 @@ use std::{
         Arc,
         atomic::{AtomicU8, Ordering},
     },
-    time::Duration,
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
@@ -85,7 +84,9 @@ use crate::{
     owner::android::frame_clock::{FrameClock, FrameStamp},
     owner::android::ndk::{FrameCallbacks, SymbolSource},
     owner::android::poll::DueDeadline,
+    owner::android::poll::LoopReads,
     owner::android::poll::LoopTurn,
+    owner::android::poll::PreferenceNotice,
     owner::android::poll::poll_timeout,
     owner::app_delivery::AppDelivery,
     owner::notices::{LifecycleHooks, NoticeChannel},
@@ -274,6 +275,9 @@ pub struct AndroidLoop {
     pub(crate) owner_signal: Arc<OwnerSignal>,
     /// The application's wake callback between owner turns.
     turn: Rc<crate::owner::signal::OwnerTurnSlot>,
+    /// When the loop reads preferences, scroll factors and insets on its own;
+    /// every other read follows a notice (ADR-0378).
+    loop_reads: Cell<LoopReads>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
     pub(crate) preferences: Arc<dyn ActivityPreferences>,
@@ -344,17 +348,28 @@ impl AndroidLoop {
             waker.wake();
             Ok(())
         }));
+        // Made before the view, which tells it of each setting it reports
+        // changed before it wakes the owner.
+        let preferences = H::preferences(&app, api, &owner_signal);
+        let settings_notice: Box<dyn Fn() + Send + Sync> = {
+            let preferences = Arc::downgrade(&preferences);
+            Box::new(move || {
+                if let Some(preferences) = preferences.upgrade() {
+                    preferences.notice();
+                }
+            })
+        };
         let java_view = java_view::JavaView::start(
             app.clone(),
             Arc::downgrade(&owner_signal),
             H::input_method(),
+            settings_notice,
             H::transfer,
         );
         let host_queue = java_host::HostQueue::start(app.clone(), Arc::downgrade(&owner_signal));
         let results =
             super::result_bridge::ResultBridge::new(&app, epoch, Arc::downgrade(&owner_signal));
         let owner = Arc::downgrade(&owner_signal);
-        let preferences = H::preferences(&app, api, &owner_signal);
         let clipboard = H::clipboard(&app, api);
         let activity_callbacks = H::activity();
         let app_delivery = Arc::new(AppDelivery::new());
@@ -382,6 +397,7 @@ impl AndroidLoop {
             input: H::input(),
             owner_signal,
             turn: Rc::default(),
+            loop_reads: Cell::new(LoopReads::first()),
             preferences,
             displays: H::displays(api, Arc::clone(&library), owner),
             api,
@@ -417,19 +433,23 @@ impl AndroidLoop {
         self.preferences.sample()
     }
 
-    /// When the loop reads preferences, scroll factors and insets next: the
-    /// cadence while `FluiView` does not observe, or the retry a failed read
-    /// owes, whichever comes first. Nothing else would come back for that
-    /// retry: a change reported during its backoff is deferred, not queued.
-    fn next_sample(&self, cadence: Option<web_time::Instant>) -> Option<web_time::Instant> {
-        [cadence, self.preferences.retry_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
-    }
-
-    fn sample_due(&self, cadence: Option<web_time::Instant>, now: web_time::Instant) -> bool {
-        self.next_sample(cadence).is_some_and(|at| now >= at)
+    /// The loop heard `heard`: the source is told, and the scroll factors and
+    /// preferences are read as `LoopReads::hear` decides. A read here is
+    /// outside the owner's turn, so a change it finds wakes the owner, whose
+    /// turn delivers it.
+    fn hear_preference_notice(&self, heard: PreferenceNotice) {
+        let mut reads = self.loop_reads.get();
+        reads.hear(
+            heard,
+            || self.preferences.notice(),
+            || {
+                self.refresh_scroll_factors();
+                if let Err(error) = self.refresh_preferences() {
+                    tracing::warn!(%error, ?heard, "Android preference query failed");
+                }
+            },
+        );
+        self.loop_reads.set(reads);
     }
 
     fn refresh_scroll_factors(&self) {
@@ -480,9 +500,22 @@ impl AndroidLoop {
         let window = self.window.borrow().clone();
         for event in events {
             match event {
-                java_view::ViewEvent::Installed => {
+                java_view::ViewEvent::Installed(outcome) => {
                     if let Some(window) = &window {
                         window.refresh_capabilities();
+                    }
+                    // Said once, here: nothing retries the installation and
+                    // nothing samples in its place. The view's own report
+                    // as it enters the window reads the settings when it
+                    // works.
+                    if let Err(missing) = outcome {
+                        tracing::error!(
+                            target: "flui_native::android",
+                            %missing,
+                            "FluiView is not in the window: settings the configuration does not \
+                             carry go unreported, and the window has no text input, drag and drop \
+                             or TalkBack tree"
+                        );
                     }
                 }
                 java_view::ViewEvent::RunOnWindow(work) => {
@@ -509,10 +542,7 @@ impl AndroidLoop {
                     }
                 }
                 java_view::ViewEvent::SettingsChanged => {
-                    self.refresh_scroll_factors();
-                    if let Err(error) = self.refresh_preferences() {
-                        tracing::warn!(%error, "Android preference query failed");
-                    }
+                    self.hear_preference_notice(PreferenceNotice::SettingsReported);
                 }
                 java_view::ViewEvent::InsetsChanged => {
                     if let Some(window) = &window {
@@ -764,9 +794,7 @@ impl host::Loop for AndroidLoop {
             .map_err(|error| PlatformError::Preferences {
                 message: error.to_string(),
             })?;
-        // When preferences, scroll factors and insets are read next; `None`
-        // waits for a change to be reported.
-        let mut next_preference_sample = Some(web_time::Instant::now());
+        self.loop_reads.set(LoopReads::first());
         let mut due_deadline = DueDeadline::default();
         let mut turn_deadline = crate::owner::wake_deadline::TurnDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
@@ -808,24 +836,24 @@ impl host::Loop for AndroidLoop {
                 break;
             }
 
-            // `FluiView` reports setting and inset changes, and configuration
-            // changes arrive as `ConfigChanged`; each reads them again. A
-            // running Activity reads them once more on its first turn and on
-            // `Start`. Until the view is in the window, or if it never gets
-            // there, a 500ms cadence while running stands in, so no change is
-            // lost; a stopped Activity reads them again on `Start`.
+            // `FluiView` reports setting and inset changes, once more as it
+            // enters the window after its observers are registered, and
+            // configuration changes arrive as `ConfigChanged`; each reads them
+            // again. A running Activity reads them on its own only on its
+            // first turn, after `Start` and at the retry a failed read owes
+            // (`LoopReads`): no cadence stands in for a notice, and a view
+            // that never gets into the window is reported once
+            // (`ViewEvent::Installed`).
             let now = web_time::Instant::now();
             let window = self.window.borrow().clone();
             if let Some(window) = window.as_ref() {
                 window.settle_insets();
             }
-            if self.activity.standing().gate().frames
-                && self.sample_due(next_preference_sample, now)
-            {
-                // Taken before the read: a view that becomes ready during it
-                // reports once it observes, and only a view that was ready
-                // already ends the cadence.
-                let observed = self.java_view.is_ready();
+            let mut loop_reads = self.loop_reads.get();
+            let read_due = self.activity.standing().gate().frames
+                && loop_reads.take_due(self.preferences.retry_deadline(), now);
+            self.loop_reads.set(loop_reads);
+            if read_due {
                 if let Some(window) = window.as_ref() {
                     window.request_insets();
                 }
@@ -833,7 +861,6 @@ impl host::Loop for AndroidLoop {
                 if let Err(error) = self.refresh_preferences() {
                     tracing::warn!(%error, "Android preference query failed");
                 }
-                next_preference_sample = (!observed).then(|| now + Duration::from_millis(500));
             }
             if self.owner_signal.drive_in(&self.turn) {
                 self.running.set(false);
@@ -906,7 +933,10 @@ impl host::Loop for AndroidLoop {
                             awaiting_vsync,
                             running,
                             wake_deadline: [wake_deadline, turn_wait].into_iter().flatten().min(),
-                            next_preference_sample: self.next_sample(next_preference_sample),
+                            next_preference_sample: self.loop_reads.get().next(
+                                self.preferences.retry_deadline(),
+                                web_time::Instant::now(),
+                            ),
                             hand_off_deadline: self.results.next_deadline(),
                             open_deadline: self.documents.borrow().next_deadline(),
                         },
@@ -940,8 +970,9 @@ impl host::Loop for AndroidLoop {
                             // The Activity may have come back on another display.
                             self.displays.invalidate();
                             // Nothing was sampled while stopped: read the
-                            // preferences and insets again on the next turn.
-                            next_preference_sample = Some(web_time::Instant::now());
+                            // preferences and insets again on the next turn,
+                            // a source whose retries ran out included.
+                            self.hear_preference_notice(PreferenceNotice::Started);
 
                             // The execution state first, then the surface: a
                             // presentation rebuilt on `true` below already runs.
@@ -1098,15 +1129,7 @@ impl host::Loop for AndroidLoop {
                                 window.invalidate_text_sizing();
                                 window.settle_appearance();
                             }
-                            self.refresh_scroll_factors();
-                            if let Err(error) = self.refresh_preferences() {
-                                tracing::warn!(%error, "Android configuration query failed");
-                            }
-                            if !self.java_view.is_ready() {
-                                next_preference_sample = Some(
-                                    web_time::Instant::now() + Duration::from_millis(500),
-                                );
-                            }
+                            self.hear_preference_notice(PreferenceNotice::ConfigurationChanged);
                             let window = self.window.borrow().clone();
                             if let Some(window) = window {
                                 window.publish_state();
@@ -1319,6 +1342,10 @@ impl host::Displays<AndroidLoop> for AndroidLoop {
 impl host::Preferences<AndroidLoop> for AndroidLoop {
     fn sample(owner: &AndroidLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
         owner.refresh_preferences()
+    }
+
+    fn delivered(owner: &AndroidLoop, values: &flui_platform::SystemPreferences) {
+        owner.preferences.delivered(values);
     }
 }
 

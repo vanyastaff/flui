@@ -101,6 +101,11 @@ struct State {
     reevaluate_exit: bool,
     /// Whether the owner opens the windows other threads ask for.
     opens_windows: bool,
+    /// The application's turn (the owner-turn callback) runs.
+    application_turn: bool,
+    /// A source handed the running application turn a change its caller
+    /// has not confirmed delivering; the turn's end wakes the owner again.
+    delivery_owed: bool,
     /// The first failure to post the turn a window asked for, said in the
     /// next owner turn: the window that asked may hold borrows a `tracing`
     /// subscriber takes, so nothing is said where it asks. The work stays
@@ -166,6 +171,8 @@ impl OwnerSignal {
                 opens: VecDeque::new(),
                 reevaluate_exit: false,
                 opens_windows: false,
+                application_turn: false,
+                delivery_owed: false,
                 unreported_window_post: None,
             }),
             notify,
@@ -326,6 +333,31 @@ impl OwnerSignal {
     }
     pub(crate) fn accepting(&self) -> bool {
         self.state.lock().accepting
+    }
+    /// Whether the application's turn runs now: the owner-turn callback,
+    /// which reads what the sources report and delivers it. The owner-work
+    /// part of a turn (window opens, a window's work) is not one. Owner
+    /// thread.
+    #[cfg(any(target_os = "android", target_os = "macos", test))]
+    pub(crate) fn in_application_turn(&self) -> bool {
+        self.state.lock().application_turn
+    }
+    /// A source handed the application's running turn a change its caller
+    /// has yet to deliver: unless [`confirm_delivery`](Self::confirm_delivery)
+    /// follows within the turn, the turn's end wakes the owner once more.
+    /// Outside the application's turn it does nothing; a source wakes the
+    /// owner there.
+    #[cfg(any(target_os = "android", target_os = "macos", test))]
+    pub(crate) fn owe_delivery(&self) {
+        let mut state = self.state.lock();
+        if state.application_turn {
+            state.delivery_owed = true;
+        }
+    }
+    /// The caller delivered what the running turn was owed.
+    #[cfg(any(target_os = "android", target_os = "macos", test))]
+    pub(crate) fn confirm_delivery(&self) {
+        self.state.lock().delivery_owed = false;
     }
     pub(crate) fn bind_owner(&self) {
         let mut owner = self.owner.lock();
@@ -656,6 +688,7 @@ impl OwnerTurn<'_> {
             }
             state.pending = false;
             state.active = true;
+            state.application_turn = true;
         }
         // The call point drops a callback the turn displaced, or one the
         // closed signal no longer takes back, before `active` clears: nested
@@ -666,7 +699,19 @@ impl OwnerTurn<'_> {
         {
             failure.contain("the owner-turn callback");
         }
-        signal.state.lock().active = false;
+        {
+            let mut state = signal.state.lock();
+            // A change the turn was handed and did not deliver (its host
+            // went, its delivery failed, the callback panicked) is read again
+            // in the next turn.
+            let undelivered = std::mem::take(&mut state.delivery_owed)
+                && std::mem::take(&mut state.application_turn);
+            state.application_turn = false;
+            state.active = false;
+            if undelivered && state.accepting {
+                state.pending = true;
+            }
+        }
         signal.rearm();
         false
     }

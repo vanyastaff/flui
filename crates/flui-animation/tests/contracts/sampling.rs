@@ -1,7 +1,7 @@
 //! Required samples and committed notices share one addressed owner's custody.
 
-use flui_animation::curve::Curve;
-use flui_animation::simulation::Simulation;
+use flui_animation::Curve;
+use flui_animation::Simulation;
 use flui_animation::{Animation, AnimationController, DrivenController, MotionClock, Vsync};
 use flui_foundation::Listenable;
 use flui_foundation::panic::{FailureClass, PanicRecovery};

@@ -488,6 +488,10 @@ pub trait Preferences<O> {
     /// # Errors
     /// What [`Platform::preferences`] reports.
     fn sample(owner: &O) -> Result<SystemPreferences, PlatformError>;
+
+    /// [`Platform::preferences_delivered`]: hand it to the position's source,
+    /// or say in an explicit no-op why there is none to settle.
+    fn delivered(owner: &O, values: &SystemPreferences);
 }
 
 /// The lifecycle position: session end, host notices, reopen and activation.
@@ -762,6 +766,9 @@ impl<O> Preferences<O> for Absent<position::Preferences> {
         // field unknown and leaves the fallback to consumers.
         Ok(SystemPreferences::default())
     }
+
+    /// No source: nothing waits for a delivery.
+    fn delivered(_: &O, _: &SystemPreferences) {}
 }
 
 impl<O> Lifecycle<O> for Absent<position::Lifecycle> {

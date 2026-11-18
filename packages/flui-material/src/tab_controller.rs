@@ -578,13 +578,10 @@ impl TabController {
         motion: MotionSpec,
     ) -> Self {
         assert_construction_tab_index(length, index, "TabController::with_previous");
-        let owner = AnimatedValue::with_debug_label(
-            "TabController::position",
-            index as f64,
-            motion.clone(),
-            None,
-        )
-        .expect("BUG: a tab index is a finite position");
+        let owner = AnimatedValue::builder(index as f64, motion.clone())
+            .debug_label("TabController::position")
+            .build_on(None)
+            .expect("BUG: a tab index is a finite position");
         let owned = owner.animation();
         let position_listeners = ChangeNotifier::new();
         let forward = position_listeners.clone();
