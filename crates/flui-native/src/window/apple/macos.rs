@@ -978,7 +978,7 @@ impl MacOSWindow {
                     crate::owner::apple::macos::owner_queue(),
                     Arc::clone(handle),
                     0,
-                )
+                );
             },
             || self.set_needs_display(false),
         );
