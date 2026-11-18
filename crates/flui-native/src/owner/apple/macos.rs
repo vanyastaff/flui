@@ -38,7 +38,7 @@ pub(crate) use wake_pump::WeakWakePump;
 pub(crate) trait MacosHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to every window it opens.
-    fn displays() -> Arc<dyn HostDisplays>;
+    fn displays(main: MainThreadMarker) -> Arc<dyn HostDisplays>;
 
     /// The system preference source, for the table's preference position; it
     /// wakes the owner behind `signal` when what it reads changes.
@@ -109,7 +109,6 @@ pub(crate) trait HostDisplays: StaleOnWake {
 
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
-use flui_foundation::OwnerAffinity;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSScreen};
@@ -163,7 +162,7 @@ pub struct ContentViewRef {
     /// Set once the window has closed; shared with the window.
     pub(crate) closed: Arc<std::sync::atomic::AtomicBool>,
     /// The lane every AppKit message to the view travels through.
-    pub(crate) owner: &'static dispatch::Queue,
+    pub(crate) owner: &'static dispatch2::DispatchQueue,
     /// Whether `owner` is the main queue, so the main thread is the lane.
     pub(crate) owner_is_main: bool,
 }
@@ -222,33 +221,10 @@ pub struct MacOSLoop {
     /// What each window's content view dispatches to, as the table made it.
     pub(crate) view_hooks: content_view::ViewHooks,
 
-    /// Records the event-loop owner thread so the thread-affine AppKit
-    /// operations below can `debug_assert` their caller (ADR-0039).
-    pub(crate) affinity: OwnerAffinity,
-}
-
-/// Debug-only check that the caller is the OS main thread.
-///
-/// On AppKit the owner thread must *be* the process main thread —
-/// `ThreadId` equality against the binding thread cannot express that on
-/// its own, so this asks AppKit directly.
-pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
-    #[cfg(debug_assertions)]
-    {
-        // `MainThreadMarker::new()` is objc2's typed form of the same
-        // `+[NSThread isMainThread]` check; `None` means this is not the main
-        // thread.
-        let is_main = MainThreadMarker::new().is_some();
-        debug_assert!(
-            is_main,
-            "BUG: `{op}` must run on the AppKit main thread — thread-affine \
-             AppKit APIs are reached through the owner thread (ADR-0039)"
-        );
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        let _ = op;
-    }
+    /// The proof that the loop is on the AppKit main thread, which made it:
+    /// the loop is neither `Send` nor `Sync`, so whoever holds it is there,
+    /// and every thread-affine AppKit call it makes takes this marker.
+    pub(crate) main: MainThreadMarker,
 }
 
 // Owner-local (ADR-0327 §5): the loop belongs to the main thread, which
@@ -281,7 +257,6 @@ impl MacOSLoop {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
             message: "MacOSPlatform::try_new must run on the AppKit main thread".to_string(),
         })?;
-        debug_assert_appkit_main_thread("MacOSPlatform::try_new");
 
         {
             // Initialize NSApplication (the process-wide singleton).
@@ -312,9 +287,10 @@ impl MacOSLoop {
 
             tracing::info!("macOS platform initialized with AppKit");
 
-            let loop_control = LoopControl::new(Arc::clone(&windows), Arc::clone(&app_delivery));
+            let loop_control =
+                LoopControl::new(Arc::clone(&windows), Arc::clone(&app_delivery), mtm);
             let preferences = H::preferences(&loop_control.owner_signal);
-            let displays = H::displays();
+            let displays = H::displays(mtm);
             let screen_observer = NativeOwner::new(
                 Arc::clone(&displays).observe(&loop_control.owner_signal),
                 mtm,
@@ -334,12 +310,8 @@ impl MacOSLoop {
                 _screen_observer: screen_observer,
                 notices,
                 view_hooks: H::view_hooks(),
-                affinity: OwnerAffinity::new(),
+                main: mtm,
             };
-            // The constructor requires the main thread (checked above), so
-            // the owner is known here — bind early so pre-`run` affine
-            // calls are covered too.
-            platform.affinity.bind_current();
             Ok(platform)
         }
     }
@@ -351,14 +323,8 @@ impl host::Loop for MacOSLoop {
         platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
-        // Idempotent when `MacOSPlatform::try_new` already bound on this thread; trips
-        // a debug assertion if `run` somehow migrated threads (ADR-0039).
-        self.affinity.bind_current();
-        // The affinity check is debug-only, so AppKit is what proves this is the
-        // main thread the application runs on, in a release build too.
-        let main = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
-            message: "MacOSPlatform::run must run on the AppKit main thread".to_string(),
-        })?;
+        // The loop was made on the main thread and cannot have left it.
+        let main = self.main;
 
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame, past the ownership guard that tells the handler of the
@@ -371,6 +337,7 @@ impl host::Loop for MacOSLoop {
         let ownership = loop_control::LoopOwnership::acquire(
             self.app.get(main),
             Arc::clone(&self.loop_control),
+            main,
         )?;
         self.app_delivery.bind(handler, &platform, &hooks);
         self.app_delivery
@@ -381,7 +348,7 @@ impl host::Loop for MacOSLoop {
         // The handler is bound: the pump may ask it for its deadline, and the
         // loop for the owner turn its bootstrap may have asked for.
         self.wake_pump.arm();
-        self.loop_control.schedule_turn_deadline();
+        self.loop_control.schedule_turn_deadline(main);
         // The sources start listening once the application has bootstrapped;
         // a notice that arrived earlier waited for it.
         let notice_watch = self.notice_sources.listen();
@@ -398,14 +365,12 @@ impl host::Loop for MacOSLoop {
     }
 
     fn quit(&self) {
-        self.affinity.debug_assert_owner("MacOSPlatform::quit");
-        debug_assert_appkit_main_thread("MacOSPlatform::quit");
         tracing::info!("Requesting application quit");
-        self.loop_control.quit();
+        self.loop_control.quit(self.main);
     }
 
     fn request_exit_policy_reevaluation(&self) {
-        self.loop_control.request(false);
+        self.loop_control.request(self.main, false);
     }
 }
 
@@ -464,14 +429,7 @@ impl host::Services for MacOSLoop {
 /// made ([`MacosHost::displays`]), on the AppKit main thread.
 impl host::Displays<MacOSLoop> for MacOSLoop {
     fn snapshot(owner: &MacOSLoop) -> Result<DisplaySnapshot, PlatformError> {
-        owner
-            .affinity
-            .debug_assert_owner("MacOSPlatform::display_snapshot");
-        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
-        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
-            message: "NSScreen sampling must run on the AppKit main thread".into(),
-        })?;
-        owner.displays.snapshot(mtm)
+        owner.displays.snapshot(owner.main)
     }
 }
 

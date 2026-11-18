@@ -15,16 +15,15 @@ use std::sync::atomic::Ordering;
 
 use flui_platform::{Unsupported, UnsupportedReason};
 use objc2::rc::{Retained, autoreleasepool};
-use objc2::runtime::{AnyClass, AnyObject};
-use objc2::{MainThreadMarker, class, msg_send};
+use objc2::runtime::AnyClass;
+use objc2::{ClassType, MainThreadMarker, MainThreadOnly, Message, msg_send};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState,
+    NSAutoresizingMaskOptions, NSColor, NSGlassEffectView, NSGlassEffectViewStyle, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
 };
-use objc2_foundation::NSRect;
 
+use super::MacOSWindow;
 use super::ext::AppKitWindow;
-use super::{BObjC, MacOSWindow, NIL, ObjcId};
 
 impl MacOSWindow {
     /// `WindowCommand::SetMaterial` on an AppKit window: `System` is
@@ -157,11 +156,11 @@ pub enum GlassStyle {
 }
 
 impl GlassStyle {
-    /// The `NSGlassEffectViewStyle` value, an `NSInteger`.
-    fn value(self) -> isize {
+    /// The `NSGlassEffectViewStyle` this is.
+    fn style(self) -> NSGlassEffectViewStyle {
         match self {
-            Self::Regular => 0,
-            Self::Clear => 1,
+            Self::Regular => NSGlassEffectViewStyle::Regular,
+            Self::Clear => NSGlassEffectViewStyle::Clear,
         }
     }
 }
@@ -232,9 +231,9 @@ enum Content {
     /// FLUI's view: no backdrop.
     Flui,
     /// An `NSVisualEffectView` holding FLUI's view.
-    Material(ObjcId),
+    Material(Retained<NSVisualEffectView>),
     /// An `NSGlassEffectView` holding FLUI's view.
-    Glass(ObjcId),
+    Glass(Retained<NSGlassEffectView>),
 }
 
 impl AppKitWindow<'_> {
@@ -262,12 +261,10 @@ impl AppKitWindow<'_> {
             return Err(MacOSBackdropError::InvalidCornerRadius);
         }
         let window = self.0;
-        let main = MainThreadMarker::new()
-            .expect("BUG: a window is neither Send nor Sync, so it is used where it was made");
         if window.closed.load(Ordering::Acquire) {
             return Err(MacOSBackdropError::CLOSED);
         }
-        install(window, main, backdrop)
+        install(window, backdrop)
     }
 
     /// Take the backdrop away: FLUI's view is the window's content view again.
@@ -278,13 +275,11 @@ impl AppKitWindow<'_> {
     /// or its content view is one something else put there.
     pub fn clear_backdrop(self) -> Result<(), MacOSBackdropError> {
         let window = self.0;
-        let main = MainThreadMarker::new()
-            .expect("BUG: a window is neither Send nor Sync, so it is used where it was made");
         if window.closed.load(Ordering::Acquire) {
             return Err(MacOSBackdropError::CLOSED);
         }
-        let content = content_of(window, main)?;
-        take_away(window, main, content);
+        let content = content_of(window)?;
+        take_away(window, content);
         Ok(())
     }
 }
@@ -294,190 +289,145 @@ fn class_named(name: &std::ffi::CStr) -> Option<&'static AnyClass> {
     AnyClass::get(name)
 }
 
-/// Whether `object` is an instance of `class` or of a subclass.
-fn is_kind(object: ObjcId, class: &AnyClass, _main: MainThreadMarker) -> bool {
-    // SAFETY: `object` is a live view of the window, read on the main thread
-    // (`_main`); `isKindOfClass:` is `NSObject`'s.
-    let kind: BObjC = unsafe { msg_send![object, isKindOfClass: class] };
-    kind.as_bool()
+/// Whether `view` and `other` are one object.
+fn is_same(view: &NSView, other: &NSView) -> bool {
+    std::ptr::eq(view, other)
 }
 
 /// What the window's content view is, or why it is none of FLUI's.
-fn content_of(window: &MacOSWindow, main: MainThreadMarker) -> Result<Content, MacOSBackdropError> {
-    let view = window.view_ptr();
-    // SAFETY: the wrapper owns a live NSWindow (released only after it is
-    // closed, which the caller ruled out) and its FLUI view; read on the main
-    // thread (`main`).
-    let (current, superview): (ObjcId, ObjcId) = unsafe {
-        (
-            msg_send![window.ns_window, contentView],
-            msg_send![view, superview],
-        )
+fn content_of(window: &MacOSWindow) -> Result<Content, MacOSBackdropError> {
+    let view: &NSView = &window.view;
+    let Some(current) = window.ns_window.contentView() else {
+        return Err(MacOSBackdropError::ForeignContentView);
     };
-    if current == view {
+    if is_same(&current, view) {
         return Ok(Content::Flui);
     }
-    if let Some(effect) = class_named(c"NSVisualEffectView")
-        && is_kind(current, effect, main)
-        && superview == current
-    {
-        return Ok(Content::Material(current));
-    }
-    if let Some(glass) = class_named(c"NSGlassEffectView")
-        && is_kind(current, glass, main)
-    {
-        // SAFETY: `current` is an `NSGlassEffectView` (checked above), whose
-        // `contentView` is its documented property; on the main thread.
-        let held: ObjcId = unsafe { msg_send![current, contentView] };
-        if held == view {
-            return Ok(Content::Glass(current));
+    if let Some(effect) = current.downcast_ref::<NSVisualEffectView>() {
+        // SAFETY: `superview` is not retained by the view's own answer, so it
+        // must still be alive when the call retains it: FLUI's view is the
+        // wrapper's own and the window's content view holds what contains it,
+        // and nothing between the two reads reorders the hierarchy, on the
+        // main thread.
+        let superview = unsafe { view.superview() };
+        if superview.is_some_and(|superview| is_same(&superview, &current)) {
+            return Ok(Content::Material(effect.retain()));
         }
+    }
+    // `NSGlassEffectView` is looked up before it is named: a system without
+    // it has no such class to compare against.
+    if class_named(c"NSGlassEffectView").is_some()
+        && let Some(glass) = current.downcast_ref::<NSGlassEffectView>()
+        && glass.contentView().is_some_and(|held| is_same(&held, view))
+    {
+        return Ok(Content::Glass(glass.retain()));
     }
     Err(MacOSBackdropError::ForeignContentView)
 }
 
-/// A new instance of `class`, `init`-ed, or `None` when AppKit made none.
-fn new_view(class: &AnyClass, _main: MainThreadMarker) -> Option<Retained<AnyObject>> {
-    // SAFETY: `alloc` then `init` is the designated way to make an `NSView`;
-    // the +1 of `init` is taken over by the `Retained`, which `from_raw`
-    // refuses for nil. On the main thread (`_main`), where views are made.
-    unsafe {
-        let allocated: ObjcId = msg_send![class, alloc];
-        let initialized: ObjcId = msg_send![allocated, init];
-        Retained::from_raw(initialized)
-    }
+/// A new instance of `V`, `init`-ed, or `None` when AppKit made none.
+fn new_view<V: ClassType + MainThreadOnly>(main: MainThreadMarker) -> Option<Retained<V>> {
+    // SAFETY: `init` is the designated initializer of an `NSView`, sent once
+    // to the instance just allocated, on the main thread `main` proves.
+    unsafe { msg_send![V::alloc(main), init] }
 }
 
 /// Put `backdrop` behind the window's content.
-fn install(
-    window: &MacOSWindow,
-    main: MainThreadMarker,
-    backdrop: MacOSBackdrop,
-) -> Result<(), MacOSBackdropError> {
-    let current = content_of(window, main)?;
+fn install(window: &MacOSWindow, backdrop: MacOSBackdrop) -> Result<(), MacOSBackdropError> {
+    let current = content_of(window)?;
     match backdrop {
         MacOSBackdrop::Material(material) => {
-            if let Content::Material(effect) = current {
-                configure_material(effect, material, main);
+            if let Content::Material(effect) = &current {
+                configure_material(effect, material);
                 return Ok(());
             }
-            let class =
-                class_named(c"NSVisualEffectView").ok_or(MacOSBackdropError::NoBackdropView)?;
-            let created = new_view(class, main).ok_or(MacOSBackdropError::NoBackdropView)?;
-            let effect = Retained::as_ptr(&created).cast_mut();
-            configure_material(effect, material, main);
-            take_away(window, main, current);
-            embed(window, main, effect, Holder::Subview);
+            let effect = new_view::<NSVisualEffectView>(window.main)
+                .ok_or(MacOSBackdropError::NoBackdropView)?;
+            configure_material(&effect, material);
+            take_away(window, current);
+            embed(window, BackdropView::Material(&effect));
             Ok(())
         }
         MacOSBackdrop::Glass(glass) => {
-            let class = class_named(c"NSGlassEffectView").ok_or(MacOSBackdropError::NO_GLASS)?;
-            let created = new_view(class, main).ok_or(MacOSBackdropError::NoBackdropView)?;
-            let glass_view = Retained::as_ptr(&created).cast_mut();
-            configure_glass(glass_view, glass, main);
-            take_away(window, main, current);
-            embed(window, main, glass_view, Holder::ContentView);
+            if class_named(c"NSGlassEffectView").is_none() {
+                return Err(MacOSBackdropError::NO_GLASS);
+            }
+            let glass_view = new_view::<NSGlassEffectView>(window.main)
+                .ok_or(MacOSBackdropError::NoBackdropView)?;
+            configure_glass(&glass_view, glass);
+            take_away(window, current);
+            embed(window, BackdropView::Glass(&glass_view));
             Ok(())
         }
     }
 }
 
-/// How a backdrop view holds FLUI's view.
-enum Holder {
+/// A backdrop view made here, and so how it holds FLUI's view.
+enum BackdropView<'a> {
     /// As a subview (`NSVisualEffectView`).
-    Subview,
+    Material(&'a NSVisualEffectView),
     /// As its `contentView` (`NSGlassEffectView`).
-    ContentView,
+    Glass(&'a NSGlassEffectView),
 }
 
 /// Make `backdrop` the window's content view, holding FLUI's view.
-fn embed(window: &MacOSWindow, _main: MainThreadMarker, backdrop: ObjcId, holder: Holder) {
-    let view = window.view_ptr();
-    // SAFETY: `backdrop` is a live view the caller holds a strong reference
-    // to until this returns, and the window retains it as its content view;
-    // the FLUI view is the wrapper's own, alive while it moves; the NSWindow
-    // is live (not closed); all on the main thread (`_main`).
-    unsafe {
-        let frame: NSRect = msg_send![view, frame];
-        let _: () = msg_send![backdrop, setFrame: frame];
-        let _: () = msg_send![backdrop, setAutoresizingMask: FILL];
-        let _: () = msg_send![window.ns_window, setContentView: backdrop];
-        match holder {
-            Holder::Subview => {
-                let bounds: NSRect = msg_send![backdrop, bounds];
-                let _: () = msg_send![view, setFrame: bounds];
-                let _: () = msg_send![view, setAutoresizingMask: FILL];
-                let _: () = msg_send![backdrop, addSubview: view];
-            }
-            Holder::ContentView => {
-                let _: () = msg_send![view, setAutoresizingMask: FILL];
-                let _: () = msg_send![backdrop, setContentView: view];
-            }
+fn embed(window: &MacOSWindow, backdrop: BackdropView<'_>) {
+    let view: &NSView = &window.view;
+    let backdrop_view: &NSView = match backdrop {
+        BackdropView::Material(effect) => effect,
+        BackdropView::Glass(glass) => glass,
+    };
+    backdrop_view.setFrame(view.frame());
+    backdrop_view.setAutoresizingMask(FILL);
+    window.ns_window.setContentView(Some(backdrop_view));
+    match backdrop {
+        BackdropView::Material(effect) => {
+            view.setFrame(effect.bounds());
+            view.setAutoresizingMask(FILL);
+            effect.addSubview(view);
         }
-        // Leaving the window resigned the view's first-responder status;
-        // keyboard and input-method input must keep reaching it.
-        let _: BObjC = msg_send![window.ns_window, makeFirstResponder: view];
+        BackdropView::Glass(glass) => {
+            view.setAutoresizingMask(FILL);
+            glass.setContentView(Some(view));
+        }
     }
+    // Leaving the window resigned the view's first-responder status;
+    // keyboard and input-method input must keep reaching it.
+    let _ = window.ns_window.makeFirstResponder(Some(view));
 }
 
 /// Make FLUI's view the window's content view again, out of the backdrop
 /// `content` holds it in.
-fn take_away(window: &MacOSWindow, _main: MainThreadMarker, content: Content) {
-    let view = window.view_ptr();
-    if matches!(content, Content::Flui) {
-        return;
+fn take_away(window: &MacOSWindow, content: Content) {
+    let view: &NSView = &window.view;
+    match content {
+        Content::Flui => return,
+        Content::Material(_) => view.removeFromSuperview(),
+        Content::Glass(glass) => glass.setContentView(None),
     }
-    // SAFETY: the backdrop view is the window's live content view, holding
-    // the FLUI view, which the wrapper owns while it moves; the window
-    // releases the backdrop view when FLUI's view replaces it; on the main
-    // thread.
-    unsafe {
-        match content {
-            Content::Material(_) => {
-                let _: () = msg_send![view, removeFromSuperview];
-            }
-            Content::Glass(glass) => {
-                let _: () = msg_send![glass, setContentView: NIL];
-            }
-            Content::Flui => {}
-        }
-        let _: () = msg_send![window.ns_window, setContentView: view];
-        let _: BObjC = msg_send![window.ns_window, makeFirstResponder: view];
-    }
+    // The window releases the backdrop view when FLUI's view replaces it.
+    window.ns_window.setContentView(Some(view));
+    let _ = window.ns_window.makeFirstResponder(Some(view));
 }
 
-fn configure_material(effect: ObjcId, material: MacOSMaterial, _main: MainThreadMarker) {
-    // SAFETY: `effect` is a live `NSVisualEffectView`; each value is the
-    // `NSInteger` enum type the setter takes; on the main thread.
-    unsafe {
-        let _: () = msg_send![effect, setMaterial: material.material()];
-        let _: () = msg_send![effect, setBlendingMode: NSVisualEffectBlendingMode::BehindWindow];
-        let _: () = msg_send![effect, setState: NSVisualEffectState::Active];
-    }
+fn configure_material(effect: &NSVisualEffectView, material: MacOSMaterial) {
+    effect.setMaterial(material.material());
+    effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    effect.setState(NSVisualEffectState::Active);
 }
 
-fn configure_glass(glass: ObjcId, input: LiquidGlass, _main: MainThreadMarker) {
-    // SAFETY: `glass` is a live `NSGlassEffectView`: `style` takes an
-    // `NSGlassEffectViewStyle` (`NSInteger`), `cornerRadius` a `CGFloat`
-    // (`f64`) and `tintColor` an `NSColor`, which the `Retained` keeps alive
-    // through the call; on the main thread, inside an autorelease pool for
-    // the colour's autoreleased reference.
-    autoreleasepool(|_| unsafe {
-        let _: () = msg_send![glass, setStyle: input.style.value()];
+fn configure_glass(glass: &NSGlassEffectView, input: LiquidGlass) {
+    // Inside an autorelease pool for the colour's autoreleased reference.
+    autoreleasepool(|_| {
+        glass.setStyle(input.style.style());
         if let Some(radius) = input.corner_radius {
-            let _: () = msg_send![glass, setCornerRadius: radius];
+            glass.setCornerRadius(radius);
         }
         if let Some(tint) = input.tint {
-            let color: Option<Retained<AnyObject>> = msg_send![
-                class!(NSColor),
-                colorWithSRGBRed: tint.red,
-                green: tint.green,
-                blue: tint.blue,
-                alpha: tint.alpha
-            ];
-            let color =
-                color.expect("BUG: NSColor makes a colour of finite sRGB channels in 0..=1");
-            let _: () = msg_send![glass, setTintColor: &*color];
+            let color = NSColor::colorWithSRGBRed_green_blue_alpha(
+                tint.red, tint.green, tint.blue, tint.alpha,
+            );
+            glass.setTintColor(Some(&color));
         }
     });
 }

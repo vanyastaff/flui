@@ -1126,7 +1126,7 @@ trait depends on `flui-platform` instead.
 - **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
   code the operating system calls, or a library from inside its own entry: a
   function with a foreign ABI (a window procedure, an enumeration callback, a
-  JNI native, an Objective-C method a `ClassBuilder` adds, an NDK callback), a
+  JNI native, an NDK callback), a
   `define_class!` method, a method of a windows-rs `I…_Impl` (a COM vtable
   entry), an AccessKit handler, and a closure handed to the OS (an `RcBlock` or
   `StackBlock`, a WinRT delegate, a GCD work item: any closure literal given to
@@ -3783,9 +3783,10 @@ the platform binds its display registry to the new window, which is safe there
 because the window is created at the origin — a point on a screen — so
 `-[NSWindow screen]` answers rather than returning nil. Caching is the one place
 this diverges from the winit implementation it otherwise mirrors: winit queries
-the monitor per call, but this backend's AppKit traffic belongs to the owner lane
-while `display_id` is a plain `&self` accessor any thread may call, so the query
-happens on the lane and the accessor reads the lock. The screen key is the
+the monitor per call, but here every snapshot reads the display, so it is read
+from AppKit only where it can change, and a change invalidates the snapshot. The
+window binds the registry before it is shown (`UnshownWindow::show`), so its
+first snapshot, published from `windowDidBecomeKey:`, names its display. The screen key is the
 `CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
 the display-UUID source replaces.
 
@@ -3996,14 +3997,34 @@ UIKit bindings at all. Every shipping Rust Apple stack is on `objc2` (winit sinc
 0.30, `wgpu-hal`, egui, slint, gpui). Carrying both stacks was a two-generation
 wart with a `build.rs` to feed.
 
-**The raw `msg_send!` shape is kept on purpose, not left un-migrated.** objc2's
-macro accepts a raw `*mut AnyObject` receiver, `Bool` arguments and a manual
-`release`, so `window.rs`'s already-reviewed safety shape survives. The concrete
-reason: `NSWindow`/`NSView` are `MainThreadOnly` in objc2's typed API, while the
-backend constructs test windows on a caller-supplied off-main serial lane
-(`MacOSWindow::for_test`), which a `MainThreadMarker`-gated method would refuse.
-`ClassBuilder` replaces `objc` 0.2's `ClassDecl` for the two runtime classes
-(`FLUIContentView`, `FLUIWindowDelegate`).
+**One binding generation: typed classes and messages (ADR-0369).** Every class
+an Apple host registers is a `define_class!` class whose Rust state is its
+`ContainedIvars` (`FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView`, the
+loop delegate, the Metal layer, every iOS class), and the macOS window holds
+what it messages as typed, retained objects (`Retained<NSWindow>`,
+`Retained<FluiContentView>`, its delegate) with its `MainThreadMarker`. A raw
+`*mut AnyObject` is left only where another API takes one (`ContentViewRef`,
+the raw window handle). AppKit holds a window's delegate weakly, so the window
+keeps it and, in its drop, detaches it and hands it to the autorelease pool,
+since the drop may run inside one of the delegate's methods.
+
+**Owner-thread state.** What only the AppKit main thread touches is a `Cell` or
+`RefCell` (ADR-0323 §1): the window's state, the iOS window's metrics, screen
+and theme. The loop control crosses threads (the owner signal's wake and the
+notice observers hold it weakly and post to the main queue), so what it keeps
+beyond the signal is one main-thread part behind a `MainThreadBound`: `Copy`
+states (`LoopState`, `TerminateGate`) in `Cell`s, changed by pure transitions
+and stored before the application is told anything, so a callback that
+re-enters the control reads the state it left and nothing is found busy. The
+loop holds its `MainThreadMarker` instead of a thread check. What stays atomic
+crosses a thread and says so at its declaration (the window's `closed` flag,
+which `Send + Sync` surface targets and text inputs hold).
+
+**A click into an inactive window (`acceptsFirstMouse:`).** The content view
+asks its input, which answers by the press model (`input::apple::title_bar`):
+a press on the move area of a title bar the application draws activates the
+window and moves it at once, as the system's title bar does; a press on the
+content only activates it, AppKit's convention.
 
 **Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
 types against the selector encoding at run time and found `makeFirstResponder:`
