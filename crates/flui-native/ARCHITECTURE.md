@@ -2880,13 +2880,18 @@ copy can still be old when the observer fires.
 The Android and AppKit sources are one model, `preferences::read::NoticedPreferences`
 (ADR-0378), over what each system supplies (`SystemReads`: the read, the clock,
 and `Retrying`, a timer while the application is active on AppKit, the loop's
-deadline on Android). The Android loop decides which notices read in
-`poll::LoopReads::hear` (`ConfigChanged` and a view report read at once, `Start`
-at the next turn; each tells the source first, which re-arms one whose retries
-ran out); each AppKit observer runs `notice_handler`, which notices and wakes the
-owner. A value counts as accepted only when the application confirms its
-delivery (`Platform::preferences_delivered`, which `refresh_preferences_with`
-calls after `update_preferences` succeeds). A change read inside the
+deadline on Android). The application's turn reads the source on every wake; the
+source asks the system only when a notice came since its latest answer or a
+retry is due, and otherwise returns that answer. The Android loop decides which
+notices read in `poll::LoopReads::hear` (`ConfigChanged` and a view report read
+at once, `Start` at the next turn; `ConfigChanged` and `Start` tell the source
+first, and `JavaView::settings_changed` tells it as the view reports, before the
+owner wakes); each AppKit observer runs `notice_handler`, which notices and
+wakes the owner. A value counts as accepted only when the application confirms
+its delivery (`Platform::preferences_delivered`, which `refresh_preferences_with`
+calls after `update_preferences` succeeds; required on every host position and
+source, an explicit no-op where nothing waits), and only for the latest read's
+answer: a re-entrant delivery's older confirmation is ignored. A change read inside the
 application's turn (`OwnerSignal::in_application_turn`, not the owner-work part
 of a turn) is owed to that turn (`owe_delivery`): delivered, it costs nothing
 more; dropped, the turn's end wakes the owner once more, and a second drop of the
@@ -2898,7 +2903,9 @@ delivered nothing; an initial query error cannot abort platform bootstrap or
 publish a fabricated default. The model's tests drive it through `SystemReads`
 with the owner signal and its turn in virtual time
 (`an_idle_source_never_wakes_the_owner`, `one_change_notice_is_one_owner_turn`,
+`application_turns_ask_the_system_only_after_a_notice`,
 `a_change_a_turn_drops_is_read_again_once`,
+`a_confirmation_of_an_older_read_is_ignored`,
 `failed_reads_back_off_and_stop_until_the_next_notice`); AppKit's getters and
 observers themselves run only on a Mac.
 A failed or panicking read leaves the admission's next retry deadline

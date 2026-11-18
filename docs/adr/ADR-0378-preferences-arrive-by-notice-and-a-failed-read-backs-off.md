@@ -53,18 +53,26 @@ retried, on the hosts whose source is told of changes (AppKit, Android)?
 
 Chosen option: 2.
 
-1. **A preference is read on a notice, never on a cadence.** The AppKit and Android sources are
-   `preferences::read::NoticedPreferences<S: SystemReads>`. A notice is an AppKit notification
-   (each observer runs `notice_handler`, which notices and wakes the owner), and on Android
-   `ConfigChanged`, `FluiView`'s report and `Start`, which the loop hears through
-   `owner::android::poll::LoopReads::hear` (each tells the source; the first two read at once,
-   `Start` at the loop's next turn). The Android loop reads on its own only on its first turn,
+1. **The system is asked on a notice, never on a cadence.** The AppKit and Android sources are
+   `preferences::read::NoticedPreferences<S: SystemReads>`. Every application turn reads the
+   source, which asks the system only when a notice came since its latest answer, or at a due
+   retry, and otherwise returns that answer as it is. A notice is an AppKit notification (each
+   observer runs `notice_handler`, which notices and wakes the owner), a setting `FluiView`
+   reports (`JavaView::settings_changed` tells the source before it wakes the owner), and
+   `ConfigChanged` and `Start`, which the Android loop hears through
+   `owner::android::poll::LoopReads::hear`. `ConfigChanged` and a view report read at once,
+   `Start` at the loop's next turn. The Android loop reads on its own only on its first turn,
    after `Start` and at a due retry (`LoopReads`); an installation of `FluiView` that fails or
    stops short reaches the owner once as `ViewEvent::Installed(Err(ViewMissing))`, logged there,
    and nothing samples in its place.
 2. **A value is accepted when its delivery is confirmed.** The application's turn reads the
    source and, once `update_preferences` accepts the value, calls
-   `Platform::preferences_delivered` (`OwnerPlatform::preferences_delivered`). A change read
+   `Platform::preferences_delivered` (`OwnerPlatform::preferences_delivered`). The method is
+   required on `Platform`, on the host position `host::Preferences::delivered` and on
+   `SystemPreferenceSource::delivered`: a host or a source that has nothing to settle says so in
+   an explicit no-op, so one that forgets it does not compile. Only a delivery of the latest
+   read's answer is accepted; one of an older read (a delivery that re-entered the owner, which
+   read and delivered a newer value, confirms its own read last) is ignored. A change read
    inside the application's turn (`OwnerSignal::in_application_turn`, not the owner-work part of
    a turn) is owed to that turn (`OwnerSignal::owe_delivery`): confirmed there it costs nothing
    more; unconfirmed, the turn's end wakes the owner once more, and a second unconfirmed read of
@@ -88,6 +96,8 @@ Chosen option: 2.
 - Good, because a dropped delivery is read again, once, without waiting for the next change.
 - Good, because a failing getter costs at most seven reads per notice, none in the background on
   macOS, and a panicking one no longer ends the Android Activity.
+- Good, because the application's turn, which reads the preferences on every wake, asks the
+  system nothing between notices.
 - Bad, because `Platform` gains `preferences_delivered`, which an application that reads
   preferences itself must call to settle a change; one that never calls it gets at most one
   extra turn per change on these two hosts.
@@ -98,13 +108,16 @@ Chosen option: 2.
 
 Tests on the Linux host drive `NoticedPreferences` through `SystemReads` with a counting
 `OwnerSignal` and its turn, in virtual time: `an_idle_source_never_wakes_the_owner`,
+`application_turns_ask_the_system_only_after_a_notice`,
 `one_change_notice_is_one_owner_turn`, `a_change_a_turn_drops_is_read_again_once`,
+`a_confirmation_of_an_older_read_is_ignored`,
 `a_change_read_in_owner_work_wakes_the_owner`, `failed_reads_back_off_and_stop_until_the_next_notice`,
 `a_panicking_read_is_a_failed_read`, `an_inactive_application_retries_only_on_its_next_notice`
 and `a_read_off_the_owner_thread_is_refused_and_changes_nothing`
 (`crates/flui-native/src/preferences/read/tests.rs`); the Android loop's own reads are held by
 `the_loop_reads_on_its_own_only_at_start_and_at_a_due_retry` and
-`each_preference_notice_tells_the_source_and_reads` (`owner/android/poll.rs`). The wakes per
+`each_preference_notice_tells_the_source_and_reads` (`owner/android/poll.rs`). The compiler
+holds the required `delivered` on every host position and source. The wakes per
 idle minute on a Mac and on an Android device are rows of `docs/platform-parity.md` ("Zero CPU
 when idle").
 
