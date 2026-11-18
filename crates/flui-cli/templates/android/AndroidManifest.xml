@@ -7,8 +7,11 @@
     <!-- No resources: the platform's default launcher icon applies.
          `hasCode`: the APK carries FLUI's Java classes, the dex of the crates
          the app links, which the Activity below is one of (ADR-0255).
-         `enableOnBackInvokedCallback`: back arrives as predictive back, which
-         FLUI handles only while it can pop. -->
+         `enableOnBackInvokedCallback`: from Android 13, back is predictive
+         back and reaches no key handler, as targetSdk 36 makes it anyway. FLUI
+         registers no back callback yet, so the system takes every back: it
+         moves the task to the background with its back-to-home animation
+         (below Android 12 it finishes the Activity). -->
     <application
         android:label="{{app_name}}"
         android:hasCode="true"
@@ -21,8 +24,9 @@
              A language change still recreates it: the host does not follow
              the locale yet. `fontWeightAdjustment` needs an API 31 or later
              platform to link. `singleTop`: a new intent reaches the running
-             Activity instead of starting a second one with a second Rust
-             runtime. -->
+             Activity at the top of its task; one that starts the Activity in
+             another application's task is forwarded to the application's own
+             task, since a process runs one FLUI platform there. -->
         <activity
             android:name="{{activity}}"
             android:exported="true"

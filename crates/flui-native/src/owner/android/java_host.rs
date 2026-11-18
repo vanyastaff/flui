@@ -16,7 +16,11 @@
 //!
 //! `FluiActivity` forwards its callbacks into a queue in `FluiHost`, which
 //! buffers until a platform binds its wake handle (an entry can arrive before
-//! `android_main` runs). Once bound, each entry wakes the owner (ADR-0249),
+//! `android_main` runs). A process runs one platform (ADR-0366): only the
+//! Activity that owns the queues binds and drains them, and any other instance,
+//! which forwards its intent to the application's own task and finishes, is
+//! refused here ([`PlatformError::SecondActivity`]). Once bound, each entry
+//! wakes the owner (ADR-0249),
 //! which drains the queue on its own thread and reads each entry as a
 //! [`HostEntry`]; an intent the Activity receives waits in a second queue, as
 //! the record [`ReceivedIntent`](super::intent::ReceivedIntent) reads, and
@@ -31,7 +35,7 @@ use crate::PlatformError;
 /// the native methods and their signatures, the methods the library calls,
 /// the entries of the queue, and what each means. `FluiHost.PROTOCOL` states
 /// it on the Java side; the two are raised together.
-pub(crate) const PROTOCOL: i32 = 6;
+pub(crate) const PROTOCOL: i32 = 7;
 
 /// The binary name of the Activity class the manifest names.
 pub(crate) const ACTIVITY_CLASS: &str = "dev.flui.platform.FluiActivity";
@@ -48,6 +52,10 @@ pub(crate) struct Found {
     pub(crate) is_flui_activity: bool,
     /// `FluiHost.PROTOCOL`, or `None` when the loader has no `FluiHost`.
     pub(crate) protocol: Option<i32>,
+    /// Whether the Activity owns `FluiHost`'s queues (`FluiHost.owns`): it
+    /// does unless another Activity of the process runs FLUI. Read only over
+    /// classes of this library's protocol.
+    pub(crate) owns_queues: bool,
 }
 
 /// Whether the platform may start over the classes `found` describes.
@@ -55,8 +63,10 @@ pub(crate) struct Found {
 /// # Errors
 ///
 /// [`PlatformError::HostProtocol`] when the classes state another protocol,
-/// and [`PlatformError::Init`] when the APK has none of FLUI's classes or its
-/// Activity is not a `FluiActivity`.
+/// [`PlatformError::Init`] when the APK has none of FLUI's classes or its
+/// Activity is not a `FluiActivity`, and [`PlatformError::SecondActivity`]
+/// when the Activity does not own `FluiHost`'s queues (ADR-0366): it forwards
+/// what it was opened with to the one that runs FLUI and finishes.
 pub(crate) fn check(found: &Found) -> Result<(), PlatformError> {
     let Some(packaged) = found.protocol else {
         return Err(PlatformError::Init {
@@ -83,6 +93,9 @@ pub(crate) fn check(found: &Found) -> Result<(), PlatformError> {
             ),
         });
     }
+    if !found.owns_queues {
+        return Err(PlatformError::SecondActivity);
+    }
     Ok(())
 }
 
@@ -103,6 +116,19 @@ pub(crate) fn verify(app: &android_activity::AndroidApp) -> Result<(), PlatformE
         ),
     })?;
     check(&found)
+}
+
+/// Whether the Activity is an instance that does not run FLUI: it forwards or
+/// hands over what it was opened with and finishes (ADR-0366), so the
+/// application's entry starts nothing for it. `false` where the classes
+/// cannot be read or are not this library's: [`verify`] then refuses the start
+/// and says why.
+#[cfg(target_os = "android")]
+pub(crate) fn hands_over(app: &android_activity::AndroidApp) -> bool {
+    crate::owner::android::activity::with_activity(app, |env, activity| {
+        env.with_local_frame(16, |env| read(env, activity))
+    })
+    .is_ok_and(|found| matches!(check(&found), Err(PlatformError::SecondActivity)))
 }
 
 #[cfg(target_os = "android")]
@@ -137,6 +163,7 @@ fn read(
             activity: activity_name,
             is_flui_activity: false,
             protocol: None,
+            owns_queues: false,
         });
     };
     let protocol = env
@@ -146,10 +173,23 @@ fn read(
         Some(flui_activity) => env.is_instance_of(activity, &flui_activity)?,
         None => false,
     };
+    // `owns` is a method of this protocol: classes of another one are refused
+    // for their protocol before it is called.
+    let owns_queues = protocol == PROTOCOL
+        && is_flui_activity
+        && env
+            .call_static_method(
+                &host,
+                jni_str!("owns"),
+                jni_sig!("(Landroid/app/Activity;)Z"),
+                &[jni::JValue::Object(activity)],
+            )?
+            .z()?;
     Ok(Found {
         activity: activity_name,
         is_flui_activity,
         protocol: Some(protocol),
+        owns_queues,
     })
 }
 
@@ -332,7 +372,8 @@ mod queue {
             handle: usize,
             class: Global<JClass<'static>>,
         },
-        /// The platform ended; nothing binds any more.
+        /// The platform ended, or another Activity owns the queues: nothing
+        /// binds any more.
         Detached,
     }
 
@@ -376,11 +417,22 @@ mod queue {
                 bind_host(env, activity, handle as jlong)
             });
             match bound {
-                Ok(class) => {
+                Ok(Some(class)) => {
                     *self.binding.lock() = Binding::Bound {
                         handle: handle as usize,
                         class,
                     };
+                }
+                Ok(None) => {
+                    // The platform started over the owner (`java_host::check`), and
+                    // only an Activity created since, while this one was
+                    // finishing, owns the queues now (ADR-0366).
+                    tracing::info!(
+                        target: "flui_native::android",
+                        "a newer Activity owns FluiHost's queue; this finishing one hears none"
+                    );
+                    *self.binding.lock() = Binding::Detached;
+                    free_handle(handle);
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -510,31 +562,40 @@ mod queue {
         load_class(env, &loader, HOST_CLASS)?.ok_or(jni::errors::Error::JavaException)
     }
 
-    /// Register `nativeWake` on `FluiHost` and hand it `handle`; the class,
-    /// held globally, on success.
+    /// Register `nativeWake` on `FluiHost` and hand it `handle` for
+    /// `activity`; the class, held globally, once bound, and `None` when
+    /// `activity` no longer owns the queues, so `FluiHost` took no handle.
     fn bind_host(
         env: &mut Env<'_>,
         activity: &JObject<'_>,
         handle: jlong,
-    ) -> jni::errors::Result<Global<JClass<'static>>> {
+    ) -> jni::errors::Result<Option<Global<JClass<'static>>>> {
         let class = host_class(env, activity)?;
         let global = env.new_global_ref(&class)?;
         register_natives(env, &class)?;
-        env.call_static_method(
-            &class,
-            jni_str!("bind"),
-            jni_sig!("(J)V"),
-            &[JValue::Long(handle)],
-        )?;
-        Ok(global)
+        let bound = env
+            .call_static_method(
+                &class,
+                jni_str!("bind"),
+                jni_sig!("(Landroid/app/Activity;J)Z"),
+                &[JValue::Object(activity), JValue::Long(handle)],
+            )?
+            .z()?;
+        Ok(bound.then_some(global))
     }
 
     /// Every entry `FluiHost` queued, read whole before `FluiHost` lets go
-    /// of exactly those, so a failure leaves them queued.
+    /// of exactly those, so a failure leaves them queued; none once another
+    /// Activity owns the queues.
     fn drain(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Vec<i32>> {
         let class = host_class(env, activity)?;
         let pairs = env
-            .call_static_method(&class, jni_str!("peekEntries"), jni_sig!("()[I"), &[])?
+            .call_static_method(
+                &class,
+                jni_str!("peekEntries"),
+                jni_sig!("(Landroid/app/Activity;)[I"),
+                &[JValue::Object(activity)],
+            )?
             .l()?;
         let pairs = JIntArray::cast_local(env, pairs)?;
         let mut out = vec![0; pairs.len(env)?];
@@ -731,8 +792,8 @@ mod queue {
             .call_static_method(
                 &class,
                 jni_str!("peekOpened"),
-                jni_sig!("()[[Ljava/lang/String;"),
-                &[],
+                jni_sig!("(Landroid/app/Activity;)[[Ljava/lang/String;"),
+                &[JValue::Object(activity)],
             )?
             .l()?;
         let records = env.cast_local::<JObjectArray<'_>>(records)?;
@@ -837,6 +898,7 @@ mod tests {
             activity: "com.example.MainActivity".to_owned(),
             is_flui_activity,
             protocol,
+            owns_queues: true,
         }
     }
 
@@ -892,6 +954,86 @@ mod tests {
             activity.contains("com.example.MainActivity") && activity.contains(ACTIVITY_CLASS),
             "{activity}"
         );
+
+        // A second instance, created while another Activity of the process
+        // runs FLUI, starts no second platform.
+        let second = Found {
+            owns_queues: false,
+            ..found(Some(PROTOCOL), true)
+        };
+        assert!(
+            matches!(check(&second), Err(PlatformError::SecondActivity)),
+            "{:?}",
+            check(&second)
+        );
+    }
+
+    /// Only the Activity that owns `FluiHost`'s queues (`owner::android::admission`
+    /// decides which, ADR-0366) binds a wake handle and reads them, so an
+    /// older platform still winding down takes nothing that arrived for a
+    /// newer one, and a new owner forgets the old handle.
+    #[test]
+    fn only_the_activity_that_owns_the_queues_binds_and_reads_them() {
+        let host = java_source(HOST_CLASS);
+        for stated in [
+            "if (owner != activity) {\n                wakeHandle = 0;\n            }\n            owner = activity;",
+            "static boolean owns(Activity activity)",
+            "static boolean bind(Activity activity, long handle)",
+            "static int[] peekEntries(Activity activity)",
+            "static String[][] peekOpened(Activity activity)",
+            "static Object[] peekAnswers(Activity activity, int max)",
+            "int count = owner == activity ? Math.min(Math.max(max, 0), ANSWERS.size()) : 0;",
+        ] {
+            assert!(host.contains(stated), "{stated:?} in FluiHost");
+        }
+        assert_eq!(
+            host.matches("if (owner != activity) {\n                return")
+                .count(),
+            3,
+            "bind and the two other reads refuse a non-owner"
+        );
+    }
+
+    /// No Java class takes a back from the system: none registers an
+    /// `OnBackInvokedCallback` or overrides `onBackPressed`. ADR-0255
+    /// decision 3 registers one only while the router can pop, and nothing
+    /// publishes that yet, so with the generated manifest's
+    /// `enableOnBackInvokedCallback` (flui-cli's
+    /// `the_base_names_flui_activity_with_the_code_it_needs`) every back on
+    /// Android 13 and later is the system's, as that manifest says. A change
+    /// that registers one rewrites this test, the manifest's comment and
+    /// `docs/gaps.md`'s "No system back" together.
+    #[test]
+    fn no_java_class_takes_the_back_from_the_system() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("android/java");
+        let mut sources = vec![root];
+        let mut read = 0;
+        while let Some(path) = sources.pop() {
+            if path.is_dir() {
+                sources.extend(
+                    std::fs::read_dir(&path)
+                        .expect("the Java sources are readable")
+                        .map(|entry| entry.expect("a directory entry").path()),
+                );
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a Java source");
+            read += 1;
+            for registration in [
+                "OnBackInvokedCallback",
+                "OnBackAnimationCallback",
+                "getOnBackInvokedDispatcher",
+                "onBackPressed",
+                "OnBackPressedCallback",
+            ] {
+                assert!(
+                    !source.contains(registration),
+                    "{} takes the back from the system ({registration})",
+                    path.display()
+                );
+            }
+        }
+        assert!(read >= 2, "the Java sources were found");
     }
 
     /// `FluiActivity` forwards `onTrimMemory`, and the owner reads the queue

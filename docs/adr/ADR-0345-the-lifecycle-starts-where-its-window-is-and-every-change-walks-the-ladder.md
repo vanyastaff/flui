@@ -5,6 +5,10 @@
 - **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) §4 (lifecycle
   facts per presentation, the ladder, the aggregate), and
   [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md) whole (the ladder out of `Detached`)
+- **Superseded-by:**
+  [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
+  for §1's Android sentence only: `onResume`/`onPause` give the foreground, which refines the
+  focus, and the execution state follows `onStart`/`onStop`
 - **Related:** [ADR-0237](ADR-0237-window-state-and-host-notices.md) (Android's three signals),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) (terminal close)
 - **Sources:** Flutter 3.50.0, `flutter/flutter@ab2912035e`

@@ -548,8 +548,8 @@ pub(crate) fn drain_answers(
         .call_static_method(
             &class,
             jni_str!("peekAnswers"),
-            jni_sig!("(I)[Ljava/lang/Object;"),
-            &[JValue::Int(max)],
+            jni_sig!("(Landroid/app/Activity;I)[Ljava/lang/Object;"),
+            &[JValue::Object(activity), JValue::Int(max)],
         )?
         .l()?;
     let peeked = env.cast_local::<JObjectArray<'_>>(peeked)?;

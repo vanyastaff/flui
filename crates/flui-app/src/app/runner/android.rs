@@ -73,14 +73,14 @@ where
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
     /// backend delivers at the first `MainEvent::InitWindow`, not at the
-    /// first `Resume` (module doc, `owner/android/looper.rs`'s
-    /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
+    /// first `Start` (module doc, `owner/android/looper.rs`'s
+    /// "# Surface Lifecycle": `Start` arrives before any window exists, so
     /// only `InitWindow` can carry a presentation). Migrated here from
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
     /// exactly once, matching the once-only pre-run bootstrap semantics it
     /// replaced. **The surface-recreation path is no longer untouched**: this
     /// bootstrap routes the window's `surface_changed`, which releases its
-    /// slot's surface on `Pause`/`TerminateWindow` and rebuilds it when a
+    /// slot's surface on `Stop`/`TerminateWindow` and rebuilds it when a
     /// window returns — see that route below. **Unvalidated
     /// on-device**: no device and no CI compile target for
     /// `target_os = "android"` verify this; stated here and in the registry
@@ -299,7 +299,8 @@ where
         // happen before the native window behind the surface dies, and the
         // rebuild for the window that replaces it. `flui-native` reports
         // both out of its own event loop: `Release` on
-        // `Pause`/`TerminateWindow`, `Rebuild` on `Resume`/`InitWindow`, with
+        // `Stop`/`TerminateWindow`, `Rebuild` on `Start`/`InitWindow` (a paused
+        // Activity that stays on screen keeps its surface, ADR-0366), with
         // the mapping and its reason in `flui-native`'s
         // `owner/android/looper.rs`, "# Surface Lifecycle".
         //
@@ -344,11 +345,12 @@ where
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
         //
-        // The Activity's three lifecycle facts reach the runtime as they are,
-        // and `derive_lifecycle_state` builds the application state from them:
-        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
-        // and holding input focus. Focus alone must not stand for the other two
-        // (a dialog or the notification shade takes focus from a running
+        // The Activity's lifecycle reaches the runtime as the window reports it
+        // (ADR-0366): running while on screen (`onStart`/`onStop`), occluded
+        // while not, and focused while it holds the input focus and is in the
+        // foreground (`onResume`/`onPause`); `derive_lifecycle_state` builds the
+        // application state from them. Focus alone must not stand for the
+        // others (a dialog or the notification shade takes focus from a running
         // Activity). They arrive with the metrics, the insets, the night mode
         // and the display through the window's one snapshot subscription,
         // seeded from the snapshot read right after it, so a fact that changed
