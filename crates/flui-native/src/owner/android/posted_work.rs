@@ -10,11 +10,12 @@
 //! takes would wait forever without the deadline.
 //!
 //! A piece posted while `capacity` wait is refused as `TooMuchPosted`, but
-//! not at once: the refusal is held ([`Admitted::Deferred`]) until a place
+//! never at once: the refusal is held ([`Admitted::Deferred`]) until a place
 //! frees (the main thread took a piece, or the deadline took one back), so a
 //! provider that posts again on the refusal finds room instead of spinning
-//! the owner one turn per refusal. At most `capacity` refusals are held; one
-//! more is refused at once.
+//! the owner one turn per refusal. The held refusals are as many as the
+//! providers' posts still unanswered: each provider holds the completion
+//! it waits on, so a provider that posts again only on its answer holds one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,8 +51,6 @@ pub(crate) enum Admitted<W> {
     Posted(Slot<W>),
     /// Refused for want of room, the refusal held until a place frees.
     Deferred,
-    /// Refused at once: the held refusals are as many as the queue holds.
-    Refused(W),
 }
 
 /// A waiting piece of work and when it was posted.
@@ -93,13 +92,10 @@ impl<W> PostedQueue<W> {
     }
 
     /// Hold `work`, posted at `now`: in a slot the main thread takes it
-    /// from, else deferred while `capacity` pieces wait, else handed back.
+    /// from, else deferred while `capacity` pieces wait.
     pub(crate) fn admit(&mut self, work: W, now: Instant) -> Admitted<W> {
         self.sweep();
         if self.waiting.len() >= self.capacity {
-            if self.deferred.len() >= self.capacity {
-                return Admitted::Refused(work);
-            }
             self.deferred.push(work);
             return Admitted::Deferred;
         }
@@ -211,62 +207,83 @@ mod tests {
 
     const LIMIT: Duration = Duration::from_secs(10);
 
-    /// A piece of work that records how it ended.
-    struct Recorded(&'static str, Arc<Mutex<Vec<String>>>);
+    /// A piece of work that records how it ended and, as the production
+    /// `PostedWork` does, is refused as `HandOffFailed` when dropped unended.
+    struct Recorded {
+        name: &'static str,
+        log: Arc<Mutex<Vec<String>>>,
+        ended: bool,
+    }
+
+    impl Recorded {
+        fn record(&mut self, how: String) {
+            self.log.lock().push(format!("{} {how}", self.name));
+            self.ended = true;
+        }
+    }
 
     impl Work<u8> for Recorded {
-        fn run(self, frame: u8) {
-            self.1.lock().push(format!("{} ran in {frame}", self.0));
+        fn run(mut self, frame: u8) {
+            self.record(format!("ran in {frame}"));
         }
 
-        fn refuse(self, reason: MainThreadRefused) {
-            self.1.lock().push(format!("{} refused {reason:?}", self.0));
+        fn refuse(mut self, reason: MainThreadRefused) {
+            self.record(format!("refused {reason:?}"));
+        }
+    }
+
+    impl Drop for Recorded {
+        fn drop(&mut self) {
+            if !self.ended {
+                self.record(format!("refused {:?}", MainThreadRefused::HandOffFailed));
+            }
         }
     }
 
     fn posted<W>(admitted: Admitted<W>) -> super::Slot<W> {
         match admitted {
             Admitted::Posted(slot) => slot,
-            Admitted::Deferred | Admitted::Refused(_) => panic!("expected room"),
+            Admitted::Deferred => panic!("expected room"),
         }
     }
 
-    /// The queue holds as many waiting pieces as its capacity; past it a
-    /// piece's refusal is held until a place frees, and once as many
-    /// refusals are held, the next piece is handed back at once.
+    /// The queue holds as many waiting pieces as its capacity; past it every
+    /// piece's refusal is held until a place frees, none answered at once.
     #[test]
-    fn the_queue_holds_its_capacity_of_waiting_work_and_hands_back_the_next() {
+    fn the_queue_holds_its_capacity_of_waiting_work_and_defers_the_rest() {
         let now = Instant::now();
         let mut queue = PostedQueue::new(2, LIMIT);
         let first = posted(queue.admit(1, now));
         posted(queue.admit(2, now));
-        assert!(matches!(queue.admit(3, now), Admitted::Deferred));
-        assert!(matches!(queue.admit(4, now), Admitted::Deferred));
-        assert!(
-            matches!(queue.admit(5, now), Admitted::Refused(5)),
-            "the held refusals are bounded too"
-        );
+        for deferred in 3..=6 {
+            assert!(
+                matches!(queue.admit(deferred, now), Admitted::Deferred),
+                "{deferred} is deferred, past the capacity too"
+            );
+        }
         assert_eq!(first.lock().take(), Some(1), "the main thread takes one");
-        assert_eq!(queue.take_room_refusals(), [3, 4], "a place freed");
-        posted(queue.admit(6, now));
+        assert_eq!(queue.take_room_refusals(), [3, 4, 5, 6], "a place freed");
+        posted(queue.admit(7, now));
     }
 
-    /// While the queue stays full, a provider that posts again on each
-    /// refusal gets no refusal back: the owner is not woken once per turn.
-    /// The refusals go out once a place frees.
+    /// While the queue stays full, providers that post again on each refusal
+    /// get no refusal back, however many post: the owner is not woken once
+    /// per turn. The refusals go out once a place frees.
     #[test]
     fn a_full_queue_holds_refusals_until_a_place_frees_instead_of_spinning() {
         let now = Instant::now();
         let mut queue = PostedQueue::new(1, LIMIT);
         let only = posted(queue.admit("waiting", now));
-        assert!(matches!(queue.admit("retry", now), Admitted::Deferred));
+        for _ in 0..8 {
+            assert!(matches!(queue.admit("retry", now), Admitted::Deferred));
+        }
         let mut released = 0;
         for _ in 0..100 {
             released += queue.take_room_refusals().len();
         }
         assert_eq!(released, 0, "no refusal while full: nothing to retry into");
         assert_eq!(only.lock().take(), Some("waiting"));
-        assert_eq!(queue.take_room_refusals(), ["retry"]);
+        assert_eq!(queue.take_room_refusals().len(), 8);
     }
 
     /// A piece is taken back only once it waited the limit and only while
@@ -302,11 +319,18 @@ mod tests {
 
     /// The main thread runs a work in the frame it reaches; a work whose
     /// frame was not lent is refused; one the owner took back is not run;
-    /// and the failure path refuses only a work still in its slot.
+    /// and the failure path refuses only a work still in its slot. Each work
+    /// ends once, its drop included.
     #[test]
     fn the_main_thread_runs_the_work_it_reaches_and_refuses_the_rest() {
         let log = Arc::new(Mutex::new(Vec::new()));
-        let slot = |name| Arc::new(Mutex::new(Some(Recorded(name, Arc::clone(&log)))));
+        let slot = |name| {
+            Arc::new(Mutex::new(Some(Recorded {
+                name,
+                log: Arc::clone(&log),
+                ended: false,
+            })))
+        };
 
         let lent = slot("lent");
         assert_eq!(
@@ -330,23 +354,29 @@ mod tests {
             Err("no thread")
         );
         let taken_back = slot("taken back");
-        drop(taken_back.lock().take());
+        let held = taken_back.lock().take();
         assert_eq!(
             take_and_run(&taken_back, |_run| -> Result<(), ()> {
                 panic!("a work taken back is not reached for")
             }),
             Ok(())
         );
+        if let Some(work) = held {
+            work.refuse(MainThreadRefused::ActivityEnded);
+        }
         refuse_unrun(&lent);
         let dropped = slot("dropped");
         refuse_unrun(&dropped);
+        drop(slot("never posted"));
         assert_eq!(
             *log.lock(),
             [
                 "lent ran in 7",
                 "unlent refused HandOffFailed",
                 "unreached refused HandOffFailed",
+                "taken back refused ActivityEnded",
                 "dropped refused HandOffFailed",
+                "never posted refused HandOffFailed",
             ]
         );
     }

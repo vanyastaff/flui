@@ -69,9 +69,10 @@ impl fmt::Debug for PostedWork {
     }
 }
 
-/// The most pieces of work the host holds that Android's main thread has not
-/// finished, every capability together; one more is refused as
-/// [`MainThreadRefused::TooMuchPosted`].
+/// The most pieces of work, every capability together, that wait for
+/// Android's main thread to take them. One posted while that many wait does
+/// not run: it is refused as [`MainThreadRefused::TooMuchPosted`], an answer
+/// the host holds until a place frees.
 pub const MAX_POSTED_WORK: usize = 16;
 
 /// Why work handed to Android's main thread did not run to its end.
@@ -82,9 +83,9 @@ pub enum MainThreadRefused {
     #[error("the Activity has ended")]
     ActivityEnded,
     /// [`MAX_POSTED_WORK`] pieces of work waited for Android's main thread
-    /// when this one was posted. The host answers it once a place has freed
-    /// (or, past as many held answers, at once), so work posted again on
-    /// this answer finds room.
+    /// when this one was posted. The host answers it only once a place has
+    /// freed (the main thread took a piece, or its deadline refused one),
+    /// never at once, so work posted again on this answer finds room.
     #[error("as much work waits for Android's main thread as the host holds")]
     TooMuchPosted,
     /// The host could not hand the work over, or Android's main thread did

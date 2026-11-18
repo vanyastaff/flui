@@ -226,31 +226,39 @@ public final class FluiDocuments extends ContentProvider {
         if (!"r".equals(mode)) {
             throw new FileNotFoundException("an offered document is read only");
         }
-        Offered document = offered(uri);
-        if (document == null) {
-            throw new FileNotFoundException("no document is offered under this URI");
+        // Opened under the lock that `withdraw` and the expiry close offers
+        // under, so the descriptor number names the offered file while it is
+        // reopened, never a later file the number was reused for.
+        synchronized (OFFERED) {
+            Offered document = offered(uri);
+            if (document == null) {
+                throw new FileNotFoundException("no document is offered under this URI");
+            }
+            return ParcelFileDescriptor.open(
+                    new File("/proc/self/fd/" + document.descriptor.getFd()),
+                    ParcelFileDescriptor.MODE_READ_ONLY);
         }
-        return ParcelFileDescriptor.open(
-                new File("/proc/self/fd/" + document.descriptor.getFd()),
-                ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
-        Offered document = offered(uri);
-        if (document == null) {
-            return null;
-        }
         String[] columns = projection == null
                 ? new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}
                 : projection;
         Object[] row = new Object[columns.length];
-        for (int index = 0; index < columns.length; index++) {
-            if (OpenableColumns.DISPLAY_NAME.equals(columns[index])) {
-                row[index] = document.name;
-            } else if (OpenableColumns.SIZE.equals(columns[index])) {
-                row[index] = document.descriptor.getStatSize();
+        // The size is read under the lock offers are closed under.
+        synchronized (OFFERED) {
+            Offered document = offered(uri);
+            if (document == null) {
+                return null;
+            }
+            for (int index = 0; index < columns.length; index++) {
+                if (OpenableColumns.DISPLAY_NAME.equals(columns[index])) {
+                    row[index] = document.name;
+                } else if (OpenableColumns.SIZE.equals(columns[index])) {
+                    row[index] = document.descriptor.getStatSize();
+                }
             }
         }
         MatrixCursor cursor = new MatrixCursor(columns, 1);

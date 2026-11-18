@@ -472,16 +472,11 @@ impl ActivityBridge for ResultBridge {
             work.refuse(MainThreadRefused::ActivityEnded);
             return;
         }
-        // The borrow ends before a refusal settles anything.
         let admitted = self.posted.borrow_mut().admit(work, Instant::now());
         let slot = match admitted {
             Admitted::Posted(slot) => slot,
-            // Refused once a place frees (`answer`).
+            // Refused once a place frees (`answer`), never at once.
             Admitted::Deferred => return,
-            Admitted::Refused(work) => {
-                work.refuse(MainThreadRefused::TooMuchPosted);
-                return;
-            }
         };
         let (on_main, on_failure) = (Arc::clone(&slot), slot);
         let app = self.app.clone();

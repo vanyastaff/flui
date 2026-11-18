@@ -5853,7 +5853,7 @@ GPU-память простаивающего или невидимого окн
   `a_full_provider_is_its_own_failure_and_only_a_started_share_keeps_its_offers`,
   `a_refused_dismissal_is_tried_again_until_it_lands_or_the_activity_ends`,
   `a_file_unlinked_after_its_open_is_held_as_unlinked`,
-  `the_queue_holds_its_capacity_of_waiting_work_and_hands_back_the_next`,
+  `the_queue_holds_its_capacity_of_waiting_work_and_defers_the_rest`,
   `only_work_still_waiting_is_taken_back_at_its_deadline_or_the_end`.
 - [x] **LY65** (закрыта: мост на `main`; идентификатор ждёт выпуска AccessKit, прогоны TalkBack —
   в parity) — `accessibility/android.rs` держит низкоуровневый `accesskit_android::Adapter`;
