@@ -5482,7 +5482,6 @@ pub fn flui::interaction::FocusScopeNode::set_autofocus(&self, autofocus: bool)
 pub fn flui::interaction::FocusScopeNode::set_first_focus(self: &alloc::rcs::rc::Rc<Self>) -> bool
 pub fn flui::interaction::FocusScopeNode::set_provisional_first_focus(self: &alloc::rcs::rc::Rc<Self>) -> bool
 pub fn flui::interaction::FocusScopeNode::set_text_direction(&self, direction: flui::foundation::TextDirection)
-pub fn flui::interaction::FocusScopeNode::set_traps_focus(&self, traps: bool)
 pub fn flui::interaction::FocusScopeNode::set_traversal_edge_behavior(&self, behavior: flui::interaction::TraversalEdgeBehavior)
 pub fn flui::interaction::FocusScopeNode::set_traversal_policy(&self, policy: alloc::rcs::rc::Rc<dyn flui::interaction::FocusTraversalPolicy>)
 pub fn flui::interaction::FocusScopeNode::sorted_traversal_order(&self, cursor: Option<&alloc::rcs::rc::Rc<flui::interaction::FocusNode>>) -> Vec<alloc::rcs::rc::Rc<flui::interaction::FocusNode>>
@@ -5528,7 +5527,6 @@ impl core::fmt::Debug for flui::interaction::ForcePressDetails
 impl serde_core::ser::Serialize for flui::interaction::ForcePressDetails
 impl<'de> serde_core::de::Deserialize<'de> for flui::interaction::ForcePressDetails
 pub const fn flui::interaction::ForcePressDetails::new(global_position: flui::geometry::Offset<f64>, local_position: flui::geometry::Offset<f64>, pressure: f64, max_pressure: f64) -> Self
-pub fn flui::interaction::ForcePressDetails::normalized_pressure(&self) -> f64
 pub struct flui::interaction::ForcePressGestureRecognizer { .. }
 impl core::fmt::Debug for flui::interaction::ForcePressGestureRecognizer
 impl flui::interaction::GestureArenaMember for flui::interaction::ForcePressGestureRecognizer
@@ -5569,7 +5567,6 @@ pub fn flui::interaction::GestureArena::poll_deadlines(&self)
 pub fn flui::interaction::GestureArena::register_deadline(&self, member: &alloc::rcs::rc::Rc<dyn flui::interaction::GestureArenaMember>) -> Result<flui::interaction::GestureDeadlineRegistration, flui::interaction::GestureDeadlineError>
 pub fn flui::interaction::GestureArena::register_deadline_member(&self, pointer: flui::interaction::PointerId, member: &alloc::rcs::rc::Rc<dyn flui::interaction::GestureArenaMember>) -> Result<flui::interaction::GestureDeadlineRegistration, flui::interaction::GestureDeadlineError>
 pub fn flui::interaction::GestureArena::reject(&self, pointer: flui::interaction::PointerId, member: &alloc::rcs::rc::Rc<dyn flui::interaction::GestureArenaMember>)
-pub fn flui::interaction::GestureArena::reject_member(&self, pointer: flui::interaction::PointerId, member: &alloc::rcs::rc::Rc<dyn flui::interaction::GestureArenaMember>)
 pub fn flui::interaction::GestureArena::resolve(&self, pointer: flui::interaction::PointerId, winner: Option<&alloc::rcs::rc::Rc<dyn flui::interaction::GestureArenaMember>>)
 pub fn flui::interaction::GestureArena::sequenced(&self) -> Result<flui::interaction::SequencedBranch, flui::interaction::CompositionError>
 pub fn flui::interaction::GestureArena::sweep(&self, pointer: flui::interaction::PointerId)
@@ -5655,7 +5652,6 @@ impl core::fmt::Debug for flui::interaction::GestureDisposition
 impl core::hash::Hash for flui::interaction::GestureDisposition
 impl core::marker::StructuralPartialEq for flui::interaction::GestureDisposition
 pub const fn flui::interaction::GestureDisposition::is_accepted(self) -> bool
-pub const fn flui::interaction::GestureDisposition::is_rejected(self) -> bool
 variant flui::interaction::GestureDisposition::Accepted // at 0
 variant flui::interaction::GestureDisposition::Rejected // at 1
 pub enum flui::interaction::GestureEndReason
@@ -5758,7 +5754,6 @@ pub fn flui::interaction::GestureSettings::scale_slop(&self) -> f64
 pub fn flui::interaction::GestureSettings::span_slop_for(&self, kind: flui::interaction::PointerKind) -> f64
 pub fn flui::interaction::GestureSettings::touch_slop(&self) -> f64
 pub fn flui::interaction::GestureSettings::try_from_values(values: flui_interaction::gesture::settings::GestureValues) -> Result<Self, flui::interaction::GestureSettingsError>
-pub fn flui::interaction::GestureSettings::try_new(touch_slop: f64, pan_slop: f64, scale_slop: f64, double_tap_slop: f64, double_tap_timeout: core::time::Duration, long_press_timeout: core::time::Duration, min_fling_velocity: f64, max_fling_velocity: f64) -> Result<Self, flui::interaction::GestureSettingsError>
 pub fn flui::interaction::GestureSettings::try_with_double_tap_slop(self, slop: f64) -> Result<Self, flui::interaction::GestureSettingsError>
 pub fn flui::interaction::GestureSettings::try_with_fling_velocity(self, min: f64, max: f64) -> Result<Self, flui::interaction::GestureSettingsError>
 pub fn flui::interaction::GestureSettings::try_with_pan_slop(self, slop: f64) -> Result<Self, flui::interaction::GestureSettingsError>
@@ -5839,7 +5834,6 @@ pub fn flui::interaction::HitTestEntry::pan_zoom_target(self, target: flui::rend
 pub fn flui::interaction::HitTestEntry::pointer_target(self, target: flui::rendering::PointerTarget) -> Self
 pub fn flui::interaction::HitTestEntry::scroll_target(self, target: flui::rendering::ScrollTarget) -> Self
 pub fn flui::interaction::HitTestEntry::smart_zoom_target(self, target: flui::rendering::SmartZoomTarget) -> Self
-pub fn flui::interaction::HitTestEntry::with_transform_unchecked(self, transform: flui::geometry::Matrix4) -> Self
 pub struct flui::interaction::HitTestHandle { .. }
 impl Clone for flui::interaction::HitTestHandle
 impl core::fmt::Debug for flui::interaction::HitTestHandle
@@ -5851,7 +5845,6 @@ impl core::fmt::Debug for flui::interaction::HitTestSnapshot
 pub fn flui::interaction::HitTestSnapshot::is_empty(&self) -> bool
 pub fn flui::interaction::HitTestSnapshot::path(&self) -> &[flui::interaction::HitTestEntry]
 pub fn flui::interaction::HitTestSnapshot::position(&self) -> flui::geometry::Offset<f64>
-pub type flui::interaction::HorizontalDragGestureRecognizer = flui::interaction::DragGestureRecognizer
 #[non_exhaustive] pub enum flui::interaction::Key
 impl Clone for flui::interaction::Key
 impl Eq for flui::interaction::Key
@@ -6466,7 +6459,6 @@ variant flui::interaction::PanClaim::Auto // at 0
 variant flui::interaction::PanClaim::None // at 3
 variant flui::interaction::PanClaim::PanX // at 1
 variant flui::interaction::PanClaim::PanY // at 2
-pub type flui::interaction::PanGestureRecognizer = flui::interaction::DragGestureRecognizer
 #[non_exhaustive] pub struct flui::interaction::PanZoomEvent { .. }
 field flui::interaction::PanZoomEvent::modifiers: flui::interaction::Modifiers // at 4
 field flui::interaction::PanZoomEvent::phase: flui::interaction::PanZoomPhase // at 3
@@ -7189,11 +7181,9 @@ pub fn flui::interaction::Velocity::dx(&self) -> f64
 pub fn flui::interaction::Velocity::dy(&self) -> f64
 pub fn flui::interaction::Velocity::from_components(dx: f64, dy: f64) -> Self
 pub fn flui::interaction::Velocity::from_direction(magnitude: f64, direction: f64) -> Self
-pub fn flui::interaction::Velocity::from_offset_over_duration(offset: flui::geometry::Offset<f64>, duration: core::time::Duration) -> Self
 pub fn flui::interaction::Velocity::is_finite(&self) -> bool
 pub fn flui::interaction::Velocity::is_zero(&self) -> bool
 pub fn flui::interaction::Velocity::magnitude(&self) -> f64
-pub fn flui::interaction::Velocity::negate(&self) -> Self
 pub fn flui::interaction::Velocity::scale(&self, factor: f64) -> Self
 pub struct flui::interaction::VelocityEstimate
 field flui::interaction::VelocityEstimate::confidence: f64 // at 3
@@ -7209,11 +7199,9 @@ impl serde_core::ser::Serialize for flui::interaction::VelocityEstimate
 impl<'de> serde_core::de::Deserialize<'de> for flui::interaction::VelocityEstimate
 pub const fn flui::interaction::VelocityEstimate::new(offset: flui::geometry::Offset<f64>, pixels_per_second: flui::geometry::Offset<f64>, duration: core::time::Duration, confidence: f64) -> Self
 pub fn flui::interaction::VelocityEstimate::is_finite(&self) -> bool
-pub fn flui::interaction::VelocityEstimate::is_reliable(&self) -> bool
 pub fn flui::interaction::VelocityEstimate::is_valid(&self) -> bool
 pub fn flui::interaction::VelocityEstimate::magnitude(&self) -> f64
 pub fn flui::interaction::VelocityEstimate::velocity(&self) -> flui::interaction::Velocity
-pub type flui::interaction::VerticalDragGestureRecognizer = flui::interaction::DragGestureRecognizer
 pub fn flui::interaction::cancel_all<'a>(recognizers: impl IntoIterator<Item = &'a dyn flui::interaction::GestureRecognizer>) -> flui::interaction::CancelOutcome
 pub mod flui::interaction::drag
 pub struct flui::interaction::drag::AllowedActions
@@ -16031,7 +16019,6 @@ impl Eq for flui::prelude::EventPropagation
 impl PartialEq for flui::prelude::EventPropagation
 impl core::fmt::Debug for flui::prelude::EventPropagation
 impl core::marker::StructuralPartialEq for flui::prelude::EventPropagation
-pub const fn flui::prelude::EventPropagation::should_continue(self) -> bool
 pub const fn flui::prelude::EventPropagation::should_stop(self) -> bool
 variant flui::prelude::EventPropagation::Continue // at 0
 variant flui::prelude::EventPropagation::Stop // at 1
@@ -29744,8 +29731,6 @@ pub fn flui_interaction::binding::GestureBinding::arena(&self) -> &flui::interac
 pub fn flui_interaction::binding::GestureBinding::begin_contactless(&self, source: flui_interaction::binding::ContactlessSource) -> Result<flui_interaction::binding::ContactlessSequence, flui::foundation::IdExhausted>
 pub fn flui_interaction::binding::GestureBinding::cancel_active_pointers(&self)
 pub fn flui_interaction::binding::GestureBinding::cancel_all_pointer_sequences(&self)
-pub fn flui_interaction::binding::GestureBinding::cancel_pointer_sequence(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui_interaction::binding::GestureBinding::close_arena(&self, pointer_id: flui::interaction::PointerId)
 pub fn flui_interaction::binding::GestureBinding::default_profiles(&self) -> flui::interaction::GestureProfiles
 pub fn flui_interaction::binding::GestureBinding::dispatch_contactless<R>(&self, sequence: flui::foundation::InputSequenceId, body: impl FnOnce() -> R) -> R
 pub fn flui_interaction::binding::GestureBinding::dispatch_pointer_frame_on<F>(&self, surface: flui_interaction::ids::InputSurface, frame: &[flui::interaction::PointerEvent], hit_test_fn: F) -> smallvec::SmallVec<[flui_interaction::binding::DispatchOutcome; 4]> where F: FnMut(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
@@ -29775,7 +29760,6 @@ pub fn flui_interaction::binding::GestureBinding::replace_default_profiles(&self
 pub fn flui_interaction::binding::GestureBinding::sampling_clock(&self) -> flui_interaction::pointer::sampling_clock::SamplingClock
 pub fn flui_interaction::binding::GestureBinding::set_resampling_enabled(&self, enabled: bool) -> Result<(), flui_interaction::binding::ResamplingModeChangeError>
 pub fn flui_interaction::binding::GestureBinding::set_sampling_clock(&self, clock: flui_interaction::pointer::sampling_clock::SamplingClock)
-pub fn flui_interaction::binding::GestureBinding::sweep_arena(&self, pointer_id: flui::interaction::PointerId)
 pub fn flui_interaction::binding::GestureBinding::tick_deadlines(&self)
 pub fn flui_interaction::binding::GestureBinding::with_clock(clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
 pub fn flui_interaction::binding::GestureBinding::with_sequences_after(self, last: u64) -> Self
@@ -30216,7 +30200,6 @@ pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_cursor(&se
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_position(&self, device_id: flui::interaction::DeviceId) -> Option<flui::geometry::Offset<f64>>
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::dispatch_hover(&self, event: &flui::interaction::PointerEvent, hit_test_result: &flui_interaction::pointer::hit_test::HitTestResult) -> Option<flui_interaction::containment::RoutePanic>
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::dispatch_window_left(&self)
-pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::mouse_is_connected(&self) -> bool
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::new() -> Self
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::register_annotation(&self, annotation: flui::rendering::MouseTrackerAnnotation)
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::remove_device(&self, device_id: flui::interaction::DeviceId)

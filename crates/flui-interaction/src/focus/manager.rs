@@ -522,8 +522,12 @@ impl FocusManager {
             self.modality.set(InputModality::Keyboard);
         }
         if cause == FocusCause::Traversal {
-            self.traversal_transitions
-                .set(self.traversal_transitions.get().wrapping_add(1));
+            self.traversal_transitions.set(
+                self.traversal_transitions
+                    .get()
+                    .checked_add(1)
+                    .expect("BUG: fewer than 2^64 traversal transitions per manager"),
+            );
         }
         let previous = std::mem::replace(&mut *self.primary_focus.borrow_mut(), node.clone());
 
