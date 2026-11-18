@@ -4,7 +4,7 @@
 - **Date:** 2026-11-17
 - **Supersedes:** none. It replaces the launch policy `flui_platform::launch` stated in its own
   documentation (a list of refused schemes, which "an application cannot widen").
-- **Superseded-by:** [ADR-0371](ADR-0371-a-dialog-filter-may-name-a-file-exactly-or-admit-every-file.md)
+- **Superseded-by:** [ADR-0372](ADR-0372-a-dialog-filter-may-name-a-file-exactly-or-admit-every-file.md)
   for §3 only (what a file matches a filter by: also an exact file name, and every file for a
   filter of every file)
 - **Related:** [ADR-0154](ADR-0154-capability-crates.md) §4 and §11 (the launcher and the file

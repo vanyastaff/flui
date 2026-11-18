@@ -3,7 +3,7 @@
 - **File dialogs** (`flui-system`): a filter of every file (`FileFilter::all_files`, offered beside
   specific filters; a request that offers one admits every pick) and exact file names in a filter
   (`FileFilter::with_file_name("Makefile")`, `".env"`), matched ignoring ASCII case and mapped on
-  Windows, the portal and macOS (ADR-0371). `FileFilter::is_all_files` and `file_names` read them;
+  Windows, the portal and macOS (ADR-0372). `FileFilter::is_all_files` and `file_names` read them;
   a malformed name is `MalformedRequest::FileName`.
 - **File dialogs** (`flui-system`): `OpenRequest::show_hidden` and `SaveRequest::show_hidden` show
   hidden files whatever the user's setting, on Windows and macOS; the portal's chooser and a

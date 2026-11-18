@@ -118,7 +118,7 @@ Reveal is `SHOpenFolderAndSelectItems`; trash is `IFileOperation` with `FOFX_REC
 `FOF_WANTNUKEWARNING`, so an item the recycle bin cannot take asks the user before it goes for good.
 
 A file dialog's filter becomes the dialog's patterns, which it matches ignoring case and to the end
-of the name, as the contract does (ADR-0360 §3, ADR-0371): `*.ext` for an extension, the name itself
+of the name, as the contract does (ADR-0360 §3, ADR-0372): `*.ext` for an extension, the name itself
 for a file name (`Makefile`), `*.*` for a filter of every file. It filters by name only, so a MIME
 type is refused with `NotOnThisPlatform` rather than dropped (ADR-0360 §4). A save names a typed
 file without an extension after the selected filter (`SetDefaultExtension` with the first filter's
@@ -228,7 +228,7 @@ pick whose type cannot be read is not refused for that. A save's pick names a fi
 is not checked. A panel has no filter menu, so every filter is allowed at once and a save reports
 no selected filter. For the same reason a filter of every file leaves the panel with no allowed
 types, as a request without filters does. A filter that names a file exactly has no content type,
-so the panel is given no allowed types then either (ADR-0371 §4): the open panel's delegate enables
+so the panel is given no allowed types then either (ADR-0372 §4): the open panel's delegate enables
 what the request's filters name or type, and a save panel takes any name and appends no extension.
 A request that asks for hidden files sets `showsHiddenFiles`. `openPanel` and `savePanel` answer nil
 where the process may not show a panel (an App Sandbox without the user-selected-file entitlement)
@@ -323,7 +323,7 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   window, or a closed one, names none.
 - Every object path is the one the portal will give (`request::object_path`), so each
   subscription is in place before the call that could answer it.
-- A file dialog's filter is globs and MIME types (ADR-0360 §4, ADR-0371 §4): an extension in lower
+- A file dialog's filter is globs and MIME types (ADR-0360 §4, ADR-0372 §4): an extension in lower
   and in upper case, a file name as written and in both cases, `*` for a filter of every file. The
   folder a dialog opens in is a hint the portal may not use, and the file chooser has no option
   for hidden files, so a request that asks for them keeps the user's own toggle.
@@ -372,7 +372,7 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   whose filters name extensions and file names only, and a backend that mapped a MIME pattern
   judges the pick by its type (`FileFilter::matches` with the browser's type on the web, type
   conformance on macOS). A request that offers a filter of every file admits every pick
-  (ADR-0371 §3).
+  (ADR-0372 §3).
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
   the system gives a page no file to write later. The handle writes them to a path the user
   chose on a thread of its own (`dialog::write`) and answers once they are written (a failed write

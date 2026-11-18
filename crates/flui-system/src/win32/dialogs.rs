@@ -4,7 +4,7 @@
 //!
 //! A filter maps to a `COMDLG_FILTERSPEC` of patterns, which the dialog
 //! matches ignoring case and to the end of the name, as the contract does
-//! (ADR-0360 §3, §4, ADR-0371): `*.ext` for an extension (`*.tar.gz`), the
+//! (ADR-0360 §3, §4, ADR-0372): `*.ext` for an extension (`*.tar.gz`), the
 //! name itself for a file name (`Makefile`), and `*.*` for a filter of every
 //! file, which Windows matches against a name with no dot as well. The
 //! dialog filters by name only, so a filter with a MIME type is refused with
