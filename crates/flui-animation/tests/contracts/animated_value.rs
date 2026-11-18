@@ -1,5 +1,6 @@
 //! The owning value's public frame, delivery and observer lifetime contracts.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -18,14 +19,15 @@ fn curve(curve: impl flui_animation::Curve + 'static) -> MotionSpec {
 }
 
 fn replacement_publishes_all_components_before_cancellation() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut value =
         AnimatedValue::try_new(Offset::ZERO, curve(curves::LINEAR), Some(&registry)).unwrap();
     let view = value.animation();
     let old = value.animate_to(Offset::new(2.0, -4.0)).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let seam = (view.value(), view.velocity());
     assert!(
         seam.0.dx > 0.0 && seam.0.dy < 0.0 && seam.1[0] > 0.0 && seam.1[1] < 0.0,
@@ -48,7 +50,7 @@ fn replacement_publishes_all_components_before_cancellation() {
         observed.get(),
         Some((seam.0, seam.1, AnimationStatus::Forward))
     );
-    registry.tick_all(&clock.frame(Duration::from_micros(250_100)));
+    driver.tick_all(&clock.frame(Duration::from_micros(250_100)));
     let after = view.value();
     for (difference, velocity) in [
         (after.dx - seam.0.dx, seam.1[0]),
@@ -62,22 +64,23 @@ fn replacement_publishes_all_components_before_cancellation() {
 }
 
 fn repeated_configuration_keeps_the_remaining_deadline() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut value = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let first = value.animate_to(1.0).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let repeated = value.animate_to(1.0).unwrap();
     assert!(first.is_pending() && repeated.is_pending());
     let seam = (value.value(), value.velocity());
     let second = value.set_motion(curve(curves::EASE_IN)).unwrap();
     assert_eq!((value.value(), value.velocity()), seam);
     assert!(first.is_canceled() && repeated.is_canceled());
-    registry.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
     let third = value.set_motion(curve(curves::EASE_OUT)).unwrap();
     assert!(second.is_canceled());
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(third.is_complete());
     assert_eq!(value.value(), 1.0);
     assert_eq!(value.velocity(), [0.0]);
@@ -97,7 +100,8 @@ fn clockless_motion_and_snap_publish_the_exact_target() {
 }
 
 fn geometry_reaches_rest_before_normalized_components() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let motion = MotionSpec::Spring(
         SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
@@ -107,9 +111,9 @@ fn geometry_reaches_rest_before_normalized_components() {
     let mut normalized = AnimatedValue::try_new(0.0, motion, Some(&registry)).unwrap();
     let geometry_run = geometry.animate_to(Offset::new(1.0, -1.0)).unwrap();
     let normalized_run = normalized.animate_to(1.0).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     for millis in (10..=5000).step_by(10) {
-        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        driver.tick_all(&clock.frame(Duration::from_millis(millis)));
         if geometry_run.is_complete() {
             assert!(
                 normalized_run.is_pending(),
@@ -117,7 +121,7 @@ fn geometry_reaches_rest_before_normalized_components() {
             );
             assert_eq!(geometry.value(), Offset::new(1.0, -1.0));
             assert_eq!(geometry.velocity(), [0.0, 0.0]);
-            registry.tick_all(&clock.frame(Duration::from_secs(5)));
+            driver.tick_all(&clock.frame(Duration::from_secs(5)));
             assert!(normalized_run.is_complete());
             assert_eq!((normalized.value(), normalized.velocity()), (1.0, [0.0]));
             return;
@@ -166,7 +170,8 @@ fn threshold_refusal<const CASE: usize>(error: &AnimationError) -> bool {
 }
 
 fn refused_threshold<const CASE: usize>() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut owner = AnimatedValue::try_new(
         InvalidThreshold::<CASE>(0.0),
@@ -177,8 +182,8 @@ fn refused_threshold<const CASE: usize>() {
     let old = owner.animate_to(InvalidThreshold(1.0)).unwrap();
     let mut healthy = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let healthy_old = healthy.animate_to(1.0).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let seam = (owner.value().0, owner.velocity());
     let healthy_seam = (healthy.value(), healthy.velocity());
     let spring = MotionSpec::Spring(
@@ -205,7 +210,7 @@ fn refused_threshold<const CASE: usize>() {
     ));
     assert!(old.is_pending() && healthy_old.is_pending());
     assert_eq!((healthy.value(), healthy.velocity()), healthy_seam);
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(old.is_complete(), "the previous motion remains deliverable");
     assert_eq!(owner.value().0, 1.0);
     assert!(healthy_old.is_complete());
@@ -224,18 +229,19 @@ fn invalid_rest_thresholds_preserve_the_accepted_run() {
 }
 
 fn observers_do_not_prolong_the_run_or_its_seat() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut value = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let view = value.animation();
     let run = value.animate_to(1.0).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let frozen = view.value();
     assert!(view.velocity()[0] > 0.0);
     drop(value);
     assert!(registry.is_empty() && run.is_canceled());
-    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    driver.tick_all(&clock.frame(Duration::from_secs(10)));
     assert_eq!(view.value(), frozen);
     assert_eq!(view.velocity(), [0.0]);
     assert!(!view.is_animating());
@@ -243,7 +249,8 @@ fn observers_do_not_prolong_the_run_or_its_seat() {
 
 fn color_motion_publishes_fractional_running_samples() {
     use flui_painting::styling::Color;
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut value = AnimatedValue::try_new(
         Color::WHITE.with_opacity(0.0),
@@ -253,11 +260,11 @@ fn color_motion_publishes_fractional_running_samples() {
     .unwrap();
     let view = value.animation();
     let run = value.animate_to(Color::WHITE).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     // A fresh value has zero velocity: its curve segment joins both resting
     // endpoints with the cubic Hermite correction, even for a linear curve.
     for micros in [30_000, 40_000] {
-        registry.tick_all(&clock.frame(Duration::from_micros(micros)));
+        driver.tick_all(&clock.frame(Duration::from_micros(micros)));
         let sample = view.value();
         assert!(run.is_pending() && view.is_animating());
         assert_eq!(sample, value.value());
@@ -273,7 +280,7 @@ fn color_motion_publishes_fractional_running_samples() {
                 .all(|channel| *channel > 0.999)
         );
     }
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(run.is_complete());
     assert_eq!(view.value(), Color::WHITE);
 }
@@ -287,7 +294,8 @@ fn admitting_motion_preserves_the_exact_displayed_origin() {
         (Color::rgba(255, 0, 0, 0), Color::WHITE),
         (Color::rgba(0, 0, 255, 0), Color::rgb(0, 255, 0)),
     ] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let mut owner =
             AnimatedValue::try_new(initial, curve(curves::LINEAR), Some(&registry)).unwrap();
@@ -315,13 +323,13 @@ fn admitting_motion_preserves_the_exact_displayed_origin() {
             Some(initial),
             "admission delivery preserves the origin"
         );
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         assert_eq!(
             view.value(),
             initial,
             "anchoring time is not a value change"
         );
-        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        driver.tick_all(&clock.frame(Duration::from_millis(100)));
         let seam = view.value();
         assert_ne!(seam, initial, "a later frame must actually advance");
         let next = owner.animate_to(Color::BLACK).unwrap();
@@ -331,7 +339,7 @@ fn admitting_motion_preserves_the_exact_displayed_origin() {
             seam,
             "interruption retains the displayed sample"
         );
-        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        driver.tick_all(&clock.frame(Duration::from_secs(2)));
         assert!(next.is_complete());
         assert_eq!(
             view.value(),
@@ -347,13 +355,13 @@ fn admitting_motion_preserves_the_exact_displayed_origin() {
             initial,
             "grouped restart retains its exact origin"
         );
-        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        driver.tick_all(&clock.frame(Duration::from_secs(2)));
         assert_eq!(
             view.value(),
             initial,
             "a zero-time restart retains its origin"
         );
-        registry.tick_all(&clock.frame(Duration::from_secs(3)));
+        driver.tick_all(&clock.frame(Duration::from_secs(3)));
         assert_eq!(view.value(), Color::WHITE);
         drop(subscription);
     }
@@ -407,13 +415,14 @@ fn immediate_motion_does_not_reconstruct_the_displaced_sample() {
         }
     }
     for snap in [false, true] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let mut owner =
             AnimatedValue::try_new(Value(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
         let old = owner.animate_to(Value(1.0)).unwrap();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_millis(250)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_millis(250)));
         REFUSE_RECONSTRUCTION.with(|refuse| refuse.set(true));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if snap {
@@ -482,7 +491,8 @@ fn displaced_exact_endpoints_share_failure_custody() {
         (true, true, false),
         (true, true, true),
     ] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let origin_drops = Rc::new(Cell::new(0));
         let target_drops = Rc::new(Cell::new(0));
@@ -501,8 +511,8 @@ fn displaced_exact_endpoints_share_failure_custody() {
                 retirement: Some((Rc::clone(&target_drops), target_fails, "target retirement")),
             })
             .unwrap();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_millis(250)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_millis(250)));
         assert_eq!(
             (origin_drops.get(), target_drops.get()),
             (0, 0),
@@ -543,7 +553,7 @@ fn displaced_exact_endpoints_share_failure_custody() {
         assert!(old.is_canceled());
         assert_eq!(origin_drops.get(), 1);
         assert_eq!(target_drops.get(), 1);
-        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        driver.tick_all(&clock.frame(Duration::from_secs(2)));
         assert_eq!(
             view.value().position,
             2.0,
@@ -606,13 +616,14 @@ fn plain(position: f64) -> ReentrantValue {
 }
 
 fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let clock = Rc::new(RefCell::new(MotionClock::new()));
     let mut value =
         AnimatedValue::try_new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
     let old = value.animate_to(plain(1.0)).unwrap();
-    registry.tick_all(&clock.borrow_mut().frame(Duration::ZERO));
-    registry.tick_all(&clock.borrow_mut().frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.borrow_mut().frame(Duration::ZERO));
+    driver.tick_all(&clock.borrow_mut().frame(Duration::from_millis(250)));
     let calls = Rc::new(Cell::new(0));
     let target = ReentrantValue {
         position: 2.0,
@@ -624,7 +635,7 @@ fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
                 let count = calls.get();
                 calls.set(count + 1);
                 if count == 0 {
-                    registry.tick_all(&clock.borrow_mut().frame(Duration::from_millis(300)));
+                    driver.tick_all(&clock.borrow_mut().frame(Duration::from_millis(300)));
                 }
             })
         },
@@ -670,7 +681,8 @@ fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
         "replacement committed without a target borrow held across Clone"
     );
 
-    let registry = Vsync::new();
+    let driver = Rc::new(VsyncDriver::new());
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let anchor = clock.frame(Duration::ZERO);
     let advance = clock.frame(Duration::from_millis(250));
@@ -678,11 +690,11 @@ fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
         position: 0.0,
         vector_hook: Rc::new(|| {}),
         clone_hook: Rc::new({
-            let registry = registry.clone();
+            let driver = Rc::clone(&driver);
             let once = Cell::new(false);
             move || {
                 if !once.replace(true) {
-                    registry.tick_all(&advance);
+                    driver.tick_all(&advance);
                 }
             }
         }),
@@ -690,7 +702,7 @@ fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
     let mut owner = AnimatedValue::try_new(origin, curve(curves::LINEAR), Some(&registry)).unwrap();
     let run = owner.animate_to(plain(1.0)).unwrap();
     let view = owner.animation();
-    registry.tick_all(&anchor);
+    driver.tick_all(&anchor);
     assert_eq!(
         view.value().position,
         0.0,
@@ -744,7 +756,8 @@ fn releasing_the_owner_stops_the_remaining_component_callouts() {
     };
     let close = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(AtomicBool::new(false));
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
@@ -764,8 +777,8 @@ fn releasing_the_owner_stops_the_remaining_component_callouts() {
             value.animate_to(Offset::new(2.0, -4.0)).unwrap(),
         )
     };
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let frozen = view.value();
     RELEASE_OWNER.with(|hook| {
         let owner = Rc::downgrade(&owner);
@@ -775,7 +788,7 @@ fn releasing_the_owner_stops_the_remaining_component_callouts() {
         }));
     });
     close.store(true, Ordering::Relaxed);
-    registry.tick_all(&clock.frame(Duration::from_millis(350)));
+    driver.tick_all(&clock.frame(Duration::from_millis(350)));
     assert!(closed.load(Ordering::Relaxed));
     assert!(owner.borrow().is_none() && registry.is_empty());
     assert!(run.is_canceled());
@@ -805,7 +818,8 @@ fn a_failed_component_keeps_the_whole_published_sample() {
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     let fail = Arc::new(AtomicBool::new(false));
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
@@ -816,13 +830,13 @@ fn a_failed_component_keeps_the_whole_published_sample() {
     };
     let mut value = AnimatedValue::try_new(Offset::ZERO, motion, Some(&registry)).unwrap();
     let old = value.animate_to(Offset::new(2.0, -4.0)).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let published = (value.value(), value.velocity());
     fail.store(true, Ordering::Relaxed);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.tick_all(&clock.frame(Duration::from_millis(350)));
+            driver.tick_all(&clock.frame(Duration::from_millis(350)));
         }))
         .is_err()
     );
@@ -838,7 +852,7 @@ fn a_failed_component_keeps_the_whole_published_sample() {
         .unwrap();
     assert!(old.is_canceled() && next.is_pending());
     assert_eq!((value.value(), value.velocity()), published);
-    registry.tick_all(&clock.frame(Duration::from_millis(400)));
+    driver.tick_all(&clock.frame(Duration::from_millis(400)));
     assert_ne!(value.value(), published.0);
     assert!(value.value().dx.is_finite() && value.value().dy.is_finite());
 }
@@ -1042,7 +1056,8 @@ fn owner_retirement_joins_every_delivery_channel() {
     let mut expected = Vec::new();
     for channel in ["value", "status", "continuation", "waiter"] {
         for earlier_failure in [false, true] {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let mut clock = MotionClock::new();
             let drops = Rc::new(Cell::new(0));
             let tail = Rc::new(Cell::new(0));
@@ -1061,7 +1076,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                     drops: Some(Rc::clone(&drops)),
                 })
                 .unwrap();
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
             let view = value.animation();
             assert!(OWNER.with(|owner| owner.replace(Some(value))).is_none());
             let first: fn() = if earlier_failure { fail } else { healthy };
@@ -1110,7 +1125,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                 Duration::from_secs(1)
             };
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                registry.tick_all(&clock.frame(elapsed));
+                driver.tick_all(&clock.frame(elapsed));
             }));
             assert_eq!(outcome.is_err(), earlier_failure, "{channel}");
             if let Err(payload) = outcome {
@@ -1149,8 +1164,8 @@ fn owner_retirement_joins_every_delivery_channel() {
                     drops: Some(Rc::clone(&fresh_drops)),
                 })
                 .unwrap();
-            registry.tick_all(&clock.frame(Duration::from_secs(2)));
-            registry.tick_all(&clock.frame(Duration::from_secs(3)));
+            driver.tick_all(&clock.frame(Duration::from_secs(2)));
+            driver.tick_all(&clock.frame(Duration::from_secs(3)));
             assert!(fresh_run.is_complete());
             drop(fresh);
             assert!(registry.is_empty());
@@ -1207,7 +1222,8 @@ fn owner_retirement_keeps_its_first_destructor_failure() {
             panic!("competing target retirement");
         }
     }
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let motion_drops = Arc::new(AtomicUsize::new(0));
     let target_drops = Rc::new(Cell::new(0));
     let value = AnimatedValue::try_new(
@@ -1233,8 +1249,8 @@ fn owner_retirement_keeps_its_first_destructor_failure() {
         AnimatedValue::try_new(0.0_f64, curve(curves::LINEAR), Some(&registry)).unwrap();
     let run = fresh.animate_to(1.0).unwrap();
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(run.is_complete());
     drop(fresh);
     assert!(registry.is_empty());
@@ -1249,14 +1265,15 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
             self.0.set(self.0.get() + 1);
         }
     }
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut value =
         AnimatedValue::try_new(0.0_f64, curve(curves::LINEAR), Some(&registry)).unwrap();
     let first_run = value.animate_to(1.0).unwrap();
     let view = value.animation();
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let storage = Rc::new(RefCell::new(None::<AnimatedValue<f64>>));
     let next_run = Rc::new(RefCell::new(None));
     let drops = Rc::new(Cell::new(0));
@@ -1314,15 +1331,17 @@ fn grouped_registry_migration_commits_before_delivery() {
     }
     for delivery in [Delivery::Immediate, Delivery::Drop, Delivery::Unwind] {
         for (unbound, fails) in [(false, false), (false, true), (true, false), (true, true)] {
-            let old = Vsync::new();
-            let next = Vsync::new();
+            let old_driver = VsyncDriver::new();
+            let old = old_driver.vsync().clone();
+            let next_driver = VsyncDriver::new();
+            let next = next_driver.vsync().clone();
             let mut left = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&old)).unwrap();
             let mut right = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&old)).unwrap();
             let left_run = left.animate_to(1.0).unwrap();
             let right_run = right.animate_to(2.0).unwrap();
             let mut clock = MotionClock::new();
-            old.tick_all(&clock.frame(Duration::ZERO));
-            old.tick_all(&clock.frame(Duration::from_millis(250)));
+            old_driver.tick_all(&clock.frame(Duration::ZERO));
+            old_driver.tick_all(&clock.frame(Duration::from_millis(250)));
             let seam = (left.value(), right.value());
             let delivered = Rc::new(Cell::new(0));
             let check = {
@@ -1347,7 +1366,7 @@ fn grouped_registry_migration_commits_before_delivery() {
                     check();
                 });
             } else {
-                next.set_frame_requester(Some(Rc::new(check)));
+                next_driver.set_frame_requester(Some(Rc::new(check)));
             }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if matches!(delivery, Delivery::Immediate) {
@@ -1384,7 +1403,7 @@ fn grouped_registry_migration_commits_before_delivery() {
             }
             assert!(old.is_empty());
             assert!(delivered.get() > 0);
-            next.set_frame_requester(None);
+            next_driver.set_frame_requester(None);
             if unbound {
                 assert_eq!(
                     delivered.get(),
@@ -1395,8 +1414,8 @@ fn grouped_registry_migration_commits_before_delivery() {
             } else {
                 assert_eq!((left.value(), right.value()), seam);
                 assert!(!left_run.is_canceled() && !right_run.is_canceled());
-                next.tick_all(&clock.frame(Duration::from_secs(2)));
-                next.tick_all(&clock.frame(Duration::from_secs(3)));
+                next_driver.tick_all(&clock.frame(Duration::from_secs(2)));
+                next_driver.tick_all(&clock.frame(Duration::from_secs(3)));
             }
             assert_eq!((left.value(), right.value()), (1.0, 2.0));
             assert!(!left.animation().is_animating() && !right.animation().is_animating());
@@ -1408,15 +1427,16 @@ fn grouped_registry_migration_commits_before_delivery() {
 
 fn grouped_motion_publishes_all_owners_before_delivery() {
     use flui_foundation::Listenable;
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut left = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let mut right =
         AnimatedValue::try_new(Offset::ZERO, curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(Offset::new(2.0, -4.0)).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let left_view = left.animation();
     let right_view = right.animation();
     let seam = (
@@ -1468,7 +1488,7 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
     assert_eq!(delivered.get(), 4);
     drop(left_listening);
     drop(right_listening);
-    registry.tick_all(&clock.frame(Duration::from_millis(1250)));
+    driver.tick_all(&clock.frame(Duration::from_millis(1250)));
     assert_eq!(left.value(), -1.0);
     assert_eq!(right.value(), Offset::new(-3.0, 7.0));
     drop((left, right));
@@ -1476,13 +1496,14 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
 }
 
 fn an_ignored_refusal_keeps_every_old_run() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut left = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let mut right = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(2.0).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     let result = MotionUpdate::run(|update| {
         update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
         assert!(
@@ -1496,27 +1517,28 @@ fn an_ignored_refusal_keeps_every_old_run() {
         input: flui_animation::AnimationInput::Target, component: 0, value,
     }) if value.is_nan()));
     assert!(left_old.is_pending() && right_old.is_pending());
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!((left.value(), right.value()), (1.0, 2.0));
     MotionUpdate::run(|update| {
         update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
         update.retarget(&mut right, 4.0, curve(curves::LINEAR))
     })
     .unwrap();
-    registry.tick_all(&clock.frame(Duration::from_millis(1001)));
-    registry.tick_all(&clock.frame(Duration::from_millis(2001)));
+    driver.tick_all(&clock.frame(Duration::from_millis(1001)));
+    driver.tick_all(&clock.frame(Duration::from_millis(2001)));
     assert_eq!((left.value(), right.value()), (3.0, 4.0));
 }
 
 fn a_caught_preparation_panic_keeps_every_old_run() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut left = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let mut right =
         AnimatedValue::try_new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(plain(2.0)).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     let result = MotionUpdate::run(|update| {
         update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
         let target = ReentrantValue {
@@ -1536,26 +1558,27 @@ fn a_caught_preparation_panic_keeps_every_old_run() {
     });
     assert_eq!(result, Err(AnimationError::AdmissionAborted));
     assert!(left_old.is_pending() && right_old.is_pending());
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!((left.value(), right.value().position), (1.0, 2.0));
 }
 
 fn a_later_converter_invalidates_the_whole_group() {
-    let registry = Vsync::new();
+    let driver = Rc::new(VsyncDriver::new());
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut left = AnimatedValue::try_new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let mut right =
         AnimatedValue::try_new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(plain(2.0)).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     let tick = clock.frame(Duration::from_millis(250));
     let target = ReentrantValue {
         position: 4.0,
         clone_hook: Rc::new(|| {}),
         vector_hook: Rc::new({
-            let registry = registry.clone();
-            move || registry.tick_all(&tick)
+            let driver = Rc::clone(&driver);
+            move || driver.tick_all(&tick)
         }),
     };
     let result = MotionUpdate::run(|update| {
@@ -1564,7 +1587,7 @@ fn a_later_converter_invalidates_the_whole_group() {
     });
     assert_eq!(result, Err(AnimationError::ReentrantMotion));
     assert!(left_old.is_pending() && right_old.is_pending());
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!((left.value(), right.value().position), (1.0, 2.0));
 }
 

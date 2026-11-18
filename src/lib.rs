@@ -212,7 +212,26 @@ pub mod semantics;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-pub use flui_animation as animation;
+/// The animation layer (`flui-animation`): every public item of the crate, at
+/// the facade's path, as the same items.
+///
+/// A glob module rather than a whole-crate alias, so that it can shadow
+/// `flui_animation::__runtime`, the frame driver's seam (ADR-0382), which is
+/// not application surface: an application receives a `Vsync` handle from its
+/// tree and never ticks or closes a registry.
+///
+/// ```compile_fail,E0603
+/// use flui::animation::__runtime::VsyncDriver;
+/// ```
+pub mod animation {
+    pub use flui_animation::*;
+    #[expect(
+        hidden_glob_reexports,
+        reason = "shadows the glob's `__runtime` (ADR-0382): the frame driver's seam is not facade surface"
+    )]
+    mod __runtime {}
+}
+
 /// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
 /// feature.
 #[cfg(feature = "cupertino")]

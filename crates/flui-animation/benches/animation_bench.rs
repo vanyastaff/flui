@@ -19,6 +19,7 @@
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface, so they are exempt from the crate's missing-docs lint.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -27,7 +28,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, Curve, CurvedAnimation,
     FrictionSimulation, MotionClock, MotionSpec, Simulation, SpringDescription, SpringSimulation,
-    Tolerance, Tween, Vsync, curves,
+    Tolerance, Tween, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
@@ -122,20 +123,20 @@ fn spring_step(c: &mut Criterion) {
     group.bench_function("animated_value_color_frame", |b| {
         b.iter_batched(
             || {
-                let registry = Vsync::new();
+                let driver = VsyncDriver::new();
                 let mut clock = MotionClock::new();
                 let mut value = AnimatedValue::try_new(
                     Color::rgba(0, 0, 0, 255),
                     MotionSpec::Spring(smooth),
-                    Some(&registry),
+                    Some(driver.vsync()),
                 )
                 .unwrap();
                 value.animate_to(Color::rgba(255, 128, 0, 255)).unwrap();
-                registry.tick_all(&clock.frame(Duration::ZERO));
-                (value, registry, clock)
+                driver.tick_all(&clock.frame(Duration::ZERO));
+                (value, driver, clock)
             },
-            |(value, registry, mut clock)| {
-                registry.tick_all(&clock.frame(black_box(Duration::from_secs_f64(FRAME))));
+            |(value, driver, mut clock)| {
+                driver.tick_all(&clock.frame(black_box(Duration::from_secs_f64(FRAME))));
                 black_box(value.value());
                 value
             },

@@ -56,7 +56,8 @@ use windows::Win32::{
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
             SetWindowTextW, ShowWindow, TranslateMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
             WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETOBJECT, WM_KEYDOWN, WM_SYSCOMMAND,
-            WM_WTSSESSION_CHANGE, WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK,
+            WM_WTSSESSION_CHANGE, WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_CONSOLE_CONNECT,
+            WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT, WTS_SESSION_LOCK,
             WTS_SESSION_UNLOCK,
         },
     },
@@ -3545,6 +3546,43 @@ fn a_locked_session_or_a_cloak_occludes_a_shown_window() {
     assert_eq!(*events.lock().expect("log"), [false, true, false, true]);
 }
 
+/// A session that loses its display (its remote client disconnects, another
+/// session takes the console) occludes a shown window until it connects
+/// again; a session that also locked meanwhile is seen only once unlocked.
+/// The messages are the ones the system sends each subscribed window, sent
+/// here by hand: no remote session is needed. Red-check: map
+/// `WTS_REMOTE_DISCONNECT` to no change, and the window stays seen.
+fn a_disconnected_session_occludes_a_shown_window_until_it_connects() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let events = record_visibility(&window);
+    let session = |code: u32| send(&window, WM_WTSSESSION_CHANGE, code as usize, 1);
+    session(WTS_REMOTE_DISCONNECT);
+    let disconnected = window.state();
+    assert!(
+        disconnected.visible && disconnected.occluded && !disconnected.is_seen(),
+        "a disconnected session shows nothing: {disconnected:?}"
+    );
+    session(WTS_REMOTE_CONNECT);
+    assert!(window.state().is_seen(), "connected again, it is seen");
+    session(WTS_CONSOLE_DISCONNECT);
+    session(WTS_SESSION_LOCK);
+    session(WTS_CONSOLE_CONNECT);
+    assert!(
+        !window.state().is_seen(),
+        "connected but still locked: {:?}",
+        window.state()
+    );
+    session(WTS_SESSION_UNLOCK);
+    assert!(window.state().is_seen());
+    assert_eq!(
+        *events.lock().expect("log"),
+        [false, true, false, true],
+        "each change of sight is published once"
+    );
+}
+
 /// The thread's one subscription to cloak changes serves each of its
 /// windows: a cloak of either is that window's alone, heard once, and the
 /// window opened first still hears one after the other closed.
@@ -3909,6 +3947,10 @@ fn native_window_commands() {
         (
             "deadlines_are_delivered_while_the_window_is_moved",
             deadlines_are_delivered_while_the_window_is_moved,
+        ),
+        (
+            "a_disconnected_session_occludes_a_shown_window_until_it_connects",
+            a_disconnected_session_occludes_a_shown_window_until_it_connects,
         ),
         (
             "a_locked_session_or_a_cloak_occludes_a_shown_window",

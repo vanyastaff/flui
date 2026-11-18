@@ -181,19 +181,22 @@ impl<T> Admission<T> {
 /// and unregisters the run.
 ///
 /// ```
-/// use flui_animation::{AnimatedValue, SharedCurve, curves, MotionClock, MotionSpec, Vsync};
+/// use flui_animation::__runtime::VsyncDriver;
+/// use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SharedCurve, curves};
 /// use std::time::Duration;
 ///
-/// let registry = Vsync::new();
+/// // The frame driver a presentation owns; an application never ticks one.
+/// let driver = VsyncDriver::new();
 /// let mut clock = MotionClock::new();
 /// let motion = MotionSpec::Curve {
 ///     duration: Duration::from_millis(200),
 ///     curve: SharedCurve::new(curves::EASE_IN_OUT),
 /// };
-/// let mut value = AnimatedValue::try_new(0.0_f64, motion, Some(&registry)).expect("finite value");
+/// let mut value =
+///     AnimatedValue::try_new(0.0_f64, motion, Some(driver.vsync())).expect("finite value");
 /// let old = value.animate_to(1.0).expect("finite target");
-/// registry.tick_all(&clock.frame(Duration::ZERO));
-/// registry.tick_all(&clock.frame(Duration::from_millis(50)));
+/// driver.tick_all(&clock.frame(Duration::ZERO));
+/// driver.tick_all(&clock.frame(Duration::from_millis(50)));
 /// let seam = (value.value(), value.velocity());
 /// let next = value.animate_to(-1.0).expect("finite target");
 /// assert!(old.is_canceled() && next.is_pending());

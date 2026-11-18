@@ -231,6 +231,12 @@ pub trait Window<O> {
         owner: &O,
         shared: &Self::Shared,
     ) -> Arc<dyn flui_platform::DisplayConnection>;
+
+    /// [`Platform::owner_wait`]: none, unless the windows' thread must serve
+    /// while it waits.
+    fn owner_wait(_owner: &O, _shared: &Self::Shared) -> Option<Arc<dyn flui_platform::OwnerWait>> {
+        None
+    }
 }
 
 /// The text position: what one window, `W`, holds of the text feature.

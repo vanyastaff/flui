@@ -885,6 +885,75 @@ on that cost, not on geometry.
 `RotatedBox(1)` / `RotatedBox(3)` at the cross start, and asserts the dry
 answer by value at all four quadrants.
 
+### A repainted boundary keeps the chunks of the render objects that owe no paint
+
+**Rule (ADR-0304 §2):** a repaint reruns every `paint` in the boundary, but a
+chunk keeps the `Arc<Chunk>`, and so the `ContentVersion`, that the boundary
+published before at the same owner and ordinal when the paint that sealed it
+is clean; otherwise `seal_picture` mints a new version
+(`pipeline/owner/paint/kept_chunks.rs`). A paint is clean when:
+
+- its render object owes no paint work: no `NEEDS_PAINT`,
+  `NEEDS_COMPOSITED_LAYER_UPDATE`, `PAINT_CHANGED` or `LAID_OUT_SINCE_PAINT`.
+  Layout marks paint only on a dirty root and on the boundaries it lays out,
+  so any other node that laid out says so through `LAID_OUT_SINCE_PAINT`, set
+  where the arena lays a node out past its cache. Its parent laid out too, so
+  the placement rule below already holds it back; the bit says so at the
+  node itself;
+- it is `placed_as_before`: the content's root is, and a child is when its
+  parent was, carried neither `LAID_OUT_SINCE_PAINT` nor `PAINT_CHANGED`, and
+  read no paint anchor. `PAINT_CHANGED` is the bit
+  `Scheduler::commit_needs_paint` sets on the node a mark names, layout's
+  marks included, and not on the ancestors the mark walks through. A child's
+  origin is its parent's plus the offset the parent's layout, or its paint
+  from its state or its anchor, gave it, so this holds the origin to the
+  previous one without storing either. A child its parent paints a second
+  time in the content is not placed as before, and neither is its subtree
+  (`PaintedSlots`, one step per child in any paint order);
+- it read no paint anchor (`FragmentRecorder::anchor_read`): an anchor outside
+  the boundary moves against it with no bit set inside;
+- the previous content can be trusted: a pass after one that failed or
+  unwound (`PipelineOwner::unrecorded_paint`) keeps nothing, since that pass
+  cleared the flags of the nodes it painted without committing their output,
+  and neither does a record the residue scan marked stale.
+
+The paint that reaches a node takes its bits, so each speaks of what happened
+since the node's last paint.
+
+**Why that is enough.** A chunk holds the runs of one paint of its owner: the
+commands that paint records between the entries of its children and of its
+effects. A run of another paint seals the open chunk, and only a first paint,
+whose ordinals count from zero, is clean, so owner and ordinal name the same
+run in both contents. Those runs depend on the owner's state, its layout, its
+origin and its anchor, which the rule above covers. Where its runs are cut
+into chunks depends on which children add entries between them, and a child
+that starts or stops adding one is marked: the mark walks up through the owner
+to the boundary, unless it meets a node marked already, whose own mark walked
+the same way. Effects are entries of their own, so a composited-layer update,
+which marks no ancestor, changes no chunk. A kept chunk sits in the new content
+under the same owner, ordinal and version, so the scene's damage pairs it with
+itself and the engine's recording cache replays it.
+
+**A missing mark is visible.** A render object that changes what it paints
+without marking itself keeps its old recording even when its boundary
+repaints for another reason.
+
+**Nothing is stored for it.** The lookup reads the previous content's entries:
+a forward scan from a cursor and, after the first miss, an index of that
+content's chunks in the pass's scratch (`ChunkIndex`), so a reordered content
+costs one pass over it.
+
+`boundary_contents::a_repaint_keeps_the_chunks_of_the_render_objects_that_owe_no_paint`,
+`a_chunk_that_moved_in_its_boundary_is_a_new_recording`,
+`a_chunk_its_parent_paints_elsewhere_is_a_new_recording`,
+`a_chunk_that_read_its_paint_anchor_is_a_new_recording`,
+`the_pass_after_a_failed_one_keeps_no_chunk`,
+`a_chunk_holds_one_paint_of_its_render_object` and
+`a_render_object_painted_twice_owes_paint_on_both_paints`
+(`tests/boundary_contents.rs`) pin the rule; flui-engine's
+`a_repainted_boundary_replays_the_chunks_that_did_not_change` pins the replay
+and its pixels on lavapipe.
+
 ### A transform patch may reuse a recorded origin only because layout forces a repaint
 
 **Rule:** `layer_patches_for` rebuilds a node's effect layers at the `origin`
@@ -1681,7 +1750,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
 | `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a boundary kept as it is is not a paint |
 | `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `refresh_boundary`'s patched effects | layers created fresh this pass, including a layer a composited-layer update patches into a kept boundary's content |
-| `layers_reused` | `refresh_boundary`'s unpatched entries | entries a composited-layer update shares unchanged with the content it replaces |
+| `layers_reused` | `FragmentComposer::seal_picture` and `refresh_boundary`'s unpatched entries | chunks a repaint kept for the render objects that owed no paint, and entries a composited-layer update shares unchanged with the content it replaces |
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 

@@ -722,6 +722,44 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_waits_out_the_backoff`.
 
+### An unseen window waits, and a covered one owes its surface a frame
+
+A presentation whose window is not seen (`WindowState::is_seen`) has a hidden clock: its polls
+skip, the demand and tree work it gathers wait, and none of it is tree work a host wakes for
+(`has_pending_tree_work`), so a covered window with a dirty tree asks the loop for nothing.
+Shown again, it asks for a frame when anything waits, its clock's demand or its tree's, and its
+dropped-frame retry, which waited while it was unseen, runs.
+
+A covered window owes its surface a frame where that frame would be shown on uncovering
+(`occluded_frame::Sight::owes`): the window may be covered (shown, unminimized, running,
+occluded, on a host whose `reports_occlusion` is available), its host keeps a covered window's
+last frame (`OccludedSurface::Kept`, which the host names through `PresentationWindow`: AppKit
+alone; X11 without a compositing manager keeps no image, a suspended Wayland toplevel's frames
+are held), and its session shows windows (`occluded_frame::Session`: the lock and the machine's
+sleep are two flags, set and cleared by `SessionLocked`/`SessionUnlocked` and `Sleep`/`Wake`, so
+a lock that outlasts a sleep still counts). Once `OCCLUDED_FRAME_QUIET` has passed with work
+waiting, and not before the dropped-frame retry, the deadline is due work in `next_wake`,
+`runs_frames` is true (every runner's wake gate and the headless host ask it, so a runner whose
+frames are off runs the frame), and `FrameClock::grant_hidden_frame` lets the first poll that can
+produce it. The frame stays due until it runs, however late the host serves its wake; a hold
+(the dropped-frame backoff, text preparation) leaves it due, and while the sink holds as many
+frames as it may it asks for no wake, the settlement that frees a place being the one. Only a
+frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing follows every
+change of sight (`follow_sight`: each window snapshot, the visibility edge, each session notice):
+a window whose frame would no longer be shown owes nothing, one that owes keeps its quiet period
+through any snapshot, and one that owed nothing starts one. A frame drawn while the window is
+unseen is marked so in its `PendingFrame`; the surface refusing or dropping that frame, and no
+other, ends the owing until the window is seen again. A hidden presentation's redraw request and
+its dropped-frame retry raise no redraw flag and wake no host. The rule records what ADR-0357
+leaves open, that a covered window's uncovering shows the frame of before the covering. **Tests**:
+`an_occluded_window_draws_its_change_in_exactly_one_frame`,
+`a_covered_window_owes_by_its_sight_on_every_snapshot`, `a_late_wake_still_draws_the_owed_frame`,
+`an_owed_frame_the_surface_refuses_is_not_drawn_again`,
+`a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep` (`flui-testing`,
+`occluded_window`); `a_hidden_window_raises_no_redraw_flag`,
+`an_owed_frame_is_refused_by_its_own_settlement_only`, `a_hold_leaves_the_owed_frame_due`
+(`flui-runtime`, `occluded_frame`).
+
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
 `QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose
 record folds then, so a presentation keeps no more records pending than the sink holds frames.

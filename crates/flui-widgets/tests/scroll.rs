@@ -7,6 +7,7 @@
 //! 5. `ScrollController::animate_to` (ADR-0037) — curve-driven animation,
 //!    grab-to-cancel, and jump_to-cancels-in-flight.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_view::LifecycleContext;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -1705,7 +1706,8 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
             }
         };
         let first = Vsync::new();
-        let second = Vsync::new();
+        let driver = VsyncDriver::new();
+        let second = driver.vsync().clone();
         let mut laid = crate::common::lay_out_animated(
             VsyncScope::new(first.clone(), child.clone()),
             tight(300.0, 300.0),
@@ -1782,8 +1784,8 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
         fling(&laid);
         let fresh_release = pixels();
         let mut clock = flui_animation::MotionClock::new();
-        second.tick_all(&clock.frame(Duration::from_secs(1)));
-        second.tick_all(&clock.frame(Duration::from_millis(1032)));
+        driver.tick_all(&clock.frame(Duration::from_secs(1)));
+        driver.tick_all(&clock.frame(Duration::from_millis(1032)));
         if pixels() <= fresh_release {
             failures.push(format!(
                 "{family}: replacement Vsync cannot drive fresh inertia"

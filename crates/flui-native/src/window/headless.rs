@@ -1813,6 +1813,11 @@ impl crate::host_window::CoreHostWindow for HeadlessHostWindow {
 }
 
 impl HostWindow for HeadlessHostWindow {
+    /// The headless host composites nothing a covering could leave behind.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
+
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.facets.accessibility) as _)
     }
