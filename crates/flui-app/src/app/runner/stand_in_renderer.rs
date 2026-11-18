@@ -42,6 +42,8 @@ struct Device {
     lost: bool,
     failing_rebuilds: u32,
     rebuild_attempts: u32,
+    /// Devices probed for a retry and adopted in place of a given-up one.
+    adoptions: u32,
     /// How many of the next frames, of any window, panic.
     panics_ahead: u32,
     /// How many of the next resizes, of any window, panic.
@@ -155,6 +157,13 @@ impl StandInRenderer {
     #[must_use]
     pub fn recovery_attempts(&self) -> u32 {
         self.shared.lock().device.rebuild_attempts
+    }
+
+    /// Devices the run adopted so far, each probed for the application's
+    /// retry of a given-up device (ADR-0305 §8).
+    #[must_use]
+    pub fn device_adoptions(&self) -> u32 {
+        self.shared.lock().device.adoptions
     }
 
     /// Whether this window's slot was detached.
@@ -367,6 +376,25 @@ impl RasterBackend for StandInBackend {
                 Some((slot, refusal))
             })
             .collect::<Vec<(SlotId, EngineError)>>())
+    }
+
+    /// The probed device takes the lost one's place; every window's surface
+    /// goes with the old instance, which the executor tells each window.
+    fn adopt_device(&mut self, device: flui_engine::ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        drop(device);
+        let shared = &mut *self.shared.lock();
+        shared.device.lost = false;
+        shared.device.adoptions = shared.device.adoptions.saturating_add(1);
+        let device = &shared.device;
+        shared
+            .windows
+            .iter()
+            .filter_map(|window| {
+                let slot = window.slot?;
+                let refusal = window.size.and_then(|size| device.fits(size).err())?;
+                Some((slot, refusal))
+            })
+            .collect::<Vec<(SlotId, EngineError)>>()
     }
 
     fn rebuilds_inline(&self) -> bool {
