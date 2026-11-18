@@ -1622,12 +1622,17 @@ impl WindowProc {
 
                 // The monitors changed: what lies at their edges may have,
                 // and the pointer the window holds is clipped where the
-                // displays now show its client area, or let go.
+                // displays now show its client area, or let go. Only a
+                // let-go publishes: a window holding nothing samples no state
+                // inside the broadcast, which can arrive inside a COM call.
                 WM_DISPLAYCHANGE => {
                     if let Some(ctx) = ctx {
                         ctx.app_bars_may_have_changed(hwnd);
+                        let held = ctx.pointer_hold.get().is_some();
                         ctx.hold_again(hwnd);
-                        ctx.publish_window_state(hwnd);
+                        if held && ctx.pointer_hold.get().is_none() {
+                            ctx.publish_window_state(hwnd);
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }

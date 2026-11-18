@@ -55,8 +55,9 @@ use windows::Win32::{
             PostMessageW, SC_MOVE, SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
             SetWindowTextW, ShowWindow, TranslateMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
-            WM_CLOSE, WM_DPICHANGED, WM_GETOBJECT, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE,
-            WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+            WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETOBJECT, WM_KEYDOWN, WM_SYSCOMMAND,
+            WM_WTSSESSION_CHANGE, WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK,
+            WTS_SESSION_UNLOCK,
         },
     },
 };
@@ -3090,6 +3091,18 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
         locked_pixel(hwnd),
         Some(pixel),
         "the lock is its own pixel again"
+    );
+    // A display change that reset the desktop's clip, as a mode change can,
+    // finds the lock clipped again at its pixel.
+    // SAFETY: frees the desktop's clip; it takes no pointer.
+    let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::ClipCursor(None) };
+    assert_eq!(locked_pixel(hwnd), None, "the clip was freed");
+    send(&window, WM_DISPLAYCHANGE, 32, 0);
+    settle();
+    assert_eq!(
+        locked_pixel(hwnd),
+        Some(pixel),
+        "the lock is clipped again after a display change"
     );
     apply(&window, WindowCommand::SetSize(extent(200.0, 150.0)));
     settle();
