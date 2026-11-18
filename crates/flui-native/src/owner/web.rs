@@ -1158,6 +1158,13 @@ impl host::Preferences<WebLoop> for WebLoop {
         }
         Ok(preferences)
     }
+
+    fn delivered(owner: &WebLoop, values: &SystemPreferences) {
+        let source = owner.preferences.borrow().clone();
+        if let Some(source) = source {
+            source.delivered(values);
+        }
+    }
 }
 
 /// The lifecycle position is the loop's: the page reports the end of its

@@ -32,7 +32,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::subscription::RenderSubscription;
-use flui_animation::curve::Curve;
+use flui_animation::Curve;
 use flui_animation::{
     Animation, AnimationController, MotionSpec, SpringSimulation, Tolerance, curves,
 };
@@ -238,11 +238,11 @@ impl Placement {
             }
             MotionSpec::Curve { duration, .. } => {
                 self.clock.set_duration(*duration);
-                Some(self.clock.forward_from(Some(0.0)))
+                Some(self.clock.forward_from(0.0))
             }
             _ => {
                 self.clock.set_duration(MotionSpec::DEFAULT_DURATION);
-                Some(self.clock.forward_from(Some(0.0)))
+                Some(self.clock.forward_from(0.0))
             }
         };
         if let Some(Err(error)) = run {

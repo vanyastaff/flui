@@ -201,12 +201,18 @@ mod hooks {
     }
 
     /// The system preference source the Android loop keeps (ADR-0172): read
-    /// again on a configuration change, on `Resume` and when `FluiView`
+    /// again on a configuration change, on `Start` and when `FluiView`
     /// reports a changed setting, and by the table's preference position.
     pub(crate) trait ActivityPreferences: SystemPreferenceSource + Send + Sync {
         /// When a read that failed is due again; the looper polls no longer
-        /// than that.
+        /// than that. `None` for a healthy source and for one whose retries
+        /// ran out.
         fn retry_deadline(&self) -> Option<web_time::Instant>;
+
+        /// A change notice arrived (a configuration change, `FluiView`'s
+        /// report, `Start`): a source whose retries ran out reads again. The
+        /// loop calls it before it reads on the notice.
+        fn notice(&self);
 
         /// Whether the Activity's configuration is in night mode now (the
         /// system dark theme, or the app's override of it), as the source

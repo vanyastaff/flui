@@ -20,4 +20,11 @@ pub(crate) trait SystemPreferenceSource {
     /// [`PlatformError::PreferencesDeferred`] while the first read waits for
     /// the owner.
     fn sample(&self) -> Result<SystemPreferences, PlatformError>;
+
+    /// The application delivered `values`, which it read through
+    /// [`sample`](Self::sample) (`Platform::preferences_delivered`). A source
+    /// that counts a value as accepted only once it is delivered (the AppKit
+    /// and Android source) settles it here; every other source says, in its
+    /// own no-op, why it has nothing to settle.
+    fn delivered(&self, values: &SystemPreferences);
 }

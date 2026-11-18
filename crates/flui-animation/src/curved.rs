@@ -100,7 +100,7 @@ impl<C: Curve> CurvedAnimation<C> {
 
     /// Set a different curve for reverse animation.
     #[must_use]
-    pub fn with_reverse_curve(mut self, reverse_curve: C) -> Self {
+    pub fn reverse_curve(mut self, reverse_curve: C) -> Self {
         let old = self.reverse_curve.replace(Terminal::new(reverse_curve));
         drop(old);
         self

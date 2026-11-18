@@ -997,7 +997,7 @@ struct FailingSimulation {
     armed: Cell<bool>,
 }
 
-impl flui_animation::simulation::Simulation for FailingSimulation {
+impl flui_animation::Simulation for FailingSimulation {
     fn x(&self, time: f64) -> f64 {
         if !self.completion && time > 0.0 && self.armed.replace(false) {
             std::panic::panic_any("simulation position computation");

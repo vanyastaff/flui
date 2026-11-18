@@ -9,7 +9,7 @@ const MODES: [Rounding; 4] = [Nearest, Floor, Ceil, TowardZero];
 /// `begin → end` sampled at `t`, rounded each way: `(rounding, expected)`.
 fn rounds(begin: i32, end: i32, t: f64, expected: [(Rounding, i32); 4]) {
     for (rounding, value) in expected {
-        let tween = IntTween::new(begin, end).with_rounding(rounding);
+        let tween = IntTween::new(begin, end).rounding(rounding);
         assert_eq!(
             tween.transform(t),
             value,
@@ -98,7 +98,7 @@ fn ordinary_integer_rounding_and_clamping() {
         [(Nearest, -1), (Floor, -1), (Ceil, 0), (TowardZero, 0)],
     );
     for rounding in MODES {
-        let ordinary = IntTween::new(-2, 3).with_rounding(rounding);
+        let ordinary = IntTween::new(-2, 3).rounding(rounding);
         assert_eq!(ordinary.transform(-1.0), -2, "{rounding:?}");
         assert_eq!(ordinary.transform(2.0), 3, "{rounding:?}");
     }
@@ -135,7 +135,7 @@ fn nearest_keeps_values_just_below_a_half() {
 fn nan_progress_preserves_the_begin_endpoint() {
     for rounding in MODES {
         for (begin, end) in [(7, -3), (-9, 4)] {
-            let tween = IntTween::new(begin, end).with_rounding(rounding);
+            let tween = IntTween::new(begin, end).rounding(rounding);
             assert_eq!(tween.transform(f64::NAN), begin);
         }
     }
@@ -176,7 +176,7 @@ fn integer_tweens_interpolate_across_the_full_range() {
 #[cfg(feature = "serde")]
 #[test]
 fn integer_tweens_decode_payloads_without_a_rounding() {
-    let floor = IntTween::new(-5, 0).with_rounding(Floor);
+    let floor = IntTween::new(-5, 0).rounding(Floor);
     let wire = serde_json::to_string(&floor).expect("serialize");
     assert_eq!(wire, r#"{"begin":-5,"end":0,"rounding":"Floor"}"#);
     assert_eq!(
@@ -223,7 +223,7 @@ fn mapped_animation_accepts_values_without_debug() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let curved = Rc::new(
         CurvedAnimation::new(Rc::new(controller.clone()), Easing { reverse: false })
-            .with_reverse_curve(Easing { reverse: true }),
+            .reverse_curve(Easing { reverse: true }),
     );
     let mapped = TweenAnimation::new(Mapping, curved.clone());
     let composed = Mapping.animate(curved);

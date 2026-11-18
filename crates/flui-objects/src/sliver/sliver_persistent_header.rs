@@ -1136,7 +1136,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         };
         self.update_animation(snap.duration, end_value, snap.curve);
         if let Some(controller) = self.controller.as_ref() {
-            let _ = controller.forward_from(Some(0.0));
+            let _ = controller.forward_from(0.0);
         }
     }
 
@@ -1166,7 +1166,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         self.animation = Some(CurvedAnimation::new(parent, curve));
         // The freshly-built tween's value AT the controller's pre-reset
         // position may not equal `begin` (the controller hasn't been driven
-        // back to t=0 yet — that's `forward_from(Some(0.0))`'s job, called
+        // back to t=0 yet — that's `forward_from(0.0)`'s job, called
         // by the caller right after this). Seed the sync marker with `begin`
         // itself so the very next `perform_layout` doesn't spuriously see a
         // "changed" value before the controller has actually moved.

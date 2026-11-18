@@ -134,6 +134,9 @@ impl SystemPreferenceSource for PreferenceSource {
         let previous = self.cache.value.borrow().clone();
         self.sample_with(|| Ok(sample(&self.ui, &self.accessibility, previous.as_ref())))
     }
+
+    /// The cache accepts a read when it answers; a broadcast marks it stale.
+    fn delivered(&self, _: &SystemPreferences) {}
 }
 
 /// What the owner asks of the source it keeps.

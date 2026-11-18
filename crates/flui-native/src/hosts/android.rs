@@ -26,7 +26,7 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
-use crate::preferences::android::AndroidPreferences;
+use crate::preferences::android::activity_preferences;
 use crate::text::android::ViewInputMethod;
 use crate::version::gate::android::AndroidApi;
 use crate::window::android::{AndroidWindow, system_chrome::AndroidSystemChrome};
@@ -84,7 +84,7 @@ impl AndroidHost for Android {
         api: AndroidApi,
         signal: &Arc<OwnerSignal>,
     ) -> Arc<dyn ActivityPreferences> {
-        Arc::new(AndroidPreferences::new(app, api, signal))
+        Arc::new(activity_preferences(app, api, signal))
     }
 
     fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
