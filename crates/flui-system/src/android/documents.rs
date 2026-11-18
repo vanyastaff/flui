@@ -260,7 +260,7 @@ pub(crate) struct LetGo(Arc<AtomicBool>);
 
 impl LetGo {
     /// Nobody waits for the answer any more.
-    fn set(&self) {
+    pub(crate) fn set(&self) {
         self.0.store(true, Ordering::Release);
     }
 
@@ -337,9 +337,15 @@ pub(crate) trait PickedDocuments: Send + 'static {
     fn discard(&mut self, index: usize);
 
     /// Persist the application's read permission to document `index`, so
-    /// that it outlasts the process: its URI, or `None` when its provider
-    /// offers no persistable permission.
+    /// that it outlasts the process: its URI, read and bounded before the
+    /// permission is taken, or `None` when the URI is too long to keep or
+    /// its provider offers no persistable permission, which leaves nothing
+    /// persisted.
     fn keep(&mut self, index: usize) -> Option<String>;
+
+    /// Release the persisted read permission of document `index`, which a
+    /// pick could not carry after all.
+    fn release(&mut self, index: usize);
 
     /// Whether the application holds a persisted read permission to
     /// document `index`.
@@ -401,12 +407,19 @@ pub(crate) fn read_picks(
         picks = picks
             .into_iter()
             .enumerate()
-            .map(
-                |(index, pick)| match documents.keep(index).and_then(super::grants::grant_of) {
-                    Some(grant) => pick.granted(grant),
-                    None => pick,
-                },
-            )
+            .map(|(index, pick)| {
+                let Some(uri) = documents.keep(index) else {
+                    return pick;
+                };
+                if let Some(grant) = super::grants::grant_of(uri) {
+                    pick.granted(grant)
+                } else {
+                    // Persisted, and no grant holds it: given back, so no
+                    // permission outlives the answer that cannot name it.
+                    documents.release(index);
+                    pick
+                }
+            })
             .collect();
     }
     Ok(Picks::try_new(picks))

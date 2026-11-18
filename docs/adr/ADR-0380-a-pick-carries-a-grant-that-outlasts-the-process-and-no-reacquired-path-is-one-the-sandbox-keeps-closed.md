@@ -27,8 +27,10 @@ pick, and only for as long as that grant lasts:
   persists it (`ContentResolver.takePersistableUriPermission`), within a bounded number Android
   trims the oldest of.
 - A Flatpak's file chooser answers a path in the document portal's folder, which the portal
-  keeps for the application across its runs; outside it the process sees only what its
-  manifest exposes.
+  keeps for the application across its runs, or the real path of a file the manifest's
+  `filesystems` expose (`home`, `host`, an `xdg-*` folder); the process sees its own folders and
+  those, and nothing else. Its description, `/.flatpak-info`, is the only sign it runs in one:
+  a host process started from a Flatpak's terminal inherits `FLATPAK_ID`.
 
 `data_dirs` assumed an unsandboxed process as well: a Flatpak with no `XDG_DATA_HOME` would be
 answered `~/.local/share`, which its sandbox does not expose; a macOS App Sandbox whose `HOME`
@@ -73,48 +75,66 @@ through.
 (`PickedFile::grant`). A `Grant` is the system's lasting access in its own form, tagged by its
 `GrantKind`: `AppleBookmark` (a security-scoped bookmark on macOS, a minimal bookmark made under
 the picker's access on iOS), `ContentUri` (the URI whose read permission was persisted after
-every pick was read, so an answer refused midway persists nothing), `UnixPath` and
-`WindowsPath` (where the process opens what the user can, and a Flatpak's document portal
-path), and `Scripted` (the double's). `Grant::to_bytes` writes a versioned header and the
-payload; `Grant::try_from_bytes` reads it back or answers a typed `MalformedGrant`. A pick its
-system could not grant lasting access to is handed over without one. A save carries none: its
-location is reopened by an open dialog.
+every pick was read, so an answer refused midway persists nothing, and given back when no grant
+can hold the URI), `UnixPath` and `WindowsPath` (where the process opens what the user can, and
+a Flatpak's document portal path). `Grant::to_bytes` writes a versioned header and the payload;
+`Grant::try_from_bytes` reads it back, judging the payload's length before it copies a byte, or
+answers a typed `MalformedGrant`. A pick its system could not grant lasting access to is handed
+over without one. A save carries none: its location is reopened by an open dialog. The scripted
+double's grants are of the `AppleBookmark` kind: opaque bytes only its store reads.
 
 ### §2. A separate service resolves a grant
 
 `GrantCapability` hands out `Grants`, which is not bound to a window: `Grants::resolve(&grant,
-max_bytes)` answers a `Completion<Result<Access, GrantError>>`. An `Access` is the file again
-(`PickedFile`: a path, or on Android its name and contents read within `max_bytes`), a fresher
-grant when the system called the old one stale (`Access::renewed`), and the `AccessScope` that
-keeps it open while the `Access` is held: a macOS or iOS security-scoped resource, started where
-the grant was resolved and stopped when the scope drops. `AccessScope` is `Send` because it is
-started off the owner thread and crosses to the owner with the answer.
+max_bytes)` answers a `Resolving`, which lasts while its caller holds it. Dropping it before the
+answer drops the `ResolveHold` the backend returned, which stops the backend's work nobody waits
+for (on Android the read's cancellation signal and its read loop, so the worker's place comes
+back). An `Access` is the file again (`PickedFile`: a path, or on Android its name and contents
+read within `max_bytes`), a fresher grant when the system called the old one stale
+(`Access::renewed`), and, for this crate's own providers, the `AccessScope` that keeps it open
+while the `Access` is held: a macOS or iOS security-scoped resource, started where the grant was
+resolved and stopped when the scope drops. Only the crate makes a scope (`AccessScope::new` is
+crate-private; a backend outside it builds `Access::new`, which holds none), so a scope that lets
+a path past the sandbox's rule is always a system's started access. `AccessScope` is `Send`
+because it is started off the owner thread and crosses to the owner with the answer.
 
 `GrantError` names what a caller branches on: `Foreign` (a grant of another kind of system, not
 asked about), `Revoked` (the system no longer grants it, or resolved it to a path the process
 may not open: pick again), `Missing` (deleted, or moved where the system does not follow),
-`TooLarge`, `Unsupported` and `Failed`. A stale bookmark is not an error: it resolves and hands
-a fresher grant over.
+`NotLocal` (a path grant naming a share, a pipe or a device, refused by the ADR-0360 §2 rule
+before any file system call, as a relative path is), `TooLarge`, `Unsupported` and `Failed`. A
+stale bookmark is not an error: it resolves and hands a fresher grant over.
 
 ### §3. The handle holds every answer to the sandbox
 
-`flui_system::sandbox::Sandbox` states what the process may open without a grant: everything, or
-the folders of its sandbox (`SandboxKind::AppSandbox`, `IosApp`, `Flatpak`, `AndroidApp`), read
-from the environment the system sets (`APP_SANDBOX_CONTAINER_ID` and the container's `HOME` and
-`TMPDIR`, `FLATPAK_ID`), never from the file system. `Grants::new` takes the provider's sandbox.
-The handle refuses a reacquired path the sandbox does not reach and no scope holds open
+`flui_platform::sandbox` detects the sandbox once for every crate that needs it
+(`Confinement::detect`, `Confinement::of_process`): a Flatpak by `/.flatpak-info`, read off the
+owner thread, size-checked before it is read and bounded, its `[Context] filesystems=` entries
+resolved to folders (`home`, `host`, the `xdg-*` folders, absolute and `~/` paths, the access
+mode dropped, a `!` entry taking back an earlier one); the macOS App Sandbox by
+`APP_SANDBOX_CONTAINER_ID`, its container `HOME` or, without it, the container under the user's
+home. A `TMPDIR` is a temporary folder only when it is absolute, plain, not a root, and inside the
+container in the App Sandbox. `flui_system::sandbox::Sandbox` states, from that, what the process
+may open without a grant: everything, or the folders of its sandbox (`SandboxKind::AppSandbox`,
+`IosApp`, `Flatpak`, `AndroidApp`). A backend reads it once per handle, through
+`GrantBackend::sandbox`, off the owner thread where it reads a file, and each resolve waits for
+it. The handle refuses a reacquired path the sandbox does not reach and no scope holds open
 (`Revoked`), contents past `max_bytes` (`TooLarge`), and a folder handed over by its files, a
 download or a fresher grant of another kind (`MalformedAnswer`), whichever backend gave it.
 
 ### §4. A process's data folders are its container's
 
-`flui_native::storage::data_dirs` answers a sandboxed process its container: a Flatpak's
-`$XDG_DATA_HOME`, else `~/.var/app/<id>/data`; the macOS App Sandbox's
-`~/Library/Containers/<id>/Data/Library/Application Support`, from `HOME` or, without it, from
-the user's home and the container id; a packaged Windows application's
-`%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`. The Linux user folders
-answer none for a folder that is not there for the process, which is how a Flatpak shows a
-folder its manifest does not expose.
+`flui_native::storage::data_dirs` answers a sandboxed process its container, from the same
+`flui_platform::sandbox` detection: a Flatpak's `$XDG_DATA_HOME`, else `~/.var/app/<id>/data`;
+the macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application Support`; a packaged
+Windows application's `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`. A
+host's store (`DataStore::of_process`) finds them at its first call, on its IO thread, never on
+the owner thread. A packaged application whose new root holds no store and whose redirected
+`%APPDATA%` location holds one has it copied over once, within a bound
+(`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), each file made new so nothing is overwritten; a
+store past the bound, or holding a link, stays where it was. The Linux user folders answer none
+for a folder that is not there for the process, which is how a Flatpak shows a folder its
+manifest does not expose.
 
 ### Consequences
 
@@ -135,13 +155,21 @@ folder its manifest does not expose.
 
 ### Confirmation
 
-- The compiler: `Grants::new` takes a `Sandbox`; an `AccessScope` is `Send`; a `Grant` has no
-  empty or oversized payload (`Grant::try_new`).
+- The compiler: every `GrantBackend` answers a sandbox and returns a `ResolveHold`; only the
+  crate makes an `AccessScope`, which is `Send`; a `Grant` has no empty or oversized payload
+  (`Grant::try_new`).
 - Tests: `a_reacquired_path_is_handed_out_only_where_the_process_can_open_it`,
   `a_picks_access_survives_a_restart_through_the_bytes_the_application_kept` and
   `a_grant_the_system_no_longer_honours_answers_why` in `flui-system`'s `system_it`;
-  `a_foreign_grant_is_refused_without_asking_the_system`, a row of
+  `a_foreign_grant_is_refused_without_asking_the_system` and
+  `a_path_the_seam_refuses_is_refused_before_the_file_system`, rows of
   `every_provider_keeps_the_system_services_contract`;
+  `each_sandbox_reaches_its_own_folders_and_what_its_system_exposes` (`flui-system`) and
+  `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
+  `a_manifests_filesystems_name_what_the_flatpak_reaches`,
+  `a_temporary_folder_that_would_reach_everything_is_ignored` (`flui-platform`);
+  `a_dropped_resolve_cancels_its_calls_and_stops_its_read` (Android, on every host);
+  `a_packaged_applications_store_is_copied_over_once_and_nothing_is_overwritten` (`flui-native`);
   `a_picks_path_is_its_grant_and_resolves_while_the_file_is_there` against the stand-in portal on
   Linux; `a_kept_pick_carries_its_uri_once_every_pick_was_read` and
   `a_document_is_reacquired_only_while_its_permission_is_held_and_within_the_bound` (Android, on

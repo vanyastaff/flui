@@ -2,33 +2,35 @@
 //!
 //! A sandboxed process opens files under its own folders (a macOS App
 //! Sandbox's container, a Flatpak's `~/.var/app/<id>`, the document portal's
-//! folder) and, outside them, only what the system granted it: a file the
-//! user picked in the system's dialog, or one a [`Grant`](crate::grant::Grant)
-//! reacquires. [`Sandbox`] states the first part, so the layer never hands
-//! out a path the process cannot open: a reacquired path outside it must
-//! come with the access that opens it ([`Grants`](crate::grant::Grants)).
+//! folder, what a Flatpak's manifest exposes) and, outside them, only what
+//! the system granted it: a file the user picked in the system's dialog, or
+//! one a [`Grant`](crate::grant::Grant) reacquires. [`Sandbox`] states the
+//! first part, so the layer never hands out a path the process cannot open:
+//! a reacquired path outside it must come with the access that opens it
+//! ([`Grants`](crate::grant::Grants)).
 //!
-//! Each platform's provider reads its sandbox from the process's
-//! environment, which the system sets for a sandboxed process before it
-//! starts, so nothing here touches the file system.
+//! The sandbox is the one `flui_platform::sandbox` detects, for this crate
+//! and for the data folders alike: a Flatpak by its `/.flatpak-info`, read
+//! off the owner thread, the App Sandbox by the environment its system sets.
 
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux", test))]
-use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+use flui_platform::sandbox::Confinement;
+use flui_platform::sandbox::is_plain;
 
 /// The kind of sandbox a process runs in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SandboxKind {
     /// The macOS App Sandbox: the application's container
-    /// (`~/Library/Containers/<bundle id>/Data`, its `HOME`) and its
-    /// temporary folder.
+    /// (`~/Library/Containers/<bundle id>/Data`) and its temporary folder.
     AppSandbox,
     /// An iOS application's container: its home and its temporary folder.
     IosApp,
     /// A Flatpak: the application's folders under `~/.var/app/<id>`, its
-    /// temporary folder and the document portal's folders. What its
-    /// manifest's `filesystems` grant beyond them is not stated here.
+    /// temporary folder, the document portal's folders and what its
+    /// manifest's `filesystems` expose.
     Flatpak,
     /// An Android application: a pick and a reacquired document are handed
     /// over as their contents there, never as a path, so no path is
@@ -44,10 +46,10 @@ pub enum SandboxKind {
 /// inside a folder that leads out of it is the sandbox's to refuse when the
 /// path is opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Sandbox(Option<Confinement>);
+pub struct Sandbox(Option<Confined>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Confinement {
+struct Confined {
     kind: SandboxKind,
     roots: Box<[PathBuf]>,
 }
@@ -71,22 +73,20 @@ impl Sandbox {
         roots
             .iter()
             .all(|root| is_plain(root))
-            .then_some(Self(Some(Confinement { kind, roots })))
+            .then_some(Self(Some(Confined { kind, roots })))
     }
 
     /// The kind of sandbox; `None` for a process that has none.
     #[must_use]
     pub fn kind(&self) -> Option<SandboxKind> {
-        self.0.as_ref().map(|confinement| confinement.kind)
+        self.0.as_ref().map(|confined| confined.kind)
     }
 
     /// The folders it reaches; empty for a process that has no sandbox, which
     /// reaches every path.
     #[must_use]
     pub fn roots(&self) -> &[PathBuf] {
-        self.0
-            .as_ref()
-            .map_or(&[], |confinement| &confinement.roots)
+        self.0.as_ref().map_or(&[], |confined| &confined.roots)
     }
 
     /// Whether the process may open `path` without a grant: always without
@@ -96,108 +96,64 @@ impl Sandbox {
     pub fn reaches(&self, path: &Path) -> bool {
         match &self.0 {
             None => true,
-            Some(confinement) => {
-                is_plain(path) && confinement.roots.iter().any(|root| path.starts_with(root))
+            Some(confined) => {
+                is_plain(path) && confined.roots.iter().any(|root| path.starts_with(root))
             }
         }
     }
 }
 
-/// Whether `path` is absolute and names its folders without climbing.
-fn is_plain(path: &Path) -> bool {
-    path.is_absolute()
-        && path
-            .components()
-            .all(|component| component != Component::ParentDir)
-}
-
-/// What the detection reads of the process's environment.
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux", test))]
-pub(crate) type Environment<'a> = &'a dyn Fn(&str) -> Option<OsString>;
-
-/// A sandbox of `kind` over the `roots` that are absolute and plain; the
-/// others name no folder of the host's.
+/// A sandbox of `kind` over the `roots` that are absolute and plain.
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux", test))]
 fn confined(kind: SandboxKind, roots: impl IntoIterator<Item = PathBuf>) -> Sandbox {
-    Sandbox(Some(Confinement {
+    Sandbox(Some(Confined {
         kind,
         roots: roots.into_iter().filter(|root| is_plain(root)).collect(),
     }))
 }
 
-/// An absolute path an environment variable names, if it names one.
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux", test))]
-fn folder(env: Environment<'_>, name: &str) -> Option<PathBuf> {
-    env(name)
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-}
-
-/// The macOS App Sandbox, when the process runs in it: the system sets
-/// `APP_SANDBOX_CONTAINER_ID` for a sandboxed process, and its `HOME` and
-/// `TMPDIR` to the container's folders.
-#[cfg(any(target_os = "macos", test))]
-pub(crate) fn mac_app_sandbox(env: Environment<'_>) -> Sandbox {
-    if env("APP_SANDBOX_CONTAINER_ID").is_none() {
-        return Sandbox::unconfined();
+/// The sandbox a detected confinement reaches: a Flatpak's own folders, its
+/// temporary folder, the document portal's folders and its manifest's
+/// filesystems; the App Sandbox's container and temporary folder.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) fn of_confinement(confinement: &Confinement) -> Sandbox {
+    match confinement {
+        Confinement::Flatpak(flatpak) => confined(
+            SandboxKind::Flatpak,
+            flatpak
+                .own
+                .iter()
+                .cloned()
+                .chain([flatpak.temporary.clone()])
+                .chain(flatpak.documents.iter().cloned())
+                .chain(flatpak.filesystems.iter().cloned()),
+        ),
+        Confinement::AppSandbox(container) => confined(
+            SandboxKind::AppSandbox,
+            [Some(container.home.clone()), container.temporary.clone()]
+                .into_iter()
+                .flatten(),
+        ),
+        _ => Sandbox::unconfined(),
     }
-    container(SandboxKind::AppSandbox, env)
 }
 
 /// An iOS application's container: every iOS application is sandboxed, its
-/// `HOME` and `TMPDIR` its container's.
+/// `HOME` its container and a `TMPDIR` inside it its temporary folder.
 #[cfg(any(target_os = "ios", test))]
-pub(crate) fn ios_app(env: Environment<'_>) -> Sandbox {
-    container(SandboxKind::IosApp, env)
-}
-
-/// A container whose folders are the process's `HOME` and `TMPDIR`.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
-fn container(kind: SandboxKind, env: Environment<'_>) -> Sandbox {
-    confined(
-        kind,
-        ["HOME", "TMPDIR"]
-            .into_iter()
-            .filter_map(|name| folder(env, name)),
-    )
-}
-
-/// A Flatpak, when the process runs in one (`FLATPAK_ID` is set): the
-/// application's folders (`~/.var/app/<id>`, where its `XDG_DATA_HOME`,
-/// `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are), its temporary folder (the
-/// sandbox's own `/tmp`) and the document portal's folders, inside the
-/// sandbox (`/run/flatpak/doc`) and under the user's runtime folder
-/// (`$XDG_RUNTIME_DIR/doc`), where the portal grants each picked file.
-#[cfg(any(target_os = "linux", test))]
-pub(crate) fn flatpak(env: Environment<'_>) -> Sandbox {
-    let Some(id) = env("FLATPAK_ID").filter(|id| is_one_name(Path::new(id))) else {
-        return Sandbox::unconfined();
-    };
-    let own = folder(env, "HOME").map(|home| home.join(".var").join("app").join(id));
-    let temporary = folder(env, "TMPDIR").unwrap_or_else(|| PathBuf::from("/tmp"));
-    let documents = folder(env, "XDG_RUNTIME_DIR").map(|runtime| runtime.join("doc"));
-    let roots = own
-        .into_iter()
-        .chain([temporary, PathBuf::from("/run/flatpak/doc")])
-        .chain(documents);
-    confined(SandboxKind::Flatpak, roots)
-}
-
-/// Whether `name` is one plain name, as an application id is.
-#[cfg(any(target_os = "linux", test))]
-fn is_one_name(name: &Path) -> bool {
-    let mut components = name.components();
-    matches!(
-        (components.next(), components.next()),
-        (Some(Component::Normal(_)), None)
-    )
+pub(crate) fn ios_app(env: flui_platform::sandbox::Environment<'_>) -> Sandbox {
+    let home = env("HOME").map(PathBuf::from).filter(|home| is_plain(home));
+    let temporary = home
+        .as_deref()
+        .and_then(|home| flui_platform::sandbox::usable_temporary(env, Some(home)));
+    confined(SandboxKind::IosApp, home.into_iter().chain(temporary))
 }
 
 /// An Android application: its picks and reacquired documents are their
 /// contents, so it reaches no path.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn android_app() -> Sandbox {
-    Sandbox(Some(Confinement {
+    Sandbox(Some(Confined {
         kind: SandboxKind::AndroidApp,
         roots: Box::default(),
     }))
@@ -208,20 +164,25 @@ mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
-    use super::{Sandbox, SandboxKind, android_app, flatpak, ios_app, mac_app_sandbox};
+    use flui_platform::sandbox::{Confinement, FlatpakInfo};
+
+    use super::{Sandbox, SandboxKind, android_app, ios_app, of_confinement};
 
     /// An absolute path on the host the test runs on.
     fn absolute(path: &str) -> PathBuf {
         std::env::temp_dir().join(path)
     }
 
-    /// An environment of `vars`.
     fn environment(vars: Vec<(&'static str, OsString)>) -> impl Fn(&str) -> Option<OsString> {
         move |name| {
             vars.iter()
                 .find(|(var, _)| *var == name)
                 .map(|(_, value)| value.clone())
         }
+    }
+
+    fn no_user_dirs(_: &str) -> Option<PathBuf> {
+        None
     }
 
     #[test]
@@ -246,61 +207,104 @@ mod tests {
             Sandbox::try_confined(SandboxKind::Flatpak, [PathBuf::from("relative")]),
             None
         );
-        assert_eq!(
-            Sandbox::try_confined(SandboxKind::Flatpak, [container.join("..")]),
-            None
-        );
         assert!(
             !android_app().reaches(&container),
             "Android reaches no path"
         );
     }
 
+    /// Each row: the environment and description a process has, a path,
+    /// and whether its sandbox reaches it.
     #[test]
-    fn each_platform_reads_its_sandbox_from_the_environment_it_sets() {
+    fn each_sandbox_reaches_its_own_folders_and_what_its_system_exposes() {
         let home = absolute("home");
-        let tmp = absolute("tmp");
+        let runtime = absolute("run");
+        let container = absolute("Containers/com.example.app/Data");
+        let flatpak_env = || {
+            environment(vec![
+                ("FLATPAK_ID", "org.example.App".into()),
+                ("HOME", home.clone().into()),
+                ("XDG_RUNTIME_DIR", runtime.clone().into()),
+                ("TMPDIR", absolute("sandbox-tmp").into()),
+            ])
+        };
+        let info = |filesystems: &str| {
+            FlatpakInfo::Present(format!(
+                "[Application]\nname=org.example.App\n[Context]\nfilesystems={filesystems}\n"
+            ))
+        };
+        let reaches = |env: &dyn Fn(&str) -> Option<OsString>, info: &FlatpakInfo, path: &Path| {
+            of_confinement(&Confinement::detect(env, info, None, &no_user_dirs)).reaches(path)
+        };
+        let documents = home.join("Documents").join("notes.txt");
+        assert!(reaches(
+            &flatpak_env(),
+            &info(""),
+            &home.join(".var/app/org.example.App/data/a")
+        ));
+        assert!(reaches(
+            &flatpak_env(),
+            &info(""),
+            &runtime.join("doc/1a2b/notes.txt")
+        ));
+        assert!(
+            !reaches(&flatpak_env(), &info(""), &documents),
+            "not exposed"
+        );
+        assert!(
+            reaches(&flatpak_env(), &info("home;"), &documents),
+            "a manifest with --filesystem=home reaches the real path the portal answers"
+        );
+        assert!(
+            reaches(&flatpak_env(), &info("xdg-documents:ro;"), &documents),
+            "an xdg folder, its mode dropped"
+        );
+        assert!(
+            !reaches(&flatpak_env(), &info("home;!home;"), &documents),
+            "a `!` entry takes it back"
+        );
+        assert_eq!(
+            Confinement::detect(&flatpak_env(), &FlatpakInfo::Absent, None, &no_user_dirs),
+            Confinement::Unconfined,
+            "FLATPAK_ID without the description is no Flatpak"
+        );
+
         let mac = environment(vec![
             ("APP_SANDBOX_CONTAINER_ID", "com.example.app".into()),
-            ("HOME", home.clone().into()),
-            ("TMPDIR", tmp.clone().into()),
+            ("HOME", container.clone().into()),
+            ("TMPDIR", container.join("tmp").into()),
         ]);
-        let sandbox = mac_app_sandbox(&mac);
-        assert_eq!(sandbox.kind(), Some(SandboxKind::AppSandbox));
-        assert_eq!(sandbox.roots(), [home.clone(), tmp]);
-        let unsandboxed = environment(vec![("HOME", home.clone().into())]);
-        assert_eq!(mac_app_sandbox(&unsandboxed), Sandbox::unconfined());
-        assert_eq!(ios_app(&unsandboxed).kind(), Some(SandboxKind::IosApp));
-        assert_eq!(ios_app(&unsandboxed).roots(), std::slice::from_ref(&home));
-
-        let runtime = absolute("run");
-        let flatpak_env = environment(vec![
-            ("FLATPAK_ID", "org.example.App".into()),
-            ("HOME", home.clone().into()),
-            ("TMPDIR", absolute("sandbox-tmp").into()),
-            ("XDG_RUNTIME_DIR", runtime.clone().into()),
-        ]);
-        let sandbox = flatpak(&flatpak_env);
-        assert_eq!(sandbox.kind(), Some(SandboxKind::Flatpak));
-        assert!(sandbox.reaches(&home.join(".var/app/org.example.App/data/notes.txt")));
-        assert!(sandbox.reaches(&runtime.join("doc").join("1a2b3c").join("notes.txt")));
-        assert!(!sandbox.reaches(&home.join("Documents").join("notes.txt")));
-        assert!(!sandbox.reaches(&home.join(".var/app/org.example.Other/data")));
-        assert_eq!(flatpak(&unsandboxed), Sandbox::unconfined());
-        let climbing = environment(vec![("FLATPAK_ID", "../etc".into())]);
-        assert_eq!(
-            flatpak(&climbing),
-            Sandbox::unconfined(),
-            "an id that is no one name is no Flatpak's"
-        );
-        let relative = environment(vec![
+        assert!(reaches(
+            &mac,
+            &FlatpakInfo::Absent,
+            &container.join("Library/a")
+        ));
+        assert!(!reaches(&mac, &FlatpakInfo::Absent, &home.join("a")));
+        let root = std::env::temp_dir()
+            .ancestors()
+            .last()
+            .expect("a path has a root")
+            .to_path_buf();
+        let wide = environment(vec![
             ("APP_SANDBOX_CONTAINER_ID", "com.example.app".into()),
-            ("HOME", "relative".into()),
+            ("HOME", container.clone().into()),
+            ("TMPDIR", root.into()),
         ]);
+        assert!(
+            !reaches(&wide, &FlatpakInfo::Absent, &home.join("a")),
+            "a TMPDIR of a root would reach everything: ignored"
+        );
+
+        let ios = environment(vec![
+            ("HOME", container.clone().into()),
+            ("TMPDIR", absolute("elsewhere").into()),
+        ]);
+        let sandbox = ios_app(&ios);
+        assert_eq!(sandbox.kind(), Some(SandboxKind::IosApp));
         assert_eq!(
-            mac_app_sandbox(&relative).roots(),
-            [] as [PathBuf; 0],
-            "a relative folder is not one the sandbox reaches"
+            sandbox.roots(),
+            std::slice::from_ref(&container),
+            "a TMPDIR outside the container is ignored"
         );
     }
 }

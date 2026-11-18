@@ -668,23 +668,33 @@ what is not built is in [`docs/gaps.md`](../../docs/gaps.md#sandbox-aware-file-a
   shows. `resolve` refuses a grant of another kind than its backend's (`Foreign`) without asking
   it, and holds every answer to the process's `Sandbox`: a path the sandbox does not reach and no
   started `AccessScope` holds open is `Revoked`, contents past the request's bound `TooLarge`, a
-  folder of files, a download or a fresher grant of another kind `MalformedAnswer`.
-- The sandbox is read from the environment the system sets for a sandboxed process (the App
-  Sandbox's `APP_SANDBOX_CONTAINER_ID` and its container's `HOME` and `TMPDIR`, iOS's container,
-  `FLATPAK_ID`), never from the file system; Android's reaches no path, since every pick and
-  reacquired document there is its contents.
+  folder of files, a download or a fresher grant of another kind `MalformedAnswer`. Only the
+  crate makes an `AccessScope`: a backend outside it answers `Access::new`, held to the sandbox.
+- A resolve lasts while its `Resolving` is held: dropping it drops the backend's `ResolveHold`,
+  which on Android sets the read's let-go and cancels its signal, so the worker stops before its
+  next chunk and its place comes back; a path's `metadata` call cannot be called back, and its
+  answer is dropped.
+- The sandbox is `flui_platform::sandbox`'s detection, the one the data folders use: each
+  handle asks its backend once (`GrantBackend::sandbox`), and resolves wait for the answer. The
+  portal reads `/.flatpak-info` on its pool (a manifest's `xdg-*` entries through
+  `user-dirs.dirs`); macOS reads the App Sandbox from the environment; iOS's container is `HOME`
+  with a `TMPDIR` inside it; Android's reaches no path, since every pick and reacquired document
+  there is its contents; Windows has none.
+- A path grant is judged before any file system call: a relative path is `MalformedAnswer`, a
+  share, a pipe or a device `NotLocal` (`flui_platform::launch::is_local_path`, ADR-0360 §2).
 - Per host: macOS makes a security-scoped bookmark of each pick on the work queue once the panel
   answered (a queue with no place answers the picks without grants) and resolves it there with
   its scope, which the `Access` stops when it drops, a stale one made again while the access is
   held; iOS makes a minimal bookmark under the picker's access as the document is read; Android
-  persists each pick's read permission once every pick was read, and reacquires the document on a
+  reads and bounds each pick's URI, then persists its read permission, once every pick was read,
+  giving a permission back when no grant can hold its URI, and reacquires the document on a
   worker as its contents, refused `Revoked` once the permission is no longer held; Linux and
   Windows keep the path and ask the file system on the portal's pool or a shell thread, a file
   gone from the document portal's folder answering `Revoked`, one gone elsewhere `Missing`. The
   web refuses the capability (`NotYetOnThisHost`).
 - The scripted double (`testing::ScriptedGrants`) resolves from a `GrantStore` that outlives the
   providers, as a system's permission store outlives the process, in the `Sandbox` the test set:
-  a restart is a new host over the same store.
+  a restart is a new host over the same store. Its grants are of the `AppleBookmark` kind.
 
 ## The web providers (`web`)
 

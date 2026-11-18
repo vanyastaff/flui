@@ -68,7 +68,6 @@ use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, Mes
 use crate::grant::{GrantCapability, Grants};
 use crate::jump_list::{JumpList, JumpListCapability};
 use crate::os::{Os, OsCapability};
-use crate::sandbox::Sandbox;
 use crate::share::{Share, ShareCapability};
 use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
 use crate::taskbar::{TaskbarCapability, TaskbarEntry};
@@ -186,7 +185,6 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
     registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(Grants::new(
             grants::WindowsGrants::new(ctx.runtime_local::<ShellThreads>()),
-            Sandbox::unconfined(),
             ctx,
         ))
     });

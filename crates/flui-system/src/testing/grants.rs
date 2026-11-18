@@ -10,7 +10,9 @@ use flui_platform::capability::Resolver;
 use rustc_hash::FxHashMap;
 
 use crate::dialog::PickedFile;
-use crate::grant::{Access, AccessScope, Grant, GrantBackend, GrantError, GrantKind, GrantResult};
+use crate::grant::{
+    Access, AccessScope, Grant, GrantBackend, GrantError, GrantKind, GrantResult, ResolveHold,
+};
 use crate::sandbox::Sandbox;
 
 /// What a simulated system keeps of the grants it made: the file each
@@ -85,8 +87,7 @@ impl GrantStore {
                 },
             },
         );
-        Grant::try_new(GrantKind::Scripted, id.to_le_bytes())
-            .expect("BUG: an id is a payload a grant holds")
+        Grant::try_new(KIND, id.to_le_bytes()).expect("BUG: an id is a payload a grant holds")
     }
 
     /// Withdraw `grant`, as a user who revokes it or a system that prunes
@@ -135,18 +136,22 @@ impl GrantStore {
         };
         let file = PickedFile::try_new(&entry.path).expect("BUG: a test grants an absolute path");
         let renewed = stale.then(|| self.add(entry.path.clone(), scoped));
-        Ok(Access::new(
-            file,
-            scoped.then(|| AccessScope::new(())),
-            renewed,
-        ))
+        Ok(if scoped {
+            Access::scoped(file, AccessScope::new(()), renewed)
+        } else {
+            Access::new(file, renewed)
+        })
     }
 }
+
+/// The kind a store's grants are: opaque bytes only their store reads, as a
+/// bookmark is.
+const KIND: GrantKind = GrantKind::AppleBookmark;
 
 /// The id a store's grant names.
 fn id_of(grant: &Grant) -> Option<u64> {
     let id: [u8; 8] = grant.payload().try_into().ok()?;
-    (grant.kind() == GrantKind::Scripted).then(|| u64::from_le_bytes(id))
+    (grant.kind() == KIND).then(|| u64::from_le_bytes(id))
 }
 
 /// Grants whose system is simulated: each resolve answers what the
@@ -186,21 +191,23 @@ impl ScriptedGrants {
     pub fn set_sandbox(&self, sandbox: Sandbox) {
         *self.sandbox.borrow_mut() = sandbox;
     }
-
-    /// The sandbox a handle acquired now is made in.
-    pub(crate) fn sandbox(&self) -> Sandbox {
-        self.sandbox.borrow().clone()
-    }
 }
 
 impl GrantBackend for ScriptedGrants {
+    /// A bookmark's kind: the store's grants are opaque bytes.
     fn kind(&self) -> GrantKind {
-        GrantKind::Scripted
+        KIND
     }
 
-    fn resolve(&self, grant: Grant, _max_bytes: u64, answer: Resolver<GrantResult>) {
+    fn sandbox(&self, answer: Resolver<Sandbox>) {
+        // A retired owner has nobody left to answer.
+        let _ = answer.resolve(self.sandbox.borrow().clone());
+    }
+
+    fn resolve(&self, grant: Grant, _max_bytes: u64, answer: Resolver<GrantResult>) -> ResolveHold {
         let resolved = self.store.borrow().resolve(&grant);
         // A retired owner has nobody left to answer.
         let _ = answer.resolve(resolved);
+        ResolveHold::new(())
     }
 }

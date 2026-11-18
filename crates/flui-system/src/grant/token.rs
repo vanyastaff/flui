@@ -20,8 +20,6 @@ pub enum GrantKind {
     /// An Android content URI whose read permission the application
     /// persisted (`ContentResolver.takePersistableUriPermission`).
     ContentUri,
-    /// A token a scripted double minted, which only a double resolves.
-    Scripted,
 }
 
 impl GrantKind {
@@ -32,7 +30,6 @@ impl GrantKind {
             Self::WindowsPath => 2,
             Self::AppleBookmark => 3,
             Self::ContentUri => 4,
-            Self::Scripted => 5,
         }
     }
 
@@ -43,7 +40,6 @@ impl GrantKind {
             2 => Self::WindowsPath,
             3 => Self::AppleBookmark,
             4 => Self::ContentUri,
-            5 => Self::Scripted,
             _ => return None,
         })
     }
@@ -161,6 +157,10 @@ impl Grant {
             return Err(MalformedGrant::Version(*version));
         }
         let kind = GrantKind::of_tag(*kind).ok_or(MalformedGrant::Kind(*kind))?;
+        // Judged by its length before a byte of it is copied.
+        if payload.is_empty() || payload.len() > Self::MAX_PAYLOAD {
+            return Err(MalformedGrant::Payload);
+        }
         Self::try_new(kind, payload).ok_or(MalformedGrant::Payload)
     }
 }

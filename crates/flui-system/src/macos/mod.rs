@@ -153,9 +153,17 @@ mod appkit {
             Ok::<_, Unsupported>(Os::new(AppleOs::new("macOS", version.components()), ctx))
         });
         registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
+            // No Flatpak description on macOS: the App Sandbox is read from
+            // the environment its system sets, with no file system call.
+            let confinement = flui_platform::sandbox::Confinement::of_process(
+                &flui_platform::sandbox::FlatpakInfo::Absent,
+                &|_| None,
+            );
             Ok::<_, Unsupported>(Grants::new(
-                AppleGrants::new(ctx.runtime_local::<WorkQueue>()),
-                crate::sandbox::mac_app_sandbox(&|name| std::env::var_os(name)),
+                AppleGrants::new(
+                    ctx.runtime_local::<WorkQueue>(),
+                    crate::sandbox::of_confinement(&confinement),
+                ),
                 ctx,
             ))
         });

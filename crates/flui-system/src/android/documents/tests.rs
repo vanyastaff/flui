@@ -830,4 +830,19 @@ fn a_kept_pick_carries_its_uri_once_every_pick_was_read() {
         !steps.taken().contains(&Step::Kept(0)),
         "nothing kept unasked"
     );
+
+    let unholdable = Document {
+        uri: Some(format!("content://x/{}", "a".repeat(64 * 1024))),
+        ..persistable("a.txt")
+    };
+    let (mut documents, steps) = steps_of(vec![unholdable]);
+    let picks = read_picks(&mut documents, &[], false, 8, &LetGo::default(), true)
+        .expect("within the limit")
+        .expect("a pick");
+    assert_eq!(picks.first().grant(), None, "a URI no grant holds");
+    assert_eq!(
+        steps.taken()[1..],
+        [Step::Read(0, 9), Step::Kept(0), Step::Released(0)],
+        "a permission no grant can carry is given back"
+    );
 }

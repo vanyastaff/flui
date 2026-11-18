@@ -8,28 +8,29 @@
 //! is not ([`GrantError`]).
 //!
 //! The layer never hands out a path the process cannot open. A reacquired
-//! path is one its [`Sandbox`] reaches, or one the access holds open (a
-//! security-scoped resource on macOS and iOS, started when the grant was
-//! resolved and stopped when the [`Access`] drops); the handle refuses any
-//! other answer, whichever backend gave it.
+//! path is one its [`Sandbox`] reaches, or one a scope this crate's own
+//! providers started holds open (a security-scoped resource on macOS and
+//! iOS, started when the grant was resolved and stopped when the [`Access`]
+//! drops); the handle refuses any other answer, whichever backend gave it.
 
 #[cfg(any(windows, target_os = "linux", all(test, any(unix, windows))))]
 pub(crate) mod path;
+mod resolving;
 mod token;
 
 use std::any::Any;
 use std::fmt;
 use std::rc::Rc;
 
-use flui_platform::capability::{
-    Capability, Completion, CompletionSource, ProviderContext, Resolver,
-};
-use flui_platform::{SystemFailure, Unsupported};
+use flui_platform::capability::{Capability, CompletionSource, ProviderContext, Resolver};
+use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
+pub use resolving::{ResolveHold, Resolving};
 pub use token::{Grant, GrantKind, MalformedGrant};
 
 use crate::dialog::{PickedFile, PickedForm};
 use crate::sandbox::Sandbox;
+use resolving::{ResolveState, SandboxSlot};
 
 /// The grant capability: `ctx.capability::<GrantCapability>()` hands out
 /// [`Grants`].
@@ -65,6 +66,11 @@ pub enum GrantError {
     /// within its volume, a path follows none).
     #[error("the file the grant reached is not there")]
     Missing,
+    /// The grant names a path off the local drives (a share, a pipe, a
+    /// device), which the layer does not reach (ADR-0360 §2). Nothing was
+    /// asked of the file system.
+    #[error("the grant names a path off the local drives")]
+    NotLocal,
     /// The file holds more than the request reads, on a system that hands
     /// a reacquired file over as its contents (Android).
     #[error("the file holds {actual} bytes, more than the {limit} the request reads")]
@@ -91,16 +97,18 @@ pub type GrantResult = Result<Access, GrantError>;
 /// security-scoped resource's access on macOS and iOS, which its drop
 /// stops.
 ///
-/// `Send`, since a backend starts the access where it resolves the grant,
-/// off the owner thread (ADR-0360 §2), and hands it to the owner with the
-/// answer.
+/// Only this crate's providers make one, so a scope that lets a path past
+/// the sandbox's rule is always a system's started access. `Send`, since a
+/// provider starts the access where it resolves the grant, off the owner
+/// thread (ADR-0360 §2), and hands it to the owner with the answer.
 #[must_use = "dropping the scope ends the access it holds"]
 pub struct AccessScope(#[expect(dead_code, reason = "held for its drop")] Box<dyn Any + Send>);
 
 impl AccessScope {
     /// A scope whose drop drops `keep`: the value whose `Drop` ends the
     /// system's access.
-    pub fn new(keep: impl Any + Send) -> Self {
+    #[cfg(any(target_os = "macos", target_os = "ios", test, feature = "testing"))]
+    pub(crate) fn new(keep: impl Any + Send) -> Self {
         Self(Box::new(keep))
     }
 }
@@ -114,12 +122,12 @@ impl fmt::Debug for AccessScope {
 /// A file a [`Grant`] reacquired, reachable while this value is held.
 ///
 /// It crosses from the thread that resolved it to the owner with the
-/// answer. Its [`file`](Self::file) is a path the process
-/// can open while the access lives, or, on a system that hands no path
-/// over (Android), the file's name and contents read when it was resolved.
-/// A system that keeps a grant only for a while may hand a fresher one
-/// over ([`renewed`](Self::renewed)), which the application stores in the
-/// old one's place.
+/// answer. Its [`file`](Self::file) is a path the process can open while
+/// the access lives, or, on a system that hands no path over (Android), the
+/// file's name and contents read when it was resolved. A system that keeps
+/// a grant only for a while may hand a fresher one over
+/// ([`renewed`](Self::renewed)), which the application stores in the old
+/// one's place.
 #[derive(Debug)]
 pub struct Access {
     file: PickedFile,
@@ -128,14 +136,25 @@ pub struct Access {
 }
 
 impl Access {
-    /// `file`, as a backend reacquired it, held open by `scope` where the
-    /// system needs one, with a fresher grant where the system made one.
+    /// `file`, as a backend reacquired it, with a fresher grant where the
+    /// system made one. A backend outside this crate hands no scope over:
+    /// its path is reached where the sandbox reaches it.
     #[must_use]
-    pub fn new(file: PickedFile, scope: Option<AccessScope>, renewed: Option<Grant>) -> Self {
+    pub fn new(file: PickedFile, renewed: Option<Grant>) -> Self {
         Self {
             file,
             renewed,
-            scope,
+            scope: None,
+        }
+    }
+
+    /// `file` held open by `scope`, the access a system started for it.
+    #[cfg(any(target_os = "macos", target_os = "ios", test, feature = "testing"))]
+    pub(crate) fn scoped(file: PickedFile, scope: AccessScope, renewed: Option<Grant>) -> Self {
+        Self {
+            file,
+            renewed,
+            scope: Some(scope),
         }
     }
 
@@ -165,16 +184,23 @@ impl Access {
 
 /// The system's grants as [`Grants`] reach them.
 ///
-/// Owner-local; it resolves off the owner thread and answers through the
-/// [`Resolver`], never calling back into the handle. A grant it receives is
-/// of its [`kind`](Self::kind).
+/// Owner-local; it reads the file system off the owner thread and answers
+/// through the [`Resolver`]s, never calling back into the handle. A grant it
+/// receives is of its [`kind`](Self::kind).
 pub trait GrantBackend: 'static {
     /// The kind of grant it resolves, and its dialogs make.
     fn kind(&self) -> GrantKind;
 
+    /// Read the sandbox the process runs in, once per handle: off the owner
+    /// thread where the file system describes it (a Flatpak's
+    /// `/.flatpak-info`).
+    fn sandbox(&self, answer: Resolver<Sandbox>);
+
     /// Reacquire what `grant` reaches; a system that hands the file over as
-    /// its contents reads at most `max_bytes`.
-    fn resolve(&self, grant: Grant, max_bytes: u64, answer: Resolver<GrantResult>);
+    /// its contents reads at most `max_bytes`. The resolve lasts while the
+    /// handle holds what this returns: its drop stops the work nobody waits
+    /// for any more.
+    fn resolve(&self, grant: Grant, max_bytes: u64, answer: Resolver<GrantResult>) -> ResolveHold;
 }
 
 /// Widget-facing grants: [`resolve`](Self::resolve) one an application
@@ -185,69 +211,87 @@ pub trait GrantBackend: 'static {
 #[derive(Clone)]
 pub struct Grants {
     backend: Rc<dyn GrantBackend>,
-    sandbox: Rc<Sandbox>,
+    sandbox: Rc<SandboxSlot>,
     completions: CompletionSource,
 }
 
 impl Grants {
-    /// A handle over `backend` for the acquisition `ctx`, in a process
-    /// `sandbox` confines.
-    pub fn new(backend: impl GrantBackend, sandbox: Sandbox, ctx: &ProviderContext<'_>) -> Self {
+    /// A handle over `backend` for the acquisition `ctx`; the backend is
+    /// asked for the process's sandbox here, and each resolve waits for it.
+    pub fn new(backend: impl GrantBackend, ctx: &ProviderContext<'_>) -> Self {
+        let backend: Rc<dyn GrantBackend> = Rc::new(backend);
+        let completions = ctx.completions().clone();
+        let (read, answer) = completions.pending::<Sandbox>();
+        let sandbox = SandboxSlot::waiting_for(read);
+        backend.sandbox(answer);
         Self {
-            backend: Rc::new(backend),
-            sandbox: Rc::new(sandbox),
-            completions: ctx.completions().clone(),
+            backend,
+            sandbox,
+            completions,
         }
-    }
-
-    /// The sandbox the process runs in, as the platform's provider read it.
-    #[must_use]
-    pub fn sandbox(&self) -> &Sandbox {
-        &self.sandbox
     }
 
     /// Reacquire the file `grant` reaches.
     ///
     /// A grant of another kind than this system's is [`GrantError::Foreign`]
     /// and no backend is asked. Whatever the backend answers is held to the
-    /// layer's rule on every host: a path the [sandbox](Self::sandbox) does
-    /// not reach and no [scope](Access::is_scoped) holds open is one the
-    /// process cannot open, answered [`GrantError::Revoked`]; contents past
+    /// layer's rule on every host: a path the process's sandbox does not
+    /// reach and no scope its system started holds open is one the process
+    /// cannot open, answered [`GrantError::Revoked`]; contents past
     /// `max_bytes` are [`GrantError::TooLarge`]; a folder handed over by its
     /// files, a download, or a fresher grant of another kind is
     /// [`SystemFailure::MalformedAnswer`].
     ///
     /// `max_bytes` bounds what a system that hands the file over as its
     /// contents (Android) reads; a reacquired path is the application's to
-    /// read.
-    pub fn resolve(&self, grant: &Grant, max_bytes: u64) -> Completion<GrantResult> {
+    /// read. Dropping the [`Resolving`] before it answers stops the resolve.
+    pub fn resolve(&self, grant: &Grant, max_bytes: u64) -> Resolving {
         let (completion, caller) = self.completions.pending::<GrantResult>();
+        let state = Rc::new(ResolveState::default());
         let kind = self.backend.kind();
         if grant.kind() != kind {
             // The owner retiring first leaves nothing waiting.
             let _ = caller.resolve(Err(GrantError::Foreign));
-            return completion;
+            return Resolving::new(completion, state);
         }
-        let (answered, answer) = self.completions.pending::<GrantResult>();
-        let sandbox = Rc::clone(&self.sandbox);
-        let mut caller = Some(caller);
-        answered.on_complete(move |outcome| {
-            let Some(caller) = caller.take() else {
+        let backend = Rc::clone(&self.backend);
+        let completions = self.completions.clone();
+        let grant = grant.clone();
+        let held = Rc::downgrade(&state);
+        self.sandbox.when_read(move |sandbox| {
+            // A resolve dropped while the sandbox was read starts nothing.
+            let Some(state) = held.upgrade() else {
                 return;
             };
-            match outcome {
-                Ok(result) => {
-                    // The owner retiring first leaves nothing waiting.
-                    let _ = caller.resolve(
-                        result.and_then(|access| admit(access, &sandbox, kind, max_bytes)),
-                    );
+            let Some(sandbox) = sandbox else {
+                // The backend answered no sandbox: nothing is reached.
+                let _ = caller.resolve(Err(GrantError::Unsupported(Unsupported::of::<
+                    GrantCapability,
+                >(
+                    UnsupportedReason::Unavailable,
+                ))));
+                return;
+            };
+            let (answered, answer) = completions.pending::<GrantResult>();
+            let mut caller = Some(caller);
+            answered.on_complete(move |outcome| {
+                let Some(caller) = caller.take() else {
+                    return;
+                };
+                match outcome {
+                    Ok(result) => {
+                        // The owner retiring first leaves nothing waiting.
+                        let _ = caller.resolve(
+                            result.and_then(|access| admit(access, &sandbox, kind, max_bytes)),
+                        );
+                    }
+                    // The backend dropped its answer: so does the handle.
+                    Err(_) => drop(caller),
                 }
-                // The backend dropped its answer: so does the handle.
-                Err(_) => drop(caller),
-            }
+            });
+            state.hold(backend.resolve(grant, max_bytes, answer));
         });
-        self.backend.resolve(grant.clone(), max_bytes, answer);
-        completion
+        Resolving::new(completion, state)
     }
 }
 
@@ -290,7 +334,7 @@ fn admit(
 impl fmt::Debug for Grants {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Grants")
-            .field("sandbox", &self.sandbox)
+            .field("kind", &self.backend.kind())
             .finish_non_exhaustive()
     }
 }
@@ -303,7 +347,7 @@ mod tests {
 
     use super::{Access, AccessScope, Grant, GrantError, GrantKind, admit};
     use crate::dialog::{FolderFile, FolderPath, PickedFile};
-    use crate::sandbox::Sandbox;
+    use crate::sandbox::android_app;
 
     fn contents(len: usize) -> PickedFile {
         PickedFile::try_from_contents("a.txt", Arc::from(vec![0; len])).expect("a file name")
@@ -311,12 +355,11 @@ mod tests {
 
     #[test]
     fn an_answer_is_admitted_only_in_a_form_the_process_can_use() {
-        let nowhere = Sandbox::try_confined(crate::sandbox::SandboxKind::AndroidApp, [])
-            .expect("no folder to refuse");
+        let nowhere = android_app();
         let admitted = |access: Access| admit(access, &nowhere, GrantKind::ContentUri, 4);
-        assert!(admitted(Access::new(contents(4), None, None)).is_ok());
+        assert!(admitted(Access::new(contents(4), None)).is_ok());
         assert_eq!(
-            admitted(Access::new(contents(5), None, None)).err(),
+            admitted(Access::new(contents(5), None)).err(),
             Some(GrantError::TooLarge {
                 actual: 5,
                 limit: 4
@@ -324,11 +367,11 @@ mod tests {
         );
         let path = PickedFile::try_new(std::env::temp_dir().join("a.txt")).expect("absolute");
         assert_eq!(
-            admitted(Access::new(path.clone(), None, None)).err(),
+            admitted(Access::new(path.clone(), None)).err(),
             Some(GrantError::Revoked),
             "a path the sandbox does not reach, with no scope"
         );
-        assert!(admitted(Access::new(path, Some(AccessScope::new(())), None)).is_ok());
+        assert!(admitted(Access::scoped(path, AccessScope::new(()), None)).is_ok());
         let folder = PickedFile::try_from_folder(
             "f",
             vec![FolderFile::new(
@@ -338,12 +381,12 @@ mod tests {
         )
         .expect("a folder");
         assert_eq!(
-            admitted(Access::new(folder, None, None)).err(),
+            admitted(Access::new(folder, None)).err(),
             Some(SystemFailure::MalformedAnswer.into())
         );
         let other = Grant::try_new(GrantKind::AppleBookmark, &b"b"[..]).expect("a payload");
         assert_eq!(
-            admitted(Access::new(contents(1), None, Some(other))).err(),
+            admitted(Access::new(contents(1), Some(other))).err(),
             Some(SystemFailure::MalformedAnswer.into()),
             "a fresher grant of another kind is no grant of this system's"
         );

@@ -41,7 +41,7 @@ use flui_system::dialog::{
     DialogError, FileDialogCapability, MalformedRequest, MessageBoxCapability, MessageBoxRequest,
     OpenRequest, SaveRequest,
 };
-use flui_system::grant::{Grant, GrantCapability, GrantError, GrantKind};
+use flui_system::grant::{Grant, GrantCapability, GrantError, GrantKind, GrantResult};
 use flui_system::jump_list::{
     JumpList, JumpListCapability, JumpListError, JumpListTask, MalformedTask,
 };
@@ -390,7 +390,7 @@ fn a_foreign_grant_is_refused_without_asking_the_system(subject: Subject) {
     };
     let foreign = Grant::try_new(GrantKind::ContentUri, &b"content://media/1"[..])
         .expect("a payload a grant holds");
-    let resolved = land(grants.resolve(&foreign, 1024));
+    let resolved = land_resolving(grants.resolve(&foreign, 1024));
     assert!(resolved.borrow().is_none(), "never inside the call");
     turn(&mut bench.host);
     let refusal = resolved
@@ -403,13 +403,70 @@ fn a_foreign_grant_is_refused_without_asking_the_system(subject: Subject) {
     bench.verify();
 }
 
+/// A path grant that names no file the layer reaches (a relative path, a
+/// share, a pipe) is refused before any file system call: answered by the
+/// seam's typed refusal, never by what the file system would have said of
+/// it. The scripted subject keeps no path grants.
+fn a_path_the_seam_refuses_is_refused_before_the_file_system(subject: Subject) {
+    if matches!(subject, Subject::Scripted) {
+        return;
+    }
+    let mut bench = Bench::new(subject);
+    let Some(grants) = bench.handle::<GrantCapability>() else {
+        return;
+    };
+    let malformed = GrantError::Failed(flui_platform::SystemFailure::MalformedAnswer);
+    let cases: Vec<(&str, Grant, GrantError)> = if cfg!(windows) {
+        let wide = |path: &str| {
+            let payload = path
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>();
+            Grant::try_new(GrantKind::WindowsPath, payload).expect("a payload a grant holds")
+        };
+        vec![
+            (
+                "a share",
+                wide(r"\\server\share\notes.txt"),
+                GrantError::NotLocal,
+            ),
+            (
+                "a verbatim share",
+                wide(r"\\?\UNC\server\share\notes.txt"),
+                GrantError::NotLocal,
+            ),
+            ("a pipe", wide(r"\\.\pipe\notes"), GrantError::NotLocal),
+            ("a relative path", wide(r"notes.txt"), malformed),
+        ]
+    } else {
+        vec![(
+            "a relative path",
+            Grant::try_new(GrantKind::UnixPath, &b"notes.txt"[..]).expect("a payload"),
+            malformed,
+        )]
+    };
+    for (name, grant, refusal) in cases {
+        let resolved = land_resolving(grants.resolve(&grant, 1024));
+        let answer = settle(&mut bench, &resolved).expect("not abandoned").err();
+        assert_eq!(answer, Some(refusal), "{name}");
+    }
+    bench.verify();
+}
+
+fn land_resolving(resolving: flui_system::grant::Resolving) -> Slot<GrantResult> {
+    let slot = outcome_slot::<Result<GrantResult, Abandoned>>();
+    let into = Rc::clone(&slot);
+    resolving.on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    slot
+}
+
 /// A row of the table: its name and what it checks of a subject.
 type Row = (&'static str, fn(Subject));
 
 /// The table: each row, run against each subject.
 #[test]
 fn every_provider_keeps_the_system_services_contract() {
-    let rows: [Row; 7] = [
+    let rows: [Row; 8] = [
         (
             "each_service_is_provided_or_refused_for_a_lasting_reason",
             each_service_is_provided_or_refused_for_a_lasting_reason,
@@ -437,6 +494,10 @@ fn every_provider_keeps_the_system_services_contract() {
         (
             "a_foreign_grant_is_refused_without_asking_the_system",
             a_foreign_grant_is_refused_without_asking_the_system,
+        ),
+        (
+            "a_path_the_seam_refuses_is_refused_before_the_file_system",
+            a_path_the_seam_refuses_is_refused_before_the_file_system,
         ),
     ];
     for subject in [Subject::Scripted, Subject::Platform] {

@@ -692,3 +692,21 @@ struct and enum `#[non_exhaustive]` and no conversion to the system's own
 values, which stay with the host.
 **Tests:** `a_win32_window_opens_with_its_options` (`flui-native`),
 `config_to_options_keeps_every_field` (`flui-app`).
+
+### The sandbox is detected once, for every crate that needs it
+
+`sandbox` says which sandbox the process runs in (`Confinement`), so `flui-native`'s data folders
+and `flui-system`'s grants read one answer (ADR-0380 §3, §4). A Flatpak is a process with
+`/.flatpak-info` (`read_flatpak_info`, size-checked before it is read and bounded, off the owner
+thread): `FLATPAK_ID` alone is inherited by a host process a Flatpak's terminal starts. The
+file's `[Context] filesystems=` entries become folders in order, the access mode dropped and a
+`!` entry taking back an earlier one. The macOS App Sandbox is `APP_SANDBOX_CONTAINER_ID`, its
+container `HOME` or the container under the user's home. A `TMPDIR` names a temporary folder
+only when it is absolute, plain, not a root, and inside the App Sandbox's container
+(`usable_temporary`). `Confinement::detect` is a pure function of what it is given;
+`Confinement::of_process` reads the process's environment and home.
+**Tests:** `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
+`a_manifests_filesystems_name_what_the_flatpak_reaches`,
+`a_temporary_folder_that_would_reach_everything_is_ignored`,
+`an_app_sandbox_keeps_to_its_container_even_without_home`,
+`the_description_is_read_within_its_bound`.

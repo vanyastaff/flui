@@ -700,7 +700,7 @@ impl Plugin for ScriptedSystem {
         });
         let grants = self.grants.clone();
         registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Grants::new(grants.clone(), grants.sandbox(), ctx))
+            Ok::<_, Unsupported>(Grants::new(grants.clone(), ctx))
         });
     }
 }

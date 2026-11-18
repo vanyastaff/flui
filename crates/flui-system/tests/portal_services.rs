@@ -19,7 +19,6 @@ use flui_system::autostart::{
 };
 use flui_system::dialog::{DialogError, FileDialogCapability, OpenRequest, OpenResult};
 use flui_system::grant::{Grant, GrantCapability, GrantError, GrantKind};
-use flui_system::sandbox::Sandbox;
 use flui_system::shortcuts::{
     BoundShortcut, GlobalShortcutCapability, Shortcut, ShortcutError, ShortcutEvent, ShortcutId,
     Trigger,
@@ -685,9 +684,6 @@ fn a_picks_path_is_its_grant_and_resolves_while_the_file_is_there() {
 
     let (mut host, grants) = acquire::<GrantCapability>(&portal.plugin());
     let grants = grants.expect("the portal provides grants on Linux");
-    if std::env::var_os("FLATPAK_ID").is_none() {
-        assert_eq!(grants.sandbox(), &Sandbox::unconfined());
-    }
     let grant = Grant::try_from_bytes(&kept).expect("the bytes the application kept");
     assert_eq!(grant.kind(), GrantKind::UnixPath);
     let access = settle(&mut host, grants.resolve(&grant, 1024))

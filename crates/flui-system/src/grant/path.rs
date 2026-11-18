@@ -3,9 +3,10 @@
 //! the document portal's path, which the portal keeps for it across runs.
 
 use std::io;
-use std::path::PathBuf;
 
 use flui_platform::SystemFailure;
+#[cfg(any(windows, target_os = "linux"))]
+use flui_platform::launch::is_local_path;
 
 use super::{Access, Grant, GrantError, GrantResult};
 use crate::dialog::{PickedFile, Picks};
@@ -36,14 +37,29 @@ pub(crate) enum Granter {
     DocumentPortal,
 }
 
+/// The file a path grant names, judged before any file system call: an
+/// absolute path with no NUL (a grant this library made names one, so any
+/// other is `MalformedAnswer`), on a local drive (ADR-0360 §2: a share, a
+/// pipe or a device is `NotLocal`, and the network is never reached).
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) fn file_of(grant: &Grant) -> Result<PickedFile, GrantError> {
+    let malformed = GrantError::Failed(SystemFailure::MalformedAnswer);
+    let path = grant.path().ok_or(malformed)?;
+    if !is_local_path(&path) {
+        return Err(GrantError::NotLocal);
+    }
+    PickedFile::try_new(path).ok_or(malformed)
+}
+
 /// What resolving a path grant answers, once the file system was asked
-/// about `path` off the owner thread (`looked`, a `metadata` call).
-pub(crate) fn reacquired(path: PathBuf, looked: io::Result<()>, granter: Granter) -> GrantResult {
+/// about `file` off the owner thread (`looked`, a `metadata` call).
+pub(crate) fn reacquired(
+    file: PickedFile,
+    looked: io::Result<()>,
+    granter: Granter,
+) -> GrantResult {
     match looked {
-        Ok(()) => PickedFile::try_new(path)
-            .map(|file| Access::new(file, None, None))
-            // A grant this library made names an absolute path.
-            .ok_or(GrantError::Failed(SystemFailure::MalformedAnswer)),
+        Ok(()) => Ok(Access::new(file, None)),
         Err(error) => Err(match error.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => match granter {
                 Granter::User => GrantError::Missing,
@@ -73,22 +89,23 @@ mod tests {
     #[test]
     fn a_path_grant_answers_the_file_or_why_it_is_not_reached() {
         let path = std::env::temp_dir().join("notes.txt");
-        let found = reacquired(path.clone(), Ok(()), Granter::User).expect("found");
+        let file = || PickedFile::try_new(&path).expect("absolute");
+        let found = reacquired(file(), Ok(()), Granter::User).expect("found");
         assert_eq!(found.file().path(), Some(path.as_path()));
         assert!(!found.is_scoped(), "a path needs no scope");
         let gone = || Err(io::Error::from(io::ErrorKind::NotFound));
         assert_eq!(
-            reacquired(path.clone(), gone(), Granter::User).err(),
+            reacquired(file(), gone(), Granter::User).err(),
             Some(GrantError::Missing)
         );
         assert_eq!(
-            reacquired(path.clone(), gone(), Granter::DocumentPortal).err(),
+            reacquired(file(), gone(), Granter::DocumentPortal).err(),
             Some(GrantError::Revoked),
             "the portal shows no document it forgot"
         );
         assert_eq!(
             reacquired(
-                path.clone(),
+                file(),
                 Err(io::Error::from(io::ErrorKind::PermissionDenied)),
                 Granter::User
             )
@@ -97,16 +114,12 @@ mod tests {
         );
         assert_eq!(
             reacquired(
-                path,
+                file(),
                 Err(io::Error::from_raw_os_error(5_000)),
                 Granter::User
             )
             .err(),
             Some(GrantError::Failed(SystemFailure::Os(5_000)))
-        );
-        assert_eq!(
-            reacquired("relative".into(), Ok(()), Granter::User).err(),
-            Some(GrantError::Failed(SystemFailure::MalformedAnswer))
         );
     }
 

@@ -721,10 +721,9 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         let (_activity, java) = host::<GrantCapability>(ctx, Reach::FrameworkOnly)?;
         Ok::<_, Unsupported>(Grants::new(
             super::grants::AndroidGrants::new(
-                Arc::new(JavaReach(java)),
+                std::rc::Rc::new(JavaReach(java)),
                 ctx.runtime_local::<Workers>(),
             ),
-            crate::sandbox::android_app(),
             ctx,
         ))
     });

@@ -91,20 +91,18 @@ pub struct DataDirs {
 /// `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`.
 /// `None` when the platform reports none. On wasm32 both roots are `app`,
 /// the prefix of the page store's keys.
+///
+/// Reads the file system (a Flatpak's `/.flatpak-info`): off the owner
+/// thread only. A host's store resolves it on its IO thread
+/// ([`DataStore::of_process`]).
 #[must_use]
 pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let base = container::BaseDirs {
-            data: dirs::data_dir(),
-            local: dirs::data_local_dir(),
-            home: dirs::home_dir(),
-        };
         container::data_dirs_in(
             &container::Container::of_process(),
             app.as_str(),
-            &|name| std::env::var_os(name),
-            &base,
+            &base_dirs(),
         )
     }
     #[cfg(target_arch = "wasm32")]
@@ -131,6 +129,77 @@ pub struct DataStore {
 enum Backing {
     Files(FileStore),
     Memory(MemoryStore),
+    #[cfg(not(target_arch = "wasm32"))]
+    OfProcess(ProcessStore),
+}
+
+/// The platform's data folders for the user, the container's for a
+/// sandboxed or packaged process.
+#[cfg(not(target_arch = "wasm32"))]
+fn base_dirs() -> container::BaseDirs {
+    container::BaseDirs {
+        data: dirs::data_dir(),
+        local: dirs::data_local_dir(),
+    }
+}
+
+/// A store under the process's own data folders, found at its first call,
+/// on the IO thread that makes it: the container is read then
+/// (`/.flatpak-info`, the package identity), and a packaged application's
+/// store from before it was packaged is copied into the package's folders
+/// once.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+struct ProcessStore {
+    app: AppDataDir,
+    store: std::sync::OnceLock<Option<FileStore>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProcessStore {
+    /// The store, found at the first call; a platform that names no data
+    /// folder leaves every call refused.
+    fn store(&self) -> Result<&FileStore, flui_platform::StorageError> {
+        self.store
+            .get_or_init(|| process_store(&self.app))
+            .as_ref()
+            .ok_or(flui_platform::StorageError::Inaccessible {
+                kind: std::io::ErrorKind::NotFound,
+            })
+    }
+}
+
+/// The store of `app` in the process's container. Blocks on the file system.
+#[cfg(not(target_arch = "wasm32"))]
+fn process_store(app: &AppDataDir) -> Option<FileStore> {
+    let found = container::Container::of_process();
+    let base = base_dirs();
+    let dirs = container::data_dirs_in(&found, app.as_str(), &base)?;
+    #[cfg(windows)]
+    if matches!(found, container::Container::Package { .. }) {
+        let before = container::Container::Sandbox(flui_platform::sandbox::Confinement::Unconfined);
+        if let Some(earlier) = container::data_dirs_in(&before, app.as_str(), &base) {
+            for (from, to) in [
+                (&earlier.roaming, &dirs.roaming),
+                (&earlier.local, &dirs.local),
+            ] {
+                match container::migrate(from, to) {
+                    Ok(container::Migrated::Nothing | container::Migrated::Copied(_)) => {}
+                    Ok(container::Migrated::TooLarge) => tracing::warn!(
+                        from = %from.display(),
+                        "the store kept before the application was packaged is past the bound \
+                         a copy takes: left where it was"
+                    ),
+                    Err(error) => tracing::warn!(
+                        from = %from.display(),
+                        %error,
+                        "the store kept before the application was packaged was not copied"
+                    ),
+                }
+            }
+        }
+    }
+    Some(FileStore::new(dirs))
 }
 
 impl DataStore {
@@ -139,6 +208,25 @@ impl DataStore {
     pub fn on_disk(dirs: DataDirs) -> Self {
         Self {
             backing: Backing::Files(FileStore::new(dirs)),
+        }
+    }
+
+    /// The values of `app` under the process's own data folders
+    /// ([`data_dirs`]), found at the store's first call, on the thread that
+    /// makes it: the owner thread never reads the file system for them. A
+    /// packaged Windows application's store kept under `%APPDATA%` before
+    /// it was packaged is copied into the package's folders then, once:
+    /// only into a root that holds no store, within a bound, nothing
+    /// overwritten. A platform that names no data folder refuses every call
+    /// (`StorageError::Inaccessible`).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn of_process(app: AppDataDir) -> Self {
+        Self {
+            backing: Backing::OfProcess(ProcessStore {
+                app,
+                store: std::sync::OnceLock::new(),
+            }),
         }
     }
 
@@ -166,6 +254,7 @@ impl DataStore {
         match &self.backing {
             Backing::Files(store) => store.read(name, limit),
             Backing::Memory(store) => store.read(name, limit),
+            Backing::OfProcess(store) => store.store()?.read(name, limit),
         }
     }
 
@@ -183,6 +272,7 @@ impl DataStore {
         match &self.backing {
             Backing::Files(store) => store.write(name, bytes, mode),
             Backing::Memory(store) => store.write(name, bytes, mode),
+            Backing::OfProcess(store) => store.store()?.write(name, bytes, mode),
         }
     }
 
@@ -198,6 +288,7 @@ impl DataStore {
         match &self.backing {
             Backing::Files(store) => store.copy_aside(name),
             Backing::Memory(store) => store.copy_aside(name),
+            Backing::OfProcess(store) => store.store()?.copy_aside(name),
         }
     }
 }

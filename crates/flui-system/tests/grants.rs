@@ -7,11 +7,13 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use flui_platform::capability::{Abandoned, Completion};
+use flui_platform::capability::Abandoned;
 use flui_system::dialog::{
     Dialog, FileDialogCapability, OpenRequest, PickedFile, PickedForm, Picks,
 };
-use flui_system::grant::{Grant, GrantCapability, GrantError, GrantKind, GrantResult, Grants};
+use flui_system::grant::{
+    Grant, GrantCapability, GrantError, GrantKind, GrantResult, Grants, Resolving,
+};
 use flui_system::sandbox::{Sandbox, SandboxKind};
 use flui_system::testing::{GrantStore, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::HeadlessHost;
@@ -48,11 +50,11 @@ fn run(store: &GrantStore) -> (HeadlessHost, ScriptedSystem, Grants) {
     )
 }
 
-/// What `completion` settles as within ten turns of `host`.
-fn settled<T: 'static>(host: &mut HeadlessHost, completion: Completion<T>) -> T {
-    let slot = outcome_slot::<Result<T, Abandoned>>();
+/// What `resolving` settles as within ten turns of `host`.
+fn settled(host: &mut HeadlessHost, resolving: Resolving) -> GrantResult {
+    let slot = outcome_slot::<Result<GrantResult, Abandoned>>();
     let into = Rc::clone(&slot);
-    completion.on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    resolving.on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
     for _ in 0..10 {
         turn(host);
         if slot.borrow().is_some() {
@@ -225,11 +227,4 @@ fn a_grant_the_system_no_longer_honours_answers_why() {
         path_of(&settled(&mut host, grants.resolve(&fresher, 1024))),
         Some(outside("renamed.txt").as_path())
     );
-}
-
-#[test]
-fn a_handle_keeps_the_sandbox_its_provider_read() {
-    let (_host, _system, grants) = run(&GrantStore::new());
-    assert_eq!(grants.sandbox(), &sandbox());
-    assert_eq!(grants.sandbox().kind(), Some(SandboxKind::AppSandbox));
 }

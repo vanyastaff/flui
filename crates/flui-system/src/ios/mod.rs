@@ -109,8 +109,10 @@ mod uikit {
         });
         registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
             Ok::<_, Unsupported>(Grants::new(
-                AppleGrants::new(ctx.runtime_local::<WorkQueue>()),
-                crate::sandbox::ios_app(&|name| std::env::var_os(name)),
+                AppleGrants::new(
+                    ctx.runtime_local::<WorkQueue>(),
+                    crate::sandbox::ios_app(&|name| std::env::var_os(name)),
+                ),
                 ctx,
             ))
         });

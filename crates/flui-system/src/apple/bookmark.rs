@@ -68,8 +68,9 @@ mod foundation {
     use crate::dialog::PickedFile;
     use crate::grant::{
         Access, AccessScope, Grant, GrantBackend, GrantCapability, GrantError, GrantKind,
-        GrantResult,
+        GrantResult, ResolveHold,
     };
+    use crate::sandbox::Sandbox;
 
     /// How a bookmark is made: security-scoped on macOS, which an App Sandbox
     /// resolves into a URL it may open; minimal on iOS, which has no
@@ -145,19 +146,23 @@ mod foundation {
         };
         // A start that did not succeed leaves the path to the sandbox's
         // rule: the handle refuses one the process cannot open.
-        let scope = started.then(|| AccessScope::new(SecurityScope(url)));
-        Ok(Access::new(file, scope, renewed))
+        Ok(if started {
+            Access::scoped(file, AccessScope::new(SecurityScope(url)), renewed)
+        } else {
+            Access::new(file, renewed)
+        })
     }
 
     /// [`GrantBackend`] over Foundation's bookmarks, on the runtime's work
-    /// queue.
+    /// queue, in the sandbox the process's environment describes.
     pub(crate) struct AppleGrants {
         queue: Rc<WorkQueue>,
+        sandbox: Sandbox,
     }
 
     impl AppleGrants {
-        pub(crate) fn new(queue: Rc<WorkQueue>) -> Self {
-            Self { queue }
+        pub(crate) fn new(queue: Rc<WorkQueue>, sandbox: Sandbox) -> Self {
+            Self { queue, sandbox }
         }
     }
 
@@ -166,12 +171,27 @@ mod foundation {
             GrantKind::AppleBookmark
         }
 
-        fn resolve(&self, grant: Grant, _max_bytes: u64, answer: Resolver<GrantResult>) {
+        /// Read from the environment when the provider was made: no file
+        /// system call.
+        fn sandbox(&self, answer: Resolver<Sandbox>) {
+            // The owner retiring first leaves nothing waiting.
+            let _ = answer.resolve(self.sandbox.clone());
+        }
+
+        fn resolve(
+            &self,
+            grant: Grant,
+            _max_bytes: u64,
+            answer: Resolver<GrantResult>,
+        ) -> ResolveHold {
             let busy = Err(GrantError::Unsupported(Unsupported::of::<GrantCapability>(
                 UnsupportedReason::Unavailable,
             )));
             self.queue
                 .run(answer, busy, move || resolve(grant.payload()));
+            // A resolution cannot be called back; its access, started for
+            // nobody, stops when the dropped answer is.
+            ResolveHold::new(())
         }
     }
 }

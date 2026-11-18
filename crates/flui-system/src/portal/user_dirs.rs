@@ -50,6 +50,25 @@ impl UserDirBackend for XdgUserDirs {
     }
 }
 
+/// The folder a Flatpak manifest's `xdg-<name>` entry names (`documents`,
+/// `download`, …), as the user's `user-dirs.dirs` names it; `None` for a
+/// name it does not know or a folder the file does not name. Reads the file
+/// system: off the owner thread only.
+pub(super) fn named_folder(name: &str) -> Option<PathBuf> {
+    let dir = match name {
+        "desktop" => UserDir::Desktop,
+        "documents" => UserDir::Documents,
+        "download" => UserDir::Downloads,
+        "music" => UserDir::Music,
+        "pictures" => UserDir::Pictures,
+        "public-share" => UserDir::PublicShare,
+        "videos" => UserDir::Videos,
+        "templates" => UserDir::Templates,
+        _ => return None,
+    };
+    locate(dir, &Environment::of_process()).ok().flatten()
+}
+
 /// Whether `folder` is a folder the process reaches. A Flatpak sees the
 /// user's folders only as its manifest's `filesystems` expose them, which
 /// the sandbox shows by mounting them and nothing else tells: a folder it

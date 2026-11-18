@@ -305,6 +305,8 @@ pub(crate) struct Document {
     /// Whether its provider offers a persistable permission, and the
     /// application holds it once kept.
     pub(crate) persisted: bool,
+    /// The URI a kept document answers, when not the stand-in's own.
+    pub(crate) uri: Option<String>,
 }
 
 impl Document {
@@ -321,6 +323,7 @@ impl Document {
             write_error: None,
             read_error: None,
             persisted: false,
+            uri: None,
         }
     }
 }
@@ -339,6 +342,10 @@ pub(crate) enum Step {
     Discarded(usize),
     /// It persisted the read permission of document `0`.
     Kept(usize),
+    /// It released the persisted read permission of document `0`.
+    Released(usize),
+    /// Its read of document `0` stopped, nobody waiting for it.
+    Stopped(usize),
     /// The owner interrupted it.
     Interrupted,
 }
@@ -348,7 +355,8 @@ pub(crate) enum Step {
 pub(crate) struct Steps(Arc<Mutex<Vec<Step>>>);
 
 impl Steps {
-    fn push(&self, step: Step) {
+    /// Record `step`.
+    pub(crate) fn push(&self, step: Step) {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -381,6 +389,14 @@ impl DocumentsStandIn {
             reads: None,
         }
     }
+
+    /// The same documents, each read held until the returned sender sends,
+    /// or drops.
+    pub(crate) fn holding_reads(mut self) -> (Self, Sender<()>) {
+        let (release, reads) = channel();
+        self.reads = Some(reads);
+        (self, release)
+    }
 }
 
 impl PickedDocuments for DocumentsStandIn {
@@ -402,14 +418,26 @@ impl PickedDocuments for DocumentsStandIn {
         if let Some(error) = self.documents[index].read_error {
             return Err(error);
         }
-        read_bounded(self.documents[index].contents.as_slice(), at_most, let_go)
+        let read = read_bounded(self.documents[index].contents.as_slice(), at_most, let_go);
+        if read == Err(DialogError::WindowClosed) {
+            self.steps.push(Step::Stopped(index));
+        }
+        read
     }
 
     fn keep(&mut self, index: usize) -> Option<String> {
-        self.documents[index].persisted.then(|| {
+        let document = &self.documents[index];
+        document.persisted.then(|| {
             self.steps.push(Step::Kept(index));
-            format!("content://stand-in/document/{index}")
+            document
+                .uri
+                .clone()
+                .unwrap_or_else(|| format!("content://stand-in/document/{index}"))
         })
+    }
+
+    fn release(&mut self, index: usize) {
+        self.steps.push(Step::Released(index));
     }
 
     fn is_kept(&mut self, index: usize) -> bool {

@@ -458,8 +458,22 @@ impl PickedDocuments for JavaDocuments {
         let kept = self.java.attached(|env| {
             env.with_local_frame(8, |env| -> jni::errors::Result<Option<String>> {
                 let uri = self.uris.get_element(env, index)?;
+                // The text first: a URI too long to keep is never persisted,
+                // so nothing is taken that no grant could name.
+                let text = env
+                    .call_method(
+                        &uri,
+                        jni_str!("toString"),
+                        jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )?
+                    .l()?;
+                let Some(text) = bounded_string(env, text, MAX_URI_UNITS)? else {
+                    return Ok(None);
+                };
                 // A provider that offers no persistable permission throws
-                // `SecurityException`: the pick carries no grant.
+                // `SecurityException`: the pick carries no grant. The last
+                // call: nothing after it can fail and leave it persisted.
                 let taken = env.call_method(
                     &self.java.resolver,
                     jni_str!("takePersistableUriPermission"),
@@ -475,18 +489,29 @@ impl PickedDocuments for JavaDocuments {
                     env.exception_clear();
                     return Ok(None);
                 }
-                let text = env
-                    .call_method(
-                        &uri,
-                        jni_str!("toString"),
-                        jni_sig!("()Ljava/lang/String;"),
-                        &[],
-                    )?
-                    .l()?;
-                bounded_string(env, text, MAX_URI_UNITS)
+                Ok(Some(text))
             })
         });
         kept.ok().flatten()
+    }
+
+    fn release(&mut self, index: usize) {
+        // A permission Android no longer holds has nothing to release.
+        let _ = self.java.attached(|env| {
+            env.with_local_frame(4, |env| {
+                let uri = self.uris.get_element(env, index)?;
+                env.call_method(
+                    &self.java.resolver,
+                    jni_str!("releasePersistableUriPermission"),
+                    jni_sig!("(Landroid/net/Uri;I)V"),
+                    &[
+                        JValue::Object(&uri),
+                        JValue::Int(FLAG_GRANT_READ_URI_PERMISSION),
+                    ],
+                )
+                .map(drop)
+            })
+        });
     }
 
     fn is_kept(&mut self, index: usize) -> bool {
@@ -568,7 +593,7 @@ pub(crate) struct JavaReach(pub(crate) Arc<Java>);
 impl DocumentReach for JavaReach {
     type Documents = JavaDocuments;
 
-    fn reach(&self, uri: &str) -> Option<JavaDocuments> {
+    fn reach(&self, uri: &str) -> Option<(JavaDocuments, Interrupt)> {
         let reached = self.0.attached(|env| {
             env.with_local_frame(8, |env| -> jni::errors::Result<_> {
                 let text = env.new_string(uri)?;
@@ -591,11 +616,22 @@ impl DocumentReach for JavaReach {
             })
         });
         let (uris, signal) = reached.ok()?;
-        Some(JavaDocuments {
+        let signal = Arc::new(signal);
+        let documents = JavaDocuments {
             java: Arc::clone(&self.0),
             uris,
             count: 1,
-            signal: Arc::new(signal),
-        })
+            signal: Arc::clone(&signal),
+        };
+        let java = Arc::clone(&self.0);
+        let interrupt: Interrupt = Box::new(move || {
+            // `CancellationSignal.cancel` tells the provider through a
+            // one-way call, so the owner thread never waits for it.
+            let _ = java.attached(|env| {
+                env.call_method(&*signal, jni_str!("cancel"), jni_sig!("()V"), &[])
+                    .map(drop)
+            });
+        });
+        Some((documents, interrupt))
     }
 }
