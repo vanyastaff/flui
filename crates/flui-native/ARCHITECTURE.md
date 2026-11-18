@@ -3634,10 +3634,16 @@ its own backing layer is otherwise never redrawn. Its contents placement is
 `contentsGravity`, a property it owns on a layer-backed view): a drawable that
 is not the layer's size, as a frame not drawn in time for a step of a live
 resize is, keeps its own size at the view's top-left corner, where the default
-placement stretches it to the layer until the next frame. Qt's `QNSView`
-answers the same placement for its Metal layer; Rune sets the gravity on the
-sublayer wgpu makes under winit's view. Type-checked only: no resize was looked
-at by eye. AppKit's own backing layers
+placement stretches it to the layer until the next frame. Contents that are not
+stretched are laid out by the layer's `contentsScale`, which the default
+placement made irrelevant: the window sets it to the scale its metrics, and so
+its drawables, are sized by, when it is made and at every change of its backing
+scale (`content_view::set_layer_contents_scale`), since wgpu leaves the scale
+of a view's own layer alone. Qt's `QNSView` answers the same placement for its
+Metal layer and sets its scale on a backing-properties change; Rune sets the
+gravity on the sublayer wgpu makes under winit's view. Type-checked only: no
+resize was looked at by eye, and no frame on a Retina display, where a wrong
+contents scale would show at twice the size. AppKit's own backing layers
 hand their `display` to the view; `CAMetalLayer`'s does nothing, and the view
 answers no `displayLayer:`, so `FluiMetalLayer::display` calls the view's
 `updateLayer` itself. The in-pass `setNeedsDisplay:` measurement below was
@@ -3868,17 +3874,23 @@ locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
 ### A macOS window's safe area is what its screen's camera housing covers of it
 
 **Rule:** the safe area of the window snapshot (`WindowInsets::safe_area`,
-ADR-0277) is measured against the window's content, so a host publishes how far
-an unsafe band reaches into that content, not the band's size.
+ADR-0277) is measured against the window's content, so a host publishes how
+much of that content an unsafe band covers, not the band's size.
 
 **Choice:** a screen reports the band its camera housing takes as
 `NSScreen.safeAreaInsets` (macOS 12, behind the `ScreenSafeArea` gate; below it
 a window has no safe area). At every sample the window reads its screen's frame
 and insets with its content rectangle, and
-`window::apple::geometry::frame::safe_area_on_screen` intersects them through
-`window::safe_area::within`, the rule the Web host reads its viewport's bands
-by. A window that covers its screen has the screen's top inset; a window the
-system keeps below the housing, and any window under the menu bar, has none.
+`window::apple::geometry::frame::safe_area_on_screen` answers, for each edge,
+the length the content and that edge's band share. A window that covers its
+screen has the screen's top inset; a window the system keeps below the housing,
+and any window under the menu bar, has none. An inset is never more than its
+band, and the part of a window past the screen's edge counts for nothing: a
+window dragged up onto a monitor arranged above the panel still names the panel
+as its screen until AppKit says it changed, and what lies beyond the panel's top
+is on the other monitor, not under the housing. That is where the rule departs
+from the Web host's (`window::safe_area::within`), whose canvas past the
+viewport's edge is scrolled out of sight and counts as covered.
 The mode is not consulted: a borderless window laid over the whole screen is
 under the housing as much as a full-screen one is. The screen is read at the
 sample and not cached beside the window's display: the inset is a function of
@@ -3906,8 +3918,10 @@ window under the band there or below it was not observed
 
 **Replacement coverage:**
 `a_window_under_the_camera_housing_has_its_band_as_a_safe_area` holds the
-intersection against stand-in insets, and `screen_safe_area_gate_table` the
-version floor; the AppKit reads are type-checked only.
+overlap against stand-in insets, with a window above, across and below the
+screen's top edge, and `screen_safe_area_gate_table` the version floor. The
+AppKit reads, and the sample that publishes the inset, are type-checked only:
+no test here makes an `NSWindow`.
 
 ### AppKit's input method is a route for a `keyDown:`, not a second producer of one
 

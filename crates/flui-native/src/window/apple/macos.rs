@@ -727,6 +727,8 @@ impl MacOSWindow {
             owner_is_main,
         };
         ns_window.setContentView(Some(&content_view));
+        // The scale the window's metrics, and so its drawables, are sized by.
+        content_view::set_layer_contents_scale(&content_view, scale);
 
         // Made once the content view is installed: the bridge subclasses
         // it for VoiceOver, on the main thread, and the window's teardown
@@ -2271,10 +2273,9 @@ impl MacOSWindow {
             crate::owner::apple::macos::bounds_of(screen.frame()),
             unsafe_edges_of(&screen, reports_safe_area),
         );
-        // Finite and not negative by `safe_area::within`, so never refused.
         flui_platform::WindowInsets::ZERO
             .try_with_safe_area(safe_area)
-            .unwrap_or(flui_platform::WindowInsets::ZERO)
+            .expect("BUG: `safe_area_on_screen` answers lengths that are finite and not negative")
     }
 
     /// What AppKit says about the window's mode, as flags.

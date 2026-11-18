@@ -179,13 +179,30 @@ fn power_mode(_: Since<ProcessPowerState>) -> PowerMode {
     }
 }
 
+/// Why a change of Low Power Mode cannot be observed on a system that has the
+/// mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+enum PowerStateNameMissing {
+    /// No loaded image exports the constant.
+    #[error("no loaded image exports `NSProcessInfoPowerStateDidChangeNotification`")]
+    NotExported,
+    /// The constant is there and holds no name.
+    #[error("`NSProcessInfoPowerStateDidChangeNotification` holds no name")]
+    Null,
+}
+
 /// The name Foundation posts a change of Low Power Mode under
-/// (`NSProcessInfoPowerStateDidChangeNotification`), where the running
-/// Foundation exports it.
+/// (`NSProcessInfoPowerStateDidChangeNotification`).
 ///
 /// Looked up by name and not linked: the constant is macOS 12's, and a binary
 /// that linked it would not load on the releases below it this crate runs on.
-fn power_state_notification(_: Since<ProcessPowerState>) -> Option<&'static NSNotificationName> {
+///
+/// # Errors
+/// [`PowerStateNameMissing`] when the running Foundation exports no such
+/// constant, or an empty one, although the proof says it should.
+fn power_state_notification(
+    _: Since<ProcessPowerState>,
+) -> Result<&'static NSNotificationName, PowerStateNameMissing> {
     // SAFETY: `RTLD_DEFAULT` searches the images the process loaded, which
     // include Foundation; the name is NUL-terminated.
     let address = unsafe {
@@ -194,11 +211,12 @@ fn power_state_notification(_: Since<ProcessPowerState>) -> Option<&'static NSNo
             c"NSProcessInfoPowerStateDidChangeNotification".as_ptr(),
         )
     };
-    let constant = NonNull::new(address.cast::<Option<&'static NSNotificationName>>())?;
+    let constant = NonNull::new(address.cast::<Option<&'static NSNotificationName>>())
+        .ok_or(PowerStateNameMissing::NotExported)?;
     // SAFETY: Foundation exports the symbol as an initialised, immutable
     // `NSNotificationName` variable: a pointer, null or to a string that
     // lives for the process, which is what the pointee type holds.
-    unsafe { constant.read() }
+    unsafe { constant.read() }.ok_or(PowerStateNameMissing::Null)
 }
 
 impl crate::owner::notices::StaleOnWake for MacosDisplays {
@@ -334,7 +352,9 @@ impl MacosDisplays {
 /// observation's panic boundary.
 struct DisplayObservers {
     _screen_parameters: Observation,
-    /// `None` before macOS 12, which posts no such notification.
+    /// `None` before macOS 12, which posts no such notification, and where
+    /// its name cannot be found, which is said in a warning: Low Power Mode
+    /// is then read only when something else has the screens read again.
     _power_state: Option<Observation>,
 }
 
@@ -355,12 +375,30 @@ impl DisplayObservers {
         let center = NSNotificationCenter::defaultCenter();
         // SAFETY: the name is AppKit's immutable notification-name constant.
         let screen_parameters = unsafe { NSApplicationDidChangeScreenParametersNotification };
+        let power_state = displays
+            .version
+            .since::<ProcessPowerState>()
+            .map(power_state_notification);
+        let power_state = match power_state {
+            Some(Ok(name)) => Some(Observation::new(
+                center.clone(),
+                name,
+                mark_stale_and_wake(),
+            )),
+            Some(Err(error)) => {
+                // Once per loop, with nothing borrowed: the observers are
+                // made as the loop is.
+                tracing::warn!(
+                    %error,
+                    "a change of Low Power Mode is not observed; the built-in display's \
+                     refresh period follows it only when the displays are read again"
+                );
+                None
+            }
+            None => None,
+        };
         Self {
-            _power_state: displays
-                .version
-                .since::<ProcessPowerState>()
-                .and_then(power_state_notification)
-                .map(|name| Observation::new(center.clone(), name, mark_stale_and_wake())),
+            _power_state: power_state,
             _screen_parameters: Observation::new(center, screen_parameters, mark_stale_and_wake()),
         }
     }

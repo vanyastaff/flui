@@ -26,7 +26,6 @@ pub(crate) mod frame {
     use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent, WindowPosition};
 
     use crate::version::gate::{Gate, apple::MacOSVersion};
-    use crate::window::safe_area;
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
@@ -45,33 +44,80 @@ pub(crate) mod frame {
 
     /// The safe area of a window whose content AppKit reports at `content`,
     /// on the screen whose frame is `screen` and whose `safeAreaInsets` are
-    /// `unsafe_edges`, both rectangles in AppKit's desktop: how far each
-    /// unsafe band of the screen reaches into the content, in the content's
-    /// logical pixels, which are points.
+    /// `unsafe_edges`, both rectangles in AppKit's desktop: on each edge, how
+    /// much of the content lies in that edge's unsafe band of the screen, in
+    /// the content's logical pixels, which are points.
     ///
     /// A window that covers its screen, as a full-screen window does where
     /// the system does not keep it below the camera housing, has the
     /// screen's insets; one that lies clear of the bands, as a window under
-    /// the menu bar does, has none. Numbers that are not finite and a
-    /// content with no area give no inset.
+    /// the menu bar does, has none. An inset is never more than its band:
+    /// the part of a window past the screen's edge is on another screen or
+    /// on none, and the housing covers none of it. Numbers that are not
+    /// finite, a content or a screen with no area and a negative inset give
+    /// no inset.
     pub(crate) fn safe_area_on_screen(
         content: Bounds<f64>,
         screen: Bounds<f64>,
         unsafe_edges: EdgeInsets,
     ) -> EdgeInsets {
         // AppKit measures up from the bottom; the bands are measured in from
-        // each edge, so the content is placed from the screen's top-left.
+        // each edge, so the content's sides are taken from the screen's
+        // top-left corner.
         let top_of = |rect: Bounds<f64>| rect.origin.y + rect.size.height;
-        safe_area::within(
-            screen.size,
-            unsafe_edges,
-            safe_area::Placement {
-                x: content.origin.x - screen.origin.x,
-                y: top_of(screen) - top_of(content),
-                width: content.size.width,
-                height: content.size.height,
-            },
-            content.size,
+        let left = content.origin.x - screen.origin.x;
+        let top = top_of(screen) - top_of(content);
+        let (right, bottom) = (left + content.size.width, top + content.size.height);
+        let (width, height) = (screen.size.width, screen.size.height);
+        if ![left, top, right, bottom, width, height]
+            .into_iter()
+            .all(f64::is_finite)
+            || right <= left
+            || bottom <= top
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return EdgeInsets::ZERO;
+        }
+        // The length the spans `from..to` and `band_from..band_to` share.
+        let shared = |from: f64, to: f64, band_from: f64, band_to: f64| {
+            (to.min(band_to) - from.max(band_from)).max(0.0)
+        };
+        // How far a band reaches in from its edge of a screen `side` long.
+        let band = |inset: f64, side: f64| {
+            if inset.is_finite() && inset > 0.0 {
+                inset.min(side)
+            } else {
+                0.0
+            }
+        };
+        // A band lies over the content only where the content is on the
+        // screen along the band's edge.
+        let reaches_across = shared(left, right, 0.0, width) > 0.0;
+        let reaches_down = shared(top, bottom, 0.0, height) > 0.0;
+        let covered = |on_screen: bool, length: f64| if on_screen { length } else { 0.0 };
+        EdgeInsets::new(
+            covered(
+                reaches_across,
+                shared(top, bottom, 0.0, band(unsafe_edges.top, height)),
+            ),
+            covered(
+                reaches_down,
+                shared(left, right, width - band(unsafe_edges.right, width), width),
+            ),
+            covered(
+                reaches_across,
+                shared(
+                    top,
+                    bottom,
+                    height - band(unsafe_edges.bottom, height),
+                    height,
+                ),
+            ),
+            covered(
+                reaches_down,
+                shared(left, right, 0.0, band(unsafe_edges.left, width)),
+            ),
         )
     }
 
@@ -457,6 +503,41 @@ pub(crate) mod frame {
                     panel,
                     housing,
                     frame(100.0, 100.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a window that reaches past the screen's top has the band and no more",
+                    panel,
+                    housing,
+                    frame(100.0, 400.0, 800.0, 882.0),
+                    top(32.0),
+                ),
+                (
+                    "a window wholly above the screen's top has none",
+                    panel,
+                    housing,
+                    frame(100.0, 982.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a window beside the screen has none of its top band",
+                    panel,
+                    housing,
+                    frame(1512.0, 482.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a band taller than the screen is the screen and no more",
+                    panel,
+                    top(5000.0),
+                    frame(0.0, -200.0, 1512.0, 1400.0),
+                    top(982.0),
+                ),
+                (
+                    "a negative inset is none",
+                    panel,
+                    top(-32.0),
+                    panel,
                     EdgeInsets::ZERO,
                 ),
                 (

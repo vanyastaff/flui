@@ -1,9 +1,7 @@
 //! The safe area of a window that covers part of a viewport whose edges the
 //! platform reports unsafe: a browser's `env(safe-area-inset-*)`, which names
 //! the bands of the layout viewport that a notch, rounded corners or a home
-//! indicator take, while the window is a canvas laid out anywhere in it; and
-//! a macOS screen's `safeAreaInsets`, the band its camera housing takes,
-//! while the window is anywhere on that screen.
+//! indicator take, while the window is a canvas laid out anywhere in it.
 
 use flui_foundation::geometry::{EdgeInsets, Size};
 

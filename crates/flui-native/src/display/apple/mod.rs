@@ -620,9 +620,9 @@ pub(crate) mod screen_cadence {
             (Panel::BuiltIn, PowerMode::LowPower) => {
                 // By the constructor a mode's rate takes, so a panel whose
                 // mode says 60 Hz keeps its period to the nanosecond.
-                let slowest_allowed = RefreshPeriod::from_hz(LOW_POWER_HERTZ)
+                let low_power_period = RefreshPeriod::from_hz(LOW_POWER_HERTZ)
                     .expect("BUG: 60 Hz is a cadence a RefreshPeriod holds");
-                reported.max(slowest_allowed)
+                reported.max(low_power_period)
             }
             (Panel::BuiltIn, PowerMode::Normal) | (Panel::External, _) => reported,
         })
@@ -812,6 +812,69 @@ pub(crate) mod screen_cadence {
             );
             assert_eq!(period, Some(hertz(120.0)));
             assert!(!asked, "the mode named its rate");
+        }
+
+        /// What the power-state notification does to the display source
+        /// (mark it stale) reaches a consumer as a new revision when Low
+        /// Power Mode changed a period, and as none when it changed nothing;
+        /// a source nothing marked stale is not read again.
+        #[test]
+        fn a_power_mode_change_is_a_new_display_revision_only_where_the_period_changed() {
+            use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+            use flui_platform::{DisplayDescription, DisplayKey};
+
+            use crate::display::source::DisplaySource;
+
+            for (panel, period_under_low_power, changes) in [
+                (Panel::BuiltIn, hertz(60.0), true),
+                (Panel::External, hertz(120.0), false),
+            ] {
+                let source = DisplaySource::new();
+                let id = source
+                    .mint(&DisplayKey::MacosUuid([7; 16]))
+                    .expect("ids are not exhausted");
+                let read = |power| {
+                    source
+                        .snapshot_with(|| {
+                            let extent = Bounds::new(Point::new(0, 0), Size::new(3024, 1964));
+                            let mut display = DisplayDescription::from_device(
+                                id,
+                                "panel",
+                                extent,
+                                extent,
+                                DevicePixelRatio::try_new(2.0).expect("a positive ratio"),
+                            )
+                            .expect("a display with an area");
+                            display.refresh_period =
+                                refresh_period(Some(120.0), || None, panel, power);
+                            Ok(vec![display])
+                        })
+                        .expect("revisions are not exhausted")
+                };
+                let period_of = |snapshot: &flui_platform::DisplaySnapshot| {
+                    snapshot.get(id).and_then(|display| display.refresh_period)
+                };
+                let normal = read(PowerMode::Normal);
+                assert_eq!(period_of(&normal), Some(hertz(120.0)), "{panel:?}");
+                let unmarked = read(PowerMode::LowPower);
+                assert_eq!(
+                    unmarked.revision(),
+                    normal.revision(),
+                    "{panel:?}: nothing marked the source stale"
+                );
+                source.invalidate();
+                let low_power = read(PowerMode::LowPower);
+                assert_eq!(
+                    period_of(&low_power),
+                    Some(period_under_low_power),
+                    "{panel:?}"
+                );
+                assert_eq!(
+                    low_power.revision() != normal.revision(),
+                    changes,
+                    "{panel:?}: a revision for a changed period, none for the same one"
+                );
+            }
         }
 
         #[test]
