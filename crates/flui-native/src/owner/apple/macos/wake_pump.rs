@@ -28,6 +28,12 @@
 //!    ([`FOLLOW_UP`]) when it finds nothing — that second look is what picks
 //!    the deadline up.
 //!
+//! The chain starts at a redraw request, and after an owner turn that leaves
+//! a deadline (`LoopControl`, [`WakePump::after_owner_turn`]): such a turn can
+//! leave one no redraw request starts it for, such as the frame a covered
+//! window owes its surface (ADR-0357), whose window asks for no frame while it
+//! cannot be seen. A turn that leaves none schedules nothing.
+//!
 //! The chain is self-limiting, which is what keeps it from being a busy poll:
 //! a firing that finds no deadline *and* requested no frame stops, and an idle
 //! app sends no redraw requests, so nothing is ever scheduled for it.
@@ -153,6 +159,23 @@ impl WakePump {
             "AppKit wake pump armed"
         );
         self.schedule(target, Look::First);
+    }
+
+    /// An owner turn ended, an idle point: look at the wake deadline once and
+    /// schedule a tick for it only when there is one earlier than the tick
+    /// queued, so a turn that leaves nothing due costs no wake. A turn can
+    /// leave a deadline no redraw request starts the pump for: the frame a
+    /// covered window owes its surface, whose window asks for no frame while
+    /// it cannot be seen (ADR-0357).
+    pub(crate) fn after_owner_turn(self: &Arc<Self>) {
+        let Some(deadline) = self.consult() else {
+            return;
+        };
+        let pending = self.pending_at.load(Ordering::Acquire);
+        if pending != 0 && base() + Duration::from_micros(pending) <= deadline {
+            return;
+        }
+        self.schedule(deadline, Look::Again);
     }
 
     /// Ask the application's handler for its wake deadline through the call

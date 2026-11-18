@@ -83,9 +83,8 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets
 
-      # `cargo xtask test`'s scope (TEST_SCOPE in tools/xtask/src/tasks.rs),
-      # spelled out: the `cargo xtask` alias passes `--locked`, which the
-      # fresh lockfile above would fail. The trybuild suites (test group
+      # ci.yml's `test` job scope without `--locked`, which the fresh
+      # lockfile above would fail. The trybuild suites (test group
       # `trybuild`, .config/nextest.toml) stay out: they compare rustc's
       # diagnostics against checked-in `.stderr` files, which track the
       # locked dependency versions, so against a fresh lockfile they report

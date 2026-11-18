@@ -373,7 +373,7 @@ impl WindowMessages for Tsf {
             | WindowStep::SizeMoveStarted
             | WindowStep::SizeMoveEnded
             | WindowStep::SettingChanged
-            | WindowStep::SessionLocked(_)
+            | WindowStep::Session(_)
             | WindowStep::PointerLocked(_) => {}
         }
     }

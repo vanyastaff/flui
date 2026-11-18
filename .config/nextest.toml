@@ -1,5 +1,5 @@
 # nextest configuration. Read from the workspace root by every `cargo nextest`
-# invocation — `cargo xtask test` and CI alike — so one file governs both.
+# invocation, local runs and CI alike, so one file governs both.
 #
 # Why it exists: a test that hangs (a GPU adapter that never answers, an Xvfb
 # connection that never comes up) used to run until the CI job's own
@@ -7,7 +7,7 @@
 # it. nextest runs each test in its own process, so it can time out and
 # terminate ONE test and keep reporting the rest.
 
-# `group()` filtersets (the two stages of `cargo xtask test`, below) arrived in
+# `group()` filtersets (the stages CI's `test`, `test-nested` and `test-trybuild` jobs select, below) arrived in
 # 0.9.133; an older nextest stops here with an upgrade hint instead.
 # 0.9.145 also fixes sibling capture-pipe inheritance on Unix (notably Apple),
 # which can produce false leaked-handles reports under parallel execution.
@@ -63,16 +63,15 @@ run-wrapper = 'test-desktop'
 # so CI checks them on Linux only), the generated projects and facade
 # consumers in `nested-cargo` (a native `cargo` with its own feature graph:
 # host-specific). Everything else selects the groups, never the filters.
-# `cargo xtask test` runs the suite in two stages,
-# `-E 'not (group(nested-cargo) | group(trybuild))'` then
-# `-E 'group(nested-cargo) | group(trybuild)'` (`--fast` stops after the
-# first): complements by construction, so no test runs twice or not at all.
-# CI splits the second stage with `--nested --nested-group native` and
-# `--nested --nested-group trybuild`; each selects one of these same groups,
-# and CI runs the trybuild group in three shards (`--trybuild-shard`), whose
-# binaries `TrybuildShard` in tools/xtask/src/tasks.rs lists; a suite added
-# here goes into one of them (`trybuild_shards_partition_the_group` fails
-# until it does).
+# CI's `test` job runs `-E 'not (group(nested-cargo) | group(trybuild))'`,
+# its `test-nested` job `-E 'group(nested-cargo)'` and its `test-trybuild`
+# job `-E 'group(trybuild)'`: complements by construction, so no test runs
+# twice or not at all. `test-trybuild` runs the trybuild group in three
+# shards, whose binaries the job's matrix in .github/workflows/ci.yml lists;
+# together they must equal the group's filter, so a suite added here goes
+# into one shard there. `test-nested` builds only the packages its filter
+# names (`-p flui -p flui-cli` in the job): a nested-cargo test of another
+# package joins that list there, or no job runs it.
 # `cargo nextest show-config test-groups` lists the members. Keep these
 # overrides first: a test takes its group from the first override that
 # matches it and sets one, so only here is each group exactly its filter.
@@ -164,7 +163,7 @@ priority = 100
 # way locally once the facade gained a readback test of its own, and all nine
 # passed immediately when re-run serially.
 #
-# CI's dedicated `gpu-test` job already passes `--test-threads 1` for this
+# The `test` job's GPU readback steps already pass `--test-threads 1` for this
 # reason. That flag does not help the `test` job, where these same tests run
 # (they are gated on `cfg(test)` alone, not on `testing`) alongside
 # thousands of others that SHOULD stay parallel. A test group is the targeted

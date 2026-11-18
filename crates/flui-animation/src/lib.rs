@@ -22,10 +22,8 @@
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - An owned value driven by [`MotionSpec`], with
 //!   velocity-preserving retargeting (`#[derive(TwoWayConverter)]` for custom types)
-//! - [`VsyncRetirement`] - Terminal registry withdrawal separates committed
-//!   kernel closure from cancellation delivery and outgoing capture retirement.
-//!   Runtime shutdown prepares every closing presentation before callbacks;
-//!   retained widget owners cannot keep their runs active (ADR-0175).
+//! - [`Vsync`] - The registry handle a tree hands its controllers; a presentation's
+//!   frame driver alone ticks and closes it (ADR-0382)
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -146,6 +144,10 @@ mod value_conversion;
 mod vsync;
 mod vsync_update;
 
+// The frame driver's seam for flui-runtime and test hosts (ADR-0382).
+#[doc(hidden)]
+pub mod __runtime;
+
 // Data types
 mod curve;
 #[doc(alias = "Curves")]
@@ -188,7 +190,7 @@ pub use vsync_update::{VsyncPublication, VsyncUpdate};
 pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::TweenAnimation;
-pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetirement};
+pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 
 // Re-exports from data type modules
 pub use curve::{

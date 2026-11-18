@@ -1873,6 +1873,7 @@ dependencies = [
 name = "flui-cupertino"
 version = "0.2.0-dev"
 dependencies = [
+ "flui-animation",
  "flui-painting",
  "flui-sdk",
  "flui-testing",
@@ -2091,6 +2092,7 @@ dependencies = [
 name = "flui-material"
 version = "0.2.0-dev"
 dependencies = [
+ "flui-animation",
  "flui-interaction",
  "flui-layer",
  "flui-painting",
