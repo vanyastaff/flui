@@ -1715,8 +1715,7 @@ impl PlatformWindow for MacOSWindow {
             (shown, replaced)
         };
         if let Some(shown) = shown {
-            let shown = shown.ns_cursor()?;
-            cursor::set(&shown);
+            shown.ns_cursor().set();
         }
         drop(replaced);
         Ok(())
@@ -1804,7 +1803,7 @@ impl MacOSWindow {
             state.lock_at = at;
         }
         content_view::set_pointer_locked(&self.view, true);
-        cursor::set(&blank);
+        blank.set();
         self.keep_lock_point();
         Ok(())
     }
@@ -1881,10 +1880,7 @@ impl MacOSWindow {
             tracing::warn!(%error, "the mouse could not be attached to the cursor again");
         }
         content_view::set_pointer_locked(&self.view, false);
-        match shown.ns_cursor() {
-            Ok(shown) => cursor::set(&shown),
-            Err(error) => tracing::debug!(%error, "the window's cursor could not be shown again"),
-        }
+        shown.ns_cursor().set();
         true
     }
 
@@ -1988,8 +1984,8 @@ impl MacOSWindow {
             let shown = (state.cursor_grab != CursorGrab::Locked).then(|| state.cursor.clone());
             (shown, replaced)
         };
-        if let Some(Ok(shown)) = shown.map(|shown| shown.ns_cursor()) {
-            cursor::set(&shown);
+        if let Some(shown) = shown {
+            shown.ns_cursor().set();
         }
         drop((made, replaced));
     }

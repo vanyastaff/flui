@@ -253,8 +253,9 @@ controller.animate_with(sim)?;
 
 Value listeners come from `flui_foundation::Listenable` and return the channel's
 owned `Subscription`, which withdraws the listener when dropped. Status
-subscriptions come from `Animation` and return a `StatusSubscription` that
-removes the callback when dropped. Both take an `Rc`'d callback.
+subscriptions come from `Animation::listen_status` and return the same
+`Subscription`, bound to the animation that admitted the callback. Both take
+an `Rc`'d callback.
 
 ```rust
 # use std::rc::Rc;
@@ -268,7 +269,7 @@ let value_listening = controller.listen(Rc::new(|| println!("value changed")));
 drop(value_listening);
 
 // Status changes
-let subscription = controller.subscribe_status(Rc::new(|status| {
+let subscription = controller.listen_status(Rc::new(|status| {
     if status == AnimationStatus::ForwardSettled {
         println!("forward phase settled");
     }

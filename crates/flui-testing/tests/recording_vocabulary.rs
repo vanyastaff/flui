@@ -115,6 +115,7 @@ fn press(pointer: PointerSource) -> PointerPress {
     )
     .with_modifiers(Modifiers::SHIFT | Modifiers::CAPS_LOCK)
     .with_click_count(NonZeroU8::new(2).expect("nonzero"))
+    .with_first_click()
 }
 
 fn release(pointer: PointerSource) -> PointerRelease {
@@ -244,6 +245,7 @@ fn capabilities(availability: Availability) -> InputRecord {
             .trackpad_gestures(Availability::Emulated)
             .touchpad_hold(Availability::Native)
             .touchpad_swipe(Availability::Unavailable)
+            .first_click(Availability::Native)
             .present(PointerKindSet::TOUCH | PointerKindSet::PEN)
             .build(),
     ))

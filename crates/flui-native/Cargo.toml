@@ -221,6 +221,11 @@ objc2-app-kit = { workspace = true, features = [
     "NSPasteboard",
     "NSGraphics",
     "NSCursor",
+    # A cursor of the application's image: its pixels in a bitmap
+    # representation of an image.
+    "NSBitmapImageRep",
+    "NSImage",
+    "NSImageRep",
     "NSVisualEffectView",
     # Liquid Glass behind a window's content (`MacOSBackdrop::Glass`), looked
     # up by name before it is used: the class exists from macOS 26.

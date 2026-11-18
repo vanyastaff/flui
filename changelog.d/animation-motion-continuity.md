@@ -32,8 +32,8 @@
 - `MotionUpdate` coordinates independent property owners, retaining prepared
   segments and publishing their deliveries only after every owner is admitted.
 - Animation status subscriptions own removal authority through
-  `StatusSubscription`; dropping a guard removes its callback without retaining
-  the animation owner, while detaching leaves it registered until source closure.
+  a source-bound `Subscription`; dropping it removes its callback without retaining
+  the animation owner, while `forget` leaves it registered until source closure.
 - Opacity, padding, alignment, numeric container properties and rotation support spring motion and retain their incoming
   velocities when retargeted through the render, layout and transform paths.
 
@@ -58,7 +58,7 @@
 
 - Replace manual `AnimatedValue::advance` and owner cloning with frame-driven
   ownership. Component vectors are fixed arrays; observer views remain cloneable.
-- Custom `Animation<T>` implementations provide `subscribe_status`, returning
+- Custom `Animation<T>` implementations provide `listen_status`, returning
   source-bound removal authority; framework relays share delivery recovery.
 - Scroll and page animation methods accept `ArcCurve`. Replacing programmatic
   scroll motion retains its published velocity, including when braking at the

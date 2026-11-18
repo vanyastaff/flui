@@ -813,12 +813,12 @@ mod tests {
             // installed hook), on whichever thread calls it.
             let reentrant_controller = controller.clone();
             fling
-                .subscribe_status(std::rc::Rc::new(move |_status| {
+                .listen_status(std::rc::Rc::new(move |_status| {
                     reentrant_controller
                         .jump_to(0.0)
                         .expect("no build is running");
                 }))
-                .detach();
+                .forget();
 
             let hook_target = fling;
             controller.attach_hooks(Rc::new(ScrollableHooks {

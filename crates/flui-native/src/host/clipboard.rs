@@ -135,7 +135,7 @@ impl ExpiredClear {
 /// the entry carries): the pure part of every host's conditional clear
 /// (ADR-0363). A host compares the token the operating system shows at the
 /// clear with the recorded one; any other write that lands forgets it.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ExpiringRecord<T> {
     held: Option<(ClipboardEntryId, T)>,
 }

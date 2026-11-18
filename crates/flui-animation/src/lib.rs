@@ -151,7 +151,6 @@ mod curve;
 #[doc(alias = "Curves")]
 pub mod curves;
 mod status;
-mod status_subscription;
 mod tween_types;
 
 // Re-exports from animation modules
@@ -180,7 +179,6 @@ pub use simulation::{
     SpringSimulation, SpringType, Tolerance,
 };
 pub use stagger::{Stagger, StaggerOrigin};
-pub use status_subscription::StatusSubscription;
 pub use value_conversion::{AnimationVector, TwoWayConverter};
 pub use vsync_update::{VsyncPublication, VsyncUpdate};
 // `#[derive(TwoWayConverter)]` writes `TwoWayConverter` and the geometry

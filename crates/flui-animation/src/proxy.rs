@@ -1,4 +1,4 @@
-﻿//! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
+//! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
 use crate::animation::{Animation, ParentSubscription, Retirement, Terminal, link_parent};
 use crate::channels::{Channels, Withdrawn};
@@ -43,7 +43,7 @@ struct ProxyOwner<T: Clone + 'static> {
     parent: RefCell<Terminal<Rc<dyn Animation<T>>>>,
     channels: Channels,
     parent_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
-    status_sub: RefCell<Terminal<crate::StatusSubscription>>,
+    status_sub: RefCell<Terminal<flui_foundation::Subscription>>,
     delivering: Cell<bool>,
     pending: RefCell<VecDeque<ProxyDelivery<T>>>,
     retired: RefCell<Vec<Terminal<Withdrawn<AnimationStatus>>>>,
@@ -54,7 +54,7 @@ enum ProxyDelivery<T: Clone + 'static> {
         parent: Terminal<Rc<dyn Animation<T>>>,
         previous: Terminal<Rc<dyn Animation<T>>>,
         value_sub: Terminal<Rc<ParentSubscription>>,
-        status_sub: Terminal<crate::StatusSubscription>,
+        status_sub: Terminal<flui_foundation::Subscription>,
     },
     Value,
     Status(AnimationStatus, Vec<ListenerId>),
@@ -67,16 +67,15 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
         let parent = self.parent.get_mut().withdraw();
         let channels = self.channels.withdraw();
         let value_sub = self.parent_sub.get_mut().withdraw();
-        let mut status_sub = self.status_sub.get_mut().withdraw();
+        let status_sub = self.status_sub.get_mut().withdraw();
         let pending = self.pending.get_mut().drain(..).collect::<Vec<_>>();
         let retired = std::mem::take(self.retired.get_mut());
         let disposed = channels.dispose();
         value_sub.detach(&mut retirement.scope());
         status_sub
-            .get_mut()
-            .cancel_with_recovery(&mut retirement.scope());
+            .into_inner()
+            .detach_with_recovery(&mut retirement.scope());
         retirement.retire(value_sub);
-        retirement.retire(status_sub);
         retirement.retire(parent);
         for delivery in pending {
             retirement.retire(delivery);
@@ -187,12 +186,11 @@ where
                     parent,
                     previous,
                     value_sub,
-                    mut status_sub,
+                    status_sub,
                 } => {
                     value_sub.detach(retirement);
-                    status_sub.get_mut().cancel_with_recovery(retirement);
+                    status_sub.into_inner().detach_with_recovery(retirement);
                     retirement.retire(value_sub);
-                    retirement.retire(status_sub);
                     retirement.retire(parent);
                     retirement.retire(previous);
                 }
@@ -238,9 +236,12 @@ where
         self.parent().is_animating()
     }
 
-    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+    fn listen_status_with_recovery(
+        &self,
+        observer: crate::StatusObserver,
+    ) -> flui_foundation::Subscription {
         let id = self.inner.channels.add_status(observer);
-        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
+        flui_foundation::Subscription::for_source(&self.inner, id, ProxyOwner::withdraw_status)
     }
 }
 
