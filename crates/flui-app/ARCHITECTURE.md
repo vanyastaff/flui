@@ -819,8 +819,9 @@ Pinned by `service_lifecycle_matrix`.
 (`ServiceLifecycle`): the state each live UI runtime's scheduler last
 committed, folded into the most active one, `Detached` while none is live.
 The runner feeds it where it builds every UI runtime: it notes the scheduler's
-state, adds a lifecycle listener, and the listener's capture forgets the
-runtime when the scheduler drops it with the runtime. The fold publishes only
+state and listens to its lifecycle; the fold holds the `Subscription` per
+runtime, and the listener's capture forgets the runtime when the scheduler
+drops it with the runtime or the fold closes. The fold publishes only
 a change, and its table's borrow ends before a reader's waker runs. Memory
 pressure reaches a service through `AppConfig::memory_reclaim`, the route that
 already exists. Pinned by `a_service_watches_the_application_pause_and_resume`.

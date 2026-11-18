@@ -70,7 +70,7 @@ and edits its row.
 | An owner changes its state, then runs code it does not own | `flui_foundation::panic::commit` / `commit_into` and `Outbox` (ADR-0287) | calling the listener, waker or `Drop` with the borrow or guard still held |
 | Keep the first of several caught panics and resume it after cleanup | `FirstPanic`; a payload nobody resumes goes to `discard_payload` (ADR-0281) | a crate-local first-failure fold, `PanicRecovery` outside `flui-foundation`, retaining or `mem::forget`ting a payload |
 | State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0323 §1) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
-| A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
+| A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` or `subscribe` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A hash table keyed by ids or fingerprints the process mints | `rustc_hash::FxHashMap`/`FxHashSet`; a per-frame set over tree ids is `flui_foundation::SlotSet`/`SlotIndex`; a crate holds it with `#![warn(clippy::disallowed_types)]` ([gaps](docs/gaps.md#hash-tables-outside-the-view-painting-and-engine-crates-still-use-siphash)) | std `HashMap`/`HashSet` with its SipHash seed; a table keyed by values an application or its content supplies (view-key hashes, authored sizes, font names and paths) keeps std with `#[expect(clippy::disallowed_types, reason = "…")]` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` |
@@ -140,8 +140,9 @@ conversation:
 - **A sweep starts with one.** A workspace-wide change is carried through one crate first, with
   its features, examples, shaders and tooling and its checks green, and then repeated across
   the rest.
-- Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
-  macOS, the iOS Simulator and an Android emulator run nightly on main
+- Commits are `area: what changed`. On a pull request `ci.yml` compiles and executes Linux only
+  (ADR-0370): main checks wasm32 and type-checks the Windows, macOS, iOS and Android backends,
+  and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR. A red
   `main` is fixed forward within the hour or reverted.
 - A job only main runs has a narrow form, which a pull request runs when its diff reaches what the
@@ -156,7 +157,8 @@ conversation:
   source that runs for every node of a frame (the element tree and its owners, render storage,
   the pipeline owner's passes, the layer crate, the semantics model), and
   `test-without-agent` runs when the diff reaches flui-app's agent module or its build script.
-  A new main-only job that a pull request can break gets such a row.
+  A new main-only job that a pull request can break gets such a row; the jobs ADR-0370 §2 moves
+  to main run there without one.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -361,6 +363,6 @@ would be embarrassed by, with the better shape. What this repository keeps getti
 - a document that records a change by appending to a record instead of rewriting its rule, or a
   reversal that leaves other records teaching the old rule.
 
-Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux and wasm32 only;
+Not a finding: a native or GPU path not yet run on its platform. On a PR `ci.yml` runs Linux only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
 device list.

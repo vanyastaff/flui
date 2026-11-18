@@ -1,8 +1,8 @@
 name: Nightly platforms
 
-# The platform code that pull-request CI only type-checks, run every night on
-# GitHub's hosted runners against main (the repository is public, so they are
-# free). CI on pull requests runs Linux and wasm32 only, and stays that fast:
+# The platform code that ci.yml only type-checks, and only on main, run every
+# night on GitHub's hosted runners against main (the repository is public, so
+# they are free). On a pull request ci.yml runs Linux alone, and stays that fast:
 # this workflow runs on a schedule, by hand, and on a pull request that edits
 # this file or the live scenario, never on any other.
 #

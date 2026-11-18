@@ -24,11 +24,12 @@ hazard and could not see it, since the method was hidden.
 
 ## Decision
 
-- `Listenable::add_observer(ListenerObserver)` and
+- `Listenable::listen_with_recovery(ListenerObserver)` and
   `Animation::observe_status(StatusObserver)` are the required methods. They
-  receive the notifying delivery's `RecoveryScope`. `add_listener` and
-  `subscribe_status` are provided adapters that ignore the scope; a panic in
-  them is still contained by the delivery.
+  receive the notifying delivery's `RecoveryScope`. `Listenable::listen` (also
+  required, so a source chooses how a plain callback registers) and the
+  provided `Animation::subscribe_status` ignore the scope; a panic in them is
+  still contained by the delivery.
 - Every implementor decides where its relays run: forward them to the channel
   that notifies, or, for a source that notifies outside a foundation channel,
   open the outermost scope with `RecoveryScope::boundary`.
@@ -45,7 +46,7 @@ hazard and could not see it, since the method was hidden.
 ## Consequences
 
 - Out-of-tree `Listenable` and `Animation` implementors must write the observer
-  method; callers of `add_listener` and `subscribe_status` are unchanged.
+  method; callers of `listen` and `subscribe_status` are unchanged.
 - `relay_failure_custody` (flui-widgets), the Cupertino tab-controller row and
   `a_custom_source_lends_its_delivery_scope_to_wrappers` (flui-animation) pin
   that relays on framework controllers and on custom sources share the

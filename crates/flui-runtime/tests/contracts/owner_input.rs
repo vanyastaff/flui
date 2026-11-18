@@ -528,11 +528,9 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     assert_eq!(runtime.scheduler().lifecycle_state(), Hidden);
     let observed = Rc::new(RefCell::new(Vec::new()));
     let callback_observed = Rc::clone(&observed);
-    runtime
-        .scheduler()
-        .add_lifecycle_state_listener(Rc::new(move |state| {
-            callback_observed.borrow_mut().push(state);
-        }));
+    let _listening = runtime.scheduler().listen_lifecycle_state(move |state| {
+        callback_observed.borrow_mut().push(state);
+    });
     let id = runtime.presentation_id();
     runtime.synchronize_window_snapshot(id, WindowExecutionState::Running, false, false);
     assert!(
@@ -584,14 +582,12 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
         runtime.update_host_lifecycle(Resumed);
         let observed = Arc::new(Mutex::new(Vec::new()));
         let callback_observed = Arc::clone(&observed);
-        runtime
-            .scheduler()
-            .add_lifecycle_state_listener(std::rc::Rc::new(move |state| {
-                callback_observed
-                    .lock()
-                    .expect("observation lock")
-                    .push(state);
-            }));
+        let listening = runtime.scheduler().listen_lifecycle_state(move |state| {
+            callback_observed
+                .lock()
+                .expect("observation lock")
+                .push(state);
+        });
         let address = owner
             .publication(owner.prepare_runtime(runtime))
             .expect("publish")
@@ -601,6 +597,7 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
                 .presentation_dispatcher(address)
                 .expect("presentation"),
             observed,
+            listening,
         ));
     }
     let effects = Effects {

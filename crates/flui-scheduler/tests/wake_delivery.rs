@@ -35,9 +35,9 @@ fn wake_in_flight_releases_owner_storage() {
     let _owner = install_owner(&scheduler);
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = Capture(drops.clone());
-    let _listener = scheduler.add_lifecycle_state_listener(std::rc::Rc::new(move |_| {
+    let _listener = scheduler.listen_lifecycle_state(move |_| {
         let _ = &capture;
-    }));
+    });
     pump_owner();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
