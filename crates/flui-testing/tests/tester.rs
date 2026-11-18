@@ -599,6 +599,12 @@ struct Notebook {
     /// A write hold each state of the tree takes on this storage and drops
     /// with the state.
     state_hold: Option<flui_testing::storage::MemoryStorage>,
+    /// The storage whose note the state reads as it is disposed, and where it
+    /// records whether the note was stored by then.
+    stored_at_dispose: Option<(
+        flui_testing::storage::MemoryStorage,
+        Rc<std::cell::Cell<Option<bool>>>,
+    )>,
 }
 
 /// The notebook, and the write hold the state keeps for its lifetime.
@@ -677,6 +683,16 @@ impl ViewState<Notebook> for NotebookState {
         };
     }
 
+    fn dispose(&mut self) {
+        if let Some((storage, stored)) = &self.0.stored_at_dispose {
+            stored.set(Some(
+                storage
+                    .contents(&flui_platform::StorageName::from_static("note"))
+                    .is_some(),
+            ));
+        }
+    }
+
     fn build(&self, _view: &Notebook, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(40.0, 40.0)
     }
@@ -698,6 +714,7 @@ fn notebook_saving(
         panic_at_session_end,
         opened: Rc::clone(&opened),
         state_hold: None,
+        stored_at_dispose: None,
     };
     (view, opened)
 }
@@ -787,6 +804,30 @@ fn a_held_close_waits_for_its_hold_and_a_session_end_does_not() {
         t.is_closed(),
         "a session that is ending closes past the hold"
     );
+}
+
+/// The close handler a test registers answers the user's close as the
+/// application's handler answers a runner's window: kept open, the close is
+/// recorded on the window's guard and the window stays.
+#[test]
+fn a_close_handler_the_test_registers_keeps_the_window_open() {
+    use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
+
+    let asked = Rc::new(std::cell::Cell::new(0));
+    let counted = Rc::clone(&asked);
+    let (view, _opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().close_request_handler(CloseRequestHandler::new(move |request| {
+            assert_eq!(request.reason(), flui_view::CloseReason::User);
+            counted.set(counted.get() + 1);
+            CloseResponse::KeepOpen
+        })),
+    );
+    assert!(!t.request_close(), "the handler keeps the window open");
+    t.pump();
+    assert!(!t.is_closed());
+    assert_eq!(asked.get(), 1);
 }
 
 #[test]
@@ -1401,6 +1442,29 @@ fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
     let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("draft".to_owned()));
+}
+
+/// At a session's end the documents are written before the runtime is torn
+/// down, as a runner orders it (ADR-0260 §4, §5): the state being disposed
+/// already finds the note stored, so a destructor the system may never let
+/// run costs nothing.
+///
+/// Fails against a host that tears the windows down first and writes after:
+/// the state is disposed before the note is stored.
+#[test]
+fn a_session_end_writes_before_the_runtime_is_torn_down() {
+    let storage = flui_testing::storage::MemoryStorage::new();
+    let stored = Rc::new(std::cell::Cell::new(None));
+    let (mut view, opened) = notebook_saving(false, Some("draft"), false);
+    view.stored_at_dispose = Some((storage.clone(), Rc::clone(&stored)));
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    t.end_session();
+    assert_eq!(
+        stored.get(),
+        Some(true),
+        "the note was stored before the state was disposed"
+    );
 }
 
 /// A subscriber and an observer that panic at the session's end do not cost the session

@@ -46,6 +46,7 @@ use flui_protocol::{
     tree::ElementId, tree::Node, tree::ReadParams, tree::Tree, tree::TreeDiagnostic, tree::outline,
     wire::Checked, wire::Role,
 };
+use flui_runtime::owner_turn::CloseRequestHandler;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
@@ -87,6 +88,7 @@ pub struct TestWindow {
     platform: Option<flui_platform::TargetPlatform>,
     storage: WindowStorage,
     registrations: AppRegistrations,
+    close_request_handler: Option<CloseRequestHandler>,
 }
 
 impl std::fmt::Debug for TestWindow {
@@ -99,6 +101,7 @@ impl std::fmt::Debug for TestWindow {
             .field("storage", &self.storage)
             .field("overrides", &overrides)
             .field("plugins", &plugins)
+            .field("close_request_handler", &self.close_request_handler)
             .finish()
     }
 }
@@ -125,7 +128,18 @@ impl TestWindow {
             platform: None,
             storage: WindowStorage::Fresh,
             registrations: AppRegistrations::new(),
+            close_request_handler: None,
         }
+    }
+
+    /// Answer the window's close requests with `handler`, as
+    /// `AppConfig::close_request_handler` does: asked after the window's close
+    /// guard for the user's close and a quit, and first at the session's end,
+    /// on the platforms whose window system asks.
+    #[must_use]
+    pub fn close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
+        self.close_request_handler = Some(handler);
+        self
     }
 
     /// Register `plugin`'s providers, as `Application::plugin` does: a widget
@@ -439,6 +453,9 @@ impl Tester {
         let mut headless = HeadlessWindow::new(config.width, config.height).with_text_input();
         if let Some(platform) = config.platform {
             headless = headless.with_platform(platform);
+        }
+        if let Some(handler) = config.close_request_handler.clone() {
+            headless = headless.with_close_request_handler(handler);
         }
         let storage = match &config.storage {
             WindowStorage::Fresh => Some(MemoryStorage::new()),
