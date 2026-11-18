@@ -1,8 +1,8 @@
 name: Expectations
 
-# A pull request that edits an expectation (the API snapshot, a trybuild
-# `*.stderr`, a snapshot, a golden protocol schema, an allowlist entry, a test,
-# an exemption) names each path under `## Expectations` in its body, with the
+# A pull request that edits an expectation (a trybuild `*.stderr`, a snapshot,
+# a golden protocol schema, a perf baseline, a test, an exemption) names each
+# path under `## Expectations` in its body, with the
 # reason (ADR-0331). The check reads the diff and the body and compiles only
 # xtask. It is a workflow of its own because editing the body has to re-run
 # it (`edited`), and must not re-run ci.yml.

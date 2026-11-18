@@ -157,26 +157,17 @@ mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
     use super::*;
-    use crate::{perf, public_api, send_positions};
+    use crate::perf;
 
     /// Every gate's self-test: the gate run over its planted violations,
     /// failing unless exactly the planted findings come back (ADR-0078 §4).
-    const SELF_TESTS: [(&str, InProcess); 5] = [
-        ("send-positions", |args| {
-            send_positions::send_positions(&parsed(args)?)
-        }),
-        ("public-api", |args| public_api::public_api(&parsed(args)?)),
+    const SELF_TESTS: [(&str, InProcess); 3] = [
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
         ("perf", |args| perf::perf(&parsed(args)?)),
         ("changelog", |args| changelog::changelog(&parsed(args)?)),
     ];
-
-    /// The self-tests that need more than this crate: `api-closure` reads the
-    /// nightly rustdoc JSON of the workspace, so CI's `api-contracts` job
-    /// runs it beside the gate.
-    const SELF_TESTS_ELSEWHERE: [&str; 1] = ["api-closure"];
 
     fn every_self_test_reports_exactly_its_planted_findings() {
         for (command, self_test) in SELF_TESTS {
@@ -204,7 +195,6 @@ mod tests {
         let listed: BTreeSet<String> = SELF_TESTS
             .iter()
             .map(|(command, _)| *command)
-            .chain(SELF_TESTS_ELSEWHERE)
             .map(str::to_owned)
             .collect();
         assert_eq!(with_flag, listed);
