@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use flui_foundation::geometry::{Matrix4, Point, RRect, Rect};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::LayerTree;
-use flui_painting::PaintStyle;
+use flui_painting::paint::PaintStyle;
 use flui_painting::paint::{ClipOp, Paint};
 use flui_painting::{DisplayList, DrawCommand, DrawOp};
 use flui_painting::{paint::Clip, styling::Color};

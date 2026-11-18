@@ -2,7 +2,7 @@
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};
-use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
+use flui::painting::{Canvas, CustomPainter, DrawOp, paint::Paint};
 use flui::prelude::*;
 use flui::rendering::{
     BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,

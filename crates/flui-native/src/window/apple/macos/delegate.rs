@@ -567,6 +567,10 @@ impl MacOSWindow {
         }
         if changed {
             tracing::info!(handle = ?self.ns_window(), scale = new_scale.get(), "window scale changed");
+            // The frames from here on are sized by the new scale.
+            crate::owner::apple::macos::content_view::set_layer_contents_scale(
+                &self.view, new_scale,
+            );
             // An image cursor is measured in points at the scale.
             self.rescale_cursor();
         }

@@ -8,7 +8,9 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 use flui_painting::glyphs::Synthesis;
 use flui_painting::paint::Path;
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, Paint, PayloadId};
+use flui_painting::{
+    Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, PayloadId, paint::Paint,
+};
 
 pub(crate) fn save_restore_tracks_the_save_count() {
     let mut canvas = Canvas::new();
@@ -152,7 +154,7 @@ pub(crate) fn interning_shares_arc_for_identical_paints() {
 /// paint holds a shader.
 pub(crate) fn a_taken_recording_shares_its_plain_paints_with_the_next() {
     use flui_foundation::geometry::{Matrix4, Offset};
-    use flui_painting::Shader;
+    use flui_painting::paint::Shader;
     use flui_painting::paint::TileMode;
 
     let plain = Paint::fill(Color::RED);
@@ -285,7 +287,7 @@ fn non_finite_rows() -> Vec<(&'static str, Record, Refusal)> {
         ColorFilter, ColorMatrix, DashPattern, FilterQuality, Image, ImageRepeat, Path, TextureId,
         TileMode,
     };
-    use flui_painting::{BlendMode, PointMode, Shader};
+    use flui_painting::{paint::BlendMode, paint::PointMode, paint::Shader};
 
     const NAN: f64 = f64::NAN;
     let fill = || Paint::fill(Color::RED);
@@ -520,8 +522,9 @@ fn non_finite_rows() -> Vec<(&'static str, Record, Refusal)> {
 
 /// A laid-out paragraph to record, from the bundled faces.
 fn shaped_paragraph() -> Arc<flui_painting::ShapedParagraph> {
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::Offset;
-    use flui_painting::typography::{TextDirection, TextSpan};
+    use flui_painting::typography::TextSpan;
     use flui_painting::{FontCollection, TextContext, TextPainter};
 
     let fonts = FontCollection::new();

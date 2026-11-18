@@ -1,4 +1,4 @@
-//! Baseline types for text alignment
+//! The baseline a line of text is aligned on.
 
 /// A horizontal line used for aligning text.
 ///
@@ -12,10 +12,7 @@
     reason = "each baseline has its own measurement and cache"
 )]
 pub enum TextBaseline {
-    /// The alphabetic baseline — the canonical, single definition for the whole
-    /// workspace (`flui-rendering` and `flui-painting` re-export this;
-    /// consolidated 2026-06). `Copy + Eq + Hash` so it stays a by-value,
-    /// map-key-capable type on the text hot paths.
+    /// The alphabetic baseline, the one Latin, Cyrillic and Greek glyphs sit on.
     #[default]
     Alphabetic,
 
@@ -25,12 +22,4 @@ pub enum TextBaseline {
     /// In these scripts, the baseline is typically at the bottom of the
     /// character box.
     Ideographic,
-}
-
-impl TextBaseline {
-    /// Returns true if this is the alphabetic baseline.
-    #[inline]
-    pub const fn is_alphabetic(&self) -> bool {
-        matches!(self, Self::Alphabetic)
-    }
 }

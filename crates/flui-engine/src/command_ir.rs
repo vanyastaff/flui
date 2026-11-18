@@ -34,8 +34,8 @@ use crate::{
 /// shader applies per RGB channel (alpha is always passed through unchanged).
 ///
 /// The underlying transfer functions are the `pub` helpers
-/// [`flui_painting::styling::color::srgb_to_linear`] and
-/// [`flui_painting::styling::color::linear_to_srgb`] — the same functions used by
+/// [`flui_painting::styling::srgb_to_linear`] and
+/// [`flui_painting::styling::linear_to_srgb`] — the same functions used by
 /// the CPU oracle in the GPU readback tests, ensuring one authoritative home for
 /// the IEC 61966-2-1 piecewise formula.
 ///
@@ -104,8 +104,8 @@ pub(crate) enum LayerFilter {
     ///
     /// The direction is selected by [`GammaDirection`]; the underlying formula is
     /// the IEC 61966-2-1 piecewise function implemented in
-    /// [`flui_painting::styling::color::srgb_to_linear`] /
-    /// [`flui_painting::styling::color::linear_to_srgb`].
+    /// [`flui_painting::styling::srgb_to_linear`] /
+    /// [`flui_painting::styling::linear_to_srgb`].
     ///
     /// The GPU shader unpremultiplies, applies the transfer per R/G/B, clamps to
     /// `[0, 1]`, and repremultiplies; alpha is left unchanged.
@@ -689,7 +689,7 @@ pub(crate) struct CachedImageDraw {
     pub(crate) key: TextureKey,
     pub(crate) instance: TextureInstance,
     pub(crate) scissor: ScissorRect,
-    pub(crate) mode: flui_painting::BlendMode,
+    pub(crate) mode: flui_painting::paint::BlendMode,
     pub(crate) filter: Option<crate::image_source_filter::ImageSourceFilter>,
 }
 

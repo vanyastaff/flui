@@ -599,7 +599,7 @@ fn right_to_left_puts_the_first_item_at_the_right() {
     let shape = geometry(&layout, 10);
     let seen = Seen::default();
     let laid = mount(flui_widgets::Directionality::new(
-        flui_painting::typography::TextDirection::Rtl,
+        flui_foundation::TextDirection::Rtl,
         seen.carousel(10),
     ));
     let first = shape.place(0, 0.0);

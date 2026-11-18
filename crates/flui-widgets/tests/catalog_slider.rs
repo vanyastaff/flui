@@ -1,9 +1,10 @@
 //! Mounted Slider contracts: input proposals, allocated paint and live numeric actions.
 use crate::common::{lay_out, tight};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Size;
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_painting::{DrawOp, PaintStyle, typography::TextDirection};
+use flui_painting::{DrawOp, paint::PaintStyle};
 use flui_rendering::{
     constraints::BoxConstraints,
     layer::Layer,

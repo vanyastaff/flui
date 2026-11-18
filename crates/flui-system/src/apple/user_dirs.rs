@@ -1,15 +1,17 @@
 //! The user's folders as Foundation names them: `NSFileManager`'s
-//! `URLsForDirectory:inDomains:` in the user's domain, the home folder its
-//! `homeDirectoryForCurrentUser`, each path as the file system's bytes. A
-//! sandboxed application is answered its container's folders, as the system
-//! gives them to it.
+//! `URLsForDirectory:inDomains:` in the user's domain, and the home folder
+//! (`homeDirectoryForCurrentUser` on macOS, `NSHomeDirectory` on iOS, which
+//! has no such method), each path as the file system's bytes. A sandboxed
+//! application is answered its container's folders, as the system gives
+//! them to it: on iOS every application is one, so its home is its
+//! container and its documents the container's Documents folder.
 //!
-//! macOS has no templates folder, so [`UserDir::Templates`] is none;
+//! The systems have no templates folder, so [`UserDir::Templates`] is none;
 //! [`UserDir::PublicShare`] is the Public folder file sharing serves, and
 //! [`UserDir::Videos`] is Movies. A folder the system names but the user
-//! does not have (deleted, never made) is none too. Each lookup runs off the
-//! main thread (`queue::WorkQueue`), since the home folder may be on a network
-//! volume.
+//! does not have (deleted, never made, or one an iOS container does not
+//! hold) is none too. Each lookup runs off the main thread
+//! (`queue::WorkQueue`), since the home folder may be on a network volume.
 
 use crate::user_dirs::UserDir;
 
@@ -29,11 +31,11 @@ pub(super) enum SearchPath {
 /// Where Foundation keeps a kind of folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Location {
-    /// `NSHomeDirectory`.
+    /// The home folder.
     Home,
     /// A search path in the user's domain.
     Search(SearchPath),
-    /// macOS names no folder of this kind.
+    /// The systems name no folder of this kind.
     None,
 }
 
@@ -53,31 +55,31 @@ pub(super) fn location(dir: UserDir) -> Location {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) use appkit::MacUserDirs;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) use foundation::AppleUserDirs;
 
-#[cfg(target_os = "macos")]
-mod appkit {
-
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod foundation {
+    use std::path::PathBuf;
     use std::rc::Rc;
 
     use flui_platform::capability::Resolver;
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
     use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
 
-    use super::super::appkit::url_path;
     use super::super::queue::WorkQueue;
+    use super::super::url_path;
     use super::{Location, SearchPath, location};
     use crate::user_dirs::{
         UserDir, UserDirBackend, UserDirCapability, UserDirError, UserDirResult,
     };
 
     /// [`UserDirBackend`] over Foundation's search paths.
-    pub(crate) struct MacUserDirs {
+    pub(crate) struct AppleUserDirs {
         queue: Rc<WorkQueue>,
     }
 
-    impl MacUserDirs {
+    impl AppleUserDirs {
         pub(crate) fn new(queue: Rc<WorkQueue>) -> Self {
             Self { queue }
         }
@@ -96,13 +98,30 @@ mod appkit {
         }
     }
 
+    /// The user's home folder.
+    #[cfg(target_os = "macos")]
+    fn home() -> Option<PathBuf> {
+        url_path(&NSFileManager::defaultManager().homeDirectoryForCurrentUser())
+    }
+
+    /// The application's container, an iOS application's home: iOS has no
+    /// `homeDirectoryForCurrentUser`.
+    #[cfg(target_os = "ios")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the macOS build of the same function reads a URL, which may name no file"
+    )]
+    fn home() -> Option<PathBuf> {
+        Some(PathBuf::from(
+            objc2_foundation::NSHomeDirectory().to_string(),
+        ))
+    }
+
     /// The folder Foundation names for `dir`, when the user has it.
     fn locate(dir: UserDir) -> UserDirResult {
         let path = match location(dir) {
             Location::None => return Ok(None),
-            Location::Home => {
-                url_path(&NSFileManager::defaultManager().homeDirectoryForCurrentUser())
-            }
+            Location::Home => home(),
             Location::Search(directory) => NSFileManager::defaultManager()
                 .URLsForDirectory_inDomains(
                     search_directory(directory),
@@ -120,7 +139,7 @@ mod appkit {
         }
     }
 
-    impl UserDirBackend for MacUserDirs {
+    impl UserDirBackend for AppleUserDirs {
         fn locate(&self, dir: UserDir, answer: Resolver<UserDirResult>) {
             let busy = Err(UserDirError::Unsupported(Unsupported::of::<
                 UserDirCapability,

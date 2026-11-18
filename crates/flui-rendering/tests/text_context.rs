@@ -2,10 +2,11 @@
 //! dry queries (ADR-0092 §10 step 3), and released on every failure path.
 
 use flui_foundation::Leaf;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{RenderFlex, RenderParagraph};
 use flui_painting::testing::text_context_lends;
-use flui_painting::typography::{TextDirection, TextSpan};
+use flui_painting::typography::TextSpan;
 use flui_rendering::{
     PipelineOwner, TextContextHandle,
     constraints::BoxConstraints,

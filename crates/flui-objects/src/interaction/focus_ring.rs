@@ -5,8 +5,8 @@
 use flui_foundation::geometry::{RRect, Rect};
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
+use flui_painting::styling::DecorationPaintOptions;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_painting::{DecorationPaintOptions, paint_box_decoration};
 
 /// The colors and widths of a focus ring: two bands, `outer` the farther
 /// from what is focused and `inner` against it.
@@ -86,8 +86,8 @@ impl FocusRingStyle {
     /// there: the outer band along the edge and the inner band within it.
     pub(crate) fn paint_inside(&self, canvas: &mut Canvas, rect: Rect<f64>) {
         let (outer, inner) = self.bands_inside();
-        paint_box_decoration(canvas, rect, &inner, DecorationPaintOptions::default());
-        paint_box_decoration(canvas, rect, &outer, DecorationPaintOptions::default());
+        inner.paint(canvas, rect, DecorationPaintOptions::default());
+        outer.paint(canvas, rect, DecorationPaintOptions::default());
     }
 }
 

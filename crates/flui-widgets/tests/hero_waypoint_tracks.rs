@@ -111,7 +111,7 @@ fn waypoint_rect_at(points: [Rect; 4], progress: f64) -> Rect {
 
 fn painted_hero_bounds(laid: &LaidOut, color: Color) -> Vec<Rect> {
     use flui_foundation::geometry::Matrix4;
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_painting::paint::Clip;
     use flui_rendering::layer::Layer;
     let tree = laid.layer_tree().expect("mounted scene");

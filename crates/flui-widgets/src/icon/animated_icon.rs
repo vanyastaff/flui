@@ -7,11 +7,11 @@ use std::rc::Rc;
 
 use flui_animation::{Animation, AnimationController, ConstantAnimation, DrivenController};
 use flui_foundation::Listenable;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Size};
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{CreationSite, ViewExt};
 

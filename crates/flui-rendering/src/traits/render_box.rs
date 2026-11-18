@@ -690,7 +690,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
 /// Text baseline types for baseline alignment.
 ///
 /// Re-exported from `flui-painting`, the single definition in the workspace.
-pub use flui_painting::TextBaseline;
+pub use flui_painting::typography::TextBaseline;
 
 // ============================================================================
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox

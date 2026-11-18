@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use flui_platform::capability::Resolver;
 
 /// One UI runtime's requests off the main thread.
@@ -53,7 +53,7 @@ impl WorkQueue {
     /// the resolver and `work` drop inside it: a panic in `work` is logged
     /// and the resolver, dropped unanswered, ends the caller's completion
     /// as `ProviderDropped`.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(crate) fn run<T: Send + 'static>(
         &self,
         answer: Resolver<T>,

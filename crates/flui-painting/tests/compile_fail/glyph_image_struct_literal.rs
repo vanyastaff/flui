@@ -1,4 +1,4 @@
-use flui_painting::{GlyphContent, GlyphImage};
+use flui_painting::glyphs::{GlyphContent, GlyphImage};
 
 fn main() {
     let _image = GlyphImage {

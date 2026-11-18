@@ -16,7 +16,7 @@ use flui_layer::{
     SceneVersion, SceneWriter, SurfaceKey,
 };
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 
 use crate::damage::{FramePlan, RegionPlan};
 use crate::headless::RetainedCapture;
@@ -1595,8 +1595,9 @@ fn publish_root(
 }
 
 fn paint_text(canvas: &mut Canvas, word: &str, at: Offset<f64>) {
+    use flui_foundation::TextDirection;
     use flui_painting::TextPainter;
-    use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+    use flui_painting::typography::{TextSpan, TextStyle};
 
     let mut painter = TextPainter::new()
         .with_text(

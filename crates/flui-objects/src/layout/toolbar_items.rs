@@ -43,9 +43,10 @@ use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
-use flui_painting::{paint::Clip, typography::TextDirection};
+use flui_painting::paint::Clip;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{

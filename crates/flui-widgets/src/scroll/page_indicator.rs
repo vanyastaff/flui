@@ -7,8 +7,9 @@ use std::rc::Rc;
 
 use flui_animation::{Animation, MotionPolicy, SharedCurve, curves};
 use flui_foundation::Listenable;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
-use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
 use flui_view::prelude::*;
 use flui_view::{EventContext, RebuildHandle, RebuildReason};

@@ -19,13 +19,13 @@ use crate::common::{LaidOut, lay_out, lay_out_animated, loose, tight};
 use flui_animation::Animatable;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_foundation::RenderId;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::{RelativeRect, Size};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
 use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
 use flui_view::{BoxedView, View, ViewExt};
@@ -264,7 +264,7 @@ impl Headless {
 
     /// The color of the first painted rectangle that is not the child's fill.
     fn decoration_fill(&self) -> Color {
-        use flui_painting::display_list::DrawOp;
+        use flui_painting::DrawOp;
         let tree = self.laid.layer_tree().expect("a painted frame");
         tree.iter()
             .filter_map(|(_, node)| match node.layer() {
@@ -398,7 +398,7 @@ pub(crate) fn decorated_box_ticks_without_rebuilding() {
 pub(crate) fn reduced_motion_lands_on_the_end_value() {
     use crate::common::lay_out_animated;
     use flui_animation::MotionOverride;
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
 
     /// The settled tree and the controller's owner, kept alive with it.
     fn settle<V: View + Clone + 'static>(

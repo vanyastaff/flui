@@ -1,4 +1,4 @@
-﻿//! [`ToolbarItems`]: a toolbar's commands in one row, the trailing ones that
+//! [`ToolbarItems`]: a toolbar's commands in one row, the trailing ones that
 //! don't fit behind an overflow button, and [`ToolbarItemsController`], which
 //! holds whether the button shows them and which they are.
 
@@ -7,9 +7,9 @@ use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_objects::{RenderToolbarItems, ToolbarItemsSplit};
-use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::element::ElementKind;

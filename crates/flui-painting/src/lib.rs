@@ -7,7 +7,7 @@
 //! that `flui-engine` replays on the GPU. Nothing is rasterised here.
 //!
 //! ```rust
-//! use flui_painting::{Canvas, Paint};
+//! use flui_painting::{Canvas, paint::Paint};
 //! use flui_foundation::geometry::Rect;
 //! use flui_painting::styling::Color;
 //!
@@ -38,10 +38,9 @@
 //!
 //! # Decorations
 //!
-//! [`paint_box_decoration`] and [`paint_table_border`] are the two
-//! painters (`BoxDecoration`, `TableBorder`) that record
-//! straight into a canvas; [`box_decoration_hit_test`] is the matching
-//! hit-test.
+//! A decoration value records itself: [`styling::BoxDecoration::paint`] and
+//! [`styling::TableBorder::paint`] draw straight into a canvas, and
+//! [`styling::BoxDecoration::hit_test`] answers against the same shape.
 //!
 //! # Threading
 //!
@@ -52,9 +51,14 @@
 //! [`HostFonts`] value the collection is fed from; no font state is
 //! process-global.
 //!
-//! The paint vocabulary (`Paint`, `Shader`, `BlendMode`, …) is defined in
-//! [`paint`] and re-exported here; the style values live in [`styling`] and
-//! [`typography`].
+//! # Where an item lives
+//!
+//! Each item has one path. The crate root holds the recording types
+//! ([`Canvas`], [`DisplayList`], [`DrawOp`], …), the layout values
+//! ([`Alignment`], [`BoxFit`]) and the text engine ([`TextPainter`],
+//! [`FontCollection`], [`TextContext`]); [`paint`] holds how a command fills,
+//! strokes and blends, [`styling`] the colours, borders and decorations,
+//! [`typography`] the text values, and [`glyphs`] the rasterizer seam.
 
 #![cfg_attr(
     test,
@@ -74,25 +78,22 @@
 // No FLUI lock on the text path and no SipHash table (clippy.toml `disallowed-types`).
 #![warn(clippy::disallowed_types)]
 
-pub mod alignment;
-pub mod box_fit;
-pub mod canvas;
-pub mod decoration;
-pub mod display_list;
-pub mod error;
+mod alignment;
+mod box_fit;
+mod canvas;
+mod display_list;
+mod error;
 #[cfg(feature = "bundled-fonts")]
 pub mod fonts;
 pub mod glyphs;
-pub mod image_placement;
+mod image_placement;
 mod lerp_impls;
 pub mod paint;
 pub mod styling;
-pub mod typography;
-
-pub mod table_border;
 pub mod text_boundaries;
-pub mod text_layout;
-pub mod text_painter;
+mod text_layout;
+mod text_painter;
+pub mod typography;
 
 // Paragraph shaping on Parley (ADR-0092): the runtime builds the app's
 // `FontCollection`, each ui_runtime owns a `TextContext` over it, and
@@ -106,28 +107,19 @@ pub mod testing;
 pub use alignment::{Alignment, AlignmentDirectional, AlignmentGeometry};
 pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
-pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{
     BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawCommandBuf, DrawCommands, DrawOp,
-    ImageRegionPlacement, NestedRRects, NonFiniteOps, Payload, PayloadId, ShapedParagraph,
+    FontBlob, FontFace, ImageRegionPlacement, NestedRRects, NonFiniteOps, Payload, PayloadId,
+    ShapedGlyph, ShapedParagraph, ShapedRun,
 };
 pub use error::RegisterFontError;
-pub use glyphs::{
-    GlyphContent, GlyphImage, GlyphImageError, GlyphKey, GlyphRasterizer, PlacedGlyph,
-};
 pub use image_placement::ImagePlacement;
-pub use table_border::paint_table_border;
 pub use text_layout::{
     FaceRef, FallbackOrder, FontCollection, HostFontFeed, HostFonts, ScriptCode, SystemFallback,
     TextContext, TextLayoutError, TextLayoutResult,
 };
 pub use text_painter::{
-    Invalidation, RetiredTextSizingCohort, TextBaseline, TextMeasurement, TextMeasurementError,
-    TextPainter, TextPreparationPending, TextResolvedSize, TextSizing, TextSizingAdmission,
+    Invalidation, RetiredTextSizingCohort, TextMeasurement, TextMeasurementError, TextPainter,
+    TextPreparationPending, TextResolvedSize, TextSizing, TextSizingAdmission,
     TextSizingAdmissionError, TextSizingCohort, TextSizingConflict, TextSizingSource,
-};
-
-// The paint vocabulary, defined in `crate::paint`.
-pub use crate::paint::{
-    BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
 };

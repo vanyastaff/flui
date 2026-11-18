@@ -15,7 +15,7 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_painting::paint::Shader;
 use flui_painting::styling::Color;
 use flui_testing::a11y::Role;

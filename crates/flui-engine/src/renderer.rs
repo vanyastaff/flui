@@ -2267,7 +2267,7 @@ mod tests {
     fn sdr_surface_selection_painter_readback_preserves_swatches_and_blending() {
         use crate::painter::WgpuPainter;
         use flui_foundation::geometry::Rect;
-        use flui_painting::Paint;
+        use flui_painting::paint::Paint;
         use flui_painting::styling::Color;
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
 
@@ -2944,7 +2944,7 @@ mod tests {
             CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer,
         };
         use flui_painting::styling::Color;
-        use flui_painting::{Canvas, Paint};
+        use flui_painting::{Canvas, paint::Paint};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -3083,7 +3083,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_foundation::geometry::Rect;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
-        use flui_painting::{Canvas, Paint, Shader};
+        use flui_painting::{Canvas, paint::Paint, paint::Shader};
         use flui_painting::{paint::BlendMode, styling::Color};
 
         let Some((device, queue)) = test_device_and_queue() else {
@@ -3205,7 +3205,7 @@ mod tests {
         use flui_foundation::geometry::{Point, RSuperellipse, Radius, Rect};
         use flui_layer::{PictureLayer, Scene, SceneBuilder};
         use flui_painting::paint::{BlendMode, Clip, ClipOp};
-        use flui_painting::{Canvas, Paint, styling::Color};
+        use flui_painting::{Canvas, paint::Paint, styling::Color};
 
         // Shader optimization is independent of the Rust build profile. In
         // particular, DEBUG would add D3DCOMPILE_SKIP_OPTIMIZATION and hide
@@ -3307,7 +3307,7 @@ mod tests {
             let mut canvas = Canvas::new();
             if clip_case != 0 {
                 let left = if clip_case == 1 { 16.0 } else { 16.5 };
-                canvas.clip_rsuperellipse_ext(
+                canvas.clip_rsuperellipse_with(
                     RSuperellipse::from_rect_and_radius(
                         Rect::from_xywh(left, 8.0, 32.0, 48.0),
                         Radius::circular(8.0),
@@ -3320,7 +3320,7 @@ mod tests {
                     },
                 );
                 if clip_case == 3 {
-                    canvas.clip_rect_ext(
+                    canvas.clip_rect_with(
                         Rect::from_xywh(8.0, 0.0, 48.0, 64.0),
                         ClipOp::Intersect,
                         Clip::AntiAlias,
@@ -3401,7 +3401,7 @@ mod tests {
         use flui_layer::{Layer, LayerTree, PictureLayer, Scene, ShaderMaskLayer};
         use flui_painting::paint::{FilterQuality, TextureId};
         use flui_painting::styling::Color;
-        use flui_painting::{Canvas, Paint, Shader};
+        use flui_painting::{Canvas, paint::Paint, paint::Shader};
 
         let Some(renderer) = crate::test_support::renderer_or_skip() else {
             return;
@@ -3422,7 +3422,7 @@ mod tests {
                 tree.root(),
                 Layer::from(ShaderMaskLayer::new(
                     Shader::solid(Color::rgba(255, 255, 255, 128)),
-                    flui_painting::BlendMode::DstIn,
+                    flui_painting::paint::BlendMode::DstIn,
                     bounds,
                 )),
             );

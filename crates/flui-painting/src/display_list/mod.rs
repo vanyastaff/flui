@@ -16,11 +16,11 @@ use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 mod blur;
-pub mod command;
-pub mod command_ops;
+mod command;
+mod command_ops;
 pub(crate) mod fingerprint;
 mod finite;
-pub mod paragraph;
+mod paragraph;
 mod payload;
 
 pub use blur::BlurSigma;
@@ -30,12 +30,12 @@ pub use finite::NonFiniteOps;
 pub(crate) use finite::paint_finite;
 use finite::{NonFinite, Refused, matrix_finite, payload_finite};
 pub use paragraph::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph, ShapedRun};
+pub(crate) use paragraph::{RunData, SpanDescription};
 use payload::StoredPayload;
 pub use payload::{ImageRegionPlacement, NestedRRects, Payload, PayloadId};
 // The paint vocabulary the commands carry; defined in `crate::paint`.
 pub(crate) use crate::paint::{
-    BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId,
-    image::{ColorFilter, ImageRepeat},
+    BlendMode, Clip, ClipOp, ColorFilter, FilterQuality, ImageRepeat, Paint, PointMode, TextureId,
 };
 
 /// Which entry of its list's transform table an op was recorded under:

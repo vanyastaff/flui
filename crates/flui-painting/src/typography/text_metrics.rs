@@ -1,6 +1,7 @@
 //! Text metrics types.
 
 use super::TextAffinity;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 
 /// Position within text with directional affinity.
@@ -201,14 +202,14 @@ pub struct TextBox {
     /// Bounding rectangle.
     pub rect: Rect<f64>,
     /// Text direction for this box.
-    pub direction: super::TextDirection,
+    pub direction: TextDirection,
 }
 
 impl TextBox {
     /// Creates a new text box.
     #[must_use]
     #[inline]
-    pub const fn new(rect: Rect<f64>, direction: super::TextDirection) -> Self {
+    pub const fn new(rect: Rect<f64>, direction: TextDirection) -> Self {
         Self { rect, direction }
     }
 
@@ -244,7 +245,7 @@ impl TextBox {
     /// Returns the text direction.
     #[must_use]
     #[inline]
-    pub const fn direction(&self) -> super::TextDirection {
+    pub const fn direction(&self) -> TextDirection {
         self.direction
     }
 
@@ -485,7 +486,7 @@ pub struct TextCharacter {
 #[non_exhaustive]
 pub struct TextLineRun {
     /// The direction its characters are laid out in.
-    pub direction: super::TextDirection,
+    pub direction: TextDirection,
     /// Its characters, in logical order; never empty.
     pub characters: Vec<TextCharacter>,
 }

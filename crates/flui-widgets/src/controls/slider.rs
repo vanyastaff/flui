@@ -4,12 +4,13 @@ use crate::support::{ValueCallback, command_modifiers, retirement::Terminal, val
 use crate::{
     CustomPaint, Directionality, DragSlot, Focus, GestureDetector, LayoutBuilder, Semantics,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_interaction::{
     events::{Key, KeyState, NamedKey},
     focus::{FocusNode, KeyEventResult},
 };
-use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 use flui_platform::keyboard::ImeComposition;
 use flui_rendering::{
     delegates::CustomPainter, hit_testing::HitTestBehavior, semantics::NumericRange,

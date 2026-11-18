@@ -704,7 +704,7 @@ impl<'a> Reading<'a> {
         let buffer = settle(Ok(file.array_buffer())).await?;
         let bytes = Uint8Array::new(&buffer);
         self.read = self.read.saturating_add(u64::from(bytes.length()));
-        rules::admit_read(self.read, self.limit)?;
+        crate::dialog::admit_read(self.read, self.limit)?;
         let length = usize::try_from(bytes.length()).map_err(|_| DialogError::TooLarge {
             actual: self.read,
             limit: self.limit,

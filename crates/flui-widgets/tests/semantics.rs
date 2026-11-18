@@ -808,7 +808,7 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
                         text,
                         start,
                         line,
-                        flui_painting::typography::TextDirection::Ltr,
+                        flui_foundation::TextDirection::Ltr,
                         Rect::from_origin_size(
                             Point::new(0.0, 10.0 * line as f64),
                             Size::new(10.0 * text.len() as f64, 10.0),
@@ -1928,10 +1928,10 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
 pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
     use flui_animation::Animatable;
     use flui_animation::{Animation, AnimationController, Tween, Vsync};
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::Matrix4;
     use flui_objects::TranslationFraction;
     use flui_painting::Alignment;
-    use flui_painting::typography::TextDirection;
     use flui_view::ViewExt;
     use flui_view::environment::VsyncScope;
     use flui_widgets::{Align, SlideTransition, Transform};

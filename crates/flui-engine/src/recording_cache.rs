@@ -302,12 +302,12 @@ pub(crate) struct ChunkRecording {
     /// position it holds is relative to.
     origin: PixelOrigin,
     /// The glyphs the recording placed, which a replay keeps placed.
-    glyph_keys: Vec<flui_painting::GlyphKey>,
+    glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
     bytes: usize,
 }
 
 impl ChunkRecording {
-    pub(crate) fn glyph_keys(&self) -> &[flui_painting::GlyphKey] {
+    pub(crate) fn glyph_keys(&self) -> &[flui_painting::glyphs::GlyphKey] {
         &self.glyph_keys
     }
 }
@@ -572,7 +572,7 @@ impl DrawSegment {
         mark: &SegmentMark,
         clip: ResolvedClip,
         origin: PixelOrigin,
-        glyph_keys: Vec<flui_painting::GlyphKey>,
+        glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
     ) -> Option<ChunkRecording> {
         let Self {
             budget: _,

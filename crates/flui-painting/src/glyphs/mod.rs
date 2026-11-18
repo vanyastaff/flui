@@ -83,7 +83,7 @@ impl GlyphContent {
 /// A consumer cannot bypass buffer admission with a struct literal:
 ///
 /// ```compile_fail
-/// use flui_painting::{GlyphContent, GlyphImage};
+/// use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage};
 /// let image = GlyphImage {
 ///     left: 0, top: 0, width: 2, height: 2,
 ///     content: GlyphContent::Mask, data: vec![255],
@@ -93,13 +93,13 @@ impl GlyphContent {
 /// Admitted dimensions and the borrowed pixel buffer cannot be mutated:
 ///
 /// ```compile_fail
-/// use flui_painting::{GlyphContent, GlyphImage};
+/// use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage};
 /// let mut image = GlyphImage::try_new(0, 0, 1, 1, GlyphContent::Mask, vec![255]).unwrap();
 /// image.width = 2;
 /// ```
 ///
 /// ```compile_fail
-/// use flui_painting::{GlyphContent, GlyphImage};
+/// use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage};
 /// let mut image = GlyphImage::try_new(0, 0, 1, 1, GlyphContent::Mask, vec![255]).unwrap();
 /// image.data()[0] = 0;
 /// ```

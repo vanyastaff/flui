@@ -83,7 +83,44 @@ use wayland_server::{
     Resource,
 };
 
-pub use wayland_protocols::xdg::shell::server::xdg_toplevel::State as ToplevelState;
+/// A state a toplevel configure names (`xdg_toplevel.state`). The kit's own
+/// type, so a test names no type of the Wayland protocol crate (ADR-0089).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ToplevelState {
+    /// `maximized`.
+    Maximized,
+    /// `fullscreen`.
+    Fullscreen,
+    /// `resizing`: an interactive resize is under way.
+    Resizing,
+    /// `activated`: the window has the seat's focus.
+    Activated,
+    /// `tiled_left`.
+    TiledLeft,
+    /// `tiled_right`.
+    TiledRight,
+    /// `tiled_top`.
+    TiledTop,
+    /// `tiled_bottom`.
+    TiledBottom,
+}
+
+impl ToplevelState {
+    /// The state as the protocol spells it.
+    const fn protocol(self) -> xdg_toplevel::State {
+        match self {
+            Self::Maximized => xdg_toplevel::State::Maximized,
+            Self::Fullscreen => xdg_toplevel::State::Fullscreen,
+            Self::Resizing => xdg_toplevel::State::Resizing,
+            Self::Activated => xdg_toplevel::State::Activated,
+            Self::TiledLeft => xdg_toplevel::State::TiledLeft,
+            Self::TiledRight => xdg_toplevel::State::TiledRight,
+            Self::TiledTop => xdg_toplevel::State::TiledTop,
+            Self::TiledBottom => xdg_toplevel::State::TiledBottom,
+        }
+    }
+}
 
 /// The keymap the seat's keyboard shares: one key, `a` (evdev 30), spelled out
 /// in full so it compiles on any xkeyboard-config.
@@ -792,7 +829,7 @@ impl Compositor {
         let states = configure
             .states
             .iter()
-            .flat_map(|state| (*state as u32).to_ne_bytes())
+            .flat_map(|state| (state.protocol() as u32).to_ne_bytes())
             .collect();
         toplevel
             .xdg_toplevel

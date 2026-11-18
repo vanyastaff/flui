@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{MotionOverride, Vsync};
-use flui_painting::{display_list::DrawOp, styling::Color};
+use flui_painting::{DrawOp, styling::Color};
 use flui_rendering::layer::Layer;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;

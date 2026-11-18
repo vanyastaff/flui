@@ -4,9 +4,10 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_painting::typography::{
-    FontFeature, FontVariation, TextDirection, TextPosition, TextSpan, TextStyle,
+    FontFeature, FontVariation, OpenTypeTag, TextPosition, TextSpan, TextStyle,
 };
 use flui_painting::{Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter};
 
@@ -102,18 +103,19 @@ fn feature_probe(features: Vec<FontFeature>) {
 }
 
 pub(crate) fn font_features_change_the_measured_and_painted_glyphs() {
-    feature_probe(vec![FontFeature::disable("rlig")]);
+    feature_probe(vec![FontFeature::disable(OpenTypeTag::new(*b"rlig"))]);
 }
 
-pub(crate) fn invalid_font_features_do_not_replace_valid_settings() {
-    feature_probe(vec![
-        FontFeature::disable("rlig"),
-        FontFeature::new("rlig", -1),
-        FontFeature::new("rlig", 65536),
-        FontFeature::enable("rl"),
-        FontFeature::enable("r\nig"),
-        FontFeature::new("rlig", 65537),
-    ]);
+/// A tag the shaper would refuse is refused where the author builds it, so
+/// a style never carries a setting shaping drops in silence.
+pub(crate) fn an_invalid_open_type_tag_is_refused_when_built() {
+    for tag in ["rl", "rligx", "", "r\nig", "r\u{7f}ig", "rïg"] {
+        assert!(OpenTypeTag::try_new(tag).is_err(), "{tag:?} is not a tag");
+    }
+    let tag = OpenTypeTag::try_new("rlig").expect("four printable ASCII bytes");
+    assert_eq!(tag, OpenTypeTag::new(*b"rlig"));
+    assert_eq!(tag.as_str(), "rlig");
+    assert_eq!("wght".parse::<OpenTypeTag>(), Ok(OpenTypeTag::WEIGHT));
 }
 
 fn variation_coords(variations: Vec<FontVariation>) -> Vec<i16> {
@@ -151,8 +153,8 @@ fn weighted_variation_coords(
 }
 
 pub(crate) fn font_variations_select_the_painted_run_instance() {
-    let low = variation_coords(vec![FontVariation::new("wght", 100.0)]);
-    let high = variation_coords(vec![FontVariation::new("wght", 900.0)]);
+    let low = variation_coords(vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0)]);
+    let high = variation_coords(vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 900.0)]);
     assert_eq!(low.len(), 1, "the generated font has one axis");
     assert_eq!(high.len(), 1);
     assert!(
@@ -161,7 +163,7 @@ pub(crate) fn font_variations_select_the_painted_run_instance() {
     );
     assert_eq!(
         weighted_variation_coords(
-            vec![FontVariation::new("wght", 100.0)],
+            vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0)],
             Some(flui_painting::typography::FontWeight::W900),
         ),
         low,
@@ -170,15 +172,15 @@ pub(crate) fn font_variations_select_the_painted_run_instance() {
     for (settings, expected) in [
         (
             vec![
-                FontVariation::new("wght", 100.0),
-                FontVariation::new("wght", 900.0),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), 900.0),
             ],
             high,
         ),
         (
             vec![
-                FontVariation::new("wght", 900.0),
-                FontVariation::new("wght", 100.0),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), 900.0),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0),
             ],
             low,
         ),
@@ -192,14 +194,12 @@ pub(crate) fn font_variations_select_the_painted_run_instance() {
 }
 
 pub(crate) fn invalid_font_variations_do_not_replace_valid_settings() {
-    let valid = variation_coords(vec![FontVariation::new("wght", 100.0)]);
+    let valid = variation_coords(vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0)]);
     let filtered = variation_coords(vec![
-        FontVariation::new("wght", 100.0),
-        FontVariation::new("wght", f64::NAN),
-        FontVariation::new("wght", f64::INFINITY),
-        FontVariation::new("wght", f64::MAX),
-        FontVariation::new("wg", 100.0),
-        FontVariation::new("w\ngt", 100.0),
+        FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0),
+        FontVariation::new(OpenTypeTag::new(*b"wght"), f64::NAN),
+        FontVariation::new(OpenTypeTag::new(*b"wght"), f64::INFINITY),
+        FontVariation::new(OpenTypeTag::new(*b"wght"), f64::MAX),
     ]);
     assert_eq!(filtered, valid);
     assert_eq!(filtered.len(), 1);
@@ -211,7 +211,7 @@ pub(crate) fn invalid_font_variations_do_not_replace_valid_settings() {
 
 pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights() {
     use flui_painting::typography::{FontWeight, TextPosition};
-    use flui_painting::{GlyphContent, GlyphRasterizer, glyphs::SwashRasterizer};
+    use flui_painting::{glyphs::GlyphContent, glyphs::GlyphRasterizer, glyphs::SwashRasterizer};
 
     const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
     let real_fonts = FontCollection::new();
@@ -267,10 +267,10 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             }
         } else {
             let authored = authored.as_ref().expect("baseline rasterized first");
-            let coverage = |images: &[flui_painting::GlyphImage]| {
+            let coverage = |images: &[flui_painting::glyphs::GlyphImage]| {
                 images
                     .iter()
-                    .flat_map(flui_painting::GlyphImage::data)
+                    .flat_map(flui_painting::glyphs::GlyphImage::data)
                     .map(|value| u64::from(*value))
                     .sum::<u64>()
             };
@@ -296,7 +296,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
     };
     let default_style = TextStyle::default()
         .with_font_family("FLUI Probe Variable")
-        .with_font_variation(FontVariation::new("wght", 100.0));
+        .with_font_variation(FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0));
     let color_only = TextStyle::default().with_color(flui_painting::styling::Color::BLACK);
     let spans = [("AA".to_owned(), Some(color_only))];
     let inherited = TextContext::new(&fonts)
@@ -321,7 +321,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             .next()
             .expect("default-style run")
             .coords(),
-        variation_coords(vec![FontVariation::new("wght", 337.0)]),
+        variation_coords(vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 337.0)]),
         "a color-only span resolves the default authored axis before adjustment"
     );
     let ellipsis_style = TextStyle::default()
@@ -336,7 +336,8 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
     let mut reference = TextPainter::new()
         .with_text(TextSpan::styled(
             "AA\nAA",
-            ellipsis_style.with_font_variation(FontVariation::new("wght", 637.0)),
+            ellipsis_style
+                .with_font_variation(FontVariation::new(OpenTypeTag::new(*b"wght"), 637.0)),
         ))
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
@@ -377,16 +378,16 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
         (FontWeight::W400, vec![], i32::MAX, 1000.0),
         (
             FontWeight::W900,
-            vec![FontVariation::new("wght", 233.25)],
+            vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 233.25)],
             100,
             333.25,
         ),
         (
             FontWeight::W900,
             vec![
-                FontVariation::new("wght", 900.0),
-                FontVariation::new("wght", 100.0),
-                FontVariation::new("wght", f64::NAN),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), 900.0),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), 100.0),
+                FontVariation::new(OpenTypeTag::new(*b"wght"), f64::NAN),
             ],
             137,
             237.0,
@@ -403,7 +404,10 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             },
         );
         let authored = coords(&painter);
-        let mut resolved = variation_coords(vec![FontVariation::new("wght", expected)]);
+        let mut resolved = variation_coords(vec![FontVariation::new(
+            OpenTypeTag::new(*b"wght"),
+            expected,
+        )]);
         if resolved.is_empty() {
             resolved.push(0);
         }
@@ -487,7 +491,10 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             let expected: Vec<_> = [400.0, 700.0, 1000.0]
                 .into_iter()
                 .map(|weight| {
-                    let mut coords = variation_coords(vec![FontVariation::new("wght", weight)]);
+                    let mut coords = variation_coords(vec![FontVariation::new(
+                        OpenTypeTag::new(*b"wght"),
+                        weight,
+                    )]);
                     if coords.is_empty() {
                         coords.push(0);
                     }
@@ -684,7 +691,7 @@ pub(crate) fn a_rich_span_ellipsis_floors_min_intrinsic_width() {
 /// painter passes separately: a line height and a family (the probe face,
 /// whose line metrics are not Roboto's) each change the empty line too.
 pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
-    use flui_painting::TextBaseline;
+    use flui_painting::typography::TextBaseline;
     use flui_painting::typography::{FontWeight, TextStyle};
 
     const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
@@ -751,8 +758,9 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
 /// one collection only, so a painter that measured anywhere else would never
 /// see it.
 pub(crate) mod parley_measurement {
+    use flui_foundation::TextDirection;
     use flui_painting::parley_text::ParagraphSpec;
-    use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+    use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
     use flui_painting::{FontCollection, TextContext, TextPainter};
 
     const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");

@@ -12,8 +12,8 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_objects::SubtreeAnchor;
-use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::BoxedView;
