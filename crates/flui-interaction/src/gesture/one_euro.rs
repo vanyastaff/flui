@@ -272,7 +272,7 @@ impl OneEuroFilter {
 /// use std::time::Duration;
 ///
 /// use flui_interaction::gesture::OneEuroFilter2D;
-/// use flui_interaction::{MonotonicClock, SystemClock};
+/// use flui_foundation::{MonotonicClock, SystemClock};
 /// use flui_foundation::geometry::Offset;
 ///
 /// let mut filter = OneEuroFilter2D::default();

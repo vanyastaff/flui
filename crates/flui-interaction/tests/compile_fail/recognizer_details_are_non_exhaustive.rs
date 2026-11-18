@@ -1,9 +1,6 @@
 use flui_foundation::geometry::Offset;
-use flui_interaction::{
-    DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-    PointerKind, Velocity,
-    gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails},
-};
+use flui_interaction::{gesture::{DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason, Velocity}, gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails}};
+use flui_platform::pointer::PointerKind;
 
 fn main() {
     let _ = DragDownDetails {

@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::panic::PanicRecovery;
-use flui_interaction::{
+use flui_interaction::gesture::{
     GestureArena, GestureArenaMember, GestureContest, GestureDeadlineRegistration,
     GestureDeadlineUpdate, ScrollLatchEnd,
 };

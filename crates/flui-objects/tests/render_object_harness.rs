@@ -140,7 +140,7 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
-use flui_interaction::InteractionLane;
+use flui_interaction::pointer::InteractionLane;
 use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
@@ -1424,7 +1424,7 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
     // A lane-registered no-op target — the harness verifies its identity
     // reaches the hit entry (the pipeline wiring); that it FIRES end-to-end is
     // covered by the Listener widget's dispatch test.
-    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let lane = flui_interaction::pointer::InteractionLane::try_new().expect("interaction lane");
     let target = lane.enter(|| {
         lane.dispatch_handle()
             .register_pointer(|_event| {})
@@ -1472,7 +1472,7 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
 /// pointer target for contacts and the mouse target for tracking.
 fn harness_interactive_carries_its_pointer_and_mouse_targets_on_one_entry() {
     let enters = Rc::new(Cell::new(0));
-    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let lane = flui_interaction::pointer::InteractionLane::try_new().expect("interaction lane");
     let (pointer_target, mouse_target) = lane.enter(|| {
         let handle = lane.dispatch_handle();
         let enter_counter = Rc::clone(&enters);
@@ -1815,7 +1815,7 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     let hovers = Rc::new(Cell::new(0));
     let enters = Rc::new(Cell::new(0));
     let exits = Rc::new(Cell::new(0));
-    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let lane = flui_interaction::pointer::InteractionLane::try_new().expect("interaction lane");
     let mouse_target = lane.enter(|| {
         let handle = lane.dispatch_handle();
         let hover_counter = Rc::clone(&hovers);
@@ -9377,7 +9377,7 @@ fn harness_input_regions_cut_routed_links_out_of_a_move_area() {
     use flui_objects::{SemanticsActionRoute, TextLinkKey, TextLinkRoute};
     use flui_rendering::input_regions::{InputRegion, InputRegionKind};
     use flui_rendering::semantics::SemanticsActionHandler;
-    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let lane = flui_interaction::pointer::InteractionLane::try_new().expect("interaction lane");
     let route = lane.enter(|| {
         let handle = lane.dispatch_handle();
         let pointer = handle

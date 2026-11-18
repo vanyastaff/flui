@@ -17,7 +17,7 @@ use std::{
 
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
-use flui_interaction::FocusManager;
+use flui_interaction::focus::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
 
 use super::dirty_queue::{DirtyElement, DirtyQueue};
@@ -596,13 +596,13 @@ pub struct BuildOwner {
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
     /// render-object lifecycle contexts report that as a typed inactive ui_runtime.
-    pub(crate) interaction_dispatch: Option<flui_interaction::InteractionDispatchHandle>,
+    pub(crate) interaction_dispatch: Option<flui_interaction::pointer::InteractionDispatchHandle>,
     /// Whether the presentation collects its semantics tree: what exists
     /// only for a collected tree (a `Semantics` action route) is kept while
     /// this holds. `true` until a runtime says otherwise, so a tree mounted
     /// outside one is treated as collected.
     pub(crate) collects_semantics: bool,
-    pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
+    pub(crate) hit_test_handle: Option<flui_interaction::pointer::HitTestHandle>,
 
     /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).
     ///
@@ -843,7 +843,7 @@ impl BuildOwner {
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
     pub fn set_interaction_dispatch_handle(
         &mut self,
-        handle: flui_interaction::InteractionDispatchHandle,
+        handle: flui_interaction::pointer::InteractionDispatchHandle,
     ) {
         self.interaction_dispatch = Some(handle);
     }
@@ -855,7 +855,7 @@ impl BuildOwner {
     /// A bare `BuildOwner` (an element-tree unit test's) has none, so its tests observe
     /// `LifecycleContext::hit_test_handle() == None` honestly rather than reading
     /// some other tree.
-    pub fn set_hit_test_handle(&mut self, handle: flui_interaction::HitTestHandle) {
+    pub fn set_hit_test_handle(&mut self, handle: flui_interaction::pointer::HitTestHandle) {
         self.hit_test_handle = Some(handle);
     }
 
@@ -946,7 +946,7 @@ impl BuildOwner {
     /// that asked. A UI runtime-scoped probe would answer every one of them with
     /// whichever tree was installed first.
     #[must_use]
-    pub fn hit_test_handle(&self) -> Option<&flui_interaction::HitTestHandle> {
+    pub fn hit_test_handle(&self) -> Option<&flui_interaction::pointer::HitTestHandle> {
         self.hit_test_handle.as_ref()
     }
 

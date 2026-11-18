@@ -46,10 +46,11 @@ use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{Offset, Point, Size};
 use flui_interaction::drag::{DragItem, DragReach, DragView};
+use flui_interaction::gesture::MultiDragAxis;
 use flui_interaction::gesture::PanClaim;
-use flui_interaction::{MultiDragAxis, PointerKindSet};
 use flui_objects::{Placement, PlacementSlot, SubtreeAnchor};
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_rendering::constraints::SliverConstraints;
 use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
 use flui_rendering::pipeline::WeakPipelineCell;
@@ -1765,7 +1766,7 @@ impl StatelessView for ReorderRow {
         let content = match view.handles {
             ReorderHandles::Default => {
                 let side = GestureArenaScope::settings_or_default_of(ctx)
-                    .min_target_for(flui_interaction::PointerKind::Touch);
+                    .min_target_for(flui_platform::pointer::PointerKind::Touch);
                 let handle = source.handle(default_handle());
                 beside_handle(content, handle, side, &view)
             }

@@ -5,6 +5,7 @@
 use flui_interaction::gesture::GestureContest;
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 
+use flui_foundation::ManualClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
@@ -17,9 +18,12 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureBinding, HitTestEntry, HitTestResult, InteractionLane,
-    ManualClock, PointerId, PointerKindSet, RecognizerSet, RenderId,
+    binding::GestureBinding,
+    gesture::{DragAxis, DragGestureRecognizer, RecognizerSet},
+    ids::PointerId,
+    pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::{GesturePreferences, pointer::CancelReason, pointer::PenTool};
 
 type Log = Rc<RefCell<Vec<(&'static str, GestureDisposition)>>>;
@@ -397,7 +401,7 @@ pub(crate) fn claimed_contact_cancels_every_other_listener_once() {
 /// default win leaves a raw listener beside it the whole contact, and a hold
 /// whose win carries a successor claims the contact only at the hand-off.
 pub(crate) fn unclaimed_wins_cancel_no_listener() {
-    use flui_interaction::{LongPressGestureRecognizer, TapGestureRecognizer};
+    use flui_interaction::gesture::{LongPressGestureRecognizer, TapGestureRecognizer};
     for kind in [PointerKind::Touch, PointerKind::Mouse] {
         let lane = InteractionLane::try_new().expect("owner lane");
         let clock = ManualClock::new();
@@ -704,7 +708,7 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
 /// drag. The press stays hit-testable: the tap and the long press are
 /// admitted, then lose to the hold.
 pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
-    use flui_interaction::{
+    use flui_interaction::gesture::{
         HoldEnd, HoldGestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer,
     };
     type Case = (&'static [f64], Duration, &'static [&'static str]);
@@ -767,13 +771,17 @@ pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
             let reasons = Rc::new(RefCell::new(Vec::new()));
             let seen = Rc::clone(&reasons);
             let _observer = arena
-                .observe(move |observation: &flui_interaction::GestureObservation| {
-                    if let flui_interaction::GestureObservation::Rejected { reason, .. } =
-                        observation
-                    {
-                        seen.borrow_mut().push(*reason);
-                    }
-                })
+                .observe(
+                    move |observation: &flui_interaction::gesture::GestureObservation| {
+                        if let flui_interaction::gesture::GestureObservation::Rejected {
+                            reason,
+                            ..
+                        } = observation
+                        {
+                            seen.borrow_mut().push(*reason);
+                        }
+                    },
+                )
                 .expect("observer registration");
             let route = lane.enter(|| {
                 let handle = lane.dispatch_handle();
@@ -848,7 +856,7 @@ pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
 /// contest leaves no hold announced for it.
 pub(crate) fn a_hold_tracks_its_contact_before_beaten_members_hear() {
     use flui_interaction::gesture::GestureRecognizer;
-    use flui_interaction::{HoldEnd, HoldGestureRecognizer};
+    use flui_interaction::gesture::{HoldEnd, HoldGestureRecognizer};
 
     struct Beaten {
         on_reject: Box<dyn Fn()>,
@@ -927,7 +935,7 @@ pub(crate) fn a_hold_tracks_its_contact_before_beaten_members_hear() {
 /// its place on the route, so the outer tap still fires.
 pub(crate) fn an_unrecognized_inner_gesture_leaves_the_outer_tap_its_contact() {
     use flui_foundation::geometry::Axis;
-    use flui_interaction::{
+    use flui_interaction::gesture::{
         ForcePressGestureRecognizer, LongPressGestureRecognizer, SwipeGestureRecognizer,
         SwipeStart, TapGestureRecognizer,
     };

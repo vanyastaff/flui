@@ -6,7 +6,7 @@ use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{InputSequenceId, PresentationId};
-use flui_interaction::{InputSurface, PointerEvent};
+use flui_interaction::{events::PointerEvent, ids::InputSurface};
 use flui_platform::keyboard::KeyState;
 use flui_platform::pointer::{ButtonChange, PointerButton};
 use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 /// Runtime-level arbitration of which presentation currently owns OS keyboard
-/// focus (issue #555's addressed-routing slice). One [`FocusManager`](flui_interaction::FocusManager) exists per presentation
+/// focus (issue #555's addressed-routing slice). One [`FocusManager`](flui_interaction::focus::FocusManager) exists per presentation
 /// (`PresentationState::focus_manager`), but only ONE presentation's tree
 /// should ever receive a keyboard event at a time — the one whose native
 /// window the platform most recently reported as focused.
@@ -577,7 +577,8 @@ impl UiRuntime {
                     != FrameCommitState::Committed
                     || !presentation.held_pointer_input().borrow().is_empty();
                 if should_hold_pointer {
-                    let pointer_id = flui_interaction::PointerEventExt::pointer_id(&pointer_event);
+                    let pointer_id =
+                        flui_interaction::events::PointerEventExt::pointer_id(&pointer_event);
                     let has_active_contact_sequence =
                         pointer_id.is_some_and(|id| presentation.gestures().has_hit_test(id));
                     let row = recording
@@ -856,7 +857,7 @@ impl UiRuntime {
         clock.stamp_input_epoch(clock.now());
         // The pointer's kind reaches hit testing, so an expanded hit area
         // sizes its minimum target for this kind of contact (ADR-0212 §4).
-        let kind = flui_interaction::PointerEventExt::pointer_kind(pointer_event)
+        let kind = flui_interaction::events::PointerEventExt::pointer_kind(pointer_event)
             .unwrap_or(flui_interaction::events::PointerKind::Unknown);
         // A press decides the input modality before anything it reaches can
         // move focus: focus a click moves is not shown.
@@ -1077,7 +1078,7 @@ impl UiRuntime {
         };
         let sequence = match presentation
             .gestures()
-            .begin_contactless(flui_interaction::ContactlessSource::Assistive)
+            .begin_contactless(flui_interaction::binding::ContactlessSource::Assistive)
         {
             Ok(sequence) => {
                 tracing::trace!(

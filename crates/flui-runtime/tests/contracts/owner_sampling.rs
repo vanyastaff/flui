@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress, UiRuntimeId};
 use flui_interaction::{
-    GestureDeadlineError, GestureDeadlineUpdate, gesture::GestureArenaMember, ids::PointerId,
+    gesture::{GestureArenaMember, GestureDeadlineError, GestureDeadlineUpdate},
+    ids::PointerId,
 };
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
@@ -30,9 +31,9 @@ struct DeadlineQuery {
 }
 
 impl GestureArenaMember for DeadlineQuery {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.calls.set(self.calls.get() + 1);
@@ -253,8 +254,8 @@ struct RetryDeadline {
 }
 
 impl GestureArenaMember for RetryDeadline {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
@@ -763,9 +764,9 @@ struct PublishedDeadline {
 }
 
 impl GestureArenaMember for PublishedDeadline {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
@@ -1460,8 +1461,8 @@ struct HostedDeadline {
 }
 
 impl GestureArenaMember for HostedDeadline {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
@@ -1643,8 +1644,8 @@ struct ReentrantDeadlineQuery {
 }
 
 impl GestureArenaMember for ReentrantDeadlineQuery {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);

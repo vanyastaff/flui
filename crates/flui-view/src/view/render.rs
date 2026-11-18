@@ -28,7 +28,7 @@ use crate::{ElementBase, InheritedView};
 /// its own `build` either.
 #[derive(Debug, Clone, Copy)]
 pub struct RenderObjectContext<'a> {
-    interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
+    interaction_dispatch: Option<&'a flui_interaction::pointer::InteractionDispatchHandle>,
     graph: Option<&'a Reactive>,
     /// The borrowed tree, present only when the context was minted during a
     /// `build_scope` rebuild (not at mount or a view swap), so
@@ -57,14 +57,14 @@ pub enum RenderObjectContextError {
     InteractionUnavailable,
     /// The owner interaction lane rejected the operation.
     #[error(transparent)]
-    Interaction(#[from] flui_interaction::InteractionDispatchError),
+    Interaction(#[from] flui_interaction::pointer::InteractionDispatchError),
 }
 
 impl<'a> RenderObjectContext<'a> {
     /// Construct a context from the active owner interaction handle and the
     /// owner's reactive graph.
     pub(crate) const fn new(
-        interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
+        interaction_dispatch: Option<&'a flui_interaction::pointer::InteractionDispatchHandle>,
         graph: Option<&'a Reactive>,
         collects_semantics: bool,
     ) -> Self {
@@ -83,7 +83,7 @@ impl<'a> RenderObjectContext<'a> {
     /// hands `update_render_object` during a `build_scope` rebuild: the borrowed
     /// tree is available here, so [`depend_on`](Self::depend_on) resolves.
     pub(crate) const fn for_rebuild(
-        interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
+        interaction_dispatch: Option<&'a flui_interaction::pointer::InteractionDispatchHandle>,
         graph: Option<&'a Reactive>,
         tree: &'a ElementTree,
         element_id: ElementId,
@@ -176,7 +176,8 @@ impl<'a> RenderObjectContext<'a> {
 
     fn dispatch_handle(
         &self,
-    ) -> Result<&flui_interaction::InteractionDispatchHandle, RenderObjectContextError> {
+    ) -> Result<&flui_interaction::pointer::InteractionDispatchHandle, RenderObjectContextError>
+    {
         self.interaction_dispatch
             .ok_or(RenderObjectContextError::InteractionUnavailable)
     }
@@ -192,8 +193,8 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_pointer(
         &self,
-        handler: impl Fn(flui_interaction::PointerDispatch<'_>) + 'static,
-    ) -> Result<flui_interaction::PointerTarget, RenderObjectContextError> {
+        handler: impl Fn(flui_interaction::pointer::PointerDispatch<'_>) + 'static,
+    ) -> Result<flui_interaction::pointer::PointerTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_pointer(handler)?)
     }
 
@@ -206,8 +207,8 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_pointer(
         &self,
-        target: flui_interaction::PointerTarget,
-        handler: impl Fn(flui_interaction::PointerDispatch<'_>) + 'static,
+        target: flui_interaction::pointer::PointerTarget,
+        handler: impl Fn(flui_interaction::pointer::PointerDispatch<'_>) + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.replace_pointer(target, handler)?)
     }
@@ -223,7 +224,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_pointer(
         &self,
-        target: flui_interaction::PointerTarget,
+        target: flui_interaction::pointer::PointerTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_pointer(target)?)
     }
@@ -282,7 +283,7 @@ impl<'a> RenderObjectContext<'a> {
 
     /// Declare that `target` feeds a drag-family recognizer, so a touchpad pan
     /// delivers its contact to it (ADR-0251). See
-    /// [`InteractionDispatchHandle::declare_scroll_contact_feed`](flui_interaction::InteractionDispatchHandle::declare_scroll_contact_feed).
+    /// [`InteractionDispatchHandle::declare_scroll_contact_feed`](flui_interaction::pointer::InteractionDispatchHandle::declare_scroll_contact_feed).
     ///
     /// # Errors
     ///
@@ -290,7 +291,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn declare_scroll_contact_feed(
         &self,
-        target: flui_interaction::PointerTarget,
+        target: flui_interaction::pointer::PointerTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -304,7 +305,7 @@ impl<'a> RenderObjectContext<'a> {
     /// As [`declare_scroll_contact_feed`](Self::declare_scroll_contact_feed).
     pub fn withdraw_scroll_contact_feed(
         &self,
-        target: flui_interaction::PointerTarget,
+        target: flui_interaction::pointer::PointerTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -313,7 +314,7 @@ impl<'a> RenderObjectContext<'a> {
 
     /// Declare the axis a scroll target scrolls along and whether it has
     /// anywhere to go, so it competes for a touchpad pan (ADR-0251). See
-    /// [`InteractionDispatchHandle::declare_scroll_target_axis`](flui_interaction::InteractionDispatchHandle::declare_scroll_target_axis).
+    /// [`InteractionDispatchHandle::declare_scroll_target_axis`](flui_interaction::pointer::InteractionDispatchHandle::declare_scroll_target_axis).
     ///
     /// # Errors
     ///
@@ -549,7 +550,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_path_clipper(
         &self,
         clipper: impl Fn(flui_foundation::geometry::Size) -> flui_painting::paint::Path + 'static,
-    ) -> Result<flui_interaction::PathClipTarget, RenderObjectContextError> {
+    ) -> Result<flui_interaction::pointer::PathClipTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_path_clipper(clipper)?)
     }
 
@@ -562,7 +563,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_path_clipper(
         &self,
-        target: flui_interaction::PathClipTarget,
+        target: flui_interaction::pointer::PathClipTarget,
         clipper: impl Fn(flui_foundation::geometry::Size) -> flui_painting::paint::Path + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
@@ -578,7 +579,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_path_clipper(
         &self,
-        target: flui_interaction::PathClipTarget,
+        target: flui_interaction::pointer::PathClipTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_path_clipper(target)?)
     }
@@ -595,7 +596,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_shader_mask(
         &self,
         factory: impl Fn(flui_foundation::geometry::Rect<f64>) -> flui_painting::paint::Shader + 'static,
-    ) -> Result<flui_interaction::ShaderMaskTarget, RenderObjectContextError> {
+    ) -> Result<flui_interaction::pointer::ShaderMaskTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_shader_mask(factory)?)
     }
 
@@ -608,7 +609,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_shader_mask(
         &self,
-        target: flui_interaction::ShaderMaskTarget,
+        target: flui_interaction::pointer::ShaderMaskTarget,
         factory: impl Fn(flui_foundation::geometry::Rect<f64>) -> flui_painting::paint::Shader + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
@@ -624,7 +625,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_shader_mask(
         &self,
-        target: flui_interaction::ShaderMaskTarget,
+        target: flui_interaction::pointer::ShaderMaskTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_shader_mask(target)?)
     }
@@ -635,7 +636,7 @@ impl<'a> RenderObjectContext<'a> {
     /// shape — a drag target's slot, a semantics node's action table. The
     /// returned target is data-only and may be stored in a render object or
     /// published as hit-test metadata; its dispatcher resolves it back with
-    /// `flui_interaction::resolve_local_payload` on the owner thread.
+    /// `flui_interaction::pointer::resolve_local_payload` on the owner thread.
     ///
     /// # Errors
     ///
@@ -644,7 +645,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_local_payload(
         &self,
         payload: std::rc::Rc<dyn std::any::Any>,
-    ) -> Result<flui_interaction::LocalPayloadTarget, RenderObjectContextError> {
+    ) -> Result<flui_interaction::pointer::LocalPayloadTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_local_payload(payload)?)
     }
 
@@ -656,7 +657,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_local_payload(
         &self,
-        target: flui_interaction::LocalPayloadTarget,
+        target: flui_interaction::pointer::LocalPayloadTarget,
         payload: std::rc::Rc<dyn std::any::Any>,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
@@ -672,7 +673,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_local_payload(
         &self,
-        target: flui_interaction::LocalPayloadTarget,
+        target: flui_interaction::pointer::LocalPayloadTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_local_payload(target)?)
     }

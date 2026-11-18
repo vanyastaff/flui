@@ -4935,8 +4935,15 @@ held against `x11_xtest_mouse_and_wheel.jsonl`),
 `xtest_keys_reach_the_focused_window`,
 `losing_the_focus_ends_a_dead_key_and_releases_held_keys`,
 `a_window_follows_its_focus_when_a_handler_panics_at_its_loss` and
-`a_window_shows_the_cursor_it_asks_for`; the harness runs the X11 rows of the
-native recording contracts beside them. Tests of the window: the pure
+`a_window_shows_the_cursor_it_asks_for`, and the real window through the
+backend conformance table (`the_x11_window_input_conforms`, in
+`tests/x11_backend_conformance.rs`): XTest's pointer for the contact rows, a
+master pointer the server adds for the named device, the focus taken away for
+the platform's cancel and XTest's keys for the menu keys, with each row XTest
+cannot drive (touch, pen, pinch, a step's own stamp, a position that is not
+finite) and each row of an input method listed there with what it reports and
+why; the harness runs the X11 rows of the native recording contracts beside
+them. Tests of the window: the pure
 modules' tables
 (`what_the_window_manager_supports_is_what_a_window_honours`,
 `logical_numbers_become_x11_numbers_only_when_they_fit`,

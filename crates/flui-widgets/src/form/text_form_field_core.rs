@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use flui_interaction::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_platform::text_store::TextInputOptions;
 use flui_view::prelude::*;
 

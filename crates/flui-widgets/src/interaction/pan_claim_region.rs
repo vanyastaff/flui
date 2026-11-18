@@ -1,6 +1,6 @@
 //! A subtree's declared pan claim (ADR-0208 rule 1, CSS `touch-action`).
 
-use flui_interaction::GestureArena;
+use flui_interaction::gesture::GestureArena;
 use flui_interaction::gesture::PanClaim;
 use flui_view::BoxedView;
 use flui_view::environment::GestureArenaScope;

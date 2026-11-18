@@ -958,8 +958,8 @@ impl GestureSettings {
     pub(crate) fn resolve_fling_velocity(
         &self,
         kind: PointerKind,
-        velocity: crate::Velocity,
-    ) -> crate::Velocity {
+        velocity: crate::gesture::Velocity,
+    ) -> crate::gesture::Velocity {
         let (min, max) = if kind == PointerKind::Touch {
             self.native.touch_fling.map_or(
                 (
@@ -975,7 +975,7 @@ impl GestureSettings {
             )
         };
         if velocity.magnitude() < min {
-            crate::Velocity::ZERO
+            crate::gesture::Velocity::ZERO
         } else {
             velocity.clamp_magnitude(0.0, max)
         }

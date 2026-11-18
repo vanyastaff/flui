@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::{FocusNode, PointerId};
+//! use flui_interaction::{focus::FocusNode, ids::PointerId};
 //!
 //! let mouse = PointerId::try_from(1_u64).expect("nonzero pointer id");
 //! let touch1 = PointerId::try_from(2_u64).expect("nonzero pointer id");
@@ -41,12 +41,12 @@ pub use flui_platform::pointer::PointerId;
 
 /// Unique identifier for a focusable UI element.
 ///
-/// Issued when a [`crate::FocusNode`] is created.
+/// Issued when a [`crate::focus::FocusNode`] is created.
 ///
 /// # Example
 ///
 /// ```rust
-/// use flui_interaction::FocusNode;
+/// use flui_interaction::focus::FocusNode;
 ///
 /// let text_field = FocusNode::new();
 /// let button = FocusNode::new();
@@ -111,12 +111,12 @@ pub use flui_platform::pointer::DeviceId;
 /// delivered there wherever the platform reports it.
 ///
 /// ```rust
-/// use flui_interaction::{GestureBinding, InputSurface};
+/// use flui_interaction::{binding::GestureBinding, ids::InputSurface};
 ///
 /// let binding = GestureBinding::new();
 /// let embedded = binding.embed_surface()?;
 /// assert_ne!(embedded, InputSurface::Window);
-/// # Ok::<(), flui_interaction::SurfaceIdsExhausted>(())
+/// # Ok::<(), flui_interaction::ids::SurfaceIdsExhausted>(())
 /// ```
 ///
 /// The set is closed, as ADR-0207 §5 states it: a new kind of routing root
@@ -131,13 +131,13 @@ pub enum InputSurface {
     /// The window of the presentation that owns the binding.
     Window,
     /// A surface embedded in that window, minted by
-    /// [`GestureBinding::embed_surface`](crate::GestureBinding::embed_surface).
+    /// [`GestureBinding::embed_surface`](crate::binding::GestureBinding::embed_surface).
     Embedded(EmbeddedSurfaceId),
 }
 
 /// Identity of a surface embedded in a presentation's window.
 ///
-/// Minted only by [`GestureBinding::embed_surface`](crate::GestureBinding::embed_surface),
+/// Minted only by [`GestureBinding::embed_surface`](crate::binding::GestureBinding::embed_surface),
 /// never reused within that binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EmbeddedSurfaceId(NonZeroU64);

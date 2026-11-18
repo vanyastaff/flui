@@ -11,8 +11,8 @@
 //!
 //! let down = pointer_down(Offset::new(100.0, 100.0), PointerKind::Mouse)?;
 //! let up = pointer_up(Offset::new(100.0, 100.0), PointerKind::Mouse)?;
-//! assert!(matches!(down, flui_interaction::PointerEvent::Down(_)));
-//! assert!(matches!(up, flui_interaction::PointerEvent::Up(_)));
+//! assert!(matches!(down, flui_interaction::events::PointerEvent::Down(_)));
+//! assert!(matches!(up, flui_interaction::events::PointerEvent::Up(_)));
 //! # Ok::<(), flui_platform::pointer::InputValueError>(())
 //! ```
 

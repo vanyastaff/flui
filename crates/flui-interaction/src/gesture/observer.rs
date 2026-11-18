@@ -40,7 +40,7 @@ use crate::gesture::arena::GestureArena;
 ///
 /// The arena queues an observation when it commits the decision and delivers
 /// the queue after the operation that made it: at the end of the outermost
-/// arena call, or, for a [`GestureBinding`](crate::GestureBinding)'s arena,
+/// arena call, or, for a [`GestureBinding`](crate::binding::GestureBinding)'s arena,
 /// when the binding's outermost dispatch returns. No arena or binding borrow is
 /// held while an observer runs, so an observer may call back into either.
 ///
@@ -102,7 +102,7 @@ impl GestureContest {
     }
 
     /// The input sequence the contest decides: the one a
-    /// [`GestureBinding`](crate::GestureBinding) minted at the contact's Down.
+    /// [`GestureBinding`](crate::binding::GestureBinding) minted at the contact's Down.
     /// `None` in an arena no binding drives, whose contacts carry no sequence.
     #[must_use]
     pub const fn sequence(self) -> Option<InputSequenceId> {

@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use flui_foundation::FrameEpoch;
 use flui_foundation::geometry::Offset;
-use flui_interaction::GestureDisposition;
-use flui_interaction::PointerId;
 use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+use flui_interaction::gesture::GestureDisposition;
+use flui_interaction::ids::PointerId;
 use flui_platform::{
     EventTime, GesturePreferences, PlatformInput, RefreshPeriod, SystemPreferences,
 };
@@ -646,7 +646,7 @@ fn password_session(privacy: Privacy) -> (Vec<u8>, Vec<String>) {
 }
 
 fn password_host() -> (HeadlessHost, Rc<RefCell<Vec<String>>>) {
-    use flui_interaction::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_widgets::{EditableText, TextEditingController};
 
     let changes = Rc::new(RefCell::new(Vec::new()));
@@ -917,7 +917,7 @@ fn a_reused_pointer_id_records_two_sequences() {
                 if matches!(
                     row.input,
                     HostInput::Platform(PlatformInput::Pointer(
-                        flui_interaction::PointerEvent::Down(_)
+                        flui_interaction::events::PointerEvent::Down(_)
                     ))
                 ) =>
             {
@@ -1223,7 +1223,7 @@ fn two_members_of_one_type_replay_to_the_right_winner() {
 fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
     use flui_runtime::RecordedSurface;
 
-    fn touch_on(host: &HeadlessHost, surface: flui_interaction::InputSurface, down: bool) {
+    fn touch_on(host: &HeadlessHost, surface: flui_interaction::ids::InputSurface, down: bool) {
         let id = PointerId::try_from(4_u64).expect("nonzero pointer");
         let at = Offset::new(50.0, 50.0);
         let event = if down {
@@ -1281,7 +1281,7 @@ fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
                 if matches!(
                     row.input,
                     HostInput::Platform(PlatformInput::Pointer(
-                        flui_interaction::PointerEvent::Scroll(_)
+                        flui_interaction::events::PointerEvent::Scroll(_)
                     ))
                 ) =>
             {
@@ -1334,7 +1334,7 @@ fn a_recording_replays_under_its_recorded_gesture_values() {
         Duration::from_millis(500)
     );
 
-    let shorter = flui_interaction::GestureSettings::default()
+    let shorter = flui_interaction::gesture::GestureSettings::default()
         .with_long_press_timeout(Duration::from_millis(200));
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut other = host_on(
@@ -1358,8 +1358,8 @@ fn a_recording_replays_under_its_recorded_gesture_values() {
 /// estimator and remainder policy.
 #[test]
 fn header_gesture_values_read_back_exactly() {
+    use flui_interaction::gesture::{GestureProfiles, GestureSettings, RemainderHandoff};
     use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
-    use flui_interaction::{GestureProfiles, GestureSettings, RemainderHandoff};
     use flui_platform::{TargetPlatform, WindowId};
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 

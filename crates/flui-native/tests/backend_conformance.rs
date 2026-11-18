@@ -1489,7 +1489,9 @@ enum X11Reading {
 /// the XInput 2 events the server sends for it, with the devices it lists,
 /// and the keys through the XKB keysym table. Touch and pen are XInput 2's;
 /// a press of a device the server has not listed yet follows the hierarchy
-/// change that lists it.
+/// change that lists it. The real window runs the table from XTest in the
+/// `x11_window` harness (`the_x11_window_input_conforms`), which names the
+/// rows only this decoder holds.
 struct X11Decoder {
     pointers: x11::X11Pointers,
     devices: Vec<x11::DeviceDescription>,

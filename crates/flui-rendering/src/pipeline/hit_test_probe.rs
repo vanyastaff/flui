@@ -10,7 +10,7 @@
 //! thread affinity already live, and implemented here, where the tree is.
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::{HitTestProbe, HitTestResult, InteractionDispatchError};
+use flui_interaction::pointer::{HitTestProbe, HitTestResult, InteractionDispatchError};
 
 use super::{PipelineCell, WeakPipelineCell};
 
@@ -84,7 +84,7 @@ impl HitTestProbe for PipelineHitTestProbe {
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::{Offset, Size};
-    use flui_interaction::{HitTestProbe, HitTestResult, InteractionDispatchError};
+    use flui_interaction::pointer::{HitTestProbe, HitTestResult, InteractionDispatchError};
 
     use super::{PipelineCell, PipelineHitTestProbe};
     use crate::{

@@ -2,7 +2,10 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use flui_interaction::{GestureBinding, HitTestEntry, HitTestResult, InteractionLane, RenderId};
+use flui_interaction::{
+    binding::GestureBinding,
+    pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
+};
 use flui_platform::{
     EventTime,
     pointer::{

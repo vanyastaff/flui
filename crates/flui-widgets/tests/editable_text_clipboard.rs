@@ -557,11 +557,11 @@ pub(crate) fn a_panicking_listener_keeps_the_middle_press_paste() {
 /// Acquires the primary selection in `init_state` and hands the handle out.
 #[derive(Clone)]
 struct PrimaryAcquirer {
-    handle: Rc<std::cell::RefCell<Option<flui_interaction::PrimarySelectionHandle>>>,
+    handle: Rc<std::cell::RefCell<Option<flui_interaction::text_input::PrimarySelectionHandle>>>,
 }
 
 struct PrimaryAcquirerState {
-    handle: Rc<std::cell::RefCell<Option<flui_interaction::PrimarySelectionHandle>>>,
+    handle: Rc<std::cell::RefCell<Option<flui_interaction::text_input::PrimarySelectionHandle>>>,
 }
 
 impl flui_view::StatefulView for PrimaryAcquirer {
@@ -584,7 +584,7 @@ impl flui_view::ViewState<PrimaryAcquirer> for PrimaryAcquirerState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         use flui_view::LifecycleContextExt as _;
         self.handle.replace(
-            ctx.capability::<flui_interaction::PrimarySelectionCapability>()
+            ctx.capability::<flui_interaction::text_input::PrimarySelectionCapability>()
                 .ok(),
         );
     }

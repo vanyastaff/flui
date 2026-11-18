@@ -22,6 +22,9 @@ fn main() {
 // The X11 host's input on the harness's server, through XTest.
 #[cfg(target_os = "linux")]
 mod x11_input;
+// The X11 host's window against the backend conformance table, through XTest.
+#[cfg(target_os = "linux")]
+mod x11_backend_conformance;
 // The native recordings an input session captured are held against.
 #[cfg(all(target_os = "linux", debug_assertions, feature = "native-capture"))]
 mod native_recording;
@@ -226,6 +229,7 @@ mod cases {
         let cases: Vec<(&str, fn())> = CASES
             .iter()
             .chain(crate::x11_input::CASES)
+            .chain(crate::x11_backend_conformance::CASES)
             .copied()
             .chain(recording_cases())
             .collect();
