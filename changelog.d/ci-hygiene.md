@@ -6,6 +6,7 @@
 
 ### Changed
 
-- CI: every pull request that compiles runs the wide lane (every Linux job over the whole
-  workspace, in parallel); the scoped `fast` lane is gone. `miri`, `macos-ci` and `test-windows`
-  now block.
+- CI: every pull request that compiles runs the wide lane (`clippy`, `test` and `public-api` on
+  Linux, in parallel; the nested and feature-gated suites, rustdoc, wasm32 and the platform
+  typechecks run on main, ADR-0370); the scoped `fast` lane is gone. `miri`, `macos-ci` and
+  `test-windows` now block.
