@@ -1074,7 +1074,9 @@ mod tests {
     }
     /// The whole `Info.plist` of a fixed project is the golden, so any key
     /// added, dropped or changed shows as a diff: among them the iPad's own
-    /// orientation list, which multitasking needs in full.
+    /// orientation list, which multitasking needs in full. The build writes
+    /// the keys as JSON and `plutil` converts them to XML, so the golden is
+    /// the same keys rendered as the XML document `plutil` produces.
     #[test]
     fn the_info_plist_matches_its_golden() {
         let mut bundle = crate::build::AppBundle::new("Notes", "com.example.notes".to_owned());
@@ -1089,9 +1091,12 @@ mod tests {
              mime = \"application/x-notes-note\"\nname = \"Note\"\n",
         );
         let plist = application_info_plist(&bundle, &numbers, "15.0", "IOS", &declarations);
+        let serde_json::Value::Object(keys) = &plist else {
+            panic!("the Info.plist is a dictionary");
+        };
         insta::assert_snapshot!(
             "ios_info_plist",
-            serde_json::to_string_pretty(&plist).expect("the plist serializes")
+            crate::build::apple_opening::plist_xml_document(keys)
         );
     }
     #[test]
