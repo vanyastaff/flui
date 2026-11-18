@@ -580,6 +580,28 @@ the change. `const fn` bodies are not mutated.
 
 These runs are not a CI gate.
 
+### A change's own lines
+
+Before the review of a change (AGENTS.md, "Before each push" item 10), the lines it adds or
+changes are mutated and judged by the tests that exercise them:
+
+```bash
+mkdir -p ../mutants-run
+git diff "$(git merge-base HEAD origin/main)" HEAD -- . ':(exclude,glob)**/tests/**' > ../mutants-run/change.diff
+cargo heli exec -- cargo gamma run --workspace --in-diff ../mutants-run/change.diff \
+  --test-package flui-testing --test-package flui-widgets   # each crate whose tests exercise the change
+cp target/cargo-gamma/gamma-report.json ../mutants-run/
+```
+
+The diff leaves out test files: they are not mutated, and cargo-gamma refuses a diff that names
+Rust source it does not mutate rather than report a score for part of the change. The directory
+goes to the review workflow as `mutants`, which uses the run only when `change.diff` is that same
+diff of the reviewed head and the report was written after it. Each survivor reaches the review's
+judge, who confirms it as a missing assertion or rejects it as an equivalent mutant from the code.
+A run over a change of a few hundred lines takes minutes to a quarter of an hour on the dev host
+(16 minutes for 30 mutants of a 13-file change); a trybuild target among the test packages makes
+it take hours, so a run leaves it out with `--exclude-test`.
+
 ## Fuzzing
 
 Code that parses bytes nobody vouches for has two tests of the same

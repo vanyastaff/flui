@@ -131,33 +131,68 @@ for (const since of ['', null]) {
   assert.deepEqual(result.not_kept.map((e) => e.title), ['nit 6'])
 }
 
-// 9. A mutation run over this diff turns each missed mutant into a finding the judge sees, even
-//    when no reader returned; a run over another diff is left out and says so.
-{
-  const mutant = { file: 'crates/a/src/lib.rs', line: 7, mutation: 'replace - with + in f' }
+// 9. A cargo-gamma run over this diff: each survivor is a finding the judge sees; a run that
+//    cannot be trusted (unreadable, refused, over another diff, older than its diff, miscounted)
+//    is left out and says why; survivors past the bound are counted; uncovered and timed-out
+//    mutants are listed, not judged; an empty or null mutants is no run; a path a shell cannot
+//    hold is refused; with no reader back the read is unavailable and the survivors are listed.
+const mutant = (line, mutation = `replace - with + [arith.sub_to_add]`) => ({ file: 'crates/a/src/lib.rs', line, mutation })
+const gamma = (extra = {}) => ({ diff_matches: true, report_is_newer: true, survived_count: 1, survived: [mutant(7)], uncovered: [], timeout: [], error: '', ...extra })
+async function withRun(report, readers = () => ({ findings: [], tried: ['t'] }), mutants = 'D:/m') {
   let judgePrompt = ''
-  const { result } = await run({ mutants: 'D:/m/mutants.out' }, (p, o) => {
+  const out = await run({ mutants }, (p, o) => {
     if (o.label === 'scope') return scope()
-    if (o.label === 'read:mutants') return { diff_matches: true, missed: [mutant], timeout: [], error: '' }
-    if (o.label.startsWith('read:')) return null
+    if (o.label === 'read:mutants') return typeof report === 'function' ? report() : report
+    if (o.label.startsWith('read:')) return readers(o)
     judgePrompt = p
-    return { confirmed: [{ sources: [1], title: 't', severity: 'important', class: 'c', file: mutant.file, line: 7, scenario: 's', verified: 'v', lenses: [] }], rejected: [], not_kept: [] }
-  })
-  assert.equal(result.unavailable, undefined)
-  assert.deepEqual(result.findings.map((f) => [f.n, f.lens, f.line]), [[1, 'mutants', 7]])
-  assert.match(judgePrompt, /No test notices `replace - with \+ in f`/)
-  assert.deepEqual(result.confirmed[0].lenses, ['mutants'])
-  assert.match(result.markdown, /Mutation run: 1 missed\./)
-}
-{
-  const { result } = await run({ mutants: 'D:/m/mutants.out' }, (p, o) => {
-    if (o.label === 'scope') return scope()
-    if (o.label === 'read:mutants') return { diff_matches: false, missed: [{ file: 'x.rs', line: 1, mutation: 'm' }], timeout: [], error: '' }
-    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
     return { confirmed: [], rejected: [], not_kept: [] }
   })
-  assert.equal(result.findings.length, 0)
-  assert.match(result.markdown, /made over another diff .*left out/)
-  assert.match(result.markdown, /Mutation run: over another diff\./)
+  return { ...out, judgePrompt }
+}
+{
+  const { result, judgePrompt } = await withRun(gamma())
+  assert.deepEqual(result.findings.map((f) => [f.n, f.lens, f.line]), [[1, 'mutants', 7]])
+  assert.equal(result.findings[0].evidence, 'D:/m/gamma-report.json')
+  assert.match(judgePrompt, /No test notices `replace - with \+ \[arith\.sub_to_add\]`/)
+  assert.match(judgePrompt, /readers and a mutation run reported/)
+  assert.match(result.markdown, /Mutation run: 1 survived\./)
+}
+for (const [report, label, why] of [
+  [gamma({ error: 'jq: error' }), 'unreadable', /could not be read: jq: error/],
+  [null, 'unreadable', /could not be read: no result/],
+  [() => { throw new Error('budget spent') }, 'unreadable', /could not be read: budget spent/],
+  [gamma({ diff_matches: false }), 'over another diff', /made over another diff .*left out/],
+  [gamma({ report_is_newer: false }), 'older than its diff', /older than its change\.diff/],
+  [gamma({ survived_count: 3 }), 'miscounted', /counts 3 survivors but 1 were read/],
+]) {
+  const { result } = await withRun(report)
+  assert.equal(result.findings.length, 0, label)
+  assert.match(result.markdown, new RegExp(`Mutation run: ${label}\.`))
+  assert.match(result.markdown, why)
+}
+{
+  const many = Array.from({ length: 40 }, (_, i) => mutant(i + 1))
+  const { result } = await withRun(gamma({ survived_count: 52, survived: many, uncovered: [mutant(90, 'u')], timeout: [mutant(91, 't')] }))
+  assert.equal(result.findings.length, 40)
+  assert.match(result.markdown, /12 more survivors are in D:\/m\/gamma-report\.json/)
+  assert.match(result.markdown, /Mutants no test reached: crates\/a\/src\/lib\.rs:90 u/)
+  assert.match(result.markdown, /Mutants the tests timed out on: crates\/a\/src\/lib\.rs:91 t/)
+}
+for (const mutants of ['', null]) {
+  const { result, calls } = await withRun(gamma(), undefined, mutants)
+  assert.equal(result.unavailable, undefined)
+  assert.ok(!calls.includes('read:mutants'))
+  assert.match(result.markdown, /Mutation run: none supplied\./)
+}
+{
+  const { result, calls } = await withRun(gamma(), undefined, "D:/it's")
+  assert.match(result.markdown, /^Independent read unavailable: the mutants path/)
+  assert.equal(calls.length, 0)
+}
+{
+  const { result } = await withRun(gamma(), () => null)
+  assert.match(result.markdown, /^Independent read unavailable: no reader returned/)
+  assert.match(result.markdown, /The mutation run's survivors, unverified, which the author answers:\n- \*\*No test notices/)
+  assert.equal(result.findings.length, 1)
 }
 console.log('all branches behave')

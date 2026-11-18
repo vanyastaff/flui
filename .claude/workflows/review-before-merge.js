@@ -18,9 +18,10 @@ export const meta = {
 //   head      the reviewed commit (default: HEAD)
 //   since     the head an earlier read covered; this read starts from the fix after it
 //   unread    lenses the earlier read could not run; they read the whole change, not the fix
-//   mutants   the directory a cargo-mutants run wrote with `-o` (AGENTS.md "Before each push"
-//             item 10): its `change.diff` is the diff the run took with `--in-diff`, and its
-//             `mutants.out/` the results; each mutant no test caught is a finding
+//   mutants   a directory holding a cargo-gamma run over this change (AGENTS.md "Before each
+//             push" item 10, docs/testing.md "A change's own lines"): `change.diff`, the diff
+//             the run took with `--in-diff`, and `gamma-report.json`, its report copied after
+//             the run; each mutant that survived is a finding
 const opts = args || {}
 const checkout = opts.checkout || '.'
 const notes = []
@@ -89,12 +90,21 @@ const MUTANTS_SCHEMA = {
   type: 'object',
   properties: {
     diff_matches: { type: 'boolean', description: 'whether the run was made over exactly this change' },
-    missed: { type: 'array', items: MUTANT },
+    report_is_newer: { type: 'boolean', description: 'whether the report was written after the diff' },
+    survived_count: { type: 'integer' },
+    survived: { type: 'array', items: MUTANT },
+    uncovered: { type: 'array', items: MUTANT },
     timeout: { type: 'array', items: MUTANT },
     error: { type: 'string', description: 'a file or command that failed, and its error, or empty' },
   },
-  required: ['diff_matches', 'missed', 'timeout', 'error'],
+  required: ['diff_matches', 'report_is_newer', 'survived_count', 'survived', 'uncovered', 'timeout', 'error'],
 }
+
+// The diff a mutation run takes leaves out test files: they are not mutated, and cargo-gamma
+// refuses a diff that names Rust source it does not mutate. docs/testing.md gives the same command.
+const MUTATION_PATHSPEC = `':(exclude,glob)**/tests/**'`
+// The judge verifies each survivor in the source, so their number is bounded; the rest are counted.
+const MAX_MUTANT_FINDINGS = 40
 
 const VERDICT_SCHEMA = {
   type: 'object',
@@ -277,14 +287,15 @@ if (opts.unread !== undefined) {
   }
 }
 
-function unavailable(reason, extra) {
+function unavailable(reason, extra = {}) {
   log(`Independent read unavailable: ${reason}`)
+  const { markdownTail = '', ...rest } = extra
   return {
+    ...rest,
     unavailable: reason,
     confirmed: [],
     rejected: [],
-    markdown: `Independent read unavailable: ${reason}${footer()}`,
-    ...extra,
+    markdown: `Independent read unavailable: ${reason}${markdownTail}${footer()}`,
   }
 }
 
@@ -302,8 +313,10 @@ for (const [name, value] of [['base', baseRef], ['head', headRef], ['since', sin
     return unavailable(`the ${name} ref ${JSON.stringify(value)} cannot be passed to git safely (not a string, a quote, a line break, or a leading dash)`)
   }
 }
-if (opts.mutants !== undefined && (typeof opts.mutants !== 'string' || !QUOTABLE.test(opts.mutants))) {
-  return unavailable(`the mutants path ${JSON.stringify(opts.mutants)} is not a string or holds a quote or a line break`)
+// An empty or null mutants means no run, as an empty since means no earlier read.
+const mutantsDir = opts.mutants === undefined || opts.mutants === null || opts.mutants === '' ? '' : opts.mutants
+if (mutantsDir && (typeof mutantsDir !== 'string' || !QUOTABLE.test(mutantsDir))) {
+  return unavailable(`the mutants path ${JSON.stringify(mutantsDir)} is not a string or holds a quote or a line break`)
 }
 if (typeof checkout !== 'string' || !QUOTABLE.test(checkout)) {
   return unavailable(`the checkout path ${JSON.stringify(checkout)} is not a string or holds a quote or a line break`)
@@ -377,13 +390,17 @@ Your lens: ${lens.focus}`
 
 phase('Read')
 // The mutation run is read beside the readers. It counts only when it was made over this exact
-// change: a run over another diff would report lines this head may not have.
-const mutantsRead = opts.mutants
+// change and finished after the diff was written: a run over another diff reports lines this
+// head may not have, and a report left from an earlier run reports nothing about this one.
+const mutantsRead = mutantsDir
   ? attempt(
-      `Read the results of a cargo-mutants run. Run only these commands, each exactly as written.
-1. diff_matches: whether \`git -C ${dir} diff ${scope.base} ${scope.head} | cmp -s - '${opts.mutants}/change.diff'\` exits 0 (1 is false, an answer; any other exit is an error).
-2. missed: every line of '${opts.mutants}/mutants.out/missed.txt'; timeout: every line of '${opts.mutants}/mutants.out/timeout.txt' (a missing timeout.txt is an empty list). Each line reads "<file>:<line>:<col>: <mutation>".
-When change.diff or missed.txt cannot be read, or cmp fails, put the path or command and its error in "error".`,
+      `Read the report of a cargo-gamma run. Run only these commands, each exactly as written, and copy their output; do not transcribe by hand.
+1. diff_matches: whether \`git -C ${dir} diff ${scope.base} ${scope.head} -- . ${MUTATION_PATHSPEC} | cmp -s - '${mutantsDir}/change.diff'\` exits 0 (1 is false, an answer; any other exit is an error).
+2. report_is_newer: whether \`test '${mutantsDir}/gamma-report.json' -nt '${mutantsDir}/change.diff'\` exits 0.
+3. survived_count: \`jq '[.files[].mutants[] | select(.status == "Survived")] | length' '${mutantsDir}/gamma-report.json'\`
+4. survived: the lines of \`jq -r '.files | to_entries[] | .key as $f | .value.mutants[] | select(.status == "Survived") | "\\($f)\\t\\(.location.start.line)\\t\\(.description) [\\(.mutatorName)]"' '${mutantsDir}/gamma-report.json' | head -n ${MAX_MUTANT_FINDINGS}\`, each split at its two tabs into file, line and mutation.
+5. uncovered and timeout: the same command as 4 with the status "NoCoverage", and then "Timeout", in place of "Survived".
+When a file cannot be read or a command fails, put the command and its error in "error".`,
       { phase: 'Read', label: 'read:mutants', schema: MUTANTS_SCHEMA, model: 'haiku', effort: 'low' },
     )
   : null
@@ -417,60 +434,74 @@ notes.push(
   ...failed.map((f) => `Not read through the ${f.lens} lens (${f.error}). The author reads the diff through it (AGENTS.md, "Before a merge"), and the next read passes it in "unread".`),
   ...done.filter((r) => r.first).map((r) => `The ${r.lens} lens was read again on ${r.model} after ${r.first}.`),
 )
-// A mutant no test caught is a line of the change whose behaviour every test is blind to.
+// A mutant that survived is a changed line whose behaviour every test it reached is blind to.
 let mutation = 'none supplied'
 const mutantFindings = []
-if (!opts.mutants) {
+if (!mutantsDir) {
   notes.push('No mutation run was supplied (AGENTS.md "Before each push" item 10).')
 } else {
   const m = await mutantsRead
-  if (m.error || m.value.error) {
+  const v = m.value
+  if (m.error || v.error) {
     mutation = 'unreadable'
-    notes.push(`The mutation run at ${opts.mutants} could not be read: ${m.error || m.value.error}.`)
-  } else if (!m.value.diff_matches) {
+    notes.push(`The mutation run at ${mutantsDir} could not be read: ${m.error || v.error}.`)
+  } else if (!v.diff_matches) {
     mutation = 'over another diff'
-    notes.push(`The mutation run at ${opts.mutants} was made over another diff than ${scope.base.slice(0, 9)}..${scope.head.slice(0, 9)}; its results were left out.`)
+    notes.push(`The mutation run at ${mutantsDir} was made over another diff than ${scope.base.slice(0, 9)}..${scope.head.slice(0, 9)} without its test files; its results were left out.`)
+  } else if (!v.report_is_newer) {
+    mutation = 'older than its diff'
+    notes.push(`The report at ${mutantsDir} is older than its change.diff, so it is not the run over that diff; its results were left out.`)
+  } else if (v.survived.length !== Math.min(v.survived_count, MAX_MUTANT_FINDINGS)) {
+    mutation = 'miscounted'
+    notes.push(`The mutation report counts ${v.survived_count} survivors but ${v.survived.length} were read; its results were left out, and the author reads gamma-report.json.`)
   } else {
-    mutation = `${m.value.missed.length} missed`
-    for (const x of m.value.missed) {
+    mutation = `${v.survived_count} survived`
+    for (const x of v.survived) {
       mutantFindings.push({
         title: `No test notices \`${x.mutation}\``,
         file: x.file,
         line: x.line,
         state: `the change's line ${x.file}:${x.line} mutated: ${x.mutation}`,
-        operation: 'the test packages of the mutation run ran',
-        wrong_result: 'every test passed (cargo-mutants: missed)',
-        evidence: `${opts.mutants}/missed.txt`,
+        operation: 'the test packages of the mutation run ran against it',
+        wrong_result: 'every test that reached it passed (cargo-gamma: survived)',
+        evidence: `${mutantsDir}/gamma-report.json`,
       })
     }
-    if (m.value.timeout.length) {
-      notes.push(`Mutants the tests timed out on, neither caught nor missed: ${m.value.timeout.map((x) => `${x.file}:${x.line} ${x.mutation}`).join('; ')}.`)
+    if (v.survived_count > MAX_MUTANT_FINDINGS) {
+      notes.push(`${v.survived_count - MAX_MUTANT_FINDINGS} more survivors are in ${mutantsDir}/gamma-report.json than the ${MAX_MUTANT_FINDINGS} the judge was given; the author answers them from the report.`)
     }
+    // A mutant no test reaches may sit in code built only for another target; it is listed for
+    // the author, not judged as a missing test.
+    if (v.uncovered.length) notes.push(`Mutants no test reached: ${v.uncovered.map((x) => `${x.file}:${x.line} ${x.mutation}`).join('; ')}.`)
+    if (v.timeout.length) notes.push(`Mutants the tests timed out on: ${v.timeout.map((x) => `${x.file}:${x.line} ${x.mutation}`).join('; ')}.`)
   }
 }
 
-// With no reader back, a mutation run's findings still go to the judge; with neither, nothing
-// was read.
-if (!done.length && !mutantFindings.length) {
-  return unavailable(`no reader returned (${failed.map((f) => `${f.lens}: ${f.error}`).join('; ')})`, { missing: failed })
+const unverifiedMutants = () => (mutantFindings.length
+  ? `\n\nThe mutation run's survivors, unverified, which the author answers:\n${mutantFindings.map((f) => `- **${f.title}** \`${f.file}:${f.line}\``).join('\n')}`
+  : '')
+// No reader back is no independent read, whatever the mutation run found; its survivors are
+// still listed for the author.
+if (!done.length) {
+  return unavailable(`no reader returned (${failed.map((f) => `${f.lens}: ${f.error}`).join('; ')})`, { missing: failed, findings: mutantFindings, markdownTail: unverifiedMutants() })
 }
 // The script's number and lens come last, so nothing a reader returns can replace them.
 const reported = [
   ...done.flatMap((r) => r.findings.map((f) => ({ ...f, lens: r.lens }))),
   ...mutantFindings.map((f) => ({ ...f, lens: 'mutants' })),
 ].map((f, i) => ({ ...f, n: i + 1 }))
-log(`${reported.length} findings from ${done.length} of ${LENSES.length} readers`)
+log(`${reported.length} findings from ${done.length} of ${LENSES.length} readers and the mutation run (${mutation})`)
 
 phase('Judge')
 const judgePrompt =
-  `You judge the findings ${done.length} independent readers reported on a change to FLUI: ${range}, reviewed head ${scope.head}. ${whereToRead} You have not seen the author's account of the change and need none.
+  `You judge the findings ${done.length} independent readers${mutantFindings.length ? ' and a mutation run' : ''} reported on a change to FLUI: ${range}, reviewed head ${scope.head}. ${whereToRead} You have not seen the author's account of the change and need none.
 
 For each finding:
 1. Merge it with the others that share its root cause; keep the clearest scenario and list every lens that reported it.
 2. Verify it in the source at the reviewed head: open the cited lines and follow the scenario. It is rejected only when a line or a test shows the scenario cannot happen; name that line. That it seems unlikely is not a rejection.
 3. Rank it by REVIEW.md "What Important means here": important, or nit. Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
 
-A finding from the "mutants" lens is a change cargo-mutants made to one line of the diff that every test passed with. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant), and say why from the code.
+A finding from the "mutants" lens is a change cargo-gamma made to one line of the diff that every test reaching it passed with. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant), and say why from the code.
 
 Every finding is numbered ("n"). Each entry of "confirmed", "rejected" and "not_kept" lists in "sources" the numbers it accounts for, and every number appears in one of them.
 
@@ -503,7 +534,7 @@ if (judged.error) {
 
 const lensLine = `Lenses read: ${done.map((r) => `${r.lens} (${r.model})`).join(', ')}${failed.length ? `; not read: ${failed.map((f) => f.lens).join(', ')}` : ''}. Mutation run: ${mutation}. Judge: ${judge || 'none'}.`
 // Reader findings keep the readers' numbers, labelled so they never read as the judge's list.
-const readerFindingLine = (f) => `- reader finding ${f.n}: **${f.title}** — ${f.state}; ${f.operation}; ${f.wrong_result}. \`${f.file}:${f.line}\` (${f.lens})`
+const readerFindingLine = (f) => `- ${f.lens === 'mutants' ? 'mutation' : 'reader'} finding ${f.n}: **${f.title}** — ${f.state}; ${f.operation}; ${f.wrong_result}. \`${f.file}:${f.line}\` (${f.lens})`
 const nothingFound = done
   .filter((r) => !r.findings.length)
   .map((r) => `The ${r.lens} lens found nothing; it tried: ${r.tried.join(' | ')}`)

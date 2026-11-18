@@ -301,12 +301,10 @@ with an answer you can point to in the code; the reviewers ask the same ones.
 9. **Arithmetic.** No overflow in intermediate values, no non-finite geometry published, units,
    clocks and 0- versus 1-based indexes match.
 10. **The test fails without the change.** Each changed line of Rust is broken on purpose and
-    some test must notice: in a checkout nobody edits while it runs (it rewrites the sources in
-    place and restores them), save the diff as `<dir>/change.diff` and run
-    `cargo heli exec -- cargo mutants --workspace --in-diff <dir>/change.diff --in-place
-    --test-tool nextest --test-package <each changed crate> -o <dir>`. A mutant it reports missed
-    is a line no test pins: add the test through the public API, or show from the code that the
-    mutation changes nothing. `<dir>` goes to the review as the workflow's `mutants`. A fix of a
+    some test must notice: a cargo-gamma run over the change's own lines
+    ([testing](docs/testing.md#a-changes-own-lines)). A mutant that survives is a line no test
+    pins: add the test through the public API, or show from the code that the mutation changes
+    nothing. The run's directory goes to the review as the workflow's `mutants`. A fix of a
     regression is also taken out by hand (a WIP commit, then the fix reverted in the working
     tree) to see its new test fail.
 11. **Repository rules.** A generic-return call names its target type, a new `pub` item has a
