@@ -5,9 +5,7 @@
 //! delivery is skipped, a dispose stops the tail, and a listener's panic is
 //! contained so the rest still run; the first failure is resumed after the
 //! round (ADR-0287). [`ChangeNotifier`](super::ChangeNotifier) is a
-//! `Notifier<()>` with its own use-after-dispose message and a
-//! `remove_listener` that tolerates a disposed receiver
-//! ([`Notifier::remove_even_if_disposed`]).
+//! `Notifier<()>` with its own use-after-dispose message.
 
 use crate::panic::RecoveryScope;
 use std::{
@@ -361,20 +359,12 @@ impl<Arg> Notifier<Arg> {
         false
     }
 
-    /// Register a listener; returns its id.
-    pub fn add(&self, listener: NotifierCallback<Arg>) -> ListenerId {
-        if self.check_disposed() {
-            return self.mint_id();
-        }
-        self.add_unchecked(listener)
-    }
-
     /// Subscribe with an owned [`Subscription`](crate::notifier::Subscription):
     /// hold it, and the listener fires; drop it, and the listener detaches
     /// from this channel.
     ///
-    /// A removed-mid-notify listener is skipped for the rest of its round, as
-    /// [`remove`](Self::remove) says; a subscription is no different. On a
+    /// A listener detached mid-notify is skipped for the rest of its round and
+    /// retired at its tail. On a
     /// disposed channel the subscription detaches quietly: the list is empty
     /// and the id it carries names nothing.
     ///
@@ -402,7 +392,11 @@ impl<Arg> Notifier<Arg> {
     where
         Arg: 'static,
     {
-        let id = self.add(listener);
+        let id = if self.check_disposed() {
+            self.mint_id()
+        } else {
+            self.add_unchecked(listener)
+        };
         let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
@@ -424,7 +418,7 @@ impl<Arg> Notifier<Arg> {
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
 
-    /// [`Self::add`] without the disposed gate — for wrappers
+    /// A user listener's admission without the disposed gate — for wrappers
     /// (`ChangeNotifier`) that run their own differently-branded entry check
     /// first. A second gate here would turn a `dispose` racing in between the
     /// wrapper's check and this call into a generically-worded debug panic,
@@ -444,7 +438,9 @@ impl<Arg> Notifier<Arg> {
     }
 
     /// Register a [`RecoveryCallback`] in the same ordered notification channel
-    /// as [`add`](Self::add).
+    /// as [`subscribe`](Self::subscribe), withdrawn by its id through
+    /// [`take_callback`](Self::take_callback): the custody form a custom
+    /// source's recovery-aware subscription is built on.
     pub fn add_with_recovery(&self, listener: RecoveryCallback<Arg>) -> ListenerId {
         if self.check_disposed() {
             return self.mint_id();
@@ -474,34 +470,12 @@ impl<Arg> Notifier<Arg> {
         mutate(&mut self.listeners.entries.borrow_mut())
     }
 
-    /// Remove a previously registered listener. No-op if absent.
-    ///
-    /// Unlike `ChangeNotifier::remove_listener` (which tolerates post-dispose
-    /// removal), this generic notifier keeps its disposed gate.
-    /// The tolerant behaviour lives in [`Self::remove_even_if_disposed`],
-    /// which `ChangeNotifier` delegates to.
-    pub fn remove(&self, id: ListenerId) {
-        if self.check_disposed() {
-            return;
-        }
-        self.retire_removed(id, self.extract_locked(|listeners| listeners.withdraw(id)));
-    }
-
-    /// [`Self::remove`] without the disposed gate: always a silent no-op on a
-    /// disposed channel (whose listener list is already empty).
-    ///
-    /// This is the flavour `ChangeNotifier::remove_listener` needs, so that
-    /// teardown code can always detach without tripping a use-after-dispose
-    /// check.
-    pub fn remove_even_if_disposed(&self, id: ListenerId) {
-        self.retire_removed(id, self.extract_locked(|listeners| listeners.withdraw(id)));
-    }
-
     /// Withdraw a registration without destroying its callback: the caller
     /// retires the returned envelope through its recovery scope, after
     /// [`inherit_failure`](Self::inherit_failure). This is the removal half of a
-    /// custom source's recovery-aware subscription; [`remove`](Self::remove)
-    /// drops the callback under its own scope instead.
+    /// custom source's recovery-aware subscription; a
+    /// [`Subscription`](crate::notifier::Subscription)'s detach drops the
+    /// callback under the channel's own scope instead.
     #[must_use]
     pub fn take_callback(&self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
         self.extract_locked(|listeners| listeners.withdraw(id))
@@ -593,16 +567,6 @@ impl<Arg> Notifier<Arg> {
             return;
         }
         self.retire_removed_map(self.extract_locked(std::mem::take));
-    }
-
-    fn retire_removed(&self, id: ListenerId, callback: Option<OwnedCallback<Arg>>) {
-        if self.listeners.delivery_depth.get() != 0 {
-            if let Some(callback) = callback {
-                self.listeners.retiring().removed.push((id, callback));
-            }
-        } else {
-            drop(callback);
-        }
     }
 
     fn retire_removed_map(&self, callbacks: Listeners<Arg>) {
@@ -783,13 +747,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::notifier::Subscription;
 
     fn panicking_listener_does_not_abort_rest() {
         let n: Notifier<()> = Notifier::new();
         let ran = Rc::new(AtomicUsize::new(0));
-        let _ = n.add(Rc::new(|&()| panic!("boom")));
+        let _failing = n.subscribe(Rc::new(|&()| panic!("boom")));
         let r = Rc::clone(&ran);
-        let _ = n.add(Rc::new(move |&()| {
+        let _counting = n.subscribe(Rc::new(move |&()| {
             r.fetch_add(1, Ordering::SeqCst);
         }));
         let failure = catch_unwind(AssertUnwindSafe(|| n.notify(&())))
@@ -801,25 +766,23 @@ mod tests {
     fn removed_during_notify_is_skipped() {
         let n: Notifier<()> = Notifier::new();
         let fired_b = Rc::new(AtomicUsize::new(0));
-        let id_b_cell = Rc::new(RefCell::new(None::<ListenerId>));
-        let n2 = n.clone();
-        let cell2 = Rc::clone(&id_b_cell);
-        let id_a = n.add(Rc::new(move |&()| {
-            let id = *cell2.borrow_mut();
-            if let Some(id) = id {
-                n2.remove(id);
+        let held_b = Rc::new(RefCell::new(None::<Subscription>));
+        let detach_b = Rc::clone(&held_b);
+        let a = n.subscribe(Rc::new(move |&()| {
+            let taken = detach_b.borrow_mut().take();
+            if let Some(subscription) = taken {
+                subscription.detach();
             }
         }));
         let fb = Rc::clone(&fired_b);
-        let id_b = n.add(Rc::new(move |&()| {
+        let b = n.subscribe(Rc::new(move |&()| {
             fb.fetch_add(1, Ordering::SeqCst);
         }));
-        let _prev = id_b_cell.borrow_mut().replace(id_b);
+        let _none = held_b.borrow_mut().replace(b);
         n.notify(&());
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
-        // The first listener holds a clone of the notifier: removing it breaks
-        // the cycle, so the list and both listeners are freed.
-        n.remove(id_a);
+        drop(a);
+        assert!(n.is_empty(), "both listeners detached");
     }
 
     /// Withdrawing leaves no listener behind and none out of order, across
@@ -827,10 +790,10 @@ mod tests {
     fn withdrawals_keep_the_rest_in_registration_order() {
         let n: Notifier<()> = Notifier::new();
         let fired = Rc::new(RefCell::new(Vec::<usize>::new()));
-        let ids: Vec<ListenerId> = (0..64_usize)
+        let mut subscriptions: Vec<Option<Subscription>> = (0..64_usize)
             .map(|index| {
                 let fired = Rc::clone(&fired);
-                n.add(Rc::new(move |&()| fired.borrow_mut().push(index)))
+                Some(n.subscribe(Rc::new(move |&()| fired.borrow_mut().push(index))))
             })
             .collect();
         let mut expected: Vec<usize> = (0..64).collect();
@@ -839,8 +802,9 @@ mod tests {
             .chain((20..60).step_by(3))
             .chain((60..64).rev());
         for index in order {
-            n.remove(ids[index]);
-            n.remove(ids[index]);
+            if let Some(subscription) = subscriptions[index].take() {
+                subscription.detach();
+            }
             expected.retain(|kept| *kept != index);
             assert_eq!(n.len(), expected.len());
             fired.borrow_mut().clear();
@@ -849,7 +813,7 @@ mod tests {
             assert_eq!(n.listener_ids().len(), expected.len());
         }
         let late = Rc::clone(&fired);
-        let _ = n.add(Rc::new(move |&()| late.borrow_mut().push(usize::MAX)));
+        let _late = n.subscribe(Rc::new(move |&()| late.borrow_mut().push(usize::MAX)));
         fired.borrow_mut().clear();
         n.notify(&());
         assert_eq!(fired.borrow().last(), Some(&usize::MAX));

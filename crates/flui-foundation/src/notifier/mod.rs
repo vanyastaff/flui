@@ -126,28 +126,27 @@ pub trait ValueListenable<T>: Listenable {
 ///
 /// # Disposal
 ///
-/// After [`dispose`] has been called, [`add_listener`] and
+/// After [`dispose`] has been called, a registration and
 /// [`notify_listeners`] panic in debug builds via `debug_assert!` and
 /// degrade to a `tracing::warn!` + no-op in release builds.
 ///
-/// [`remove_listener`] is the deliberate exception: it carries no disposed
-/// check in either build profile, so that teardown code can detach from an
-/// already-disposed listenable. It is always a silent no-op
-/// once disposed (the listener map is already empty).
+/// Withdrawal is the deliberate exception: a [`Subscription`]'s detach and
+/// [`remove_all_listeners`] carry no disposed check in either build profile,
+/// so that teardown code can detach from an already-disposed listenable. They
+/// are a silent no-op once disposed (the listener map is already empty).
 ///
 /// `is_disposed` is shared across clones via `Rc<Cell<bool>>` so that a
 /// listener-callback holding its own clone sees disposal performed elsewhere.
 ///
 /// [`dispose`]: ChangeNotifier::dispose
-/// [`add_listener`]: ChangeNotifier::add_listener
 /// [`notify_listeners`]: ChangeNotifier::notify_listeners
-/// [`remove_listener`]: ChangeNotifier::remove_listener
+/// [`remove_all_listeners`]: ChangeNotifier::remove_all_listeners
 #[derive(Clone)]
 pub struct ChangeNotifier {
     /// The shared notification core — `ChangeNotifier` IS `Notifier<()>`
     /// plus its own seams: the `ChangeNotifier`-branded
-    /// use-after-dispose message, and `remove_listener` tolerating a
-    /// disposed receiver. The snapshot/ordering/`catch_unwind` firing
+    /// use-after-dispose message, and withdrawal tolerating a disposed
+    /// receiver. The snapshot/ordering/`catch_unwind` firing
     /// discipline lives once, in [`Notifier::notify`].
     inner: Notifier<()>,
 }
@@ -193,10 +192,10 @@ impl ChangeNotifier {
     /// Discards listeners and marks this notifier as disposed.
     ///
     /// After this is called, the notifier is not in a usable state:
-    /// subsequent calls to [`add_listener`] or [`notify_listeners`] panic in
-    /// debug builds via `debug_assert!` and degrade to a `tracing::warn!` +
-    /// no-op in release builds. [`remove_listener`] is the deliberate
-    /// exception — it stays a silent no-op after dispose.
+    /// a later registration or [`notify_listeners`] panics in debug builds
+    /// via `debug_assert!` and degrades to a `tracing::warn!` + no-op in
+    /// release builds. Withdrawal is the deliberate exception: it stays a
+    /// silent no-op after dispose.
     ///
     /// Disposal does NOT notify listeners; consumers must decide whether to notify before
     /// calling `dispose`.
@@ -207,17 +206,15 @@ impl ChangeNotifier {
     /// to call `dispose` on its own clone (the snapshot-then-fire path in
     /// [`notify_listeners`] makes this reentrancy-safe).
     ///
-    /// [`add_listener`]: ChangeNotifier::add_listener
     /// [`notify_listeners`]: Self::notify_listeners
-    /// [`remove_listener`]: ChangeNotifier::remove_listener
     pub fn dispose(&self) {
         self.inner.dispose();
     }
 
     /// Withdraw a subscription without destroying its callback: the caller
     /// retires the returned envelope through its recovery scope, after
-    /// [`inherit_failure`](Self::inherit_failure). `remove_listener` drops it
-    /// instead, deferred to the end of an active delivery.
+    /// [`inherit_failure`](Self::inherit_failure). A [`Subscription`]'s detach
+    /// drops it instead, deferred to the end of an active delivery.
     #[must_use]
     pub fn take_listener(&self, id: ListenerId) -> Option<Rc<NotificationCallback<()>>> {
         self.inner.take_callback(id)
@@ -288,7 +285,7 @@ impl ChangeNotifier {
     ///   state borrow is held across invocation or capture retirement.
     /// - Before each callback fires, the listener's registration is re-checked.
     ///   If the listener was removed during notify (e.g. a previous callback
-    ///   called `remove_listener`), the callback is silently skipped. A
+    ///   detached its subscription), the callback is silently skipped. A
     ///   listener removed mid-iteration does NOT fire.
     /// - Each callback is wrapped in `catch_unwind(AssertUnwindSafe(|| ...))`.
     ///   If a callback panics, the panic payload is logged via
@@ -396,18 +393,9 @@ impl Listenable for ChangeNotifier {
 }
 
 impl ChangeNotifier {
-    /// The channel's own registration of a plain callback, for owners that
-    /// withdraw through [`take_listener`](Self::take_listener)'s id — the
-    /// channel-level machinery the trait's `listen`-pair wraps.
-    pub fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        if self.check_disposed() {
-            return self.inner.mint_id();
-        }
-        self.inner.add_plain_unchecked(listener)
-    }
-
-    /// The channel's own registration of a relay, whose id the channel's
-    /// `take_callback` machinery withdraws (ADR-0219's channel level).
+    /// The channel's own registration of a relay, withdrawn by its id through
+    /// [`take_listener`](Self::take_listener) (ADR-0219's channel level): the
+    /// custody form a custom source's recovery-aware subscription is built on.
     pub fn add_with_recovery(&self, relay: ListenerObserver) -> ListenerId {
         if self.check_disposed() {
             return self.inner.mint_id();
@@ -416,17 +404,8 @@ impl ChangeNotifier {
             .add_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
     }
 
-    /// The channel's own tolerant withdrawal: a no-op on a disposed channel
-    /// (its table is empty), so an owner's teardown or a
-    /// [`Subscription`]'s replacement can always detach. Owned callers hold a
-    /// [`Subscription`] instead; this is the channel-level machinery an owner
-    /// of the whole channel retires its own registrations through.
-    pub fn remove_listener(&self, id: ListenerId) {
-        self.inner.remove_even_if_disposed(id);
-    }
-
-    /// Withdraw every listener with the tolerance of
-    /// [`remove_listener`](Self::remove_listener).
+    /// Withdraw every listener; a no-op on a disposed channel, whose table is
+    /// already empty.
     pub fn remove_all_listeners(&self) {
         self.inner.remove_all_unchecked();
     }

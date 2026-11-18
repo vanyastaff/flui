@@ -40,8 +40,8 @@
 //! let key = UniqueKey::new();
 //!
 //! // Observable values for reactive UI
-//! let mut notifier = ChangeNotifier::new();
-//! let listener_id = notifier.add_listener(Rc::new(|| {
+//! let notifier = ChangeNotifier::new();
+//! let subscription = notifier.listen(Rc::new(|| {
 //!     // react to the change (e.g. mark a widget dirty)
 //! }));
 //!

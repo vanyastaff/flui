@@ -124,7 +124,7 @@ impl Animation<f64> for ReentrantParent {
         &self,
         observer: flui_animation::StatusObserver,
     ) -> flui_animation::StatusSubscription {
-        let id = self.statuses.add_listener(Rc::new(move || {
+        let id = self.statuses.add_with_recovery(Rc::new(move |_recovery| {
             let _keep = &observer;
         }));
         flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
