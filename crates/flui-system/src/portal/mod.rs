@@ -258,7 +258,7 @@ impl AppName {
     }
 
     /// A scenario's name for the application.
-    #[cfg(feature = "testing")]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn scripted(id: &str) -> Self {
         Self(id.into())
     }
@@ -645,5 +645,19 @@ pub(crate) fn register(
     let dirs = configure;
     registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
+    });
+    // No portal shows a message box or a share sheet, and the jump list is
+    // Windows': refused for good, never faked.
+    refuse_for_good::<crate::dialog::MessageBoxCapability>(registrar);
+    refuse_for_good::<crate::share::ShareCapability>(registrar);
+    refuse_for_good::<crate::jump_list::JumpListCapability>(registrar);
+}
+
+/// Provide `C` as a refusal with `NotOnThisPlatform`.
+fn refuse_for_good<C: flui_platform::capability::Capability>(registrar: &mut CapabilityRegistrar) {
+    registrar.provide::<C>(|_: &ProviderContext<'_>| {
+        Err::<C::Handle, _>(Unsupported::of::<C>(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
     });
 }
