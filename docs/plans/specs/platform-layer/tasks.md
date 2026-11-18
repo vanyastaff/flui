@@ -7992,7 +7992,8 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
-- [x] **LY145** — ветки `testing/headless-fidelity` и `runtime/owner-turn-steps`. Построено: `HeadlessHost` закрывает окно, которое переживает другое, через
+- [x] **LY145** — ветки `testing/headless-fidelity` и `runtime/owner-turn-steps`. Построено:
+  `HeadlessHost` закрывает окно, которое переживает другое, через
   `close_presentation_entered` (фокус ОС переходит к выжившему), последнее закрытие роняет
   `UiRuntime`, и удержанные ответы кончаются `OwnerRetired`; `UiRuntime::stop_presentation_for_test`
   удалён; встроенные возможности — как у runner (primary selection только на Linux, сценарный HTTP
