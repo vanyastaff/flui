@@ -1285,6 +1285,12 @@ impl crate::host_window::HostWindow for MacOSWindow {
             .window_text_input()
             .and_then(crate::text::WindowTextInput::store_host)
     }
+
+    /// The window server composites every window and shows a covered one's
+    /// last frame again the moment it is uncovered.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Kept
+    }
 }
 
 /// What the macOS windows open with: the table's window-level positions and

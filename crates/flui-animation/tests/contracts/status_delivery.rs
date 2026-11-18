@@ -5,6 +5,7 @@
 //!
 //! The delivery and recovery rows run in the ordinary suite.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -283,16 +284,17 @@ fn panicking_status_listener_leaves_the_next_frame_ticking() {
 // --- the Vsync walk ------------------------------------------------------------
 
 fn vsync_walk_ticks_siblings_after_a_panicking_controller() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let _first = running(&vsync, Some("first"));
     let _second = running(&vsync, Some("second"));
     let sibling = running(&vsync, None);
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
 
     let walk = catch_unwind(AssertUnwindSafe(|| {
-        vsync.tick_all(
+        driver.tick_all(
             &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
         );
     }));
@@ -311,17 +313,18 @@ fn vsync_walk_ticks_siblings_after_a_panicking_controller() {
 }
 
 fn vsync_walk_ticks_the_parent_after_a_panicking_child_registry() {
-    let parent = Vsync::new();
+    let driver = VsyncDriver::new();
+    let parent = driver.vsync().clone();
     let own = running(&parent, None);
     let child = Vsync::new();
     let _child = parent.attach_child(&child).expect("child attaches");
     let _failing = running(&child, Some("child"));
-    parent.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
 
     let walk = catch_unwind(AssertUnwindSafe(|| {
-        parent.tick_all(
+        driver.tick_all(
             &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
         );
     }));
@@ -336,19 +339,20 @@ fn vsync_walk_ticks_the_parent_after_a_panicking_child_registry() {
 }
 
 fn vsync_walk_after_a_panic_ticks_every_controller() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let failing = running(&vsync, Some("once"));
     let sibling = running(&vsync, None);
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        vsync.tick_all(
+        driver.tick_all(
             &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
         );
     }));
 
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.75)),
     );
 
@@ -1116,7 +1120,8 @@ fn peer_failure_drops_removed_value_captures() {
 }
 
 fn removed_value_capture_custody(mode: &str) {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let mut peer_owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let peer = peer_owner.controller().clone();
@@ -1187,11 +1192,11 @@ fn removed_value_capture_custody(mode: &str) {
         controller.forward().expect("run admitted");
         if mode == "peer" {
             peer.forward().expect("peer run admitted");
-            vsync.tick_all(
+            driver.tick_all(
                 &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
             );
             catch_unwind(AssertUnwindSafe(|| {
-                vsync.tick_all(
+                driver.tick_all(
                     &flui_animation::MotionClock::new()
                         .frame(std::time::Duration::from_secs_f64(0.5)),
                 );
@@ -1435,7 +1440,8 @@ fn child_failure_drops_the_parents_run_captures() {
 }
 
 fn frame_failure_drops_run_captures(nested: bool) {
-    let parent = Vsync::new();
+    let driver = VsyncDriver::new();
+    let parent = driver.vsync().clone();
     let child = Vsync::new();
     let _child = nested.then(|| parent.attach_child(&child).expect("child registry"));
     let failing_owner = AnimationController::builder(Duration::from_secs(1))
@@ -1448,11 +1454,11 @@ fn frame_failure_drops_run_captures(nested: bool) {
     let sibling = sibling_owner.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = install_capturing_continuation(&sibling, &drops);
-    parent.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        parent.tick_all(
+        driver.tick_all(
             &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
         );
     }))
@@ -1462,10 +1468,10 @@ fn frame_failure_drops_run_captures(nested: bool) {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 2);
     let _reverse = sibling.reverse().expect("sibling reverses");
-    parent.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
-    parent.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(2.0)),
     );
     assert_eq!(sibling.value(), 0.0);

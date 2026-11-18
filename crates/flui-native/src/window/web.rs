@@ -1275,6 +1275,11 @@ impl WebWindow {
 }
 
 impl crate::host_window::HostWindow for WebWindow {
+    /// A hidden page gets no animation frames, and the browser tells no covering.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
+
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         self.facets
             .borrow()

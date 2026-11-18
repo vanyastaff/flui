@@ -62,7 +62,10 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
     /// called on the raster thread once a turn wrote a settlement or moved
     /// the device's health, with no lock held and contained. A slot holds
     /// two settlements undrained, so a frame presents while the owner builds
-    /// the next.
+    /// the next. `owner_wait` is the platform's wait for the owner's waits on
+    /// the thread (an attach, a detach, the stop), where it has one
+    /// ([`flui_platform::OwnerWait`]): the thread notifies it after each turn
+    /// and once it stopped.
     ///
     /// # Errors
     /// The operating system's refusal to start the thread; the backend is
@@ -71,15 +74,23 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
         backend: B,
         clock: Arc<dyn MonotonicClock + Send + Sync>,
         wake: impl Fn() + Send + 'static,
+        owner_wait: Option<Arc<dyn flui_platform::OwnerWait>>,
     ) -> std::io::Result<(ExecutorHandle, RasterSender)> {
         let (lifecycle_tx, lifecycle) = bounded(LIFECYCLE_CAPACITY);
-        let shared = Arc::new(Shared::threaded(lifecycle_tx));
+        let shared = Arc::new(Shared::threaded(lifecycle_tx, owner_wait));
         let sender = RasterSender::new(Arc::clone(&shared));
         let (stopped_tx, stopped) = bounded(1);
         let served = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name(THREAD_NAME.to_owned())
             .spawn(move || {
+                // Told when the thread ends, an unwind past its last line
+                // included, so an owner waiting through the platform's wait
+                // learns of it then.
+                let told = StopTold {
+                    stopped: stopped_tx,
+                    shared: Arc::clone(&served),
+                };
                 // Shared on this thread only: the executor's turns wake
                 // through it, and so does a failure no turn reports.
                 let wake: Rc<dyn Fn()> = Rc::new(wake);
@@ -116,8 +127,7 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
                 let mut released = FirstPanic::new();
                 released.contain(move || drop(wake));
                 let _held = hand_over(released, &served);
-                // The owner may have stopped waiting; nobody to tell then.
-                let _told = stopped_tx.send(());
+                drop(told);
             })?;
         Ok((
             ExecutorHandle {
@@ -127,6 +137,22 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
             },
             sender,
         ))
+    }
+}
+
+/// Tells the owner the raster thread ended, as the thread's last act or as
+/// it unwinds: the stop channel answers, and an owner waiting through the
+/// platform's wait is notified.
+struct StopTold {
+    stopped: crossbeam_channel::Sender<()>,
+    shared: Arc<Shared>,
+}
+
+impl Drop for StopTold {
+    fn drop(&mut self) {
+        // The owner may have stopped waiting; nobody to tell then.
+        let _told = self.stopped.send(());
+        let _held = self.shared.note_turn();
     }
 }
 
@@ -146,7 +172,7 @@ fn serve<B: RasterBackend>(
         let mut caught = FirstPanic::new();
         let _outcome = caught.contain(|| executor.turn());
         owed |= hand_over(caught, shared);
-        shared.note_turn();
+        owed |= shared.note_turn();
         let due = rebuild_due_in(&executor, shared, &mut owed);
         if std::mem::take(&mut owed) {
             wake_owner(wake, shared);
@@ -157,11 +183,12 @@ fn serve<B: RasterBackend>(
     caught.contain(|| executor.shut_down());
     caught.contain(|| drop(executor));
     // A failure owed from before a stop that came ahead of the first turn is
-    // woken for here.
-    if hand_over(caught, shared) || owed {
+    // woken for here, and so is a panic of the platform's wait the last
+    // notification raised.
+    let owed = hand_over(caught, shared) || owed;
+    if shared.note_turn() || owed {
         wake_owner(wake, shared);
     }
-    shared.note_turn();
 }
 
 /// Give a contained panic to the owner as its text; answers whether it is
@@ -342,7 +369,7 @@ impl ExecutorHandle {
             return Ok(());
         };
         self.shared.shut_down();
-        match self.stopped.recv_timeout(timeout) {
+        match self.await_stop(timeout) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => {
                 // The thread ran its last line or unwound past it; either way
                 // it is ending, and its panic was contained.
@@ -354,6 +381,31 @@ impl ExecutorHandle {
                 drop(thread);
                 Err(self.die(timeout))
             }
+        }
+    }
+
+    /// Wait for the thread to tell its stop, at most `timeout`: through the
+    /// platform's wait where it has one, which serves what the owner thread
+    /// owes meanwhile (a stop's detaches can send it a message), and on the
+    /// stop channel otherwise.
+    fn await_stop(&self, timeout: Duration) -> Result<(), RecvTimeoutError> {
+        let Some(wait) = self.shared.owner_wait() else {
+            return self.stopped.recv_timeout(timeout);
+        };
+        let started = std::time::Instant::now();
+        loop {
+            match self.stopped.try_recv() {
+                Ok(()) => return Ok(()),
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    return Err(RecvTimeoutError::Disconnected);
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+            }
+            let waited = started.elapsed();
+            if waited >= timeout {
+                return Err(RecvTimeoutError::Timeout);
+            }
+            wait.wait(timeout.saturating_sub(waited));
         }
     }
 

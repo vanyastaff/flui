@@ -1373,6 +1373,11 @@ impl crate::host_window::CoreHostWindow for WindowsWindow {
 }
 
 impl crate::host_window::HostWindow for WindowsWindow {
+    /// Win32 tells no covering (ADR-0357 §2).
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
+
     /// The window's own bridge — the capability the composition root's
     /// accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {

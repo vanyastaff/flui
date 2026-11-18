@@ -643,9 +643,10 @@ pub(crate) enum WindowStep {
     ScaleApplied,
     /// A system setting changed.
     SettingChanged,
-    /// The user's session locked (`true`) or unlocked: a locked session
-    /// hides every window, whatever its surface.
-    SessionLocked(bool),
+    /// The user's session locked or unlocked, lost its display or got it
+    /// back: a locked or disconnected session hides every window, whatever
+    /// its surface.
+    Session(crate::lifecycle::windows::messages::SessionChange),
     /// It holds the pointer in place (`true`), registered for the mouse's raw
     /// input, or let it go: its input reads `WM_INPUT` as the locked
     /// pointer's motion while it holds it, and delivers no mouse moves.

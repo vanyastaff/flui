@@ -66,8 +66,10 @@ impl SceneVersionId {
 
 /// Which recording of a chunk this is (ADR-0304 §2).
 ///
-/// A chunk keeps its content version while its render object owes no paint
-/// work and its recording inputs are unchanged, and takes the next one
+/// A chunk of a repainted boundary keeps its content version when the paint
+/// that seals it records what the boundary's previous paint recorded there,
+/// which the paint walk reads from its render object's flags and its
+/// ancestors' in the boundary (ADR-0304 §2), and takes the next one
 /// otherwise; a content version from another owner, or from before a
 /// [`renew`](super::SceneOwner::renew), carries another lineage and never
 /// compares equal.

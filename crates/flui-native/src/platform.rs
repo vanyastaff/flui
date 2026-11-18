@@ -457,6 +457,14 @@ pub trait Platform: sealed::Sealed + 'static {
     /// handle, and headless answers none.
     fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection>;
 
+    /// How the windows' thread waits for a raster thread of the application
+    /// (ADR-0305 §9): `None` where a plain wait does, and on Win32 a wait
+    /// that serves the messages the raster thread's DXGI calls send to the
+    /// windows meanwhile.
+    fn owner_wait(&self) -> Option<Arc<dyn flui_platform::OwnerWait>> {
+        None
+    }
+
     // ==================== Platform Info ====================
 
     /// Get the platform's name for debugging/logging
@@ -686,6 +694,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection> {
         H::Window::display_connection(&self.owner, &self.window_shared)
+    }
+
+    fn owner_wait(&self) -> Option<Arc<dyn flui_platform::OwnerWait>> {
+        H::Window::owner_wait(&self.owner, &self.window_shared)
     }
 
     fn name(&self) -> &'static str {

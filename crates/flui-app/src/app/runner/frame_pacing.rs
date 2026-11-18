@@ -33,11 +33,12 @@ pub(super) enum WakeAction {
     Skip,
 }
 
-/// Decides what a platform wake should do, given the scheduler's
-/// [`UpdateScheduler::frames_enabled`](flui_scheduler::UpdateScheduler::frames_enabled) fact (ADR-0035) alongside the pre-existing
-/// dirty/frame-requested signals.
+/// Decides what a platform wake should do, given whether the runtime runs
+/// frames ([`UiRuntime::runs_frames`](flui_runtime::ui_runtime::UiRuntime::runs_frames):
+/// the scheduler's frames are enabled, ADR-0035, or a covered window owes its
+/// surface a frame, ADR-0357) alongside the dirty/frame-requested signals.
 ///
-/// `frames_enabled == false` takes priority over everything else — even
+/// `frames_run == false` takes priority over everything else — even
 /// with visual `dirty` work pending, a backgrounded app services owner commands,
 /// async tasks, and input deadlines without running a visual frame. The
 /// mid-frame owner-task poll inside `handle_begin_frame` does not run in
@@ -53,7 +54,7 @@ pub(super) enum WakeAction {
 /// `Vsync`, and a pump that leaves one running re-requests a frame through
 /// `wake_frame`, which sets `needs_redraw`.
 pub(super) fn wake_action(
-    frames_enabled: bool,
+    frames_run: bool,
     dirty: bool,
     frame_scheduled: bool,
     fallback: FallbackGate,
@@ -65,7 +66,7 @@ pub(super) fn wake_action(
     // that; the armed deadline brings the loop back exactly one display
     // period after the last present, and what `frame_is_dirty` counts as
     // dirty (`dirty`) is never held behind it.
-    let action = if !frames_enabled {
+    let action = if !frames_run {
         WakeAction::PumpBackground
     } else if dirty || (frame_scheduled && !fallback.pending) {
         WakeAction::Render
@@ -83,7 +84,7 @@ pub(super) fn wake_action(
         target: "flui.pace",
         event = "wake_resolved",
         action = ?action,
-        frames_enabled,
+        frames_run,
         dirty,
         frame_scheduled,
         fallback_pending = fallback.pending,

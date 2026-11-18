@@ -3,6 +3,7 @@
 //! `A = [47, 47, 47, 47, 72, 97, 122, 147]` (`activity_indicator.dart`),
 //! evaluated here independently of the widget.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::time::Duration;
 
 use flui_cupertino::CupertinoActivityIndicator;
@@ -71,20 +72,20 @@ pub fn ticks_step_once_per_eighth_of_a_second() {
             .collect();
         assert_eq!(tick_alphas(&laid), expected, "at {millis} ms");
     }
-    let next = Vsync::new();
+    let driver = VsyncDriver::new();
     let before = tick_alphas(&laid);
     laid.pump_widget(VsyncScope::new(
-        next.clone(),
+        driver.vsync().clone(),
         CupertinoActivityIndicator::new(),
     ));
     assert!(vsync.is_empty());
     assert_eq!(tick_alphas(&laid), before);
-    next.tick_all(
+    driver.tick_all(
         &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.0)),
     );
     laid.pump_for(Duration::ZERO);
     assert_eq!(tick_alphas(&laid), before);
-    next.tick_all(
+    driver.tick_all(
         &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.25)),
     );
     laid.pump_for(Duration::ZERO);

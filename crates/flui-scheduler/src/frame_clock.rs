@@ -300,6 +300,16 @@ impl MonotonicClock for ClockSource {
     }
 }
 
+/// Whether a presentation can be seen, and whether its owner granted a hidden
+/// one a frame ([`FrameClock::grant_hidden_frame`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sight {
+    Shown,
+    Hidden,
+    /// Hidden, and the next produce [`FrameClock::poll`] can grant is granted.
+    HiddenOwingFrame,
+}
+
 /// The per-presentation physical-time policy state machine.
 ///
 /// Pure and platform-free: it owns no window, no GPU handle, no element
@@ -314,7 +324,7 @@ impl MonotonicClock for ClockSource {
 pub struct FrameClock {
     source: ClockSource,
     demand: Cell<DemandMask>,
-    hidden: Cell<bool>,
+    sight: Cell<Sight>,
     deferred_count: Cell<u32>,
     first_frame_sent: Cell<bool>,
     min_produce_interval: Cell<Option<Duration>>,
@@ -384,7 +394,7 @@ impl FrameClock {
         Self {
             source,
             demand: Cell::new(DemandMask::empty()),
-            hidden: Cell::new(false),
+            sight: Cell::new(Sight::Shown),
             deferred_count: Cell::new(0),
             first_frame_sent: Cell::new(false),
             min_produce_interval: Cell::new(None),
@@ -541,7 +551,7 @@ impl FrameClock {
     /// blocked by hidden/backpressure) is a different, already-handled
     /// case: see [`clear_demand`](Self::clear_demand)'s doc.
     pub fn try_arm_redraw_request(&self) -> bool {
-        if self.hidden.get() || self.demand.get().is_empty() || self.redraw_requested.get() {
+        if self.is_hidden() || self.demand.get().is_empty() || self.redraw_requested.get() {
             return false;
         }
         self.redraw_requested.set(true);
@@ -609,17 +619,37 @@ impl FrameClock {
     // ------------------------------------------------------------------
 
     /// Mark this presentation hidden or visible. While hidden, every
-    /// [`poll`](Self::poll) call returns `Skip(Hidden)` with demand retained
-    /// — becoming visible again with a nonzero mask produces on the very
-    /// next poll.
+    /// [`poll`](Self::poll) call returns `Skip(Hidden)` with demand retained,
+    /// but for one frame [`grant_hidden_frame`](Self::grant_hidden_frame)
+    /// grants — becoming visible again with a nonzero mask produces on the
+    /// very next poll. Marking a hidden presentation hidden again keeps its
+    /// grant; showing it ends the grant.
     pub fn set_hidden(&self, hidden: bool) {
-        self.hidden.set(hidden);
+        let sight = match (hidden, self.sight.get()) {
+            (false, _) => Sight::Shown,
+            (true, Sight::Shown) => Sight::Hidden,
+            (true, kept) => kept,
+        };
+        self.sight.set(sight);
     }
 
     /// Whether this presentation is currently marked hidden.
     #[must_use]
     pub fn is_hidden(&self) -> bool {
-        self.hidden.get()
+        self.sight.get() != Sight::Shown
+    }
+
+    /// Let a hidden presentation produce one frame: the next
+    /// [`poll`](Self::poll) with demand and capacity produces as if shown,
+    /// and the polls after it skip as hidden again. A frame the caller owes a
+    /// surface its window system keeps (an occluded window's, ADR-0357), so
+    /// it holds the content of now when it is next seen. Nothing for a shown
+    /// presentation, whose polls produce anyway; a grant not yet used is kept
+    /// across polls that find no demand or no capacity.
+    pub fn grant_hidden_frame(&self) {
+        if self.sight.get() == Sight::Hidden {
+            self.sight.set(Sight::HiddenOwingFrame);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -768,7 +798,7 @@ impl FrameClock {
         if self.demand.get().is_empty() {
             return PollDecision::Skip(SkipReason::NoDemand);
         }
-        if self.hidden.get() {
+        if self.sight.get() == Sight::Hidden {
             self.deferred_hidden.set(self.deferred_hidden.get() + 1);
             return PollDecision::Skip(SkipReason::Hidden);
         }
@@ -778,6 +808,9 @@ impl FrameClock {
             return PollDecision::Skip(SkipReason::Backpressure);
         }
 
+        if self.sight.get() == Sight::HiddenOwingFrame {
+            self.sight.set(Sight::Hidden);
+        }
         self.demand.set(DemandMask::empty());
         self.redraw_requested.set(false);
         self.last_produce_at.set(Some(now));

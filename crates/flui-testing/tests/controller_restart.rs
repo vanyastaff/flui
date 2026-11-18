@@ -12,6 +12,7 @@
 
 use std::time::Duration;
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{Animation, AnimationController, AnimationStatus, Vsync};
 use flui_testing::widgets::{LaidOut, lay_out_animated, tight};
 use flui_widgets::SizedBox;
@@ -39,8 +40,9 @@ pub(crate) fn widget_registry_adoption_preserves_its_driver_on_refusal() {
         laid.adopt_vsync(foreign_child.clone()),
         Err(VsyncRegistrationError::AlreadyAttached)
     );
-    let closed = Vsync::new();
-    closed.prepare_close().finish();
+    let driver = VsyncDriver::new();
+    let closed = driver.vsync().clone();
+    driver.prepare_close().finish();
     assert_eq!(
         laid.adopt_vsync(closed),
         Err(VsyncRegistrationError::Closed)

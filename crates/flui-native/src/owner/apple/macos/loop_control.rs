@@ -60,6 +60,10 @@ pub(crate) struct LoopControl {
     pub(crate) owner_signal: Arc<crate::owner::signal::OwnerSignal>,
     windows: super::WindowRegistry,
     app: Arc<AppDelivery>,
+    /// The loop's wake pump, which looks at the wake deadline after every
+    /// owner turn: a turn can leave one no redraw request starts the pump for
+    /// (a covered window's owed frame, ADR-0357).
+    wake_pump: Weak<super::wake_pump::WakePump>,
     owner: NativeOwner<OwnerPart>,
 }
 
@@ -116,6 +120,7 @@ impl LoopControl {
     pub(super) fn new(
         windows: super::WindowRegistry,
         app: Arc<AppDelivery>,
+        wake_pump: Weak<super::wake_pump::WakePump>,
         main: MainThreadMarker,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
@@ -131,6 +136,11 @@ impl LoopControl {
                                 control.quit(main);
                             } else {
                                 control.schedule_turn_deadline(main);
+                                // The turn may have left a wake deadline that
+                                // no redraw request reaches the pump for.
+                                if let Some(pump) = control.wake_pump.upgrade() {
+                                    pump.after_owner_turn();
+                                }
                             }
                         }
                     });
@@ -141,6 +151,7 @@ impl LoopControl {
                 owner_signal,
                 windows,
                 app,
+                wake_pump,
                 owner: NativeOwner::new(
                     OwnerPart {
                         requests: LoopRequests::new(),

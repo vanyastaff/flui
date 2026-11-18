@@ -137,6 +137,7 @@ mod launch_key;
 mod locale;
 mod opened;
 pub mod os_options;
+mod owner_wait;
 mod placement;
 mod platform_window;
 pub mod pointer;
@@ -195,6 +196,7 @@ pub use locale::{InvalidLocale, Locale};
 pub use opened::{
     Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
 };
+pub use owner_wait::OwnerWait;
 pub use placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use preferences::{
@@ -226,7 +228,7 @@ pub use window::{
     WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };
 pub use window_capabilities::{
-    CapabilityParts, PublicationMint, WindowCapabilities, WindowCapability,
+    CapabilityParts, OccludedSurface, PublicationMint, WindowCapabilities, WindowCapability,
 };
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,

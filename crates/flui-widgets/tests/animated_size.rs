@@ -11,6 +11,7 @@
 //! the latter would silently reset the in-flight retarget state on every
 //! unrelated rebuild.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_view::LifecycleContext;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -248,7 +249,8 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
                 .boxed()
             })
         };
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         // A new root view is how the scope hands its probe to build again.
         let root = || VsyncScope::new(registry.clone(), probe.view());
         let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
@@ -256,7 +258,7 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
         app.pump_widget(root());
         let mut clock = MotionClock::new();
         for millis in [20, 120] {
-            registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+            driver.tick_all(&clock.frame(Duration::from_millis(millis)));
         }
         assert!(!registry.has_running(), "the real resize run completed");
         assert!(
@@ -300,7 +302,7 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             side.set(40.0);
             app.pump_widget(root());
             for millis in [140, 240] {
-                registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+                driver.tick_all(&clock.frame(Duration::from_millis(millis)));
             }
             app.tick();
             assert_eq!(
@@ -511,7 +513,8 @@ pub(crate) fn a_spring_finishing_before_layout_completes_once() {
                 .child(SizedBox::square(side.get()))
         })
     };
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     // A new root view is how the scope hands its probe to build again.
     let root = || VsyncScope::new(registry.clone(), probe.view());
     let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
@@ -521,7 +524,7 @@ pub(crate) fn a_spring_finishing_before_layout_completes_once() {
     let mut clock = MotionClock::new();
     let mut millis = 20;
     while registry.has_running() || millis == 20 {
-        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        driver.tick_all(&clock.frame(Duration::from_millis(millis)));
         millis += 16;
     }
     assert!(!registry.has_running(), "the spring finished");

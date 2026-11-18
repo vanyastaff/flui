@@ -4,6 +4,7 @@
 //! curve values against a cubic Bézier evaluated by bisection here, so no
 //! oracle reuses the production formula.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::time::Duration;
 
 use crate::motion_trace::AnimatedValue;
@@ -565,12 +566,13 @@ fn a_time_defined_spring_inherits_velocity() {
 
     let description =
         SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3).unwrap();
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut owner = Owner::try_new(0.0, MotionSpec::Spring(description), Some(&registry)).unwrap();
     let original = owner.animate_to(100.0).unwrap();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(50)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(50)));
     let (origin, [velocity]) = (owner.value(), owner.velocity());
     assert!(
         velocity > 100.0,
@@ -595,12 +597,12 @@ fn a_time_defined_spring_inherits_velocity() {
         let expected = target + envelope * (a * phase.cos() + b * phase.sin());
         let expected_velocity = envelope
             * ((-decay * a + damped * b) * phase.cos() + (-decay * b - damped * a) * phase.sin());
-        registry.tick_all(&clock.frame(Duration::from_millis(50 + u64::from(millis))));
+        driver.tick_all(&clock.frame(Duration::from_millis(50 + u64::from(millis))));
         assert!(close(owner.value(), expected, 1e-12));
         assert!(close(owner.velocity()[0], expected_velocity, 1e-12));
         assert!(owner.value() > target && next.is_pending());
     }
-    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    driver.tick_all(&clock.frame(Duration::from_secs(10)));
     assert_eq!((owner.value(), owner.velocity()), (target, [0.0]));
     assert!(next.is_complete());
     assert!(!registry.has_running());
@@ -1214,7 +1216,8 @@ fn fling_across_hands_the_gesture_velocity_to_the_spring() {
         (0.0, 1e200, 1e200, 1e200, 1e200),
         (0.0, 1e-200, 1e-300, 1e-200, 1e-100),
     ] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let owner = AnimationController::builder(Duration::from_secs(1))
             .bounds(ValueRange::try_new(lower, upper).unwrap())
@@ -1222,7 +1225,7 @@ fn fling_across_hands_the_gesture_velocity_to_the_spring() {
             .build_on(Some(&registry));
         let controller = owner.controller();
         controller.fling_across(velocity, extent).unwrap();
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         let actual = controller.velocity();
         assert!(
             (actual / expected - 1.0).abs() < 1e-12,
@@ -1230,18 +1233,19 @@ fn fling_across_hands_the_gesture_velocity_to_the_spring() {
         );
         if extent >= 150.0 && upper <= 3.0 {
             let before = controller.value();
-            registry.tick_all(&clock.frame(Duration::from_micros(1)));
+            driver.tick_all(&clock.frame(Duration::from_micros(1)));
             let screen_speed = (controller.value() - before) / 1e-6 * extent / (upper - lower);
             assert!((screen_speed - velocity).abs() < 1.0);
         }
     }
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller();
     let run = controller.forward().unwrap();
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(250)));
     let seam = (
         controller.value(),
         controller.velocity(),
@@ -1280,7 +1284,7 @@ fn fling_across_hands_the_gesture_velocity_to_the_spring() {
         );
         assert!(run.is_pending());
     }
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(run.is_complete());
     assert_eq!(controller.value(), 1.0);
 }
@@ -1520,7 +1524,8 @@ fn a_controller_spring_arrives_at_rest_independently_of_frames() {
             Duration::from_millis(17),
             Duration::from_secs(20),
         ] {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let mut clock = MotionClock::new();
             let owner =
                 AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
@@ -1528,12 +1533,12 @@ fn a_controller_spring_arrives_at_rest_independently_of_frames() {
             let mut run = controller
                 .retarget(0.8, &MotionSpec::Spring(spring(10.0, zeta)))
                 .expect("spring segment");
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
             let horizon = Duration::from_secs(20);
             let mut now = Duration::ZERO;
             while now < horizon {
                 now = now.saturating_add(frame).min(horizon);
-                registry.tick_all(&clock.frame(now));
+                driver.tick_all(&clock.frame(now));
             }
             assert_eq!(
                 controller.value(),
@@ -2213,7 +2218,8 @@ fn same_scalar_spring_target_keeps_the_rest_trajectory() {
     for zeta in [0.5, 1.0, 2.0] {
         let motion = MotionSpec::Spring(spring(10.0, zeta));
         for seam_ms in (100..=6000).step_by(10) {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let mut clock = MotionClock::new();
             let baseline = AnimationController::builder(Duration::from_secs(1))
                 .initial_value(1.0)
@@ -2231,8 +2237,8 @@ fn same_scalar_spring_target_keeps_the_rest_trajectory() {
                 .controller()
                 .retarget(0.0, &motion)
                 .expect("initial spring");
-            registry.tick_all(&clock.frame(Duration::ZERO));
-            registry.tick_all(&clock.frame(Duration::from_millis(seam_ms)));
+            driver.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::from_millis(seam_ms)));
             if !baseline.controller().is_animating() {
                 continue;
             }
@@ -2259,7 +2265,7 @@ fn same_scalar_spring_target_keeps_the_rest_trajectory() {
                     );
                     replacement = next;
                 }
-                registry.tick_all(&clock.frame(Duration::from_millis(seam_ms + delta + 4)));
+                driver.tick_all(&clock.frame(Duration::from_millis(seam_ms + delta + 4)));
             }
             let left = (
                 baseline.controller().value(),
@@ -2285,7 +2291,8 @@ fn same_scalar_spring_target_keeps_the_rest_trajectory() {
 
 fn repeated_retargets_before_a_frame_share_the_seam() {
     use flui_animation::{Animation, MotionClock};
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let owner = AnimationController::builder(Duration::from_secs(1))
         .unbounded()
@@ -2294,8 +2301,8 @@ fn repeated_retargets_before_a_frame_share_the_seam() {
     let mut displaced = controller
         .animate_to(1.0, Some(Duration::from_secs(1)))
         .expect("initial run");
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(100)));
     let before = (controller.value(), controller.velocity());
     for (target, motion) in [
         (0.9, linear_spec(1000)),
@@ -2312,7 +2319,7 @@ fn repeated_retargets_before_a_frame_share_the_seam() {
         ));
         displaced = next;
     }
-    registry.tick_all(&clock.frame(Duration::from_micros(100_100)));
+    driver.tick_all(&clock.frame(Duration::from_micros(100_100)));
     let average = (controller.value() - before.0) / 1e-4;
     let acceleration_bound = 100.0 * before.0.abs() + 10.0 * before.1.abs();
     assert!(
@@ -2320,7 +2327,7 @@ fn repeated_retargets_before_a_frame_share_the_seam() {
         "each replacement before a tick retains the original seam time: {average} vs {}",
         before.1
     );
-    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    driver.tick_all(&clock.frame(Duration::from_secs(10)));
     assert!(matches!(
         poll_run(&mut displaced),
         std::task::Poll::Ready(Ok(()))
@@ -2332,7 +2339,8 @@ fn retarget_on_the_completing_frame_starts_at_rest() {
     use flui_foundation::Listenable;
     use std::cell::RefCell;
     use std::rc::Rc;
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
     let controller = owner.controller();
@@ -2349,18 +2357,18 @@ fn retarget_on_the_completing_frame_starts_at_rest() {
             *sink.borrow_mut() = Some(run);
         }
     }));
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(100)));
     assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Ok(()))));
     assert_eq!(controller.value(), 1.0);
     assert_eq!(controller.velocity(), 0.0);
-    registry.tick_all(&clock.frame(Duration::from_micros(100_100)));
+    driver.tick_all(&clock.frame(Duration::from_micros(100_100)));
     assert!(
         controller.value() < 1.0,
         "completion-frame retarget advances on the next frame"
     );
     let mut next = next.borrow_mut().take().expect("run installed by callback");
-    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    driver.tick_all(&clock.frame(Duration::from_secs(10)));
     assert!(matches!(
         poll_run(&mut next),
         std::task::Poll::Ready(Ok(()))
@@ -2369,31 +2377,33 @@ fn retarget_on_the_completing_frame_starts_at_rest() {
 
 fn a_retarget_after_idle_starts_on_the_next_frame() {
     use flui_animation::{Animation, MotionClock};
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
     let controller = owner.controller();
     let _old = controller.forward().expect("initial run");
     for millis in [0, 100, 200, 300] {
-        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        driver.tick_all(&clock.frame(Duration::from_millis(millis)));
     }
     let _next = controller
         .retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5)))
         .expect("new run after idle");
-    registry.tick_all(&clock.frame(Duration::from_millis(400)));
+    driver.tick_all(&clock.frame(Duration::from_millis(400)));
     assert_eq!(
         controller.value(),
         1.0,
         "idle run anchors on its first observed frame"
     );
-    registry.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
     assert!(controller.value() < 1.0);
 }
 
 fn retarget_after_a_failed_frame_uses_the_published_time() {
     use flui_animation::{Animation, MotionClock};
     for panic in [false, true] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         let reference = AnimationController::builder(Duration::from_secs(1))
@@ -2407,10 +2417,10 @@ fn retarget_after_a_failed_frame_uses_the_published_time() {
                 FailingQuadratic { panic },
             )
             .expect("quadratic source");
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_millis(250)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_millis(250)));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.tick_all(&clock.frame(Duration::from_millis(500)));
+            driver.tick_all(&clock.frame(Duration::from_millis(500)));
         }));
         assert_eq!(failure.is_err(), panic);
         let motion = MotionSpec::Spring(spring(10.0, 0.5));
@@ -2431,7 +2441,7 @@ fn retarget_after_a_failed_frame_uses_the_published_time() {
             .retarget(0.8, &motion)
             .expect("reference seam");
         reference.controller().tick_at(Duration::from_millis(350));
-        registry.tick_all(&clock.frame(Duration::from_millis(600)));
+        driver.tick_all(&clock.frame(Duration::from_millis(600)));
         assert!(
             close(controller.value(), reference.controller().value(), 1e-12),
             "the next sample is 350 ms after the published seam, rather than 100 ms after the rejected frame: {} vs {}",
@@ -2447,7 +2457,8 @@ fn retargeting_another_controller_preserves_its_frame_origin() {
     use std::cell::Cell;
     use std::rc::Rc;
     for target_first in [false, true] {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let create =
             || AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
@@ -2460,8 +2471,8 @@ fn retargeting_another_controller_preserves_its_frame_origin() {
         };
         let _trigger_run = trigger.controller().forward().expect("trigger run");
         let _target_run = target.controller().forward().expect("target run");
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_millis(100)));
         let seam = Rc::new(Cell::new(None));
         let sink = seam.clone();
         let observer = target.controller().clone();
@@ -2477,14 +2488,14 @@ fn retargeting_another_controller_preserves_its_frame_origin() {
             assert!(close(observer.velocity(), before.1, 1e-9));
             sink.set(Some(before));
         }));
-        registry.tick_all(&clock.frame(Duration::from_micros(100_100)));
+        driver.tick_all(&clock.frame(Duration::from_micros(100_100)));
         let (x0, v0) = seam.get().expect("trigger delivered retarget");
         if target_first {
             assert!(
                 close(target.controller().value(), x0, 1e-12),
                 "a visited controller is not sampled twice"
             );
-            registry.tick_all(&clock.frame(Duration::from_micros(100_200)));
+            driver.tick_all(&clock.frame(Duration::from_micros(100_200)));
         }
         let average = (target.controller().value() - x0) / 1e-4;
         let acceleration_bound = 100.0 * x0.abs() + 10.0 * v0.abs();
@@ -2497,20 +2508,21 @@ fn retargeting_another_controller_preserves_its_frame_origin() {
 
 fn the_frame_after_a_retarget_has_no_hold() {
     use flui_animation::{Animation, MotionClock};
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller();
     let _old = controller.forward().expect("initial run");
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(100)));
     let before = (controller.value(), controller.velocity());
     assert!(before.0 > 0.0 && before.1 > 0.0, "moving before the seam");
     let _next = controller
         .retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5)))
         .expect("spring inherits forward velocity before reversing");
     let dt = Duration::from_micros(100);
-    registry.tick_all(
+    driver.tick_all(
         &clock.frame(
             Duration::from_millis(100)
                 .checked_add(dt)
