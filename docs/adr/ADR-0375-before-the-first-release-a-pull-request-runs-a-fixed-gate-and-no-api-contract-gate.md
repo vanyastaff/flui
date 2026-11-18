@@ -12,6 +12,8 @@
   reader confirms it:
   ADR-0082, ADR-0089, ADR-0098, ADR-0151, ADR-0266, ADR-0280, ADR-0304, ADR-0305, ADR-0311,
   ADR-0312, ADR-0322, ADR-0323, ADR-0327, ADR-0329, ADR-0330, ADR-0331, ADR-0368.
+- **Superseded-by:** [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
+  for the Confirmation only: the `ci` job's rule is a shell step, not `cargo xtask ci-verify`.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   (the source gates, removed by the same reasoning).
 
