@@ -11,7 +11,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Where the system leaves that click to the application (AppKit), it only activates the
 /// window by default, as AppKit's own controls do; inside this widget's box it is
 /// delivered too, as a press marked
-/// [`is_first_click`](flui_interaction::events::PointerButtonEvent::is_first_click), and
+/// [`is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click), and
 /// the gestures under it see it as any other press. Outside every such box the press, and
 /// the rest of its contact, reach nothing. Where the system delivers or swallows that click
 /// itself (Windows, X11, Wayland), the widget changes nothing.

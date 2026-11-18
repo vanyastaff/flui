@@ -448,7 +448,7 @@ impl GestureBinding {
     /// ([`PlatformWindow::set_input_regions`](flui_platform::PlatformWindow::set_input_regions)).
     ///
     /// A press marked first click
-    /// ([`PointerPress::is_first_click`](crate::events::PointerButtonEvent::is_first_click))
+    /// ([`PointerPress::is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click))
     /// is admitted only where an
     /// [`InputRegionKind::FirstClick`](flui_platform::input_regions::InputRegionKind::FirstClick)
     /// region holds it: anywhere else, and on an embedded surface, whose coordinates the
