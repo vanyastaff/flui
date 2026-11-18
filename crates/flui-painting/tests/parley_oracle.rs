@@ -557,10 +557,27 @@ fn split_quarter_pixel_edges_keep_their_bins() {
     assert_eq!(SubpixelBin::split(0.375), (0, SubpixelBin::Two));
     assert_eq!(SubpixelBin::split(0.625), (0, SubpixelBin::Three));
     assert_eq!(SubpixelBin::split(0.875), (1, SubpixelBin::Zero));
-    assert_eq!(SubpixelBin::split(-0.125), (-1, SubpixelBin::Three));
-    assert_eq!(SubpixelBin::split(-0.375), (-1, SubpixelBin::Two));
-    assert_eq!(SubpixelBin::split(-0.625), (-1, SubpixelBin::One));
-    assert_eq!(SubpixelBin::split(-0.875), (-1, SubpixelBin::Zero));
+    // One tie rule on both sides of 0: -0.125 is 0.875 a pixel lower.
+    assert_eq!(SubpixelBin::split(-0.125), (0, SubpixelBin::Zero));
+    assert_eq!(SubpixelBin::split(-0.375), (-1, SubpixelBin::Three));
+    assert_eq!(SubpixelBin::split(-0.625), (-1, SubpixelBin::Two));
+    assert_eq!(SubpixelBin::split(-0.875), (-1, SubpixelBin::One));
+}
+
+/// A position moved by whole pixels keeps its bin and moves its pixel by as
+/// many, across 0 and at every edge between bins.
+fn split_moves_with_whole_pixels() {
+    for eighths in -24_i8..24 {
+        let position = f32::from(eighths) / 8.0;
+        let (pixel, bin) = SubpixelBin::split(position);
+        for moved in [-1000_i16, -3, -1, 1, 2, 1000] {
+            assert_eq!(
+                SubpixelBin::split(position + f32::from(moved)),
+                (pixel + i32::from(moved), bin),
+                "{position} moved by {moved}"
+            );
+        }
+    }
 }
 
 pub(crate) fn subpixel_split_is_total_across_the_float_domain() {
@@ -576,6 +593,7 @@ pub(crate) fn subpixel_split_is_total_across_the_float_domain() {
                 "quarter pixel edges",
                 split_quarter_pixel_edges_keep_their_bins,
             ),
+            ("whole-pixel moves", split_moves_with_whole_pixels),
         ],
     );
 }
@@ -616,6 +634,14 @@ fn place_paragraph(
     origin: (f32, f32),
     scale: f32,
 ) -> Vec<flui_painting::glyphs::PlacedGlyph> {
+    place_paragraph_at(paragraph, (f64::from(origin.0), f64::from(origin.1)), scale)
+}
+
+fn place_paragraph_at(
+    paragraph: &flui_painting::ShapedParagraph,
+    origin: (f64, f64),
+    scale: f32,
+) -> Vec<flui_painting::glyphs::PlacedGlyph> {
     let run = paragraph
         .runs()
         .next()
@@ -623,6 +649,42 @@ fn place_paragraph(
     let mut fonts = FontRegistry::new();
     let key = fonts.prepare_run(&run).expect("the shaped face registers");
     run.placed_glyphs(key, origin, scale).collect()
+}
+
+/// A paragraph moved by whole device pixels places every glyph that many
+/// pixels away with the same key: across 0 on either axis, at a tie between
+/// bins, and far from 0, where an `f32` origin would round its fraction.
+pub(crate) fn placed_glyphs_move_with_whole_pixels() {
+    let (paragraph, _) = placement_paragraph(flui_painting::typography::TextStyle::default());
+    // (row, an origin, a whole-pixel move)
+    for (row, origin, (dx, dy)) in [
+        ("up across 0", (3.0, 0.5), (0, -2)),
+        ("left across 0", (0.875, 3.0), (-1, 0)),
+        ("a tie left across 0", (0.625, 3.0), (-1, 0)),
+        ("down across 0", (2.0, -1.5), (0, 2)),
+        ("far right", (8.374_992_370_6, 0.0), (4096, 0)),
+        ("farther right", (8.374_023_437_5, 0.0), (1_500_000, 0)),
+        ("far down", (0.0, 3.3), (0, 1_500_000)),
+    ] {
+        for scale in [1.0, 1.25] {
+            let here = place_paragraph_at(&paragraph, origin, scale);
+            let moved = place_paragraph_at(
+                &paragraph,
+                (origin.0 + f64::from(dx), origin.1 + f64::from(dy)),
+                scale,
+            );
+            assert_eq!(here.len(), 2, "{row}");
+            let shifted: Vec<_> = here
+                .iter()
+                .map(|glyph| (glyph.key, glyph.x + dx, glyph.y + dy))
+                .collect();
+            let placed: Vec<_> = moved
+                .iter()
+                .map(|glyph| (glyph.key, glyph.x, glyph.y))
+                .collect();
+            assert_eq!(placed, shifted, "{row} at {scale}");
+        }
+    }
 }
 
 fn assert_origin_is_omitted(origin: (f32, f32)) {

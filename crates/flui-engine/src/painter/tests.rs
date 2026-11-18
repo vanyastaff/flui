@@ -3259,12 +3259,8 @@ fn extreme_glyph_bearings_do_not_overflow_before_clipping(
         "visible reference has real glyph ink"
     );
     {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "the i32 lower endpoint is exactly representable in f32"
-        )]
         let glyph = run
-            .placed_glyphs(key, (origin.x as f32, origin.y as f32), 1.0)
+            .placed_glyphs(key, (origin.x, origin.y), 1.0)
             .next()
             .expect("extreme placed origin is admitted");
         let bitmap = rasterizer

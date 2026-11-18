@@ -292,6 +292,10 @@ fn parley_oracle_contract() {
                 "placed_glyphs_keep_cancelling_vertical_coordinates",
                 parley_oracle::placed_glyphs_keep_cancelling_vertical_coordinates,
             ),
+            (
+                "placed_glyphs_move_with_whole_pixels",
+                parley_oracle::placed_glyphs_move_with_whole_pixels,
+            ),
         ],
     );
 }

@@ -141,7 +141,7 @@ pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
                 .fonts_mut()
                 .prepare_run(&run)
                 .expect("a shaped face registers");
-            for glyph in run.placed_glyphs(key, (offset.dx as f32, offset.dy as f32), 1.0) {
+            for glyph in run.placed_glyphs(key, (offset.dx, offset.dy), 1.0) {
                 let Some(image) = rasterizer.rasterize(glyph.key) else {
                     continue;
                 };

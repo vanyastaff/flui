@@ -268,32 +268,45 @@ impl<'a> ShapedRun<'a> {
     /// `key` is what the raster side's registry returned for this run
     /// ([`FontRegistry::prepare_run`](crate::glyphs::FontRegistry::prepare_run)).
     /// `origin` is the paragraph's top-left in device pixels and `scale` the
-    /// device-pixel ratio. A glyph's pen position goes to
-    /// `origin.x + x × scale`, split into a whole column and a quarter-pixel
-    /// bin; its baseline row is `round(baseline × scale)` plus the truncated
-    /// `origin.y + dy × scale`; its bitmap is rasterized at
-    /// `font_size × scale`. These are the rules cosmic-text placed glyphs
-    /// with, so a glyph lands on the device pixel it landed on there.
+    /// device-pixel ratio. The origin is split in `f64` into its whole pixels
+    /// and its fraction before any `f32` arithmetic. A glyph's pen position,
+    /// the fraction plus `x × scale`, is split into a whole column and a
+    /// quarter-pixel bin ([`SubpixelBin::split`]); its baseline row is
+    /// `round(baseline × scale)` plus the floor of the fraction plus
+    /// `dy × scale`; both then add the origin's whole pixels. Its bitmap is
+    /// rasterized at `font_size × scale`. A glyph's column, row and bin
+    /// therefore depend on the origin's fraction alone, at any magnitude and
+    /// on either side of 0: moving the origin by whole pixels moves every
+    /// glyph by as many and keeps its key. These are cosmic-text's rules for
+    /// a non-negative origin.
     ///
     /// Glyphs with non-finite or unrepresentable device coordinates are omitted.
-    /// The rounded baseline and truncated vertical offset are added in `f64`
-    /// before checking the final row, preserving cancellation between them.
+    /// The rounded baseline, the origin's whole row and the floored vertical
+    /// offset are added in `f64` before checking the final row, preserving
+    /// cancellation between them.
     pub fn placed_glyphs(
         &self,
         key: RunKey,
-        origin: (f32, f32),
+        origin: (f64, f64),
         scale: f32,
     ) -> impl Iterator<Item = PlacedGlyph> + 'a {
         let size = self.data.font_size * scale;
         let synthesis = self.data.synthesis;
         let color = self.data.color;
         let baseline = (self.data.baseline * scale).round();
+        let whole = (origin.0.floor(), origin.1.floor());
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a fraction in [0, 1) narrows to f32 with only its rounding lost"
+        )]
+        let fraction = ((origin.0 - whole.0) as f32, (origin.1 - whole.1) as f32);
         self.glyphs().iter().filter_map(move |glyph| {
-            let horizontal = glyph.x.mul_add(scale, origin.0);
-            device_coordinate(f64::from(horizontal))?;
-            let (x, bin) = SubpixelBin::split(horizontal);
-            let dy = glyph.dy.mul_add(scale, origin.1).trunc();
-            let y = device_coordinate(f64::from(baseline) + f64::from(dy))?;
+            let horizontal = glyph.x.mul_add(scale, fraction.0);
+            device_coordinate(whole.0 + f64::from(horizontal))?;
+            let (column, bin) = SubpixelBin::split(horizontal);
+            let x = device_coordinate(whole.0 + f64::from(column))?;
+            let dy = glyph.dy.mul_add(scale, fraction.1).floor();
+            let y = device_coordinate(f64::from(baseline) + whole.1 + f64::from(dy))?;
             Some(PlacedGlyph {
                 key: GlyphKey::new(key.face, glyph.id, size, bin)
                     .with_variation(key.variation)

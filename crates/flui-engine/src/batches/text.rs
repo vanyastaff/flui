@@ -83,7 +83,6 @@ impl DrawBatcher {
             Placement::Uniform => (origin.x, origin.y),
             Placement::Affine { .. } => (0.0, 0.0),
         };
-        let raster_origin = (raster_origin.0 as f32, raster_origin.1 as f32);
 
         for run in paragraph.runs() {
             // The face first, in a statement of its own: the placement below
