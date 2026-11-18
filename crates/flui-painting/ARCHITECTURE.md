@@ -219,10 +219,23 @@ The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
 `FontRegistry` (`FontRegistry::prepare_run`, which also interns the run's
 variation coordinates) and places the run's glyphs with
-`ShapedRun::placed_glyphs(key, origin, scale)`: `PlacedGlyph { key: GlyphKey,
-x, y, color }` in device pixels, the pen split into a whole column and a
-quarter-pixel bin, the baseline row `round(baseline × scale)`, as cosmic-text
-placed glyphs. The atlas draws through the `GlyphRasterizer` trait: a key type
+`ShapedRun::placed_glyphs(key, whole, offset, scale)`: `PlacedGlyph { key:
+GlyphKey, x, y, color }` in device pixels, the paragraph's top-left being
+`whole + offset`. `whole` is whole pixels, which only move the glyphs;
+`offset` is split in `f64` into whole pixels and a fraction narrowed to `f32`.
+The pen, that fraction plus `x × scale`, is floored into a whole column and
+binned to a quarter pixel with one rule for every sign, and the row is
+`round(baseline × scale)` plus the floored vertical offset, each plus both
+whole parts. A glyph's column, row and bin thus depend on the bits of `offset`
+alone: a caller that moves the paragraph by changing `whole` and keeping
+`offset` places every glyph as many pixels away with the same key, on either
+side of 0 and at any magnitude (`placed_glyphs_move_with_whole_pixels`). The
+engine passes a translation's whole pixels as `whole` for that reason; folding
+them into `offset` rounds the fraction at the translation's magnitude. A glyph
+whose pen alone is outside the `i32` range is omitted
+(`placed_glyphs_omit_a_pen_the_split_would_saturate`). For a non-negative
+position these are the rules cosmic-text placed glyphs with; cosmic-text
+truncated, which placed a glyph differently on each side of 0. The atlas draws through the `GlyphRasterizer` trait: a key type
 plus `rasterize(&mut self, key)`, deterministic per key, with `None` for a key
 the rasterizer cannot draw (the atlas does not place it and asks again next
 use). `SwashRasterizer` implements it with `GlyphKey`: blob id and face index,
@@ -238,7 +251,7 @@ Icons), against bitmaps recorded from cosmic-text before it was removed
 (`tests/support/raster_recorded.rs`), on vendored faces only so the result
 does not depend on the host. Complex scripts
 and colour emoji have no vendored face and are not compared there. The key has
-no vertical bin because the placement truncates a glyph's row before binning,
+no vertical bin because the placement floors a glyph's row before binning,
 so its vertical bin is always zero. A registry holds every blob a key names,
 so a key stays valid after fontique's source cache drops the file
 (`a_held_blob_keeps_its_keys_across_a_prune`, `src/text_layout/context.rs`).
@@ -273,7 +286,7 @@ preparation debt and their `TextPainter` remain owner-local. `Canvas` and
 `TextPainter` are mutated through `&mut self` by one owner.
 The crate takes no lock of its own: its `clippy.toml` disallows `Mutex` and
 `RwLock`, with no `#[expect]`ed site, and it declares no process-global font
-state (`cargo xtask globals`).
+state.
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
 through `&mut` by the UI runtime that owns it (flui-rendering lends it to one
@@ -999,7 +1012,7 @@ specified zero result. Actual `ShapedRun::placed_glyphs` instead omits non-finit
 or unrepresentable device coordinates, so saturation never moves a glyph onto a
 visible edge. The exact `i32::MAX` bound is checked in `f64`, since converting
 that bound to `f32` rounds it up to the inadmissible coordinate 2^31.
-Baseline rounding and vertical-offset truncation are preserved, then added in
+Baseline rounding, the origin's whole row and the floored vertical offset are added in
 `f64` before checking the final row: large cancelling terms may still place a
 glyph at a valid device row. Bitmap-bearing arithmetic remains the engine's
 responsibility. Public rows `subpixel_split_is_total_across_the_float_domain`,

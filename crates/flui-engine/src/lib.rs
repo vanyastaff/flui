@@ -349,6 +349,9 @@ pub(crate) mod pipeline_set;
 mod pipeline_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_warmup;
+/// Whole-pixel moves of recorded IR, which let a chunk moved by whole device
+/// pixels replay its recording (ADR-0304 §9).
+mod pixel_shift;
 mod portable_coverage;
 mod profiler;
 mod recording_budget;

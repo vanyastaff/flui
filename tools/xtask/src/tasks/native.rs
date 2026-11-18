@@ -17,7 +17,7 @@ use syn::{Expr, Lit, Meta, Token};
 
 use super::PLATFORM_TARGETS;
 use super::exec::{Cmd, Host, Step};
-use crate::file_length::modules;
+mod modules;
 
 /// Names selected for each native target, sorted for reproducible plans.
 pub(super) type Packages = BTreeMap<&'static str, BTreeSet<String>>;

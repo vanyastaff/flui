@@ -12,8 +12,7 @@
 //!
 //! `os_entry` is the one boundary: every entry's body is a call of it, or
 //! of a function of the same file whose body is that call (an adapter, such
-//! as a COM object's `com_entry`), and `cargo xtask panic-boundary` checks
-//! that of every entry in the crate (ADR-0151 §16). An entry says what it
+//! as a COM object's `com_entry`; ADR-0151 §16). An entry says what it
 //! answers after a panic (`AfterPanic`): a failure the OS understands, or,
 //! where the state behind it may be torn mid-dispatch, the end of the process
 //! (`docs/PANIC-POLICY.md`: a panic is a bug report, never control flow).
@@ -98,8 +97,7 @@ pub(crate) enum AfterPanic<A, R> {
 /// `Copy`, so nothing of them is destroyed outside the boundary either.
 ///
 /// An entry's body is one call of this function, or of an adapter of its file
-/// whose body is that call; `cargo xtask panic-boundary` holds every entry in
-/// the crate to it.
+/// whose body is that call.
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
@@ -144,8 +142,7 @@ where
 /// `#[ivars = ContainedIvars<T>]`, the value is destroyed by one call of
 /// [`os_entry`]: a destructor's panic is logged there, the fields after the
 /// failing one are destroyed as it unwinds, and `dealloc` goes on to the
-/// superclass's. `cargo xtask panic-boundary` holds every class of the crate
-/// to this type.
+/// superclass's. Every class of the crate declares this type.
 ///
 /// The value is read through `Deref` (`self.ivars().field`) and never moves:
 /// it is destroyed in place, where objc2 keeps it pinned.

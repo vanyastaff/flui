@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Consequences, Confirmation): the rule stands and its reader
+  confirms it.
 - **Revised:** 2026-10-20 — the open question became a decision; the experiments below stay as the
   context for it. A new crate for geometry is not on the table: ADR-0098 dissolved `flui-geometry`
   and `flui-types`.

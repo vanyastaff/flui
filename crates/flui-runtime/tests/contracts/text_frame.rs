@@ -940,7 +940,7 @@ impl flui_runtime::sink::FrameSink for PreparedTextSink {
                 let mut sizes = Vec::new();
                 for run in paragraph.runs() {
                     let key = registry.prepare_run(&run).expect("submitted portable font");
-                    for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                    for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
                         assert_ne!(glyph.key.glyph_id(), 0, "the text must paint actual glyphs");
                         sizes.push(f64::from(glyph.key.size()));
                     }

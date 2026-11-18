@@ -5,10 +5,9 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 ## Subsystems
 
 The top-level modules are layers ([ADR-0217](../../../docs/adr/ADR-0217-interaction-module-layers-and-pointer-assembly.md) §1):
-a module names only modules in a lower layer, and modules in one layer name none of each other.
-`[package.metadata.flui.modules]` in the manifest declares them and `cargo xtask module-dag`
-checks them with no exceptions. Each public item has one module path; the crate root and
-`prelude` re-export the common ones.
+a module names only modules in a lower layer, and modules in one layer name none of each other,
+with no exceptions. Each public item has one module path; the crate root and `prelude` re-export
+the common ones.
 
 | Layer | Module | One-paragraph description |
 |---|---|---|

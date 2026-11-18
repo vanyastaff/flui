@@ -5,6 +5,8 @@
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §3's keeping of a panicking closure's captures and of a failed IO future, and §4's payload
   retention, only: both are dropped normally.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Amends:** [ADR-0047](ADR-0047-unified-execution-services.md) "One owner, no ambient reach":
   code below the host reaches the lanes through the background capability, whose handle holds
   an `Executor`, never `ExecutionServices`.
