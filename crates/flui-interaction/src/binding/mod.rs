@@ -171,18 +171,37 @@ use crate::{
     },
 };
 
-/// Whether a press marked first click
+/// The entries of the hit path `result` a press marked first click
 /// ([`PointerButtonEvent::is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click))
-/// whose hit path is `result` may reach the widgets: the path holds a box that accepts the
-/// first click ([`FirstClickTarget`](crate::pointer::FirstClickTarget)), so the press lands
-/// in that box's subtree. A widget painted over the box takes the hit instead, and the
-/// path then holds no such box.
-fn accepts_first_click(result: &HitTestResult) -> bool {
-    result.path().iter().any(|entry| {
+/// reaches: the innermost box on the path that accepts the first click
+/// ([`FirstClickTarget`](crate::pointer::FirstClickTarget)) and the entries its subtree
+/// put on the path just before it
+/// ([`HitTestEntry::subtree_entries`](crate::pointer::HitTestEntry::subtree_entries)). A
+/// widget painted over the box, whether it took the hit or let it through, and the box's
+/// ancestors are left out. `None` when no such box is on the path: the press only brought
+/// the window forward.
+fn first_click_route(result: &HitTestResult) -> Option<std::ops::RangeInclusive<usize>> {
+    let path = result.path();
+    let at = path.iter().position(|entry| {
         entry
             .metadata_as::<crate::pointer::FirstClickTarget>()
             .is_some()
-    })
+    })?;
+    Some(at.saturating_sub(path[at].subtree_entries)..=at)
+}
+
+/// Keep only the entries of `result` in `route`; the others' payloads are destroyed one at
+/// a time under containment, the first failure kept in `first_panic`.
+fn keep_only(
+    result: &mut HitTestResult,
+    route: std::ops::RangeInclusive<usize>,
+    first_panic: &mut FirstPanic,
+) {
+    let path = result.path_mut();
+    let mut left_out = HitTestResult::new();
+    left_out.path_mut().extend(path.drain(route.end() + 1..));
+    left_out.path_mut().extend(path.drain(..*route.start()));
+    left_out.retire_metadata(first_panic);
 }
 
 fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
@@ -1629,6 +1648,50 @@ impl GestureBinding {
                     let cleanup = self.supersede(pointer_id);
                     keep_first(&mut first_panic, cleanup, "superseded pointer teardown");
                 }
+                let position = event
+                    .position()
+                    .expect("BUG: Down carries a checked position");
+                let mut hit_test_fn = Some(hit_test_fn);
+                let mut hit_test = |first_panic: &mut FirstPanic| -> HitTestResult {
+                    let hit_test_fn = hit_test_fn
+                        .take()
+                        .expect("BUG: a Down hit-tests its position once");
+                    match try_run(|| hit_test_fn(position)) {
+                        Ok(result) => result,
+                        Err(panic) => {
+                            keep_first(first_panic, panic, "pointer Down hit test");
+                            let lifecycle = caught(|| self.arena.arena().close(pointer_id));
+                            keep_first(
+                                first_panic,
+                                lifecycle,
+                                "pointer Down arena close after failed hit test",
+                            );
+                            crate::containment::raise(std::mem::take(first_panic));
+                        }
+                    }
+                };
+                // A first click is decided by its hit path before it takes
+                // anything: a click no first-click box holds only brought the
+                // window forward, so it evicts no contact at the cap, spends no
+                // sequence identity, reaches no target and has its tail
+                // refused. One a box holds reaches only the box's subtree.
+                let first_click_path = if down.is_first_click() {
+                    let mut result = hit_test(&mut first_panic);
+                    let Some(route) = first_click_route(&result) else {
+                        self.contacts.refuse(pointer_id);
+                        drop(result);
+                        tracing::debug!(
+                            ?pointer_id,
+                            "a first click whose hit path holds no first-click box only activated its window"
+                        );
+                        first_panic.resume();
+                        return;
+                    };
+                    keep_only(&mut result, route, &mut first_panic);
+                    Some(result)
+                } else {
+                    None
+                };
                 // Minted before hit testing: an exhausted binding refuses the
                 // contact before any target sees it, and never reissues an id.
                 let Ok(sequence) = self.sequences.next().map(PointerSequence) else {
@@ -1677,37 +1740,10 @@ impl GestureBinding {
                 }
                 self.publish_contact_sequence(pointer_id, sequence.0);
 
-                let position = event
-                    .position()
-                    .expect("BUG: Down carries a checked position");
-                let result = match try_run(|| hit_test_fn(position)) {
-                    Ok(result) => result,
-                    Err(panic) => {
-                        keep_first(&mut first_panic, panic, "pointer Down hit test");
-                        let lifecycle = caught(|| self.arena.arena().close(pointer_id));
-                        keep_first(
-                            &mut first_panic,
-                            lifecycle,
-                            "pointer Down arena close after failed hit test",
-                        );
-                        crate::containment::raise(first_panic);
-                    }
+                let result = match first_click_path {
+                    Some(result) => result,
+                    None => hit_test(&mut first_panic),
                 };
-
-                // A first click whose hit path holds no first-click box only
-                // brought the window forward: no target sees the contact, its
-                // tail is refused, and it reports no input sequence.
-                if down.is_first_click() && !accepts_first_click(&result) {
-                    self.contacts.refuse(pointer_id);
-                    self.arena.arena().set_dispatched(None);
-                    drop(result);
-                    tracing::debug!(
-                        ?pointer_id,
-                        "a first click whose hit path holds no first-click box only activated its window"
-                    );
-                    first_panic.resume();
-                    return;
-                }
 
                 let token = Self::resolve_route(&result);
                 // Hit entries contain inert target identities and transforms;

@@ -13,6 +13,7 @@ use flui_platform::pointer::{
     PointerPress, PointerRelease, PointerSample, PointerSource,
 };
 use flui_view::{IntoView, View};
+use flui_widgets::HitTestBehavior;
 use flui_widgets::{ColoredBox, FirstClick, GestureDetector, Positioned, SizedBox, Stack};
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -23,6 +24,16 @@ fn counted(taps: &Rc<Cell<u32>>) -> impl IntoView {
     GestureDetector::new()
         .on_tap(move |_| taps.set(taps.get() + 1))
         .child(SizedBox::new(100.0, 100.0).child(ColoredBox::new(Color::rgb(240, 240, 240))))
+}
+
+/// A 100-px square that paints nothing and counts its taps through a translucent detector:
+/// a hit on it lets the press through to whatever lies below.
+fn translucent(taps: &Rc<Cell<u32>>) -> impl IntoView {
+    let taps = Rc::clone(taps);
+    GestureDetector::new()
+        .behavior(HitTestBehavior::Translucent)
+        .on_tap(move |_| taps.set(taps.get() + 1))
+        .child(SizedBox::new(100.0, 100.0))
 }
 
 /// The two squares side by side: `accepting` on the left, inside a first-click region
@@ -133,5 +144,50 @@ pub(crate) fn a_widget_painted_over_a_first_click_box_does_not_take_the_first_cl
         (under.get(), over.get()),
         (0, 1),
         "a press into an active window"
+    );
+}
+
+/// A translucent target inside a `FirstClick` box lets the hit through, and the box still
+/// joins the path: the first click reaches it.
+pub(crate) fn a_translucent_target_inside_a_first_click_box_takes_the_first_click() {
+    let taps = Rc::new(Cell::new(0));
+    let laid = lay_out(
+        Stack::new(
+            (Positioned::new(FirstClick::new().child(translucent(&taps)))
+                .left(0.0)
+                .top(0.0),),
+        ),
+        tight(200.0, 100.0),
+    );
+
+    click(&laid, 1, 50.0, true);
+    assert_eq!(
+        taps.get(),
+        1,
+        "the translucent target inside the box takes the first click"
+    );
+}
+
+/// A translucent widget painted over a `FirstClick` box lets the press through to the box:
+/// the first click reaches the box's widget and not the widget on top, which an ordinary
+/// press reaches as well.
+pub(crate) fn a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click() {
+    let under = Rc::new(Cell::new(0));
+    let over = Rc::new(Cell::new(0));
+    let laid = lay_out(
+        Stack::new((
+            Positioned::new(FirstClick::new().child(counted(&under)))
+                .left(0.0)
+                .top(0.0),
+            Positioned::new(translucent(&over)).left(0.0).top(0.0),
+        )),
+        tight(200.0, 100.0),
+    );
+
+    click(&laid, 1, 50.0, true);
+    assert_eq!(
+        (under.get(), over.get()),
+        (1, 0),
+        "only the box's subtree sees the first click"
     );
 }

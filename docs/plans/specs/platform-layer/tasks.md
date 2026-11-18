@@ -9162,7 +9162,15 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   пометкой (билет по номеру и времени события, `FirstClickTicket`) и только активирует окно в
   остальных местах; регион хоста — грубый предфильтр, а привязка жестов на каждом хосте
   пропускает помеченное нажатие, только если путь попадания проходит через коробку `FirstClick`
-  (`FirstClickTarget`), отказ — весь контакт. Тесты:
+  (`FirstClickTarget`), и отдаёт его только поддереву коробки на этом пути
+  (`HitTestEntry::subtree_entries`); коробка входит в путь и тогда, когда цель внутри неё
+  прозрачна (`RenderObject::joins_hits_below`); отказанный первый клик решается до вытеснения
+  контакта на пределе и до выдачи идентификатора последовательности; запись ввода несёт пометку
+  и возможность `first_click` (протокол 0.28), отказ — весь контакт. Тесты:
+  `first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click`,
+  `first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click`,
+  `a_refused_first_click_takes_no_contact_room_and_no_sequence`,
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`,
   `first_click::a_first_click_reaches_only_the_widgets_that_accept_it` (без проверки в привязке
   падает: первый клик вне региона нажимает простой квадрат),
   `first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click` (падает,

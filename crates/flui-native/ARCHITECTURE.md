@@ -4121,8 +4121,9 @@ included in logical units as the hit test counts a box, activates it and is
 delivered, marked `is_first_click`; a press anywhere else only activates it,
 AppKit's convention. The region is a rough pre-filter: the gesture binding
 admits a marked press only when its hit path runs through the `FirstClick`
-box (`FirstClickTarget`), so a widget painted over the box does not receive
-it. The answer issues a ticket for the press's event number and timestamp,
+box (`FirstClickTarget`), and hands it only to the box's subtree on that path
+(`HitTestEntry::subtree_entries`), so a widget painted over the box does not
+receive it. The answer issues a ticket for the press's event number and timestamp,
 read only for a press it delivers marked, and only the press with that stamp
 is marked when it arrives (`FirstClickTicket`): any press spends the ticket,
 so an answer whose press never came marks none.

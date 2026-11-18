@@ -12,10 +12,11 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// A press marked
 /// [`is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click) reaches
 /// the widgets only when its hit path runs through this widget: the press lands in the
-/// child, and no widget painted over the child took the hit first. The gestures on that
-/// path then see it as any other press. Anywhere else the press, and the rest of its
-/// contact, reach nothing. A widget painted over the child that lets presses through
-/// (`HitTestBehavior::Translucent`) shares the press with the child.
+/// child, and no widget painted over the child took the hit first. It then reaches the
+/// child's widgets on that path, translucent ones included, and they see it as any other
+/// press; this widget's ancestors and any widget painted over the child that lets presses
+/// through (`HitTestBehavior::Translucent`) do not see it. Anywhere else the press, and
+/// the rest of its contact, reach nothing.
 ///
 /// The host reads the box, mapped into the window through every transform and clip above
 /// it as it is painted (a rotated child counts as its bounding box), only as a rough

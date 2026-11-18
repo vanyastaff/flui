@@ -27,6 +27,8 @@ fn input_regions() {
             ("system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped", crate::system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped),
             ("first_click::a_first_click_reaches_only_the_widgets_that_accept_it", crate::first_click::a_first_click_reaches_only_the_widgets_that_accept_it),
             ("first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click", crate::first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click),
+            ("first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click", crate::first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click),
+            ("first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click", crate::first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click),
         ],
     );
 }

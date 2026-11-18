@@ -14,49 +14,25 @@ use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::Ren
 
 /// A render object whose box is a `kind` input region while it is enabled.
 ///
-/// An enabled [`InputRegionKind::FirstClick`] region also marks every hit that lands in its
-/// child with a [`FirstClickTarget`], which is how the gesture binding knows a press marked
-/// first click reached this box rather than a widget painted over it.
-#[derive(Debug, Clone)]
+/// An enabled [`InputRegionKind::FirstClick`] region also joins every hit path that runs
+/// through its child, a translucent target's included, carrying a [`FirstClickTarget`]:
+/// that is how the gesture binding knows a press marked first click reached this box
+/// rather than a widget painted over it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderInputRegion {
     kind: InputRegionKind,
     enabled: bool,
     has_child: bool,
-    /// The [`FirstClickTarget`] payload while the box accepts the first click, made once so
-    /// that a hit test allocates nothing.
-    first_click: Option<HitMetadata>,
 }
-
-impl PartialEq for RenderInputRegion {
-    fn eq(&self, other: &Self) -> bool {
-        // `first_click` follows from the other two fields.
-        self.kind == other.kind
-            && self.enabled == other.enabled
-            && self.has_child == other.has_child
-    }
-}
-
-impl Eq for RenderInputRegion {}
 
 impl RenderInputRegion {
     /// Claims this object's box as a `kind` region.
     #[must_use]
-    pub fn new(kind: InputRegionKind) -> Self {
-        let mut region = Self {
+    pub const fn new(kind: InputRegionKind) -> Self {
+        Self {
             kind,
             enabled: true,
             has_child: false,
-            first_click: None,
-        };
-        region.refresh_first_click();
-        region
-    }
-
-    /// Makes the hit payload agree with the kind and the enabled flag.
-    fn refresh_first_click(&mut self) {
-        let accepts = self.enabled && self.kind == InputRegionKind::FirstClick;
-        if accepts != self.first_click.is_some() {
-            self.first_click = accepts.then(|| HitMetadata::new(FirstClickTarget));
         }
     }
 
@@ -79,7 +55,6 @@ impl RenderInputRegion {
             return RenderUpdateImpact::NONE;
         }
         self.kind = kind;
-        self.refresh_first_click();
         RenderUpdateImpact::PAINT
     }
 
@@ -90,8 +65,12 @@ impl RenderInputRegion {
             return RenderUpdateImpact::NONE;
         }
         self.enabled = enabled;
-        self.refresh_first_click();
         RenderUpdateImpact::PAINT
+    }
+
+    /// Whether the box accepts the first click now.
+    const fn accepts_first_click(&self) -> bool {
+        self.enabled && matches!(self.kind, InputRegionKind::FirstClick)
     }
 }
 
@@ -118,10 +97,16 @@ impl RenderBox for RenderInputRegion {
 
     flui_rendering::forward_single_child_box_hit_test!();
 
+    /// A first-click box joins the path of every hit in its child, blocking or not.
+    fn joins_hits_below(&self) -> bool {
+        self.accepts_first_click()
+    }
+
     /// A hit in the child of an enabled first-click region carries the
-    /// [`FirstClickTarget`].
+    /// [`FirstClickTarget`]. Made per hit: only a first-click box, a rare widget, pays it.
     fn metadata(&self) -> Option<HitMetadata> {
-        self.first_click.clone()
+        self.accepts_first_click()
+            .then(|| HitMetadata::new(FirstClickTarget))
     }
 
     fn describe_input_regions(&self, size: Size, regions: &mut InputRegionSink) {
