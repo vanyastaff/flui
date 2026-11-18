@@ -38,7 +38,7 @@ pub(crate) use wake_pump::WeakWakePump;
 pub(crate) trait MacosHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to every window it opens.
-    fn displays() -> Arc<dyn HostDisplays>;
+    fn displays(main: MainThreadMarker) -> Arc<dyn HostDisplays>;
 
     /// The system preference source, for the table's preference position; it
     /// wakes the owner behind `signal` when what it reads changes.
@@ -290,7 +290,7 @@ impl MacOSLoop {
             let loop_control =
                 LoopControl::new(Arc::clone(&windows), Arc::clone(&app_delivery), mtm);
             let preferences = H::preferences(&loop_control.owner_signal);
-            let displays = H::displays();
+            let displays = H::displays(mtm);
             let screen_observer = NativeOwner::new(
                 Arc::clone(&displays).observe(&loop_control.owner_signal),
                 mtm,

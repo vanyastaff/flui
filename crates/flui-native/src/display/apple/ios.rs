@@ -48,7 +48,6 @@ use objc2_ui_kit::{
     UIScreen, UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
     UIScreenModeDidChangeNotification, UITraitEnvironment, UIUserInterfaceIdiom,
 };
-use parking_lot::Mutex;
 
 use flui_foundation::geometry::Size;
 use flui_platform::{
@@ -94,12 +93,12 @@ pub struct IosDisplays {
     /// `UIScreen` is retained and compared there.
     screens: NativeOwner<std::cell::RefCell<ScreenLedger<RetainedScreen>>>,
     /// The period each window's display link last published, by screen.
-    link_periods: Mutex<ScreenPeriods<WindowId>>,
+    link_periods: NativeOwner<std::cell::RefCell<ScreenPeriods<WindowId>>>,
     /// The cadence each window's display link shows, as it measures it.
-    cadences: Mutex<Vec<(WindowId, LinkPeriod)>>,
+    cadences: NativeOwner<std::cell::RefCell<Vec<(WindowId, LinkPeriod)>>>,
     /// Whether each screen's last scale read was refused, so a run of refusals
     /// is reported once.
-    scale_streak: Mutex<ScaleStreaks<DisplayId>>,
+    scale_streak: NativeOwner<std::cell::RefCell<ScaleStreaks<DisplayId>>>,
 }
 
 impl std::fmt::Debug for IosDisplays {
@@ -116,9 +115,9 @@ impl IosDisplays {
             shows_a_pointer: UIDevice::currentDevice(marker).userInterfaceIdiom()
                 == UIUserInterfaceIdiom::Pad,
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
-            link_periods: Mutex::new(ScreenPeriods::new()),
-            cadences: Mutex::new(Vec::new()),
-            scale_streak: Mutex::new(ScaleStreaks::default()),
+            link_periods: NativeOwner::new(std::cell::RefCell::new(ScreenPeriods::new()), marker),
+            cadences: NativeOwner::new(std::cell::RefCell::default(), marker),
+            scale_streak: NativeOwner::new(std::cell::RefCell::default(), marker),
         }
     }
 
@@ -141,10 +140,11 @@ impl IosDisplays {
             };
             // The screen's scale by the hosts' one rule; a refusal is
             // reported once the ledger is let go.
-            let (ratio, refused) =
-                self.scale_streak
-                    .lock()
-                    .read(id, screen.nativeScale(), "UIScreen nativeScale");
+            let (ratio, refused) = self.scale_streak.get(marker).borrow_mut().read(
+                id,
+                screen.nativeScale(),
+                "UIScreen nativeScale",
+            );
             refusals.extend(refused);
 
             // A screen's bounds are in points, its logical pixels; screens are
@@ -165,7 +165,7 @@ impl IosDisplays {
             let mut display =
                 DisplayDescription::new(id, name, DesktopOrigin::default(), bounds, ratio)
                     .with_primary(index == 0);
-            display.refresh_period = self.link_periods.lock().period_of(number);
+            display.refresh_period = self.link_periods.get(marker).borrow_mut().period_of(number);
             // SAFETY: `displayGamut` is read on the main thread, which
             // `marker` proves, as UIKit's trait collections require.
             let p3 = unsafe { screen.traitCollection().displayGamut() } == UIDisplayGamut::P3;
@@ -181,10 +181,13 @@ impl IosDisplays {
         for refused in refusals {
             refused.report();
         }
-        self.link_periods.lock().retain_screens(&live_numbers);
+        self.link_periods
+            .get(marker)
+            .borrow_mut()
+            .retain_screens(&live_numbers);
         // A screen this sample did not read takes its streak with it.
         let read: Vec<DisplayId> = displays.iter().map(|display| display.id).collect();
-        self.scale_streak.lock().keep_only(&read);
+        self.scale_streak.get(marker).borrow_mut().keep_only(&read);
         displays
     }
 }
@@ -331,11 +334,14 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
 
     fn move_window(
         &self,
+        marker: MainThreadMarker,
         window: WindowId,
-        slot: &Mutex<ScreenIdentity>,
+        slot: &std::cell::Cell<ScreenIdentity>,
         next: ScreenIdentity,
     ) -> bool {
-        let changed = change_screen(&mut *slot.lock(), next);
+        let mut current = slot.get();
+        let changed = change_screen(&mut current, next);
+        slot.set(current);
         let Some(previous) = changed else {
             return false;
         };
@@ -343,14 +349,18 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
         // screen the window moved to.
         if let Some((_, cadence)) = self
             .cadences
-            .lock()
+            .get(marker)
+            .borrow_mut()
             .iter_mut()
             .find(|(held, _)| *held == window)
         {
             cadence.forget();
         }
         if let Some(number) = previous.number {
-            self.link_periods.lock().forget(number.0, window);
+            self.link_periods
+                .get(marker)
+                .borrow_mut()
+                .forget(number.0, window);
         }
         self.source.invalidate();
         true
@@ -358,12 +368,13 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
 
     fn observe_link(
         &self,
+        marker: MainThreadMarker,
         window: WindowId,
         number: Option<ScreenNumber>,
         interval_seconds: f64,
     ) -> bool {
         let published = {
-            let mut cadences = self.cadences.lock();
+            let mut cadences = self.cadences.get(marker).borrow_mut();
             let index = cadences
                 .iter()
                 .position(|(held, _)| *held == window)
@@ -376,15 +387,31 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
         let (Some(period), Some(number)) = (published, number) else {
             return false;
         };
-        self.link_periods.lock().report(number.0, window, period);
+        self.link_periods
+            .get(marker)
+            .borrow_mut()
+            .report(number.0, window, period);
         self.source.invalidate();
         true
     }
 
     /// Other windows' periods on the screen stay.
-    fn forget_link(&self, window: WindowId, number: Option<ScreenNumber>) {
-        self.cadences.lock().retain(|(held, _)| *held != window);
-        let forgot = number.is_some_and(|number| self.link_periods.lock().forget(number.0, window));
+    fn forget_link(
+        &self,
+        marker: MainThreadMarker,
+        window: WindowId,
+        number: Option<ScreenNumber>,
+    ) {
+        self.cadences
+            .get(marker)
+            .borrow_mut()
+            .retain(|(held, _)| *held != window);
+        let forgot = number.is_some_and(|number| {
+            self.link_periods
+                .get(marker)
+                .borrow_mut()
+                .forget(number.0, window)
+        });
         if forgot {
             self.source.invalidate();
         }
