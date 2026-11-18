@@ -1244,7 +1244,6 @@ fn a_registration_while_a_segment_is_retained_asks_for_its_successor() {
         owner
             .drive_frame(
                 Instant::now(),
-                far_deadline(),
                 || {},
                 || {
                     presentation.resume_segment().expect("resume");
@@ -1259,7 +1258,6 @@ fn a_registration_while_a_segment_is_retained_asks_for_its_successor() {
         owner
             .drive_frame(
                 Instant::now(),
-                far_deadline(),
                 || {},
                 || {
                     if presentation.has_completion_demand() {
