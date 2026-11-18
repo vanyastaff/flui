@@ -618,48 +618,82 @@ fn an_own_read_whose_selection_fails_keeps_the_first_failure() {
 /// own, as a terminal or an editor pasting it does.
 struct Requestor {
     connection: RustConnection,
+    root: xproto::Window,
     window: xproto::Window,
     utf8: xproto::Atom,
     incr: xproto::Atom,
+    targets: xproto::Atom,
 }
 
 impl Requestor {
     fn new() -> Self {
-        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
-
         let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
         let root = connection.setup().roots[screen].root;
         let window = connection.generate_id().expect("an id");
-        connection
-            .create_window(
-                x11rb::COPY_DEPTH_FROM_PARENT,
-                window,
-                root,
-                0,
-                0,
-                1,
-                1,
-                0,
-                WindowClass::INPUT_ONLY,
-                x11rb::COPY_FROM_PARENT,
-                &CreateWindowAux::new(),
-            )
-            .expect("the request is sent");
-        Self {
+        let requestor = Self {
             connection,
+            root,
             window,
             utf8: atom("UTF8_STRING"),
             incr: atom("INCR"),
-        }
+            targets: atom("TARGETS"),
+        };
+        requestor.make_window();
+        requestor
+    }
+
+    /// Make the window under its id.
+    fn make_window(&self) {
+        self.connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                self.window,
+                self.root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                xproto::WindowClass::INPUT_ONLY,
+                x11rb::COPY_FROM_PARENT,
+                &xproto::CreateWindowAux::new(),
+            )
+            .expect("the request is sent");
+    }
+
+    /// Destroy the window and make another under the same id, as the server
+    /// gives a gone client's ids to the next one, and wait until the server
+    /// has done both.
+    fn replace_window(&self) {
+        self.connection
+            .destroy_window(self.window)
+            .expect("the request is sent");
+        self.make_window();
+        self.round_trip();
+    }
+
+    /// Wait until the server has carried out every request sent so far.
+    fn round_trip(&self) {
+        self.connection
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
     }
 
     /// Ask `owner` for the text into `property` and wait for the answer,
     /// turning the owner's loop meanwhile: the property it names, `NONE`
     /// when it refused.
     fn ask(&self, owner: &X11Clipboard, property: xproto::Atom) -> xproto::Atom {
+        self.send_request(property);
+        self.answer(owner)
+    }
+
+    /// Wait for the next answer the window hears, turning `owner`'s loop
+    /// meanwhile: the property it names, `NONE` for a refusal.
+    fn answer(&self, owner: &X11Clipboard) -> xproto::Atom {
         use x11rb::protocol::Event;
 
-        self.send_request(property);
         let deadline = Instant::now() + STEP;
         loop {
             owner.deliver();
@@ -682,16 +716,53 @@ impl Requestor {
 
     /// Ask for the text into `property`, waiting for nothing.
     fn send_request(&self, property: xproto::Atom) {
+        self.convert(self.utf8, property);
+    }
+
+    /// Ask for the primary selection as `target` into `property`, waiting
+    /// for nothing.
+    fn convert(&self, target: xproto::Atom, property: xproto::Atom) {
         self.connection
             .convert_selection(
                 self.window,
                 xproto::Atom::from(xproto::AtomEnum::PRIMARY),
-                self.utf8,
+                target,
                 property,
                 x11rb::CURRENT_TIME,
             )
             .expect("the request is sent");
         self.connection.flush().expect("the request is sent");
+    }
+
+    /// Wait until the clipboard's thread has heard every request sent
+    /// before, without turning the owner's loop: a request for `TARGETS`,
+    /// which the thread answers as it hears it, after the requests that came
+    /// first. The properties of the answers heard before its own.
+    fn heard(&self) -> Vec<xproto::Atom> {
+        use x11rb::protocol::Event;
+
+        self.convert(self.targets, atom("FLUI_TARGETS"));
+        let mut before = Vec::new();
+        let deadline = Instant::now() + STEP;
+        loop {
+            while let Some(event) = self
+                .connection
+                .poll_for_event()
+                .expect("the connection holds")
+            {
+                if let Event::SelectionNotify(notify) = event {
+                    if notify.target == self.targets {
+                        return before;
+                    }
+                    before.push(notify.property);
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the TARGETS answer"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     /// Start every `INCR` transfer `owner` writes at once, and never take a
@@ -747,9 +818,9 @@ fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
 
 /// A requestor that goes (it crashes, or is killed) holds none of the
 /// `INCR` transfers the clipboard writes at once: those under way end as its
-/// window goes, not at their timeout, and those asked before it went and
-/// answered after are refused, not started on a window that is not there.
-/// The next client is served at once either way.
+/// window goes, not at their timeout, and those asked before it went are
+/// dropped as it goes, never started on a window that is not there. The next
+/// client is served at once either way.
 #[test]
 fn a_requestor_that_goes_lets_go_of_its_transfers() {
     #[derive(Debug, Clone, Copy)]
@@ -778,6 +849,9 @@ fn a_requestor_that_goes_lets_go_of_its_transfers() {
                 for held in 0..2 * super::selection::MAX_WRITERS {
                     gone.send_request(atom(&format!("FLUI_HELD_{held}")));
                 }
+                // Each heard while its window lived: the thread hears the
+                // window's end, not a window that took its id meanwhile.
+                gone.heard();
             }
         }
         let window = gone.window;
@@ -811,6 +885,79 @@ fn a_requestor_that_goes_lets_go_of_its_transfers() {
         assert!(
             started.elapsed() < super::selection::TRANSFER_TIMEOUT,
             "{goes:?}: served at once, not at a transfer's timeout"
+        );
+    }
+}
+
+/// A requestor whose window goes while its request waits on the owner
+/// thread is never answered, though a window that takes the gone one's id
+/// asks before the answer is written, as a client the server gives a gone
+/// one's ids does: that window hears only its own answer, whole or `INCR`.
+/// The case makes the window under the same id itself, while the clipboard's
+/// thread is held in a command, so the owner thread's text for the gone
+/// window's request reaches the thread before the window's end does.
+#[test]
+fn a_window_that_takes_a_gone_requestors_id_hears_only_its_own_answer() {
+    use super::selection::{Command, Name, Owed};
+
+    let Some(_server) = server() else {
+        return;
+    };
+    for text in ["selected".to_owned(), "x".repeat(1 << 20)] {
+        let owner = clipboard();
+        let asked = Rc::new(Cell::new(0));
+        offer_primary(&owner, counted(&text, &asked));
+        let requestor = Requestor::new();
+        let gone = atom("FLUI_GONE");
+        requestor.send_request(gone);
+        assert_eq!(
+            requestor.heard(),
+            Vec::<xproto::Atom>::new(),
+            "the request waits on the owner thread"
+        );
+
+        // A read of the primary selection answers through a poster that
+        // holds the thread until the case lets go.
+        let (entered, held) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let poster = OwnerPoster::new(move |_| {
+            let _ = entered.send(());
+            // A dropped sender lets go, as a send does.
+            let _ = released.lock().expect("the release").recv_timeout(STEP);
+            Err(OwnerRetired)
+        });
+        let source = CompletionSource::new(poster, PendingCompletions::new());
+        let (_read, answer) = source.pending::<ClipboardRead>();
+        owner.send(Command::Read(Name::Primary, Owed::new(answer)));
+        held.recv_timeout(STEP)
+            .expect("the thread answers the read");
+
+        requestor.replace_window();
+        let after = atom("FLUI_AFTER");
+        requestor.send_request(after);
+        requestor.round_trip();
+        // The text for the gone window's request, queued behind the read.
+        owner.deliver();
+        drop(release);
+
+        assert_eq!(
+            requestor.answer(&owner),
+            after,
+            "{} bytes: the window hears its own answer, not the gone one's",
+            text.len()
+        );
+        let written = requestor
+            .connection
+            .get_property(false, requestor.window, gone, xproto::AtomEnum::ANY, 0, 1)
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        assert_eq!(
+            written.type_,
+            x11rb::NONE,
+            "{} bytes: nothing is written for the gone window's request",
+            text.len()
         );
     }
 }
