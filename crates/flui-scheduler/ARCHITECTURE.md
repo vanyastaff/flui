@@ -105,8 +105,10 @@ presentation, a failed frame's backoff).
 only for the original live owner; a scoped widget handle cannot mint siblings.
 Registering a callback, scoped or unscoped, asks for no frame (ADR-0367): it
 runs after the next frame that completes its segment, so a callback that
-re-registers itself costs nothing while no frame runs. A caller that needs that
-frame asks with `PostFrameHandle::schedule_frame`, which outside a running
+re-registers itself costs nothing while no frame runs. A registration made while
+a retained segment waits to resume (suspended or servicing) is the exception: it
+asks for the successor it joins, which the resume does not complete. A caller
+that needs a frame asks with `PostFrameHandle::schedule_frame`, which outside a running
 segment commits completion demand before requesting a host wake, outside queue
 guards. A failed or cleared wake cannot erase that accepted request.
 The runtime admits a completion-only segment only for an eligible presentation

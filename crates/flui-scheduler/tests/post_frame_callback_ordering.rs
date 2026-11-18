@@ -1218,6 +1218,10 @@ fn post_frame_ordering_matrix() {
                 completion_demand_coalesces_and_survives_hidden_presentation_gating as fn(),
             ),
             (
+                "a_registration_while_a_segment_is_retained_asks_for_its_successor",
+                a_registration_while_a_segment_is_retained_asks_for_its_successor as fn(),
+            ),
+            (
                 "a_requested_completion_survives_wake_failure_and_host_clearing",
                 a_requested_completion_survives_wake_failure_and_host_clearing as fn(),
             ),
@@ -1275,4 +1279,59 @@ fn post_frame_ordering_matrix() {
             ),
         ],
     );
+}
+
+/// A callback registered while a retained segment waits to resume joins the
+/// successor segment, which resuming does not complete: the registration asks
+/// for that successor itself.
+///
+/// Fails when such a registration asks for nothing, so the callback waits
+/// past the resumed segment for a frame nothing asks for.
+fn a_registration_while_a_segment_is_retained_asks_for_its_successor() {
+    let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
+    let presentation = owner.presentation_scope();
+    let log = Log::default();
+    presentation.enter_segment().expect("segment");
+    presentation.suspend_segment().expect("retained segment");
+    let ran = log.clone();
+    presentation
+        .post_frame_handle()
+        .schedule(move |_| ran.push("successor"))
+        .expect("registration while retained");
+    assert!(
+        presentation.has_completion_demand(),
+        "the successor segment is owed"
+    );
+    assert!(scheduler.is_frame_scheduled(), "and asked for");
+
+    owner
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                presentation.resume_segment().expect("resume");
+                presentation.complete_segment().expect("coherent geometry");
+            },
+        )
+        .expect("live owner frame");
+    assert!(
+        log.get().is_empty(),
+        "resuming completes only the retained segment"
+    );
+    owner
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                if presentation.has_completion_demand() {
+                    presentation.enter_segment().expect("the owed successor");
+                    presentation.complete_segment().expect("coherent geometry");
+                }
+            },
+        )
+        .expect("live owner frame");
+    assert_eq!(log.get(), ["successor"]);
 }

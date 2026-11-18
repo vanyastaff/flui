@@ -753,7 +753,9 @@ impl PresentationFrameScope {
         Ok(())
     }
 
-    /// Accepted successor callbacks need a coherent completion even when the
+    /// A requested frame (`PostFrameHandle::schedule_frame`), a callback an
+    /// aborted frame left waiting, or one registered while a retained segment
+    /// waits to resume, needs a coherent completion even when the
     /// presentation has no dirty tree work. Runtime admission must also check
     /// host eligibility and existing coherent geometry before entering it.
     #[must_use]
@@ -989,10 +991,13 @@ impl PostFrameHandle {
     /// the successor segment. Self-registration therefore never runs twice in
     /// one completion batch.
     ///
-    /// Registering asks for no frame: the callback runs after the next frame
+    /// Registering asks for no frame (ADR-0367): the callback runs after the next frame
     /// that completes its segment, whatever asked for that frame. A caller
-    /// whose callback waits on a frame nothing else asks for requests one
-    /// itself (a rebuild, a render invalidation, `UpdateScheduler::request_frame`).
+    /// whose callback waits on a frame nothing else asks for calls
+    /// [`schedule_frame`](Self::schedule_frame); a scheduler-wide frame request
+    /// alone does not complete a clean presentation. A registration made while
+    /// a retained segment waits to resume (suspended or servicing) asks for the
+    /// successor segment itself, since resuming completes only the retained one.
     /// A loop that re-registers from its own callback therefore runs once per
     /// frame while frames run and costs nothing while the presentation is idle.
     ///
@@ -1097,14 +1102,20 @@ impl PostFrameHandle {
         let Some(scheduler) = self.scheduler.upgrade() else {
             return Err((value, Some(lane)));
         };
+        let mut owed_successor: Option<Rc<PresentationScopeState>> = None;
         let target = if let Some(scope) = &self.scope {
             let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
                 return Err((value, Some(lane)));
             };
-            let epoch = if scope.phase.get() == SegmentPhase::Running {
-                scope.current.borrow().clone()
-            } else {
-                scope.next.borrow().clone()
+            let epoch = match scope.phase.get() {
+                SegmentPhase::Running => scope.current.borrow().clone(),
+                // Resuming a retained segment completes only that segment, so
+                // the successor this callback joins is asked for here.
+                SegmentPhase::Suspended | SegmentPhase::Servicing => {
+                    owed_successor = Some(Rc::clone(&scope));
+                    scope.next.borrow().clone()
+                }
+                SegmentPhase::Idle | SegmentPhase::Completing => scope.next.borrow().clone(),
             };
             CallbackTarget::Presentation {
                 scope: Rc::downgrade(&scope),
@@ -1120,7 +1131,13 @@ impl PostFrameHandle {
                 callback,
                 target,
             });
+            if let Some(scope) = &owed_successor {
+                scope.next_demand.set(true);
+            }
         });
+        if owed_successor.is_some() {
+            scheduler.request_frame();
+        }
         Ok(())
     }
 

@@ -43,7 +43,9 @@ Should registering a post-frame callback ask for a frame?
 Option 1.
 
 - `PostFrameHandle::schedule` and `schedule_or_return` queue the callback for the next frame that
-  completes its segment and ask for no frame, whatever the segment's phase.
+  completes its segment and ask for no frame. The one exception is a registration made while a
+  retained segment waits to resume (suspended or servicing): resuming completes only the retained
+  segment, so the registration asks for the successor it joins.
 - `PostFrameHandle::schedule_frame` asks for a frame of the handle's presentation, as Flutter's
   `scheduleFrame`: it sets the scope's completion demand (outside a running segment) and requests
   a frame, so a clean presentation completes a segment without rebuilding or submitting a scene.
