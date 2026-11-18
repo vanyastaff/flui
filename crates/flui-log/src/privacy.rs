@@ -24,9 +24,9 @@
 //! | Recorded as | Default | Override |
 //! |---|---|---|
 //! | scalar (`i64`, `u64`, `i128`, `u128`, `f64`, `bool`) | published | `.private` suffix redacts |
-//! | dynamic (`&str`, `Debug`, `Display`, errors, bytes) | redacted to [`REDACTED_VALUE`] | `.public` suffix publishes |
-//! | `message`, [native](EventOrigin::Native) `tracing` event | published | — |
-//! | `message`, [bridged](EventOrigin::LogBridge) from the `log` facade | redacted | — (deliberately none) |
+//! | dynamic (`&str`, `Debug`, `Display`, errors, bytes) | redacted to `<private>` | `.public` suffix publishes |
+//! | `message`, native `tracing` event | published | — |
+//! | `message`, bridged from the `log` facade | redacted | — (deliberately none) |
 //!
 //! ```rust
 //! tracing::info!(
@@ -55,7 +55,7 @@
 //! with the interpolation already flattened into `message` — free-form text
 //! from code that cannot carry a marker and was never reviewed against those
 //! requirements. Native `os_log` would have redacted exactly that dynamic string,
-//! so a bridged message is classified [`Private`](FieldPrivacy::Private), with
+//! so a bridged message is classified private, with
 //! deliberately no opt-out: the third party cannot classify its own text, and
 //! the embedding application should not vouch for text it does not produce.
 //! The record itself still ships — its level, its `log.*` provenance fields,
@@ -91,8 +91,7 @@
 /// the cross-platform contract and the platform mechanism it maps onto read as
 /// one thing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[expect(clippy::exhaustive_enums, reason = "a field is published or redacted")]
-pub enum FieldPrivacy {
+pub(crate) enum FieldPrivacy {
     /// The value is published verbatim.
     Public,
     /// The value is replaced by [`REDACTED_VALUE`] before it reaches the sink.
@@ -105,11 +104,7 @@ pub enum FieldPrivacy {
 /// because they cannot embed free-form user content; anything rendered from a
 /// string or a `Debug`/`Display` implementation can.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "`tracing`'s `Visit` protocol records a scalar or a rendering that can carry free text"
-)]
-pub enum FieldKind {
+pub(crate) enum FieldKind {
     /// A numeric or boolean value (`record_i64`, `record_u64`, `record_i128`,
     /// `record_u128`, `record_f64`, `record_bool`).
     Scalar,
@@ -125,8 +120,7 @@ pub enum FieldKind {
 /// third party's fully interpolated string. Named fields classify identically
 /// under both origins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum EventOrigin {
+pub(crate) enum EventOrigin {
     /// Emitted through `tracing`'s own macros. The callsite can carry field
     /// markers and is subject to this workspace's fields-not-messages rule, so
     /// its message publishes.
@@ -149,7 +143,7 @@ pub const PRIVATE_FIELD_SUFFIX: &str = ".private";
 /// reader of either platform's log recognises it. Defined in
 /// `flui-foundation` so framework types that withhold text can format as it
 /// without depending on this crate.
-pub use flui_foundation::diagnostics::REDACTED_VALUE;
+pub(crate) use flui_foundation::diagnostics::REDACTED_VALUE;
 
 /// The event field `tracing`'s macros store the formatted message under.
 pub(crate) const MESSAGE_FIELD: &str = "message";
@@ -171,7 +165,7 @@ impl FieldPrivacy {
     /// redacts for a bridged one; the `log.*` bridge fields are always
     /// published (see the module docs for why).
     #[must_use]
-    pub fn classify(name: &str, kind: FieldKind, origin: EventOrigin) -> Self {
+    pub(crate) fn classify(name: &str, kind: FieldKind, origin: EventOrigin) -> Self {
         if name == MESSAGE_FIELD {
             return match origin {
                 EventOrigin::Native => Self::Public,

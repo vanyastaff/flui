@@ -3,11 +3,10 @@
 //! # One filter, not two
 //!
 //! A [`Targets`] filter is the *only* thing that decides whether an event
-//! reaches a backend. The historical logger stacked a second `LevelFilter`
-//! beside the directive filter and seeded it from a `Level` field that
-//! defaulted to `INFO`, so `RUST_LOG=flui_view=trace` selected the events and
-//! the ceiling then threw them away — a filter that could only ever subtract
-//! from what the user asked for, and that no directive could raise.
+//! reaches a backend. There is no second `LevelFilter` beside it: a level
+//! ceiling stacked over the directive filter could only subtract from what
+//! `RUST_LOG` selected, so `RUST_LOG=flui_view=trace` would select `TRACE`
+//! events and the ceiling would drop them, and no directive could raise it.
 //!
 //! This module therefore has no level knob at all. A ceiling cannot be
 //! configured because there is nowhere to configure one; the technical maximum
@@ -74,13 +73,12 @@ pub enum FilterError {
 /// Which directives select events, and which environment variable may override
 /// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct FilterConfig {
     /// The directive string (see [Directives](self#directives)). It is not validated
     /// until [`FilterConfig::targets`] resolves it.
-    pub directives: String,
+    directives: String,
     /// The environment variable consulted before the directives, if any.
-    pub env_var: Option<String>,
+    env_var: Option<String>,
 }
 
 impl Default for FilterConfig {

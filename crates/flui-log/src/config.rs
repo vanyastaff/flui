@@ -1,7 +1,6 @@
 //! What to log, as whom, and in what shape.
 
 use tracing::Subscriber;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{Layer as _, Registry};
@@ -82,45 +81,26 @@ impl LogConfig {
         self.log_bridge_policy
     }
 
-    /// Resolve the filter. Equivalent to `config.filter().targets()`.
-    ///
-    /// # Errors
-    ///
-    /// Propagates the [`FilterError`] from
-    /// [`FilterConfig::targets`](crate::FilterConfig::targets).
-    pub fn targets(&self) -> Result<Targets, FilterError> {
-        self.filter.targets()
-    }
-
     pub(crate) fn without_env_override(&self) -> Self {
         let mut fallback = self.clone();
-        fallback.filter = FilterConfig::new(self.filter.directives.clone()).without_env_var();
+        fallback.filter = self.filter.clone().without_env_var();
         fallback
-    }
-
-    /// Build the platform's default sink as a composable layer.
-    #[must_use]
-    pub fn platform_layer<S>(&self) -> PlatformLayer<S>
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    {
-        PlatformLayer::platform_default(self)
     }
 
     /// Build FLUI's default subscriber: a registry and a filtered native sink.
     ///
     /// Nothing global happens here. The result is an ordinary value that a
     /// caller can stack further layers onto before handing it to
-    /// [`install_subscriber`](crate::install_subscriber).
+    /// [`install_subscriber`](crate::ownership::install_subscriber).
     ///
     /// ```rust
-    /// use flui_log::LogConfig;
+    /// use flui_log::config::LogConfig;
     /// use tracing_subscriber::layer::SubscriberExt as _;
     ///
     /// let subscriber = LogConfig::default().subscriber()?;
     /// // The application's own layer sits above FLUI's default stack.
     /// let _with_extra = subscriber.with(tracing_subscriber::filter::LevelFilter::TRACE);
-    /// # Ok::<(), flui_log::FilterError>(())
+    /// # Ok::<(), flui_log::filter::FilterError>(())
     /// ```
     ///
     /// # Errors
@@ -133,7 +113,7 @@ impl LogConfig {
         impl Subscriber + for<'lookup> LookupSpan<'lookup> + Send + Sync + 'static + use<>,
         FilterError,
     > {
-        let filter = self.targets()?;
+        let filter = self.filter.targets()?;
         let platform = PlatformLayer::platform_default(self);
         Ok(Registry::default().with(platform.with_filter(filter)))
     }
@@ -156,13 +136,6 @@ impl LogConfigBuilder {
     /// Set which events are selected.
     pub fn filter(mut self, filter: FilterConfig) -> Self {
         self.config.filter = filter;
-        self
-    }
-
-    /// Set the filter from a directive string, keeping the default
-    /// `RUST_LOG` override.
-    pub fn directives(mut self, directives: impl Into<String>) -> Self {
-        self.config.filter = FilterConfig::new(directives);
         self
     }
 

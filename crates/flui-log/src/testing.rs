@@ -26,13 +26,9 @@
 //! interest is computed against `NoSubscriber`, cached as `Interest::never()`,
 //! and the capturing test's event is dropped before dispatch ever happens.
 //!
-//! This was not hypothetical. `flui-widgets`' parity suite carried two
-//! hand-rolled copies of the `with_default` technique, both documenting the
-//! caveat and neither able to fix it — one of them,
-//! `grid_view_builder_unbounded_truncation_warns_once_not_every_frame`, failed
-//! **4 times in 25** runs of the `parity` binary while passing 60/60 in
-//! isolation, poisoned by a sibling test that mounts an identical tree and
-//! reaches the same warning first.
+//! The race is ordinary in a test binary: two tests that mount the same tree
+//! reach the same warning, and whichever thread gets there first decides
+//! whether the other one can ever capture it.
 //!
 //! # How this fixes it
 //!
@@ -89,7 +85,6 @@
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
@@ -107,7 +102,10 @@ thread_local! {
 }
 
 /// One captured `tracing` event.
+///
+/// Non-exhaustive so a later field (the enclosing spans, say) is not a break.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CapturedRecord {
     /// The event's level.
     pub level: Level,
@@ -282,10 +280,9 @@ impl Subscriber for CaptureSubscriber {
     }
 
     fn new_span(&self, _span: &Attributes<'_>) -> Id {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        // Ids must be non-zero; wrapping past u64::MAX is not reachable in a
-        // test process, and `max(1)` keeps it total anyway.
-        Id::from_u64(NEXT.fetch_add(1, Ordering::Relaxed).max(1))
+        // Spans are not tracked, so every span shares one id, as the
+        // sentinel's do; `tracing` only requires it to be non-zero.
+        Id::from_u64(1)
     }
 
     fn record(&self, _span: &Id, _values: &Record<'_>) {}

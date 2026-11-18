@@ -4,7 +4,9 @@
 //! process slot. A future embedded entry point does not need a no-op policy API:
 //! it preserves host ownership by never calling this module.
 
-use flui_log::{LogConfig, SubscriberInstallation, SubscriberPolicy};
+use flui_log::config::LogConfig;
+use flui_log::filter::FilterConfig;
+use flui_log::ownership::{SubscriberInstallation, SubscriberPolicy};
 
 use super::{AppConfig, DiagnosticsProfile};
 
@@ -29,7 +31,7 @@ pub(crate) fn managed_log_config(config: &AppConfig) -> LogConfig {
 
     LogConfig::builder()
         .identity(config.application_identity.clone())
-        .directives(directives)
+        .filter(FilterConfig::new(directives))
         .build()
 }
 

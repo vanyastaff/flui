@@ -22,7 +22,7 @@
 //! Every backend here accepts *every* level. Whether an event is emitted is
 //! decided by the [`Targets`](crate::filter) filter alone. A backend that also
 //! filtered would be a second, invisible ceiling that no `RUST_LOG` directive
-//! could raise — see [`crate::filter`] for the regression this prevents.
+//! could raise (see [`crate::filter`]).
 //!
 //! # Privacy: device sinks are private by default
 //!
@@ -30,17 +30,16 @@
 //! application, so those two sinks — and only those two — are constructed
 //! behind a redaction stage (the crate-private `redact` module): a dynamic
 //! value (string, `Debug` or `Display` rendering, error) is replaced by
-//! [`privacy::REDACTED_VALUE`]
+//! [`REDACTED_VALUE`](flui_foundation::diagnostics::REDACTED_VALUE)
 //! unless its field name ends in `.public`; a scalar is published unless its
 //! name ends in `.private`; a native `tracing` message is published, while a
 //! message bridged from the `log` facade is third-party interpolated text and
-//! is redacted. The contract, the
-//! Apple model it is ported from, and its residual holes live in [`privacy`].
-//! The desktop and web-console sinks write to the developer's own terminal or
-//! `DevTools` and publish fields verbatim.
+//! is redacted. The contract, the Apple model it is ported from, and its
+//! residual holes live in [`privacy`](crate::privacy). The desktop and
+//! web-console sinks write to the developer's own terminal or `DevTools` and
+//! publish fields verbatim.
 
 pub(crate) mod logcat;
-pub mod privacy;
 pub(crate) mod record;
 pub(crate) mod redact;
 
@@ -55,8 +54,6 @@ use tracing_subscriber::fmt::format::{Compact, DefaultFields, Format};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
-
-pub use logcat::LogcatPriority;
 
 /// The selected sink.
 ///
@@ -162,11 +159,13 @@ impl<S> core::fmt::Debug for Sink<S> {
 /// a `dyn` boundary of its own.
 ///
 /// ```rust,no_run
-/// use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig, PlatformLayer, install_subscriber};
+/// use flui_log::backend::PlatformLayer;
+/// use flui_log::config::LogConfig;
+/// use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 /// use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 ///
 /// let config = LogConfig::default();
-/// let filter = config.targets()?;
+/// let filter = config.filter().targets()?;
 /// let subscriber = Registry::default()
 ///     .with(PlatformLayer::platform_default(&config).with_filter(filter));
 /// // ... stack further layers here ...
@@ -182,70 +181,40 @@ impl<S> PlatformLayer<S>
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    /// The backend this compilation target uses by default.
+    /// The backend this compilation target uses by default: the desktop
+    /// formatter in `config`'s [`DesktopFormat`](crate::config::DesktopFormat),
+    /// logcat on Android, Apple unified logging on iOS, the browser console on
+    /// wasm32.
+    ///
+    /// # Privacy
+    ///
+    /// The two device sinks, logcat and Apple unified logging, are constructed
+    /// behind the redaction stage: fields are private by default and publish
+    /// only under the rules in [`privacy`](crate::privacy). Logcat is a plain
+    /// line transport with no redaction knob of its own, so the classification
+    /// is applied before the line is rendered and a redacted value never leaves
+    /// the process.
     #[must_use]
-    pub fn platform_default(config: &crate::LogConfig) -> Self {
+    pub fn platform_default(config: &crate::config::LogConfig) -> Self {
         Self {
             sink: default_sink(config),
         }
     }
 
-    /// The desktop formatter, in the requested shape.
-    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    #[must_use]
-    pub fn desktop(format: crate::DesktopFormat) -> Self {
-        Self {
-            sink: desktop_sink(format),
-        }
-    }
-
-    /// Compact desktop output written to stderr.
-    ///
-    /// Command-line composition roots use this so diagnostics never corrupt
-    /// stdout protocols such as shell completions or JSON output.
-    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    #[must_use]
-    pub fn desktop_compact_stderr() -> Self {
-        Self {
-            sink: compact_sink(
-                BoxMakeWriter::new(std::io::stderr),
-                ansi_wanted(&std::io::stderr()),
-            ),
-        }
-    }
-
-    /// Android logcat, tagged with the event target and falling back to the
-    /// identity's display name.
-    ///
-    /// # Privacy
-    ///
-    /// Constructed behind the redaction stage: fields are private by default
-    /// and publish only under the rules in [`privacy`]. Android itself has no
-    /// `os_log`-style redaction knob — logcat is a plain line transport — so
-    /// the classification is applied before the line is rendered, and a
-    /// redacted value never leaves the process.
-    #[cfg(target_os = "android")]
-    #[must_use]
-    pub fn logcat(identity: &crate::AppIdentity) -> Self {
-        Self {
-            sink: Sink::Logcat(redact::RedactLayer::new(logcat::LogcatLayer::new(
-                identity.display_name(),
-            ))),
-        }
-    }
-
     /// Apple unified logging, under the identity's subsystem and FLUI's stable
-    /// category.
+    /// category: the default on iOS, and the opt-in for a bundled macOS
+    /// application built with the `apple-unified-logging` feature.
     ///
     /// # Privacy
     ///
     /// Constructed behind the redaction stage: fields are **private by
-    /// default** and publish only under the rules in [`privacy`] — a scalar
-    /// or a field whose name ends in `.public` is published, everything else
-    /// reaches the unified log as `<private>`. The classification is enforced
-    /// per event, in-process, before `tracing-oslog` renders; a producer does
-    /// not have to know this sink is installed, and nothing a producer forgets
-    /// to mark can land in the log archive verbatim.
+    /// default** and publish only under the rules in
+    /// [`privacy`](crate::privacy) — a scalar or a field whose name ends in
+    /// `.public` is published, everything else reaches the unified log as
+    /// `<private>`. The classification is enforced per event, in-process,
+    /// before `tracing-oslog` renders; a producer does not have to know this
+    /// sink is installed, and nothing a producer forgets to mark can land in
+    /// the log archive verbatim.
     ///
     /// One deliberate divergence from native `os_log` redaction: the OS
     /// substitutes `<private>` at *display* time and can reveal the stored
@@ -278,29 +247,10 @@ where
         all(target_os = "macos", feature = "apple-unified-logging")
     ))]
     #[must_use]
-    pub fn apple_unified_logging(identity: &crate::AppIdentity) -> Self {
+    pub fn apple_unified_logging(identity: &crate::identity::AppIdentity) -> Self {
         Self {
-            sink: Sink::AppleUnified(redact::RedactLayer::new(tracing_oslog::OsLogger::new(
-                identity.apple_subsystem(),
-                crate::identity::APPLE_CATEGORY,
-            ))),
+            sink: apple_unified_sink(identity),
         }
-    }
-
-    /// Browser console, with spans reported to the performance timeline.
-    #[cfg(target_arch = "wasm32")]
-    #[must_use]
-    pub fn web_console() -> Self {
-        Self {
-            sink: web_console_sink(),
-        }
-    }
-
-    /// Which backend this layer writes to. Stable enough to assert on.
-    #[inline]
-    #[must_use]
-    pub fn backend_name(&self) -> &'static str {
-        self.sink.name()
     }
 }
 
@@ -310,60 +260,60 @@ where
 // body, so each target's default is a single readable definition.
 
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
+fn default_sink<S>(config: &crate::config::LogConfig) -> Sink<S> {
     desktop_sink(config.desktop_format())
 }
 
 #[cfg(target_os = "android")]
-fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
+fn default_sink<S>(config: &crate::config::LogConfig) -> Sink<S> {
     Sink::Logcat(redact::RedactLayer::new(logcat::LogcatLayer::new(
         config.identity().display_name(),
     )))
 }
 
 #[cfg(target_os = "ios")]
-fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
-    Sink::AppleUnified(redact::RedactLayer::new(tracing_oslog::OsLogger::new(
-        config.identity().apple_subsystem(),
-        crate::identity::APPLE_CATEGORY,
-    )))
+fn default_sink<S>(config: &crate::config::LogConfig) -> Sink<S> {
+    apple_unified_sink(config.identity())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
+fn default_sink<S>(config: &crate::config::LogConfig) -> Sink<S> {
     let _ = config;
     web_console_sink()
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-fn desktop_sink<S>(format: crate::DesktopFormat) -> Sink<S> {
-    match format {
-        // `with_target(true)` diverges from the historical backend, which hid
-        // the target. The target is the exact string a `RUST_LOG` directive
-        // matches on, so hiding it left an author guessing at what to write.
-        crate::DesktopFormat::Compact => compact_sink(
-            BoxMakeWriter::new(std::io::stdout),
-            ansi_wanted(&std::io::stdout()),
-        ),
-
-        #[cfg(feature = "hierarchical")]
-        crate::DesktopFormat::Hierarchical => {
-            Sink::Hierarchical(tracing_forest::ForestLayer::default())
-        }
-    }
+#[cfg(any(
+    target_os = "ios",
+    all(target_os = "macos", feature = "apple-unified-logging")
+))]
+fn apple_unified_sink<S>(identity: &crate::identity::AppIdentity) -> Sink<S> {
+    Sink::AppleUnified(redact::RedactLayer::new(tracing_oslog::OsLogger::new(
+        identity.apple_subsystem(),
+        crate::identity::APPLE_CATEGORY,
+    )))
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-fn compact_sink<S>(writer: BoxMakeWriter, ansi: bool) -> Sink<S> {
-    Sink::Compact(Box::new(
-        tracing_subscriber::fmt::layer()
-            .compact()
-            .with_writer(writer)
-            .with_ansi(ansi)
-            .with_target(true)
-            .with_level(true)
-            .with_line_number(true),
-    ))
+fn desktop_sink<S>(format: crate::config::DesktopFormat) -> Sink<S> {
+    match format {
+        // The target is shown because it is the exact string a `RUST_LOG`
+        // directive matches on: a line without it leaves the reader guessing
+        // what to write to select it.
+        crate::config::DesktopFormat::Compact => Sink::Compact(Box::new(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_writer(BoxMakeWriter::new(std::io::stdout))
+                .with_ansi(ansi_wanted(&std::io::stdout()))
+                .with_target(true)
+                .with_level(true)
+                .with_line_number(true),
+        )),
+
+        #[cfg(feature = "hierarchical")]
+        crate::config::DesktopFormat::Hierarchical => {
+            Sink::Hierarchical(tracing_forest::ForestLayer::default())
+        }
+    }
 }
 
 /// Whether the compact formatter should emit ANSI colour on `stream`.
