@@ -9,6 +9,7 @@ use super::{
         motion_history,
     },
 };
+use crate::containment::FirstPanic;
 use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
@@ -216,7 +217,7 @@ impl Drop for DragCallbacks {
 }
 fn replace_callback<T: ?Sized>(slot: &mut Option<Rc<T>>, incoming: Rc<T>) {
     let outgoing = slot.replace(incoming);
-    let mut failure = None;
+    let mut failure = FirstPanic::new();
     retire_callback(outgoing, &mut failure);
     finish_containment(failure, std::thread::panicking());
 }
@@ -686,30 +687,26 @@ impl DragGestureRecognizer {
             (start, update)
         };
         self.started.set(true);
-        let mut first = crate::containment::RoutePanic::capture(|| {
+        let mut first = crate::containment::caught(|| {
             invoke_callback(
                 self.callbacks.on_start.clone(),
                 || {},
                 |callback| callback(start),
             );
         });
-        if first.is_none()
+        if !first.is_held()
             && self.is_current(tracked)
             && self.active.get() == Some(tracked.id)
             && let Some(details) = update
         {
-            let candidate = crate::containment::RoutePanic::capture(|| {
+            let candidate = crate::containment::caught(|| {
                 invoke_callback(
                     self.callbacks.on_update.clone(),
                     || {},
                     |callback| callback(details),
                 );
             });
-            crate::containment::RoutePanic::preserve_first(
-                &mut first,
-                candidate,
-                "drag initial update",
-            );
+            crate::containment::keep_first(&mut first, candidate, "drag initial update");
         }
         // Claim remaining contacts only after the active acceptance callback.
         // That callback can cancel the entire sequence or admit a replacement.
@@ -723,9 +720,8 @@ impl DragGestureRecognizer {
                 .collect();
             for contact in pending {
                 if self.is_current(&contact) {
-                    let candidate =
-                        crate::containment::RoutePanic::capture(|| contact.contact.accept());
-                    crate::containment::RoutePanic::preserve_first(
+                    let candidate = crate::containment::caught(|| contact.contact.accept());
+                    crate::containment::keep_first(
                         &mut first,
                         candidate,
                         "drag remaining contact claim",
@@ -798,11 +794,10 @@ impl DragGestureRecognizer {
         self.active.set(None);
         let accepted = self.started.replace(false);
         let rail = self.rail.take();
-        let (clock, clock_failure) =
-            match crate::containment::RoutePanic::try_run(|| self.arena.sample_now()) {
-                Ok(now) => (now, None),
-                Err(failure) => (active.state.borrow().last_time, Some(failure)),
-            };
+        let (clock, clock_failure) = match crate::containment::try_run(|| self.arena.sample_now()) {
+            Ok(now) => (now, FirstPanic::new()),
+            Err(failure) => (active.state.borrow().last_time, failure),
+        };
         let (velocity, measured, global_velocity, position, global) = {
             let mut state = active.state.borrow_mut();
             let now = state
@@ -844,7 +839,7 @@ impl DragGestureRecognizer {
         let retire = || {
             let mut first = clock_failure;
             for contact in outgoing {
-                let candidate = crate::containment::RoutePanic::capture(|| {
+                let candidate = crate::containment::caught(|| {
                     // An unaccepted drag bows out before pointer-up can sweep
                     // the remaining competition; it must not win by order.
                     if accepted && reason == GestureEndReason::Completed && contact.id == active.id
@@ -856,11 +851,7 @@ impl DragGestureRecognizer {
                         contact.contact.withdraw();
                     }
                 });
-                crate::containment::RoutePanic::preserve_first(
-                    &mut first,
-                    candidate,
-                    "drag contact retirement",
-                );
+                crate::containment::keep_first(&mut first, candidate, "drag contact retirement");
                 retire_callback(Some(contact), &mut first);
             }
             finish_containment(first, std::thread::panicking());

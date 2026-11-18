@@ -40,7 +40,7 @@ fn check_lines<'a>(
 /// A named set of files an open or save dialog offers to filter by: "Images"
 /// with `png` and `jpg`, "Build files" with `Makefile`, or "All files".
 ///
-/// One meaning on every host (ADR-0360, ADR-0372): a file matches when its
+/// One meaning on every host (ADR-0360, ADR-0374): a file matches when its
 /// name ends in `.` and one of the extensions (`PHOTO.PNG` matches `png`,
 /// `a.tar.gz` matches `tar.gz`), when its whole name is one of the file
 /// names (`makefile` matches `Makefile`), each compared ignoring ASCII case,

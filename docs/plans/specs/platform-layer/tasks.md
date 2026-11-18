@@ -5928,7 +5928,7 @@ GPU-память простаивающего или невидимого окн
   `attachInfo`; `FluiDocuments` не вытесняет живое предложение: держит не больше `MAX_OFFERED`,
   каждое `OFFER_LIFETIME_MS`, лишнее — `IllegalStateException` → `Unavailable`; чтение выбора —
   кусками `READ_CHUNK` с проверкой отпускания между ними; `describe` снимает исключение после
-  каждой колонки; папки пользователя не требуют dex. После слияния с `main` (ADR-0372, метки и
+  каждой колонки; папки пользователя не требуют dex. После слияния с `main` (ADR-0374, метки и
   кнопка по умолчанию message box): фильтр всех файлов или фильтр по имени файла показывает
   пикеру все документы; message box Android показывает подробность под сообщением, метки кнопок
   запроса и отдаёт фокус кнопке ответа по умолчанию
@@ -8246,7 +8246,7 @@ GPU-память простаивающего или невидимого окн
   `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
   падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
 - [x] **Краевые случаи диалогов `flui-system`** (строки в таблице нет: сверка файловых диалогов
-  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0372.
+  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0374.
   Построено. Фильтр: `FileFilter::all_files` (свой вид `Kind::EveryFile`, а не строка `*`; запрос
   с ним принимает любой выбор, шаблон, добавленный к нему, — `MalformedRequest::PatternOnAllFiles`)
   и точное имя `with_file_name` (`Makefile`, `.env`; без учёта регистра ASCII,
@@ -9460,7 +9460,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
-- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0372 (заменяет
+- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0373 (заменяет
   `KeyboardInset` из §1 ADR-0277, применение из §3, клетку iOS из §4 и цель `move_keyboard` из
   §5). Проверено на `main` @ `eacf2a10d` чтением: оба правила в коде подтвердились (link только в
   `NSDefaultRunLoopMode`; `occlusion` давала вставку от верха любой рамки, нулевой кадр читался

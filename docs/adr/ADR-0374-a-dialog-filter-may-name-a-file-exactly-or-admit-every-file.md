@@ -1,4 +1,4 @@
-# ADR-0372: A dialog filter may name a file exactly or admit every file
+# ADR-0374: A dialog filter may name a file exactly or admit every file
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18

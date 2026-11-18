@@ -42,7 +42,7 @@ const ANY_TYPE: &str = "*/*";
 /// the filters' names are not shown. A filter of every file or one that
 /// names a file exactly makes it empty, every file: no attribute value
 /// names a file by its whole name, and the handle holds each pick to the
-/// filters (ADR-0372 §4).
+/// filters (ADR-0374 §4).
 pub(crate) fn accept_attribute(filters: &[FileFilter]) -> String {
     if filters.iter().any(shows_every_file) {
         return String::new();
@@ -102,7 +102,7 @@ pub(crate) struct PickerTypes<'a> {
 /// meaning (ADR-0360). A filter of every file is the picker's own entry of
 /// every file rather than a type; one that names a file is a type of its
 /// extensions and MIME types, when it has any, and its file names are
-/// reached through that entry (ADR-0372 §4).
+/// reached through that entry (ADR-0374 §4).
 pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<PickerTypes<'_>> {
     let types = filters
         .iter()
