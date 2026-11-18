@@ -363,7 +363,11 @@ impl Rig {
             id: WindowId::try_from_raw(1).expect("a nonzero window id"),
         };
         let text = Arc::new(WindowText::new());
-        ime.window_opened(window, WindowScale::new(1.0), Some(Arc::clone(&text) as _));
+        ime.window_opened(
+            window,
+            WindowScale::new(flui_foundation::geometry::DevicePixelRatio::ONE),
+            Some(Arc::clone(&text) as _),
+        );
         let store = InMemoryTextStore::new("");
         text.client()
             .expect("the window's client")

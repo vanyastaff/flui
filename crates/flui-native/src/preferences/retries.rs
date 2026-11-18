@@ -1,8 +1,8 @@
 //! The bounded retries of a preference read that came to nothing: the
 //! platform layer's one doubling schedule ([`flui_platform::Backoff`]),
 //! counted, so a failure that never heals costs a bounded number of attempts
-//! and never a poll. The Windows source and the Linux settings watch retry on
-//! it.
+//! and never a poll. The Windows source, the Linux settings watch and the
+//! AppKit and Android sources (`read`) retry on it.
 
 use std::time::Duration;
 

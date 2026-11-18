@@ -808,7 +808,7 @@ fn read_error(text: &str) -> CodecError {
     NativeRecording::read(text.as_bytes()).expect_err("the recording is refused")
 }
 
-const HEADER: &str = r#"{"flui_native_recording":3,"backend":"web","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4,"kinds":["touch"]}]}"#;
+const HEADER: &str = r#"{"flui_native_recording":4,"backend":"web","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4,"kinds":["touch"]}]}"#;
 
 /// An unknown row, action or kind is a typed error naming its line and
 /// spelling, never a skipped row; an unknown field is skipped.
@@ -856,14 +856,14 @@ fn an_unknown_native_variant_is_a_typed_error_not_a_skipped_row() {
 /// Another major version, a value outside its range and a device the header
 /// does not declare are refused.
 fn a_native_recording_outside_its_format_is_refused() {
-    for version in [2, 4] {
+    for version in [2, 5] {
         let header = HEADER.replace(
-            r#""flui_native_recording":3"#,
+            r#""flui_native_recording":4"#,
             &format!(r#""flui_native_recording":{version}"#),
         );
         assert!(matches!(
             read_error(&header),
-            CodecError::Version { found, supported: 3 } if found == version
+            CodecError::Version { found, oldest: 3, supported: 4 } if found == version
         ));
     }
     let zero_frequency = HEADER.replace(
@@ -898,6 +898,90 @@ fn a_native_recording_outside_its_format_is_refused() {
     ));
 }
 
+/// A device pixel ratio no screen has (zero, negative, or outside
+/// `DevicePixelRatio::MIN..=MAX`) is refused as the typed `Ratio` error on
+/// the line that holds it, wherever a row holds one: a reading's scale, a
+/// wheel's, a touchpad viewport's, a display's scale factor, a window's
+/// metrics and the pixel ratio of the system's mouse and touch geometry.
+/// JSON has no spelling for a non-finite number, so the parser refuses those
+/// first. A version 3 recording, whose fields are version 4's, reads row by
+/// row: a ratio in range is taken, one outside it refused the same way.
+fn a_ratio_no_screen_has_is_refused_where_a_recording_holds_it() {
+    /// A row of one kind holding a ratio.
+    type RowAt = fn(f64) -> String;
+    /// A window's snapshot at scale one, whose scale each case replaces.
+    const WINDOW_STATE: &str = r#"{"row":"state","state":{"revision":0,"outer":{"position":{"display":1,"at":[0.0,0.0]},"size":[800.0,600.0]},"content_size":[800.0,600.0],"mode":"normal","visible":true,"occluded":false,"focused":true,"title":"FLUI Window","constraints":{},"resizable":true,"frame":"system","display":1,"metrics":{"physical":[800,600],"scale":1.0},"appearance":"light","safe_area":[0.0,0.0,0.0,0.0],"execution":"running","hovered":false,"active":true,"capabilities":{"sets_title":"native","sets_position":"native","sets_size":"native","sets_constraints":"native","sets_resizable":"native","sets_frame":"native","app_title_bar":"native","minimizes":"native","maximizes":"native","enters_fullscreen":"native","hides":"native","shows":"native","activates":"native","closes":"native","material":"native","reports_presentation":"native","observes_position":"native","observes_minimized":"native","places_at_open":"native","frame_rate_hint":"native"}}}"#;
+
+    let reading = |scale: f64| {
+        format!(
+            r#"{{"row":"reading","reading":{{"contact":1,"kind":"touch","action":"move","time":{{"epoch_ns":5}},"position":[1.0,2.0],"scale":{scale:?}}}}}"#
+        )
+    };
+    let wheel = |scale: f64| {
+        format!(
+            r#"{{"row":"wheel","wheel":{{"axis":"vertical","distance":120,"position":[1.0,2.0],"scale":{scale:?},"time_ns":5}}}}"#
+        )
+    };
+    let viewport = |scale: f64| {
+        format!(
+            r#"{{"row":"viewport","viewport":{{"status":"running"}},"time":{{"epoch_ns":5}},"position":[1.0,2.0],"scale":{scale:?}}}"#
+        )
+    };
+    let display = |scale: f64| {
+        format!(
+            r#"{{"row":"displays","read":{{"observed":{{"revision":1,"displays":[{{"label":1,"name":"Panel","origin":[0,0],"extent":[100.0,100.0],"usable":[0.0,0.0,100.0,100.0],"scale_factor":{scale:?},"color":{{"absent":"not_yet_on_this_host"}}}}]}}}}}}"#
+        )
+    };
+    let mouse_geometry = |ratio: f64| {
+        format!(
+            r#"{{"row":"preferences","read":{{"observed":{{"gestures":{{"native_mouse_geometry":{{"double_click_area":[4,4],"drag_tolerance":[2,3],"pixel_ratio":{ratio:?}}}}}}}}}}}"#
+        )
+    };
+    let touch_geometry = |ratio: f64| {
+        format!(
+            r#"{{"row":"preferences","read":{{"observed":{{"gestures":{{"native_touch_geometry":{{"touch_slop":8,"double_tap_slop":100,"min_fling":50,"max_fling":8000,"pixel_ratio":{ratio:?}}}}}}}}}}}"#
+        )
+    };
+    let window_state =
+        |scale: f64| WINDOW_STATE.replace(r#""scale":1.0"#, &format!(r#""scale":{scale:?}"#));
+    let registry = HEADER;
+    let platform =
+        r#"{"flui_native_recording":4,"backend":"headless","stream":"platform","devices":[]}"#;
+    let window =
+        r#"{"flui_native_recording":4,"backend":"headless","stream":"window_state","devices":[]}"#;
+    let rows: [(&str, &str, RowAt); 7] = [
+        ("reading", registry, reading),
+        ("wheel", registry, wheel),
+        ("viewport", registry, viewport),
+        ("display", platform, display),
+        ("mouse geometry", platform, mouse_geometry),
+        ("touch geometry", platform, touch_geometry),
+        ("window state", window, window_state),
+    ];
+    for (case, current, row) in rows {
+        let previous = current.replace(
+            r#""flui_native_recording":4"#,
+            r#""flui_native_recording":3"#,
+        );
+        for header in [current, previous.as_str()] {
+            let text = format!("{header}\n{}\n", row(2.0));
+            NativeRecording::read(text.as_bytes()).unwrap_or_else(|error| {
+                panic!("{case} under {header}: a ratio a screen has reads: {error}")
+            });
+            for refused in [0.0, -2.0, 1.0 / 64.0, 64.0] {
+                let text = format!("{header}\n{}\n", row(refused));
+                assert!(
+                    matches!(
+                        read_error(&text),
+                        CodecError::Ratio { line: 2, ratio } if ratio == refused
+                    ),
+                    "{case} at {refused} under {header}: refused as a ratio no screen has"
+                );
+            }
+        }
+    }
+}
+
 /// A recording is untrusted input: a line past the line bound is refused
 /// before it is parsed, a row past the row bound is refused, and a store
 /// lock past its bounds, with an edit under a read lock, an inverted range
@@ -909,7 +993,7 @@ fn a_native_recording_past_its_bounds_is_refused() {
     };
 
     let window =
-        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":4,"backend":"headless","stream":"window","devices":[]}"#;
     // A line past the bound is too long whatever it holds: a multi-byte character the bound
     // cuts in two (both alignments of `é` against it) is no malformed line.
     for (case, pad) in [
@@ -1075,6 +1159,10 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
         (
             "a_native_recording_outside_its_format_is_refused",
             a_native_recording_outside_its_format_is_refused,
+        ),
+        (
+            "a_ratio_no_screen_has_is_refused_where_a_recording_holds_it",
+            a_ratio_no_screen_has_is_refused_where_a_recording_holds_it,
         ),
         (
             "a_native_recording_past_its_bounds_is_refused",

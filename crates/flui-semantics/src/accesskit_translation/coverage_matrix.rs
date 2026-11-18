@@ -14,10 +14,11 @@ use smallvec::SmallVec;
 use super::{PublishView, to_node};
 use crate::attributes::{RareAttributes, SemanticsAttributes};
 use crate::identity::AccessibilityNodeId;
-use crate::properties::{HeadingLevel, TextDirection};
+use crate::properties::HeadingLevel;
 use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use crate::{CellPosition, NumericRange, SemanticsAction, SetSize, SortDirection, TableShape};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 
 /// The window root every row's node hangs under.

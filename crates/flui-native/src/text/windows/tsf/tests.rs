@@ -1176,7 +1176,11 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
         .hwnd();
     let services =
         crate::text::windows::testing::services_of(hwnd).expect("the window's text services");
-    let dpi: usize = if services.scale() > 1.5 { 96 } else { 192 };
+    let dpi: usize = if services.scale().get() > 1.5 {
+        96
+    } else {
+        192
+    };
     let mut rect = RECT::default();
     // SAFETY: the case's own window on its owner thread; `WM_DPICHANGED`
     // carries the address of the suggested rectangle, a live local here.
@@ -1190,7 +1194,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
         );
     }
     assert!(
-        (services.scale() * 96.0 - dpi as f64).abs() < 1e-9,
+        (services.scale().get() * 96.0 - dpi as f64).abs() < 1e-9,
         "the text services answer at the window's new scale"
     );
     window.close_now();

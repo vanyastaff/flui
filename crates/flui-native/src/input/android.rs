@@ -239,6 +239,7 @@ pub(crate) mod motion {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::EventTime;
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
@@ -689,7 +690,7 @@ pub(crate) mod motion {
         pub fn decode(
             &mut self,
             motion: &Motion<'_>,
-            scale: f64,
+            scale: DevicePixelRatio,
             wheel: &dyn Fn(f32, f32) -> Option<ScrollDelta>,
             discovery: DeviceDiscovery,
             now: Instant,
@@ -1000,8 +1001,12 @@ pub(crate) mod motion {
                     };
                     let (x, y) = if owned == ScrollPhase::Changed {
                         (
-                            f64::from(first.axes.gesture_scroll_x) / event.scale,
-                            f64::from(first.axes.gesture_scroll_y) / event.scale,
+                            event
+                                .scale
+                                .to_logical(f64::from(first.axes.gesture_scroll_x)),
+                            event
+                                .scale
+                                .to_logical(f64::from(first.axes.gesture_scroll_y)),
                         )
                     } else {
                         (0.0, 0.0)
@@ -1064,7 +1069,7 @@ pub(crate) mod motion {
         motion: &'motion Motion<'pointers>,
         device: Option<NativeDevice>,
         capabilities: Option<DeviceCapabilities>,
-        scale: f64,
+        scale: DevicePixelRatio,
         time: EventTime,
         received: Instant,
     }
@@ -1368,6 +1373,8 @@ use crate::{
     version::gate::android::AndroidApi,
 };
 #[cfg(target_os = "android")]
+use flui_foundation::geometry::DevicePixelRatio;
+#[cfg(target_os = "android")]
 use flui_platform::PlatformInput;
 #[cfg(target_os = "android")]
 use motion::{
@@ -1529,7 +1536,7 @@ impl ActivityInput for AndroidInput {
         &self,
         app: &android_activity::AndroidApp,
         event: &android_activity::input::MotionEvent<'_>,
-        scale: f64,
+        scale: DevicePixelRatio,
     ) -> Vec<PlatformInput> {
         /// Whether any `MotionEvent` has reached the input in this process.
         static FIRST_MOTION_SEEN: AtomicBool = AtomicBool::new(false);
@@ -1563,7 +1570,7 @@ impl ActivityInput for AndroidInput {
                     converted = events.len(),
                     x = pointer.x(),
                     y = pointer.y(),
-                    scale_factor = scale,
+                    scale_factor = scale.get(),
                     first,
                     "motion event reached the input queue"
                 )
@@ -1664,7 +1671,7 @@ impl AndroidInputState {
     fn convert_motion_event(
         &mut self,
         event: &android_activity::input::MotionEvent<'_>,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
         scroll_policy: scroll::AxisPolicy,
         reading: DeviceReading,
     ) -> Vec<PlatformInput> {

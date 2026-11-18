@@ -1,16 +1,14 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 116 закрыты и 18 открыты (сверено с `main` @ `4db9c6981`, закрытиями
-  LY85 и LY145); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
+  Из 134 задач серии 119 закрыты и 15 открыты (сверено с `main` @ `5b4e3202b` и закрытием
+  LY145); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
   задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
     провайдеры Android;
-  - LY63 — `locale|layoutDirection` в `configChanges` шаблона, его теста и проверки манифеста;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
-  - LY71 — golden `Info.plist` и ориентации iPad;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
@@ -20,7 +18,6 @@
     ядра за фичей;
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
   - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
-  - LY112 — масштаб записи ввода `NativeReading::scale` как `DevicePixelRatio`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
   - LY139 — пометка первого клика с регионом, запись истечения буфера macOS и жизненный цикл окна
     iOS без замков, курсор macOS на типизированных вызовах;
@@ -6106,7 +6103,7 @@ GPU-память простаивающего или невидимого окн
   заглушку, а после активации — хост в этом слоте.
 - [x] **LY85** (закрыта: оба хоста идут через общую таблицу; прогоны с устройствами и в сессии
   рабочего стола записаны в `platform-parity.toml`) — фундаменты #1930 и #1931, ввод #1936 и
-  #1937, окно X11 в таблице — ветка `native/x11-window-conformance`. Через
+  #1937, окно X11 в таблице #2806. Через
   `assert_backend_conforms` идут декодеры обоих хостов (`x11_decoder_conforms`,
   `wayland_decoders_conform`) и настоящее окно Wayland под Weston (`wayland_window_conforms`, его
   зовёт `the_wayland_window_input_conforms`). Настоящее окно X11 под openbox на Xvfb идёт через
@@ -6115,9 +6112,16 @@ GPU-память простаивающего или невидимого окн
   который сервер умеет произвести, через XTest и отдаёт таблице то, что услышал обработчик окна:
   мышь — контакты; устройство с именем — мастер-указатель, который сервер добавляет и объявляет
   (XTest двигает его через client pointer); отмена платформы — фокус, который забирает другое окно
-  теста; клавиши меню и Shift+F10 — XTest. Строки, которые окно не держит, перечислены в
-  `NOT_HELD` с тем, что строка отвечает, и причиной; каждая другая строка обязана держаться, а
-  запись, которая перестала совпадать, валит тест. Не держатся: касание (на Xvfb нет устройства с
+  теста; клавиши меню и Shift+F10 — XTest. Строки, которые окно не исполняет, перечислены в
+  `UNEXERCISED` с тем, что строка отвечает (её текст «не применима», вид провала `FailureKind`
+  таблицы или «держится без ввода»), и причиной; каждая другая строка обязана держаться на вводе,
+  который окно доставило, а запись, которая перестала совпадать, валит тест. Держатся без ввода
+  `event_times_never_go_back` (сервер ставит метки по порядку, метка назад до окна не доходит) и
+  `precise_scroll_is_delivered_as_claimed` (окно не заявляет точной прокрутки и чтения для неё не
+  имеет), три строки перетаскивания и четыре строки хаптики (они читают только источник
+  перетаскивания и актуатор окна, ввода не берут); такую запись тест не может найти устаревшей.
+  Исполняют ввод окна четыре строки: контакт мыши, устройство с именем, отмена и клавиши меню.
+  Не держатся: касание (на Xvfb нет устройства с
   touch-классом, XTest касаний не шлёт), перо (у устройств XTest только x и y, драйвера планшета
   Xvfb не грузит), щипок и жесты тачпада (события XInput 2.4 шлёт только драйвер тачпада),
   интервалы и перенос 32-битного времени (XTest не несёт метки, сервер ставит свою), позиция не
@@ -6158,15 +6162,53 @@ GPU-память простаивающего или невидимого окн
   из них — запрет в `deny.toml` и списках `forbid`, пример в тесте xtask, ссылка на тикет winit,
   сравнение с другим фреймворком (prior art в ADR, `ARCHITECTURE.md` и комментариях) или история
   в ADR; ни одна не называет winit хостом или источником событий FLUI.
-- [ ] **LY89** (открыта: счётчик пробуждений) — macOS слушает `NSWorkspace` и
-  `NSNotificationCenter` (параметры отображения доступности, локаль, активация); Android —
-  `ContentObserver` в `FluiView` (`nativeSettingsChanged`) и `ConfigChanged`; пока `FluiView` не
-  в окне, лупер Android читает предпочтения раз в 500 мс
-  (`crates/flui-native/src/owner/android/looper.rs:812`). Остаётся код: тест в виртуальном
-  времени — N секунд простоя дают ноль пробуждений, смена предпочтения ровно одно, и он падает при
-  возврате таймера, на источниках macOS и Android; сегодня такую проверку держит только портал
-  Linux. Прогоны (пробуждения за минуту на Mac и за Home на Android) — строка качества parity
-  «Zero CPU when idle».
+- [x] **LY89** (закрыта: код и тесты в виртуальном времени на `main`; прогоны на Mac и Android —
+  в parity) — правило записано в ADR-0378 (заменяет решение 3 ADR-0249). Источники macOS и
+  Android стали одной моделью `NoticedPreferences` (`crates/flui-native/src/preferences/read.rs`)
+  поверх `SystemReads` (чтение, часы и `Retrying`: таймер, пока приложение AppKit активно, или
+  срок, до которого ждёт лупер Android), поэтому модель компилируется и проверяется на Linux.
+  macOS слушает `NSWorkspace` и `NSNotificationCenter` (параметры отображения доступности,
+  локаль, активация, цвета, полосы прокрутки, тема), каждый наблюдатель вызывает
+  `notice_handler`; Android — `ContentObserver` в `FluiView` (`nativeSettingsChanged`, ещё раз
+  при входе в окно после регистрации), `ConfigChanged` и `Start`, какие из них читают, решает
+  `LoopReads::hear`. Ход приложения читает источник при каждом пробуждении, но систему источник
+  спрашивает только после уведомления или в срок повтора, иначе отдаёт последний ответ
+  (`application_turns_ask_the_system_only_after_a_notice`: 10 посторонних ходов — ноль чтений
+  системы, уведомление — одно; без этого 10). Значение принято, только когда приложение
+  подтвердило доставку ответа последнего чтения (`Platform::preferences_delivered` после
+  `update_preferences`, обязателен у каждой позиции хоста и источника; подтверждение более
+  старого чтения при повторном входе игнорируется, `a_confirmation_of_an_older_read_is_ignored`,
+  без проверки 2 хода вместо 1): смена, прочитанная в ходе
+  приложения, причитается этому ходу и не будит; брошенная ходом будит ещё раз один раз;
+  прочитанная вне хода приложения (в том числе в части хода с работой владельца) будит. Одно
+  уведомление — один ход (раньше macOS и отчёт `FluiView` давали два). Кадентность 500 мс
+  лупера Android, пока `FluiView` не в окне, убрана: лупер читает сам только на первом ходу,
+  после `Start` и в срок повтора (`LoopReads`), а неудавшаяся установка вида приходит владельцу
+  один раз типом `ViewMissing` и пишется в лог. Неудачное или паникующее чтение (паника
+  сдерживается в источнике) повторяется через 0,5–16 с шесть раз (на macOS только пока
+  приложение активно), затем ждёт следующего уведомления; чтение не с потока владельца
+  отклоняется и ничего не меняет. Тесты через шов системы с сигналом владельца и его ходом:
+  `an_idle_source_never_wakes_the_owner`, `one_change_notice_is_one_owner_turn`,
+  `a_change_a_turn_drops_is_read_again_once`, `a_change_read_in_owner_work_wakes_the_owner`,
+  `failed_reads_back_off_and_stop_until_the_next_notice`, `a_panicking_read_is_a_failed_read`,
+  `an_inactive_application_retries_only_on_its_next_notice`,
+  `a_read_off_the_owner_thread_is_refused_and_changes_nothing`,
+  `a_recovered_read_outside_a_turn_wakes_the_owner`, у лупера
+  `the_loop_reads_on_its_own_only_at_start_and_at_a_due_retry` и
+  `each_preference_notice_tells_the_source_and_reads`. С откатом: безусловное пробуждение `main`
+  в точке чтения роняет `one_change_notice_is_one_owner_turn` для AppKit и для отчёта
+  `FluiView` (2 хода вместо 1); периодический таймер после успешного чтения роняет тест простоя
+  (3600 ходов за час); кадентность 500 мс в `LoopReads` роняет тест простоя и тест лупера;
+  фиксированный повтор 500 мс без предела роняет тест повторов; повтор без допуска по активности
+  роняет тест неактивного приложения; без пробуждения в конце хода брошенная смена не читается
+  снова (1 ход вместо 2); признак хода по `active` глотает смену в работе владельца; повторный
+  выброс паники роняет тест паники и тест повторов; без проверки потока чтение не с потока
+  владельца читает систему; без `notice` в одной ветке `hear` падают тест лупера и тест
+  повторов. Прогон Galaxy
+  S21 2026-10-21 (ни одного хода за 10 с простоя, в том числе за Home) сделан до удаления
+  кадентности. Остаётся: пробуждения за минуту простоя на Mac (vanyastaff/flui#1840), на Android
+  — за минуту за Home и пока `FluiView` входит в окно; строка качества parity «Zero CPU when
+  idle».
 - [ ] **LY93** (открыта, не начата) — `flui_system::PickedFile`
   (`crates/flui-system/src/dialog/request.rs:1242`) — свой тип с формами `Path`, `Contents`,
   `Folder` и `Download`, чтобы нести доступ песочницы без смены API; iOS читает выбранный документ
@@ -7140,7 +7182,7 @@ GPU-память простаивающего или невидимого окн
   делался (`docs/gaps.md`, «Pointer and keyboard gaps»). Windows, X11, Android и iOS флага
   направления не дают — `Unknown` (там же).
 
-- [ ] **LY112** (открыта: масштаб записи ввода) — ветка `platform/one-rule-once` на `main`.
+- [x] **LY112** — ветки `platform/one-rule-once` и `native/reading-scale-checked`.
   Построено: режим окна Wayland решает `mode_of` (столбец Wayland в
   `every_window_system_decides_the_mode_alike`); детенты колеса Wayland и Win32 — один
   `DetentSteps`, валюаторы X11 — `decode::valuator_detents` (столбцы X11 и Wayland в
@@ -7151,13 +7193,49 @@ GPU-память простаивающего или невидимого окн
   (`a_logical_side_becomes_a_device_extent_every_host_can_draw`,
   `a_surface_side_is_snapped_to_whole_device_pixels`); масштаб от контракта вниз —
   `DevicePixelRatio` (`DisplayDescription::scale_factor`), число ОС читается одним правилом
-  `display::scale` (`ScaleStreak`; `a_ratio_is_held_to_the_range_a_screen_can_have`). Зум
-  DirectManipulation и отношения боксов хоста Web — не масштаб дисплея или окна и сохраняют свою
-  проверку. Остаётся код: масштаб записи ввода `NativeReading::scale` (проверка `DecodeFault::Scale`
-  в `input::assembly`) становится `DevicePixelRatio`, который кодек нативной записи проверяет при
-  чтении, как масштаб дисплея
-  ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit),
-  «Scales still checked by hand»).
+  `display::scale` (`ScaleStreak`; `a_ratio_is_held_to_the_range_a_screen_can_have`,
+  `a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale`). Масштаб записи ввода —
+  `DevicePixelRatio`: `NativeReading::scale`, `WheelReading::scale` и `TouchpadFrame::scale`
+  несут масштаб окна, который хост уже проверил (Win32 — `WindowScale::ratio`, X11 —
+  `WindowScale` на `DevicePixelRatio`, Android — `AndroidWindow::scale`, AppKit, UIKit, DOM и
+  Wayland — `at_logical`), так что `DecodeFault::Scale` и ручные проверки в
+  `input::assembly` удалены: сборка не встречает масштаба, которого нет у экрана. Кодек нативной
+  записи проверяет каждое отношение пикселей при чтении одной функцией `ratio` и отказывает
+  типизированным `CodecError::Ratio` со строкой: масштаб чтения, колеса, кадра тачпада, масштаб
+  дисплея, метрики окна, отношение геометрии мыши и касания
+  (`a_ratio_no_screen_has_is_refused_where_a_recording_holds_it`: 0, −2, 1/64 и 64 в каждом из
+  семи видов строк, под заголовком версии 4 и версии 3; без проверки при чтении тест красный —
+  запись читается). Писатель пишет версию 4 (`FORMAT_VERSION`), читатель читает версии 3 и 4
+  (`OLDEST_READABLE_VERSION`): поля и формы те же, версия 4 только ограничивает каждое отношение
+  диапазоном экрана, и строка вне его отказана, а не вся запись; диапазон записан у каждого поля
+  схемы. Запись ввода (`flui-runtime`, `flui-testing`) отказывает тем же строкам типом
+  `WireError::Ratio` / `RecordingError::Ratio`
+  (`a_preferences_row_whose_pixel_ratio_no_screen_has_is_refused_on_its_line`,
+  `a_recording_whose_window_scale_no_screen_has_is_refused_on_its_line`). `WindowMetrics::try_new`
+  и `from_logical` принимают `DevicePixelRatio` (`InvalidMetrics::InvalidScale` удалён), как и
+  `try_set_scale_factor` тестового хоста. Тем же типом — курсор-образ AppKit (`NativeCursor`),
+  шаг колеса Web (`WheelStep`, отношение холста через `HostInput::register`) и масштаб окна Win32
+  (`WindowScale::scale` удалён: перенос, точка сброса, IME, цель перетаскивания читают `ratio`;
+  `checked_logical_to_device` остаётся множителем, потому что пересчитывает и отношением двух
+  DPI). Масштаб окна X11 остаётся атомарным: `InputTarget` держит транспорт перетаскивания,
+  который `Send + Sync`. Зум DirectManipulation (`ContentTransform`) и
+  отношения боксов хоста Web (`window::web`, `accessibility::web::dom`) — не отношение пикселей
+  экрана и не ограничены его диапазоном (зум жеста, CSS-трансформ, ноль у схлопнутого бокса) и
+  сохраняют свою проверку ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit),
+  «Scales still checked by hand»). Строки, которые тип делает невозможными («zero scale» в
+  `an_undecodable_reading_cancels_its_contact_as_invalid_input`, нулевой и NaN-масштаб в
+  `invalid_native_sensor_is_refused`, строки масштаба `InvalidScale` в
+  `a_report_that_is_not_a_drawable_area_names_its_cause`), сняты; отказ перенесён в кодек и в
+  `a_ratio_is_held_to_the_range_a_screen_can_have`. Тест
+  `a_scale_no_window_can_have_is_answered_and_changes_nothing` заменён на
+  `the_largest_ratio_a_screen_can_have_is_a_scale_the_window_takes`: отношение вне диапазона
+  больше нельзя передать окну.
+  Проверки: Windows — clippy `-p flui-native -p flui-protocol -p flui-cli --all-targets --all-features
+  -D warnings`, nextest тех же крейтов; WSL Ubuntu 24.04 — clippy `-p flui-native --all-targets`
+  (`--all-features`, по умолчанию, `--no-default-features`, `--features x11`), nextest `-p flui-native`
+  под `xvfb-run` (1139 из 1139); `cargo +nightly check` для `aarch64-apple-darwin`,
+  `aarch64-linux-android` и `wasm32-unknown-unknown` (`--lib --tests`) и `aarch64-apple-ios`
+  (`--lib`). Не запущено: clippy и тесты на macOS, iOS, Android и в браузере — на CI.
 - [x] **LY123** — ветка `native/win32-post-debts`. Находки проверены на `main` прогоном на
   Windows: очередь потока, заполненная до квоты (`FullQueue`, тестовая опора рядом с
   `OwnerQueue`), отказывает каждому post окна, и старый код терял кадр скрытого окна, доставку с

@@ -17,7 +17,9 @@ pub(super) fn observed_property<T: TwoWayConverter + 'static>(
     notifications: &Rc<ChangeNotifier>,
     vsync: Option<&Vsync>,
 ) -> Result<(AnimatedValue<T>, flui_foundation::Subscription), AnimationError> {
-    let owner = AnimatedValue::with_debug_label(label, initial, motion, vsync)?;
+    let owner = AnimatedValue::builder(initial, motion)
+        .debug_label(label)
+        .build_on(vsync)?;
     let weak = Rc::downgrade(notifications);
     let relay = owner
         .animation()

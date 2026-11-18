@@ -153,7 +153,7 @@ fn sample_state(
                     i32::try_from(state.backing.width).unwrap_or(i32::MAX),
                     i32::try_from(state.backing.height).unwrap_or(i32::MAX),
                 ),
-                state.scale_factor.get(),
+                state.scale_factor,
             )
             .ok(),
         )
@@ -635,10 +635,15 @@ impl WebWindow {
             .expect("BUG: newly opened window owns its registration");
         let drag =
             Arc::clone(transfer).register(&self.canvas, &self.delivery, &mut registration)?;
+        let pixel_ratio = {
+            let state = Arc::clone(&self.state);
+            Rc::new(move || state.lock().scale_factor)
+        };
         let keys = input.register(
             &self.canvas,
             &self.delivery,
             input_latency,
+            pixel_ratio,
             &mut registration,
         )?;
         let focus = self.register_focus_events(&mut registration)?;

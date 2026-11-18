@@ -27,10 +27,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::curve::{Curve, Interval};
 use flui_animation::{
     Animation, AnimationController, DrivenController, MotionPolicy, Vsync, VsyncUpdate, curves,
 };
+use flui_animation::{Curve, Interval};
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, Size};
 use flui_objects::StackFit;

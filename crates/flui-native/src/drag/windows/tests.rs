@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
@@ -549,7 +549,7 @@ fn screen_point(hwnd: HWND) -> POINTL {
 }
 
 fn scale(hwnd: HWND) -> f64 {
-    with_window_context(hwnd, "test", |context| context.scale.scale()).expect("a context")
+    with_window_context(hwnd, "test", |context| context.scale.ratio().get()).expect("a context")
 }
 
 /// Resolve a ready transfer request.
@@ -855,8 +855,10 @@ fn a_window_hands_its_drop_target_and_text_services_its_one_scale() {
     let read = || {
         (
             scale(target.hwnd),
-            super::testing::scale_of(window).expect("the window's drop target"),
-            services.scale(),
+            super::testing::scale_of(window)
+                .expect("the window's drop target")
+                .get(),
+            services.scale().get(),
         )
     };
     let opened = read();
@@ -1060,7 +1062,7 @@ fn decode_reading(
         action,
         ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
     )
-    .at_device(10.0, 10.0, 1.0);
+    .at_device(10.0, 10.0, DevicePixelRatio::ONE);
     if let Some(device) = device {
         reading = reading.from_device(device);
     }

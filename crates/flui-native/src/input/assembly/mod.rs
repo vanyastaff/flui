@@ -46,6 +46,7 @@ mod wheel;
 
 use std::num::NonZeroU8;
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     CancelReason, InputValueError, PanZoomEvent, PointerButton, PointerButtons, PointerCancel,
@@ -286,7 +287,10 @@ pub struct NativeReading {
     /// the contact's last one applies.
     pub position: Option<RawPoint>,
     /// Raw units per logical pixel: one for a backend that reports points.
-    pub scale: f64,
+    /// A ratio no screen has cannot be held here, so the host checks the
+    /// number it reads once, where it makes the reading, and a recording's
+    /// codec checks it when it reads the row.
+    pub scale: DevicePixelRatio,
     /// Sensor values.
     pub sensors: RawSensors,
 }
@@ -314,7 +318,7 @@ impl NativeReading {
             click_count: None,
             time,
             position: None,
-            scale: 1.0,
+            scale: DevicePixelRatio::ONE,
             sensors: RawSensors {
                 pressure: None,
                 tangential_pressure: None,
@@ -329,7 +333,7 @@ impl NativeReading {
     /// logical pixel: a backend whose OS reports physical pixels (Win32,
     /// Android, X11).
     #[must_use]
-    pub const fn at_device(self, x: f64, y: f64, scale: f64) -> Self {
+    pub const fn at_device(self, x: f64, y: f64, scale: DevicePixelRatio) -> Self {
         Self {
             position: Some(RawPoint { x, y }),
             scale,
@@ -344,7 +348,7 @@ impl NativeReading {
     pub const fn at_logical(self, x: f64, y: f64) -> Self {
         Self {
             position: Some(RawPoint { x, y }),
-            scale: 1.0,
+            scale: DevicePixelRatio::ONE,
             ..self
         }
     }
@@ -408,9 +412,6 @@ impl NativeReading {
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DecodeFault {
-    /// The scale is not a positive finite number.
-    #[error("device scale {0} is not positive and finite")]
-    Scale(f64),
     /// A position or sensor value is outside its range.
     #[error("reading value refused: {0}")]
     Value(#[from] InputValueError),

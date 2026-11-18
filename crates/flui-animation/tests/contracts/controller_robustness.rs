@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    DrivenController, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation, Vsync,
-    curve::{Curve, Linear},
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, Curve, CurvedAnimation,
+    DrivenController, Linear, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation,
+    Vsync,
 };
 use flui_foundation::Listenable;
 
@@ -654,7 +654,7 @@ fn explicit_finish_uses_the_last_repeat_leg() {
 }
 
 fn explicit_finish_refuses_an_undeclared_endpoint_without_sampling() {
-    use flui_animation::simulation::Simulation;
+    use flui_animation::Simulation;
     use std::{cell::Cell, rc::Rc};
 
     struct UnknownEnd(Rc<Cell<usize>>);
@@ -721,7 +721,7 @@ fn explicit_finish_reaches_native_physical_endpoints() {
             .initial_value(0.4)
             .build();
         let run = if fling {
-            controller.fling_with(input, Some(slow))
+            controller.fling_with(input, slow)
         } else {
             controller.retarget(input, &MotionSpec::Spring(slow))
         }
@@ -1135,7 +1135,7 @@ fn typed_refusals_preserve_the_original_run() {
             controller.animate_to(f64::NAN, None)
         }),
         (AnimationInput::From, |controller| {
-            controller.forward_from(Some(f64::NAN))
+            controller.forward_from(f64::NAN)
         }),
         (AnimationInput::Velocity, |controller| {
             controller.fling(f64::NAN)

@@ -61,6 +61,8 @@ use crate::owner::windows::{
 #[cfg(windows)]
 use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
 #[cfg(windows)]
+use flui_foundation::geometry::DevicePixelRatio;
+#[cfg(windows)]
 use flui_platform::keyboard::Modifiers;
 
 #[cfg(windows)]
@@ -236,8 +238,8 @@ impl InputWindow {
     }
 
     /// Its scale: its DPI over 96.
-    fn scale_factor(&self) -> f64 {
-        self.scale.scale()
+    fn scale_factor(&self) -> DevicePixelRatio {
+        self.scale.ratio()
     }
 
     /// Whether the window is still the one this input was made for: a
@@ -1583,6 +1585,7 @@ mod raw {
     use crate::input::keys::{self, MOUSE_BUTTONS};
     use crate::owner::windows::control::OwnerPreferences;
     use crate::owner::windows::{get_x_lparam, get_y_lparam};
+    use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::PlatformInput;
 
     /// Every Win32 registry serves one window.
@@ -1746,7 +1749,7 @@ mod raw {
         packet: PointerPacket,
         message: u32,
         client_offset: POINT,
-        scale: f64,
+        scale: DevicePixelRatio,
         now_ms: u64,
         modifiers: KeyboardModifiers,
     ) -> NativeReading {
@@ -1938,7 +1941,7 @@ mod raw {
         packets: &[PointerPacket],
         message: u32,
         client_offset: POINT,
-        scale: f64,
+        scale: DevicePixelRatio,
         now_ms: u64,
         modifiers: KeyboardModifiers,
     ) -> Assembled {
@@ -2164,7 +2167,7 @@ mod raw {
         hwnd: HWND,
         message: u32,
         (raw, mouse): (u32, bool),
-        scale: f64,
+        scale: DevicePixelRatio,
         clock: &MessageClock,
         registry: &RefCell<ContactRegistry>,
     ) -> Assembled {
@@ -2193,7 +2196,7 @@ mod raw {
     pub(super) fn frame_member_input(
         hwnd: HWND,
         member: &FrameMember,
-        scale: f64,
+        scale: DevicePixelRatio,
         clock: &MessageClock,
         registry: &RefCell<ContactRegistry>,
     ) -> Assembled {
@@ -2230,7 +2233,7 @@ mod raw {
         message: u32,
         (raw, contact): (u32, NativeContact),
         packets: &[PointerPacket],
-        scale: f64,
+        scale: DevicePixelRatio,
         clock: &MessageClock,
         registry: &RefCell<ContactRegistry>,
     ) -> Assembled {
@@ -2444,7 +2447,7 @@ mod raw {
         action: ReadingAction,
         wparam: WPARAM,
         lparam: LPARAM,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
         time: u64,
     ) -> NativeReading {
         NativeReading::new(
@@ -2471,7 +2474,7 @@ mod raw {
         is_down: bool,
         wparam: WPARAM,
         lparam: LPARAM,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
         time: u64,
     ) -> Assembled {
         let action = if is_down {
@@ -2488,7 +2491,7 @@ mod raw {
         registry: &RefCell<ContactRegistry>,
         wparam: WPARAM,
         lparam: LPARAM,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
         time: u64,
     ) -> Assembled {
         let reading = legacy_mouse_reading(ReadingAction::Move, wparam, lparam, scale_factor, time);
@@ -2566,7 +2569,7 @@ mod raw {
         axis: WheelAxis,
         wparam: WPARAM,
         lparam: LPARAM,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
         time: u64,
     ) -> Option<PlatformInput> {
         let mut point = POINT {

@@ -5,7 +5,7 @@
 //! pixels at a device ratio of 1, and a published tree to read.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::geometry::{DevicePixelRatio, Rect};
 use flui_foundation::{RenderId, SemanticsId};
@@ -61,7 +61,7 @@ pub struct Fixture {
 impl Fixture {
     pub fn new() -> Self {
         Self {
-            owner: SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {})),
+            owner: SemanticsOwner::new(Rc::new(|_: &TreeUpdate| {})),
             ids: Vec::new(),
         }
     }

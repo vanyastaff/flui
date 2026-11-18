@@ -689,7 +689,7 @@ impl LaidOut {
     /// [`try_set_scale_factor`](Self::try_set_scale_factor) answers that
     /// instead.
     pub fn set_scale_factor(&mut self, scale_factor: flui_foundation::geometry::DevicePixelRatio) {
-        self.try_set_scale_factor(scale_factor.get()).expect(
+        self.try_set_scale_factor(scale_factor).expect(
             "a scale the window's size has metrics at; try_set_scale_factor answers one it has not",
         );
     }
@@ -705,7 +705,7 @@ impl LaidOut {
     /// window's size at `scale_factor` makes; nothing changes.
     pub fn try_set_scale_factor(
         &mut self,
-        scale_factor: f64,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
     ) -> Result<(), flui_foundation::geometry::InvalidMetrics> {
         let host = self.host.ui_runtime_mut();
         let window = host.primary_window();

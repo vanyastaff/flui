@@ -178,7 +178,7 @@ impl PlatformAccessibility for IosAccessibility {
         self.shared.set_action_listener(listener);
     }
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
         Self::ASSISTIVE_FOCUS
     }
 
@@ -221,8 +221,8 @@ impl IosAccessibility {
     /// The published `accesskit_ios` tracks VoiceOver's cursor but tells the
     /// application nothing of it
     /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
-    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
-        flui_semantics::AssistiveFocusSupport::Unreported;
+    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::platform::AssistiveFocusSupport =
+        flui_semantics::platform::AssistiveFocusSupport::Unreported;
 
     /// A route change is UIKit's notice of a new screen; a run on a device
     /// has not checked how VoiceOver reads it yet.

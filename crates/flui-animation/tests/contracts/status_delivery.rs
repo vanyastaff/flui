@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    DrivenController, ProxyAnimation, StatusCallback, StatusSubscription, Vsync, curve::Curve,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation, Curve,
+    DrivenController, ProxyAnimation, StatusCallback, StatusSubscription, Vsync,
 };
 use flui_foundation::testing::CountingWaker;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
@@ -471,7 +471,7 @@ fn reentrant_transitions_keep_the_return_to_the_original_status() {
                     owner
                         .subscribe_status(std::rc::Rc::clone(&late_listener))
                         .detach();
-                    let _reverse = owner.reverse_from(Some(0.5)).expect("nested reverse");
+                    let _reverse = owner.reverse_from(0.5).expect("nested reverse");
                     let _forward = owner.forward().expect("nested forward");
                 }
             }
@@ -523,7 +523,7 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
                 ForwardSettled => "completed status",
                 Reverse => "reverse status",
                 ReverseSettled => "dismissed status",
-                _ => "unexpected status",
+                Forward => "forward status",
             });
         }))
         .detach();
@@ -783,7 +783,7 @@ fn make_wrapper(
         "reverse" => std::rc::Rc::new(flui_animation::ReverseAnimation::new(source)),
         "curved" => std::rc::Rc::new(flui_animation::CurvedAnimation::new(
             source,
-            flui_animation::curve::Linear,
+            flui_animation::Linear,
         )),
         "tween" => std::rc::Rc::new(flui_animation::TweenAnimation::new(
             flui_animation::Tween::new(0.0, 10.0),
@@ -793,7 +793,7 @@ fn make_wrapper(
         "switch" => std::rc::Rc::new(flui_animation::AnimationSwitch::new(source, None)),
         "nested" => std::rc::Rc::new(flui_animation::ReverseAnimation::new(std::rc::Rc::new(
             flui_animation::ProxyAnimation::new(std::rc::Rc::new(
-                flui_animation::CurvedAnimation::new(source, flui_animation::curve::Linear),
+                flui_animation::CurvedAnimation::new(source, flui_animation::Linear),
             )),
         ))),
         _ => panic!("unknown wrapper case"),

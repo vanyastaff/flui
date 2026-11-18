@@ -422,7 +422,7 @@ impl AnimateState {
     /// Play from the start toward the end, entering.
     fn replay(&self) {
         self.progress.set_phase(Phase::Enter);
-        admit(self.controller().forward_from(Some(0.0)));
+        admit(self.controller().forward_from(0.0));
     }
 
     /// Move toward `position`. Leaving rest picks a transition's side from

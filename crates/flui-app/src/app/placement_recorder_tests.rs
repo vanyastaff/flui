@@ -343,7 +343,7 @@ fn scaled(state: WindowState, scale: f64) -> WindowState {
     state.with_metrics(Some(
         flui_foundation::geometry::WindowMetrics::try_new(
             flui_foundation::geometry::DeviceSize::new(800, 600),
-            scale,
+            flui_foundation::geometry::DevicePixelRatio::try_new(scale).expect("a ratio in range"),
         )
         .expect("a drawable area"),
     ))

@@ -802,7 +802,11 @@ fn the_last_revision_refuses_instead_of_wrapping() {
 }
 
 fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
-    WindowMetrics::try_new(Size::new(width, height), scale).expect("a drawable area")
+    WindowMetrics::try_new(
+        Size::new(width, height),
+        flui_foundation::geometry::DevicePixelRatio::try_new(scale).expect("a ratio in range"),
+    )
+    .expect("a drawable area")
 }
 
 /// Every fact the snapshot holds is a difference the revision moves for.

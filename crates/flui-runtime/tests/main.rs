@@ -168,7 +168,7 @@ pub(crate) fn window_metrics(
 ) -> flui_foundation::geometry::WindowMetrics {
     flui_foundation::geometry::WindowMetrics::from_logical(
         flui_foundation::geometry::Size::new(width, height),
-        scale,
+        flui_foundation::geometry::DevicePixelRatio::try_new(scale).expect("a ratio in range"),
     )
     .expect("valid window metrics")
 }

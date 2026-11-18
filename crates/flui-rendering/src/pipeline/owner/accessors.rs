@@ -2368,7 +2368,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// semantics types — which is what keeps `flui-native` (layer 2) free of a
 /// dependency on `flui-semantics` (layer 3).
 fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
-    std::sync::Arc::new(|_update: &flui_semantics::TreeUpdate| {})
+    std::rc::Rc::new(|_update: &flui_semantics::TreeUpdate| {})
 }
 
 /// Visits one node of a hit walk with its user code contained.

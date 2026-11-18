@@ -297,7 +297,7 @@ fn controller_status(c: &mut Criterion) {
         add_listeners(&controller, 0, status_listeners);
         group.bench_function(BenchmarkId::new("status_fan_out", status_listeners), |b| {
             b.iter(|| {
-                black_box(controller.forward_from(Some(0.0)).unwrap());
+                black_box(controller.forward_from(0.0).unwrap());
                 controller.tick_at(std::time::Duration::from_secs_f64(black_box(2.0)));
             });
         });

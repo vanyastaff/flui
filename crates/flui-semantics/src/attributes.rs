@@ -9,13 +9,14 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::AxisDirection;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
     collection::Collection,
-    properties::{HeadingLevel, SemanticsSortKey, TextDirection},
+    properties::{HeadingLevel, SemanticsSortKey},
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{LiveSetting, SemanticsRole},
     states::States,

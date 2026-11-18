@@ -517,6 +517,10 @@ pub trait Preferences<O> {
     /// # Errors
     /// What [`Platform::preferences`] reports.
     fn sample(owner: &O) -> Result<SystemPreferences, PlatformError>;
+
+    /// [`Platform::preferences_delivered`]: hand it to the position's source,
+    /// or say in an explicit no-op why there is none to settle.
+    fn delivered(owner: &O, values: &SystemPreferences);
 }
 
 /// The lifecycle position: session end, host notices, reopen and activation.
@@ -680,8 +684,8 @@ impl PlatformAccessibility for Absent<position::Accessibility> {
     }
 
     /// No adapter, no cursor to report.
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
+        flui_semantics::platform::AssistiveFocusSupport::Unreported
     }
 }
 
@@ -791,6 +795,9 @@ impl<O> Preferences<O> for Absent<position::Preferences> {
         // field unknown and leaves the fallback to consumers.
         Ok(SystemPreferences::default())
     }
+
+    /// No source: nothing waits for a delivery.
+    fn delivered(_: &O, _: &SystemPreferences) {}
 }
 
 impl<O> Lifecycle<O> for Absent<position::Lifecycle> {

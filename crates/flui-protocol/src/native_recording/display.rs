@@ -110,7 +110,8 @@ pub struct Display {
     /// The area windows can occupy, in its own logical pixels from its top-left corner: left,
     /// top, right, bottom.
     pub usable: [f64; 4],
-    /// Device pixels per logical pixel.
+    /// Device pixels per logical pixel, within `1/32..=32`: the range a screen can
+    /// have, and a reader refuses a row outside it.
     pub scale_factor: f64,
     /// The period of its mode, in nanoseconds, when known.
     #[cfg_attr(

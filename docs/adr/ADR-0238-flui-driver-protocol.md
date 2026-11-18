@@ -145,7 +145,7 @@ API, a CLI and MCP.
 ## Consequences
 
 - One finder serves `flui test`, the CLI and agents with one meaning (ADR-0095 §5), now resolved in
-  the app (`flui-semantics::agent`), not re-implemented per client.
+  the app (the agent read of flui-semantics, `TreeSnapshot`), not re-implemented per client.
 - Schema `0.5` renames the agent ops (`semantics.read`, `semantics.act`, `motion.set`,
   `windows.list`); pre-1.0 the rename is a `version::BREAKING` entry citing this ADR.
 - The xtask device drivers and the scripts under [`tools/device-checks/`](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/device-checks) are deleted once their

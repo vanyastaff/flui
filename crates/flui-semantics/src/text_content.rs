@@ -20,8 +20,8 @@ use flui_foundation::geometry::{Matrix4, Rect};
 use smol_str::SmolStr;
 
 use crate::identity::AccessibilityNodeId;
-use crate::properties::TextDirection;
 use crate::regions::SemanticsRegionId;
+use flui_foundation::TextDirection;
 
 /// The most characters one run holds: AccessKit's word starts are `u8`
 /// indices into the run's characters.

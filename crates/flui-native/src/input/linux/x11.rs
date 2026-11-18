@@ -55,6 +55,7 @@ pub mod decode {
 
     use smallvec::SmallVec;
 
+    use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::EventTime;
     use flui_platform::PlatformInput;
     use flui_platform::input_capabilities::PointerKindSet;
@@ -882,7 +883,7 @@ pub mod decode {
         fn reading(
             event: &XiEvent,
             surface: NativeSurface,
-            scale: f64,
+            scale: DevicePixelRatio,
             target: Target,
             action: ReadingAction,
         ) -> NativeReading {
@@ -911,7 +912,12 @@ pub mod decode {
 
         /// What `event`, delivered to the window `surface` at `scale` device
         /// pixels per logical pixel, delivers there.
-        pub fn event(&mut self, surface: NativeSurface, scale: f64, event: &XiEvent) -> Decoded {
+        pub fn event(
+            &mut self,
+            surface: NativeSurface,
+            scale: DevicePixelRatio,
+            event: &XiEvent,
+        ) -> Decoded {
             let mut decoded = Decoded::default();
             if event.emulated {
                 return decoded;
@@ -1020,7 +1026,7 @@ pub mod decode {
         pub fn motions(
             &mut self,
             surface: NativeSurface,
-            scale: f64,
+            scale: DevicePixelRatio,
             motions: &[XiEvent],
         ) -> Vec<PlatformInput> {
             let mut out = Vec::new();
@@ -1048,7 +1054,7 @@ pub mod decode {
         fn moved_through(
             &mut self,
             surface: NativeSurface,
-            scale: f64,
+            scale: DevicePixelRatio,
             moves: &[&XiEvent],
             out: &mut Vec<PlatformInput>,
         ) {
@@ -1094,7 +1100,7 @@ pub mod decode {
             &mut self,
             event: &XiEvent,
             surface: NativeSurface,
-            scale: f64,
+            scale: DevicePixelRatio,
             target: Target,
             out: &mut Vec<PlatformInput>,
         ) {
@@ -1152,7 +1158,7 @@ pub mod decode {
         fn swipe(
             &mut self,
             surface: NativeSurface,
-            scale: f64,
+            scale: DevicePixelRatio,
             event: &XiEvent,
             out: &mut Vec<PlatformInput>,
         ) {
@@ -1228,7 +1234,7 @@ pub mod decode {
         fn pinch(
             &mut self,
             surface: NativeSurface,
-            scale: f64,
+            scale: DevicePixelRatio,
             event: &XiEvent,
             out: &mut Vec<PlatformInput>,
         ) {

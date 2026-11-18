@@ -19,7 +19,7 @@ fn reverse_curve_locked_to_run_entry_direction() {
         controller.clone() as std::rc::Rc<dyn Animation<f64>>,
         Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
     )
-    .with_reverse_curve(curves::EASE_IN_QUINT);
+    .reverse_curve(curves::EASE_IN_QUINT);
 
     controller.set_value(0.5).expect("no build is running");
     let _ = controller.forward();
