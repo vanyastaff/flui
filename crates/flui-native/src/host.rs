@@ -72,7 +72,6 @@ pub(crate) use drag::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
 pub(crate) use provider::MAX_PROVIDER_READS;
 
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -91,9 +90,8 @@ use flui_semantics::platform::{
 use crate::error::PlatformError;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::platform::{AppHandler, PathPromptOptions, Platform};
+use crate::platform::{AppHandler, Platform};
 use crate::storage::DataStore;
-use crate::task::Task;
 use crate::text::TextInput;
 
 /// `key`'s launch value where a host reads the environment (ADR-0288 §7): the variable
@@ -114,8 +112,8 @@ pub trait Host: 'static {
     const NAME: &'static str;
 
     /// The owner thread's loop: what the operating system hands out once per
-    /// process, and the services no position holds.
-    type Loop: Loop + Services;
+    /// process, the launch included.
+    type Loop: Loop + Launch;
     /// Opening windows and what is known of them before one exists.
     type Window: Window<Self::Loop>;
     /// The displays and their snapshot.
@@ -171,45 +169,18 @@ pub trait Loop: Sized + 'static {
     fn request_exit_policy_reevaluation(&self);
 }
 
-/// What the host does for the application outside the closed list: the
-/// application's path, opening URLs and paths, file
-/// prompts and the compositor's name. They leave [`Platform`] for the system
-/// capability crate (ADR-0151 §9); until then the loop carries them, and each
-/// host writes its answer, inert ones included.
-pub trait Services {
-    /// [`Platform::app_path`].
-    ///
-    /// # Errors
-    /// [`PlatformError::AppPath`] when the lookup fails.
-    fn app_path(&self) -> Result<PathBuf, PlatformError>;
-
+/// What the process was launched with, which no position of the closed list
+/// holds: the launch values and, on the web, the page's origin. The loop
+/// answers them, since the launch is what the operating system hands the
+/// process once. Opening URLs and paths, the file dialogs and the folders are
+/// `flui-system`'s and `flui_platform::launch`'s, never the core host's
+/// (ADR-0151 §9).
+pub trait Launch {
     /// [`Platform::launch_value`].
     fn launch_value(&self, key: LaunchKey) -> Option<String>;
 
     /// [`Platform::page_origin`]: `None` but on the web.
     fn page_origin(&self) -> Option<String>;
-
-    /// [`Platform::open_url`].
-    fn open_url(&self, url: &str);
-
-    /// [`Platform::reveal_path`].
-    fn reveal_path(&self, path: &Path);
-
-    /// [`Platform::open_path`].
-    fn open_path(&self, path: &Path);
-
-    /// [`Platform::prompt_for_paths`].
-    fn prompt_for_paths(
-        &self,
-        options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>>;
-
-    /// [`Platform::prompt_for_new_path`].
-    fn prompt_for_new_path(
-        &self,
-        directory: &Path,
-        suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>>;
 }
 
 /// The window position: opening windows, and what is known of them before

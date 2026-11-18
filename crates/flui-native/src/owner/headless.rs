@@ -8,7 +8,6 @@
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
     rc::Rc,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
@@ -284,7 +283,6 @@ pub(crate) struct HeadlessState {
     /// The application's turn deadline as [`HeadlessOwnerTurns::drive_at`]
     /// armed it.
     turn_deadline: crate::owner::wake_deadline::TurnDeadline,
-    opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
     /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
     /// `Platform::run` installs `HeadlessDeferredOwnerHooks` instead of
@@ -407,7 +405,6 @@ impl HeadlessLoop {
             windows,
             keyboard_layout: "en-US".to_string(),
             turn_deadline: crate::owner::wake_deadline::TurnDeadline::default(),
-            opened_urls: Vec::new(),
             deferred_window_open: false,
             pending_opens: Vec::new(),
             exit_reevaluation_requested: false,
@@ -673,7 +670,7 @@ impl host::Loop for HeadlessLoop {
     }
 }
 
-impl host::Services for HeadlessLoop {
+impl host::Launch for HeadlessLoop {
     /// Only a page has an origin.
     fn page_origin(&self) -> Option<String> {
         None
@@ -681,46 +678,6 @@ impl host::Services for HeadlessLoop {
 
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
-    }
-
-    /// The executable the process runs, as on the desktop hosts: a headless
-    /// platform still runs in a real process.
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        std::env::current_exe().map_err(|error| PlatformError::AppPath {
-            message: error.to_string(),
-        })
-    }
-
-    fn open_url(&self, url: &str) {
-        self.with_state(|state| {
-            state.opened_urls.push(url.to_string());
-        });
-    }
-
-    // Nothing is shown, so no path is revealed or opened and no prompt runs.
-    fn reveal_path(&self, path: &std::path::Path) {
-        let _ = path;
-    }
-
-    fn open_path(&self, path: &std::path::Path) {
-        let _ = path;
-    }
-
-    fn prompt_for_paths(
-        &self,
-        options: crate::PathPromptOptions,
-    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        let _ = options;
-        crate::Task::ready(Ok(None))
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        directory: &std::path::Path,
-        suggested_name: Option<&str>,
-    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
-        let _ = (directory, suggested_name);
-        crate::Task::ready(Ok(None))
     }
 }
 

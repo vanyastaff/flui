@@ -1072,57 +1072,13 @@ impl host::Loop for WebLoop {
     }
 }
 
-impl host::Services for WebLoop {
+impl host::Launch for WebLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         self.launch.value(key)
     }
 
     fn page_origin(&self) -> Option<String> {
         web_sys::window()?.location().origin().ok()
-    }
-
-    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
-        // web_sys::Window::location() returns Location, not Result
-        // Location::origin() returns Result<String, JsValue>
-        if let Some(w) = web_sys::window()
-            && let Ok(origin) = w.location().href()
-        {
-            return Ok(std::path::PathBuf::from(origin));
-        }
-        Ok(std::path::PathBuf::from("/"))
-    }
-
-    fn open_url(&self, url: &str) {
-        if let Some(w) = web_sys::window() {
-            let _ = w.open_with_url_and_target(url, "_blank");
-        }
-    }
-
-    // A page reveals or opens no path and shows no file prompt here: those
-    // services move to the system capability crate.
-    fn reveal_path(&self, path: &std::path::Path) {
-        let _ = path;
-    }
-
-    fn open_path(&self, path: &std::path::Path) {
-        let _ = path;
-    }
-
-    fn prompt_for_paths(
-        &self,
-        options: crate::PathPromptOptions,
-    ) -> crate::Task<Result<Option<Vec<std::path::PathBuf>>, PlatformError>> {
-        let _ = options;
-        crate::Task::ready(Ok(None))
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        directory: &std::path::Path,
-        suggested_name: Option<&str>,
-    ) -> crate::Task<Result<Option<std::path::PathBuf>, PlatformError>> {
-        let _ = (directory, suggested_name);
-        crate::Task::ready(Ok(None))
     }
 }
 
