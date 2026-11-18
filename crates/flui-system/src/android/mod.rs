@@ -28,8 +28,8 @@
 //!   contents, a save's write) or the file system (the file a launch or a
 //!   share hands over), since a provider answers when it will.
 //!
-//! The native methods go through `owner::android::native_call`, which `cargo
-//! xtask panic-boundary` holds them to. The rules of each provider (what a
+//! The native methods go through `owner::android::native_call`, the crate's
+//! panic boundary for a JNI entry (ADR-0151 §16). The rules of each provider (what a
 //! request becomes, what an answer means) are tested beside it on every
 //! host, the dialogs' whole path over a stand-in Activity; the JNI calls
 //! compile on Android only, and no compiler checks the names and signatures

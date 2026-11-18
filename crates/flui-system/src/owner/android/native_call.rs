@@ -1,13 +1,13 @@
 //! A native method of the crate's Java classes, from the call Java makes to
 //! what it answers.
 //!
-//! Java calls `FluiSystem.answered` from a callback on its main thread (a
-//! runnable posted to it, a dialog's listener), and none of those catches:
-//! an exception pending when the method returns is thrown there, and an
-//! exception nothing catches on the main thread ends the process. So a
-//! native method is one call of [`jni_native`], which `cargo xtask
-//! panic-boundary` holds it to, as it holds `flui-native`'s to that crate's
-//! adapter of the same name and contract: the body runs inside the panic
+//! Java calls `FluiCallback`'s native methods from a proxy's handler on its
+//! main thread (a runnable posted to it, a dialog's listener) and from a
+//! finalizer, and none of those catches: an exception pending when the
+//! method returns is thrown there, and an exception nothing catches on the
+//! main thread ends the process. So a native method is one call of
+//! [`jni_native`], the crate's adapter of the same name and contract as
+//! `flui-native`'s (ADR-0151 §16): the body runs inside the panic
 //! boundary with the method's environment, Java receives the body's answer
 //! or, after a failed JNI call or a panic, the method's "nothing" (`false`,
 //! `0`, `null`, no value), and never a pending exception, which

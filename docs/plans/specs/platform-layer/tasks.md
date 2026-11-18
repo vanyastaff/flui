@@ -5788,8 +5788,8 @@ GPU-память простаивающего или невидимого окн
   APK без классов или с другим протоколом — `NotDeclared`. Новый ключ объявлений
   `android.providers` (схема 4, ADR-0307): класс и суффикс authority под id приложения,
   `flui build` пишет `<provider>` в манифест (не экспортирован, `grantUriPermissions`).
-  Оба нативных метода — один вызов `owner::android::native_call::jni_native` крейта
-  (`xtask panic-boundary` читает и его). Файловые диалоги — `ACTION_OPEN_DOCUMENT` и
+  Оба нативных метода — один вызов `owner::android::native_call::jni_native` крейта (граница
+  паники для входа JNI, ADR-0151 §16). Файловые диалоги — `ACTION_OPEN_DOCUMENT` и
   `ACTION_CREATE_DOCUMENT` через `Activity::launch_for_result` под ключом на вид; удержание
   диалога — `ResultTicket` (сброс кончает пикер, ADR-0344, и отменяет чтение через
   `CancellationSignal`), `ActivityEnded` отвечает `WindowClosed`, ответ прежней Activity забирает
@@ -5839,7 +5839,8 @@ GPU-память простаивающего или невидимого окн
   `aarch64-linux-android` на nightly в WSL (только `--lib`: dev-зависимостям нужен clang NDK);
   каждое имя и сигнатура JNI сверены с `android.jar` платформы 35 через `javap`; dex собран
   локально теми же JDK и build-tools, что в записи. Не запущено: ничего на устройстве и эмуляторе;
-  clippy для Android — только CI (`cross-typecheck`). Чего не достаёт до контракта (выбор без
+  clippy для Android — только CI (`cross-typecheck`, на `main` и по ручному запуску `ci.yml`
+  на ветке). Чего не достаёт до контракта (выбор без
   доступа, переживающего диалог; диалог папок; фильтр только по MIME; ответ прежней Activity не
   доставляется приложению) — `docs/gaps.md`. Прогоны — строки parity «Open a URL», «Open a file,
   reveal it in the file manager», «Open, save and folder dialogs», «Message box», «Share», «User
