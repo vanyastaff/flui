@@ -66,7 +66,7 @@ public final class FluiHost {
      * calls, the entries of the queue, and what each means. Raised with every
      * change to any of them, together with the library's constant.
      */
-    public static final int PROTOCOL = 7;
+    public static final int PROTOCOL = 8;
 
     /** An entry for {@code onTrimMemory}; its value is the level. */
     static final int TRIM_MEMORY = 1;

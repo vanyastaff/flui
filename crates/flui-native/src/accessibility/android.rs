@@ -10,17 +10,35 @@
 //!
 //! # Threads
 //!
-//! The adapter lives on the Java main thread. The node provider's calls
-//! arrive there and are answered at once from the tree the adapter holds. A
-//! publish from the owner thread retains a self-contained update and posts
-//! the update to the main thread, where it is applied and its events raised.
-//! The posts run in order, so the adapter applies the updates in the order
-//! the owner published them, and neither thread waits for the other.
+//! The adapter lives on the Java main thread, in a
+//! [`ProvidedTree`] made there by the first call that reaches it and held
+//! in an [`OwnerSlot`] of that thread, which every other thread reaches as
+//! nothing. The node provider's calls arrive there and are answered at once
+//! from the tree the adapter holds. A publish from the owner thread retains
+//! a self-contained update and posts the update to the main thread, where
+//! it is applied and its events raised. The posts run in order, so the
+//! adapter applies the updates in the order the owner published them, and
+//! neither thread waits for the other.
 //!
-//! The adapter's lock is taken only on the main thread and never across an
+//! The adapter is borrowed only on the main thread and never across an
 //! event raise: TalkBack answers an event by asking for node info, which
-//! re-enters the provider. A call that finds the lock held anyway answers as
-//! a view with no tree.
+//! re-enters the provider. A call that finds it borrowed anyway is
+//! [`Busy`](crate::accessibility::provided_tree::Busy) and answers as a view with no tree.
+//!
+//! # While a service listens
+//!
+//! `FluiView` reports whether any accessibility service is enabled
+//! (`AccessibilityManager.isEnabled()`, asked as its accessibility-state
+//! listener fires, as the view enters the window and as the bridge arrives),
+//! which reaches [`ViewAccessibility::services_changed`]. While one is, a
+//! service's first question through the node provider starts the tree; when
+//! none is, the adapter drops its tree and the composition root, told on the
+//! main thread with nothing borrowed, stops building it, so a publish posts
+//! nothing. A question while none is enabled (Assist structure, the autofill
+//! framework's compatibility mode, a hover posted before the report) is
+//! answered from a placeholder and starts nothing ([`ProvidedTree`]). Touch
+//! exploration ending is not a stop: another service (Switch Access, Select
+//! to Speak) still reads the tree without it.
 //!
 //! # Explore by touch
 //!
@@ -42,71 +60,105 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use std::sync::Arc;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use accesskit::TreeUpdate;
 use accesskit_android::jni::JNIEnv;
 use accesskit_android::jni::objects::JObject;
 use accesskit_android::jni::sys as jni021;
 use accesskit_android::{Adapter, PlatformAction, QueuedEvents};
-use parking_lot::Mutex;
 
-use crate::accessibility::bridge::{Action, Activation, BridgeShared};
+use crate::accessibility::bridge::BridgeShared;
+use crate::accessibility::provided_tree::{Provided, ProvidedAdapter, ProvidedTree};
 use crate::owner::android::ActivityRef;
 use crate::owner::android::java_view::{JavaView, ViewAccessibility};
 use crate::owner::android::native_call::{ClearsPending, EnvSlot};
+use crate::owner::slot::OwnerSlot;
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
     RouteChange, RouteChangeSupport,
 };
 
-/// The adapter with the handlers it calls.
-struct Provided {
-    adapter: Adapter,
-    activation: Activation,
-    action: Action,
+impl ProvidedAdapter for Adapter {
+    type Events = QueuedEvents;
+
+    fn update_if_active(&mut self, update: TreeUpdate) -> Option<QueuedEvents> {
+        Adapter::update_if_active(self, move || update)
+    }
 }
 
 /// The part of the bridge the Java main thread holds: the adapter, which the
-/// view's node provider and the owner's posted updates reach.
+/// view's node provider, the owner's posted updates and the accessibility
+/// manager's notice reach.
 struct NodeProvider {
     shared: Arc<BridgeShared>,
-    provided: Mutex<Provided>,
+    /// Made by the first call that reaches it, on the Java main thread, and
+    /// bound to that thread: every call into the adapter runs there.
+    tree: OnceLock<OwnerSlot<Rc<ProvidedTree<Adapter>>>>,
 }
 
 impl NodeProvider {
-    /// Run `f` with the adapter, or answer `None` when a call on this thread
-    /// already holds it.
-    fn with<R>(&self, f: impl FnOnce(&mut Provided) -> R) -> Option<R> {
-        let Some(mut provided) = self.provided.try_lock() else {
-            tracing::warn!(
-                target: "flui_native::android",
-                "TalkBack re-entered the node provider while it held the adapter"
-            );
-            return None;
-        };
-        Some(f(&mut provided))
+    /// The tree, made on first use. Java main thread; `None` elsewhere.
+    fn tree(&self) -> Option<Rc<ProvidedTree<Adapter>>> {
+        self.tree
+            .get_or_init(|| {
+                let slot = OwnerSlot::new();
+                if slot
+                    .replace(Rc::new(ProvidedTree::new(Arc::clone(&self.shared))))
+                    .is_err()
+                {
+                    tracing::error!(
+                        target: "flui_native::android",
+                        "TalkBack's tree holds nothing: owner slots are exhausted"
+                    );
+                }
+                slot
+            })
+            .cloned()
     }
 
-    /// Run `f` with the adapter; then, outside its lock, raise the events `f`
-    /// made. Java main thread.
+    /// Run `f` with the adapter, or answer `None` when a call on this thread
+    /// is already inside it. Java main thread.
+    fn with<R>(&self, f: impl FnOnce(&mut Provided<Adapter>) -> R) -> Option<R> {
+        let answer = self.tree()?.with(f);
+        if answer.is_err() {
+            tracing::warn!(
+                target: "flui_native::android",
+                "TalkBack re-entered the node provider while a call was inside the adapter"
+            );
+        }
+        answer.ok()
+    }
+
+    /// Run `f` with the adapter; then, with the adapter free, raise the
+    /// events `f` made. Java main thread.
     fn raising<R>(
         &self,
         env: &mut JNIEnv<'_>,
         host: &JObject<'_>,
-        f: impl FnOnce(&mut Provided) -> (Option<QueuedEvents>, R),
+        f: impl FnOnce(&mut Provided<Adapter>) -> (Option<QueuedEvents>, R),
     ) -> Option<R> {
         let (events, answer) = self.with(f)?;
         raise(env, host, events);
         Some(answer)
     }
 
-    /// Apply `update`. Java main thread.
+    /// Apply `update`, which an adapter whose tree ended drops. Java main
+    /// thread.
     fn apply(&self, env: &mut JNIEnv<'_>, host: &JObject<'_>, update: TreeUpdate) {
-        self.raising(env, host, |provided| {
-            (provided.adapter.update_if_active(move || update), ())
-        });
+        let Some(tree) = self.tree() else {
+            return;
+        };
+        let Ok(events) = tree.apply(update) else {
+            tracing::warn!(
+                target: "flui_native::android",
+                "an update reached the adapter while a call was inside it and was dropped"
+            );
+            return;
+        };
+        raise(env, host, events);
     }
 
     /// Hand the adapter one touch-exploration hover. Java main thread.
@@ -296,6 +348,12 @@ impl ViewAccessibility for NodeProvider {
         }
     }
 
+    fn services_changed(&self, enabled: bool) {
+        if let Some(tree) = self.tree() {
+            tree.services_changed(enabled);
+        }
+    }
+
     /// TalkBack explores by touch only once it asked for the tree; the hover
     /// is applied on the Java main thread, after what was posted before it.
     fn explore(self: Arc<Self>, view: &Arc<JavaView>, action: i32, x: f32, y: f32) -> bool {
@@ -333,11 +391,7 @@ impl crate::host::Accessibility<ActivityRef> for AndroidAccessibility {
         let shared = Arc::new(BridgeShared::new());
         let provider = Arc::new(NodeProvider {
             shared: Arc::clone(&shared),
-            provided: Mutex::new(Provided {
-                adapter: Adapter::default(),
-                activation: Activation(Arc::clone(&shared)),
-                action: Action(Arc::clone(&shared)),
-            }),
+            tree: OnceLock::new(),
         });
         window
             .view
