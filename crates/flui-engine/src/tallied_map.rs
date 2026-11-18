@@ -78,6 +78,12 @@ impl<K: Hash + Eq, V> TalliedMap<K, V> {
         self.map = FxHashMap::default();
     }
 
+    /// The entries the table has room for.
+    #[cfg(test)]
+    pub(crate) fn room(&self) -> usize {
+        self.map.capacity()
+    }
+
     /// The entries reached since this last answered, which starts the
     /// count again.
     #[cfg(test)]

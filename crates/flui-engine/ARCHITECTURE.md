@@ -234,9 +234,11 @@ frame through the lineage index, at the cost of the entries dropped
 The slots of a `GpuContext` note their lineage in the context, which shares one
 painter; a `Renderer` and the headless capture that stands in for it note
 theirs in `FrameProtocol::plan_scene`. An entry is charged its recording's
-bytes and its node in the list and its place in both indexes; a cache an epoch, a
-reclaim, a lineage drop or an eviction empties lets go of the room of all
-three (`a_cache_emptied_lets_its_room_go`).
+bytes, its node in the list and one place in each index, but not the slack
+of the indexes (spare hash slots and keys, spare `Vec` room), a few tens of
+bytes more per entry; a cache an epoch, a reclaim, a lineage drop or an
+eviction empties lets go of the room of all three
+(`a_cache_emptied_lets_its_room_go`).
 A `Full(DamageOff)` frame, a window's or an offscreen slot's, does not read the
 cache; evictions are counted until a submitted frame reports them, and bytes by
 the capacity a recording holds, which a capture allocates to its length.

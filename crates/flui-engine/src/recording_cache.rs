@@ -1308,8 +1308,10 @@ struct Entry {
 }
 
 /// What a kept recording costs the budget beyond what it holds itself: the
-/// rest of its boxed entry, its node in the recency list and its places in
-/// the two indexes.
+/// rest of its boxed entry, its node in the recency list and one place in
+/// each index. The indexes' slack is left out: a hash table's spare slots
+/// and keys, the `SmallVec` a content version holds, the spare room of a
+/// lineage's `Vec`, a few tens of bytes more per entry.
 const ENTRY_OVERHEAD: usize = std::mem::size_of::<Entry>() - std::mem::size_of::<ChunkRecording>()
     + RecencyList::<Box<Entry>>::NODE_BYTES
     + 2 * std::mem::size_of::<Place>();
@@ -1569,6 +1571,17 @@ impl RecordingCache {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.recency.len()
+    }
+
+    /// The room of the recency list and of the content and lineage indexes,
+    /// in nodes and entries.
+    #[cfg(test)]
+    fn room(&self) -> [usize; 3] {
+        [
+            self.recency.room(),
+            self.by_content.room(),
+            self.by_lineage.room(),
+        ]
     }
 
     /// The nodes and map entries every step since this was last asked
@@ -2141,29 +2154,38 @@ mod tests {
         assert_eq!(work[0], work[1], "a drop costs what it drops: {work:?}");
     }
 
-    /// An epoch that empties the cache lets go of the room its recordings
-    /// held, so memory the budget no longer counts is not kept.
+    /// Whatever empties the cache, an epoch, a lineage drop or an eviction
+    /// over the budget, lets go of the room of the recency list and of both
+    /// indexes, so memory the budget no longer counts is not kept.
     #[test]
     fn a_cache_emptied_lets_its_room_go() {
-        let mut cache = RecordingCache::new();
-        let keys: Vec<RecordingKey> = versions(100)
-            .into_iter()
-            .map(|content| key(&cache, content, 0.0))
-            .collect();
-        for &key in &keys {
-            cache.insert(key, recording(UNIT));
+        type Empty = fn(&mut RecordingCache, flui_layer::Lineage);
+        let rows: [(&str, Empty); 3] = [
+            ("an epoch", |cache, _| cache.advance_epoch()),
+            ("a lineage drop", |cache, lineage| {
+                cache.drop_lineage(lineage);
+            }),
+            ("an eviction", |cache, _| {
+                cache.set_budget(0);
+                cache.settle();
+            }),
+        ];
+        for (row, empty) in rows {
+            let mut cache = RecordingCache::new();
+            let keys: Vec<RecordingKey> = versions(100)
+                .into_iter()
+                .map(|content| key(&cache, content, 0.0))
+                .collect();
+            for &key in &keys {
+                cache.insert(key, recording(UNIT));
+            }
+            assert!(
+                cache.room().iter().all(|&room| room > 0),
+                "{row}: filled {:?}",
+                cache.room()
+            );
+            empty(&mut cache, keys[0].content.lineage());
+            assert_eq!((cache.len(), cache.room()), (0, [0; 3]), "{row}");
         }
-        assert!(cache.recency.room() >= 100);
-        cache.advance_epoch();
-        assert_eq!((cache.len(), cache.recency.room()), (0, 0));
-        let keys: Vec<RecordingKey> = versions(100)
-            .into_iter()
-            .map(|content| key(&cache, content, 0.0))
-            .collect();
-        for &key in &keys {
-            cache.insert(key, recording(UNIT));
-        }
-        cache.drop_lineage(keys[0].content.lineage());
-        assert_eq!((cache.len(), cache.recency.room()), (0, 0));
     }
 }
