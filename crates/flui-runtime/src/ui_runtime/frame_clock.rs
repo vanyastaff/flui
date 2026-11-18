@@ -561,11 +561,11 @@ impl UiRuntime {
     }
 
     /// Whether work is due now, at an instant of its own: a due task deadline,
-    /// a dropped frame whose backoff is over, the frame an unseen window owes
-    /// its surface ([`Self::owes_occluded_frame`]), a gesture deadline that
-    /// came due, a haptic delivery, or a frame-rate hold that ran out. A
-    /// runner serves it on the wake its deadline brings, never behind a pacing
-    /// deferral (ADR-0353 decision 4).
+    /// a dropped frame whose backoff is over (a seen window's), the frame a
+    /// covered window owes its surface, a gesture deadline that came due, a
+    /// haptic delivery, or a frame-rate hold that ran out. A runner serves it
+    /// on the wake its deadline brings, never behind a pacing deferral
+    /// (ADR-0353 decision 4).
     pub fn has_pending_due_work(&self) -> bool {
         // A deadline a task sleeps until is owner work once it is due.
         let deadline_due = self
@@ -576,9 +576,11 @@ impl UiRuntime {
             || self.owes_occluded_frame()
             || self.presentations.iter().any(|presentation| {
                 // A sink at its in-flight limit or a given-up device asks for
-                // no frame until a settlement or a new rebuild does.
+                // no frame until a settlement or a new rebuild does, and an
+                // unseen window retries its dropped frame once it is seen.
                 let retry_due = !presentation.frames_in_flight().is_saturated()
                     && !presentation.device_abandoned()
+                    && !presentation.clock().is_hidden()
                     && presentation
                         .failure_retry_at()
                         .is_some_and(|at| presentation.clock().now() >= at);
@@ -591,15 +593,19 @@ impl UiRuntime {
             })
     }
 
-    /// Whether a window that cannot be seen, occluded by what may be a
-    /// covering, has had its quiet period end with work waiting: its next
-    /// frame draws what changed, so the surface the window system shows on
-    /// uncovering is current (ADR-0357). A runner whose frames are off
-    /// because no window is seen runs that frame all the same; every other
-    /// frame of an unseen window waits until it is seen.
-    #[doc(hidden)]
+    /// Whether a wake of this runtime runs a frame rather than a background
+    /// turn ([`Self::pump_background`](crate::ui_runtime::UiRuntime::pump_background)):
+    /// frames are enabled (some window is seen), or a covered window whose
+    /// surface is kept has its owed frame due, which runs while no window is
+    /// seen (ADR-0357). Every runner's wake gate and the headless host ask
+    /// this, not the scheduler, so none can leave the owed frame out.
     #[must_use]
-    pub fn owes_occluded_frame(&self) -> bool {
+    pub fn runs_frames(&self) -> bool {
+        self.scheduler.frames_enabled() || self.owes_occluded_frame()
+    }
+
+    /// Whether a covered window's owed frame is due now (ADR-0357).
+    fn owes_occluded_frame(&self) -> bool {
         self.presentations.iter().any(|presentation| {
             presentation
                 .occluded_frame_at()
@@ -715,10 +721,12 @@ impl UiRuntime {
                     presentation.occluded_frame_at(),
                     // A presentation at its in-flight limit attempts no frame when its backoff
                     // ends; the settlement that frees a place wakes it, and the in-flight floor
-                    // bounds the sleep until then (ADR-0305 §5).
-                    presentation
-                        .failure_retry_at()
-                        .filter(|_| !presentation.frames_in_flight().is_saturated()),
+                    // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it
+                    // is seen, which wakes it.
+                    presentation.failure_retry_at().filter(|_| {
+                        !presentation.frames_in_flight().is_saturated()
+                            && !presentation.clock().is_hidden()
+                    }),
                     presentation.in_flight_floor().filter(|_| {
                         floor_owed(PresentationAddress {
                             ui_runtime_id,

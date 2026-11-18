@@ -635,32 +635,21 @@ impl UiRuntime {
     }
 
     /// Gate `presentation_id`'s own
-    /// [`FrameClock`](flui_scheduler::FrameClock) on a real visibility
-    /// signal — the presentation-level counterpart of the
-    /// UI runtime-wide `AppLifecycleState` derivation
-    /// `PlatformToUi::WindowVisibility` (`runner.rs`) also drives. A stale
-    /// or unknown `presentation_id` (already closed, or a forged/mixed
-    /// address) is a
-    /// traced no-op, matching [`Self::notify_presentation_focus_gained`]'s
-    /// own discipline.
+    /// [`FrameClock`](flui_scheduler::FrameClock) on whether its window can be
+    /// seen (`WindowObservation::Visibility`), beside the UI runtime-wide
+    /// `AppLifecycleState` the same observation drives. A stale or unknown
+    /// `presentation_id` (already closed, or a forged or mixed address) is a
+    /// traced no-op, as in [`Self::notify_presentation_focus_gained`].
     ///
-    /// While hidden,
-    /// [`FrameClock::poll`](flui_scheduler::FrameClock::poll) returns
-    /// `Skip(Hidden)` for this
-    /// presentation: `draw_frame_entered`'s segment loop skips its
-    /// build/layout/paint/submit entirely, demand retained. Becoming visible
-    /// again does NOT self-produce — nothing wakes an idle platform loop on
-    /// its own — so this is also the ungate→wake edge: with a nonzero
-    /// retained mask, this call wakes the UI runtime unconditionally rather than
-    /// consulting
-    /// [`FrameClock::try_arm_redraw_request`](flui_scheduler::FrameClock::try_arm_redraw_request).
-    /// That latch cannot
-    /// be trusted here: it may already be armed from a demand mark that
-    /// occurred BEFORE this presentation went hidden (a poke the platform
-    /// loop already delivered and wasted, since `poll` returned `Skip(Hidden)`
-    /// for it) — reading `try_arm_redraw_request()`'s return value would
-    /// incorrectly stay silent in that sequence and strand the presentation
-    /// gated forever with demand nobody ever wakes for.
+    /// While hidden, [`FrameClock::poll`](flui_scheduler::FrameClock::poll)
+    /// skips the presentation's segment with its demand retained, and its tree
+    /// work wakes no host (`has_pending_tree_work`); the one frame it draws is
+    /// the one it owes a kept surface while covered (`PresentationState::follow_sight`,
+    /// ADR-0357). Shown again, it wakes the runtime when its clock's demand or
+    /// its tree's work waits, unconditionally rather than through
+    /// [`FrameClock::try_arm_redraw_request`](flui_scheduler::FrameClock::try_arm_redraw_request),
+    /// whose latch may still be armed from a poke the loop delivered and
+    /// wasted while the presentation was hidden.
     pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool) {
         let Some(presentation) = self.presentations.get(presentation_id) else {
             tracing::debug!(
@@ -671,13 +660,8 @@ impl UiRuntime {
         };
         let shown_again = presentation.clock().is_hidden() && !hidden;
         presentation.clock().set_hidden(hidden);
-        if hidden {
-            // Whether the window owes its surface a frame while unseen is read now, from the
-            // state that made it unseen (ADR-0357).
-            presentation.begin_unseen(presentation.clock().now());
-        } else {
-            presentation.end_unseen();
-        }
+        // What the window owes its surface while unseen is read from the state that made it so.
+        presentation.follow_sight(self.session_shown.get(), presentation.clock().now());
         if shown_again {
             // A withdrawal of its surface from here on is a new one, ridden out at the display
             // rate once any dropped-frame wait already running ends (ADR-0335 §2).

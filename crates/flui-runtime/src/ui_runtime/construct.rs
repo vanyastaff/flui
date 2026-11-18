@@ -261,6 +261,7 @@ impl UiRuntime {
             anchor_owed: Cell::new(false),
             press_commit: Cell::new(None),
             frame_failure_detail: Cell::new(FrameFailureDetail::default()),
+            session_shown: Cell::new(true),
             _owner_affine: PhantomData,
         };
         ui_runtime.seed_runtime_lifecycle();

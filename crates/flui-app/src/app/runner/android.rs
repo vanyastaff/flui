@@ -538,7 +538,7 @@ impl AndroidFrameDriver {
             );
             let scheduler = ui_runtime.scheduler();
             let action = wake_action(
-                scheduler.frames_enabled(),
+                ui_runtime.runs_frames(),
                 dirty,
                 scheduler.is_frame_scheduled(),
                 FallbackGate::default(),

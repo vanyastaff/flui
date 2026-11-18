@@ -112,6 +112,9 @@ pub struct HeadlessWindow {
     /// Whether the window system keeps the window off the screen, as the test
     /// last reported it ([`HeadlessHost::set_window_occluded`]).
     occluded: Mutex<bool>,
+    /// What the simulated window system does with the window's last frame
+    /// while it is off the screen ([`HeadlessWindow::with_occlusion_reports`]).
+    occluded_surface: flui_platform::OccludedSurface,
     /// What covers the window, as the test last reported it.
     insets: Mutex<flui_platform::WindowInsets>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
@@ -245,11 +248,17 @@ impl HeadlessWindow {
         }
         chrome.unobserved = true;
         drop(chrome);
+        self.advance_revision();
+        Ok(())
+    }
+
+    /// The window's state changed: what [`PlatformWindow::state`] reports is
+    /// at the next revision.
+    fn advance_revision(&self) {
         let mut revision = self.revision.lock();
         *revision = revision
             .next()
             .expect("BUG: a test changes a window far fewer than u64::MAX times");
-        Ok(())
     }
 
     /// Whether the window changed since the host last told the UI runtime, forgotten.
@@ -294,6 +303,7 @@ impl HeadlessWindow {
             display: Mutex::new(None),
             execution: Mutex::new(flui_platform::WindowExecutionState::Running),
             occluded: Mutex::new(false),
+            occluded_surface: flui_platform::OccludedSurface::Discarded,
             insets: Mutex::new(flui_platform::WindowInsets::ZERO),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
@@ -401,16 +411,19 @@ impl HeadlessWindow {
     }
 
     /// Play a window system that tells a covering by other windows
-    /// ([`WindowCapabilities::reports_occlusion`](flui_platform::WindowCapabilities::reports_occlusion)),
-    /// as AppKit does: an occluded snapshot
-    /// ([`HeadlessHost::set_window_occluded`]) may then be a covering. Without
-    /// it the window plays one whose occlusion is never a covering (a locked
-    /// session, a background app).
+    /// ([`WindowCapabilities::reports_occlusion`](flui_platform::WindowCapabilities::reports_occlusion))
+    /// and keeps a covered window's last frame
+    /// ([`OccludedSurface::Kept`](flui_platform::OccludedSurface::Kept)), as
+    /// AppKit does: an occluded snapshot ([`HeadlessHost::set_window_occluded`])
+    /// may then be a covering whose surface is shown again on uncovering.
+    /// Without it the window plays one whose occlusion is never a covering (a
+    /// locked session, a background app).
     #[must_use]
     pub fn with_occlusion_reports(mut self) -> Self {
         let mut parts = self.capabilities.into_parts();
         parts.reports_occlusion = flui_platform::WindowCapability::Native;
         self.capabilities = Self::publish(parts);
+        self.occluded_surface = flui_platform::OccludedSurface::Kept;
         self
     }
 
@@ -1259,6 +1272,7 @@ impl HeadlessHost {
                     .map(|host| host as Rc<dyn TextStoreHost>),
             )
             .with_gesture_profiles(gesture_preset)
+            .with_occluded_surface(window.occluded_surface)
             .with_platform(platform),
             1.0,
             host,
@@ -1493,7 +1507,17 @@ impl HeadlessHost {
             clippy::disallowed_methods,
             reason = "ADR-0287: the kit keeps a pump's panic to settle failures before resuming"
         )]
-        let attempt = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(&mut frame_clock, sink)));
+        // As a runner's wake gate: a runtime whose frames are off (no window
+        // seen) takes a background turn, unless a covered window owes its
+        // surface a frame.
+        let attempt = catch_unwind(AssertUnwindSafe(|| {
+            if ui_runtime.runs_frames() {
+                ui_runtime.pump(&mut frame_clock, sink)
+            } else {
+                ui_runtime.pump_background();
+                FrameOutcome::default()
+            }
+        }));
         let first_failure = {
             let mut failures = self.failures.lock();
             let first = failures.first().cloned();
@@ -1935,6 +1959,7 @@ impl HeadlessHost {
                     .map(|host| host as Rc<dyn TextStoreHost>),
             )
             .with_gesture_profiles(gesture_preset)
+            .with_occluded_surface(window.occluded_surface)
             .with_platform(platform),
         );
         let id = self.ui_runtime_mut().install_presentation(presentation);
@@ -2230,22 +2255,31 @@ impl HeadlessHost {
 
     /// Report whether the window system keeps `window` off the screen
     /// ([`WindowState::occluded`](flui_platform::WindowState::occluded)), as a
-    /// host reports a covering, a lock or a background app: the window's state
-    /// says so, and the host delivers whether the window is now seen
-    /// (`WindowObservation::Visibility`). Whether the occlusion may be a
-    /// covering is the window's
-    /// [`with_occlusion_reports`](HeadlessWindow::with_occlusion_reports). A
-    /// window that closed hears nothing, as on a real host.
+    /// host reports a covering, a lock or a background app. As a host does on
+    /// a change, the window's state says so at a new revision, the host
+    /// delivers the new snapshot (`WindowObservation::State`) and, when it
+    /// changes whether the window is seen, that too
+    /// (`WindowObservation::Visibility`); the same value again changes and
+    /// delivers nothing. Whether the occlusion may be a covering is the
+    /// window's [`with_occlusion_reports`](HeadlessWindow::with_occlusion_reports).
+    /// A window that closed hears nothing, as on a real host.
     pub fn set_window_occluded(&self, window: HeadlessWindowId, occluded: bool) {
         let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
             return;
         };
-        *open.window.occluded.lock() = occluded;
+        let was_seen = open.window.state().is_seen();
+        if std::mem::replace(&mut *open.window.occluded.lock(), occluded) == occluded {
+            return;
+        }
+        open.window.advance_revision();
         let seen = open.window.state().is_seen();
-        self.observe(
-            window.0,
-            flui_runtime::owner::WindowObservation::Visibility(seen),
-        );
+        self.observe(window.0, flui_runtime::owner::WindowObservation::State);
+        if seen != was_seen {
+            self.observe(
+                window.0,
+                flui_runtime::owner::WindowObservation::Visibility(seen),
+            );
+        }
     }
 
     /// Deliver `notice` to every subscriber of the application, as a host
@@ -2583,10 +2617,15 @@ impl HeadlessHost {
         let retrying = runtime
             .failure_retry_deadline()
             .is_some_and(|retry| retry > now);
-        if !retrying
+        // A runtime whose frames do not run (no window seen, none owing a
+        // frame) has no frame to run now: its pump is a background turn, which
+        // its deadlines, background work and observations still ask for.
+        let frame_owed = runtime.runs_frames()
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
-                || runtime.has_pending_work()
+                || runtime.has_pending_work());
+        if !retrying
+            && (frame_owed
                 || self.background_runs_next_pump()
                 || self.observations_pending()
                 || self.turn_owed())
@@ -2698,10 +2737,12 @@ impl HeadlessHost {
     ) -> Result<usize, NotSettled> {
         for frames in 0..=max_frames {
             // A retired host owes only its background work and the scenario.
+            // A runtime whose frames do not run owes no frame, only its deadlines.
             let runtime_idle = self.ui_runtime.as_ref().is_none_or(|runtime| {
-                !runtime.needs_redraw()
-                    && !runtime.scheduler().is_frame_scheduled()
-                    && !runtime.has_pending_work()
+                (!runtime.runs_frames()
+                    || (!runtime.needs_redraw()
+                        && !runtime.scheduler().is_frame_scheduled()
+                        && !runtime.has_pending_work()))
                     && runtime.next_wake().is_none()
             });
             if runtime_idle

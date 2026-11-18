@@ -635,10 +635,9 @@ impl DesktopFrameDriver {
                 fallback_gate,
             );
             // Frames are off while no window is seen, but a covered window
-            // whose quiet period is over draws the frame it owes its surface
-            // (ADR-0357), as due work.
+            // owing its kept surface a frame runs it (ADR-0357).
             let action = wake_action(
-                scheduler.frames_enabled() || ui_runtime.owes_occluded_frame(),
+                ui_runtime.runs_frames(),
                 dirty,
                 scheduler.is_frame_scheduled(),
                 fallback_gate,

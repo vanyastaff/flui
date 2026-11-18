@@ -8514,16 +8514,25 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `an_unseen_window_with_nothing_asked_runs_no_frame`. Долг кадра (`flui-runtime`,
   `occluded_frame`; правило в `ARCHITECTURE.md` крейта): невидимая презентация больше не считается
   работой дерева, по которой хост будит цикл (раньше перекрытое окно с грязным деревом просило кадр
-  на каждом пробуждении и ничего не рисовало); окно, перекрытое там, где хост различает перекрытие
-  (видимо, не свёрнуто, работает, `occluded`, `reports_occlusion` доступна), после
-  `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе рисует один кадр через
-  `FrameClock::grant_hidden_frame`, срок — в `next_wake` и `has_pending_due_work`, десктопный
-  раннер с выключенными кадрами рисует его по `owes_occluded_frame`; состояние окна читается при
-  скрытии и снова к сроку. Тест `an_occluded_window_draws_its_change_in_exactly_one_frame`
-  (`flui-testing`, четыре строки): изменение под перекрытием кадра не рисует, после тишины — ровно
-  один кадр с новым содержимым, при раскрытии — ровно один; перекрытие без отчёта о перекрытии
-  (блокировка, фон) не рисует до показа. С откатом runtime и планировщика падают строки
-  «перекрытие» и «не перекрытие» (`time_to_next_frame` — ноль вместо тишины). X11
+  на каждом пробуждении и ничего не рисовало; повтор отброшенного кадра невидимого окна тоже ждёт
+  показа). Долг есть только там, где кадр будет показан при раскрытии: окно может быть перекрыто
+  (видимо, не свёрнуто, работает, `occluded`, `reports_occlusion` доступна), хост хранит последний
+  кадр перекрытого окна (`OccludedSurface::Kept`, хост называет его через `PresentationWindow`:
+  только AppKit; X11 без композитного менеджера образа не хранит, Wayland держит кадры
+  приостановленного окна) и сеанс показывает окна (нет `SessionLocked`/`Sleep` без последующего
+  `SessionUnlocked`/`Wake`). После `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше
+  повтора отброшенного кадра, окно рисует один кадр через `FrameClock::grant_hidden_frame`; срок —
+  в `next_wake`, раннеры и headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или
+  долг наступил). Долг пересчитывается на каждом снимке окна, крае видимости и уведомлении сеанса
+  (`follow_sight`); срок, не исполненный за `OCCLUDED_FRAME_GRACE`, больше не просится до смены
+  вида окна; отказанный или отброшенный поверхностью долг кончает долг до показа. Насос AppKit
+  (`WakePump`) взводится после каждого хода владельца, чтобы срок без запроса перерисовки дошёл до
+  кадра. Тесты (`flui-testing`, `occluded_window`): `an_occluded_window_draws_its_change_in_exactly_one_frame`
+  (четыре строки), `a_covered_window_owes_by_its_sight_on_every_snapshot`,
+  `an_owed_frame_the_host_does_not_run_is_not_asked_for_again`,
+  `an_owed_frame_the_surface_refuses_is_not_drawn_again`,
+  `a_covered_window_owes_nothing_while_its_session_is_locked`; каждый падает со своим откатом
+  (пересчёт на снимке, отсрочка, отказ, уведомление сеанса, долг в `runs_frames`). X11
   (`window/linux/x11/window/compositing.rs`): XFixes `SelectSelectionInput` на
   `_NET_WM_CM_S<n>` (смена владельца, уничтожение окна, уход клиента) перечитывает поддержку;
   тест `a_compositing_manager_that_goes_gives_the_covering_report_back` под Xvfb и openbox с
@@ -8533,8 +8542,10 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Тесты: модель `a_disconnected_session_hides_its_windows_until_it_connects` (каждый хост) и
   проводка `a_disconnected_session_occludes_a_shown_window_until_it_connects` (nextest на Windows,
   сообщения посланы вручную, без RDP); обе падают, если `WTS_REMOTE_DISCONNECT` ничего не меняет.
-  Прогоны настоящего отключённого RDP-сеанса, быстрой смены пользователя и долга кадра на macOS и
-  X11-рабочем столе — заметки строки parity `visibility-minimize-occlusion`. Прогон Wayland с
+  Таблица кодов `WM_WTSSESSION_CHANGE` одна (`session_change`, ею пользуется и `classify`).
+  Прогоны настоящего отключённого RDP-сеанса, быстрой смены пользователя Windows и долга кадра на
+  macOS (проход отображения перекрытого окна, сон дисплеев и заставка без блокировки, быстрая
+  смена пользователя) — заметки строки parity `visibility-minimize-occlusion`. Прогон Wayland с
   композитором, не отвечающим на callback, — заметка строки parity `event-loop-startup-and-wake-ups`.
 - [x] **LY142** — ветка `app/owner-thread-state`. Находки подтверждены на `main` @ `817b30989`
   чтением: роутер закрытия лежит в `Rc` (`NativeBindings`) и держит `Weak<dyn PlatformWindow>`,

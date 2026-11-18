@@ -771,10 +771,15 @@ pub(crate) mod messages {
                 PBT_APMRESUMEAUTOMATIC => HostMessage::Event(HostEvent::Wake),
                 _ => HostMessage::Ignored,
             },
-            WM_WTSSESSION_CHANGE => match wparam {
-                WTS_SESSION_LOCK => HostMessage::Event(HostEvent::SessionLocked),
-                WTS_SESSION_UNLOCK => HostMessage::Event(HostEvent::SessionUnlocked),
-                _ => HostMessage::Ignored,
+            // One table for the session's codes (`session_change`): the lock
+            // and the unlock are notices; a display lost or regained is each
+            // window's step alone.
+            WM_WTSSESSION_CHANGE => match session_change(wparam) {
+                Some(SessionChange::Locked) => HostMessage::Event(HostEvent::SessionLocked),
+                Some(SessionChange::Unlocked) => HostMessage::Event(HostEvent::SessionUnlocked),
+                Some(SessionChange::Disconnected | SessionChange::Connected) | None => {
+                    HostMessage::Ignored
+                }
             },
             _ => HostMessage::Ignored,
         }

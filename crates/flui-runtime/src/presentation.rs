@@ -45,7 +45,7 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
-use crate::occluded_frame::OccludedFrame;
+use crate::occluded_frame::{OccludedFrame, Sight};
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -158,6 +158,7 @@ pub struct PresentationWindow {
     pointer_resampling: PointerResampling,
     gesture_profiles: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
+    occluded_surface: flui_platform::OccludedSurface,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -169,6 +170,7 @@ impl std::fmt::Debug for PresentationWindow {
             .field("text_store_host", &self.text_store_host.is_some())
             .field("gesture_profiles", &self.gesture_profiles)
             .field("platform", &self.platform)
+            .field("occluded_surface", &self.occluded_surface)
             .finish()
     }
 }
@@ -188,7 +190,18 @@ impl PresentationWindow {
                 flui_platform::TargetPlatform::Unknown,
             ),
             platform: flui_platform::TargetPlatform::Unknown,
+            occluded_surface: flui_platform::OccludedSurface::Discarded,
         }
+    }
+
+    /// What the window system does with the window's last frame while it
+    /// keeps the window off the screen, as the host names it; discarded by
+    /// default. Only a window whose surface is kept owes a frame while it is
+    /// covered ([`OccludedSurface`](flui_platform::OccludedSurface), ADR-0357).
+    #[must_use]
+    pub fn with_occluded_surface(mut self, surface: flui_platform::OccludedSurface) -> Self {
+        self.occluded_surface = surface;
+        self
     }
 
     /// The platform whose conventions this presentation's tree follows: the
@@ -550,6 +563,9 @@ pub struct PresentationState {
     /// Whether this presentation owes its surface a frame while it cannot be
     /// seen, and since when it has drawn none ([`OccludedFrame`]).
     occluded_frame: Cell<OccludedFrame>,
+    /// What the window system does with the window's last frame while it
+    /// keeps the window off the screen, as the host named it.
+    occluded_surface: flui_platform::OccludedSurface,
     /// Whether the performance overlay is drawn. Its numbers come from the
     /// clock's frame history, which is kept either way.
     performance_overlay: Cell<bool>,
@@ -889,6 +905,7 @@ impl PresentationState {
             pointer_resampling,
             gesture_profiles,
             platform,
+            occluded_surface,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         pipeline.withdraw_layout();
@@ -1154,6 +1171,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            occluded_surface,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
@@ -1305,6 +1323,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            occluded_surface: flui_platform::OccludedSurface::Discarded,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
@@ -1743,6 +1762,7 @@ impl PresentationState {
     /// Record a frame dropped due to a surface error.
     pub(crate) fn record_frame_dropped(&self) {
         self.frames_dropped.set(self.frames_dropped.get() + 1);
+        self.refuse_occluded_frame();
     }
 
     /// Record a frame the backend could not put on screen, returning the new
@@ -1753,6 +1773,7 @@ impl PresentationState {
     pub(crate) fn record_frame_withheld(&self) -> u32 {
         let streak = self.not_shown_streak.get().saturating_add(1);
         self.not_shown_streak.set(streak);
+        self.refuse_occluded_frame();
         streak
     }
 
@@ -1767,23 +1788,39 @@ impl PresentationState {
         self.not_shown_streak.set(0);
     }
 
-    /// The presentation stopped being seen at `now`: from the window's state
-    /// as it is now, whether it owes its surface a frame
-    /// ([`OccludedFrame::for_window`]). A presentation that already owes one
-    /// keeps its quiet period.
-    pub(crate) fn begin_unseen(&self, now: Instant) {
-        if self.occluded_frame.get() != OccludedFrame::NotOwed {
-            return;
-        }
-        let owed = self
-            .with_window(|window| OccludedFrame::for_window(&window.state(), now))
-            .unwrap_or_default();
-        self.occluded_frame.set(owed);
+    /// What a frame of this presentation would reach while it is unseen,
+    /// from its window's state now; `None` once the window is gone.
+    fn occluded_sight(&self, session_shown: bool) -> Option<Sight> {
+        self.with_window(|window| Sight::of(&window.state(), self.occluded_surface, session_shown))
     }
 
-    /// The presentation is seen again: it owes its surface nothing.
-    pub(crate) fn end_unseen(&self) {
-        self.occluded_frame.set(OccludedFrame::NotOwed);
+    /// Re-read at `now` what the presentation owes its surface: called when
+    /// it stops or starts being seen, on every new snapshot of its window
+    /// (minimized, restored, hidden, shown, covered: a change of sight that
+    /// leaves it unseen changes no visibility) and when its session locks,
+    /// unlocks, sleeps or wakes (`session_shown`). A seen presentation owes
+    /// nothing; an unseen one follows [`OccludedFrame::follow`].
+    pub(crate) fn follow_sight(&self, session_shown: bool, now: Instant) {
+        let next = if self.clock.is_hidden() {
+            self.occluded_sight(session_shown)
+                .map_or(OccludedFrame::NotOwed, |sight| {
+                    self.occluded_frame
+                        .get()
+                        .follow(sight, self.failure_retry_at(), now)
+                })
+        } else {
+            OccludedFrame::NotOwed
+        };
+        self.occluded_frame.set(next);
+    }
+
+    /// The surface refused a frame: one drawn while the presentation is
+    /// unseen is the frame it owed, and nothing more is owed until it is
+    /// seen again, however its content changes.
+    fn refuse_occluded_frame(&self) {
+        if self.clock.is_hidden() {
+            self.occluded_frame.set(OccludedFrame::Refused);
+        }
     }
 
     /// Whether frame work waits on this presentation: a demand its clock
@@ -1795,29 +1832,30 @@ impl PresentationState {
     }
 
     /// When this presentation, unseen with frame work waiting, draws the
-    /// frame it owes its surface; `None` when it is seen, owes none or has no
-    /// work.
+    /// frame it owes its surface: the end of its quiet period, not before its
+    /// dropped-frame retry. `None` when it is seen, owes none, has no work, or
+    /// its frame lapsed unrun ([`OccludedFrame::owed_at`]), so a deadline the
+    /// host does not serve is never asked for again.
     pub(crate) fn occluded_frame_at(&self) -> Option<Instant> {
         if !self.clock.is_hidden() || self.closing_requested.get() {
             return None;
         }
-        let due = self.occluded_frame.get().due_at()?;
-        self.has_retained_frame_work().then_some(due)
+        let owed = self
+            .occluded_frame
+            .get()
+            .owed_at(self.failure_retry_at(), self.clock.now())?;
+        self.has_retained_frame_work().then_some(owed)
     }
 
     /// At `now`, grant the owed frame of a presentation whose quiet period
-    /// is over, if the window may still be covered: the window may have been
-    /// minimized or locked since it was hidden, which no visibility change
-    /// says, and then it owes nothing more until it is next hidden. The quiet
-    /// period starts again at `now`.
-    pub(crate) fn grant_occluded_frame(&self, now: Instant) {
+    /// is over, if a frame would still be shown: the window may have been
+    /// locked since, which only its sight says. The quiet period starts again
+    /// at `now`.
+    pub(crate) fn grant_occluded_frame(&self, session_shown: bool, now: Instant) {
         if self.occluded_frame_at().is_none_or(|due| now < due) {
             return;
         }
-        let covered = self
-            .with_window(|window| crate::occluded_frame::may_be_covered(&window.state()))
-            .unwrap_or(false);
-        if covered {
+        if self.occluded_sight(session_shown).is_some_and(Sight::owes) {
             self.occluded_frame.set(OccludedFrame::QuietSince(now));
             self.clock.grant_hidden_frame();
         } else {

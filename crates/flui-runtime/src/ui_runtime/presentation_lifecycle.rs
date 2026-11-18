@@ -425,6 +425,12 @@ impl UiRuntime {
     /// panics; the subscribers still receive the state, and the first panic
     /// resumes afterwards.
     pub(crate) fn publish_window_state(&self, id: PresentationId, moved: impl FnOnce()) {
+        // Every new snapshot may change what an unseen window owes its surface:
+        // minimized, restored, hidden or covered while it stays unseen changes
+        // no visibility (ADR-0357).
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.follow_sight(self.session_shown.get(), presentation.clock().now());
+        }
         let Some(window) = self
             .presentations
             .get(id)
@@ -466,6 +472,23 @@ impl UiRuntime {
             first.contain(|| {
                 let _ = self.text.try_with(|text| text.reclaim(*level));
             });
+        }
+        // A locked or sleeping session shows no window, so no covered window
+        // owes its surface a frame until it unlocks or wakes (ADR-0357).
+        let session_shown = match notice {
+            flui_platform::HostNotice::SessionLocked | flui_platform::HostNotice::Sleep => {
+                Some(false)
+            }
+            flui_platform::HostNotice::SessionUnlocked | flui_platform::HostNotice::Wake => {
+                Some(true)
+            }
+            _ => None,
+        };
+        if let Some(shown) = session_shown {
+            self.session_shown.set(shown);
+            for presentation in self.presentations.iter() {
+                presentation.follow_sight(shown, presentation.clock().now());
+            }
         }
         let sources: Vec<_> = self
             .presentations

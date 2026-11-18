@@ -59,6 +59,29 @@ impl WindowCapability {
     }
 }
 
+/// What the window system does with a window's last frame while it keeps the
+/// window off the screen (ADR-0357).
+///
+/// A compositor that keeps it shows it again the moment the window is
+/// uncovered, before a frame drawn then reaches the screen, so a window whose
+/// content changed while covered owes that surface a frame. A window system
+/// that keeps no image of an obscured window (X11 without a compositing
+/// manager) asks for its content again on uncovering, and one that holds a
+/// hidden window's frames (a suspended Wayland toplevel) draws none: there a
+/// frame drawn while covered is clipped away or never runs. A host fact, fixed
+/// per window, named by the host as it hands the window to the framework.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OccludedSurface {
+    /// No frame drawn while the window is off the screen is shown on its
+    /// return, or none is drawn at all.
+    #[default]
+    Discarded,
+    /// The window system keeps the window's last frame and shows it again on
+    /// uncovering (AppKit).
+    Kept,
+}
+
 /// Which commands a window honours and which reports it makes, and how: the
 /// [`CapabilityParts`] a window published, each read by its accessor
 /// (`capabilities.material()`), and which publication they are (ADR-0341).

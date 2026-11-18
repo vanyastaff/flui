@@ -1,18 +1,21 @@
 //! A window the window system keeps off the screen draws no frame while its
-//! content changes. Where the occlusion may be a covering, the window draws
-//! one owed frame once it has been quiet a while, so the surface the window
-//! system shows on uncovering holds the content of then, not of before the
-//! covering; elsewhere (a lock, a background app) it draws nothing until it is
-//! seen (ADR-0357).
+//! content changes. Where the occlusion may be a covering and the window
+//! system keeps the covered window's surface (AppKit), the window draws one
+//! owed frame once it has been quiet a while, so the surface shown on
+//! uncovering holds the content of then, not of before the covering; elsewhere
+//! (no covering told, a lock, a background app) it draws nothing until it is
+//! seen. An owed frame the host does not run, or the surface refuses, is not
+//! asked for again (ADR-0357).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
+use flui_platform::{SystemNotice, WindowCommand, WindowMode};
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::{HeadlessHost, HeadlessWindow, UnshownFrame};
 use flui_view::prelude::*;
 use flui_view::{RenderView, StatefulView, View};
 
@@ -196,14 +199,9 @@ fn an_occluded_window_draws_its_change_in_exactly_one_frame() {
     assert!(failed.is_empty(), "failing cases: {failed:?}");
 }
 
-fn run(case: &Case) {
-    let name = case.name;
-    let window = HeadlessWindow::new(40, 40);
-    let window = if case.reports_covering {
-        window.with_occlusion_reports()
-    } else {
-        window
-    };
+/// A host showing [`Content`] at 1 in `window`, its first frame drawn: the
+/// host, the number the content shows and the number it last painted.
+fn mounted(window: HeadlessWindow) -> (HeadlessHost, SharedSignal<u32>, Arc<AtomicU32>) {
     let mut host = HeadlessHost::new(window);
     let number = SharedSignal::new(1);
     let painted = Arc::new(AtomicU32::new(0));
@@ -213,7 +211,37 @@ fn run(case: &Case) {
     })
     .expect("a fresh host has no root");
     let _ = host.pump(FRAME);
-    assert_eq!(painted.load(Ordering::SeqCst), 1, "{name}: the first frame");
+    assert_eq!(painted.load(Ordering::SeqCst), 1, "the first frame");
+    (host, number, painted)
+}
+
+/// A host whose window tells a covering and keeps a covered window's surface,
+/// its window covered and its content changed to 2 after a frame: the owed
+/// frame's quiet period runs.
+fn covered_with_a_change() -> (HeadlessHost, Arc<AtomicU32>) {
+    let (mut host, number, painted) = mounted(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    host.set_window_occluded(host.primary_window(), true);
+    let _ = host.pump(FRAME);
+    number.set(2);
+    let _ = host.pump(FRAME);
+    (host, painted)
+}
+
+fn set_mode(host: &HeadlessHost, mode: WindowMode) {
+    WindowCommand::SetMode(mode)
+        .admit_and_apply(host.window())
+        .expect("the headless window takes a mode");
+}
+
+fn run(case: &Case) {
+    let name = case.name;
+    let window = HeadlessWindow::new(40, 40);
+    let window = if case.reports_covering {
+        window.with_occlusion_reports()
+    } else {
+        window
+    };
+    let (mut host, number, painted) = mounted(window);
     let primary = host.primary_window();
 
     host.set_window_occluded(primary, true);
@@ -275,4 +303,103 @@ fn run(case: &Case) {
         shown,
         "{name}: the window shows its content once seen"
     );
+}
+
+/// A covered window minimized owes nothing, and restored while still covered
+/// owes its frame again, though it was never seen in between: a change of
+/// sight that leaves the window unseen changes no visibility, and the owing
+/// follows every snapshot. Fails when owing is decided only as the window
+/// stops being seen: the minimized window keeps the quiet period it was
+/// covered with, and the one restored never owes again.
+#[test]
+fn a_covered_window_owes_by_its_sight_on_every_snapshot() {
+    let (mut host, painted) = covered_with_a_change();
+    set_mode(&host, WindowMode::Minimized);
+    let _ = host.pump(FRAME);
+    assert_eq!(
+        host.time_to_next_frame(),
+        None,
+        "a minimized window owes its surface nothing"
+    );
+    let before = host.sink().submits();
+    set_mode(&host, WindowMode::Normal);
+    let _ = host.pump(FRAME);
+    let wait = host
+        .time_to_next_frame()
+        .expect("restored while covered, the window owes its frame again");
+    assert!(wait > FRAME, "after a quiet period: {wait:?}");
+    let _ = host.pump(wait);
+    assert_eq!(host.sink().submits() - before, 1, "one owed frame");
+    assert_eq!(painted.load(Ordering::SeqCst), 2, "with the new content");
+}
+
+/// An owed frame the host does not run when it comes due (it holds the
+/// window's frames, as Wayland does a suspended toplevel's) is not asked for
+/// again: past its grace no deadline brings the loop back, however long the
+/// window stays covered, until its sight changes. Fails when a past due time
+/// stays the wake deadline: the loop is asked to wake at once, forever.
+#[test]
+fn an_owed_frame_the_host_does_not_run_is_not_asked_for_again() {
+    let (host, _painted) = covered_with_a_change();
+    let wait = host
+        .time_to_next_frame()
+        .expect("the covered window owes its frame");
+    // The host runs no frame of the window through its time and long after.
+    host.advance(wait + Duration::from_secs(60));
+    assert_eq!(
+        host.time_to_next_frame(),
+        None,
+        "a frame the host held is not asked for again"
+    );
+}
+
+/// An owed frame the surface refuses (it withdraws the window's surface) ends
+/// the obligation until the window is seen again: no frame is drawn for later
+/// changes, and no deadline asks for one. Fails when a refused owed frame is
+/// owed again after the next quiet period.
+#[test]
+fn an_owed_frame_the_surface_refuses_is_not_drawn_again() {
+    let (mut host, _painted) = covered_with_a_change();
+    host.leave_unshown(u32::MAX, UnshownFrame::Withdrawn);
+    let wait = host
+        .time_to_next_frame()
+        .expect("the covered window owes its frame");
+    let _ = host.pump(wait);
+    let refused = host.sink().submits();
+    for _ in 0..5 {
+        match host.time_to_next_frame() {
+            Some(wait) => {
+                let _ = host.pump(wait.max(FRAME));
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        host.time_to_next_frame(),
+        None,
+        "a refused owed frame asks for no wake"
+    );
+    let _ = host.pump(Duration::from_secs(5));
+    assert_eq!(host.sink().submits(), refused, "and draws nothing more");
+}
+
+/// A covered window in a locked or sleeping session owes nothing: a lock
+/// covers every window, and a changing window would otherwise draw once a
+/// period until the session unlocks. Unlocked, it owes its frame again. Fails
+/// when the session's lock does not reach the owing.
+#[test]
+fn a_covered_window_owes_nothing_while_its_session_is_locked() {
+    let (mut host, painted) = covered_with_a_change();
+    host.notify(SystemNotice::SessionLocked);
+    assert_eq!(host.time_to_next_frame(), None, "locked, nothing is owed");
+    let before = host.sink().submits();
+    let _ = host.pump(Duration::from_secs(5));
+    assert_eq!(host.sink().submits(), before, "and nothing is drawn");
+    host.notify(SystemNotice::SessionUnlocked);
+    let wait = host
+        .time_to_next_frame()
+        .expect("unlocked, the covered window owes its frame again");
+    let _ = host.pump(wait);
+    assert_eq!(host.sink().submits() - before, 1, "one owed frame");
+    assert_eq!(painted.load(Ordering::SeqCst), 2);
 }

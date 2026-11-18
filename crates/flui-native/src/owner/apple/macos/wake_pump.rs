@@ -28,9 +28,15 @@
 //!    ([`FOLLOW_UP`]) when it finds nothing — that second look is what picks
 //!    the deadline up.
 //!
+//! The chain starts at a redraw request and after every owner turn
+//! (`LoopControl`): a turn can leave a deadline no redraw request starts it
+//! for, such as the frame a covered window owes its surface (ADR-0357), whose
+//! window asks for no frame while it cannot be seen.
+//!
 //! The chain is self-limiting, which is what keeps it from being a busy poll:
 //! a firing that finds no deadline *and* requested no frame stops, and an idle
-//! app sends no redraw requests, so nothing is ever scheduled for it.
+//! app sends no redraw requests and takes no owner turns, so nothing is ever
+//! scheduled for it.
 
 use std::{
     sync::{

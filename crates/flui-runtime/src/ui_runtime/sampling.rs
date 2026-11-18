@@ -186,6 +186,10 @@ impl<'runtime> PresentationSampling<'runtime> {
             tracing::trace!(target: "flui.pace", event = "segment_backoff", presentation = ?presentation.id(), "presentation waits out a dropped frame");
             return;
         }
+        // An unseen window whose quiet period is over draws the frame it owes its surface. The
+        // grant waits in its clock for the first poll this or a later pump makes (text
+        // preparation may hold this one), and the next quiet period starts now.
+        presentation.grant_occluded_frame(runtime.session_shown.get(), presentation.clock().now());
         let mut selected = None;
         let mut completion_entered = self.completion_entered;
         self.run(SamplingStage::Preparation, |recovery| {
@@ -205,8 +209,6 @@ impl<'runtime> PresentationSampling<'runtime> {
                 presentation.clock().mark_demand(DemandKind::Completion);
             }
             let now = presentation.clock().now();
-            // An unseen window whose quiet period is over draws the frame it owes its surface.
-            presentation.grant_occluded_frame(now);
             let segment_start = presentation.text_preparation.borrow().segment.as_ref().map_or(now, |saved| saved.host_time);
             let decision = presentation.clock().poll(now, presentation.frames_in_flight());
             if decision.should_run_segment() && !(blocked && !pending && !resuming) {

@@ -290,8 +290,12 @@ impl MacOSLoop {
 
             tracing::info!("macOS platform initialized with AppKit");
 
-            let loop_control =
-                LoopControl::new(Arc::clone(&windows), Arc::clone(&app_delivery), mtm);
+            let loop_control = LoopControl::new(
+                Arc::clone(&windows),
+                Arc::clone(&app_delivery),
+                Arc::downgrade(&wake_pump),
+                mtm,
+            );
             let preferences = H::preferences(&loop_control.owner_signal);
             let displays = H::displays(mtm);
             let screen_observer = NativeOwner::new(

@@ -727,21 +727,31 @@ and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry
 A presentation whose window is not seen (`WindowState::is_seen`) has a hidden clock: its polls
 skip, the demand and tree work it gathers wait, and none of it is tree work a host wakes for
 (`has_pending_tree_work`), so a covered window with a dirty tree asks the loop for nothing.
-Shown again, it asks for a frame when anything waits, its clock's demand or its tree's. Where
-its occlusion may be a covering by other windows (`occluded_frame::may_be_covered`: shown,
-unminimized, running, occluded, on a host whose `reports_occlusion` is available) the window
-system shows the surface again the moment the window is uncovered, before a frame drawn then
-reaches it, so the presentation owes the surface a frame: once `OCCLUDED_FRAME_QUIET` has
-passed since it stopped being seen or since its last owed frame, with work waiting, the
-deadline is due work in `next_wake`, `FrameClock::grant_hidden_frame` lets one poll produce,
-and the quiet period starts again. A host whose frames are off because no window is seen runs
-that frame (`owes_occluded_frame`). The state is read when the window stops being seen and
-again when the frame comes due, since a covered window minimized or locked meanwhile reports
-no visibility change; such a window owes nothing more until it is next hidden. An occlusion
-that is never a covering (a locked session, a background app or page, Win32's cloak) owes
-nothing. The rule records what ADR-0357 leaves open, that a covered window's uncovering shows
-the frame of before the covering. **Test:** `an_occluded_window_draws_its_change_in_exactly_one_frame`
-(`flui-testing`).
+Shown again, it asks for a frame when anything waits, its clock's demand or its tree's, and its
+dropped-frame retry, which waited while it was unseen, runs.
+
+A covered window owes its surface a frame where that frame would be shown on uncovering
+(`occluded_frame::Sight::owes`): the window may be covered (shown, unminimized, running,
+occluded, on a host whose `reports_occlusion` is available), its host keeps a covered window's
+last frame (`OccludedSurface::Kept`, which the host names through `PresentationWindow`: AppKit
+alone; X11 without a compositing manager keeps no image, a suspended Wayland toplevel's frames
+are held), and its session shows windows (no `SessionLocked` or `Sleep` notice since the last
+`SessionUnlocked` or `Wake`). Once `OCCLUDED_FRAME_QUIET` has passed with work waiting, and not
+before the dropped-frame retry, the deadline is due work in `next_wake`, `runs_frames` is true
+(every runner's wake gate and the headless host ask it, so a runner whose frames are off runs
+the frame), `FrameClock::grant_hidden_frame` lets one poll produce, and the quiet period starts
+again. The owing follows every change of sight (`follow_sight`: each window snapshot, the
+visibility edge, each session notice), since a covered window minimized or restored stays
+unseen. A due time is never asked for again past `OCCLUDED_FRAME_GRACE`: a host that has not
+run the frame by then holds the window's frames, and the window owes nothing more until its
+sight changes. A frame the surface refuses or drops while the window is unseen ends the owing
+until it is seen again. The rule records what ADR-0357 leaves open, that a covered window's
+uncovering shows the frame of before the covering. **Tests** (`flui-testing`, `occluded_window`):
+`an_occluded_window_draws_its_change_in_exactly_one_frame`,
+`a_covered_window_owes_by_its_sight_on_every_snapshot`,
+`an_owed_frame_the_host_does_not_run_is_not_asked_for_again`,
+`an_owed_frame_the_surface_refuses_is_not_drawn_again`,
+`a_covered_window_owes_nothing_while_its_session_is_locked`.
 
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
 `QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose
