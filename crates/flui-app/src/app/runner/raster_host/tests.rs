@@ -2404,13 +2404,16 @@ pub(in crate::app::runner) fn threaded_host_for_two(
     (shared, slots, wakes)
 }
 
-/// An inline host's device request answers on its worker, which asks every
-/// attached window for a frame: that frame's turn installs the device, and
-/// no deadline is owed while the request is under way.
+/// An inline host's device request answers on its worker, which asks the
+/// window it attached for a frame and makes the window's deadline due, so the
+/// frame gate runs the frame whose turn installs the device. While the
+/// request is under way the deadline is the request's own, so a driver that
+/// never answers still wakes the window.
 ///
-/// Red-check: pass the inline executor a device wake that asks for no frame
-/// (`|| {}`) and the window is never asked for the frame that installs the
-/// device.
+/// Red-check: attach an inline window with no redraw requester (as the host
+/// did for the threaded placement only) and the answer asks for no frame;
+/// leave the answer unnoted (`Shared::device_answered`) and the window's
+/// deadline stays at the request's, seconds away.
 #[test]
 fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
     let slots = ScriptedSlots::new();
@@ -2418,14 +2421,10 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         RasterFactory::Scripted(slots.clone()),
         RasterPlacement::Inline,
     );
-    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = Arc::clone(&wakes);
-    let redraw: Arc<dyn flui_platform::RedrawRequester> = Arc::new(move || {
-        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    });
-    host.attach_target(
-        Arc::new(FakeWindow::new(1)),
-        Some(redraw),
+    let window = flui_runtime::testing::TestWindow::new();
+    let redraws = window.redraw_calls_handle();
+    host.attach(
+        &window,
         address(),
         &crate::app::AppConfig::default(),
         None,
@@ -2437,19 +2436,26 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
     host.service(address());
     assert_eq!(slots.held_device_requests(), 1);
     assert!(host.device_health().is_lost());
-    assert_eq!(
-        host.window_deadline(address()),
-        None,
-        "the request's answer wakes the window; no deadline is owed"
+    let waiting = host
+        .window_deadline(address())
+        .expect("a request under way owes its deadline");
+    assert!(
+        waiting > web_time::Instant::now() + std::time::Duration::from_secs(1),
+        "the request's deadline is seconds away"
     );
 
-    let asked = wakes.load(std::sync::atomic::Ordering::SeqCst);
+    let asked = redraws.load(std::sync::atomic::Ordering::SeqCst);
     assert!(slots.answer_device_request());
     assert_eq!(
-        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        redraws.load(std::sync::atomic::Ordering::SeqCst),
         asked + 1,
         "the answer asks the window for a frame"
     );
+    let due = host
+        .window_deadline(address())
+        .expect("an answered request is due");
+    assert!(due <= web_time::Instant::now(), "the frame gate runs now");
     host.service(address());
     assert_eq!(host.device_health(), DeviceHealth::Healthy);
+    assert_eq!(host.window_deadline(address()), None);
 }

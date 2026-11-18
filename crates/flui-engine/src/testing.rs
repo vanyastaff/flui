@@ -340,8 +340,8 @@ impl ScriptedSlots {
         self.script.lock().device_lost = false;
     }
 
-    /// Every device install from now on advances `clock` by `took`, as a
-    /// driver that blocks the attempt does.
+    /// Every device install from now on advances `clock` by `took`, as an
+    /// install that takes the answer late does.
     pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {
         self.script.lock().rebuild_takes = Some((clock.clone(), took));
     }

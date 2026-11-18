@@ -3746,4 +3746,49 @@ mod tests {
             RasterVerdict::Presented
         );
     }
+
+    /// A window closed while its device is asked for is not served by the
+    /// new device: the install configures the slots left, and the one
+    /// detached meanwhile has no target on it.
+    ///
+    /// Red-check: skip `GpuContext::detach` in the backend's `detach`, so the
+    /// closed slot stays in the context's table, and the install serves it.
+    #[test]
+    fn a_slot_detached_while_its_device_is_requested_is_not_served_by_the_new_device() {
+        use crate::raster_executor::DeviceHealth;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let (closed, _, _) = attach_rgba(&sender);
+        let (kept, address, _) = attach_rgba(&sender);
+        let _ = executor.turn();
+        executor.backend().lose_device();
+        let _ = executor.turn();
+        let _ = sender
+            .send(RasterCommand::Detach { slot: closed })
+            .expect("the detach is accepted");
+        let _ = executor.turn();
+        executor.backend_mut().await_device_request();
+        let _ = executor.turn();
+        assert_eq!(sender.device_health(), DeviceHealth::Healthy);
+        assert!(
+            executor.backend().read_slot(closed).is_err(),
+            "the closed slot has no target on the new device"
+        );
+        let generation = sender
+            .record(kept)
+            .expect("the owner holds the slot")
+            .required_generation;
+        assert_eq!(
+            draw_once(&mut executor, &sender, (kept, address, generation)),
+            RasterVerdict::Presented
+        );
+    }
 }

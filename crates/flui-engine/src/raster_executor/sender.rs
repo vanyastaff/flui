@@ -101,7 +101,8 @@ pub struct DeviceRetries {
 #[derive(Default)]
 pub(crate) struct DeviceRecord {
     pub(crate) health: DeviceHealth,
-    /// When the next rebuild may run, for the owner's wake.
+    /// When the executor must next turn for the device, for the owner's
+    /// wake: the next rebuild, or the deadline of the request under way.
     pub(crate) next_attempt_at: Option<Instant>,
     /// Why the last rebuild failed, until the owner takes it.
     pub(crate) failure: Option<EngineError>,
@@ -109,6 +110,12 @@ pub(crate) struct DeviceRecord {
     /// health their adoption left is published: an owner that reads these
     /// before the health never reads a served retry with the health before it.
     pub(crate) retries: DeviceRetries,
+    /// When the request under way started, if one is.
+    pub(crate) requested_at: Option<Instant>,
+    /// The request under way answered since the executor last looked: its
+    /// next turn installs the device, so the owner's wake is due now. Set
+    /// from the thread that answered, cleared by the turn that takes it.
+    pub(crate) answered: bool,
 }
 
 /// What the owner and the executor share: the lifecycle queue, the coalesced
@@ -227,6 +234,14 @@ impl Shared {
 
     pub(crate) fn depth(&self) -> usize {
         self.depth
+    }
+
+    /// The device request under way answered: note it for the owner's
+    /// deadline and wake the raster thread, if there is one, whose next turn
+    /// installs the device.
+    pub(crate) fn device_answered(&self) {
+        self.device().answered = true;
+        self.ring();
     }
 
     /// Wake the raster thread, if there is one.
@@ -655,11 +670,20 @@ impl RasterSender {
         self.shared.device().health
     }
 
-    /// When the executor may next rebuild the lost device: the owner runs a
-    /// turn then. `None` while the device renders or its rebuild is given up.
+    /// When the executor must next turn for the lost device: the owner runs
+    /// a turn then. That is the next rebuild, or the deadline of the request
+    /// under way, and once that request answered, when it started, which is
+    /// past, so the owner's next turn installs the device. `None` while the
+    /// device renders or its rebuild is given up.
     #[must_use]
     pub fn device_retry_at(&self) -> Option<Instant> {
-        self.shared.device().next_attempt_at
+        let record = self.shared.device();
+        if record.answered
+            && let Some(started) = record.requested_at
+        {
+            return Some(started);
+        }
+        record.next_attempt_at
     }
 
     /// Why the device's last rebuild failed, once: the owner reports it

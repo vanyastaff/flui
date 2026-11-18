@@ -475,15 +475,21 @@ executor runs each command under its own catch, in both placements.
   slot's surface and the request only enumerates the instance's adapters, and for its device on
   a worker of its own (`crates/flui-engine/src/device_worker.rs`), since a driver may take
   hundreds of milliseconds to answer after a reset. The turn that starts the request does not
-  wait for it: the device stays lost meanwhile, no deadline is owed (`device_retry_at` answers
-  `None`), and the worker's answer calls the executor's `DeviceAnswered` wake (the host's wake
-  from any thread inline, the raster thread's doorbell threaded), so the next turn installs the
-  device. Each request carries a `DeviceTicket` the executor mints; it installs only the answer to
-  the ticket it waits for, and it stops waiting when the attempt fails or the streak ends (the
-  device came back, an adoption, a give-up), so a late answer installs nothing, and a retiring
-  context drops its worker's answer without waiting for it. A request that answers no device, or
-  panics on its worker, is a failed attempt; the panic is resumed on the executor's thread when
-  the answer is taken. A rebuild that panics counts as a failure and its panic is
+  wait for it. The device stays lost meanwhile, and the owner's deadline (`device_retry_at`) is
+  the request's own, `DEVICE_REQUEST_DEADLINE` (five seconds) after it started: a request
+  unanswered by then is a failed attempt, so a driver that hangs inside it walks the backoff to
+  the give-up instead of holding the device lost with no attempt counted, and its worker is left
+  to end on its own. The worker's answer calls the executor's `DeviceAnswered` wake, which notes
+  the answer in the device's record, so `device_retry_at` answers the request's start, a past
+  instant, and then wakes the host from the answering thread: inline, the raster host asks every
+  window it attached for a frame (every window lists its redraw requester), and the frame gate
+  counts the due deadline, so that frame's turn installs the device; threaded, it rings the
+  raster thread. Each request carries a `DeviceTicket` the executor mints; it installs only the
+  answer to the ticket it waits for, and it stops waiting when the attempt fails or the streak
+  ends (the device came back, an adoption, a give-up), so a late answer installs nothing, and a
+  retiring context drops its worker's answer without waiting for it. A request that answers no
+  device, or panics on its worker, is a failed attempt; the panic is resumed on the executor's
+  thread when the answer is taken. A rebuild that panics counts as a failure and its panic is
   resumed once the turn has served every slot; the context counts its device lost until every
   slot is on the new one, so a rebuild that unwinds part way is asked for again from the start
   (what an unwound attempt refused is kept and answered by the attempt that finishes),
@@ -812,12 +818,13 @@ the facade. Every production use of `with_backend` becomes:
   `a_dead_renderer_is_reported_once_and_its_frames_go_on` (§9) and
   `a_given_up_device_renders_again_when_the_application_asks`; the device request off the turn
   (§8): `a_device_request_answered_after_its_turn_is_installed_by_the_next`,
-  `a_window_closed_while_its_device_is_requested_is_not_served_by_the_new_device`,
+  `a_device_request_unanswered_past_its_deadline_fails_its_attempt`,
   `an_answer_nobody_waits_for_installs_nothing` and
   `a_failed_device_request_waits_its_backoff_from_its_answer`, with `device_worker.rs`'s
   `a_worker_hands_over_its_answer_or_its_panic_and_wakes_the_executor` and
-  `a_request_nobody_waits_for_holds_nobody`, and the raster host's
-  `an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it`.
+  `a_request_nobody_waits_for_holds_nobody`; the raster host's
+  `an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it`, and `gpu_context.rs`'s
+  `a_slot_detached_while_its_device_is_requested_is_not_served_by_the_new_device`.
 - Runs: a platform's placement becomes threaded only with its run recorded in
   `docs/platform-parity.md` (§10, the row `frames-drawn-on-a-raster-thread`). Wayland is threaded
   on this run of two windows, one occluded, on lavapipe and on no device:

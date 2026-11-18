@@ -196,6 +196,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
     ) -> (Self, RasterSender) {
         let (lifecycle_tx, lifecycle) = bounded(LIFECYCLE_CAPACITY);
         let shared = Arc::new(Shared::new(lifecycle_tx));
+        // The answer is noted for the owner's deadline before the host's
+        // wake asks for the frame whose turn installs the device.
+        let noted = Arc::downgrade(&shared);
         let sender = RasterSender::new(Arc::clone(&shared));
         (
             Self::assemble(
@@ -203,7 +206,12 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 clock.now(),
                 clock,
                 Box::new(wake),
-                DeviceAnswered::new(Arc::new(device_answered)),
+                DeviceAnswered::new(Arc::new(move || {
+                    if let Some(shared) = noted.upgrade() {
+                        shared.device_answered();
+                    }
+                    device_answered();
+                })),
                 shared,
                 lifecycle,
             ),
@@ -604,7 +612,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 let ticket = DeviceTicket::new(raw);
                 let answered = self.device_answered.clone();
                 match first.contain(|| self.backend.request_device(ticket, answered)) {
-                    Some(Ok(())) => self.rebuilds.note_requested(ticket),
+                    Some(Ok(())) => self.rebuilds.note_requested(ticket, now),
                     Some(Err(error)) => {
                         failure = Some(error);
                         now = self.now(first);
@@ -624,9 +632,18 @@ impl<B: RasterBackend> RasterExecutor<B> {
             }
         }
         // A request answered at once (a backend that asks on this thread) is
-        // installed in the turn that started it.
+        // installed in the turn that started it. The answer's note is cleared
+        // before the answer is taken, so one that lands after is seen by the
+        // next turn.
         if let Some(ticket) = self.rebuilds.requested() {
+            self.shared.device().answered = false;
             match first.contain(|| self.backend.install_requested_device(ticket)) {
+                Some(None) if self.rebuilds.request_overdue(now) => {
+                    // The driver hangs inside the request: the attempt fails,
+                    // and its worker is left to end on its own.
+                    failure = Some(EngineError::GpuUnavailable);
+                    failed = Some(self.rebuilds.record_failure(now));
+                }
                 Some(None) => {}
                 Some(Some(Ok(refused))) => {
                     self.rebuilds.recovered();
@@ -709,6 +726,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
             let mut record = self.shared.device();
             record.health = health;
             record.next_attempt_at = self.rebuilds.next_attempt_at(now);
+            record.requested_at = self.rebuilds.requested_at();
             failure.and_then(|error| record.failure.replace(error))
         };
         if let Some(error) = replaced {

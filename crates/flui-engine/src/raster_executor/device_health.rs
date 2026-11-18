@@ -63,6 +63,13 @@ pub(crate) const REBUILD_ATTEMPTS_AT_CAP: u32 = 10;
 /// overflows on a long streak.
 const SHIFT_CAP: u32 = 6;
 
+/// How long a device request may go unanswered before its attempt fails: a
+/// driver that hangs inside the request would otherwise hold the device lost
+/// with no attempt counted. Its worker is left to end on its own; the next
+/// attempt starts another. Past what a driver takes after a reset (hundreds
+/// of milliseconds), short of what a user waits for a frozen window.
+pub(crate) const DEVICE_REQUEST_DEADLINE: Duration = Duration::from_secs(5);
+
 /// What one failed rebuild left the streak at, for the executor to log once
 /// its state is committed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,9 +95,10 @@ pub(crate) struct DeviceRebuilds {
     given_up: bool,
     /// The earliest instant the next rebuild may run; `None` for now.
     next_at: Option<Instant>,
-    /// The request the executor waits for: no other starts, and no deadline
-    /// is owed meanwhile, since its answer wakes the executor.
-    requested: Option<DeviceTicket>,
+    /// The request the executor waits for, and when it started: no other
+    /// starts meanwhile, and one unanswered past [`DEVICE_REQUEST_DEADLINE`]
+    /// fails its attempt.
+    requested: Option<(DeviceTicket, Instant)>,
 }
 
 impl DeviceRebuilds {
@@ -107,15 +115,21 @@ impl DeviceRebuilds {
         }
     }
 
-    /// When the next rebuild may run, for the owner's wake: `now` while one
-    /// is due at once, `None` while the device is healthy, the rebuild is
-    /// given up or a request is under way, which need no wake: a request's
-    /// answer wakes the executor itself.
+    /// When the executor must next turn for the device, for the owner's
+    /// wake: `now` while a rebuild is due at once, the request's deadline
+    /// while one is under way (its answer wakes the executor sooner), `None`
+    /// while the device is healthy or the rebuild is given up.
     pub(crate) fn next_attempt_at(&self, now: Instant) -> Option<Instant> {
-        if self.lost && !self.given_up && self.requested.is_none() {
-            Some(self.next_at.unwrap_or(now))
-        } else {
-            None
+        if !self.lost || self.given_up {
+            return None;
+        }
+        match self.requested {
+            Some((_, started)) => Some(
+                started
+                    .checked_add(DEVICE_REQUEST_DEADLINE)
+                    .unwrap_or(started),
+            ),
+            None => Some(self.next_at.unwrap_or(now)),
         }
     }
 
@@ -141,14 +155,28 @@ impl DeviceRebuilds {
             && self.next_at.is_none_or(|at| now >= at)
     }
 
-    /// A request started under `ticket`; the executor waits for its answer.
-    pub(crate) fn note_requested(&mut self, ticket: DeviceTicket) {
-        self.requested = Some(ticket);
+    /// A request started under `ticket` at `now`; the executor waits for its
+    /// answer.
+    pub(crate) fn note_requested(&mut self, ticket: DeviceTicket, now: Instant) {
+        self.requested = Some((ticket, now));
     }
 
     /// The request the executor waits for, if one is under way.
     pub(crate) fn requested(&self) -> Option<DeviceTicket> {
-        self.requested
+        self.requested.map(|(ticket, _)| ticket)
+    }
+
+    /// When the request under way started, if one is.
+    pub(crate) fn requested_at(&self) -> Option<Instant> {
+        self.requested.map(|(_, started)| started)
+    }
+
+    /// Whether the request under way is unanswered past its deadline at
+    /// `now`: the driver hangs, and the attempt fails.
+    pub(crate) fn request_overdue(&self, now: Instant) -> bool {
+        self.requested.is_some_and(|(_, started)| {
+            now.saturating_duration_since(started) >= DEVICE_REQUEST_DEADLINE
+        })
     }
 
     /// A rebuild failed at `now`: arm the next one, or give the rebuild up

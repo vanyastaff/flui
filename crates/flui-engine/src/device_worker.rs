@@ -20,9 +20,10 @@ type Answer<T> = Result<EngineResult<T>, Box<dyn Any + Send>>;
 /// started it under.
 ///
 /// Dropped before its answer is taken (the executor stopped waiting for it,
-/// or the context retired), it waits for nothing: the worker's answer is
-/// dropped on the worker once it finds nobody to take it, so a retiring
-/// owner is never held for the driver.
+/// or the context retired), it waits for nothing: an answer still to come is
+/// dropped on the worker once it finds nobody to take it, and one already
+/// handed over is dropped with the request, on the thread that drops it, so a
+/// retiring owner is never held for the driver.
 pub(crate) struct DeviceWorker<T> {
     ticket: DeviceTicket,
     answer: mpsc::Receiver<Answer<T>>,

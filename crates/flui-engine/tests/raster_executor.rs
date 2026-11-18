@@ -2034,8 +2034,8 @@ fn a_failed_rebuild_is_reported_and_the_next_waits_out_its_backoff() {
     );
 }
 
-/// A rebuild that blocks before it fails arms the next from when it ended,
-/// so a slow driver is not asked again the moment it answers.
+/// An install that takes time before it fails arms the next attempt from when
+/// it ended, so a slow driver is not asked again the moment it answers.
 #[test]
 fn a_slow_failed_rebuild_waits_its_backoff_from_when_it_ended() {
     let mut rig = rig();
@@ -2481,12 +2481,12 @@ fn a_settlement_is_announced_only_by_a_wake_that_returned() {
 }
 
 /// A lost device's replacement is asked for off the turn: the turn that
-/// starts the request settles its frames lost and owes no deadline, and the
-/// request's answer wakes the owner, whose next turn installs the device.
+/// starts the request settles its frames lost and owes only the request's
+/// deadline, and the answer wakes the owner and makes its deadline due, so
+/// the owner's next turn installs the device.
 ///
-/// Red-check: owe the next attempt's deadline while a request is under way
-/// (`DeviceRebuilds::next_attempt_at`) and the owner is paced by a timer
-/// instead of the answer.
+/// Red-check: leave the answer unnoted (`Shared::device_answered`) and the
+/// owner's deadline stays at the request's, seconds after the answer.
 #[test]
 fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
     let mut rig = rig();
@@ -2505,10 +2505,12 @@ fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
         rig.sender.device_health(),
         DeviceHealth::Rebuilding { attempts: 0 }
     );
+    // The request's deadline: `DEVICE_REQUEST_DEADLINE`, five seconds.
+    let requested = MonotonicClock::now(&rig.clock);
     assert_eq!(
         rig.sender.device_retry_at(),
-        None,
-        "the request's answer wakes the owner; no deadline is owed"
+        Some(requested + Duration::from_secs(5)),
+        "a request under way owes only its deadline"
     );
     let _ = rig.executor.turn();
     assert_eq!(rig.backend.held_device_requests(), 1, "no second request");
@@ -2519,6 +2521,11 @@ fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
         rig.wakes.load(Ordering::SeqCst),
         woken + 1,
         "the answer wakes the owner"
+    );
+    assert_eq!(
+        rig.sender.device_retry_at(),
+        Some(requested),
+        "an answered request is due at once"
     );
     let _ = rig
         .sender
@@ -2540,63 +2547,6 @@ fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
     assert_eq!(
         verdicts(&rig.sender, at.slot),
         [(3, RasterVerdict::Presented)]
-    );
-}
-
-/// A window closed while its device is asked for is not served by the new
-/// device: the install configures the slots left, and the closed one gets
-/// no call and no settlement after its detach.
-///
-/// Red-check: keep the ticket when the streak ends (`DeviceRebuilds::recovered`)
-/// and the install after the detach never comes.
-#[test]
-fn a_window_closed_while_its_device_is_requested_is_not_served_by_the_new_device() {
-    let mut rig = rig();
-    let closed = attached(&mut rig, 1);
-    let kept = attached(&mut rig, 2);
-    rig.backend.hold_device_requests();
-    rig.backend.lose_device();
-    let _ = rig.executor.turn();
-    assert_eq!(rig.backend.held_device_requests(), 1);
-    let _ = rig
-        .sender
-        .send(RasterCommand::Detach { slot: closed.slot })
-        .expect("accepted");
-    let _ = rig.executor.turn();
-    let detached_at = rig.backend.calls().len();
-
-    assert!(rig.backend.answer_device_request());
-    let _ = rig
-        .sender
-        .send(frame(restamped(&rig, kept), 1))
-        .expect("accepted");
-    let _ = rig.executor.turn();
-    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
-    assert_eq!(
-        verdicts(&rig.sender, kept.slot),
-        [(1, RasterVerdict::SurfaceStale)]
-    );
-    let _ = rig
-        .sender
-        .send(frame(restamped(&rig, kept), 2))
-        .expect("accepted");
-    let _ = rig.executor.turn();
-    let after_install = &rig.backend.calls()[detached_at..];
-    assert_eq!(
-        verdicts(&rig.sender, kept.slot),
-        [(2, RasterVerdict::Presented)]
-    );
-    assert!(
-        after_install.iter().all(|call| !matches!(
-            call,
-            SlotCall::Render(slot, _) | SlotCall::Resize(slot, _) | SlotCall::Restore(slot)
-                if *slot == closed.slot
-        )),
-        "the closed window is not served: {after_install:?}"
-    );
-    assert!(
-        rig.backend.calls()[..detached_at].contains(&SlotCall::Detach(closed.slot)),
-        "the window was detached while the request was under way"
     );
 }
 
@@ -2669,4 +2619,49 @@ fn a_failed_device_request_waits_its_backoff_from_its_answer() {
         Duration::from_millis(16),
         "the backoff counts from the answer"
     );
+}
+
+/// A request whose driver never answers fails its attempt at its deadline,
+/// so a hung driver walks the backoff toward the give-up instead of holding
+/// the device lost with no attempt counted; the next attempt asks again.
+///
+/// Red-check: wait for the answer with no deadline (drop the overdue arm in
+/// `recover_device`) and the device stays `Rebuilding { attempts: 0 }`.
+#[test]
+fn a_device_request_unanswered_past_its_deadline_fails_its_attempt() {
+    let mut rig = rig();
+    let _at = attached(&mut rig, 1);
+    rig.backend.hold_device_requests();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    let deadline = rig
+        .sender
+        .device_retry_at()
+        .expect("a request under way owes its deadline");
+    rig.clock
+        .advance(deadline.duration_since(MonotonicClock::now(&rig.clock)));
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 1 }
+    );
+    assert!(matches!(
+        rig.sender.take_device_failure(),
+        Some(EngineError::GpuUnavailable)
+    ));
+    let retry_at = rig
+        .sender
+        .device_retry_at()
+        .expect("the failed attempt arms the next");
+    rig.clock
+        .advance(retry_at.duration_since(MonotonicClock::now(&rig.clock)));
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.backend.held_device_requests(),
+        1,
+        "the next attempt asks again, in place of the hung request"
+    );
+    assert!(rig.backend.answer_device_request());
+    let _ = rig.executor.turn();
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
 }

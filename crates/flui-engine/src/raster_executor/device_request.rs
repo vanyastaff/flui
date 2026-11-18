@@ -30,8 +30,8 @@ impl DeviceTicket {
 /// (the owner's frame inline, the raster thread's doorbell threaded).
 ///
 /// It only schedules, so the caller holds nothing it needs back. A wake that
-/// panics is contained, and its payload discarded, since the thread that
-/// answered has nobody to hand it to.
+/// panics is contained, its text logged on `flui.gpu` and its payload
+/// discarded, since the thread that answered has nobody to hand it to.
 #[derive(Clone)]
 pub struct DeviceAnswered(Arc<dyn Fn() + Send + Sync>);
 
@@ -45,6 +45,13 @@ impl DeviceAnswered {
         let mut caught = flui_foundation::panic::FirstPanic::new();
         let _woken = caught.contain(|| (self.0)());
         if let Some(payload) = caught.into_payload() {
+            // Nobody on this thread can take it: its text is logged, so the
+            // wake that never came is told.
+            tracing::error!(
+                target: "flui.gpu",
+                panic = flui_foundation::panic::payload_text(&*payload).unwrap_or("non-text payload"),
+                "the wake of an answered device request panicked",
+            );
             flui_foundation::panic::discard_payload(payload);
         }
     }
