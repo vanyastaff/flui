@@ -2862,22 +2862,35 @@ registers in `onAttachedToWindow` and then reports once, so a change made before
 observation began is read too, and unregisters when detached and in `detach`,
 which clears its handle first. A view that never reaches the window, or that the
 native side detaches because it could not keep it, leaves nothing that could call
-a freed handle. Until the view is in the window, or if it never gets there, the
-host reads every 500ms while the Activity is on screen, so no change is lost. The long-press
-timeout is read from its secure setting, since `ViewConfiguration`'s copy can
-still be old when the observer fires. A failed read owes a retry at its deadline,
-which bounds the loop's wait like the cadence does, so errors preserve the
-accepted observation and the next refresh attempt.
-AppKit registers its observers before its first native getter. A cold source has
-no accepted observation; an initial query error cannot abort platform bootstrap,
-publish a fabricated default, or discard its retry. The shared production read
-path's `cold_native_observation_recovers_without_forged_defaults` covers failed
-initial observation, deferred retry, first successful publication and recovery
-without a stale-success response. This portable seam does not execute AppKit's
-native constructor or its notification observers.
+a freed handle. Nothing samples in its place: the loop reads on its own only on
+its first turn, after `Start` and at a due retry (`poll::LoopReads`), and an
+installation that fails or stops short reaches the owner once as
+`ViewEvent::Installed` with its `ViewMissing`, which the loop logs. The
+long-press timeout is read from its secure setting, since `ViewConfiguration`'s
+copy can still be old when the observer fires.
+
+The Android and AppKit sources are one model, `preferences::read::NoticedPreferences`,
+over what each system supplies (`NativePreferences`: the read, the clock, the
+activity gate and the retry timer). A notice re-arms a source whose retries ran
+out (the Android loop calls it before it reads on `ConfigChanged`, a view report
+or `Start`; each AppKit observer runs `notice_handler`, which also wakes the
+owner). A read inside the owner's turn returns what changed to that turn's
+caller, which delivers it, so it wakes nobody; a read outside a turn wakes the
+owner for a change or a recovered read. One notice is therefore one owner turn.
+A failed or panicking read is retried on `Retries` (0.5 to 16 s apart, six
+times) while the gate admits it (AppKit: the application is active; Android:
+the loop's own `Start` gate), then waits for the next notice; the AppKit retry
+is a timer on the owner queue, the Android one the loop's wait bounded by the
+source's retry deadline. A cold source has no accepted observation; an initial
+query error cannot abort platform bootstrap or publish a fabricated default.
 Successful recovery requests owner delivery even when the comparison value is
-unchanged: a prior failed consumer read must not strand the accepted observation.
-Healthy unchanged observations remain quiet.
+unchanged: a prior failed consumer read must not strand the accepted
+observation. Healthy unchanged observations remain quiet. The model's tests
+drive it through `NativePreferences` with the owner signal and its turn in
+virtual time (`an_idle_source_never_wakes_the_owner`,
+`one_change_notice_is_one_owner_turn`,
+`failed_reads_back_off_and_stop_until_the_next_notice`); AppKit's getters and
+observers themselves run only on a Mac.
 Failed or unwinding native reads restore a 500ms admission deadline; unrelated
 owner wakes cannot repeat the getter early. Reentrant reads return
 `PreferencesDeferred` before native work, and foreign calls do not affect that
@@ -6337,8 +6350,8 @@ other thread leaks that data instead of freeing what a late call could reach.
 The loop has no timer of its own (ADR-0249): every producer wakes the looper
 (`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
 view's queue, the inset reply, this callback), and `poll_timeout` blocks until
-the next wake deadline or 500 ms preference sample while the Activity is on
-screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
+the next wake deadline or preference read (`LoopReads`: the first turn, `Start`,
+a due retry) while the Activity is on screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
 deadline already behind while stopped waits for a frame, so it does not cut the
 wait to zero.
 

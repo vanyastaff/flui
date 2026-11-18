@@ -8,8 +8,10 @@
 //! interval or "Click in the scroll bar to" changes. The user changes them in
 //! System Settings, another application, so they are read again when this
 //! one is active again; a change written while it stays active
-//! (`defaults write`) waits for the next activation. A failed read schedules
-//! one wake for its retry; nothing polls.
+//! (`defaults write`) waits for the next activation. Nothing polls: the source
+//! is the model the Android host shares (`preferences::read`), and a failed
+//! read is retried on its bounded schedule only while the application is
+//! active.
 //!
 //! The native AppKit loop keeps the observers and the source together
 //! ([`AppKitPreferences`]).
@@ -17,7 +19,10 @@
 // The notification-name constants are AppKit's and Foundation's statics.
 #![expect(unsafe_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use flui_platform::{
     GesturePreferences, MotionPreference, ScrollBarPreferences, ScrollBarVisibility,
@@ -40,14 +45,22 @@ use crate::{
     PlatformError,
     owner::sources::SystemPreferenceSource,
     owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
-    preferences::{apple::regional, locales as preferred_locales, read::WakingRead},
+    preferences::{
+        apple::regional,
+        locales as preferred_locales,
+        read::{NativePreferences, NoticedPreferences},
+    },
 };
+
+/// The macOS host's preference source: AppKit read through the model the
+/// Android host shares.
+type AppKitSource = NoticedPreferences<AppKitReads>;
 
 /// What a loop keeps of AppKit's preferences: the observers, then the source,
 /// so native observation ends before the source goes.
 pub(crate) struct AppKitPreferences {
     _observers: PreferenceObservers,
-    source: Arc<PreferenceSource>,
+    source: Arc<AppKitSource>,
 }
 
 impl std::fmt::Debug for AppKitPreferences {
@@ -60,7 +73,16 @@ impl AppKitPreferences {
     /// Observe AppKit's preferences, waking the owner behind `signal` when one
     /// changes, and read them once.
     pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Self {
-        let (source, observers) = PreferenceSource::new(signal);
+        let source = Arc::new(NoticedPreferences::new(AppKitReads, signal));
+        // Registration precedes the first getter: a change during the cold
+        // read still wakes the owner, and a failed or contained read leaves
+        // the observers in place for the next one.
+        let observers = PreferenceObservers::new(&source);
+        contain_owner_callback(|| {
+            if let Err(error) = source.sample() {
+                tracing::warn!(%error, "initial AppKit preference query failed");
+            }
+        });
         Self {
             _observers: observers,
             source,
@@ -74,96 +96,26 @@ impl SystemPreferenceSource for AppKitPreferences {
     }
 }
 
-/// The macOS host's preferences: what AppKit reports, sampled on the owner lane.
-struct PreferenceSource {
-    reads: WakingRead,
-}
+/// AppKit's side of the source: the getters on the main thread, whether the
+/// application is active, and a retry on the owner queue.
+struct AppKitReads;
 
-impl std::fmt::Debug for PreferenceSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreferenceSource").finish_non_exhaustive()
+impl NativePreferences for AppKitReads {
+    fn read(&self) -> Result<SystemPreferences, PlatformError> {
+        sample()
     }
-}
 
-/// The notifications that invalidate a [`PreferenceSource`]. Owned on the main
-/// thread beside the source and removed when dropped.
-struct PreferenceObservers {
-    _observations: [Observation; 6],
-}
-
-impl PreferenceSource {
-    fn new(signal: &Arc<OwnerSignal>) -> (Arc<Self>, PreferenceObservers) {
-        let source = Arc::new(Self {
-            reads: WakingRead::new(signal),
-        });
-        // Registration precedes the first getter: a change during the cold
-        // read still wakes the owner, and a failed or contained read leaves
-        // the observers in place for the next one.
-        let observers = PreferenceObservers::new(signal);
-        contain_owner_callback(|| {
-            if let Err(error) = source.sample() {
-                tracing::warn!(%error, "initial AppKit preference query failed");
-            }
-        });
-        (source, observers)
+    fn now(&self) -> web_time::Instant {
+        web_time::Instant::now()
     }
-}
 
-impl SystemPreferenceSource for PreferenceSource {
-    fn sample(&self) -> Result<SystemPreferences, PlatformError> {
-        if MainThreadMarker::new().is_none() {
-            return Err(PlatformError::Preferences {
-                message: "AppKit preferences require the application owner thread".into(),
-            });
-        }
-        if !self
-            .reads
-            .signal()
-            .upgrade()
-            .is_some_and(|signal| signal.accepting())
-        {
-            return Err(PlatformError::Preferences {
-                message: "the AppKit preference owner has stopped".into(),
-            });
-        }
-        // A failed or unwound read owes a retry, and nothing else may wake the
-        // owner for it: schedule that wake unless the read settled.
-        let mut retry = RetryWake {
-            source: self,
-            owed: true,
-        };
-        let read = self.reads.observe(web_time::Instant::now(), sample);
-        retry.owed = matches!(
-            read,
-            Err(ref error) if !matches!(error, PlatformError::PreferencesDeferred)
-        );
-        drop(retry);
-        let (current, needs_delivery) = read?;
-        // Publication precedes admission. OwnerSignal retains delivery
-        // debt when the hook has not been installed yet.
-        self.reads.announce(needs_delivery);
-        Ok(current)
+    /// An inactive application is read again on its activation notice.
+    fn retry_admitted(&self) -> bool {
+        MainThreadMarker::new()
+            .is_some_and(|main_thread| NSApplication::sharedApplication(main_thread).isActive())
     }
-}
 
-/// Wakes the owner when the read a failure postponed is due, unless the read
-/// settled first; runs on unwind too.
-struct RetryWake<'a> {
-    source: &'a PreferenceSource,
-    owed: bool,
-}
-
-impl Drop for RetryWake<'_> {
-    fn drop(&mut self) {
-        let Some(deadline) = self
-            .owed
-            .then(|| self.source.reads.retry_deadline())
-            .flatten()
-        else {
-            return;
-        };
-        let signal = self.source.reads.signal().clone();
-        let delay = deadline.saturating_duration_since(web_time::Instant::now());
+    fn arm_retry(&self, delay: Duration, signal: Weak<OwnerSignal>) {
         crate::owner::apple::macos::exec_after_on_owner(
             crate::owner::apple::macos::owner_queue(),
             delay,
@@ -176,16 +128,14 @@ impl Drop for RetryWake<'_> {
     }
 }
 
+/// The notifications that invalidate the source. Owned on the main thread
+/// beside it and removed when dropped.
+struct PreferenceObservers {
+    _observations: [Observation; 6],
+}
+
 impl PreferenceObservers {
-    fn new(signal: &Arc<OwnerSignal>) -> Self {
-        let wake = || {
-            let signal = Arc::downgrade(signal);
-            move || {
-                if let Some(signal) = signal.upgrade() {
-                    let _ = signal.wake();
-                }
-            }
-        };
+    fn new(source: &Arc<AppKitSource>) -> Self {
         let workspace = NSWorkspace::sharedWorkspace().notificationCenter();
         let center = NSNotificationCenter::defaultCenter();
         // SAFETY: the names are AppKit's and Foundation's immutable
@@ -195,19 +145,27 @@ impl PreferenceObservers {
                 Observation::new(
                     workspace,
                     NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
-                    wake(),
+                    source.notice_handler(),
                 ),
                 Observation::new(
                     center.clone(),
                     NSApplicationDidBecomeActiveNotification,
-                    wake(),
+                    source.notice_handler(),
                 ),
-                Observation::new(center.clone(), NSCurrentLocaleDidChangeNotification, wake()),
-                Observation::new(center.clone(), NSSystemColorsDidChangeNotification, wake()),
+                Observation::new(
+                    center.clone(),
+                    NSCurrentLocaleDidChangeNotification,
+                    source.notice_handler(),
+                ),
+                Observation::new(
+                    center.clone(),
+                    NSSystemColorsDidChangeNotification,
+                    source.notice_handler(),
+                ),
                 Observation::new(
                     center,
                     NSPreferredScrollerStyleDidChangeNotification,
-                    wake(),
+                    source.notice_handler(),
                 ),
                 // A switch between light and dark changes the accent the
                 // appearance resolves; AppKit posts it to other applications
@@ -216,7 +174,7 @@ impl PreferenceObservers {
                 Observation::new(
                     NSDistributedNotificationCenter::defaultCenter().into_super(),
                     ns_string!("AppleInterfaceThemeChangedNotification"),
-                    wake(),
+                    source.notice_handler(),
                 ),
             ]
         };

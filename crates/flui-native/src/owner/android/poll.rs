@@ -22,8 +22,8 @@ pub(crate) struct LoopTurn {
     pub(crate) running: bool,
     /// The earliest wall-clock deadline the wake hook reported.
     pub(crate) wake_deadline: Option<Instant>,
-    /// When preferences, scroll factors and insets are read next; `None` while
-    /// their changes are reported instead.
+    /// When preferences, scroll factors and insets are read next
+    /// ([`LoopReads::next`]); `None` while their changes are reported instead.
     pub(crate) next_preference_sample: Option<Instant>,
     /// When the oldest request for a result the Java main thread has not
     /// taken is due to end, running or not.
@@ -70,6 +70,49 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
         .flatten()
         .min()
         .map(until)
+}
+
+/// When the loop reads the preferences, scroll factors and insets on its own
+/// rather than on a notice: on its first turn and after `Start` (a stopped
+/// Activity reads nothing), and when the retry a failed read owes falls due.
+///
+/// Every other change reaches the loop as a notice: `FluiView` reports the
+/// settings and the insets, once more as it enters the window after its
+/// observers are registered, and the configuration arrives as
+/// `ConfigChanged`. Nothing here repeats, so no cadence stands in for a notice
+/// that has not come.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopReads {
+    /// A read is owed at the loop's next turn.
+    owed: bool,
+}
+
+impl LoopReads {
+    /// The reads of a loop that has not read yet: its first turn reads.
+    pub(crate) const fn first() -> Self {
+        Self { owed: true }
+    }
+
+    /// The Activity started: nothing was read while it was stopped, so the
+    /// next turn reads.
+    pub(crate) fn started(&mut self) {
+        self.owed = true;
+    }
+
+    /// When the loop reads next: now while a read is owed, else at `retry`,
+    /// the source's retry deadline; `None` waits for a notice.
+    pub(crate) fn next(self, retry: Option<Instant>, now: Instant) -> Option<Instant> {
+        self.owed.then_some(now).into_iter().chain(retry).min()
+    }
+
+    /// Whether the loop reads at `now`; taking a read clears the owed one.
+    pub(crate) fn take_due(&mut self, retry: Option<Instant>, now: Instant) -> bool {
+        let due = self.next(retry, now).is_some_and(|at| now >= at);
+        if due {
+            self.owed = false;
+        }
+        due
+    }
 }
 
 /// Which past deadline the owner was last offered.
@@ -206,6 +249,34 @@ mod tests {
         ] {
             assert_eq!(poll_timeout(turn, now), expected, "{case}");
         }
+    }
+
+    /// The loop reads on its own on its first turn, after `Start` and at a
+    /// due retry, each once, and never again until one of them comes back: an
+    /// hour idle after a read names no instant, so the poll blocks.
+    #[test]
+    fn the_loop_reads_on_its_own_only_at_start_and_at_a_due_retry() {
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let mut reads = LoopReads::first();
+        assert!(reads.take_due(None, start), "the first turn reads");
+        for second in 0..=3600 {
+            assert_eq!(
+                reads.next(None, at(second)),
+                None,
+                "a read owed at {second} s"
+            );
+            assert!(!reads.take_due(None, at(second)));
+        }
+        let retry = Some(at(3601));
+        assert_eq!(reads.next(retry, at(3600)), retry);
+        assert!(!reads.take_due(retry, at(3600)), "a retry ahead waits");
+        assert!(reads.take_due(retry, at(3601)), "a retry due reads");
+        assert!(!reads.take_due(None, at(3601)), "and once");
+        reads.started();
+        assert_eq!(reads.next(retry, at(3602)), Some(at(3601)));
+        assert!(reads.take_due(None, at(3602)), "`Start` reads");
+        assert!(!reads.take_due(None, at(3603)));
     }
 
     /// A deadline left behind is offered once, however many turns pass before

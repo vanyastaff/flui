@@ -327,6 +327,15 @@ impl OwnerSignal {
     pub(crate) fn accepting(&self) -> bool {
         self.state.lock().accepting
     }
+    /// Whether an owner turn runs now. What a read inside it finds goes back
+    /// to its caller in that turn, so a source that read there owes the owner
+    /// no wake for it; a wake would only post a turn that finds nothing new.
+    /// Owner thread.
+    #[cfg(any(target_os = "android", target_os = "macos", test))]
+    pub(crate) fn turn_active(&self) -> bool {
+        debug_assert_eq!(self.owner(), std::thread::current().id());
+        self.state.lock().active
+    }
     pub(crate) fn bind_owner(&self) {
         let mut owner = self.owner.lock();
         *owner = std::thread::current().id();

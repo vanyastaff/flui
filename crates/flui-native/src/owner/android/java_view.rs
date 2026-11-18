@@ -121,10 +121,33 @@ pub(crate) trait ActivityDragSource: flui_platform::drag::PlatformDragSource {
 /// back weakly.
 pub(crate) type TransferFor = fn(Weak<JavaView>) -> Arc<dyn ViewTransfer>;
 
+/// Why `FluiView` is not in the window after its installation finished. The
+/// backend then runs without the view for the Activity's life: nothing
+/// reinstalls it.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ViewMissing {
+    /// Java refused the view.
+    #[error("Java refused FluiView: {error} (handle kept: {handle_kept})")]
+    Refused {
+        /// What Java threw, as JNI reports it.
+        error: String,
+        /// The window could not say whether a view names the handle.
+        handle_kept: bool,
+    },
+    /// The installation panicked or its work was dropped unrun.
+    #[error("FluiView's installation stopped short: {failure} (handle kept: {handle_kept})")]
+    StoppedShort {
+        /// How the posted installation ended.
+        failure: String,
+        /// The window could not say whether a view names the handle.
+        handle_kept: bool,
+    },
+}
+
 /// What the view reported, for the owner to deliver.
 pub(crate) enum ViewEvent {
-    /// The view's installation finished, whether or not it worked.
-    Installed,
+    /// The view's installation finished: in the window, or why not.
+    Installed(Result<(), ViewMissing>),
     /// What a feature made of a report on the Java main thread, run on the
     /// owner against the window, in order with the rest; dropped with no
     /// window.
@@ -351,41 +374,38 @@ impl JavaView {
         view
     }
 
-    /// Install the view, then tell the owner, then log: the state is
-    /// committed before anything runs that is not this crate's (a
-    /// subscriber is user code). Java main thread only.
+    /// Install the view, then tell the owner, which reports a failure once;
+    /// the state is committed before anything runs that is not this crate's
+    /// (a subscriber is user code). An installation the platform's end
+    /// overtook tells nobody. Java main thread only.
     fn install(self: &Arc<Self>) {
-        let installed = self.installation.install(self);
-        self.push_event(ViewEvent::Installed);
-        match installed {
+        match self.installation.install(self) {
             Installed::Ready => {
+                self.push_event(ViewEvent::Installed(Ok(())));
                 tracing::info!(target: "flui_native::android", "FluiView is installed");
             }
-            Installed::Refused { error, handle_kept } => tracing::warn!(
-                target: "flui_native::android",
-                %error,
-                handle_kept,
-                "FluiView was not installed"
-            ),
+            Installed::Refused { error, handle_kept } => {
+                self.push_event(ViewEvent::Installed(Err(ViewMissing::Refused {
+                    error,
+                    handle_kept,
+                })));
+            }
             Installed::Detached => {}
         }
     }
 
     /// The installation stopped short (a panic, or its work dropped): what
-    /// Java put in the window is taken out, and the owner hears that it
-    /// finished. An installation that had finished, or never began, leaves
+    /// Java put in the window is taken out, and the owner hears why the view
+    /// is missing. An installation that had finished, or never began, leaves
     /// nothing to report.
     fn installation_stopped(self: &Arc<Self>, failure: &main_thread::PostFailure) {
         let Some(released) = self.installation.stopped_short(self) else {
             return;
         };
-        self.push_event(ViewEvent::Installed);
-        tracing::warn!(
-            target: "flui_native::android",
-            ?failure,
-            handle_kept = released == Released::Kept,
-            "FluiView's installation stopped short; the view was taken out"
-        );
+        self.push_event(ViewEvent::Installed(Err(ViewMissing::StoppedShort {
+            failure: format!("{failure:?}"),
+            handle_kept: released == Released::Kept,
+        })));
     }
 
     /// The platform's drag-and-drop transport.
