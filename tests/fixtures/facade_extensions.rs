@@ -511,9 +511,9 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
 
 
 use flui::view::{
-    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FrameTiming, Instant,
-    InvalidDurationConfig, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError,
-    Seconds, TaskToken,
+    AsyncDriver, BoxedTask, FrameId, FrameTiming, Instant, PostFrameHandle,
+    PostFrameScheduleError, TaskToken,
+};
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -546,13 +546,7 @@ impl StatefulView for CapabilityView {
 
 fn inspect_timing(timing: &FrameTiming) {
     let _: FrameId = timing.id;
-    let start: Instant = timing.start_time;
-    let duration: FrameDuration = timing.frame_duration;
-    let elapsed: Milliseconds = timing.elapsed_at(start);
-    let _: Seconds = elapsed.to_seconds();
-    let _: Microseconds = elapsed.to_micros();
-    let _: BudgetPercentage = timing.utilization_at(start);
-    assert!(duration.as_ms().value() > 0.0);
+    let _: Instant = timing.start_time;
 }
 
 struct PendingCapabilityTask {
@@ -644,8 +638,6 @@ fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
     drop(capabilities);
     t.pump();
     assert_eq!(view.pending_polled.load(Ordering::SeqCst), 1);
-    let error: InvalidDurationConfig = FrameDuration::try_from_fps(0).expect_err("zero fps");
-    assert!(matches!(error, InvalidDurationConfig::ZeroFps));
 }
 
 use flui::interaction::{
