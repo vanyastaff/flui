@@ -12,7 +12,7 @@ use flui_animation::{
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Rect, Size};
 use flui_foundation::{ChangeNotifier, Listenable};
-use flui_interaction::{FocusManager, FocusNode};
+use flui_interaction::focus::{FocusManager, FocusNode};
 use flui_objects::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselLayout, MAX_ITEM_EXTENT,
 };

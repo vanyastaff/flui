@@ -120,13 +120,21 @@ trait depends on `flui-platform` instead.
   The Android host has no public platform name: it starts over the Activity
   the system hands only to `android_main`, through `android_platform(app)`.
 - **No public path names an OS type (ADR-0151 §8).** The crate's public API,
-  hidden items included, names from outside the workspace only the crates of
-  the `allow` list in `[package.metadata.flui.api-closure]` (the cursor, the
-  callback lock, the raw handles, the pointer assembly's buffers and the web's
-  `Instant`), on every target it builds a host for: `cargo xtask api-closure`
-  documents it for Linux, Windows and macOS with every feature and for iOS,
-  Android and wasm32. A list of what may be named fails closed: an OS binding
-  a dependency brings is a finding without anyone listing it. The windows a
+  hidden items included, names from outside the workspace only `cursor_icon`
+  (the contract's cursor), `parking_lot` (the lock the window's callback
+  setters hand out), `raw_window_handle`, `smallvec` (the pointer assembly's
+  inline buffers, hidden, for `tests/`) and `web_time` (the web's `Instant`),
+  on every target it builds a host for: Linux, Windows and macOS with every
+  feature, iOS, Android and wasm32 with their defaults. Beyond those crates:
+  every implementor of `flui-semantics`'
+  `PlatformAccessibility` (the windows' accessibility bridges) names AccessKit,
+  whose tree its methods take;
+  `android_platform` and `android_hands_over` (ADR-0366) take the system's
+  `android_activity` Activity; and
+  `NativeExecutor::from_tokio` borrows the application's `tokio` runtime
+  (ADR-0327 §3). No program checks the list before the first release
+  (ADR-0375): an OS binding a dependency brings is a finding of the reader.
+  The windows a
   host builds are crate-private: the platform hands out `Rc<dyn HostWindow>`,
   a raw window or display handle leaves through the window's `SurfaceTarget`,
   the host's `DisplayConnection` (`OwnerPlatform::display_connection`, from
@@ -4934,8 +4942,15 @@ held against `x11_xtest_mouse_and_wheel.jsonl`),
 `xtest_keys_reach_the_focused_window`,
 `losing_the_focus_ends_a_dead_key_and_releases_held_keys`,
 `a_window_follows_its_focus_when_a_handler_panics_at_its_loss` and
-`a_window_shows_the_cursor_it_asks_for`; the harness runs the X11 rows of the
-native recording contracts beside them. Tests of the window: the pure
+`a_window_shows_the_cursor_it_asks_for`, and the real window through the
+backend conformance table (`the_x11_window_input_conforms`, in
+`tests/x11_backend_conformance.rs`): XTest's pointer for the contact rows, a
+master pointer the server adds for the named device, the focus taken away for
+the platform's cancel and XTest's keys for the menu keys, with each row XTest
+cannot drive (touch, pen, pinch, a step's own stamp, a position that is not
+finite) and each row of an input method listed there with what it reports and
+why; the harness runs the X11 rows of the native recording contracts beside
+them. Tests of the window: the pure
 modules' tables
 (`what_the_window_manager_supports_is_what_a_window_honours`,
 `logical_numbers_become_x11_numbers_only_when_they_fit`,

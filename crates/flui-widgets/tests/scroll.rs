@@ -322,7 +322,7 @@ pub(crate) fn scroll_offsets_reach_platforms_from_the_top_or_left_edge() {
 
 pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
     let profile = |min, max| {
-        flui_interaction::GestureSettings::default()
+        flui_interaction::gesture::GestureSettings::default()
             .try_with_fling_velocity(min, max)
             .expect("valid fling range")
     };
@@ -585,7 +585,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
     let event = |id: u64, millis: u64, y: f64, phase| {
         let info = PointerSource::new(
-            flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"),
+            flui_interaction::ids::PointerId::try_from(id).expect("nonzero touch identity"),
             PointerKind::Touch,
         );
         let sample = PointerSample::new(
@@ -1405,7 +1405,7 @@ fn phased_scroll(
     dy: f64,
     phase: Option<flui_interaction::events::pointer::ScrollPhase>,
     device: u64,
-) -> flui_interaction::PointerEvent {
+) -> flui_interaction::events::PointerEvent {
     use flui_interaction::events::pointer::*;
     let pointer = PointerSource::new(
         PointerId::try_from(1_u64).expect("pointer"),
@@ -1484,7 +1484,7 @@ pub(crate) fn scroll_latch_survives_focal_motion_and_releases_on_cancel() {
 /// longer phased time (ADR-0209 §5).
 pub(crate) fn phase_less_scroll_latch_expires_on_owner_clock_inactivity() {
     use flui_interaction::events::pointer::ScrollPhase;
-    let settings = flui_interaction::GestureSettings::default();
+    let settings = flui_interaction::gesture::GestureSettings::default();
     let millisecond = Duration::from_millis(1);
     for (phase, idle) in [
         (None, settings.contactless_latch_idle()),
@@ -1958,7 +1958,7 @@ fn dispatch_typed_wheel(
 struct AuthoredWheelContent {
     axis: flui_foundation::geometry::Axis,
     controller: ScrollController,
-    provider: flui_interaction::WheelPreferencesProvider,
+    provider: flui_interaction::pointer::WheelPreferencesProvider,
     distances: flui_widgets::WheelScrollDistances,
     extent: f64,
 }
@@ -1972,7 +1972,7 @@ impl flui_view::StatelessView for AuthoredWheelContent {
             .wheel_distances(self.distances)
             .child(SizedBox::new(self.extent, self.extent));
         let inner = flui_view::environment::GestureArenaScope::new(arena.clone(), scroll)
-            .settings(flui_interaction::GestureSettings::default());
+            .settings(flui_interaction::gesture::GestureSettings::default());
         flui_view::environment::GestureArenaScope::new(arena, inner)
             .wheel_preferences(self.provider.clone())
     }
@@ -2006,7 +2006,7 @@ fn dispatch_wheel_distance(
 
 pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
     use flui_foundation::geometry::Axis;
-    use flui_interaction::WheelPreferencesSource;
+    use flui_interaction::pointer::WheelPreferencesSource;
     use flui_platform::{WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit};
     use flui_widgets::WheelScrollDistances;
 
@@ -2170,7 +2170,7 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
 
 pub(crate) fn wheel_distances_refuse_overflow_and_the_next_packet_recovers() {
     use flui_foundation::geometry::Axis;
-    use flui_interaction::WheelPreferencesSource;
+    use flui_interaction::pointer::WheelPreferencesSource;
     use flui_platform::{WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit};
     use flui_widgets::{InvalidWheelScrollDistance, WheelScrollDistances};
 
@@ -5046,12 +5046,15 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
 #[derive(Debug)]
 struct CountingBehavior {
     physics: SharedScrollPhysics,
-    devices: flui_interaction::PointerKindSet,
+    devices: flui_platform::input_capabilities::PointerKindSet,
     asked: Cell<usize>,
 }
 
 impl CountingBehavior {
-    fn new(physics: SharedScrollPhysics, devices: flui_interaction::PointerKindSet) -> Rc<Self> {
+    fn new(
+        physics: SharedScrollPhysics,
+        devices: flui_platform::input_capabilities::PointerKindSet,
+    ) -> Rc<Self> {
         Rc::new(Self {
             physics,
             devices,
@@ -5069,7 +5072,7 @@ impl flui_widgets::ScrollBehavior for CountingBehavior {
     fn drag_devices(
         &self,
         _details: &flui_widgets::ScrollBehaviorDetails,
-    ) -> flui_interaction::PointerKindSet {
+    ) -> flui_platform::input_capabilities::PointerKindSet {
         self.devices
     }
 }
@@ -5099,11 +5102,11 @@ impl flui_widgets::ScrollPhysics for PinnedPhysics {
 /// Drag a 300 px viewport over 800 px of `view`'s content up by 50 px and
 /// return the offset it lands on.
 fn dragged_offset(view: impl Fn(&ScrollController) -> flui_view::BoxedView) -> f64 {
-    dragged_offset_with(flui_interaction::PointerKind::Touch, view)
+    dragged_offset_with(flui_platform::pointer::PointerKind::Touch, view)
 }
 
 fn dragged_offset_with(
-    kind: flui_interaction::PointerKind,
+    kind: flui_platform::pointer::PointerKind,
     view: impl Fn(&ScrollController) -> flui_view::BoxedView,
 ) -> f64 {
     let controller = ScrollController::new();
@@ -5124,30 +5127,30 @@ pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
             .child(SizedBox::new(300.0, 800.0))
             .boxed()
     };
-    let pen = flui_interaction::PointerKind::Pen {
-        tool: flui_interaction::PenTool::Tip,
+    let pen = flui_platform::pointer::PointerKind::Pen {
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     for kind in [
-        flui_interaction::PointerKind::Touch,
+        flui_platform::pointer::PointerKind::Touch,
         pen,
-        flui_interaction::PointerKind::Virtual,
+        flui_platform::pointer::PointerKind::Virtual,
     ] {
         assert_eq!(dragged_offset_with(kind, list), 50.0, "{kind:?} drags");
     }
     assert_eq!(
-        dragged_offset_with(flui_interaction::PointerKind::Mouse, list),
+        dragged_offset_with(flui_platform::pointer::PointerKind::Mouse, list),
         0.0,
         "the mouse leaves the drag"
     );
     let every = |controller: &ScrollController| {
         SingleChildScrollView::new()
             .controller(controller.clone())
-            .allowed_devices(flui_interaction::PointerKindSet::all())
+            .allowed_devices(flui_platform::input_capabilities::PointerKindSet::all())
             .child(SizedBox::new(300.0, 800.0))
             .boxed()
     };
     assert_eq!(
-        dragged_offset_with(flui_interaction::PointerKind::Mouse, every),
+        dragged_offset_with(flui_platform::pointer::PointerKind::Mouse, every),
         50.0,
         "a view that names every device takes the mouse"
     );
@@ -5156,7 +5159,7 @@ pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
 /// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
 /// open, and what it names itself wins.
 pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
-    use flui_interaction::PointerKindSet;
+    use flui_platform::input_capabilities::PointerKindSet;
     use flui_widgets::{ScrollBehavior, ScrollConfiguration};
 
     let clamping = || -> SharedScrollPhysics { Rc::new(ClampingScrollPhysics::new()) };
@@ -5244,7 +5247,7 @@ pub(crate) fn the_default_scroll_behavior_follows_the_platform_convention() {
 /// A rebuild under the same behavior keeps the physics it answered; another
 /// behavior is asked again.
 pub(crate) fn a_scroll_view_asks_its_behavior_again_only_when_it_changes() {
-    use flui_interaction::PointerKindSet;
+    use flui_platform::input_capabilities::PointerKindSet;
     use flui_widgets::ScrollConfiguration;
 
     let controller = ScrollController::new();

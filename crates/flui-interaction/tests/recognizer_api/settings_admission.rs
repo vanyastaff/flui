@@ -8,13 +8,17 @@ use std::{
     time::Duration,
 };
 
+use flui_foundation::ManualClock;
 use flui_foundation::geometry::{DevicePixelRatio, Offset, Point, Size};
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, ForcePressGestureRecognizer,
-    GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings, GestureSettingsSource,
-    LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer, PointerId,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::{
+        DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, ForcePressGestureRecognizer,
+        GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings,
+        GestureSettingsSource, LongPressGestureRecognizer, MultiTapGestureRecognizer,
+        ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    },
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_platform::{
@@ -93,11 +97,13 @@ fn multi_tap_retains_whole_attempt_policy() {
     let source = GestureSettingsSource::new(old.clone());
     let taps = Rc::new(Cell::new(0));
     let output = taps.clone();
-    let tap =
-        MultiTapGestureRecognizer::builder(arena.clone(), flui_interaction::MultiTapCount::TWO)
-            .settings(source.provider())
-            .on_multi_tap(move |_| output.set(output.get() + 1))
-            .build();
+    let tap = MultiTapGestureRecognizer::builder(
+        arena.clone(),
+        flui_interaction::gesture::MultiTapCount::TWO,
+    )
+    .settings(source.provider())
+    .on_multi_tap(move |_| output.set(output.get() + 1))
+    .build();
     for (a, expected) in [(40, 1), (42, 1), (44, 2)] {
         send(
             &*tap,
@@ -726,7 +732,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
                 &GesturePreferences::default(),
                 Some(&geometry)
             ),
-            Err(flui_interaction::GestureSettingsError::UnrepresentableProjection { .. })
+            Err(flui_interaction::gesture::GestureSettingsError::UnrepresentableProjection { .. })
         ),
         "unrepresentable derived tier is explicitly recoverable"
     );
@@ -744,7 +750,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
                 &GesturePreferences::default(),
                 Some(&geometry)
             ),
-            Err(flui_interaction::GestureSettingsError::UnrepresentableProjection { .. })
+            Err(flui_interaction::gesture::GestureSettingsError::UnrepresentableProjection { .. })
         ),
         "positive unrepresentable projection cannot silently become zero"
     );
@@ -1147,14 +1153,17 @@ fn nonrepresentable_component_estimate_is_refused() {
         let details = terminal.last().expect("terminal callback");
         assert_eq!(
             details.reason,
-            flui_interaction::GestureEndReason::Completed
+            flui_interaction::gesture::GestureEndReason::Completed
         );
         assert_eq!(
             details.velocity,
-            flui_interaction::Velocity::ZERO,
+            flui_interaction::gesture::Velocity::ZERO,
             "{estimator:?} refuses an unrepresentable component"
         );
-        assert_eq!(details.fling_velocity(), flui_interaction::Velocity::ZERO);
+        assert_eq!(
+            details.fling_velocity(),
+            flui_interaction::gesture::Velocity::ZERO
+        );
         assert_eq!(details.primary_velocity, 0.0);
 
         drop(terminal);
@@ -1327,7 +1336,8 @@ fn native_touch_span_preserves_baseline_ratio() {
 
 fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     use flui_interaction::{
-        gesture::PanZoomDisposition, gesture::VelocityEstimator, pointer::PanZoomDispatch,
+        gesture::{PanZoomDisposition, VelocityEstimator},
+        pointer::PanZoomDispatch,
     };
     use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 

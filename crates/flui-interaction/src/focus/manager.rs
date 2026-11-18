@@ -5,9 +5,10 @@
 //! when their subtree is attached below [`FocusManager::root_scope`].
 
 use crate::containment::keep_first;
+use rustc_hash::FxHashSet;
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     rc::{Rc, Weak},
 };
 
@@ -784,10 +785,10 @@ impl FocusManager {
             .flat_map(|node| node.ancestors())
             .collect();
         let new_path: Vec<_> = new.into_iter().flat_map(|node| node.ancestors()).collect();
-        let previous_ids: HashSet<_> = previous_path.iter().map(|node| node.id()).collect();
-        let new_ids: HashSet<_> = new_path.iter().map(|node| node.id()).collect();
+        let previous_ids: FxHashSet<_> = previous_path.iter().map(|node| node.id()).collect();
+        let new_ids: FxHashSet<_> = new_path.iter().map(|node| node.id()).collect();
 
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let mut changed = Vec::new();
         for node in previous_path {
             if !new_ids.contains(&node.id()) && seen.insert(node.id()) {
@@ -814,9 +815,9 @@ impl FocusManager {
         current_path: Vec<Rc<FocusNode>>,
         round: &mut PanicRecovery,
     ) {
-        let previous_ids: HashSet<_> = previous_path.iter().map(|node| node.id()).collect();
-        let current_ids: HashSet<_> = current_path.iter().map(|node| node.id()).collect();
-        let mut seen = HashSet::new();
+        let previous_ids: FxHashSet<_> = previous_path.iter().map(|node| node.id()).collect();
+        let current_ids: FxHashSet<_> = current_path.iter().map(|node| node.id()).collect();
+        let mut seen = FxHashSet::default();
         let changed = previous_path
             .into_iter()
             .filter(|node| !current_ids.contains(&node.id()))

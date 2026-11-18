@@ -761,7 +761,7 @@ impl Action<PreviousFocusIntent> for PreviousFocusAction {
 
 /// Move focus along one geometric direction after the focused control declines the key.
 #[derive(Debug, Clone, Copy)]
-pub struct DirectionalFocusIntent(pub flui_interaction::FocusDirection);
+pub struct DirectionalFocusIntent(pub flui_interaction::focus::FocusDirection);
 impl Intent for DirectionalFocusIntent {}
 
 /// Directional navigation bound to one presentation's focus owner.

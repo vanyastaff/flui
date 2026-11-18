@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use flui_foundation::ManualClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
@@ -21,9 +22,13 @@ use flui_interaction::gesture::GestureArena;
 use flui_interaction::gesture::{ScaleEndDetails, ScaleUpdateDetails};
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, ForcePressGestureRecognizer, GestureBinding,
-    GestureRecognizer, HitTestResult, ManualClock, PointerId, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapGestureRecognizer,
+    binding::GestureBinding,
+    gesture::{
+        DragAxis, DragGestureRecognizer, ForcePressGestureRecognizer, GestureRecognizer,
+        ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    },
+    ids::PointerId,
+    pointer::HitTestResult,
 };
 
 // ============================================================================
@@ -609,8 +614,8 @@ impl GestureRecognizer for Claimant {
 
     fn handle_event(&self, _: PointerDispatch<'_>) {}
 
-    fn cancel(&self) -> flui_interaction::CancelOutcome {
-        flui_interaction::CancelOutcome::Idle
+    fn cancel(&self) -> flui_interaction::gesture::CancelOutcome {
+        flui_interaction::gesture::CancelOutcome::Idle
     }
 }
 
@@ -717,7 +722,7 @@ fn a_pointer_frame_delivers_every_event_and_closes_after_a_failure() {
     ];
     expect_panic("a frame event", || {
         rig.binding.dispatch_pointer_frame_on(
-            flui_interaction::InputSurface::Window,
+            flui_interaction::ids::InputSurface::Window,
             &frame,
             |_| HitTestResult::new(),
         );
@@ -1515,7 +1520,10 @@ fn finite_tap_drag_inputs_cannot_publish_overflowing_motion() {
         } else {
             result.expect("finite-input refusal does not panic");
         }
-        assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
+        assert_eq!(
+            recognizer.cancel(),
+            flui_interaction::gesture::CancelOutcome::Idle
+        );
         deltas.borrow_mut().clear();
         let down = make_down_event_for_id(id(1), Offset::ZERO, PointerKind::Touch)
             .expect("finite recovery Down");
@@ -1783,7 +1791,7 @@ fn prediction_does_not_admit_drag() {
 }
 
 fn double_tap_minimum_interval(gap_ms: u64) {
-    use flui_interaction::DoubleTapGestureRecognizer;
+    use flui_interaction::gesture::DoubleTapGestureRecognizer;
     for kind in [PointerKind::Mouse, PointerKind::Touch] {
         for first_press_ms in [0, 250] {
             let rig = Rig::new();
@@ -1847,7 +1855,7 @@ fn double_tap_rejects_39ms_bounce() {
 /// A bounce still down when the first attempt times out keeps its hold until
 /// it lifts: its lift is no tap, though the first tap has fired.
 fn a_bounce_outliving_the_first_attempt_yields_no_tap() {
-    use flui_interaction::DoubleTapGestureRecognizer;
+    use flui_interaction::gesture::DoubleTapGestureRecognizer;
     for kind in [PointerKind::Mouse, PointerKind::Touch] {
         let rig = Rig::new();
         let taps = Rc::new(Cell::new(0));
@@ -1962,7 +1970,7 @@ fn slops_measure_root_pixels_inside_a_transform() {
 /// A bounced second Down is not a second tap: no tap on it wins its contact,
 /// and the first tap arrives once, when the double tap gives it up.
 fn double_tap_bounce_yields_no_tap_of_its_own() {
-    use flui_interaction::DoubleTapGestureRecognizer;
+    use flui_interaction::gesture::DoubleTapGestureRecognizer;
     for kind in [PointerKind::Mouse, PointerKind::Touch] {
         let rig = Rig::new();
         let taps = Rc::new(Cell::new(0));
@@ -1999,7 +2007,7 @@ fn double_tap_admits_exact_40ms() {
 }
 
 fn stationary_gesture_measured_excursion(family: &str) {
-    use flui_interaction::{
+    use flui_interaction::gesture::{
         DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
     };
     for coalesced_packet in [false, true] {
@@ -2022,7 +2030,7 @@ fn stationary_gesture_measured_excursion(family: &str) {
                 .build(),
             "multi tap" => MultiTapGestureRecognizer::builder(
                 rig.binding.arena().clone(),
-                flui_interaction::MultiTapCount::TWO,
+                flui_interaction::gesture::MultiTapCount::TWO,
             )
             .on_multi_tap(move |_| r.set(r.get() + 1))
             .on_multi_tap_cancel(move |_| c.set(c.get() + 1))
@@ -2093,7 +2101,7 @@ fn multi_tap_measured_excursion() {
 
 fn moving_gesture_measured_excursion(family: &str) {
     use flui_interaction::gesture::ScaleStartMode;
-    use flui_interaction::{GestureSettings, MultiDragAxis, MultiDragGestureRecognizer};
+    use flui_interaction::gesture::{GestureSettings, MultiDragAxis, MultiDragGestureRecognizer};
     for coalesced_packet in [false, true] {
         let rig = Rig::new();
         let starts = Rc::new(Cell::new(0));
@@ -2482,7 +2490,7 @@ struct CancelRival {
     reject: Box<dyn Fn()>,
     accepted: Rc<Cell<usize>>,
 }
-impl flui_interaction::GestureArenaMember for CancelRival {
+impl flui_interaction::gesture::GestureArenaMember for CancelRival {
     fn accept_gesture(&self, _: GestureContest) {
         self.accepted.set(self.accepted.get() + 1);
     }

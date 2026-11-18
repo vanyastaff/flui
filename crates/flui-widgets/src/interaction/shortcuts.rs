@@ -499,7 +499,7 @@ impl std::fmt::Debug for Shortcuts {
 /// Presentation-local state behind [`Shortcuts`]: the focus owner whose
 /// primary focus an intent resolves at.
 pub struct ShortcutsState {
-    focus_manager: Rc<flui_interaction::FocusManager>,
+    focus_manager: Rc<flui_interaction::focus::FocusManager>,
 }
 
 impl std::fmt::Debug for ShortcutsState {
@@ -647,7 +647,7 @@ impl DefaultFocusTraversal {
 
 /// Presentation-local state behind [`DefaultFocusTraversal`].
 pub struct DefaultFocusTraversalState {
-    focus_owner: Rc<flui_interaction::FocusManager>,
+    focus_owner: Rc<flui_interaction::focus::FocusManager>,
     /// The node the bindings' key handler lives on, which the focus owner
     /// starts a key's walk at while nothing is focused.
     keys: Rc<FocusNode>,
@@ -965,12 +965,21 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             )
             .by_convention(Rc::clone(&self.convention), platform);
         for (key, direction) in [
-            (NamedKey::ArrowUp, flui_interaction::FocusDirection::Up),
-            (NamedKey::ArrowDown, flui_interaction::FocusDirection::Down),
-            (NamedKey::ArrowLeft, flui_interaction::FocusDirection::Left),
+            (
+                NamedKey::ArrowUp,
+                flui_interaction::focus::FocusDirection::Up,
+            ),
+            (
+                NamedKey::ArrowDown,
+                flui_interaction::focus::FocusDirection::Down,
+            ),
+            (
+                NamedKey::ArrowLeft,
+                flui_interaction::focus::FocusDirection::Left,
+            ),
             (
                 NamedKey::ArrowRight,
-                flui_interaction::FocusDirection::Right,
+                flui_interaction::focus::FocusDirection::Right,
             ),
         ] {
             shortcuts = shortcuts.shortcut(

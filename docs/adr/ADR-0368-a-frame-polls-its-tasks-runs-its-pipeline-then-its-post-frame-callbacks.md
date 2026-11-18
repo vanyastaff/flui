@@ -21,6 +21,8 @@
   sentence keeping `should_schedule_frame()` as an alias of `frames_enabled()` only
 - **Supersedes:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) §3 the sentence on
   `TimingsCallback` only: the scheduler keeps no timings lane
+- **Superseded-by:** [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `api/flui.txt` snapshot only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md) (animation time is the runtime's
   `Vsync` controllers, not scheduler tickers), [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)
   (one frame transaction), [ADR-0257](ADR-0257-frame-timing-and-latency.md) (where the idle bound

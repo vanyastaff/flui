@@ -3,17 +3,17 @@
 pub use crate::close::CloseMode;
 use crate::close::CloseTombstone;
 pub use crate::pointer::interaction_lane::DispatchCustody;
-use crate::{FocusManager, TextInputOwner};
+use crate::{focus::FocusManager, text_input::TextInputOwner};
 
 /// Give one presentation independently withdrawable registration authority.
 pub fn presentation_dispatch(
-    handle: &crate::InteractionDispatchHandle,
-) -> crate::InteractionDispatchHandle {
+    handle: &crate::pointer::InteractionDispatchHandle,
+) -> crate::pointer::InteractionDispatchHandle {
     handle.scoped_owner()
 }
 
 /// Withdraw a presentation's registered targets on the owner thread.
-pub fn close_dispatch(handle: &crate::InteractionDispatchHandle, mode: CloseMode) {
+pub fn close_dispatch(handle: &crate::pointer::InteractionDispatchHandle, mode: CloseMode) {
     handle.close_owner(mode);
 }
 
@@ -21,7 +21,7 @@ pub fn close_dispatch(handle: &crate::InteractionDispatchHandle, mode: CloseMode
 /// its captures until [`retire_dispatch`]: a presentation closes every other
 /// capability before any of them is destroyed (ADR-0123).
 pub fn withdraw_dispatch(
-    handle: &crate::InteractionDispatchHandle,
+    handle: &crate::pointer::InteractionDispatchHandle,
     mode: CloseMode,
 ) -> Option<DispatchCustody> {
     handle.withdraw_owner(mode)
@@ -29,8 +29,8 @@ pub fn withdraw_dispatch(
 
 /// [`withdraw_dispatch`] through the physical lane, without TLS activation.
 pub fn withdraw_dispatch_in(
-    lane: &crate::InteractionLane,
-    handle: &crate::InteractionDispatchHandle,
+    lane: &crate::pointer::InteractionLane,
+    handle: &crate::pointer::InteractionDispatchHandle,
     mode: CloseMode,
 ) -> Option<DispatchCustody> {
     handle.withdraw_owner_in(lane, mode)
@@ -43,8 +43,8 @@ pub fn retire_dispatch(custody: DispatchCustody, mode: CloseMode) {
 
 /// Withdraw through the physical lane during UI runtime destruction, without TLS activation.
 pub fn close_dispatch_in(
-    lane: &crate::InteractionLane,
-    handle: &crate::InteractionDispatchHandle,
+    lane: &crate::pointer::InteractionLane,
+    handle: &crate::pointer::InteractionDispatchHandle,
     mode: CloseMode,
 ) {
     handle.close_owner_in(lane, mode);
@@ -64,9 +64,9 @@ pub fn withdraw_focus(owner: &FocusManager) {
 
 /// Mark `node` as created by a widget for itself: once that widget detaches
 /// it (on dispose) or replaces it, a request on it answers
-/// [`FocusRequestOutcome::Stale`](crate::FocusRequestOutcome::Stale) instead
+/// [`FocusRequestOutcome::Stale`](crate::focus::FocusRequestOutcome::Stale) instead
 /// of waiting for an attachment that will never come.
-pub fn mark_widget_owned(node: &crate::FocusNode) {
+pub fn mark_widget_owned(node: &crate::focus::FocusNode) {
     node.mark_widget_owned();
 }
 
@@ -82,13 +82,13 @@ pub fn close_text_input(owner: &TextInputOwner, mode: CloseMode) {
 }
 
 /// Withdraw cached routes and gesture admission for a terminal presentation.
-pub fn close_gestures(owner: &crate::GestureBinding, mode: CloseMode) {
+pub fn close_gestures(owner: &crate::binding::GestureBinding, mode: CloseMode) {
     owner.close_with_mode(mode);
 }
 
 /// Install the owning presentation's weak redraw capability for logical capture release.
 pub fn set_pointer_capture_wake(
-    owner: &crate::GestureBinding,
+    owner: &crate::binding::GestureBinding,
     window: std::rc::Weak<dyn flui_platform::PlatformWindow>,
 ) {
     owner.set_pointer_capture_wake(window);
@@ -96,7 +96,7 @@ pub fn set_pointer_capture_wake(
 
 /// Sample gesture deadlines under the presentation's failure custody.
 pub fn tick_deadlines_with_recovery(
-    owner: &crate::GestureBinding,
+    owner: &crate::binding::GestureBinding,
     now: web_time::Instant,
     recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
 ) {
@@ -105,7 +105,7 @@ pub fn tick_deadlines_with_recovery(
 
 /// Refresh scheduling observation during a guard-free owner operation.
 pub fn refresh_deadlines_with_recovery(
-    owner: &crate::GestureBinding,
+    owner: &crate::binding::GestureBinding,
     now: web_time::Instant,
     recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
 ) {
@@ -114,7 +114,9 @@ pub fn refresh_deadlines_with_recovery(
 
 /// Read the last owner scheduling observation without executing member code.
 #[must_use]
-pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<flui_platform::EventTime> {
+pub fn next_deadline_snapshot(
+    owner: &crate::binding::GestureBinding,
+) -> Option<flui_platform::EventTime> {
     owner.arena().next_deadline_snapshot()
 }
 
@@ -123,7 +125,7 @@ pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<flui_plat
 /// platform represents, a deadline no wake can reach.
 #[must_use]
 pub fn wake_instant(
-    owner: &crate::GestureBinding,
+    owner: &crate::binding::GestureBinding,
     deadline: flui_platform::EventTime,
 ) -> Option<web_time::Instant> {
     owner.instant_at(deadline)
@@ -131,7 +133,7 @@ pub fn wake_instant(
 
 /// Read ordinary deadline demand, excluding quarantined discovery and polling.
 #[must_use]
-pub fn has_pending_deadlines_snapshot(owner: &crate::GestureBinding) -> bool {
+pub fn has_pending_deadlines_snapshot(owner: &crate::binding::GestureBinding) -> bool {
     owner.arena().has_pending_deadlines_snapshot()
 }
 
@@ -160,7 +162,7 @@ impl CloseWindow {
     }
 
     /// Hold a presentation dispatch owner's window, or a raw handle's lane window.
-    pub fn dispatch(&mut self, handle: &crate::InteractionDispatchHandle) {
+    pub fn dispatch(&mut self, handle: &crate::pointer::InteractionDispatchHandle) {
         self.hold(handle.close_tombstone());
     }
 
@@ -176,7 +178,7 @@ impl CloseWindow {
 
     /// Hold the windows of a presentation's gesture binding, its arena,
     /// pointer router and mouse tracker.
-    pub fn gestures(&mut self, owner: &crate::GestureBinding) {
+    pub fn gestures(&mut self, owner: &crate::binding::GestureBinding) {
         for terminal in owner.close_tombstones() {
             self.hold(terminal);
         }

@@ -1764,7 +1764,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     };
     let event = |millis: u64, y: f64, phase: u8| {
         let info = PointerSource::new(
-            flui_interaction::PointerId::try_from(1).expect("pointer"),
+            flui_interaction::ids::PointerId::try_from(1).expect("pointer"),
             PointerKind::Touch,
         );
         let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
@@ -3489,7 +3489,7 @@ impl StatelessView for NestedWheelScroll {
             self.child.clone(),
         );
         if self.authored_gestures {
-            scope.settings(flui_interaction::GestureSettings::default())
+            scope.settings(flui_interaction::gesture::GestureSettings::default())
         } else {
             scope
         }
@@ -3503,7 +3503,7 @@ struct AuthoredGestureTiming {
 }
 
 struct AuthoredGestureTimingState {
-    arena: Option<flui_interaction::GestureArena>,
+    arena: Option<flui_interaction::gesture::GestureArena>,
 }
 
 impl flui_view::StatefulView for AuthoredGestureTiming {
@@ -3525,7 +3525,8 @@ impl flui_view::ViewState<AuthoredGestureTiming> for AuthoredGestureTimingState 
             view.child.clone(),
         )
         .settings(
-            flui_interaction::GestureSettings::default().with_long_press_timeout(view.timeout),
+            flui_interaction::gesture::GestureSettings::default()
+                .with_long_press_timeout(view.timeout),
         )
     }
 }
@@ -4522,7 +4523,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 .add_global_key_handler(Rc::new(move |_| {
                     keyboard.borrow_mut().push("key");
                     assert!(!key_fails, "keyboard failure");
-                    flui_interaction::KeyEventResult::Handled
+                    flui_interaction::focus::KeyEventResult::Handled
                 }));
             let address = owner
                 .publication(owner.prepare_runtime(runtime))

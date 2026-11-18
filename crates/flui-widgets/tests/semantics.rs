@@ -1059,7 +1059,7 @@ use crate::common::{ProbeSignals, SignalProbe};
 /// Retained overlay state remains live while its page is structurally absent
 /// from both assembled semantics and the actual delivered update stream.
 pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_update() {
-    use flui_interaction::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_testing::A11yTree;
     use flui_testing::a11y::Role;
     use flui_view::ViewExt as _;

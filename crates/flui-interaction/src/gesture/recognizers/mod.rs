@@ -38,7 +38,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::{GestureArena, TapGestureRecognizer};
+//! use flui_interaction::{gesture::{GestureArena, TapGestureRecognizer}};
 //!
 //! let arena = GestureArena::new();
 //! let recognizer = TapGestureRecognizer::builder(arena)

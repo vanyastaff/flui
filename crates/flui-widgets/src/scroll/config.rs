@@ -10,7 +10,7 @@
 //! whole vocabulary, and a new setting is one more provided method.
 
 use flui_foundation::geometry::Axis;
-use flui_interaction::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 
 use crate::scroll::nested::OverscrollBehavior;
 use crate::scroll::scroll_owner::SharedSnapPolicy;

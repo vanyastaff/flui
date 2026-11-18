@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use flui_interaction::FocusManager;
+use flui_interaction::focus::FocusManager;
 use flui_interaction::focus::FocusNode;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers, NamedKey};

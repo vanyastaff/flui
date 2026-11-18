@@ -29,9 +29,12 @@ use flui_foundation::geometry::Rect;
 use flui_foundation::{Subscription, ValueKey};
 use flui_interaction::focus::{FocusCause, FocusNode};
 use flui_interaction::{
-    GestureRecognizer, InteractionDispatchError, LocalPayloadTarget, PointerDispatch,
-    PointerTarget, RecognizerSet, RectProvider, TapGestureRecognizer, cancel_all,
-    resolve_local_payload,
+    focus::RectProvider,
+    gesture::{GestureRecognizer, RecognizerSet, TapGestureRecognizer, cancel_all},
+    pointer::{
+        InteractionDispatchError, LocalPayloadTarget, PointerDispatch, PointerTarget,
+        resolve_local_payload,
+    },
 };
 use flui_objects::{
     RenderParagraph, SemanticsActionRoute, ShownLinksListener, StackFit, SubtreeAnchor,

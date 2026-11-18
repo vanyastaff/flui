@@ -13,7 +13,7 @@ use crate::presentation_forest::PresentationForest;
 use crate::runtime_services::{RuntimeHostServices, RuntimeServices};
 use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_interaction::InteractionLane;
+use flui_interaction::pointer::InteractionLane;
 #[cfg(any(test, feature = "testing"))]
 use flui_painting::FontCollection;
 #[cfg(any(test, feature = "testing"))]

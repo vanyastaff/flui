@@ -734,12 +734,16 @@ fn the_clipboard_service_turns_off_and_back_on() {
         .set_at(Duration::from_secs(2), ServiceState::On);
 
     let window = host.open_window(HeadlessWindow::new(10, 10));
-    let off = acquire_capability_in::<flui_interaction::ClipboardCapability>(&mut host, window);
+    let off = acquire_capability_in::<flui_interaction::text_input::ClipboardCapability>(
+        &mut host, window,
+    );
     assert_eq!(off.err(), Some(refusal));
 
     let _ = host.pump(Duration::from_secs(2));
     let second = host.open_window(HeadlessWindow::new(10, 10));
-    let on = acquire_capability_in::<flui_interaction::ClipboardCapability>(&mut host, second);
+    let on = acquire_capability_in::<flui_interaction::text_input::ClipboardCapability>(
+        &mut host, second,
+    );
     assert!(on.is_ok(), "the host's own clipboard is back at 2 s");
     scenario.verify().expect("the clipboard came back");
 }

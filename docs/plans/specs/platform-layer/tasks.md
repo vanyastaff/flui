@@ -1,15 +1,13 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 116 закрыты и 18 открыты (сверено с `main` @ `ce1fb55ac`); записи — в разделе
+  Из 134 задач серии 118 закрыты и 16 открыты (сверено с `main` @ `5b4e3202b`); записи — в разделе
   «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
     провайдеры Android;
-  - LY63 — `locale|layoutDirection` в `configChanges` шаблона, его теста и проверки манифеста;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
-  - LY85 — настоящее окно X11 через `assert_backend_conforms`;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
@@ -3506,22 +3504,33 @@ GPU-память простаивающего или невидимого окн
   фоне, запись до `android_main`, образ API 23–25, ввод с dex из APK) записаны в
   `platform-parity.toml` («Memory pressure», «Activity results for capability providers», «IME
   composition»).
-- [ ] **LY63** (открыта: смена языка) — `targetSdk` закреплён в `platform-support.toml`
-  (`android.target-sdk`); путь Gradle и правила R8 `dev.flui.**`
-  (`a_minified_release_keeps_what_the_crates_rules_keep`); golden манифеста и `build.gradle.kts`
-  (`the_generated_manifest_matches_its_golden`, `the_scaffolded_gradle_script_matches_its_golden`);
-  `windowSoftInputMode` — ADR-0340 §3. Шаблон объявляет
-  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
-  (`the_android_activity_handles_the_configuration_changes_the_host_follows`); тема, `font_scale`,
-  `font_weight_adjustment`, плотность и поворот прогнаны на Galaxy S21 одним `android_main`.
-  Причин не объявлять `locale` больше нет: хост читает языки заново на `ConfigChanged`
-  (`crates/flui-native/src/preferences/android.rs`), а порядок резервных шрифтов следует за сменой
-  языка (`crates/flui-app/src/app/runtime/fallback_rescan.rs`, ADR-0271 §4). Остаётся код:
-  `locale|layoutDirection` в `configChanges` шаблона
-  (`crates/flui-cli/templates/android/AndroidManifest.xml:34`), в `HANDLED_CONFIG_CHANGES` с его
-  комментарием (`crates/flui-cli/tests/cli_platform.rs:61`) и в проверке манифеста
-  (`crates/flui-cli/src/build/android_manifest.rs:384`). Прогон смены языка на устройстве —
-  строка parity «Configuration changes reach the running app».
+- [x] **LY63** (`windowSoftInputMode` решён, ADR-0340 §3; `configChanges` —
+  #1845, `targetSdk` — #2231, правила R8 и golden — #2287), часть `configChanges` — ветка
+  `android/config-changes`. Шаблон `flui create`
+  объявляет все изменения, которые хост читает на `ConfigChanged`:
+  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|keyboard|keyboardHidden|navigation`
+  (тест `the_android_activity_handles_the_configuration_changes_the_host_follows`). `locale` и
+  `layoutDirection` объявлены: `ConfigChanged` перечитывает настройки, языки приходят из
+  `Configuration.getLocales` (`preferences/android.rs`, `language_tags`), резервные шрифты
+  следуют первому языку (`flui-app`, `fallback_rescan.rs`); направление письма платформа не
+  публикует, оно выводится из локали (`docs/gaps.md`, «Locale edge»). Прогон на устройстве
+  (смена языка, Activity жива) — долг в `platform-parity.toml` («Configuration changes reach
+  the running app»). Упаковщик без
+  Gradle отказывает `android.jar` ниже `targetSdk` (не ниже API 31 из-за флага `fontWeightAdjustment`). Ночной режим хост
+  читает из Java `Configuration.uiMode`: нативный `AConfiguration` android-activity после
+  изменения на месте остаётся прежним. Прогон на Galaxy S21 (Android 15, проба `flui create
+  --local`): тема в обе стороны, `font_scale` 1.3, `font_weight_adjustment` 300, `wm density`
+  480, поворот — один `android_main`, значения в `MediaQuery`. `targetSdk` закреплён в `platform-support.toml` (`android.target-sdk = 36`; упаковщик без Gradle и `flui.targetSdk` в `gradle.properties`, 2026-11-03). Путь Gradle сделан в LY62
+  (исходники крейтов через `flui.javaSources`), список `configChanges` в генерируемом манифесте
+  `FluiActivity` — там же. Правила R8 (2026-11-03, ветка `claude/project-thread-op0kt3`): ключ
+  `android.proguard` схемы 2, `flui-native` объявляет `android/proguard-rules.pro`
+  (`-keep class dev.flui.** { *; }`), Gradle получает `flui.proguardFiles` в release, скрипт без
+  чтения свойства отклоняется (`a_minified_release_keeps_what_the_crates_rules_keep`); `flui create`
+  кладёт свой `app/proguard-rules.pro`. Golden: `the_generated_manifest_matches_its_golden`,
+  `the_scaffolded_gradle_script_matches_its_golden` (insta). `windowSoftInputMode` решён в ветке
+  `native/android-activity-results` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края
+  до края, ставит `FluiActivity.onCreate` (таблица — `owner::android::window_setup`), счёт `WindowResized` — прогон
+  в parity «Soft-keyboard insets».
 - [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`
   @ `e617f109a` (#1923, #1924, #1925). **Контракт.** `PlatformWindow` без `Send + Sync`; окна
   отдаются как `Rc<dyn HostWindow>`/`Rc<dyn PlatformWindow>`, слабые ссылки — `std::rc::Weak`.
@@ -5945,18 +5954,35 @@ GPU-память простаивающего или невидимого окн
   строки LY76, R6.6 и D16 исправлены. Заглушка и хост семантики стоят в слоте `flui-semantics`,
   последнем после canvas: `the_tree_reaches_the_dom_once_the_placeholder_is_activated` читает
   заглушку, а после активации — хост в этом слоте.
-- [ ] **LY85** (открыта: окно X11 в общей таблице) — через `assert_backend_conforms` идут
-  декодеры обоих хостов (`x11_decoder_conforms`, `wayland_decoders_conform`) и настоящее окно
-  Wayland под Weston (`wayland_window_conforms`, его зовёт `the_wayland_window_input_conforms`);
-  записи `wayland_weston_mouse_wheel.jsonl` и `x11_xtest_mouse_and_wheel.jsonl`
-  (`wayland_recordings_decode_to_their_host_input`, `x11_recordings_decode_to_their_host_input`);
-  `docs/platform-parity.md` и `docs/gaps.md` описывают оба хоста по прогонам на Weston, sway и
-  Xvfb. Остаётся код: настоящее окно X11 через `assert_backend_conforms` по образцу
-  `wayland_window_conforms` (`crates/flui-native/tests/backend_conformance.rs:1837`); сейчас
-  `the_x11_window_conforms` (`crates/flui-native/tests/x11_window.rs:931`) идёт только через
-  `window_conformance::assert_conforms`. Записи касания, пера, щипка и плавной прокрутки с
-  устройств и прогон в сессии рабочего стола — строка качества parity «Recorded native input…» и
-  заметки строк `touch`, `pen-and-stylus`, `trackpad-pinch-and-rotate`.
+- [x] **LY85** (закрыта: оба хоста идут через общую таблицу; прогоны с устройствами и в сессии
+  рабочего стола записаны в `platform-parity.toml`) — фундаменты #1930 и #1931, ввод #1936 и
+  #1937, окно X11 в таблице — ветка `native/x11-window-conformance`. Через
+  `assert_backend_conforms` идут декодеры обоих хостов (`x11_decoder_conforms`,
+  `wayland_decoders_conform`) и настоящее окно Wayland под Weston (`wayland_window_conforms`, его
+  зовёт `the_wayland_window_input_conforms`). Настоящее окно X11 под openbox на Xvfb идёт через
+  ту же таблицу (`run_backend_conformance`) в харнессе `x11_window`:
+  `the_x11_window_input_conforms` (`tests/x11_backend_conformance.rs`) исполняет каждый шаг,
+  который сервер умеет произвести, через XTest и отдаёт таблице то, что услышал обработчик окна:
+  мышь — контакты; устройство с именем — мастер-указатель, который сервер добавляет и объявляет
+  (XTest двигает его через client pointer); отмена платформы — фокус, который забирает другое окно
+  теста; клавиши меню и Shift+F10 — XTest. Строки, которые окно не держит, перечислены в
+  `NOT_HELD` с тем, что строка отвечает, и причиной; каждая другая строка обязана держаться, а
+  запись, которая перестала совпадать, валит тест. Не держатся: касание (на Xvfb нет устройства с
+  touch-классом, XTest касаний не шлёт), перо (у устройств XTest только x и y, драйвера планшета
+  Xvfb не грузит), щипок и жесты тачпада (события XInput 2.4 шлёт только драйвер тачпада),
+  интервалы и перенос 32-битного времени (XTest не несёт метки, сервер ставит свою), позиция не
+  конечная (сервер шлёт фиксированную точку), счётчик высокого разрешения (его у X нет), фазы
+  прокрутки (их у XInput 2 нет), строки старта перетаскивания в начале (XDND стартует при выходе
+  из окна) и строки IME (на сервере харнесса нет IBus, Fcitx5 и XIM); каждую из них держит
+  декодер (`native x11`). С подменой отмены на отпускание кнопки тест падает на
+  `no_backend_cancels_a_contact_as_claimed`. Записи: `wayland_weston_mouse_wheel.jsonl` и
+  `x11_xtest_mouse_and_wheel.jsonl` (`wayland_recordings_decode_to_their_host_input`,
+  `x11_recordings_decode_to_their_host_input`); записей касания, пера и щипка на X11 под Xvfb не
+  сделать по тем же причинам. Прогоны с сенсорным экраном, планшетом и тачпадом в сессии GNOME и
+  KDE — заметки строк `touch`, `pen-and-stylus`, `trackpad-pinch-and-rotate` и строка качества
+  «Recorded native input…» в `platform-parity.toml`. Прогон (WSL Ubuntu 24.04, Xvfb с openbox,
+  `FLUI_HEADLESS=1 WAYLAND_DISPLAY='' xvfb-run … cargo nextest run -p flui-native --all-features`):
+  `the_x11_window_input_conforms` зелёный.
 - [x] **LY86** — #1930 (`ace0a3b2e`) и #1931 (`c8401e35b`) добавили шаги CI, #2258 перевёл
   `flui-app` на нативные хосты, #2276 удалил winit. Job `test` (`.github/workflows/ci.yml`)
   ставит Xvfb, openbox, Weston и sway, поднимает headless Weston с `FLUI_REQUIRE_WAYLAND=1` и
@@ -5964,9 +5990,9 @@ GPU-память простаивающего или невидимого окн
   (`platform_suite_linux_filtered`) и набор Wayland (`wayland_suite_linux`); ночной прогон —
   `nightly-platforms.yml`. Job `test` зелёный на `main` @ `46786da8e` (прогон 43701971256,
   2026-11-15). LY86 зависит от хостов (LY79, LY80, LY81, LY83, LY84), а не от LY85: job гонит
-  нативные хосты вместо winit, а полнота conformance-таблицы на них — работа LY85, чей строимый
-  остаток (настоящее окно X11 в `assert_backend_conforms`) тот же job будет гонять, когда он
-  сольётся. Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
+  нативные хосты вместо winit, а полнота conformance-таблицы на них — работа LY85, чьё настоящее
+  окно X11 в таблице (`the_x11_window_input_conforms`, харнесс `x11_window`) гоняет тот же job.
+  Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
   выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
   — находка LY106.
 - [x] **LY87** — #2276 (`053507d53`) удалил файлы `winit` в фичах, `hosts/winit.rs`, фичу
@@ -6664,8 +6690,7 @@ GPU-память простаивающего или невидимого окн
   Дальше: тесты маршрутизатора держат свой владелец (очередь заданий, `turn`, `retire`) и время
   через `Instant`; сценарный примитив `flui_platform::capability::scripted` (`Scenario`,
   `ManualClock`) может их заменить отдельным изменением.
-  LY63 не закрыта: `locale|layoutDirection` в `configChanges` и доставка смены языка хостом
-  остаются (запись LY63). Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
+  Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
   results for capability providers» (выбор через SAF, старт при остановленной Activity, два
   запроса, ответ после «Don't keep activities» и после `am kill`, ответ до `android_main`),
   «Memory pressure», «Soft-keyboard insets» (счёт `WindowResized`), «IME composition» (ввод с dex из
