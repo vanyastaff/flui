@@ -212,7 +212,7 @@ impl BoxDecoration {
                 Paint::fill(Color::TRANSPARENT).with_shader(resolve_gradient(gradient, rect));
             match &silhouette {
                 Silhouette::Circle(circle) => {
-                    canvas.draw_circle(circle.center, circle.radius, &paint)
+                    canvas.draw_circle(circle.center, circle.radius, &paint);
                 }
                 Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
                 Silhouette::Rect => canvas.draw_rect(rect, &paint),
@@ -231,7 +231,7 @@ impl BoxDecoration {
             let paint = Paint::fill(color).with_anti_alias(options.anti_alias);
             match &silhouette {
                 Silhouette::Circle(circle) => {
-                    canvas.draw_circle(circle.center, circle.radius, &paint)
+                    canvas.draw_circle(circle.center, circle.radius, &paint);
                 }
                 Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
                 Silhouette::Rect => canvas.draw_rect(rect, &paint),

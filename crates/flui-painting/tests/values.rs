@@ -1178,7 +1178,13 @@ pub(crate) fn a_font_weight_is_any_css_weight() {
         ..TextStyle::default()
     };
     let (normal, black) = (weighted(FontWeight::NORMAL), weighted(FontWeight::W900));
-    for (t, expected) in [(0.3, 550), (0.5, 650), (2.0, 1000), (-1.0, 1)] {
+    for (t, expected) in [
+        (0.3, 550),
+        (0.5, 650),
+        (2.0, 1000),
+        (-1.0, 1),
+        (f64::NAN, 900),
+    ] {
         let weight = normal
             .lerp_to(&black, t)
             .font_weight

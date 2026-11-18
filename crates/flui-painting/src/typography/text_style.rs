@@ -75,16 +75,20 @@ impl FontWeight {
     }
 
     /// The weight nearest `value`, held inside 1..=1000: what an
-    /// interpolation that overshoots its ends draws.
+    /// interpolation that overshoots its ends draws. `None` for NaN, which
+    /// names no weight; the caller keeps the nearer end.
     #[must_use]
-    pub(crate) fn saturating(value: f64) -> Self {
+    pub(crate) fn saturating(value: f64) -> Option<Self> {
+        if value.is_nan() {
+            return None;
+        }
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "clamped into 1..=1000 first, so the cast is exact"
         )]
         let weight = value.round().clamp(1.0, 1000.0) as u16;
-        Self(weight)
+        Some(Self(weight))
     }
 }
 

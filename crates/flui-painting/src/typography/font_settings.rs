@@ -41,6 +41,10 @@ impl OpenTypeTag {
     /// When a byte is not printable ASCII; [`OpenTypeTag::try_new`] is the
     /// fallible twin. In a `const` the check runs at compile time.
     #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "the convenience twin of try_new, checked at compile time in a const"
+    )]
     pub const fn new(bytes: [u8; 4]) -> Self {
         match Self::try_from_bytes(bytes) {
             Some(tag) => tag,
@@ -68,6 +72,10 @@ impl OpenTypeTag {
 
     /// The tag as text.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "every constructor checks that the bytes are printable ASCII"
+    )]
     pub fn as_str(&self) -> &str {
         std::str::from_utf8(&self.0).expect("BUG: an OpenTypeTag holds printable ASCII")
     }

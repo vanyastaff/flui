@@ -9998,8 +9998,6 @@ pub struct flui::painting::paint::TextureId(_)
 impl Clone for flui::painting::paint::TextureId
 impl Copy for flui::painting::paint::TextureId
 impl Eq for flui::painting::paint::TextureId
-impl From<flui::painting::paint::TextureId> for u64
-impl From<u64> for flui::painting::paint::TextureId
 impl PartialEq for flui::painting::paint::TextureId
 impl core::fmt::Debug for flui::painting::paint::TextureId
 impl core::hash::Hash for flui::painting::paint::TextureId
@@ -10007,7 +10005,6 @@ impl core::marker::StructuralPartialEq for flui::painting::paint::TextureId
 impl serde_core::ser::Serialize for flui::painting::paint::TextureId
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::TextureId
 pub const fn flui::painting::paint::TextureId::get(self) -> u64
-pub const fn flui::painting::paint::TextureId::is_null(self) -> bool
 pub const fn flui::painting::paint::TextureId::new(id: u64) -> Self
 pub enum flui::painting::paint::TileMode
 impl Clone for flui::painting::paint::TileMode
@@ -10195,7 +10192,9 @@ pub const fn flui::painting::styling::BoxDecoration::set_border_radius(self, bor
 pub const fn flui::painting::styling::BoxDecoration::set_color(self, color: Option<flui::prelude::Color>) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BoxDecoration<T>
 pub const fn flui::painting::styling::BoxDecoration::set_shape(self, shape: flui::painting::BoxShape) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BoxDecoration<T>
 pub const fn flui::painting::styling::BoxDecoration::with_color(color: flui::prelude::Color) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BoxDecoration<T>
+pub fn flui::painting::styling::BoxDecoration::hit_test(&self, rect: flui::geometry::Rect<f64>, position: flui::geometry::Offset<f64>) -> bool
 pub fn flui::painting::styling::BoxDecoration::lerp(a: &Self, b: &Self, t: f64) -> Self // impl<T> flui::painting::styling::BoxDecoration<T> where T: core::ops::arith::Mul<f64, Output = T> + flui::geometry::NumericUnit
+pub fn flui::painting::styling::BoxDecoration::paint(&self, canvas: &mut flui::painting::Canvas, rect: flui::geometry::Rect<f64>, options: flui::painting::styling::DecorationPaintOptions)
 pub fn flui::painting::styling::BoxDecoration::set_box_shadow(self, box_shadow: Option<Vec<flui::painting::styling::BoxShadow<T>>>) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BoxDecoration<T>
 pub fn flui::painting::styling::BoxDecoration::set_gradient(self, gradient: Option<flui::painting::styling::Gradient>) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BoxDecoration<T>
 pub fn flui::painting::styling::BoxDecoration::with_gradient(gradient: flui::painting::styling::Gradient) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BoxDecoration<T>
@@ -10250,6 +10249,16 @@ pub const fn flui::painting::styling::DecorationImage::with_opacity(self, opacit
 pub const fn flui::painting::styling::DecorationImage::with_repeat(self, repeat: flui::prelude::ImageRepeat) -> Self
 pub fn flui::painting::styling::DecorationImage::new(image: flui::painting::paint::Image) -> Self
 pub fn flui::painting::styling::DecorationImage::with_fit(self, fit: flui::painting::BoxFit) -> Self
+#[non_exhaustive] pub struct flui::painting::styling::DecorationPaintOptions
+field flui::painting::styling::DecorationPaintOptions::anti_alias: bool // at 0
+impl Clone for flui::painting::styling::DecorationPaintOptions
+impl Copy for flui::painting::styling::DecorationPaintOptions
+impl Default for flui::painting::styling::DecorationPaintOptions
+impl Eq for flui::painting::styling::DecorationPaintOptions
+impl PartialEq for flui::painting::styling::DecorationPaintOptions
+impl core::fmt::Debug for flui::painting::styling::DecorationPaintOptions
+impl core::marker::StructuralPartialEq for flui::painting::styling::DecorationPaintOptions
+pub const fn flui::painting::styling::DecorationPaintOptions::with_anti_alias(value: bool) -> Self
 pub struct flui::painting::styling::Elevation;
 impl core::fmt::Debug for flui::painting::styling::Elevation
 pub const flui::painting::styling::Elevation::LEVEL_0: f64 = 0.0
@@ -10490,17 +10499,20 @@ pub const flui::painting::typography::DecorationThickness::MAX: Self = _
 pub const fn flui::painting::typography::DecorationThickness::get(self) -> f32
 pub fn flui::painting::typography::DecorationThickness::try_new(scale: f64) -> Option<Self>
 pub struct flui::painting::typography::FontFeature
-field flui::painting::typography::FontFeature::feature: String // at 0
-field flui::painting::typography::FontFeature::value: i32 // at 1
+field flui::painting::typography::FontFeature::tag: flui::painting::typography::OpenTypeTag // at 0
+field flui::painting::typography::FontFeature::value: u16 // at 1
 impl Clone for flui::painting::typography::FontFeature
+impl Copy for flui::painting::typography::FontFeature
+impl Eq for flui::painting::typography::FontFeature
 impl PartialEq for flui::painting::typography::FontFeature
 impl core::fmt::Debug for flui::painting::typography::FontFeature
+impl core::hash::Hash for flui::painting::typography::FontFeature
 impl core::marker::StructuralPartialEq for flui::painting::typography::FontFeature
 impl serde_core::ser::Serialize for flui::painting::typography::FontFeature
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::FontFeature
-pub fn flui::painting::typography::FontFeature::disable(feature: impl Into<String>) -> Self
-pub fn flui::painting::typography::FontFeature::enable(feature: impl Into<String>) -> Self
-pub fn flui::painting::typography::FontFeature::new(feature: impl Into<String>, value: i32) -> Self
+pub const fn flui::painting::typography::FontFeature::disable(tag: flui::painting::typography::OpenTypeTag) -> Self
+pub const fn flui::painting::typography::FontFeature::enable(tag: flui::painting::typography::OpenTypeTag) -> Self
+pub const fn flui::painting::typography::FontFeature::new(tag: flui::painting::typography::OpenTypeTag, value: u16) -> Self
 #[non_exhaustive] pub enum flui::painting::typography::FontStyle
 impl Clone for flui::painting::typography::FontStyle
 impl Copy for flui::painting::typography::FontStyle
@@ -10515,39 +10527,46 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::FontS
 variant flui::painting::typography::FontStyle::Italic // at 1
 variant flui::painting::typography::FontStyle::Normal // at 0
 pub struct flui::painting::typography::FontVariation
-field flui::painting::typography::FontVariation::axis: String // at 0
+field flui::painting::typography::FontVariation::axis: flui::painting::typography::OpenTypeTag // at 0
 field flui::painting::typography::FontVariation::value: f64 // at 1
 impl Clone for flui::painting::typography::FontVariation
+impl Copy for flui::painting::typography::FontVariation
 impl PartialEq for flui::painting::typography::FontVariation
 impl core::fmt::Debug for flui::painting::typography::FontVariation
 impl core::marker::StructuralPartialEq for flui::painting::typography::FontVariation
 impl serde_core::ser::Serialize for flui::painting::typography::FontVariation
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::FontVariation
-pub fn flui::painting::typography::FontVariation::new(axis: impl Into<String>, value: f64) -> Self
-pub enum flui::painting::typography::FontWeight
+pub const fn flui::painting::typography::FontVariation::new(axis: flui::painting::typography::OpenTypeTag, value: f64) -> Self
+pub struct flui::painting::typography::FontWeight(_)
 impl Clone for flui::painting::typography::FontWeight
 impl Copy for flui::painting::typography::FontWeight
 impl Default for flui::painting::typography::FontWeight
 impl Eq for flui::painting::typography::FontWeight
+impl From<flui::painting::typography::FontWeight> for u16
+impl Ord for flui::painting::typography::FontWeight
 impl PartialEq for flui::painting::typography::FontWeight
+impl PartialOrd for flui::painting::typography::FontWeight
+impl TryFrom<u16> for flui::painting::typography::FontWeight { type Error = flui::painting::typography::InvalidFontWeight; }
 impl core::fmt::Debug for flui::painting::typography::FontWeight
 impl core::hash::Hash for flui::painting::typography::FontWeight
 impl core::marker::StructuralPartialEq for flui::painting::typography::FontWeight
 impl serde_core::ser::Serialize for flui::painting::typography::FontWeight
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::FontWeight
 pub const flui::painting::typography::FontWeight::BOLD: Self = Self::W700
+pub const flui::painting::typography::FontWeight::MAX: Self = _
+pub const flui::painting::typography::FontWeight::MIN: Self = _
 pub const flui::painting::typography::FontWeight::NORMAL: Self = Self::W400
-pub const fn flui::painting::typography::FontWeight::from_css(value: i32) -> Self
-pub const fn flui::painting::typography::FontWeight::value(&self) -> u16
-variant flui::painting::typography::FontWeight::W100 // at 0
-variant flui::painting::typography::FontWeight::W200 // at 1
-variant flui::painting::typography::FontWeight::W300 // at 2
-variant flui::painting::typography::FontWeight::W400 // at 3
-variant flui::painting::typography::FontWeight::W500 // at 4
-variant flui::painting::typography::FontWeight::W600 // at 5
-variant flui::painting::typography::FontWeight::W700 // at 6
-variant flui::painting::typography::FontWeight::W800 // at 7
-variant flui::painting::typography::FontWeight::W900 // at 8
+pub const flui::painting::typography::FontWeight::W100: Self = _
+pub const flui::painting::typography::FontWeight::W200: Self = _
+pub const flui::painting::typography::FontWeight::W300: Self = _
+pub const flui::painting::typography::FontWeight::W400: Self = _
+pub const flui::painting::typography::FontWeight::W500: Self = _
+pub const flui::painting::typography::FontWeight::W600: Self = _
+pub const flui::painting::typography::FontWeight::W700: Self = _
+pub const flui::painting::typography::FontWeight::W800: Self = _
+pub const flui::painting::typography::FontWeight::W900: Self = _
+pub const fn flui::painting::typography::FontWeight::try_new(value: u16) -> Result<Self, flui::painting::typography::InvalidFontWeight>
+pub const fn flui::painting::typography::FontWeight::value(self) -> u16
 pub struct flui::painting::typography::GlyphInfo
 field flui::painting::typography::GlyphInfo::advance: f64 // at 3
 field flui::painting::typography::GlyphInfo::bounds: flui::geometry::Rect<f64> // at 2
@@ -10581,6 +10600,23 @@ pub fn flui::painting::typography::InlineSpan::to_plain_text(&self) -> String
 pub fn flui::painting::typography::InlineSpan::to_semantics_text(&self) -> String
 variant flui::painting::typography::InlineSpan::Placeholder(flui::painting::typography::PlaceholderSpan) // at 1
 variant flui::painting::typography::InlineSpan::Text(alloc::rcs::arc::Arc<flui::painting::typography::TextSpan>) // at 0
+pub struct flui::painting::typography::InvalidFontWeight(u16)
+impl Clone for flui::painting::typography::InvalidFontWeight
+impl Copy for flui::painting::typography::InvalidFontWeight
+impl Eq for flui::painting::typography::InvalidFontWeight
+impl PartialEq for flui::painting::typography::InvalidFontWeight
+impl core::error::Error for flui::painting::typography::InvalidFontWeight
+impl core::fmt::Debug for flui::painting::typography::InvalidFontWeight
+impl core::fmt::Display for flui::painting::typography::InvalidFontWeight
+impl core::marker::StructuralPartialEq for flui::painting::typography::InvalidFontWeight
+pub struct flui::painting::typography::InvalidOpenTypeTag(_)
+impl Clone for flui::painting::typography::InvalidOpenTypeTag
+impl Eq for flui::painting::typography::InvalidOpenTypeTag
+impl PartialEq for flui::painting::typography::InvalidOpenTypeTag
+impl core::error::Error for flui::painting::typography::InvalidOpenTypeTag
+impl core::fmt::Debug for flui::painting::typography::InvalidOpenTypeTag
+impl core::fmt::Display for flui::painting::typography::InvalidOpenTypeTag
+impl core::marker::StructuralPartialEq for flui::painting::typography::InvalidOpenTypeTag
 pub struct flui::painting::typography::LineMetrics
 field flui::painting::typography::LineMetrics::ascent: f64 // at 1
 field flui::painting::typography::LineMetrics::baseline: f64 // at 7
@@ -10607,6 +10643,31 @@ pub fn flui::painting::typography::LineMetrics::new(hard_break: bool, ascent: f6
 pub fn flui::painting::typography::LineMetrics::range(&self) -> flui::painting::typography::TextRange
 pub fn flui::painting::typography::LineMetrics::right(&self) -> f64
 pub fn flui::painting::typography::LineMetrics::top(&self) -> f64
+pub struct flui::painting::typography::OpenTypeTag(_)
+impl Clone for flui::painting::typography::OpenTypeTag
+impl Copy for flui::painting::typography::OpenTypeTag
+impl Eq for flui::painting::typography::OpenTypeTag
+impl From<flui::painting::typography::OpenTypeTag> for String
+impl Ord for flui::painting::typography::OpenTypeTag
+impl PartialEq for flui::painting::typography::OpenTypeTag
+impl PartialOrd for flui::painting::typography::OpenTypeTag
+impl TryFrom<String> for flui::painting::typography::OpenTypeTag { type Error = flui::painting::typography::InvalidOpenTypeTag; }
+impl core::fmt::Debug for flui::painting::typography::OpenTypeTag
+impl core::fmt::Display for flui::painting::typography::OpenTypeTag
+impl core::hash::Hash for flui::painting::typography::OpenTypeTag
+impl core::marker::StructuralPartialEq for flui::painting::typography::OpenTypeTag
+impl core::str::traits::FromStr for flui::painting::typography::OpenTypeTag { type Err = flui::painting::typography::InvalidOpenTypeTag; }
+impl serde_core::ser::Serialize for flui::painting::typography::OpenTypeTag
+impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::OpenTypeTag
+pub const flui::painting::typography::OpenTypeTag::ITALIC: Self = _
+pub const flui::painting::typography::OpenTypeTag::OPTICAL_SIZE: Self = _
+pub const flui::painting::typography::OpenTypeTag::SLANT: Self = _
+pub const flui::painting::typography::OpenTypeTag::WEIGHT: Self = _
+pub const flui::painting::typography::OpenTypeTag::WIDTH: Self = _
+pub const fn flui::painting::typography::OpenTypeTag::new(bytes: [u8; 4]) -> Self
+pub const fn flui::painting::typography::OpenTypeTag::to_bytes(self) -> [u8; 4]
+pub fn flui::painting::typography::OpenTypeTag::as_str(&self) -> &str
+pub fn flui::painting::typography::OpenTypeTag::try_new(tag: &str) -> Result<Self, flui::painting::typography::InvalidOpenTypeTag>
 #[non_exhaustive] pub enum flui::painting::typography::PlaceholderAlignment
 impl Clone for flui::painting::typography::PlaceholderAlignment
 impl Copy for flui::painting::typography::PlaceholderAlignment
@@ -11109,6 +11170,30 @@ pub const fn flui::platform::Brightness::is_light(&self) -> bool
 pub fn flui::platform::Brightness::parse(s: &str) -> Option<Self>
 variant flui::platform::Brightness::Dark // at 1
 variant flui::platform::Brightness::Light // at 0
+#[non_exhaustive] pub enum flui::platform::BrowserException
+impl Clone for flui::platform::BrowserException
+impl Copy for flui::platform::BrowserException
+impl Eq for flui::platform::BrowserException
+impl From<flui::platform::BrowserException> for flui::platform::SystemFailure
+impl PartialEq for flui::platform::BrowserException
+impl core::error::Error for flui::platform::BrowserException
+impl core::fmt::Debug for flui::platform::BrowserException
+impl core::fmt::Display for flui::platform::BrowserException
+impl core::hash::Hash for flui::platform::BrowserException
+impl core::marker::StructuralPartialEq for flui::platform::BrowserException
+pub fn flui::platform::BrowserException::from_name(name: &str) -> Self
+variant flui::platform::BrowserException::Abort // at 0
+variant flui::platform::BrowserException::Data // at 1
+variant flui::platform::BrowserException::InvalidState // at 2
+variant flui::platform::BrowserException::NotAllowed // at 3
+variant flui::platform::BrowserException::NotFound // at 4
+variant flui::platform::BrowserException::NotReadable // at 5
+variant flui::platform::BrowserException::NotSupported // at 6
+variant flui::platform::BrowserException::Other // at 11
+variant flui::platform::BrowserException::QuotaExceeded // at 7
+variant flui::platform::BrowserException::Security // at 8
+variant flui::platform::BrowserException::Syntax // at 9
+variant flui::platform::BrowserException::Type // at 10
 pub struct flui::platform::CapabilityAbsence(_)
 impl Clone for flui::platform::CapabilityAbsence
 impl Copy for flui::platform::CapabilityAbsence
@@ -11154,30 +11239,6 @@ field flui::platform::CapabilityParts::sets_frame: flui::platform::WindowCapabil
 field flui::platform::CapabilityParts::sets_position: flui::platform::WindowCapability // at 1
 field flui::platform::CapabilityParts::sets_resizable: flui::platform::WindowCapability // at 4
 field flui::platform::CapabilityParts::sets_resize_increments: flui::platform::WindowCapability // at 19
-#[non_exhaustive] pub enum flui::platform::BrowserException
-impl Clone for flui::platform::BrowserException
-impl Copy for flui::platform::BrowserException
-impl Eq for flui::platform::BrowserException
-impl From<flui::platform::BrowserException> for flui::platform::SystemFailure
-impl PartialEq for flui::platform::BrowserException
-impl core::error::Error for flui::platform::BrowserException
-impl core::fmt::Debug for flui::platform::BrowserException
-impl core::fmt::Display for flui::platform::BrowserException
-impl core::hash::Hash for flui::platform::BrowserException
-impl core::marker::StructuralPartialEq for flui::platform::BrowserException
-pub fn flui::platform::BrowserException::from_name(name: &str) -> Self
-variant flui::platform::BrowserException::Abort // at 0
-variant flui::platform::BrowserException::Data // at 1
-variant flui::platform::BrowserException::InvalidState // at 2
-variant flui::platform::BrowserException::NotAllowed // at 3
-variant flui::platform::BrowserException::NotFound // at 4
-variant flui::platform::BrowserException::NotReadable // at 5
-variant flui::platform::BrowserException::NotSupported // at 6
-variant flui::platform::BrowserException::Other // at 11
-variant flui::platform::BrowserException::QuotaExceeded // at 7
-variant flui::platform::BrowserException::Security // at 8
-variant flui::platform::BrowserException::Syntax // at 9
-variant flui::platform::BrowserException::Type // at 10
 field flui::platform::CapabilityParts::sets_size: flui::platform::WindowCapability // at 2
 field flui::platform::CapabilityParts::sets_title: flui::platform::WindowCapability // at 0
 field flui::platform::CapabilityParts::shows: flui::platform::WindowCapability // at 11
@@ -12492,6 +12553,7 @@ variant flui::platform::SystemControls::Shown // at 0
 impl Clone for flui::platform::SystemFailure
 impl Copy for flui::platform::SystemFailure
 impl Eq for flui::platform::SystemFailure
+impl From<flui::platform::BrowserException> for flui::platform::SystemFailure
 impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
 impl PartialEq for flui::platform::SystemFailure
 impl core::error::Error for flui::platform::SystemFailure
@@ -12499,6 +12561,7 @@ impl core::fmt::Debug for flui::platform::SystemFailure
 impl core::fmt::Display for flui::platform::SystemFailure
 impl core::hash::Hash for flui::platform::SystemFailure
 impl core::marker::StructuralPartialEq for flui::platform::SystemFailure
+variant flui::platform::SystemFailure::Browser(flui::platform::BrowserException) // at 4
 variant flui::platform::SystemFailure::Bus // at 2
 variant flui::platform::SystemFailure::Framework(i64) // at 5
 variant flui::platform::SystemFailure::MalformedAnswer // at 3
@@ -12537,7 +12600,6 @@ pub const fn flui::platform::SystemPreferences::wheel(&self) -> &flui::platform:
 pub const fn flui::platform::SystemPreferences::with_accent_color(self, value: Option<flui::platform::SrgbColor>) -> Self
 pub const fn flui::platform::SystemPreferences::with_haptics(self, enabled: bool) -> Self
 pub const fn flui::platform::SystemPreferences::with_high_contrast(self, value: bool) -> Self
-impl From<flui::platform::BrowserException> for flui::platform::SystemFailure
 pub const fn flui::platform::SystemPreferences::with_motion(self, value: flui::platform::MotionPreference) -> Self
 pub const fn flui::platform::SystemPreferences::with_scroll_bars(self, value: flui::platform::ScrollBarPreferences) -> Self
 pub const fn flui::platform::SystemPreferences::with_text_weight(self, value: flui::platform::TextWeightPreference) -> Self
@@ -12545,7 +12607,6 @@ pub fn flui::platform::SystemPreferences::into_parts(self) -> flui::platform::Pr
 pub fn flui::platform::SystemPreferences::locales(&self) -> Option<&[flui::platform::Locale]>
 pub fn flui::platform::SystemPreferences::with_gestures(self, value: flui::platform::GesturePreferences) -> Self
 pub fn flui::platform::SystemPreferences::with_locales(self, value: impl Into<alloc::rcs::arc::Arc<[flui::platform::Locale]>>) -> Self
-variant flui::platform::SystemFailure::Browser(flui::platform::BrowserException) // at 4
 pub fn flui::platform::SystemPreferences::with_regional(self, value: flui::platform::RegionalFormats) -> Self
 pub fn flui::platform::SystemPreferences::with_text_scale(self, value: f64) -> Result<Self, flui::platform::InvalidPreference>
 pub fn flui::platform::SystemPreferences::with_wheel(self, value: flui::platform::WheelPreferences) -> Self
@@ -18319,6 +18380,7 @@ pub const fn flui::prelude::TableBorder::symmetric(inside: flui::painting::styli
 pub const fn flui::prelude::TableBorder::with_border_radius(self, border_radius: flui::painting::styling::BorderRadius) -> Self
 pub fn flui::prelude::TableBorder::is_uniform(&self) -> bool
 pub fn flui::prelude::TableBorder::outer_border(&self) -> flui::painting::styling::Border
+pub fn flui::prelude::TableBorder::paint(&self, canvas: &mut flui::painting::Canvas, rect: flui::geometry::Rect<f64>, rows: &[f64], columns: &[f64])
 pub struct flui::prelude::TableCell { .. }
 impl Clone for flui::prelude::TableCell
 impl core::fmt::Debug for flui::prelude::TableCell
@@ -18907,7 +18969,7 @@ reexport flui::prelude::run_app => flui::run_app
 reexport flui::prelude::show_dialog => flui::material::show_dialog
 reexport flui::prelude::trace! => tracing::trace
 reexport flui::prelude::warn! => tracing::warn
-pub fn flui::register_font(font_bytes: &[u8]) -> Result<(), flui::FontRegistrationError>
+pub fn flui::register_font(font_bytes: impl Into<alloc::borrow::Cow<'static, [u8]>>) -> Result<(), flui::FontRegistrationError>
 pub mod flui::rendering
 pub trait flui::rendering::Arity: flui_foundation::arity::sealed::Sealed + core::fmt::Debug + Copy + Default + 'static
 const flui::rendering::Arity::DESCRIPTION: &'static str
@@ -22536,6 +22598,8 @@ variant flui::services::system::dialog::DialogError::Busy // at 0
 variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 7
 variant flui::services::system::dialog::DialogError::InvalidRequest(flui::services::system::dialog::MalformedRequest) // at 1
 variant flui::services::system::dialog::DialogError::NotAFile // at 4
+variant flui::services::system::dialog::DialogError::NotInFilter // at 5
+variant flui::services::system::dialog::DialogError::TooLarge { actual: u64, limit: u64 } // at 6
 variant flui::services::system::dialog::DialogError::Unsupported(flui::platform::Unsupported) // at 2
 variant flui::services::system::dialog::DialogError::WindowClosed // at 3
 pub struct flui::services::system::dialog::DialogHold(_)
@@ -22564,6 +22628,7 @@ pub const flui::services::system::dialog::FileFilter::MAX_PATTERNS: usize = 64
 pub const flui::services::system::dialog::FileFilter::MAX_PATTERN_LEN: usize = 255
 pub const flui::services::system::dialog::FileFilter::MAX_PER_REQUEST: usize = 64
 pub fn flui::services::system::dialog::FileFilter::extensions(&self) -> &[String]
+pub fn flui::services::system::dialog::FileFilter::matches(&self, name: &str, mime_type: Option<&str>) -> bool
 pub fn flui::services::system::dialog::FileFilter::mime_types(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
 pub fn flui::services::system::dialog::FileFilter::new(name: impl Into<String>) -> Self
@@ -22580,8 +22645,6 @@ impl core::error::Error for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Debug for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
-variant flui::services::system::dialog::DialogError::NotInFilter // at 5
-variant flui::services::system::dialog::DialogError::TooLarge { actual: u64, limit: u64 } // at 6
 variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
 variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
 variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 11
@@ -22610,7 +22673,6 @@ pub trait flui::services::system::dialog::MessageBoxBackend: 'static
 fn flui::services::system::dialog::MessageBoxBackend::show(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::MessageBoxRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::MessageBoxResult>) -> flui::services::system::dialog::DialogHold
 pub enum flui::services::system::dialog::MessageBoxCapability
 impl core::fmt::Debug for flui::services::system::dialog::MessageBoxCapability
-pub fn flui::services::system::dialog::FileFilter::matches(&self, name: &str, mime_type: Option<&str>) -> bool
 impl flui::platform::capability::Capability for flui::services::system::dialog::MessageBoxCapability { type Handle = flui::services::system::dialog::MessageBoxes; }
 #[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest
 field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 3
@@ -22676,6 +22738,7 @@ pub fn flui::services::system::dialog::OpenRequest::files() -> Self
 pub fn flui::services::system::dialog::OpenRequest::filter(self, filter: flui::services::system::dialog::FileFilter) -> Self
 pub fn flui::services::system::dialog::OpenRequest::folders() -> Self
 pub fn flui::services::system::dialog::OpenRequest::is_multiple(&self) -> bool
+pub fn flui::services::system::dialog::OpenRequest::max_bytes(self, max_bytes: u64) -> Self
 pub fn flui::services::system::dialog::OpenRequest::picks_folders(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::OpenResult = Result<Option<flui::services::system::dialog::Picks>, flui::services::system::dialog::DialogError>
@@ -22692,6 +22755,16 @@ pub fn flui::services::system::dialog::PickedFile::path(&self) -> Option<&std::p
 pub fn flui::services::system::dialog::PickedFile::try_download(name: impl Into<String>) -> Option<Self>
 pub fn flui::services::system::dialog::PickedFile::try_from_contents(name: impl Into<String>, contents: alloc::rcs::arc::Arc<[u8]>) -> Option<Self>
 pub fn flui::services::system::dialog::PickedFile::try_new(path: impl Into<std::path::PathBuf>) -> Option<Self>
+#[non_exhaustive] pub enum flui::services::system::dialog::PickedForm<'a>
+impl<'a> Clone for flui::services::system::dialog::PickedForm<'a>
+impl<'a> Copy for flui::services::system::dialog::PickedForm<'a>
+impl<'a> Eq for flui::services::system::dialog::PickedForm<'a>
+impl<'a> PartialEq for flui::services::system::dialog::PickedForm<'a>
+impl<'a> core::fmt::Debug for flui::services::system::dialog::PickedForm<'a>
+impl<'a> core::marker::StructuralPartialEq for flui::services::system::dialog::PickedForm<'a>
+variant flui::services::system::dialog::PickedForm::Contents { name: &'a str, contents: &'a [u8] } // at 1
+variant flui::services::system::dialog::PickedForm::Download { name: &'a str } // at 2
+variant flui::services::system::dialog::PickedForm::Path(&'a std::path::Path) // at 0
 pub struct flui::services::system::dialog::Picks { .. }
 impl Clone for flui::services::system::dialog::Picks
 impl Eq for flui::services::system::dialog::Picks
@@ -22726,10 +22799,10 @@ impl Clone for flui::services::system::dialog::SaveRequest
 impl Default for flui::services::system::dialog::SaveRequest
 impl Eq for flui::services::system::dialog::SaveRequest
 impl PartialEq for flui::services::system::dialog::SaveRequest
-pub fn flui::services::system::dialog::OpenRequest::max_bytes(self, max_bytes: u64) -> Self
 impl core::fmt::Debug for flui::services::system::dialog::SaveRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::SaveRequest
 pub fn flui::services::system::dialog::SaveRequest::accept_label(self, label: impl Into<String>) -> Self
+pub fn flui::services::system::dialog::SaveRequest::contents(self, contents: impl Into<alloc::rcs::arc::Arc<[u8]>>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::directory(self, directory: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::filter(self, filter: flui::services::system::dialog::FileFilter) -> Self
 pub fn flui::services::system::dialog::SaveRequest::new() -> Self
@@ -22738,16 +22811,6 @@ pub fn flui::services::system::dialog::SaveRequest::title(self, title: impl Into
 pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::SaveLocation>, flui::services::system::dialog::DialogError>
 pub mod flui::services::system::jump_list
 pub struct flui::services::system::jump_list::JumpList { .. }
-#[non_exhaustive] pub enum flui::services::system::dialog::PickedForm<'a>
-impl<'a> Clone for flui::services::system::dialog::PickedForm<'a>
-impl<'a> Copy for flui::services::system::dialog::PickedForm<'a>
-impl<'a> Eq for flui::services::system::dialog::PickedForm<'a>
-impl<'a> PartialEq for flui::services::system::dialog::PickedForm<'a>
-impl<'a> core::fmt::Debug for flui::services::system::dialog::PickedForm<'a>
-impl<'a> core::marker::StructuralPartialEq for flui::services::system::dialog::PickedForm<'a>
-variant flui::services::system::dialog::PickedForm::Contents { name: &'a str, contents: &'a [u8] } // at 1
-variant flui::services::system::dialog::PickedForm::Download { name: &'a str } // at 2
-variant flui::services::system::dialog::PickedForm::Path(&'a std::path::Path) // at 0
 impl Clone for flui::services::system::jump_list::JumpList
 impl core::fmt::Debug for flui::services::system::jump_list::JumpList
 pub const flui::services::system::jump_list::JumpList::MAX_TASKS: usize = 32
@@ -22784,7 +22847,6 @@ impl Eq for flui::services::system::jump_list::JumpListTask
 impl PartialEq for flui::services::system::jump_list::JumpListTask
 impl core::fmt::Debug for flui::services::system::jump_list::JumpListTask
 impl core::marker::StructuralPartialEq for flui::services::system::jump_list::JumpListTask
-pub fn flui::services::system::dialog::SaveRequest::contents(self, contents: impl Into<alloc::rcs::arc::Arc<[u8]>>) -> Self
 pub const flui::services::system::jump_list::JumpListTask::MAX_ARGUMENTS: usize = 32
 pub const flui::services::system::jump_list::JumpListTask::MAX_TEXT_LEN: usize = 260
 pub fn flui::services::system::jump_list::JumpListTask::argument(self, argument: impl Into<String>) -> Self
@@ -31196,7 +31258,7 @@ pub fn flui_painting::text_layout::context::FontCollection::check_font(font_byte
 pub fn flui_painting::text_layout::context::FontCollection::generation(&self) -> u64
 pub fn flui_painting::text_layout::context::FontCollection::new() -> Self
 pub fn flui_painting::text_layout::context::FontCollection::ptr_eq(a: &Self, b: &Self) -> bool
-pub fn flui_painting::text_layout::context::FontCollection::register_font(&self, font_bytes: &[u8]) -> Result<(), flui_painting::error::RegisterFontError>
+pub fn flui_painting::text_layout::context::FontCollection::register_font(&self, font_bytes: impl Into<alloc::borrow::Cow<'static, [u8]>>) -> Result<(), flui_painting::error::RegisterFontError>
 pub fn flui_painting::text_layout::context::FontCollection::with_host_feed() -> (Self, flui_painting::text_layout::context::HostFontFeed)
 pub fn flui_painting::text_layout::context::FontCollection::with_host_fonts(host: &flui_painting::text_layout::host::HostFonts) -> Self
 pub struct flui_painting::text_layout::context::HostFontFeed { .. }

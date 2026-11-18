@@ -145,6 +145,7 @@ impl Lerp for crate::typography::TextStyle {
                         &f64::from(a.value()),
                         &f64::from(b.value()),
                     ))
+                    .unwrap_or(if t < 0.5 { *a } else { *b })
                 },
             ),
             shadows,
