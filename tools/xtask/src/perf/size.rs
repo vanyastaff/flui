@@ -23,6 +23,10 @@
 //! growth inside it prints and passes, and `--bless` on `main` moves the
 //! baseline. A count or size that fell prints as an improvement and passes.
 //!
+//! On `main` each push also compares its byte counters with the push before
+//! it ([`step`]), so growth that stays inside the cumulative tolerance is
+//! still answered at the merge that brings it.
+//!
 //! The baseline is [`BASELINE`]; the host binary's size depends on the host,
 //! so the baseline is Linux x86_64's, which is where CI runs this.
 
@@ -37,6 +41,8 @@ use cargo_metadata::Message;
 use cargo_metadata::camino::Utf8PathBuf;
 
 use super::{Counts, Finding, Mode};
+
+mod step;
 
 /// The size baseline: one table, `[size]`.
 const BASELINE: &str = "perf/size.toml";
@@ -101,7 +107,12 @@ pub(super) enum Measure {
 }
 
 /// `cargo xtask perf --size [--graph] [--check | --bless]`.
-pub(super) fn run(root: &Path, mode: Mode, measure: Measure) -> anyhow::Result<ExitCode> {
+pub(super) fn run(
+    root: &Path,
+    mode: Mode,
+    measure: Measure,
+    step: StepFiles<'_>,
+) -> anyhow::Result<ExitCode> {
     let mut counters = BTreeMap::new();
     for (name, triple) in GRAPH_TARGETS {
         counters.insert(format!("crates_{name}"), graph_packages(root, triple)?);
@@ -122,6 +133,17 @@ pub(super) fn run(root: &Path, mode: Mode, measure: Measure) -> anyhow::Result<E
             "hot_reload_host_release_bytes".to_owned(),
             reload.release_size(root, &host, None)?,
         );
+    }
+    let measured = (measure == Measure::All).then(|| step::Measurement {
+        commit: measured_commit(root),
+        bytes: counters
+            .iter()
+            .filter(|(counter, _)| is_bytes(counter))
+            .map(|(counter, &value)| (counter.clone(), value))
+            .collect(),
+    });
+    if let (Some(record), Some(measured)) = (step.record, &measured) {
+        measured.write(record)?;
     }
     let current: Counts = [(SCENARIO.to_owned(), counters)].into_iter().collect();
 
@@ -148,7 +170,25 @@ pub(super) fn run(root: &Path, mode: Mode, measure: Measure) -> anyhow::Result<E
     for finding in &findings {
         println!("{finding}");
     }
-    let failing = findings.iter().filter(|finding| finding.fails()).count();
+    let mut failing = findings.iter().filter(|finding| finding.fails()).count();
+    if let Some(measured) = &measured {
+        let previous = match step.previous {
+            Some(path) => step::Measurement::read(path)?,
+            None => None,
+        };
+        if step.previous.is_some() && previous.is_none() {
+            println!("perf --size: no previous push recorded; the step is not compared");
+        }
+        if let Some(previous) = &previous {
+            let grown = step::grown(previous, measured);
+            for growth in &grown {
+                println!("{growth}");
+            }
+            failing += grown.len();
+        }
+        let base_bytes = baseline.get(SCENARIO).cloned().unwrap_or_default();
+        write_job_summary(&step::summary(&base_bytes, previous.as_ref(), measured))?;
+    }
     Ok(match mode {
         Mode::Check if failing > 0 => {
             println!("perf --size: {failing} failing findings against {BASELINE}");
@@ -163,6 +203,45 @@ pub(super) fn run(root: &Path, mode: Mode, measure: Measure) -> anyhow::Result<E
             ExitCode::SUCCESS
         }
     })
+}
+
+/// The files of the step comparison: the previous push's measurement to
+/// compare against, and where this run's goes. Either may be absent.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct StepFiles<'a> {
+    pub(super) previous: Option<&'a Path>,
+    pub(super) record: Option<&'a Path>,
+}
+
+/// The commit this run measures: CI's `GITHUB_SHA`, else the checkout's
+/// `HEAD`, else a label that says it is unknown.
+fn measured_commit(root: &Path) -> String {
+    if let Some(sha) = std::env::var_os("GITHUB_SHA") {
+        return sha.to_string_lossy().into_owned();
+    }
+    Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map_or_else(|| "unknown commit".to_owned(), |sha| sha.trim().to_owned())
+}
+
+/// Appends `markdown` to the GitHub job summary when the run has one.
+fn write_job_summary(markdown: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
+        return Ok(());
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .with_context(|| format!("opening the job summary {}", path.to_string_lossy()))?;
+    file.write_all(markdown.as_bytes())
+        .context("writing the job summary")
 }
 
 /// The distinct packages of the facade's default graph on `triple`.

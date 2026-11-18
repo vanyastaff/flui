@@ -921,8 +921,8 @@ jobs:
   # cold release builds, so a pull request runs it only when `size_required`:
   # its diff touches a manifest, Cargo.lock, the toolchain, .cargo/, the
   # `flui create` templates, the baseline or the check (ON_DEMAND). A code
-  # change moves a size a little at a time; main runs it on every push and
-  # catches that drift.
+  # change moves a size a little at a time; main runs it on every push, where
+  # one merge may grow a binary by 0.5% over the push before it.
   # ─────────────────────────────────────────────────────────────────────────
   size:
     name: size
@@ -948,8 +948,42 @@ jobs:
           shared-key: workspace-size-v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # A push to main compares its sizes with the push before it as well as
+      # with the baseline (`--previous`): the baseline's 2% is cumulative, so
+      # merges that each add a little pass until a later one crosses it. The
+      # previous push's measurement is a cache entry per run, the newest of
+      # which `restore-keys` returns; it is saved from main only, failing
+      # pushes included, so a growth fails at its own merge and not again at
+      # the next one.
+      - name: Restore the previous push's sizes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/size-step/previous.toml
+          key: size-step-${{ github.run_id }}
+          restore-keys: size-step-
+
       - name: cargo xtask perf --size --check
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         run: cargo xtask perf --size --check
+
+      - name: cargo xtask perf --size --check against the previous push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: >-
+          cargo xtask perf --size --check
+          --previous target/size-step/previous.toml
+          --record target/size-step/current.toml
+
+      - name: Keep this push's sizes for the next one
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('target/size-step/current.toml') != ''
+        run: mv target/size-step/current.toml target/size-step/previous.toml
+
+      - name: Save this push's sizes
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('target/size-step/previous.toml') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/size-step/previous.toml
+          key: size-step-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
