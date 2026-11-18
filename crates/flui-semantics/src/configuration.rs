@@ -5,6 +5,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, AxisDirection};
 
 use rustc_hash::FxHashMap;
@@ -15,9 +16,7 @@ use crate::{
     action::{AssistiveFocusHandler, CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::{RareAttributes, SemanticsAttributes},
     collection::{CellPosition, SetSize, SortDirection, TableShape},
-    properties::{
-        HeadingLevel, SemanticsSortKey, TextDirection, UNBLOCKED_USER_ACTIONS_MASK, join_strings,
-    },
+    properties::{HeadingLevel, SemanticsSortKey, UNBLOCKED_USER_ACTIONS_MASK, join_strings},
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{LiveSetting, SemanticsRole},
     states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled},

@@ -11,6 +11,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Rect};
 use flui_interaction::events::CursorIcon;
 use flui_painting::TextPainter;
@@ -18,8 +19,7 @@ use flui_painting::typography::{InlineSpan, TextAffinity, TextBox, TextSpan};
 use flui_rendering::{
     hit_testing::PointerTarget,
     semantics::{
-        SemanticsAction, SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey,
-        SemanticsRole, TextDirection,
+        SemanticsAction, SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, SemanticsRole,
     },
 };
 
