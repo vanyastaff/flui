@@ -5766,17 +5766,16 @@ GPU-память простаивающего или невидимого окн
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,
   и решит прогон Simulator. Прогон на пути через store host — заметка строки parity «IME
   composition and candidate placement».
-- [ ] **LY71** (открыта: golden и ориентации iPad) — `flui build` пишет
-  `UIApplicationSupportsIndirectInputEvents`, один список `UISupportedInterfaceOrientations`, схемы
-  URL и типы файлов из деклараций (`crates/flui-cli/src/build/ios_package.rs:724`,
-  `apple_opening::info_plist_keys`; тесты
+- [x] **LY71** — #2035 (`2f2ab0b31`), типы URL и файлов из деклараций #2602. `flui build` пишет
+  `UIApplicationSupportsIndirectInputEvents`, список телефона `UISupportedInterfaceOrientations`
+  и отдельный `UISupportedInterfaceOrientations~ipad` из четырёх ориентаций: многозадачность iPad
+  требует всех четырёх, если приложение не задаёт `UIRequiresFullScreen`, а ни `flui.toml`, ни
+  исходники платформы этого ключа не задают. Схемы URL и типы файлов берутся из деклараций
+  (`apple_opening::info_plist_keys`). Весь `Info.plist` фиксированного проекта — golden
+  `crates/flui-cli/src/build/snapshots/flui__build__ios_package__tests__ios_info_plist.snap`.
+  Тесты (`crates/flui-cli/src/build/ios_package.rs`): `the_info_plist_matches_its_golden`,
   `info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer`,
-  `the_info_plist_registers_what_the_application_opens`). Остаётся код: golden `Info.plist`
-  (insta, как `flui__build__desktop__tests__macos_info_plist.snap`) и
-  `UISupportedInterfaceOrientations~ipad`: при `UIDeviceFamily` `[1,2]` iPad получает список
-  телефона без `PortraitUpsideDown`, а многозадачность iPad требует всех четырёх ориентаций или
-  `UIRequiresFullScreen`. Прогон на iPad Simulator — заметки строк parity
-  `mouse-buttons-hover-capture` (указатель) и `multiple-windows`.
+  `the_info_plist_registers_what_the_application_opens`. Прогон на iPad Simulator (указатель,
 - [x] **LY72** — #2121 (`8b154b514`). Окно UIKit слушает `keyboardWillChangeFrame:` и публикует
   inset в снимке, он доходит до `MediaQuery`. Правила те же, что у Android (`window/keyboard.rs`).
   Решено: `UIKeyboardLayoutGuide` не строится, уведомление уже несёт конечную рамку, длительность

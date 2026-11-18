@@ -921,7 +921,7 @@ evidence = 'Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (
 id = "orientation-lock"
 feature = 'Orientation lock'
 status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
-note = 'Android 16 ignores it on displays whose smallest width is at least 600 dp for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation))'
+note = 'Android 16 ignores it on displays whose smallest width is at least 600 dp for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation)); iOS: the `Info.plist` lists all four orientations for iPad (`UISupportedInterfaceOrientations~ipad`, as multitasking requires) and three for iPhone, which no iPad Simulator run has shown'
 
 [[group.section.row]]
 id = "haptics"
