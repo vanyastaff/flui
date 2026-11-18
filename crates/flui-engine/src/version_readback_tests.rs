@@ -1809,6 +1809,113 @@ fn a_cached_chunk_replays_the_command_stream_it_recorded() {
     assert_eq!(pixels_differing(&first.pixels, &second.pixels), 0);
 }
 
+/// A boundary the pipeline repaints for one render object keeps the
+/// recordings of the others' chunks (ADR-0304 §2), so the next full frame
+/// replays every one of them from the cache, records the changed chunk alone,
+/// and draws what a capture that records everything draws.
+///
+/// Red-check: paint mints a version for every chunk of a repainted boundary.
+#[test]
+fn a_repainted_boundary_replays_the_chunks_that_did_not_change() {
+    use flui_foundation::geometry::Size;
+    use flui_layer::{Entry, FullReason};
+    use flui_objects::{RenderColoredBox, RenderFlex, RenderRepaintBoundary};
+    use flui_rendering::{
+        constraints::BoxConstraints,
+        pipeline::PipelineOwner,
+        testing::{SceneHost, box_node, tree, update_render_object},
+    };
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let square = |rgba: [f32; 4]| box_node(RenderColoredBox::new(rgba, Size::new(16.0, 16.0)));
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let mut pipeline = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let (root, registry) = tree::mount(
+        &mut pipeline,
+        box_node(RenderRepaintBoundary::new()).label("root").child(
+            box_node(RenderFlex::row())
+                .child(square(red))
+                .child(square([0.0, 1.0, 0.0, 1.0]).label("changing"))
+                .child(square(red))
+                .child(square(red)),
+        ),
+    );
+    pipeline.set_root_id(Some(root));
+    pipeline.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+        f64::from(SIDE),
+        f64::from(SIDE),
+    ))));
+    let boundary = registry.get("root").expect("labelled");
+    let changing = registry.get("changing").expect("labelled");
+    let mut scene = SceneHost::new();
+    let frame = |scene: &mut SceneHost, pipeline| {
+        let (pipeline, result) = scene.run_frame(pipeline);
+        result.expect("the frame paints");
+        pipeline
+    };
+    let mut pipeline = frame(&mut scene, pipeline);
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    full_frame(&mut capture, scene.version(), FullReason::FirstFrame);
+
+    update_render_object::<RenderColoredBox, _>(&mut pipeline, changing, |square| {
+        square.set_color([0.0, 0.0, 1.0, 1.0])
+    });
+    let pipeline = frame(&mut scene, pipeline);
+    let chunks = scene
+        .content_of(&pipeline, boundary)
+        .expect("the boundary is published")
+        .entries()
+        .iter()
+        .filter(|entry| matches!(entry, Entry::Chunk { .. }))
+        .count();
+    assert_eq!(chunks, 4, "precondition: one chunk per square");
+
+    let repainted = full_frame(&mut capture, scene.version(), FullReason::FirstFrame);
+    assert_eq!(
+        (
+            repainted.counters.chunks_recorded,
+            repainted.counters.recording_cache_hits
+        ),
+        (1, chunks as u64 - 1),
+        "the recoloured chunk records, the clean ones replay"
+    );
+
+    let mut cold = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    cold.keep_recorded_ir();
+    let recorded = full_frame(&mut cold, scene.version(), FullReason::FirstFrame);
+    assert_eq!(
+        recorded.counters.recording_cache_hits, 0,
+        "precondition: the oracle records everything"
+    );
+    assert_eq!(
+        pixels_differing(&repainted.pixels, &recorded.pixels),
+        0,
+        "the replayed frame draws what recording it draws"
+    );
+    let count = |pixels: &[u8], colour: [u8; 4]| {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|&&pixel| pixel == colour)
+            .count()
+    };
+    assert_eq!(
+        count(&repainted.pixels, BLUE),
+        16 * 16,
+        "the recoloured square"
+    );
+    assert_eq!(count(&repainted.pixels, GREEN), 0, "its old colour is gone");
+    assert_eq!(
+        count(&repainted.pixels, RED),
+        3 * 16 * 16,
+        "the clean squares"
+    );
+}
+
 /// An empty root, drawn in full between two frames of another version.
 fn empty_frame(capture: &mut RetainedCapture) {
     let mut owner = SceneOwner::new();
