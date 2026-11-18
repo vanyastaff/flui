@@ -43,8 +43,6 @@ positions = [
     { item = "flui_layer::tree::layer_tree::LayerTree::find_annotations", at = "bound", marker = "Sync", crosses = "snapshot" },
     { item = "flui_platform::capability::activity_result::Activity::on_main_thread", at = "bound", marker = "Send", count = 2, crosses = "job" },
     { item = "flui_platform::capability::activity_result::Activity::on_main_thread", at = "impl-trait", marker = "Send", crosses = "job" },
-    { item = "flui_platform::capability::main_thread::MainThreadRefusal", at = "dyn", marker = "Send", crosses = "job" },
-    { item = "flui_platform::capability::main_thread::MainThreadWork", at = "dyn", marker = "Send", crosses = "job" },
     { item = "flui_platform::capability::owner::PendingCompletions::retire", at = "dyn", marker = "Send", crosses = "panic-payload" },
     { item = "flui_platform::data_transfer::DragTransport", at = "supertrait", marker = "Send" },
     { item = "flui_platform::data_transfer::DragTransport", at = "supertrait", marker = "Sync" },
