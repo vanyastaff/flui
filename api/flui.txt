@@ -11536,6 +11536,30 @@ field flui::platform::CapabilityParts::sets_frame: flui::platform::WindowCapabil
 field flui::platform::CapabilityParts::sets_position: flui::platform::WindowCapability // at 1
 field flui::platform::CapabilityParts::sets_resizable: flui::platform::WindowCapability // at 4
 field flui::platform::CapabilityParts::sets_resize_increments: flui::platform::WindowCapability // at 19
+#[non_exhaustive] pub enum flui::platform::BrowserException
+impl Clone for flui::platform::BrowserException
+impl Copy for flui::platform::BrowserException
+impl Eq for flui::platform::BrowserException
+impl From<flui::platform::BrowserException> for flui::platform::SystemFailure
+impl PartialEq for flui::platform::BrowserException
+impl core::error::Error for flui::platform::BrowserException
+impl core::fmt::Debug for flui::platform::BrowserException
+impl core::fmt::Display for flui::platform::BrowserException
+impl core::hash::Hash for flui::platform::BrowserException
+impl core::marker::StructuralPartialEq for flui::platform::BrowserException
+pub fn flui::platform::BrowserException::from_name(name: &str) -> Self
+variant flui::platform::BrowserException::Abort // at 0
+variant flui::platform::BrowserException::Data // at 1
+variant flui::platform::BrowserException::InvalidState // at 2
+variant flui::platform::BrowserException::NotAllowed // at 3
+variant flui::platform::BrowserException::NotFound // at 4
+variant flui::platform::BrowserException::NotReadable // at 5
+variant flui::platform::BrowserException::NotSupported // at 6
+variant flui::platform::BrowserException::Other // at 11
+variant flui::platform::BrowserException::QuotaExceeded // at 7
+variant flui::platform::BrowserException::Security // at 8
+variant flui::platform::BrowserException::Syntax // at 9
+variant flui::platform::BrowserException::Type // at 10
 field flui::platform::CapabilityParts::sets_size: flui::platform::WindowCapability // at 2
 field flui::platform::CapabilityParts::sets_title: flui::platform::WindowCapability // at 0
 field flui::platform::CapabilityParts::shows: flui::platform::WindowCapability // at 11
@@ -12894,6 +12918,7 @@ pub const fn flui::platform::SystemPreferences::wheel(&self) -> &flui::platform:
 pub const fn flui::platform::SystemPreferences::with_accent_color(self, value: Option<flui::platform::SrgbColor>) -> Self
 pub const fn flui::platform::SystemPreferences::with_haptics(self, enabled: bool) -> Self
 pub const fn flui::platform::SystemPreferences::with_high_contrast(self, value: bool) -> Self
+impl From<flui::platform::BrowserException> for flui::platform::SystemFailure
 pub const fn flui::platform::SystemPreferences::with_motion(self, value: flui::platform::MotionPreference) -> Self
 pub const fn flui::platform::SystemPreferences::with_scroll_bars(self, value: flui::platform::ScrollBarPreferences) -> Self
 pub const fn flui::platform::SystemPreferences::with_text_weight(self, value: flui::platform::TextWeightPreference) -> Self
@@ -12901,6 +12926,7 @@ pub fn flui::platform::SystemPreferences::into_parts(self) -> flui::platform::Pr
 pub fn flui::platform::SystemPreferences::locales(&self) -> Option<&[flui::platform::Locale]>
 pub fn flui::platform::SystemPreferences::with_gestures(self, value: flui::platform::GesturePreferences) -> Self
 pub fn flui::platform::SystemPreferences::with_locales(self, value: impl Into<alloc::rcs::arc::Arc<[flui::platform::Locale]>>) -> Self
+variant flui::platform::SystemFailure::Browser(flui::platform::BrowserException) // at 4
 pub fn flui::platform::SystemPreferences::with_regional(self, value: flui::platform::RegionalFormats) -> Self
 pub fn flui::platform::SystemPreferences::with_text_scale(self, value: f64) -> Result<Self, flui::platform::InvalidPreference>
 pub fn flui::platform::SystemPreferences::with_wheel(self, value: flui::platform::WheelPreferences) -> Self
@@ -22876,7 +22902,7 @@ impl core::fmt::Display for flui::services::system::dialog::DialogError
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::DialogError
 pub const fn flui::services::system::dialog::DialogError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::services::system::dialog::DialogError::Busy // at 0
-variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 5
+variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 7
 variant flui::services::system::dialog::DialogError::InvalidRequest(flui::services::system::dialog::MalformedRequest) // at 1
 variant flui::services::system::dialog::DialogError::NotAFile // at 4
 variant flui::services::system::dialog::DialogError::Unsupported(flui::platform::Unsupported) // at 2
@@ -22923,6 +22949,8 @@ impl core::error::Error for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Debug for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
+variant flui::services::system::dialog::DialogError::NotInFilter // at 5
+variant flui::services::system::dialog::DialogError::TooLarge { actual: u64, limit: u64 } // at 6
 variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
 variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
 variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 11
@@ -22951,6 +22979,7 @@ pub trait flui::services::system::dialog::MessageBoxBackend: 'static
 fn flui::services::system::dialog::MessageBoxBackend::show(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::MessageBoxRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::MessageBoxResult>) -> flui::services::system::dialog::DialogHold
 pub enum flui::services::system::dialog::MessageBoxCapability
 impl core::fmt::Debug for flui::services::system::dialog::MessageBoxCapability
+pub fn flui::services::system::dialog::FileFilter::matches(&self, name: &str, mime_type: Option<&str>) -> bool
 impl flui::platform::capability::Capability for flui::services::system::dialog::MessageBoxCapability { type Handle = flui::services::system::dialog::MessageBoxes; }
 #[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest
 field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 3
@@ -22999,10 +23028,11 @@ variant flui::services::system::dialog::MessageLevel::Error // at 2
 variant flui::services::system::dialog::MessageLevel::Info // at 0
 variant flui::services::system::dialog::MessageLevel::Warning // at 1
 #[non_exhaustive] pub struct flui::services::system::dialog::OpenRequest { .. }
-field flui::services::system::dialog::OpenRequest::accept_label: Option<String> // at 5
-field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 3
-field flui::services::system::dialog::OpenRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 4
-field flui::services::system::dialog::OpenRequest::title: Option<String> // at 2
+field flui::services::system::dialog::OpenRequest::accept_label: Option<String> // at 6
+field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 4
+field flui::services::system::dialog::OpenRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 5
+field flui::services::system::dialog::OpenRequest::max_bytes: u64 // at 2
+field flui::services::system::dialog::OpenRequest::title: Option<String> // at 3
 impl Clone for flui::services::system::dialog::OpenRequest
 impl Eq for flui::services::system::dialog::OpenRequest
 impl PartialEq for flui::services::system::dialog::OpenRequest
@@ -23024,7 +23054,12 @@ impl Eq for flui::services::system::dialog::PickedFile
 impl PartialEq for flui::services::system::dialog::PickedFile
 impl core::fmt::Debug for flui::services::system::dialog::PickedFile
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::PickedFile
-pub fn flui::services::system::dialog::PickedFile::path(&self) -> &std::path::Path
+pub fn flui::services::system::dialog::PickedFile::contents(&self) -> Option<&[u8]>
+pub fn flui::services::system::dialog::PickedFile::file_name(&self) -> Option<&std::ffi::os_str::OsStr>
+pub fn flui::services::system::dialog::PickedFile::form(&self) -> flui::services::system::dialog::PickedForm<'_>
+pub fn flui::services::system::dialog::PickedFile::path(&self) -> Option<&std::path::Path>
+pub fn flui::services::system::dialog::PickedFile::try_download(name: impl Into<String>) -> Option<Self>
+pub fn flui::services::system::dialog::PickedFile::try_from_contents(name: impl Into<String>, contents: alloc::rcs::arc::Arc<[u8]>) -> Option<Self>
 pub fn flui::services::system::dialog::PickedFile::try_new(path: impl Into<std::path::PathBuf>) -> Option<Self>
 pub struct flui::services::system::dialog::Picks { .. }
 impl Clone for flui::services::system::dialog::Picks
@@ -23050,15 +23085,17 @@ pub fn flui::services::system::dialog::SaveLocation::filter(&self) -> Option<usi
 pub fn flui::services::system::dialog::SaveLocation::into_file(self) -> flui::services::system::dialog::PickedFile
 pub fn flui::services::system::dialog::SaveLocation::new(file: flui::services::system::dialog::PickedFile, filter: Option<usize>) -> Self
 #[non_exhaustive] pub struct flui::services::system::dialog::SaveRequest
-field flui::services::system::dialog::SaveRequest::accept_label: Option<String> // at 4
-field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 1
-field flui::services::system::dialog::SaveRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 3
-field flui::services::system::dialog::SaveRequest::suggested_name: Option<String> // at 2
-field flui::services::system::dialog::SaveRequest::title: Option<String> // at 0
+field flui::services::system::dialog::SaveRequest::accept_label: Option<String> // at 5
+field flui::services::system::dialog::SaveRequest::contents: Option<alloc::rcs::arc::Arc<[u8]>> // at 0
+field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 2
+field flui::services::system::dialog::SaveRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 4
+field flui::services::system::dialog::SaveRequest::suggested_name: Option<String> // at 3
+field flui::services::system::dialog::SaveRequest::title: Option<String> // at 1
 impl Clone for flui::services::system::dialog::SaveRequest
 impl Default for flui::services::system::dialog::SaveRequest
 impl Eq for flui::services::system::dialog::SaveRequest
 impl PartialEq for flui::services::system::dialog::SaveRequest
+pub fn flui::services::system::dialog::OpenRequest::max_bytes(self, max_bytes: u64) -> Self
 impl core::fmt::Debug for flui::services::system::dialog::SaveRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::SaveRequest
 pub fn flui::services::system::dialog::SaveRequest::accept_label(self, label: impl Into<String>) -> Self
@@ -23070,6 +23107,16 @@ pub fn flui::services::system::dialog::SaveRequest::title(self, title: impl Into
 pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::SaveLocation>, flui::services::system::dialog::DialogError>
 pub mod flui::services::system::jump_list
 pub struct flui::services::system::jump_list::JumpList { .. }
+#[non_exhaustive] pub enum flui::services::system::dialog::PickedForm<'a>
+impl<'a> Clone for flui::services::system::dialog::PickedForm<'a>
+impl<'a> Copy for flui::services::system::dialog::PickedForm<'a>
+impl<'a> Eq for flui::services::system::dialog::PickedForm<'a>
+impl<'a> PartialEq for flui::services::system::dialog::PickedForm<'a>
+impl<'a> core::fmt::Debug for flui::services::system::dialog::PickedForm<'a>
+impl<'a> core::marker::StructuralPartialEq for flui::services::system::dialog::PickedForm<'a>
+variant flui::services::system::dialog::PickedForm::Contents { name: &'a str, contents: &'a [u8] } // at 1
+variant flui::services::system::dialog::PickedForm::Download { name: &'a str } // at 2
+variant flui::services::system::dialog::PickedForm::Path(&'a std::path::Path) // at 0
 impl Clone for flui::services::system::jump_list::JumpList
 impl core::fmt::Debug for flui::services::system::jump_list::JumpList
 pub const flui::services::system::jump_list::JumpList::MAX_TASKS: usize = 32
@@ -23106,6 +23153,7 @@ impl Eq for flui::services::system::jump_list::JumpListTask
 impl PartialEq for flui::services::system::jump_list::JumpListTask
 impl core::fmt::Debug for flui::services::system::jump_list::JumpListTask
 impl core::marker::StructuralPartialEq for flui::services::system::jump_list::JumpListTask
+pub fn flui::services::system::dialog::SaveRequest::contents(self, contents: impl Into<alloc::rcs::arc::Arc<[u8]>>) -> Self
 pub const flui::services::system::jump_list::JumpListTask::MAX_ARGUMENTS: usize = 32
 pub const flui::services::system::jump_list::JumpListTask::MAX_TEXT_LEN: usize = 260
 pub fn flui::services::system::jump_list::JumpListTask::argument(self, argument: impl Into<String>) -> Self
