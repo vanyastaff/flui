@@ -27,16 +27,18 @@ mod cases {
 
     use flui_foundation::geometry::Size;
     use flui_native::testing::wayland::{
-        MAX_BUFFER_SCALE, compositor_report, cursor_report, present, run_for,
+        MAX_BUFFER_SCALE, PortalParentRequest, compositor_report, cursor_report, present, run_for,
     };
     use flui_native::testing::wayland_compositor::{
         Configure, HangUp, Heard, KEY_A, Offer, OutputOffer, ScriptedCompositor, Step,
         ToplevelState,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
+    use flui_platform::capability::PortalParent;
     use flui_platform::keyboard::{KeyPress, KeyState};
     use flui_platform::pointer::{PointerEvent, TouchpadSwipePhase};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
+    use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
     /// The cursor theme the harness writes and names.
@@ -88,6 +90,10 @@ mod cases {
                 an_output_removed_under_a_window_leaves_it_on_the_others,
             ),
             (
+                "two_outputs_of_different_scales_are_each_their_own_logical_pixels",
+                two_outputs_of_different_scales_are_each_their_own_logical_pixels,
+            ),
+            (
                 "a_configure_storm_settles_on_the_last_configure",
                 a_configure_storm_settles_on_the_last_configure,
             ),
@@ -110,6 +116,14 @@ mod cases {
             (
                 "a_gestures_global_without_holds_gives_the_window_none",
                 a_gestures_global_without_holds_gives_the_window_none,
+            ),
+            (
+                "each_portal_request_exports_the_window_and_releases_the_export_as_it_ends",
+                each_portal_request_exports_the_window_and_releases_the_export_as_it_ends,
+            ),
+            (
+                "a_compositor_without_an_exporter_names_no_portal_parent",
+                a_compositor_without_an_exporter_names_no_portal_parent,
             ),
         ]
         .into_iter()
@@ -322,6 +336,89 @@ mod cases {
         }
     }
 
+    /// The portal parent the session's window answers one request, once the
+    /// compositor named the export.
+    fn portal_parent(session: &Session) -> PortalParent {
+        let mut request = PortalParentRequest::ask(session.window.as_ref());
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            if let Some(parent) = request.answer() {
+                return parent;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the export's handle; the compositor heard {:?}",
+                session.compositor.heard()
+            );
+            run_for(&session.platform, Duration::from_millis(5)).expect("the loop turns");
+        }
+    }
+
+    /// Every portal request exports the window anew (`xdg-foreign`) and is
+    /// answered with the compositor's handle; the export lives while the
+    /// request holds its parent and is destroyed when the request lets it go,
+    /// so no handle names the window between requests. The window's close
+    /// destroys the export a request still holds, and a closed window is
+    /// exported for nobody.
+    fn each_portal_request_exports_the_window_and_releases_the_export_as_it_ends() {
+        let session = Session::open(
+            Offer::default().exporter(),
+            WindowOptions::default().title("exported"),
+        );
+        session.turn_until("the window's first frame", |session| {
+            session.compositor.heard().frames > 0
+        });
+        assert_eq!(
+            session.compositor.heard().exports,
+            0,
+            "the window is not exported before a request asks"
+        );
+
+        let first = portal_parent(&session);
+        assert_eq!(first.as_str(), "wayland:flui-export-1");
+        let second = portal_parent(&session);
+        assert_eq!(second.as_str(), "wayland:flui-export-2");
+        assert_eq!(
+            session.compositor.heard().exported,
+            ["flui-export-1", "flui-export-2"],
+            "each request holds an export of its own"
+        );
+
+        drop(first);
+        session.heard_until("the first export's release", |heard| {
+            heard.exported == ["flui-export-2"]
+        });
+        drop(second);
+        session.heard_until("the second export's release", |heard| {
+            heard.exported.is_empty()
+        });
+
+        // A request still holding its parent when the window closes loses
+        // the export with the window.
+        let held = portal_parent(&session);
+        assert_eq!(held.as_str(), "wayland:flui-export-3");
+        session.window.close_for_cleanup();
+        session.heard_until("the closed window's export released", |heard| {
+            heard.exported.is_empty()
+        });
+        drop(held);
+        assert!(
+            portal_parent(&session).is_none(),
+            "a closed window names no parent"
+        );
+        assert_eq!(session.compositor.heard().exports, 3, "and is not exported");
+    }
+
+    /// Where the compositor offers no exporter, a request is answered at once
+    /// with no window, and the portal shows its dialog unattached.
+    fn a_compositor_without_an_exporter_names_no_portal_parent() {
+        let session = Session::open(Offer::default(), WindowOptions::default().title("plain"));
+        session.turn_until("the window's first frame", |session| {
+            session.compositor.heard().frames > 0
+        });
+        assert!(portal_parent(&session).is_none());
+    }
+
     /// A window asked for larger than the compositor's bounds opens within
     /// them: the configure that leaves the size to it comes after
     /// `configure_bounds` (`xdg_wm_base` version 4).
@@ -333,9 +430,9 @@ mod cases {
         ));
         let session = Session::open(
             offer,
-            WindowOptions::default()
-                .title("bounded")
-                .size(Size::new(1600.0, 1000.0)),
+            WindowOptions::default().title("bounded").size(
+                flui_platform::WindowExtent::try_new(Size::new(1600.0, 1000.0)).expect("an extent"),
+            ),
         );
         session.turn_until("the window's first frame", |session| {
             session.compositor.heard().frames > 0
@@ -828,6 +925,77 @@ mod cases {
             !session.window.state().occluded,
             "the window is still on an output; it reported {report:?}"
         );
+    }
+
+    /// Two outputs of different scales are each measured in their own
+    /// logical pixels: an output's extent is its mode over its own scale, its
+    /// whole area usable (Wayland reports no work area), its origin the
+    /// compositor's arrangement. Wayland tells no window where it is, so the
+    /// window publishes no position on either output, nor once the one under
+    /// it goes.
+    fn two_outputs_of_different_scales_are_each_their_own_logical_pixels() {
+        use flui_foundation::geometry::{Rect, Size};
+
+        let offer = Offer::default().compositor(5).outputs([
+            OutputOffer::new(1920, 1080, 1),
+            OutputOffer::new(2560, 1440, 2),
+        ]);
+        let session = Session::open(offer, WindowOptions::default().title("two scales"));
+        let displays = |session: &Session| {
+            session
+                .platform
+                .display_snapshot()
+                .map_or_else(|_| Vec::new(), |snapshot| snapshot.displays().to_vec())
+        };
+        session.turn_until("both outputs in the snapshot", |session| {
+            displays(session).len() == 2
+        });
+        let mut extents: Vec<(Size<f64>, f64, Rect<f64>)> = displays(&session)
+            .iter()
+            .map(|display| {
+                (
+                    display.bounds.extent(),
+                    display.scale_factor.get(),
+                    display.bounds.usable(),
+                )
+            })
+            .collect();
+        extents.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(
+            extents,
+            [
+                (
+                    Size::new(1920.0, 1080.0),
+                    1.0,
+                    Rect::from_ltrb(0.0, 0.0, 1920.0, 1080.0)
+                ),
+                (
+                    Size::new(1280.0, 720.0),
+                    2.0,
+                    Rect::from_ltrb(0.0, 0.0, 1280.0, 720.0)
+                ),
+            ],
+            "each output in its own logical pixels, all of it usable"
+        );
+        session.compositor.play(Step::Enter(0));
+        session.compositor.play(Step::Enter(1));
+        session.turn_until("the window on both outputs", |session| {
+            compositor_report(session.window.as_ref())
+                .is_some_and(|report| report.outputs.len() == 2)
+        });
+        assert_eq!(
+            session.window.state().outer.position(),
+            None,
+            "a Wayland window publishes no position"
+        );
+
+        // The output under the window goes: the window is on the other, and
+        // still publishes no position.
+        session.compositor.play(Step::RemoveOutput(1));
+        session.turn_until("the window back at scale 1", |session| {
+            session.scale() == Some(1.0)
+        });
+        assert_eq!(session.window.state().outer.position(), None);
     }
 
     /// A burst of configures, each of another size, sent before the loop

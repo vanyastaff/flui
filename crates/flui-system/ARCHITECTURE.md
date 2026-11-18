@@ -2,14 +2,13 @@
 
 `flui-system` is the first capability crate (ADR-0154 §11): the OS shell services the core host's
 closed list leaves out. It depends on the contract crate (`flui-platform`) and on external crates
-only, keeps no process-global state, and registers through `SystemPlugin`. What each platform
-provides is in [`docs/gaps.md`](../../docs/gaps.md) and the System services rows of
-[`platform-parity.toml`](../flui-native/platform-parity.toml); this file states the rules the code
-keeps.
+only, keeps no process-global state, and registers through `SystemPlugin`. Each service is a
+marker, a handle and a backend trait in this crate, a provider per platform, and a scripted backend
+under `testing`. What each platform provides is in [`docs/gaps.md`](../../docs/gaps.md) and the
+System services rows of [`platform-parity.toml`](../flui-native/platform-parity.toml); this file
+states the rules the code keeps.
 
 ## Handles and backends
-
-Each service is a capability marker, an owner-thread handle and a backend trait:
 
 | Service | Handle | Backend | Answer |
 |---------|--------|---------|--------|
@@ -17,45 +16,55 @@ Each service is a capability marker, an owner-thread handle and a backend trait:
 | File dialogs | `FileDialogs` | `FileDialogBackend` | `Dialog` |
 | Message box | `MessageBoxes` | `MessageBoxBackend` | `Dialog` |
 | Share | `Share` | `ShareBackend` | `Completion` |
-| Launch at login | `LaunchAtLogin` | `LaunchAtLoginBackend` | `Completion` |
-| Global shortcuts | `GlobalShortcuts` | `GlobalShortcutBackend` | `Completion` of a `ShortcutRegistration` |
-| Taskbar | `Taskbar` | `TaskbarBackend` | synchronous `Result` |
+| Autostart | `Autostart` | `AutostartBackend` | `Completion` |
+| Global shortcuts | `GlobalShortcuts` | `ShortcutBackend` | a `ShortcutBinding`'s events |
+| Launcher entry | `TaskbarEntry` | `TaskbarBackend` | none: the whole state is sent |
+| User folders | `UserDirs` | `UserDirBackend` | `Completion` |
 | Jump list | `JumpList` | `JumpListBackend` | `Completion` |
-| The OS | `Os` | `OsBackend` | `Completion` for a folder, a value for `info` |
+| The OS | `Os` | `OsBackend` | a value |
 
 The rules every backend relies on live in the handle, so the scripted doubles and every platform
-have them: a malformed request is refused before the backend is asked (`MalformedRequest`,
-`MalformedShare`, `MalformedTask`, `InvalidShortcut`), each bounded before anything is copied; a
-window-bound handle (dialogs, message box, share, taskbar) refuses a widget in no window with
-`NoWindow` and answers `WindowClosed` once its window closed, without asking; an answer the request
-cannot have (a button the box does not offer, several picks for one, a filter index past the
-request's, a relative folder) is `SystemFailure::MalformedAnswer`. Every answer settles at an owner
-turn, never inside the call.
+have them:
 
-A window shows one dialog at a time, whichever handle asked: `FileDialogs` and `MessageBoxes`
-share the runtime's `OpenDialogs` table, and a `Dialog` lasts while its caller holds it, ending the
-system's dialog through the backend's `DialogHold` when it is dropped, its window closes or the
-runtime retires (ADR-0344). A global shortcut stays registered while its `ShortcutRegistration` is
-held; `ShortcutPresses::press` runs the listener at the next owner turn, and a press delivered after
-the registration dropped runs nothing.
+- Every handle is owner-thread and every answer settles at an owner turn, never inside the call
+  that asked.
+- A malformed request is refused before any backend is asked, with a typed reason
+  (`MalformedRequest`, `MalformedShare`, `MalformedTask`, `MalformedAutostart`,
+  `MalformedShortcut`), each bounded before anything is copied.
+- A window-bound handle (the dialogs, the message box, the share sheet) refuses a widget in no
+  window with `NoWindow` and answers `WindowClosed` once its window closed, without asking. An
+  answer the request cannot have (a button the box does not offer, several picks for one, a
+  filter index past the request's) is `SystemFailure::MalformedAnswer`.
+- A request its caller can call off ends when its value drops: a `Dialog` (ADR-0344) and a
+  `ShortcutBinding`, each through the hold its backend returned. A window shows one dialog at a
+  time, whichever handle asked: `FileDialogs` and `MessageBoxes` share the runtime's
+  `OpenDialogs` table, and a `Dialog` ends the system's dialog through the backend's
+  `DialogHold` when it is dropped, its window closes or the runtime retires.
+- `GlobalShortcuts` delivers a stream through `ShortcutFeed`, the one cross-thread queue here: at
+  most `ShortcutFeed::MAX_QUEUED` presses and releases (past it the oldest goes, counted by
+  `ShortcutBinding::dropped`), one whole binding (a newer `Bound` or `Changed` takes the place of
+  the one queued) and the end, which is answered again after it.
+- `TaskbarEntry` is the application's: the handles of one UI runtime share one state, a change
+  that changes nothing is not sent, and the backend is always handed the whole state.
+- The message box, the share sheet and the jump list came with their Windows provider. No portal
+  has a message box or a share sheet, and the jump list is Windows', so the Linux provider refuses
+  the three with `NotOnThisPlatform`.
 
-## Windows
+## Windows (`win32`)
 
 The `win32` module provides every service. Each OS call sits behind a trait of its file
-(`DialogSystem`, `ShellSystem`, `MessageBoxSystem`, `LoginRegistry`, `HotkeySystem`,
-`TaskbarSystem`, `JumpListSystem`), whose one real implementation calls Win32 or COM; the provider's
-rules (what a request becomes, what an answer means, who hears it on every exit) are tested beside
-each file with the OS's answers as inputs, so no test shows a dialog, launches a handler, registers
-a hot key or writes the user's login items. The owed desktop runs are in the parity rows.
+(`DialogSystem`, `ShellSystem`, `MessageBoxSystem`, `ShareSystem`, `LoginRegistry`,
+`HotkeySystem`, `TaskbarSystem`, `JumpListSystem`, the known folders' lookup), whose one real
+implementation calls Win32 or COM; the provider's rules (what a request becomes, what an answer
+means, who hears it on every exit) are tested beside each file with the OS's answers as inputs, so
+no test shows a dialog, launches a handler, registers a hot key, writes a start-up entry or touches
+the taskbar. The owed desktop runs are in the parity rows.
 
-The share sheet's seam (`ShareSystem`) and the folders' lookup take the system's place the same
-way.
-
-Every OS entry of the crate (each window procedure, enumeration callback and WinRT delegate) is one
-call of `owner::panic_boundary::os_entry`, the crate's boundary of the same contract as
-`flui-native`'s (ADR-0151 §16): a panic is logged and contained, its payload destroyed under
-containment, and the OS gets the entry's answer after a panic. `cargo xtask panic-boundary` reads
-this crate as well as `flui-native`.
+Every OS entry of the crate (each window procedure, subclass, enumeration callback and WinRT
+delegate) is one call of `owner::panic_boundary::os_entry`, the crate's boundary of the same
+contract as `flui-native`'s (ADR-0151 §16): a panic is logged and contained, its payload destroyed
+under containment, and the OS gets the entry's answer after a panic. `cargo xtask panic-boundary`
+reads this crate as well as `flui-native`.
 
 Threads and apartments:
 
@@ -77,8 +86,8 @@ Threads and apartments:
   as its dialog is dismissed, while the dialog closes on its own thread a little later and only then
   re-enables its owner, so a dialog asked for before that thread has left its dialog answers
   `DialogError::Busy` rather than come up under a window the old one re-enables.
-- **The shell's other work runs a request per thread** (`ShellThreads`): the launcher, launch at
-  login, the jump list, the folders, the share sheet's file check and its file resolution, each
+- **The shell's other work runs a request per thread** (`ShellThreads`): the launcher, autostart,
+  the jump list, the user's folders, the share sheet's file check and its file resolution, each
   inside the apartment its calls ask for, at most `threads::MAX_IN_FLIGHT` per runtime in one count
   (`ShellPool`); a request past that answers `Unavailable`, and a thread that unwinds gives back its
   place and drops its resolver. A request still running `ShellThreads::ABANDON_AFTER` after it
@@ -86,10 +95,10 @@ Threads and apartments:
   answered with the request's refusal, the abandonment logged, and its late answer discarded (the
   caller's resolver was taken, the request's ticket). No file system call runs on the owner thread
   (ADR-0360 §2).
-- **The share sheet, the hot keys and the taskbar run on the owner thread**, inside the apartment
-  the host entered there: they call the window's own thread's objects and read no file. The share
-  sheet's files are resolved as `StorageFile`s in the multithreaded apartment, on a thread that only
-  waits on WinRT's asynchronous calls.
+- **The share sheet, the hot keys, the taskbar and the system information run on the owner
+  thread**, inside the apartment the host entered there: they call the window's own thread's
+  objects and read no file. The share sheet's files are resolved as `StorageFile`s in the
+  multithreaded apartment, on a thread that only waits on WinRT's asynchronous calls.
 
 Launching never builds a command line. A URI goes to `ShellExecuteExW` as it is, with the `open`
 verb, so Windows resolves the handler the user chose for its scheme (`UserChoice`, the default
@@ -109,41 +118,87 @@ refused with `NotOnThisPlatform` rather than dropped (§4). A save names a typed
 extension after the selected filter (`SetDefaultExtension` with the first filter's first) and
 reports the selected filter from `GetFileTypeIndex`.
 
-The taskbar subclasses each window it shows something on, to show its last progress and badge again
-on `TaskbarButtonCreated` (a button made late, Explorer restarted), lets that one message through
-the window's message filter (an elevated process hears Explorer, at medium integrity, only so), and
-removes the subclass when the window closes. `SetWindowSubclass` and its siblings are found by
-ordinal (410 to 413) in the system folder's `comctl32.dll` (`LOAD_LIBRARY_SEARCH_SYSTEM32`, never a
-copy beside the executable), as the SDK's import library links them: version 5.82, which a process
-without the version 6 manifest entry loads, exports them by ordinal only, and a link by name keeps
-such a process from starting. The badge is an overlay icon drawn here, a disk with the count.
+The launcher entry is shown on the taskbar button of each window a `TaskbarEntry` was acquired in,
+one state for all of them, since every top-level window has a button of its own. The provider
+subclasses each such window to show the entry again on `TaskbarButtonCreated` (a button made late,
+Explorer restarted), lets that one message through the window's message filter (an elevated process
+hears Explorer, at medium integrity, only so), and removes the subclass when the window closes.
+`SetWindowSubclass` and its siblings are found by ordinal (410 to 413) in the system folder's
+`comctl32.dll` (`LOAD_LIBRARY_SEARCH_SYSTEM32`, never a copy beside the executable), as the SDK's
+import library links them: version 5.82, which a process without the version 6 manifest entry
+loads, exports them by ordinal only, and a link by name keeps such a process from starting. The
+count is an overlay icon drawn here, a disk with the count, `99+` above 99. With no window shown on,
+the taskbar is not reached.
 
-A global shortcut's hot key id is never handed out twice in a runtime's life, so a `WM_HOTKEY` still
-queued for a dropped shortcut finds no registration rather than a later one; the 0xBFFF ids Windows
-gives an application end in `ShortcutError::Exhausted`.
+A global shortcut is bound to the trigger it prefers, or not at all: Windows has no settings an
+application binds through, so a shortcut with no preferred trigger, or whose chord another
+application holds, is left out of `ShortcutEvent::Bound`. A trigger's key is its virtual key (a
+letter's or digit's ASCII upper case, which names the key that types it on the active layout; a
+named key's fixed one), registered with `MOD_NOREPEAT`; `WM_HOTKEY` reports no release, so a
+binding hears presses only. A hot key id is never handed out twice in a runtime's life, so a
+`WM_HOTKEY` still queued for a dropped binding finds no shortcut rather than a later one; a binding
+that needs more of the 0xBFFF ids than are left ends with `ShortcutError::Exhausted`, and none is
+handed out.
 
-Launch at login names its `Run` value after the executable's stem and a hash of its lower-cased
-path, so two applications with one file name never overwrite each other's entry; the entry is
-compared with the quoted path unit for unit, and a value longer than a command line is refused
-before anything is allocated for it. The user's choice under `StartupApproved\Run` is reported
-(`DisabledByUser`) and never written. A packaged process, whose manifest owns its start-up task, is
-refused.
+Autostart names its `Run` value after the executable's stem and a hash of its lower-cased path, so
+two applications with one file name never overwrite each other's entry; the entry is compared with
+the quoted path unit for unit, and a value longer than a command line is refused before anything is
+allocated for it. The user's choice under `StartupApproved\Run` is never written: a request to
+enable an entry the user turned off answers `Disabled`, what the system grants. A request's reason
+is not shown, since the `Run` key asks nobody. A packaged process, whose manifest owns its start-up
+task, is refused.
 
-## Linux
+A user folder is `SHGetKnownFolderPath`'s, on a shell thread, since a redirected folder may reach
+the network; `PublicShare` is `FOLDERID_Public`. A folder the user does not have answers none, and
+a relative path the system's contract excludes is `MalformedAnswer`.
 
-The `portal` module reaches `org.freedesktop.portal.Desktop` on zbus's own runtime, one thread per
-UI runtime (`Portal`): the launcher (`OpenURI`, `OpenDirectory`, `Trash`) and the file dialogs
-(`FileChooser`). The services it has no portal provider for yet answer `NotYetOnThisHost`.
+## Linux (`portal`)
+
+- One `Portal` per UI runtime (`ProviderContext::runtime_local`): a thread of its own runs a
+  `zruntime` executor; every request is a task there. Every file-system call (opening a file for
+  the portal, reading `user-dirs.dirs`, reading `/proc/self/exe`) runs on `zruntime::unblock`'s
+  pool, never on the owner thread or the portal's, so a stalled mount delays that request alone.
+- A request reaches the portal through `Bus::desktop`: the connection, the portal's current
+  unique owner (an installed portal that is not running is started first), and, for an
+  unsandboxed application with an id, the application named to that owner through
+  `org.freedesktop.host.portal.Registry`, once per connection and portal instance and before
+  its first call. Every call goes to that owner, and only signals that owner sends are heard.
+- Before a request depends on an interface it checks the interface's `version`
+  (`Desktop::require`), read once per portal instance; an absent interface or an older version
+  is `NotOnThisDevice`. A portal that is not on the bus is `Unavailable`.
+- A request that shows something names the acquiring widget's window: `with_parent` asks
+  `WindowRef::portal_parent` (ADR-0365) and the task holds the `PortalParent` until the portal
+  answered the request (a shortcut binding keeps it across a retry until its `BindShortcuts`
+  was answered). The window's close releases the export whoever holds it, and a request with no
+  window, or a closed one, names none.
+- Every object path is the one the portal will give (`request::object_path`), so each
+  subscription is in place before the call that could answer it.
+- When the UI runtime's portal ends, its bus is retired: every request still showing something
+  closes its `Request`, every shortcut session closes its `Session`, and the thread stops when
+  the tasks have ended or at `DRAIN_BOUND`. Every call is bounded by `METHOD_TIMEOUT`.
+- A shortcut binding renews its session on the portal that replaces a departed one, and retries
+  a failure that can clear (`Unavailable`, a bus failure) on `RETRY`, at most `RETRIES` times in
+  a row, then ends with that failure. Nothing is polled.
+- Autostart goes through the `Background` portal only; the command line is this executable, and
+  one a desktop entry cannot hold unquoted is refused, since the portal writes it unquoted. FLUI
+  writes no autostart entry of its own.
+- The launcher entry is the Unity `LauncherEntry.Update` signal under
+  `application://<id>.desktop`; an application with no id has none (`NotDeclared`). One task per
+  UI runtime sends it, taking the newest state each time it is free, so a burst of changes ends
+  on the last one.
+- The system information has no Linux provider yet and answers `NotYetOnThisHost`.
 
 ## Tests
 
 - `crates/flui-system/tests/` (`system_it`, feature `testing`): the handles through the public API
   on a headless host over `testing::ScriptedSystem`, and the conformance table
-  `every_provider_keeps_the_system_services_contract`, run against the doubles and against
-  `SystemPlugin` on the host it runs on, asking nothing a user answers. Against the platform's
-  providers it proves acquisition and the seam's refusals only (its windows are headless), and the
-  system's name and home folder.
+  `every_provider_keeps_the_system_services_contract`, every service run against the doubles and
+  against `SystemPlugin` on the host it runs on (the Windows shell or the Linux portal), asking
+  nothing a user answers. Against the platform's providers it proves acquisition, the seam's
+  refusals and the launcher entry's shared state only (its windows are headless), and the system's
+  name and home folder.
 - `win32::*::tests`: each Windows provider at its OS seam, with the stand-ins and the test owner
   of the crate's kit (`testing::win32`, test builds on Windows only); `win32::modal::tests` and
   `win32::dialogs::tests` run the dialog thread and its dismissal window with a stand-in dialog.
-- `tests/portal.rs` (Linux): the portal providers against a stand-in portal on a private bus.
+- `tests/portal.rs` and `tests/portal_services.rs` (Linux): the portal providers against a
+  stand-in portal on a private bus.

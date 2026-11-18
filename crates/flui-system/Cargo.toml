@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "FLUI's OS shell services: launching, file dialogs and message boxes, sharing, launch at login, global shortcuts, taskbar progress, the jump list, the user's folders"
+description = "FLUI's OS shell services: launching, file dialogs and message boxes, sharing, autostart, global shortcuts, the launcher entry, the jump list, the user's folders and the system's version"
 repository.workspace = true
 keywords = ["ui", "flui", "dialog", "launcher", "taskbar"]
 categories = ["gui"]
@@ -27,7 +27,7 @@ libc = { workspace = true }
 raw-window-handle = { workspace = true }
 serde = { workspace = true }
 zbus = { workspace = true }
-zruntime = { version = "0.2", default-features = false, features = ["runtime", "event"] }
+zruntime = { version = "0.2", default-features = false, features = ["runtime", "event", "unblock"] }
 
 # The Windows providers: the shell's COM objects and Win32 calls, each run on
 # the thread and apartment its documentation names (ADR-0154 §1, §5).

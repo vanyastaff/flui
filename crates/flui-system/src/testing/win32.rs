@@ -13,17 +13,22 @@ use std::time::{Duration, Instant};
 use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
 use windows::Win32::UI::Shell::TBPFLAG;
 
-use crate::taskbar::TaskbarBadge;
 use crate::win32::Owner;
 use crate::win32::launcher::{HeldFile, ShellSystem, Trashed};
-use crate::win32::shortcuts::{HotkeySystem, KeySource};
+use crate::win32::shortcuts::HotkeySystem;
 use crate::win32::taskbar::{TaskbarButtons, TaskbarSystem};
 
 use flui_platform::capability::{
     CompletionSource, HostBridge, OwnerJob, OwnerPoster, OwnerScope, PendingCompletions,
     ProviderContext, RuntimeLocals, WindowCloser, WindowRef,
 };
-use flui_platform::{SurfaceTarget, SwapChainStatistics, WindowIdMint};
+use flui_platform::haptics::PlatformHaptics;
+use flui_platform::{
+    AdmittedCommand, ApplyError, Cursor, CursorError, GestureGeometry, PlatformSystemChrome,
+    PlatformTextInput, PlatformWindow, PreferenceQueryError, RedrawRequester, SurfaceTarget,
+    SwapChainStatistics, WindowAt, WindowExtent, WindowGeometry, WindowId, WindowIdMint,
+    WindowState,
+};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
@@ -137,11 +142,67 @@ pub(crate) fn win32_window(hwnd: isize) -> (WindowRef, WindowCloser) {
 }
 
 fn open(target: Arc<dyn SurfaceTarget>) -> (WindowRef, WindowCloser) {
+    thread_local! {
+        // One mint per test thread: two windows of one test are two ids.
+        static WINDOW_IDS: WindowIdMint = WindowIdMint::new();
+    }
     let (closer, lifetime) = WindowCloser::new();
-    let id = WindowIdMint::new()
-        .next()
-        .expect("BUG: a fresh mint issues its first id");
-    (WindowRef::new(id, 1.0, target, lifetime), closer)
+    let id = WINDOW_IDS
+        .with(WindowIdMint::next)
+        .expect("BUG: a test opens far fewer windows than a mint issues");
+    let window: Rc<dyn PlatformWindow> = Rc::new(TestWindow { id, target });
+    (WindowRef::new(&window, lifetime), closer)
+}
+
+/// A window that is its id and its surface: what a [`WindowRef`] reads of
+/// it. Every verb answers that it does nothing.
+struct TestWindow {
+    id: WindowId,
+    target: Arc<dyn SurfaceTarget>,
+}
+
+impl PlatformWindow for TestWindow {
+    flui_platform::window_takes_no_frame_verbs!();
+
+    fn id(&self) -> WindowId {
+        self.id
+    }
+    fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
+        Ok(None)
+    }
+    fn request_redraw(&self) {}
+    fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
+        Arc::new(|| {})
+    }
+    fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+        Arc::clone(&self.target)
+    }
+    fn state(&self) -> WindowState {
+        WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
+    }
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        command.against(&self.state().capabilities)?;
+        Ok(())
+    }
+    fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> {
+        Ok(())
+    }
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        None
+    }
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        None
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn window_at(&self, _: flui_sdk::foundation::geometry::Point<f64>) -> WindowAt {
+        WindowAt::Unknown
+    }
+    fn reveal_after_first_frame(&self) {}
 }
 
 /// A window known only by its handle's value.
@@ -252,7 +313,7 @@ impl ShellSystem for FakeShell {
 }
 
 /// The hot keys a [`FakeHotkeys`] holds.
-pub(crate) type Held = Rc<RefCell<Vec<(i32, HOT_KEY_MODIFIERS, KeySource)>>>;
+pub(crate) type Held = Rc<RefCell<Vec<(i32, HOT_KEY_MODIFIERS, u32)>>>;
 
 /// A hot key system that records what it holds and refuses what it was
 /// told to.
@@ -263,11 +324,11 @@ pub(crate) struct FakeHotkeys {
 }
 
 impl HotkeySystem for FakeHotkeys {
-    fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, key: KeySource) -> Result<(), i32> {
+    fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, virtual_key: u32) -> Result<(), i32> {
         if let Some(code) = self.refuse {
             return Err(code);
         }
-        self.held.borrow_mut().push((id, modifiers, key));
+        self.held.borrow_mut().push((id, modifiers, virtual_key));
         Ok(())
     }
 
@@ -280,7 +341,7 @@ impl HotkeySystem for FakeHotkeys {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum TaskbarCall {
     Progress(TBPFLAG, Option<u64>),
-    Badge(TaskbarBadge),
+    Badge(Option<u64>),
     Watch,
     Unwatch,
 }
@@ -310,8 +371,8 @@ impl TaskbarSystem for FakeTaskbar {
         self.answer()
     }
 
-    fn badge(&self, _: Owner, badge: TaskbarBadge) -> Result<(), i32> {
-        self.calls.borrow_mut().push(TaskbarCall::Badge(badge));
+    fn badge(&self, _: Owner, count: Option<u64>) -> Result<(), i32> {
+        self.calls.borrow_mut().push(TaskbarCall::Badge(count));
         self.answer()
     }
 

@@ -45,7 +45,7 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # (dev-only) dependency to a normal one.
 flui-foundation = { workspace = true }
 # The log capture's home: `log_capture` is a re-export of `flui_log::testing`.
-flui-log = { workspace = true }
+flui-log = { workspace = true, features = ["testing"] }
 # The text-store contract `text_store_kit` certifies stores against, and
 # `InMemoryTextStore`, the reference store its own fixture drives; its
 # `testing` doubles (`FakeHaptics`), which `TestHost` hands out.

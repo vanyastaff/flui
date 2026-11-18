@@ -1,5 +1,5 @@
-//! Launch at login over the current user's `Run` key, as the system's own
-//! Startup apps settings read it.
+//! Autostart over the current user's `Run` key, as the system's own Startup
+//! apps settings read it.
 //!
 //! The entry is a `REG_SZ` value of
 //! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` holding the running
@@ -9,9 +9,11 @@
 //! elsewhere reads as not enabled until it enables again. The user turning
 //! the entry off in Settings or Task Manager is recorded beside it, under
 //! `…\Explorer\StartupApproved\Run`, as a value whose first byte is odd;
-//! that is reported as [`LoginItemState::DisabledByUser`] and never
-//! overwritten. A packaged application's start-up task is its manifest's,
-//! so a packaged process is refused.
+//! that record is the user's and never overwritten, so a request to enable
+//! an entry the user turned off answers [`AutostartState::Disabled`]: what
+//! the system grants. A request's reason is not shown: the `Run` key asks
+//! nobody. A packaged application's start-up task is its manifest's, so a
+//! packaged process is refused.
 //!
 //! Each request runs on its own thread ([`ShellThreads`]).
 
@@ -35,12 +37,12 @@ use windows::Win32::System::Registry::{
 use windows::core::{PCWSTR, w};
 
 use super::{ShellThreads, wide};
-use crate::login::{
-    LaunchAtLoginBackend, LaunchAtLoginCapability, LoginItemError, LoginItemRequest,
-    LoginItemResult, LoginItemState,
+use crate::autostart::{
+    AutostartBackend, AutostartCapability, AutostartError, AutostartRequest, AutostartResult,
+    AutostartState,
 };
 
-/// The current user's login items as the provider reaches them, on a
+/// The current user's start-up entries as the provider reaches them, on a
 /// request's thread. Each failure is the Win32 error the call reported.
 pub(super) trait LoginRegistry: Send + Sync + 'static {
     /// Whether the process runs packaged.
@@ -88,49 +90,52 @@ pub(super) fn command(executable: &Path) -> OsString {
 }
 
 /// The error a registry call's `code` means.
-fn login_error(code: i32) -> LoginItemError {
+fn autostart_error(code: i32) -> AutostartError {
     if i32::try_from(ERROR_ACCESS_DENIED.0).is_ok_and(|denied| denied == code) {
-        LoginItemError::Denied
+        AutostartError::Denied
     } else {
-        LoginItemError::Failed(SystemFailure::Os(code))
+        AutostartError::Failed(SystemFailure::Os(code))
     }
 }
 
-/// Do what `request` asks of `registry` and read the state after it.
-pub(super) fn answer(registry: &dyn LoginRegistry, request: LoginItemRequest) -> LoginItemResult {
+/// Do what `request` asks of `registry` and answer the state after it.
+pub(super) fn answer(registry: &dyn LoginRegistry, request: &AutostartRequest) -> AutostartResult {
     if registry.packaged() {
-        return Err(LoginItemError::Unsupported(Unsupported::of::<
-            LaunchAtLoginCapability,
+        return Err(AutostartError::Unsupported(Unsupported::of::<
+            AutostartCapability,
         >(
             UnsupportedReason::NotYetOnThisHost,
         )));
     }
-    let executable = registry.executable().map_err(login_error)?;
+    let executable = registry.executable().map_err(autostart_error)?;
     let name = entry_name(&executable);
     let command = command(&executable);
-    match request {
-        LoginItemRequest::Enable => registry
+    if request.is_enabled() {
+        registry
             .set_run_value(&name, &command)
-            .map_err(login_error)?,
-        LoginItemRequest::Disable => registry.delete_run_value(&name).map_err(login_error)?,
-        LoginItemRequest::Read => {}
+            .map_err(autostart_error)?;
+    } else {
+        registry.delete_run_value(&name).map_err(autostart_error)?;
     }
-    match registry.run_value(&name).map_err(login_error)? {
-        Some(value) if value == command => match registry.approved(&name).map_err(login_error)? {
-            Some(false) => Ok(LoginItemState::DisabledByUser),
-            Some(true) | None => Ok(LoginItemState::Enabled),
-        },
-        Some(_) | None => Ok(LoginItemState::Disabled),
+    match registry.run_value(&name).map_err(autostart_error)? {
+        Some(value) if value == command => {
+            match registry.approved(&name).map_err(autostart_error)? {
+                // The user turned it off: the system does not start it.
+                Some(false) => Ok(AutostartState::Disabled),
+                Some(true) | None => Ok(AutostartState::Enabled),
+            }
+        }
+        Some(_) | None => Ok(AutostartState::Disabled),
     }
 }
 
-/// [`LaunchAtLoginBackend`] over the `Run` key.
-pub(crate) struct WindowsLaunchAtLogin {
+/// [`AutostartBackend`] over the `Run` key.
+pub(crate) struct WindowsAutostart {
     registry: Arc<dyn LoginRegistry>,
     threads: Rc<ShellThreads>,
 }
 
-impl WindowsLaunchAtLogin {
+impl WindowsAutostart {
     pub(crate) fn new(threads: Rc<ShellThreads>) -> Self {
         Self::over(Arc::new(Registry), threads)
     }
@@ -140,20 +145,20 @@ impl WindowsLaunchAtLogin {
     }
 }
 
-impl LaunchAtLoginBackend for WindowsLaunchAtLogin {
-    fn ask(&self, request: LoginItemRequest, answer_to: Resolver<LoginItemResult>) {
+impl AutostartBackend for WindowsAutostart {
+    fn request(&self, request: AutostartRequest, answer_to: Resolver<AutostartResult>) {
         let registry = Arc::clone(&self.registry);
         self.threads.answer(
-            "flui-login",
+            "flui-autostart",
             answer_to,
             || {
-                Err(LoginItemError::Unsupported(Unsupported::of::<
-                    LaunchAtLoginCapability,
+                Err(AutostartError::Unsupported(Unsupported::of::<
+                    AutostartCapability,
                 >(
                     UnsupportedReason::Unavailable,
                 )))
             },
-            move || answer(&*registry, request),
+            move || answer(&*registry, &request),
         );
     }
 }
@@ -296,7 +301,7 @@ mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
     use super::{LoginRegistry, answer, command, entry_name};
-    use crate::login::{LoginItemError, LoginItemRequest, LoginItemState};
+    use crate::autostart::{AutostartError, AutostartRequest, AutostartState};
 
     /// A registry held in memory.
     struct MemoryRegistry {
@@ -367,12 +372,11 @@ mod tests {
     fn enabling_writes_the_quoted_executable_and_the_users_choice_stands() {
         let registry = MemoryRegistry::new();
         assert_eq!(
-            answer(&registry, LoginItemRequest::Read),
-            Ok(LoginItemState::Disabled)
-        );
-        assert_eq!(
-            answer(&registry, LoginItemRequest::Enable),
-            Ok(LoginItemState::Enabled)
+            answer(
+                &registry,
+                &AutostartRequest::enable().reason("Sync at login")
+            ),
+            Ok(AutostartState::Enabled)
         );
         let name = entry_name(&registry.executable);
         assert_eq!(
@@ -386,8 +390,8 @@ mod tests {
             .expect("BUG: the test's lock")
             .insert(name.clone(), false);
         assert_eq!(
-            answer(&registry, LoginItemRequest::Enable),
-            Ok(LoginItemState::DisabledByUser),
+            answer(&registry, &AutostartRequest::enable()),
+            Ok(AutostartState::Disabled),
             "the user turned it off: enabling again does not override them"
         );
         assert_eq!(
@@ -397,22 +401,43 @@ mod tests {
         );
 
         assert_eq!(
-            answer(&registry, LoginItemRequest::Disable),
-            Ok(LoginItemState::Disabled)
+            answer(&registry, &AutostartRequest::disable()),
+            Ok(AutostartState::Disabled)
         );
         assert_eq!(registry.run_value(&name), Ok(None));
     }
 
     #[test]
-    fn an_entry_naming_another_executable_is_not_this_ones() {
-        let registry = MemoryRegistry::new();
-        registry.run.lock().expect("BUG: the test's lock").insert(
-            entry_name(&registry.executable),
-            command(Path::new(r"C:\Old\notes.exe")),
-        );
+    fn an_entry_whose_write_did_not_take_answers_disabled() {
+        // A registry whose read hands back another executable's command (a
+        // policy rewriting the value): the entry is not this one's.
+        struct Rewriting(MemoryRegistry);
+        impl LoginRegistry for Rewriting {
+            fn packaged(&self) -> bool {
+                false
+            }
+            fn executable(&self) -> Result<PathBuf, i32> {
+                self.0.executable()
+            }
+            fn run_value(&self, _name: &str) -> Result<Option<OsString>, i32> {
+                Ok(Some(command(Path::new(r"C:\Old\notes.exe"))))
+            }
+            fn set_run_value(&self, name: &str, command: &OsStr) -> Result<(), i32> {
+                self.0.set_run_value(name, command)
+            }
+            fn delete_run_value(&self, name: &str) -> Result<(), i32> {
+                self.0.delete_run_value(name)
+            }
+            fn approved(&self, name: &str) -> Result<Option<bool>, i32> {
+                self.0.approved(name)
+            }
+        }
         assert_eq!(
-            answer(&registry, LoginItemRequest::Read),
-            Ok(LoginItemState::Disabled)
+            answer(
+                &Rewriting(MemoryRegistry::new()),
+                &AutostartRequest::enable()
+            ),
+            Ok(AutostartState::Disabled)
         );
     }
 
@@ -422,10 +447,10 @@ mod tests {
             packaged: true,
             ..MemoryRegistry::new()
         };
-        let refusal = answer(&packaged, LoginItemRequest::Enable).expect_err("packaged");
+        let refusal = answer(&packaged, &AutostartRequest::enable()).expect_err("packaged");
         assert!(matches!(
             refusal,
-            LoginItemError::Unsupported(unsupported)
+            AutostartError::Unsupported(unsupported)
                 if unsupported.reason == UnsupportedReason::NotYetOnThisHost
         ));
 
@@ -434,16 +459,16 @@ mod tests {
             ..MemoryRegistry::new()
         };
         assert_eq!(
-            answer(&denied, LoginItemRequest::Enable),
-            Err(LoginItemError::Denied)
+            answer(&denied, &AutostartRequest::enable()),
+            Err(AutostartError::Denied)
         );
         let failed = MemoryRegistry {
             write_error: Some(1009),
             ..MemoryRegistry::new()
         };
         assert_eq!(
-            answer(&failed, LoginItemRequest::Enable),
-            Err(LoginItemError::Failed(SystemFailure::Os(1009)))
+            answer(&failed, &AutostartRequest::enable()),
+            Err(AutostartError::Failed(SystemFailure::Os(1009)))
         );
     }
 
@@ -461,35 +486,35 @@ mod tests {
     }
 
     #[test]
-    fn a_login_request_is_answered_from_a_shell_thread_through_the_handle() {
+    fn an_autostart_request_is_answered_from_a_shell_thread_through_the_handle() {
         use std::cell::RefCell;
         use std::rc::Rc;
         use std::sync::Arc;
 
         use flui_platform::capability::Abandoned;
 
-        use crate::login::{LaunchAtLogin, LoginItemResult};
+        use crate::autostart::{Autostart, AutostartResult};
         use crate::testing::win32::TestOwner;
         use crate::win32::ShellThreads;
 
         let owner = TestOwner::new();
         let ctx = owner.ctx(None);
         let registry = Arc::new(MemoryRegistry::new());
-        let login = LaunchAtLogin::new(
-            super::WindowsLaunchAtLogin::over(
+        let autostart = Autostart::new(
+            super::WindowsAutostart::over(
                 Arc::clone(&registry) as Arc<dyn LoginRegistry>,
                 Rc::new(ShellThreads::default()),
             ),
             &ctx,
         );
-        let landed: Rc<RefCell<Option<Result<LoginItemResult, Abandoned>>>> = Rc::default();
+        let landed: Rc<RefCell<Option<Result<AutostartResult, Abandoned>>>> = Rc::default();
         let into = Rc::clone(&landed);
-        login
-            .enable()
+        autostart
+            .request(AutostartRequest::enable())
             .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
         assert!(landed.borrow().is_none(), "never inside the call");
         owner.turn_until(|| landed.borrow().is_some());
-        assert_eq!(*landed.borrow(), Some(Ok(Ok(LoginItemState::Enabled))));
+        assert_eq!(*landed.borrow(), Some(Ok(Ok(AutostartState::Enabled))));
         assert!(
             registry
                 .run_value(&entry_name(&registry.executable))

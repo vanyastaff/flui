@@ -1,9 +1,10 @@
 //! `Install` demands the slot. When it is taken the caller gets a typed error,
-//! not a panic — the historical `Logger::init` called `expect` here.
+//! not a panic.
 
 mod support;
 
-use flui_log::{LogConfig, SetupError, SubscriberOwnership, SubscriberPolicy};
+use flui_log::config::LogConfig;
+use flui_log::ownership::{SetupError, SubscriberOwnership, SubscriberPolicy};
 
 #[test]
 fn install_succeeds_once_then_reports_the_slot_as_taken() {

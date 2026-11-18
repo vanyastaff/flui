@@ -5447,69 +5447,68 @@ GPU-память простаивающего или невидимого окн
   лаунчера — тест `flui-system`. Тесты `flui-system` теперь берут абсолютные пути через
   `temp_dir`: `/srv/…` и `/home` относительны на Windows, и два теста там падали. Примитив вне
   фичи недоступен (модуль за `cfg(feature = "scripted")`). Запуски на устройствах не нужны.
-- [x] **LY57** (закрыта веткой `system/windows-providers`: провайдеры Windows всех служб, остальные
-  службы и общая conformance-таблица; прогоны на рабочем столе — заметки строк parity) — #2150
-  (`9450db8e1`), портал Linux #2158, `Unsupported` в ошибках запуска и диалогов #2354, `flui add`
-  #2273, фича фасада #2325. Крейт — `crates/flui-system`, ярус `pkg`, kind `capability`;
-  `SystemPlugin` объявлен в `[package.metadata.flui.capability]`, фасад публикует крейт как
-  `flui::services::system` за фичей `system`. Правила крейта — его новый `ARCHITECTURE.md`.
-  Службы (маркер, handle, трейт бэкенда): запуск (`Launcher` контракта), файловые диалоги и
-  message box (`FileDialogs`, `MessageBoxes`: общая таблица «один диалог на окно», `Dialog`
-  живёт, пока его держат, ADR-0344), `Share`, `LaunchAtLogin` (`DisabledByUser` — выбор
-  пользователя, не перезаписывается), `GlobalShortcuts` (`Shortcut` требует Control, Alt или
-  Meta, кроме F13–F24 и медиаклавиш; нажатие доходит до слушателя на следующем ходу владельца,
-  после сброса `ShortcutRegistration` — ничего), `Taskbar` (`Fraction`, `TaskbarProgress`,
-  `TaskbarBadge`), `JumpList`, `Os` (папки пользователя и сведения об ОС). Правила — в handle:
-  искажённый запрос отказывается до бэкенда (`MalformedRequest::Text`/`EmptyMessage`,
-  `MalformedShare`, `MalformedTask`, `InvalidShortcut`), закрытое окно — `WindowClosed` без
-  обращения к системе, ответ вне запроса — `MalformedAnswer`. Заголовок и подпись кнопки
-  файлового диалога длиннее `MAX_TEXT_LEN` или с управляющим символом теперь отказываются на
-  всех хостах. `flui_platform::launch::is_local_path` — общее правило локальности запуска и
-  share. Двойники всех служб — `testing::ScriptedSystem::on`. Windows (`win32`): модальный
-  диалог — на своём потоке в STA, владелец — окно виджета (главный цикл владельца продолжает
-  кадры), закрытие — через окно отмены потока (`IFileDialog::Close`, `EndDialog`); фильтры —
-  `*.ext`, MIME отказывается `NotOnThisPlatform`, `SetDefaultExtension` и `GetFileTypeIndex`;
-  запуск, автозапуск, jump list и папки — поток на запрос в STA, не больше
-  `ShellThreads::MAX_IN_FLIGHT` на runtime; URI — `ShellExecuteExW` с `open` и классом схемы
-  (`SEE_MASK_CLASSNAME`); документ — `CreateFileW`, `GetFinalPathNameByHandleW`, пол
-  `runs_when_opened` и `AssocIsDangerous`, затем открытие по итоговому имени; reveal —
-  `SHOpenFolderAndSelectItems`; trash — `IFileOperation` с `FOFX_RECYCLEONDELETE` и
-  `FOF_WANTNUKEWARNING`; share, горячие клавиши (`RegisterHotKey` на своём message-only окне) и
-  панель задач (`ITaskbarList3`, сабклассинг окна ради `TaskbarButtonCreated`; `SetWindowSubclass`
-  по ординалу, так как `comctl32.dll` 5.82 экспортирует его только по ординалу: импорт по имени
-  не давал процессу без манифеста запуститься, `0xc0000139` на тестовом исполняемом файле) — на
-  потоке владельца. Linux: портал как был; новые службы — `NotYetOnThisHost` (порталы — LY59).
+- [x] **LY57** (закрыта веткой `system/windows-providers`: провайдеры Windows всех служб, message
+  box, share, jump list и сведения об ОС, общая conformance-таблица; прогоны на рабочем столе —
+  заметки строк parity) — #2150 (`9450db8e1`), портал Linux #2158, `Unsupported` в ошибках запуска
+  и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт — `crates/flui-system`, ярус `pkg`,
+  kind `capability`; `SystemPlugin` объявлен в `[package.metadata.flui.capability]`, фасад
+  публикует крейт как `flui::services::system` за фичей `system`. Правила крейта — его
+  `ARCHITECTURE.md`. Службы: запуск (`Launcher` контракта), файловые диалоги и message box
+  (`FileDialogs`, `MessageBoxes`: общая таблица «один диалог на окно», `Dialog` живёт, пока его
+  держат, ADR-0344), `Share`, `JumpList`, `Os` (сведения об ОС) — контракты этой ветки;
+  автозапуск, глобальные сочетания, запись лаунчера и папки пользователя — контракты LY59
+  (`Autostart`, `GlobalShortcuts`, `TaskbarEntry`, `UserDirs`), к которым ветка добавила
+  `ShortcutError::Exhausted`; свои дубли (`LaunchAtLogin`, `Shortcut`/`ShortcutRegistration`,
+  `Taskbar` окна, папки в `Os`) удалены при слиянии с LY59. Правила — в handle: искажённый запрос
+  отказывается до бэкенда (`MalformedRequest::Text`/`EmptyMessage`, `MalformedShare`,
+  `MalformedTask`), закрытое окно — `WindowClosed` без обращения к системе, ответ вне запроса —
+  `MalformedAnswer`. Заголовок и подпись кнопки файлового диалога длиннее `MAX_TEXT_LEN` или с
+  управляющим символом отказываются на всех хостах. `flui_platform::launch::is_local_path` — общее
+  правило локальности запуска и share. Двойники всех служб — `testing::ScriptedSystem::on`.
+  Windows (`win32`): модальный диалог — на своём потоке в STA, владелец — окно виджета (главный
+  цикл владельца продолжает кадры), закрытие — через окно отмены потока (`IFileDialog::Close`,
+  `EndDialog`); фильтры — `*.ext`, MIME отказывается `NotOnThisPlatform`, `SetDefaultExtension` и
+  `GetFileTypeIndex`; запуск, автозапуск (`Run`, выбор пользователя в `StartupApproved\Run` не
+  перезаписывается: включение выключенной им записи отвечает `Disabled`), jump list и папки
+  (`SHGetKnownFolderPath`) — поток на запрос в STA, не больше `threads::MAX_IN_FLIGHT` на runtime;
+  URI — `ShellExecuteExW` с `open` без класса схемы (выбор пользователя), однобуквенная схема
+  отказывается; документ — `CreateFileW`, `GetFinalPathNameByHandleW`, пол `runs_when_opened` и
+  `AssocIsDangerous`, затем открытие по итоговому имени; reveal — `SHOpenFolderAndSelectItems`;
+  trash — `IFileOperation` с `FOFX_RECYCLEONDELETE` и `FOF_WANTNUKEWARNING`; share, горячие
+  клавиши (`RegisterHotKey` на своём message-only окне; сочетание связывается с предпочтённым
+  триггером или выпадает из `Bound`; только нажатия — `WM_HOTKEY` не сообщает отпускание) и запись
+  лаунчера (`ITaskbarList3` на кнопках окон, где её получили; сабклассинг ради
+  `TaskbarButtonCreated`, `SetWindowSubclass` по ординалу: `comctl32.dll` 5.82 экспортирует его
+  только по ординалу) — на потоке владельца. Linux: message box, share и jump list —
+  `NotOnThisPlatform` в регистрации портала; сведения об ОС — `NotYetOnThisHost`.
   Тесты (`crates/flui-system/tests/`): таблица `every_provider_keeps_the_system_services_contract`
-  (`conformance.rs`; против двойников и против `SystemPlugin` хоста; на Windows прочитала сведения
-  об ОС и домашнюю папку с реальной системы); `services.rs`:
+  (`conformance.rs`; каждая служба против двойников и против `SystemPlugin` хоста; на Windows
+  прочитала сведения об ОС и домашнюю папку с реальной системы); `shell_services.rs`:
   `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`,
   `a_message_box_ends_with_its_window`,
   `a_share_reaches_its_windows_sheet_and_a_malformed_one_is_refused_without_asking`,
-  `launch_at_login_answers_the_state_the_system_leaves`,
-  `a_shortcut_holds_control_alt_or_meta_unless_no_application_types_its_key`,
-  `a_registered_shortcut_runs_its_listener_at_a_turn_until_its_registration_drops`,
-  `a_taskbar_change_reaches_its_windows_button_and_stops_with_the_window`,
   `a_jump_list_is_refused_without_asking_when_its_tasks_are_malformed`,
-  `a_folder_is_absolute_and_the_os_is_what_its_system_says`; строки текста в
+  `the_os_is_what_its_system_says`; строки текста в
   `a_malformed_request_is_refused_without_showing_a_dialog`;
   `the_system_plugin_provides_the_shell_on_windows_the_portal_on_linux_and_refuses_elsewhere`
-  (было `…_portal_on_linux_and_refuses_elsewhere`). Модули Windows (`win32::*::tests`):
+  (строка на каждую службу и ОС). Модули Windows (`win32::*::tests`):
   `a_dialog_answers_from_its_thread_at_an_owner_turn`,
   `a_dropped_dialog_is_closed_on_its_thread_and_frees_the_window`,
   `a_dialog_ends_with_its_window_and_is_closed_on_its_thread`,
   `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`,
   `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`,
-  `a_uri_goes_to_its_schemes_registered_class`,
   `enabling_writes_the_quoted_executable_and_the_users_choice_stands`,
-  `a_press_runs_the_listener_at_the_next_turn_until_the_registration_drops`,
-  `a_button_made_late_or_again_shows_what_its_window_last_asked`,
+  `an_autostart_request_is_answered_from_a_shell_thread_through_the_handle`,
+  `a_binding_hears_what_was_bound_then_each_press_until_it_drops`,
+  `a_chord_another_application_holds_is_left_out`,
+  `a_button_made_late_or_again_shows_the_entry_last_set`,
+  `the_entry_is_shown_on_every_window_it_was_acquired_in`,
+  `a_folder_is_found_on_a_shell_thread_and_answered_as_the_system_said`,
   `an_argument_is_quoted_as_the_command_line_splitter_reads_it_back`,
   `a_runtime_runs_a_bounded_number_of_shell_requests_and_frees_each_place` и таблицы
   отображений. С откатами: без проверки заголовка и подписи падает
   `a_malformed_request_is_refused_without_showing_a_dialog`; без `MessageButtons::admits` —
-  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`; без флага
-  `active` у нажатий — `a_registered_shortcut_runs_its_listener_at_a_turn_until_its_registration_drops`
-  и `a_press_runs_the_listener_at_the_next_turn_until_the_registration_drops`; с ответом
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`; с ответом
   отменённого диалога — `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`;
   с судом по данному пути вместо итогового —
   `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`. После независимого
@@ -5522,35 +5521,65 @@ GPU-память простаивающего или невидимого окн
   держит один поток диалога, пока тот не вышел
   (`a_window_takes_no_new_dialog_until_the_dismissed_one_has_left_its_thread`); id горячих клавиш
   не переиспользуются, `ShortcutError::Exhausted`
-  (`a_press_queued_for_a_dropped_chord_never_reaches_the_chord_after_it`,
-  `a_runtime_that_numbered_every_hot_key_refuses_the_next_for_good`); каждая точка входа ОС —
+  (`a_press_queued_for_a_dropped_binding_never_reaches_the_binding_after_it`,
+  `a_runtime_that_numbered_every_hot_key_ends_the_next_binding_for_good`); каждая точка входа ОС —
   через `owner::panic_boundary::os_entry`, `xtask panic-boundary` читает и `flui-system`; запрос
   дольше `ShellThreads::ABANDON_AFTER` бросается со своим отказом
-  (`a_request_past_its_deadline_is_abandoned_its_caller_refused_and_its_place_reclaimed`); URI —
-  без класса схемы (выбор пользователя), однобуквенная схема отказывается. Каждый из этих тестов
-  красный с откатом своей правки. Не запускалось: ни один настоящий диалог, запуск, горячая
-  клавиша, элемент автозапуска, изменение панели задач, jump list или share на рабочем столе —
-  owed в заметках строк parity (System services, Dock menu/jump list); macOS, iOS, Android, wasm
-  не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`, `reveal_path`,
-  `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в `docs/gaps.md`.
-- [ ] **LY59** (не закрыта: четыре портала на `main`; остальных порталов, `portal_parent()` в
-  `WindowRef`, поправки ADR-0152 и прогона на рабочем столе нет) — #2158 (`bb618a7f7`), zbus на
+  (`a_request_past_its_deadline_is_abandoned_its_caller_refused_and_its_place_reclaimed`). Каждый
+  из этих тестов красный с откатом своей правки. Не запускалось: ни один настоящий диалог,
+  запуск, горячая клавиша, запись автозапуска, изменение панели задач, jump list или share на
+  рабочем столе — owed в заметках строк parity (System services, Dock menu/jump list); macOS,
+  iOS, Android, wasm не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`,
+  `reveal_path`, `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в
+  `docs/gaps.md`.
+- [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
+  ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
-  говорит с `org.freedesktop.portal` напрямую через `zbus` (строка называла `ashpd`):
-  FileChooser (открыть, сохранить), OpenURI, OpenDirectory (reveal), Trash. Родитель диалога —
-  `x11:<XID>` из raw-handle окна; для окна Wayland строка пуста, диалог не модален
-  (`portal::parent_window`). Тесты (`tests/portal.rs`, стенд портала на своей шине):
-  `the_launcher_reaches_the_open_uri_and_trash_portals`,
-  `the_dialogs_reach_the_file_chooser_and_answer_its_picks`,
-  `without_a_portal_on_the_bus_the_services_are_unavailable`,
-  `an_installed_portal_that_is_not_running_is_started_first`,
-  `a_response_from_another_client_is_not_heard`,
-  `a_portal_that_leaves_before_answering_ends_the_dialog_and_frees_the_window`. Остаётся:
-  GlobalShortcuts, Background (автозапуск), сигнал прогресса Unity LauncherEntry, пути XDG;
-  `WindowRef::portal_parent()` (окно Wayland экспортирует ручку `xdg-foreign` и держит
-  `PortalParent` в `window/linux/wayland.rs`, но читают её только тесты:
-  `a_portal_names_a_window_by_its_export`); поправка ADR-0152; conformance-таблица; прогон на
-  рабочем столе.
+  говорит с `org.freedesktop.portal` напрямую через `zbus` (строка называла `ashpd`): FileChooser,
+  OpenURI, OpenDirectory, Trash, Background (автозапуск), GlobalShortcuts; прогресс и счётчик —
+  сигнал Unity `LauncherEntry.Update`; пути — XDG user dirs (`user-dirs.dirs`, читается на нити
+  портала). Контракты в `flui-system`: `autostart` (`Autostart`, `AutostartRequest`,
+  `AutostartState`), `shortcuts` (`GlobalShortcuts`, `ShortcutBinding`, `ShortcutFeed`,
+  `Trigger` в записи спецификации XDG shortcuts), `taskbar` (`TaskbarEntry`, `Progress`,
+  `Honoured`), `user_dirs` (`UserDirs`, `UserDir`); вне Linux — `NotYetOnThisHost`; двойники
+  `ScriptedAutostart`, `ScriptedShortcuts`, `ScriptedTaskbar`, `ScriptedUserDirs` в
+  `ScriptedSystem`. Родитель портала — межплатформенное понятие ADR-0365 (поправка ADR-0152 §2.6 и
+  ADR-0154 §9): `PortalParent` (`none`, `x11`, `wayland` с экспортом, отпускаемым при drop),
+  `PlatformWindow::portal_parent`, `WindowRef::portal_parent`; окно Wayland экспортирует себя на
+  каждый запрос (`zxdg_exporter_v2`), а не на всю жизнь, запрос держит экспорт до конца.
+  `ProviderContext::app_id` (из `HostBridge::name_application`, ADR-0351): несэндбоксное
+  приложение называется порталу через `org.freedesktop.host.portal.Registry` один раз на экземпляр
+  портала до первого вызова. Версия интерфейса читается до запроса: старее нужной —
+  `NotOnThisDevice`. Отставка runtime закрывает `Request` и `Session` (ограниченный слив нити).
+  Сессия сочетаний возобновляется на портале, пришедшем после ушедшего, преходящий отказ
+  повторяется по `Backoff` (не более пяти раз), опроса нет. Тесты (`tests/portal_services.rs`,
+  стенд портала на своей шине в WSL):
+  `a_request_names_the_window_by_its_export_and_releases_it_when_it_ends`,
+  `a_launch_names_the_window_by_its_export_until_the_portal_answers`,
+  `the_application_is_named_to_each_portal_once_before_its_first_call`,
+  `a_portal_older_than_a_request_needs_answers_not_on_this_device`,
+  `autostart_asks_the_background_portal_and_answers_what_it_granted`,
+  `global_shortcuts_bind_hear_their_presses_and_unbind_when_dropped`,
+  `a_restarted_portal_renews_the_binding_and_a_closed_session_ends_it`,
+  `a_refused_binding_ends_denied_and_closes_its_session`,
+  `the_launcher_entry_broadcasts_its_whole_state_under_the_applications_entry`,
+  `the_home_folder_is_the_one_the_process_names`,
+  `a_runtime_that_ends_closes_the_sessions_its_portal_still_holds`,
+  `a_closed_window_takes_its_exports_with_it_and_names_no_parent` (закрытие окна отпускает
+  экспорт любого запроса, закрытое окно не называется),
+  `a_binding_retried_after_its_first_attempt_failed_still_names_its_window`,
+  `a_burst_of_entry_changes_ends_on_the_last_state`; правило закрытого окна в `WindowRef` —
+  `a_closed_window_is_named_to_no_portal_whatever_its_host_answers`; ручки на двойниках
+  (`tests/services.rs`, на всех ОС); экспорт против `ScriptedCompositor` (глобал
+  `zxdg_exporter_v2` добавлен): `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends`,
+  `a_compositor_without_an_exporter_names_no_portal_parent`; под sway —
+  `a_portal_parent_names_the_window_while_its_request_holds_the_export`. Message box и share:
+  портала нет ни для того, ни для другого; их контракт пришёл с провайдером Windows (LY57), и
+  регистрация портала отказывает в них `NotOnThisPlatform`. Общая conformance-таблица — LY57.
+  Прогоны против
+  порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
+  «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
+  shortcuts», «Launch at login», «User folders».
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который
@@ -8510,6 +8539,68 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   links»): вставка URI-клипа и клипа больше предела, drag из чужого приложения с множеством
   типов, документ облачного провайдера; на этой машине у закреплённого toolchain 1.100.0 нет
   цели Android, а `rustup` не запускается.
+
+- [x] **LY115** — ветка `platform/window-coordinate-space`, решение — ADR-0364 (заменяет
+  глобальную позицию ADR-0237 решения 2, опцию дисплея решения 6 и границы ADR-0236 решения 1).
+  Находки подтверждены на `main` @ `2d32298db` чтением кода: Win32 делил угол окна на масштаб
+  окна и умножал на него `SetPosition`; macOS публиковал границы экрана как точки, умноженные на
+  масштаб каждого экрана (два экрана перекрывались в этом «пространстве устройства»), а
+  размещение делило их обратно масштабом дисплея; `SetSize`, `SetPosition`, `size` и `position`
+  опций были сырыми числами со второй проверкой. Построено: `WindowPosition { display, at }`
+  (`try_new` отказывает нечисловым координатам) — единственная форма места окна в снимке
+  (`outer`, `normal_geometry`), команде, опциях и `ResolvedPlacement`; отсчёт — от угла дисплея,
+  не от его рабочей области (рабочая область меняется вместе с панелью задач, и окно сдвигалось бы
+  в снимке, не двигаясь; формат размещения хранит смещение от рабочей области, как прежде).
+  `successor` делает дисплей окна дисплеем позиции. `WindowOptions::display` и
+  `WindowOption::Position` удалены. Дисплей несёт `DisplayBounds` (протяжённость и рабочая
+  область в собственных логических пикселях, `try_new` держит рабочую область внутри) и
+  `DesktopOrigin` (место в рабочем столе в единицах оконной системы, только для порядка).
+  `SetSize` и `WindowOptions::size` — `WindowExtent` с проверкой площади при допуске, как шаги
+  изменения размера ADR-0354 (второго newtype не заведено). Хосты: общий `DisplayFrame` Win32 и
+  X11 (`origin + snap(at × scale)`, отказ за пределами диапазона как `OutOfRange`, обратно —
+  `(pixel − origin) / scale`), `display_of_rect` в 128 битах; AppKit — угол экрана в точках;
+  headless держит позицию на своём дисплее; позиция на дисплее, которого снимок не держит, —
+  `ApplyError::DisplayGone`, при открытии — место выбирает система. `AppConfig::position(x, y)` —
+  целые логические пиксели основного дисплея; `AppConfig::window_options(displays)` — единственный
+  способ построить опции окна (преобразование `From<&AppConfig>` удалено), им открываются главное
+  окно, `run_direct`, вторичное окно, Android и web. Окно Win32 на мониторе, которого нет в
+  снимке, перечитывает мониторы до публикации (`window_display`); геометрия выборки Win32 —
+  чистая `sampled_geometry` (стороны — точная разность в `f64`, прямоугольник возврата в масштабе
+  своего дисплея); первый снимок X11 — место, где окно создано (`OpenPlan::placed`), или никакого;
+  размещение не пишется из состояния без позиции у хоста, который позиции наблюдает; смещение
+  размещения — `PlacementOffset`; `ResolvedPlacement::position()` строится на его `display`. Протокол 0.25
+  (разрыв, `Break::required` для полей, заменивших удалённые), формат нативной записи 3. Тесты (в
+  скобках — откат, который их роняет): `a_position_set_on_a_normal_window_moves_it` (Win32,
+  настоящее окно, угол против `GetMonitorInfoW`/`GetDpiForMonitor`; без подачи `DisplayFrame` в
+  `sample_state` позиции нет и падают пять строк `native_window_commands`);
+  `a_position_on_a_display_the_host_does_not_hold_is_refused` (Win32);
+  `a_position_lands_on_the_display_it_names` (headless; без отказа `DisplayGone` команда
+  принимается); `a_configured_position_opens_on_the_primary_display` (`flui-app`; без
+  `window_options` окно открывается в (0, 0)); `the_position_is_kept` (`flui-app`; без позиции в
+  `window_options` — `None`); `sampled_geometry` (Win32, три монитора разного масштаба и
+  отрицательное начало; деление пикселя на масштаб окна роняет каждую строку);
+  `window_display` (Win32; без перечитывания дисплея нет);
+  `a_position_names_the_display_the_window_is_on`,
+  `display_bounds_are_logical_pixels_of_the_display`,
+  `a_panel_along_the_top_moves_the_offset_not_the_position`,
+  `from_state_remembers_nothing_on_a_display_the_snapshot_lacks`,
+  `from_state_remembers_nothing_a_placing_host_could_not_place` (`flui-platform`);
+  `a_position_converts_through_its_own_display`,
+  `a_window_spanning_two_displays_has_one_pixel_and_two_names`,
+  `a_rectangle_is_on_the_display_holding_most_of_it`, `open_geometry`,
+  `open_plan_places_by_display_origin_and_scale`, `a_window_is_on_the_display_it_overlaps_most`,
+  `a_position_on_a_display_becomes_a_global_one` (AppKit),
+  `two_outputs_of_different_scales_are_each_their_own_logical_pixels` (сценарный композитор
+  Wayland). Прогнано: Windows `cargo heli nextest` по `flui-platform`, `flui-native`, `flui-app`,
+  `flui-view`, `flui-testing`, `flui-runtime`, `flui-protocol` (два падения не из этой ветки:
+  `an_intent_opens_its_link_or_documents` читает путь `file:` по-windows,
+  `the_driver_agent_contains_every_failure` застаёт прежнего драйвера); WSL: набор X11 и headless
+  под Xvfb с openbox (1144), окна Wayland на Weston (20), сценарный композитор (15);
+  проверка типов macOS, Android и wasm32 на nightly. iOS — только CI. Тест начала экрана web в CSS
+  (`web_lists_screens_only_with_granted_permission`) — только CI (в WSL нет wasm-bindgen).
+  Открыто в `docs/gaps.md`: `WindowState::display` и дисплей позиции — два поля. Должно на устройствах (в
+  строке `position-size-move-and-resize-events`): два монитора разного DPI на Windows, отключение
+  монитора под окном, второй экран macOS.
 
 - [x] **LY152** — ветка `platform/concealed-clipboard-expiry`, решение — ADR-0363. Находка
   подтверждена на `main` @ `b68c2ddfa` чтением: `ClipboardWrite::concealed` только держал запись

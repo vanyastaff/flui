@@ -270,8 +270,9 @@ pub use flui_material as material;
 /// of its name.
 ///
 /// `system` (`flui-system`): the providers of the launcher, whose handle is
-/// [`platform::launch::Launcher`], and the file dialogs. An application
-/// registers `services::system::SystemPlugin`.
+/// [`platform::launch::Launcher`], the file dialogs, autostart, global
+/// shortcuts, the launcher entry's progress and count, and the user's
+/// folders. An application registers `services::system::SystemPlugin`.
 #[cfg(feature = "system")]
 pub mod services {
     pub use flui_system as system;
@@ -336,32 +337,33 @@ pub mod platform {
         Availability, Brightness, CapabilityAbsence, CapabilityParts, ClipboardEntryId,
         ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead, ClipboardWrite,
         ClipboardWritten, ColorGamut, CommandRefusal, Concealment, ControlsOffset, CopiedAside,
-        Cursor, CursorError, CursorGrab, CursorIcon, CursorImage, CursorImageError, DisplayColor,
-        DisplayDescription, DisplayId, DisplayParts, DisplayRevision, DisplayRevisionExhausted,
-        DisplaySnapshot, Distance, DragDropEvent, DurationScale, DxgiFrameStatistics, DxgiShown,
-        DxgiStatistics, DynamicRange, EmptyPointerFrame, Environment, ExpiryClearing, FlingSpeeds,
-        FramePacing, FramePresented, FrameRateHint, FrameRequest, GestureGeometry, GestureParts,
-        GesturePreferences, HapticFeedback, Headroom, HostNotice, HourCycle, ImeEvent,
-        InputLatency, InsetCurve, InsetMotion, InvalidAppDataDir, InvalidControlsOffset,
-        InvalidGeometry, InvalidHeadroom, InvalidInsets, InvalidLocale, InvalidPreference,
-        InvalidRefreshPeriod, InvalidRegionalFormat, InvalidWindowOption, KeyboardInset, Launch,
-        Locale, MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem, MotionPreference,
+        Cursor, CursorError, CursorGrab, CursorIcon, CursorImage, CursorImageError, DesktopOrigin,
+        DisplayBounds, DisplayColor, DisplayDescription, DisplayId, DisplayParts, DisplayRevision,
+        DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent, DurationScale,
+        DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange, EmptyPointerFrame,
+        Environment, ExpiryClearing, FlingSpeeds, FramePacing, FramePresented, FrameRateHint,
+        FrameRequest, GestureGeometry, GestureParts, GesturePreferences, HapticFeedback, Headroom,
+        HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve, InsetMotion, InvalidAppDataDir,
+        InvalidControlsOffset, InvalidDisplayBounds, InvalidGeometry, InvalidHeadroom,
+        InvalidInsets, InvalidLocale, InvalidPreference, InvalidRefreshPeriod,
+        InvalidRegionalFormat, InvalidWindowOption, KeyboardInset, Launch, Locale,
+        MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem, MotionPreference,
         NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, OpenTarget, Opened, OpenedFile,
-        OpenedOverflow, OpeningGeometry, OsRelease, PlacementError, PlatformFailure, PlatformInput,
-        PlatformSystemChrome, PlatformTextInput, PlatformWindow, PointerFrame, PreferenceParts,
-        PreferenceQueryError, PublicationMint, RedrawRequester, RefreshPeriod, RegionOverride,
-        RegionalFormats, RegionalParts, ResolvedPlacement, ScrollBarParts, ScrollBarPreferences,
-        ScrollBarVisibility, ScrollTrackClick, SessionEndAnswer, SessionEndBlock,
-        SessionEndBlockError, SessionEndRequest, SizeConstraints, SrgbColor, Storage, StorageError,
-        StorageFuture, StorageName, Stored, StoredVersion, SubmitError, SurfaceColorSpace,
-        SurfaceTarget, SwapChainStatistics, SystemControls, SystemFailure, SystemNotice,
-        SystemPreferences, SystemUiOverlayStyle, TargetPlatform, TextWeightPreference, Unsupported,
-        UnsupportedReason, Weekday, WheelParts, WheelPreferences, WheelStep, WindowAt,
-        WindowCapabilities, WindowCapability, WindowCommand, WindowDisplay, WindowExecutionState,
-        WindowExtent, WindowFocus, WindowFrame, WindowGeometry, WindowId, WindowInsets,
-        WindowInteraction, WindowLevel, WindowMaterial, WindowMode, WindowOption, WindowOptions,
-        WindowPlacement, WindowReveal, WindowRevision, WindowRevisionExhausted, WindowState,
-        WindowStateParts, WriteMode,
+        OpenedOverflow, OpeningGeometry, OsRelease, PlacementError, PlacementOffset,
+        PlatformFailure, PlatformInput, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+        PointerFrame, PreferenceParts, PreferenceQueryError, PublicationMint, RedrawRequester,
+        RefreshPeriod, RegionOverride, RegionalFormats, RegionalParts, ResolvedPlacement,
+        ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick,
+        SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndRequest,
+        SizeConstraints, SrgbColor, Storage, StorageError, StorageFuture, StorageName, Stored,
+        StoredVersion, SubmitError, SurfaceColorSpace, SurfaceTarget, SwapChainStatistics,
+        SystemControls, SystemFailure, SystemNotice, SystemPreferences, SystemUiOverlayStyle,
+        TargetPlatform, TextWeightPreference, Unsupported, UnsupportedReason, Weekday, WheelParts,
+        WheelPreferences, WheelStep, WindowAt, WindowCapabilities, WindowCapability, WindowCommand,
+        WindowDisplay, WindowExecutionState, WindowExtent, WindowFocus, WindowFrame,
+        WindowGeometry, WindowId, WindowInsets, WindowInteraction, WindowLevel, WindowMaterial,
+        WindowMode, WindowOption, WindowOptions, WindowPlacement, WindowPosition, WindowReveal,
+        WindowRevision, WindowRevisionExhausted, WindowState, WindowStateParts, WriteMode,
     };
     /// Capabilities: what an application registers, and the contracts a provider and a host meet.
     pub mod capability {
@@ -369,7 +371,7 @@ pub mod platform {
             Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityId,
             CapabilityProvider, CapabilityRegistrar, Completion, CompletionSource, DataRefused,
             HostBridge, IntentFrame, InvalidResultKey, JniFrame, OwnerJob, OwnerPoster,
-            OwnerRetired, OwnerScope, PendingCompletions, Plugin, ProviderContext,
+            OwnerRetired, OwnerScope, PendingCompletions, Plugin, PortalParent, ProviderContext,
             RegisteredProvider, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold,
             ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,
             ResultTicketHold, ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime,

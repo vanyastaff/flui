@@ -171,10 +171,11 @@ pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError}
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
 pub use display::{
-    ColorGamut, DisplayColor, DisplayDescription, DisplayId, DisplayIdsExhausted, DisplayKey,
-    DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
-    DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
-    SurfaceColorSpace, WindowDisplay,
+    ColorGamut, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId,
+    DisplayIdsExhausted, DisplayKey, DisplayParts, DisplayRegistry, DisplayRevision,
+    DisplayRevisionExhausted, DisplaySnapshot, DynamicRange, FrameRateHint, Headroom,
+    InvalidDisplayBounds, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod, SurfaceColorSpace,
+    WindowDisplay,
 };
 pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;
@@ -193,7 +194,7 @@ pub use locale::{InvalidLocale, Locale};
 pub use opened::{
     Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
 };
-pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
+pub use placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
@@ -229,7 +230,9 @@ pub use window_capabilities::{
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };
-pub use window_geometry::{InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry};
+pub use window_geometry::{
+    InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry, WindowPosition,
+};
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{

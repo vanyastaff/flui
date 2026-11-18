@@ -1105,7 +1105,9 @@ fn a_locked_pointer_stays_with_the_content_as_the_window_moves() {
 
     fixture
         .window
-        .admit_and_apply(WindowCommand::SetSize(Size::new(200.0, 150.0)))
+        .admit_and_apply(WindowCommand::SetSize(
+            flui_platform::WindowExtent::try_new(Size::new(200.0, 150.0)).expect("an extent"),
+        ))
         .expect("the window resizes");
     fixture.settle();
     assert_eq!(
@@ -1118,17 +1120,19 @@ fn a_locked_pointer_stays_with_the_content_as_the_window_moves() {
     // place on the screen, which the server leaves alone; the lock's point
     // is the content's, so the pointer goes with the window.
     let origin = fixture.window.state().outer.position().expect("placed");
+    let moved = flui_platform::WindowPosition::try_new(
+        origin.display(),
+        Point::new(origin.at().x + 50.0, origin.at().y + 40.0),
+    )
+    .expect("a finite point");
     fixture
         .window
-        .admit_and_apply(WindowCommand::SetPosition(Point::new(
-            origin.x + 50.0,
-            origin.y + 40.0,
-        )))
+        .admit_and_apply(WindowCommand::SetPosition(moved))
         .expect("the window moves");
     fixture.settle();
     assert_eq!(
         fixture.window.state().outer.position(),
-        Some(Point::new(origin.x + 50.0, origin.y + 40.0)),
+        Some(moved),
         "the window manager moved the window"
     );
     assert_eq!(in_window(&fixture), (199, 149), "the pointer moved with it");
@@ -1539,7 +1543,7 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
     let mut fixture = X11Fixture::open_with_options(
         WindowOptions::default()
             .title("app title bar")
-            .size(Size::new(400.0, 300.0))
+            .size(flui_platform::WindowExtent::try_new(Size::new(400.0, 300.0)).expect("an extent"))
             .frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
         Rc::clone(&handler) as Rc<dyn flui_platform::WindowHandler>,
     );
@@ -1574,7 +1578,9 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
         moved.position().expect("a position"),
     );
     assert!(
-        to.x > from.x + 30.0 && to.y > from.y + 15.0,
+        to.display() == from.display()
+            && to.at().x > from.at().x + 30.0
+            && to.at().y > from.at().y + 15.0,
         "the bar moved the window: {from:?} to {to:?}"
     );
     assert_eq!(moved.size(), before.size());
@@ -1640,7 +1646,7 @@ fn openbox_paces_an_interactive_resize_by_the_windows_counter() {
     let mut fixture = X11Fixture::open_with_options(
         WindowOptions::default()
             .title("paced resize")
-            .size(Size::new(400.0, 300.0))
+            .size(flui_platform::WindowExtent::try_new(Size::new(400.0, 300.0)).expect("an extent"))
             .frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
         RecordingWindowHandler::new() as Rc<dyn flui_platform::WindowHandler>,
     );

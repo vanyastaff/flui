@@ -4,7 +4,12 @@
 
 use flui_foundation::geometry::Size;
 use flui_native::current_platform;
-use flui_platform::{PlatformWindow, WindowFrame, WindowOptions};
+use flui_platform::{PlatformWindow, WindowExtent, WindowFrame, WindowOptions};
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
 
 /// The scale the window's snapshot reports with its drawable area.
 fn scale_of(window: &(impl PlatformWindow + ?Sized)) -> f64 {
@@ -61,13 +66,11 @@ fn test_window_lifecycle_contract() {
     // Contract 3: Window creation should either succeed or fail gracefully
     let options = WindowOptions::default()
         .title("Contract Test Window".to_string())
-        .size(Size::new(640.0, 480.0))
+        .size(extent(640.0, 480.0))
         .visible(false)
         .resizable(true)
         .frame(WindowFrame::System)
-        .min_size(Some(
-            flui_platform::WindowExtent::try_new(Size::new(320.0, 240.0)).expect("a limit"),
-        ))
+        .min_size(Some(extent(320.0, 240.0)))
         .max_size(None);
 
     match platform.open_window(
@@ -163,7 +166,7 @@ fn test_window_lifecycle_contract() {
             // Contract 10: Multiple window creation
             let options2 = WindowOptions::default()
                 .title("Contract Test Window 2".to_string())
-                .size(Size::new(400.0, 300.0))
+                .size(extent(400.0, 300.0))
                 .visible(false);
 
             match platform.open_window(
@@ -208,7 +211,7 @@ fn test_window_lifecycle_contract() {
 
 #[cfg(target_os = "windows")]
 mod native_windows {
-    use super::{physical_of, scale_of};
+    use super::{extent, physical_of, scale_of};
     use crate::Opened;
     use flui_foundation::geometry::Size;
     use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
@@ -878,7 +881,7 @@ mod native_windows {
                 } else {
                     WindowFrame::None
                 })
-                .size(Size::new(320.0, 240.0)),
+                .size(extent(320.0, 240.0)),
         )
         .expect("create actual hidden Win32 window")
     }
@@ -945,7 +948,7 @@ mod native_windows {
             platform,
             WindowOptions::default()
                 .visible(true)
-                .size(Size::new(160.0, 120.0)),
+                .size(extent(160.0, 120.0)),
         )
         .expect("create actual shown Win32 window")
     }
@@ -1018,7 +1021,7 @@ mod native_windows {
                     &owner,
                     WindowOptions::default()
                         .visible(true)
-                        .size(Size::new(160.0, 120.0)),
+                        .size(extent(160.0, 120.0)),
                 );
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 let state = Arc::new(Mutex::new((Some(initial), 0_usize)));
@@ -1135,7 +1138,7 @@ mod native_windows {
                         &owner,
                         WindowOptions::default()
                             .visible(visible)
-                            .size(Size::new(160.0, 120.0)),
+                            .size(extent(160.0, 120.0)),
                     );
                 }
                 let watchdog = owner.proxy();
@@ -1170,7 +1173,7 @@ mod native_windows {
                     &owner,
                     WindowOptions::default()
                         .visible(true)
-                        .size(Size::new(160.0, 120.0)),
+                        .size(extent(160.0, 120.0)),
                 );
                 let hwnd = hwnd_of(&window);
                 // SAFETY: the live wrapper owns this HWND on its creating
@@ -1288,7 +1291,7 @@ mod native_windows {
                     &owner,
                     WindowOptions::default()
                         .visible(minimized)
-                        .size(Size::new(160.0, 120.0)),
+                        .size(extent(160.0, 120.0)),
                 );
                 let hwnd = hwnd_of(&window);
                 if minimized {
@@ -1359,7 +1362,7 @@ mod native_windows {
                         &owner,
                         WindowOptions::default()
                             .visible(true)
-                            .size(Size::new(160.0, 120.0)),
+                            .size(extent(160.0, 120.0)),
                     );
                     windows.push(Rc::clone(&window));
                     if index == 0 {
@@ -2593,6 +2596,7 @@ mod native_windows {
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let weak = Rc::downgrade(&window);
+        let displays = platform.display_snapshot().expect("display snapshot");
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
         window.handler.react_to_state_change(move || {
@@ -2603,15 +2607,24 @@ mod native_windows {
             // creating thread; rect is a live correctly sized out-parameter.
             unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect) }
                 .expect("window rectangle");
-            let scale = scale_of(&*window);
-            let actual = flui_foundation::geometry::Point::new(
-                f64::from(rect.left) / scale,
-                f64::from(rect.top) / scale,
-            );
+            // A position is a point of its display, in that display's own
+            // logical pixels from its corner.
+            let observed = window.state().outer.position();
+            let actual = observed.map(|position| {
+                let display = displays
+                    .get(position.display())
+                    .expect("the position names a display of the snapshot");
+                let origin = display.origin.get();
+                let scale = display.scale_factor.get();
+                flui_foundation::geometry::Point::new(
+                    f64::from(rect.left - origin.x) / scale,
+                    f64::from(rect.top - origin.y) / scale,
+                )
+            });
             callback_observations
                 .lock()
                 .expect("move observations")
-                .push((actual, window.state().outer.position()));
+                .push((actual, observed.map(flui_platform::WindowPosition::at)));
         });
         for (x, y) in [(40_000, 100), (200, 150)] {
             observations.lock().expect("move observations").clear();
@@ -2631,14 +2644,15 @@ mod native_windows {
             .expect("native move");
             let values = observations.lock().expect("move observations");
             let &(actual, observed) = values.last().expect("native move delivered");
+            assert!(actual.is_some(), "the moved window has a position");
+            assert_eq!(actual, observed, "callback saw truncated or stale origin");
             assert_eq!(
-                Some(actual),
-                observed,
-                "callback saw truncated or stale origin"
-            );
-            assert_eq!(
-                window.state().outer.position(),
-                Some(actual),
+                window
+                    .state()
+                    .outer
+                    .position()
+                    .map(flui_platform::WindowPosition::at),
+                actual,
                 "getter changed after native move"
             );
         }
@@ -3079,10 +3093,11 @@ mod native_windows {
                     scale_of(&*window),
                 ));
         });
-        for requested in [Size::new(500.0, 360.0), Size::new(440.0, 280.0)] {
+        for requested in [extent(500.0, 360.0), extent(440.0, 280.0)] {
             window
                 .admit_and_apply(flui_platform::WindowCommand::SetSize(requested))
                 .expect("the native window resizes");
+            let requested = requested.get();
             let values = observations.lock().expect("resize observations");
             let &(size, scale, observed, physical, observed_scale) =
                 values.last().expect("native resize delivered");
@@ -5594,7 +5609,7 @@ mod native_windows {
             .open_window(
                 WindowOptions::default()
                     .visible(false)
-                    .size(Size::new(320.0, 240.0)),
+                    .size(extent(320.0, 240.0)),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("create actual hidden Win32 window")

@@ -3,25 +3,27 @@
 //!
 //! The owner thread's loop dispatches every window of the thread, so the
 //! window's `WM_HOTKEY` arrives without a hook in the host (ADR-0154 §9,
-//! item 4). A press is handed to its registration's
-//! [`ShortcutPresses`], which runs the listener at the owner's next turn,
-//! never inside the window procedure. A chord names a physical key: a
-//! letter, digit or punctuation key maps through the keyboard layout active
-//! when it is registered (`MapVirtualKeyExW` on its scan code), every other
-//! key to its fixed virtual key. `MOD_NOREPEAT` keeps a held chord one press.
+//! item 4). Windows has no shortcut settings an application binds through:
+//! a shortcut is bound to the trigger it prefers, or not at all, and the
+//! [`ShortcutEvent::Bound`] list names the ones bound. One whose chord
+//! another application holds, or that prefers none, is left out of it. A
+//! trigger's key is its virtual key: a letter's or digit's is its ASCII
+//! upper case, which names the key that types it on the active layout, and
+//! a named key's is fixed. `MOD_NOREPEAT` keeps a held chord one press, and
+//! Windows reports no release, so a binding hears
+//! [`ShortcutEvent::Pressed`] only.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
 use flui_platform::SystemFailure;
-use flui_platform::capability::Resolver;
-use flui_platform::keyboard::{Code, Modifiers};
+use flui_platform::keyboard::{Modifiers, NamedKey};
 use rustc_hash::FxHashMap;
-use windows::Win32::Foundation::{ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, HOT_KEY_MODIFIERS, MAPVK_VSC_TO_VK, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
-    MOD_SHIFT, MOD_WIN, MapVirtualKeyExW, RegisterHotKey, UnregisterHotKey,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
+    UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, HWND_MESSAGE,
@@ -30,197 +32,115 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
-use crate::shortcut::{
-    GlobalShortcutBackend, Shortcut, ShortcutError, ShortcutHold, ShortcutPresses,
+use crate::shortcuts::{
+    BoundShortcut, Shortcut, ShortcutBackend, ShortcutError, ShortcutEvent, ShortcutFeed,
+    ShortcutHold, ShortcutId, Trigger, TriggerKey, function_key,
 };
 
 /// The highest id an application's hot key may have.
 const MAX_HOTKEY_ID: i32 = 0xBFFF;
 
-/// Where a key's virtual key comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeySource {
-    /// A key whose character the layout decides, by its set-1 scan code.
-    Scan(u32),
-    /// A key whose virtual key is the same on every layout.
-    Fixed(u32),
-}
-
-/// How `code` is found, or `None` for a key a hot key cannot name.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one table row per key; split, the table would hide its gaps"
-)]
-pub(super) fn key_source(code: Code) -> Option<KeySource> {
-    use KeySource::{Fixed, Scan};
-    let source = match code {
-        Code::KeyA => Scan(0x1E),
-        Code::KeyB => Scan(0x30),
-        Code::KeyC => Scan(0x2E),
-        Code::KeyD => Scan(0x20),
-        Code::KeyE => Scan(0x12),
-        Code::KeyF => Scan(0x21),
-        Code::KeyG => Scan(0x22),
-        Code::KeyH => Scan(0x23),
-        Code::KeyI => Scan(0x17),
-        Code::KeyJ => Scan(0x24),
-        Code::KeyK => Scan(0x25),
-        Code::KeyL => Scan(0x26),
-        Code::KeyM => Scan(0x32),
-        Code::KeyN => Scan(0x31),
-        Code::KeyO => Scan(0x18),
-        Code::KeyP => Scan(0x19),
-        Code::KeyQ => Scan(0x10),
-        Code::KeyR => Scan(0x13),
-        Code::KeyS => Scan(0x1F),
-        Code::KeyT => Scan(0x14),
-        Code::KeyU => Scan(0x16),
-        Code::KeyV => Scan(0x2F),
-        Code::KeyW => Scan(0x11),
-        Code::KeyX => Scan(0x2D),
-        Code::KeyY => Scan(0x15),
-        Code::KeyZ => Scan(0x2C),
-        Code::Digit1 => Scan(0x02),
-        Code::Digit2 => Scan(0x03),
-        Code::Digit3 => Scan(0x04),
-        Code::Digit4 => Scan(0x05),
-        Code::Digit5 => Scan(0x06),
-        Code::Digit6 => Scan(0x07),
-        Code::Digit7 => Scan(0x08),
-        Code::Digit8 => Scan(0x09),
-        Code::Digit9 => Scan(0x0A),
-        Code::Digit0 => Scan(0x0B),
-        Code::Minus => Scan(0x0C),
-        Code::Equal => Scan(0x0D),
-        Code::BracketLeft => Scan(0x1A),
-        Code::BracketRight => Scan(0x1B),
-        Code::Semicolon => Scan(0x27),
-        Code::Quote => Scan(0x28),
-        Code::Backquote => Scan(0x29),
-        Code::Backslash => Scan(0x2B),
-        Code::Comma => Scan(0x33),
-        Code::Period => Scan(0x34),
-        Code::Slash => Scan(0x35),
-        Code::F1 => Fixed(0x70),
-        Code::F2 => Fixed(0x71),
-        Code::F3 => Fixed(0x72),
-        Code::F4 => Fixed(0x73),
-        Code::F5 => Fixed(0x74),
-        Code::F6 => Fixed(0x75),
-        Code::F7 => Fixed(0x76),
-        Code::F8 => Fixed(0x77),
-        Code::F9 => Fixed(0x78),
-        Code::F10 => Fixed(0x79),
-        Code::F11 => Fixed(0x7A),
-        Code::F12 => Fixed(0x7B),
-        Code::F13 => Fixed(0x7C),
-        Code::F14 => Fixed(0x7D),
-        Code::F15 => Fixed(0x7E),
-        Code::F16 => Fixed(0x7F),
-        Code::F17 => Fixed(0x80),
-        Code::F18 => Fixed(0x81),
-        Code::F19 => Fixed(0x82),
-        Code::F20 => Fixed(0x83),
-        Code::F21 => Fixed(0x84),
-        Code::F22 => Fixed(0x85),
-        Code::F23 => Fixed(0x86),
-        Code::F24 => Fixed(0x87),
-        Code::Space => Fixed(0x20),
-        Code::Enter => Fixed(0x0D),
-        Code::Escape => Fixed(0x1B),
-        Code::Tab => Fixed(0x09),
-        Code::Backspace => Fixed(0x08),
-        Code::Insert => Fixed(0x2D),
-        Code::Delete => Fixed(0x2E),
-        Code::Home => Fixed(0x24),
-        Code::End => Fixed(0x23),
-        Code::PageUp => Fixed(0x21),
-        Code::PageDown => Fixed(0x22),
-        Code::ArrowLeft => Fixed(0x25),
-        Code::ArrowUp => Fixed(0x26),
-        Code::ArrowRight => Fixed(0x27),
-        Code::ArrowDown => Fixed(0x28),
-        Code::Numpad0 => Fixed(0x60),
-        Code::Numpad1 => Fixed(0x61),
-        Code::Numpad2 => Fixed(0x62),
-        Code::Numpad3 => Fixed(0x63),
-        Code::Numpad4 => Fixed(0x64),
-        Code::Numpad5 => Fixed(0x65),
-        Code::Numpad6 => Fixed(0x66),
-        Code::Numpad7 => Fixed(0x67),
-        Code::Numpad8 => Fixed(0x68),
-        Code::Numpad9 => Fixed(0x69),
-        Code::PrintScreen => Fixed(0x2C),
-        Code::Pause => Fixed(0x13),
-        Code::MediaPlayPause => Fixed(0xB3),
-        Code::MediaStop => Fixed(0xB2),
-        Code::MediaTrackNext => Fixed(0xB0),
-        Code::MediaTrackPrevious => Fixed(0xB1),
-        Code::AudioVolumeMute => Fixed(0xAD),
-        Code::AudioVolumeDown => Fixed(0xAE),
-        Code::AudioVolumeUp => Fixed(0xAF),
-        _ => return None,
+/// The virtual key and the name Windows shows of a named key a trigger
+/// takes.
+fn named_key(key: NamedKey) -> Option<(u32, String)> {
+    let (virtual_key, name) = match key {
+        NamedKey::Enter => (0x0D, "Enter"),
+        NamedKey::Escape => (0x1B, "Esc"),
+        NamedKey::Tab => (0x09, "Tab"),
+        NamedKey::Backspace => (0x08, "Backspace"),
+        NamedKey::Insert => (0x2D, "Ins"),
+        NamedKey::Delete => (0x2E, "Del"),
+        NamedKey::Home => (0x24, "Home"),
+        NamedKey::End => (0x23, "End"),
+        NamedKey::PageUp => (0x21, "PgUp"),
+        NamedKey::PageDown => (0x22, "PgDn"),
+        NamedKey::ArrowLeft => (0x25, "Left"),
+        NamedKey::ArrowUp => (0x26, "Up"),
+        NamedKey::ArrowRight => (0x27, "Right"),
+        NamedKey::ArrowDown => (0x28, "Down"),
+        _ => {
+            let number = function_key(key)?;
+            return Some((0x6F + u32::from(number), format!("F{number}")));
+        }
     };
-    Some(source)
+    Some((virtual_key, name.to_owned()))
 }
 
-/// The hot-key modifiers of a shortcut's: every chord with `MOD_NOREPEAT`.
-pub(super) fn hotkey_modifiers(modifiers: Modifiers) -> HOT_KEY_MODIFIERS {
-    let mut hotkey = MOD_NOREPEAT;
-    for (modifier, flag) in [
-        (Modifiers::CONTROL, MOD_CONTROL),
-        (Modifiers::ALT, MOD_ALT),
-        (Modifiers::SHIFT, MOD_SHIFT),
-        (Modifiers::META, MOD_WIN),
+/// A trigger as `RegisterHotKey` takes it: its modifiers with
+/// `MOD_NOREPEAT`, its virtual key, and the chord as Windows shows it
+/// (`Ctrl+Shift+A`).
+pub(super) fn hotkey(trigger: &Trigger) -> (HOT_KEY_MODIFIERS, u32, String) {
+    let mut modifiers = MOD_NOREPEAT;
+    let mut shown = String::new();
+    for (modifier, flag, name) in [
+        (Modifiers::CONTROL, MOD_CONTROL, "Ctrl+"),
+        (Modifiers::ALT, MOD_ALT, "Alt+"),
+        (Modifiers::SHIFT, MOD_SHIFT, "Shift+"),
+        (Modifiers::META, MOD_WIN, "Win+"),
     ] {
-        if modifiers.contains(modifier) {
-            hotkey |= flag;
+        if trigger.modifiers().contains(modifier) {
+            modifiers |= flag;
+            shown.push_str(name);
         }
     }
-    hotkey
+    let virtual_key = match trigger.key() {
+        TriggerKey::Character(character) => {
+            let upper = character.to_ascii_uppercase();
+            shown.push(upper);
+            u32::from(upper)
+        }
+        TriggerKey::Named(named) => {
+            let (virtual_key, name) =
+                named_key(named).expect("BUG: a trigger holds a key every system names");
+            shown.push_str(&name);
+            virtual_key
+        }
+    };
+    (modifiers, virtual_key, shown)
 }
 
 /// The hot keys as the provider reaches them, on the owner thread.
 pub(crate) trait HotkeySystem: 'static {
     /// Register hot key `id`; the failure is the Win32 error.
-    fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, key: KeySource) -> Result<(), i32>;
+    fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, virtual_key: u32) -> Result<(), i32>;
 
     /// Unregister hot key `id`.
     fn unregister(&self, id: i32);
 }
 
-/// The presses each registered hot key reports to, by id, and the last id
+/// Where each registered hot key's presses go, by id, and the last id
 /// handed out.
 #[derive(Default)]
 pub(crate) struct HotkeyTable {
-    entries: RefCell<FxHashMap<i32, ShortcutPresses>>,
+    entries: RefCell<FxHashMap<i32, (ShortcutFeed, ShortcutId)>>,
     last: Cell<i32>,
 }
 
 impl HotkeyTable {
-    /// An id no hot key of this runtime has had: never handed out again,
-    /// so a `WM_HOTKEY` still queued for a dropped registration finds no
-    /// entry rather than a later one. `None` once all [`MAX_HOTKEY_ID`]
-    /// were handed out.
-    fn mint(&self) -> Option<i32> {
-        let next = self.last.get().checked_add(1)?;
-        (next <= MAX_HOTKEY_ID).then(|| {
-            self.last.set(next);
-            next
+    /// `count` ids no hot key of this runtime has had: never handed out
+    /// again, so a `WM_HOTKEY` still queued for a dropped binding finds no
+    /// entry rather than a later one. `None`, and nothing handed out, when
+    /// fewer than `count` are left of [`MAX_HOTKEY_ID`].
+    fn mint(&self, count: usize) -> Option<std::ops::RangeInclusive<i32>> {
+        let first = self.last.get().checked_add(1)?;
+        let last = self.last.get().checked_add(i32::try_from(count).ok()?)?;
+        (last <= MAX_HOTKEY_ID).then(|| {
+            self.last.set(last);
+            first..=last
         })
     }
 
-    /// Hot key `id` was pressed: its registration hears it at the owner's
-    /// next turn. The table's borrow ends before the press is reported.
+    /// Hot key `id` was pressed: its binding hears it. The table's borrow
+    /// ends before the press is sent.
     pub(super) fn pressed(&self, id: i32) {
-        let presses = self.entries.borrow().get(&id).cloned();
-        if let Some(presses) = presses {
-            presses.press();
+        let entry = self.entries.borrow().get(&id).cloned();
+        if let Some((feed, shortcut)) = entry {
+            feed.send(ShortcutEvent::Pressed(shortcut));
         }
     }
 
-    fn insert(&self, id: i32, presses: ShortcutPresses) {
-        let replaced = self.entries.borrow_mut().insert(id, presses);
+    fn insert(&self, id: i32, feed: ShortcutFeed, shortcut: ShortcutId) {
+        let replaced = self.entries.borrow_mut().insert(id, (feed, shortcut));
         drop(replaced);
     }
 
@@ -234,7 +154,7 @@ impl HotkeyTable {
 type MakeSystem = Box<dyn Fn(&Rc<HotkeyTable>) -> Result<Box<dyn HotkeySystem>, i32>>;
 
 /// One UI runtime's hot keys: the table and the system that registers
-/// them, made with the first registration.
+/// them, made with the first binding.
 pub(crate) struct HotkeyWindow {
     table: Rc<HotkeyTable>,
     system: OnceCell<Result<Box<dyn HotkeySystem>, i32>>,
@@ -265,26 +185,41 @@ impl HotkeyWindow {
             .map_err(|code| *code)
     }
 
-    /// Register `shortcut` reporting to `presses`: its id, or why not.
-    fn register(&self, shortcut: Shortcut, presses: ShortcutPresses) -> Result<i32, ShortcutError> {
-        let key = key_source(shortcut.code()).ok_or(ShortcutError::KeyNotSupported)?;
+    /// Register each of `shortcuts` that prefers a trigger, its presses
+    /// sent to `feed`: the ids registered and the shortcuts bound, or why
+    /// none could be.
+    fn bind(
+        &self,
+        shortcuts: Vec<Shortcut>,
+        feed: &ShortcutFeed,
+    ) -> Result<(Vec<i32>, Vec<BoundShortcut>), ShortcutError> {
         let system = self
             .system()
             .map_err(|code| ShortcutError::Failed(SystemFailure::Os(code)))?;
-        let id = self.table.mint().ok_or(ShortcutError::Exhausted)?;
-        // In the table first: a press the system reports at once finds it.
-        self.table.insert(id, presses);
-        if let Err(code) = system.register(id, hotkey_modifiers(shortcut.modifiers()), key) {
-            self.table.remove(id);
-            let taken =
-                i32::try_from(ERROR_HOTKEY_ALREADY_REGISTERED.0).is_ok_and(|taken| taken == code);
-            return Err(if taken {
-                ShortcutError::Taken
-            } else {
-                ShortcutError::Failed(SystemFailure::Os(code))
-            });
+        let ids = self
+            .table
+            .mint(shortcuts.len())
+            .ok_or(ShortcutError::Exhausted)?;
+        let mut registered = Vec::new();
+        let mut bound = Vec::new();
+        for (id, shortcut) in ids.zip(shortcuts) {
+            let Some(trigger) = &shortcut.preferred else {
+                continue;
+            };
+            let (modifiers, virtual_key, shown) = hotkey(trigger);
+            // In the table first: a press the system reports at once finds it.
+            self.table.insert(id, feed.clone(), shortcut.id.clone());
+            match system.register(id, modifiers, virtual_key) {
+                Ok(()) => {
+                    registered.push(id);
+                    bound.push(BoundShortcut::new(shortcut.id, Some(shown)));
+                }
+                // Another application, or this binding, holds the chord:
+                // this shortcut is not bound.
+                Err(_) => self.table.remove(id),
+            }
         }
-        Ok(id)
+        Ok((registered, bound))
     }
 
     fn unregister(&self, id: i32) {
@@ -295,19 +230,21 @@ impl HotkeyWindow {
     }
 }
 
-/// Unregisters its hot key when dropped.
+/// Unregisters a binding's hot keys when dropped.
 struct Registered {
     hotkeys: Rc<HotkeyWindow>,
-    id: i32,
+    ids: Vec<i32>,
 }
 
 impl Drop for Registered {
     fn drop(&mut self) {
-        self.hotkeys.unregister(self.id);
+        for id in self.ids.drain(..) {
+            self.hotkeys.unregister(id);
+        }
     }
 }
 
-/// [`GlobalShortcutBackend`] over `RegisterHotKey`.
+/// [`ShortcutBackend`] over `RegisterHotKey`.
 pub(crate) struct WindowsShortcuts {
     hotkeys: Rc<HotkeyWindow>,
 }
@@ -318,23 +255,19 @@ impl WindowsShortcuts {
     }
 }
 
-impl GlobalShortcutBackend for WindowsShortcuts {
-    fn register(
-        &self,
-        shortcut: Shortcut,
-        presses: ShortcutPresses,
-        answer: Resolver<Result<(), ShortcutError>>,
-    ) -> ShortcutHold {
-        match self.hotkeys.register(shortcut, presses) {
-            Ok(id) => {
-                let _ = answer.resolve(Ok(()));
-                ShortcutHold::new(Registered {
+impl ShortcutBackend for WindowsShortcuts {
+    fn bind(&self, shortcuts: Vec<Shortcut>, feed: ShortcutFeed) -> ShortcutHold {
+        match self.hotkeys.bind(shortcuts, &feed) {
+            Ok((ids, bound)) => {
+                let hold = Registered {
                     hotkeys: Rc::clone(&self.hotkeys),
-                    id,
-                })
+                    ids,
+                };
+                feed.send(ShortcutEvent::Bound(bound));
+                ShortcutHold::new(hold)
             }
             Err(error) => {
-                let _ = answer.resolve(Err(error));
+                feed.send(ShortcutEvent::Ended(error));
                 ShortcutHold::new(())
             }
         }
@@ -399,20 +332,7 @@ impl MessageWindow {
 }
 
 impl HotkeySystem for MessageWindow {
-    fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, key: KeySource) -> Result<(), i32> {
-        let virtual_key = match key {
-            KeySource::Fixed(virtual_key) => virtual_key,
-            // SAFETY: plain values; the layout is this thread's active one.
-            KeySource::Scan(scan) => unsafe {
-                MapVirtualKeyExW(scan, MAPVK_VSC_TO_VK, Some(GetKeyboardLayout(0)))
-            },
-        };
-        if virtual_key == 0 {
-            return Err(
-                i32::try_from(windows::Win32::Foundation::ERROR_INVALID_PARAMETER.0)
-                    .unwrap_or(i32::MAX),
-            );
-        }
+    fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, virtual_key: u32) -> Result<(), i32> {
         // SAFETY: the window is this thread's; a hot key belongs to it until
         // `unregister` or its destruction.
         unsafe { RegisterHotKey(Some(self.window), id, modifiers, virtual_key) }
@@ -469,20 +389,20 @@ fn hotkey_message(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) ->
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use flui_platform::capability::Abandoned;
-    use flui_platform::keyboard::{Code, Modifiers};
+    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+        MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
     };
 
-    use super::{
-        HotkeySystem, HotkeyTable, HotkeyWindow, KeySource, WindowsShortcuts, hotkey_modifiers,
-        key_source,
+    use super::{HotkeySystem, HotkeyTable, HotkeyWindow, WindowsShortcuts, hotkey};
+    use crate::shortcuts::{
+        BoundShortcut, GlobalShortcuts, Shortcut, ShortcutBinding, ShortcutError, ShortcutEvent,
+        ShortcutId, Trigger,
     };
-    use crate::shortcut::{GlobalShortcuts, Shortcut, ShortcutError, ShortcutResult};
     use crate::testing::win32::{FakeHotkeys, Held, TestOwner};
 
     fn window_over(fake: FakeHotkeys) -> (Rc<HotkeyWindow>, Held) {
@@ -494,65 +414,98 @@ mod tests {
         (Rc::new(window), held)
     }
 
-    #[test]
-    fn a_chord_names_a_physical_key_and_never_repeats() {
-        assert_eq!(key_source(Code::KeyQ), Some(KeySource::Scan(0x10)));
-        assert_eq!(key_source(Code::Digit0), Some(KeySource::Scan(0x0B)));
-        assert_eq!(key_source(Code::F13), Some(KeySource::Fixed(0x7C)));
-        assert_eq!(
-            key_source(Code::MediaPlayPause),
-            Some(KeySource::Fixed(0xB3))
-        );
-        assert_eq!(key_source(Code::Fn), None, "a key a hot key cannot name");
-        assert_eq!(
-            hotkey_modifiers(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::META),
-            MOD_CONTROL | MOD_SHIFT | MOD_WIN | MOD_NOREPEAT
-        );
+    fn id(name: &str) -> ShortcutId {
+        ShortcutId::try_new(name).expect("an id")
+    }
+
+    fn trigger(modifiers: Modifiers, key: &Key) -> Trigger {
+        Trigger::try_new(modifiers, key).expect("a trigger")
+    }
+
+    /// The shortcut `name` preferring `modifiers` and `key`.
+    fn shortcut(name: &str, modifiers: Modifiers, key: &Key) -> Shortcut {
+        Shortcut::new(id(name), "Does a thing").preferred(trigger(modifiers, key))
+    }
+
+    /// The next event `binding` hears, after the owner's turns.
+    fn next(owner: &TestOwner, binding: &ShortcutBinding) -> ShortcutEvent {
+        let landed: Rc<RefCell<Option<Result<ShortcutEvent, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&landed);
+        binding
+            .next()
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        owner.turn_until(|| landed.borrow().is_some());
+        let event = landed.borrow_mut().take();
+        event.expect("landed").expect("not abandoned")
     }
 
     #[test]
-    fn a_press_runs_the_listener_at_the_next_turn_until_the_registration_drops() {
+    fn a_trigger_becomes_a_virtual_key_that_never_repeats_and_its_windows_name() {
+        let ctrl_shift = Modifiers::CONTROL | Modifiers::SHIFT;
+        let cases = [
+            (
+                trigger(ctrl_shift, &Key::character("k")),
+                (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 0x4B, "Ctrl+Shift+K"),
+            ),
+            (
+                trigger(Modifiers::META, &Key::character("7")),
+                (MOD_WIN | MOD_NOREPEAT, 0x37, "Win+7"),
+            ),
+            (
+                trigger(Modifiers::ALT, &Key::Named(NamedKey::F24)),
+                (MOD_ALT | MOD_NOREPEAT, 0x87, "Alt+F24"),
+            ),
+            (
+                trigger(Modifiers::NONE, &Key::Named(NamedKey::PageDown)),
+                (MOD_NOREPEAT, 0x22, "PgDn"),
+            ),
+        ];
+        for (trigger, (modifiers, virtual_key, shown)) in cases {
+            assert_eq!(
+                hotkey(&trigger),
+                (modifiers, virtual_key, shown.to_owned()),
+                "{trigger:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_binding_hears_what_was_bound_then_each_press_until_it_drops() {
         let owner = TestOwner::new();
         let (hotkeys, held) = window_over(FakeHotkeys::default());
         let ctx = owner.ctx(None);
         let shortcuts = GlobalShortcuts::new(WindowsShortcuts::new(Rc::clone(&hotkeys)), &ctx);
-        let shortcut = Shortcut::try_new(Modifiers::CONTROL, Code::KeyK).expect("a chord");
-        let pressed = Rc::new(Cell::new(0_u32));
-        let counting = Rc::clone(&pressed);
-        let answered: Rc<RefCell<Option<Result<ShortcutResult, Abandoned>>>> = Rc::default();
-        let into = Rc::clone(&answered);
-        shortcuts
-            .register(shortcut, move || counting.set(counting.get() + 1))
-            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
-        owner.turn_until(|| answered.borrow().is_some());
-        let registration = answered
-            .borrow_mut()
-            .take()
-            .expect("answered")
-            .expect("not abandoned")
-            .expect("registered");
-        let [(id, modifiers, key)] = held.borrow().as_slice().to_owned()[..] else {
+        let binding = shortcuts.bind(vec![
+            shortcut("record", Modifiers::CONTROL, &Key::character("k")),
+            // Windows has no settings to choose a trigger in.
+            Shortcut::new(id("unchosen"), "Waits for a trigger"),
+        ]);
+        assert_eq!(
+            next(&owner, &binding),
+            ShortcutEvent::Bound(vec![BoundShortcut::new(
+                id("record"),
+                Some("Ctrl+K".to_owned())
+            )])
+        );
+        let [(hotkey_id, modifiers, virtual_key)] = held.borrow().as_slice().to_owned()[..] else {
             panic!("one hot key held: {:?}", held.borrow());
         };
-        assert_eq!(modifiers, MOD_CONTROL | MOD_NOREPEAT);
-        assert_eq!(key, KeySource::Scan(0x25));
+        assert_eq!((modifiers, virtual_key), (MOD_CONTROL | MOD_NOREPEAT, 0x4B));
 
-        // What the window procedure does with a `WM_HOTKEY` of `id`.
-        let table = &hotkeys.table;
-        table.pressed(id);
-        assert_eq!(pressed.get(), 0, "never inside the window procedure");
-        owner.turn();
-        assert_eq!(pressed.get(), 1);
+        // What the window procedure does with a `WM_HOTKEY` of the id.
+        hotkeys.table.pressed(hotkey_id);
+        assert_eq!(next(&owner, &binding), ShortcutEvent::Pressed(id("record")));
 
-        table.pressed(id);
-        drop(registration);
-        owner.turn();
-        assert_eq!(pressed.get(), 1, "a press after the drop runs nothing");
+        drop(binding);
         assert_eq!(*held.borrow(), [], "the drop unregistered");
+        assert!(
+            hotkeys.table.entries.borrow().is_empty(),
+            "a press after the drop finds no binding"
+        );
     }
 
     #[test]
-    fn a_chord_another_application_holds_is_taken() {
+    fn a_chord_another_application_holds_is_left_out() {
         let owner = TestOwner::new();
         let (hotkeys, held) = window_over(FakeHotkeys {
             refuse: Some(1409),
@@ -560,88 +513,71 @@ mod tests {
         });
         let ctx = owner.ctx(None);
         let shortcuts = GlobalShortcuts::new(WindowsShortcuts::new(hotkeys), &ctx);
-        let shortcut = Shortcut::try_new(Modifiers::ALT, Code::Space).expect("a chord");
-        let answered: Rc<RefCell<Option<Result<ShortcutResult, Abandoned>>>> = Rc::default();
-        let into = Rc::clone(&answered);
-        shortcuts
-            .register(shortcut, || {})
-            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
-        owner.turn_until(|| answered.borrow().is_some());
-        assert!(matches!(
-            answered.borrow_mut().take(),
-            Some(Ok(Err(ShortcutError::Taken)))
-        ));
+        let binding = shortcuts.bind(vec![shortcut(
+            "launcher",
+            Modifiers::ALT,
+            &Key::Named(NamedKey::Enter),
+        )]);
+        assert_eq!(next(&owner, &binding), ShortcutEvent::Bound(Vec::new()));
         assert_eq!(*held.borrow(), []);
     }
 
-    /// Register `shortcut` counting presses into `count`, and run turns
-    /// until the system answered.
-    fn registered(
-        owner: &TestOwner,
-        shortcuts: &GlobalShortcuts,
-        shortcut: Shortcut,
-        count: &Rc<Cell<u32>>,
-    ) -> ShortcutResult {
-        let counting = Rc::clone(count);
-        let answered: Rc<RefCell<Option<Result<ShortcutResult, Abandoned>>>> = Rc::default();
-        let into = Rc::clone(&answered);
-        shortcuts
-            .register(shortcut, move || counting.set(counting.get() + 1))
-            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
-        owner.turn_until(|| answered.borrow().is_some());
-        answered
-            .borrow_mut()
-            .take()
-            .expect("answered")
-            .expect("not abandoned")
-    }
-
     #[test]
-    fn a_press_queued_for_a_dropped_chord_never_reaches_the_chord_after_it() {
+    fn a_press_queued_for_a_dropped_binding_never_reaches_the_binding_after_it() {
         let owner = TestOwner::new();
         let (hotkeys, held) = window_over(FakeHotkeys::default());
         let ctx = owner.ctx(None);
         let shortcuts = GlobalShortcuts::new(WindowsShortcuts::new(Rc::clone(&hotkeys)), &ctx);
-        let first = Shortcut::try_new(Modifiers::CONTROL, Code::KeyA).expect("a chord");
-        let second = Shortcut::try_new(Modifiers::CONTROL, Code::KeyB).expect("a chord");
-        let (first_count, second_count) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let chord = || shortcut("same", Modifiers::CONTROL, &Key::character("a"));
 
-        let registration = registered(&owner, &shortcuts, first, &first_count).expect("first");
+        let first = shortcuts.bind(vec![chord()]);
         let first_id = held.borrow()[0].0;
-        drop(registration);
-        // The second takes a fresh id in the same turn, before the queued
+        drop(first);
+        // The second binds the same chord at once, before the queued
         // `WM_HOTKEY` of the first is dispatched.
-        let second_registration =
-            registered(&owner, &shortcuts, second, &second_count).expect("second");
+        let second = shortcuts.bind(vec![chord()]);
         let second_id = held.borrow()[0].0;
         assert_ne!(first_id, second_id, "an id is never handed out twice");
+        assert!(matches!(next(&owner, &second), ShortcutEvent::Bound(_)));
 
+        // The late press of the dropped binding reaches nobody; the
+        // second's press is the first event the second hears after `Bound`.
         hotkeys.table.pressed(first_id);
-        owner.turn();
-        assert_eq!(
-            (first_count.get(), second_count.get()),
-            (0, 0),
-            "the late press of the dropped chord runs nobody"
-        );
         hotkeys.table.pressed(second_id);
+        assert_eq!(next(&owner, &second), ShortcutEvent::Pressed(id("same")));
+        assert_eq!(second.dropped(), 0);
+        let landed: Rc<RefCell<Option<Result<ShortcutEvent, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&landed);
+        second
+            .next()
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
         owner.turn();
-        assert_eq!(second_count.get(), 1);
-        drop(second_registration);
+        assert!(landed.borrow().is_none(), "one press, not two");
     }
 
     #[test]
-    fn a_runtime_that_numbered_every_hot_key_refuses_the_next_for_good() {
+    fn a_runtime_that_numbered_every_hot_key_ends_the_next_binding_for_good() {
         let owner = TestOwner::new();
         let (hotkeys, held) = window_over(FakeHotkeys::default());
-        hotkeys.table.last.set(super::MAX_HOTKEY_ID);
+        hotkeys.table.last.set(super::MAX_HOTKEY_ID - 1);
         let ctx = owner.ctx(None);
         let shortcuts = GlobalShortcuts::new(WindowsShortcuts::new(hotkeys), &ctx);
-        let chord = Shortcut::try_new(Modifiers::CONTROL, Code::KeyZ).expect("a chord");
-        let count = Rc::new(Cell::new(0));
-        assert!(matches!(
-            registered(&owner, &shortcuts, chord, &count),
-            Err(ShortcutError::Exhausted)
-        ));
+        let two = vec![
+            shortcut("one", Modifiers::CONTROL, &Key::character("y")),
+            shortcut("two", Modifiers::CONTROL, &Key::character("z")),
+        ];
+        let binding = shortcuts.bind(two);
+        assert_eq!(
+            next(&owner, &binding),
+            ShortcutEvent::Ended(ShortcutError::Exhausted),
+            "one number is left, the binding needs two: none is handed out"
+        );
         assert_eq!(*held.borrow(), []);
+        let one = shortcuts.bind(vec![shortcut(
+            "one",
+            Modifiers::CONTROL,
+            &Key::character("y"),
+        )]);
+        assert!(matches!(next(&owner, &one), ShortcutEvent::Bound(list) if list.len() == 1));
     }
 }

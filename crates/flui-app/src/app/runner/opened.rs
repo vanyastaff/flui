@@ -78,7 +78,7 @@ impl OpenSettings {
         feature = "single-instance",
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
-    pub(crate) fn keeps_one_instance(&self, identity: &flui_log::AppIdentity) -> bool {
+    pub(crate) fn keeps_one_instance(&self, identity: &flui_log::identity::AppIdentity) -> bool {
         // The Linux and Windows hosts keep one instance; macOS, iOS and
         // Android keep one themselves, and each page on the Web is an
         // application of its own.
@@ -104,7 +104,7 @@ impl OpenSettings {
         not(feature = "single-instance"),
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
-    pub(crate) fn keeps_one_instance(&self, _identity: &flui_log::AppIdentity) -> bool {
+    pub(crate) fn keeps_one_instance(&self, _identity: &flui_log::identity::AppIdentity) -> bool {
         if cfg!(any(target_os = "linux", windows)) && self.declares_a_launch() {
             tracing::warn!(
                 "the application declares a URL scheme or a file type but is built without flui's \
@@ -1109,7 +1109,7 @@ fn report_unreached(address: PresentationAddress, error: &flui_runtime::owner::D
 #[cfg(all(test, feature = "single-instance", any(target_os = "linux", windows)))]
 mod tests {
     use flui_foundation::AppId;
-    use flui_log::AppIdentity;
+    use flui_log::identity::AppIdentity;
     use flui_view::navigation::{FileTypeDeclaration, OpenDeclarations};
 
     use super::OpenSettings;

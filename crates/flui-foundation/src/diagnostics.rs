@@ -54,5 +54,5 @@ pub const PRESENTATION_ID: &str = "presentation_id";
 /// framework type that withholds text it may not publish (a caught panic's
 /// payload, for one) formats as it, so both read the same in a log. It is
 /// here, not in `flui-log`, because only composition roots may depend on
-/// `flui-log`; that crate re-exports it at `flui_log::REDACTED_VALUE`.
+/// `flui-log`.
 pub const REDACTED_VALUE: &str = "<private>";

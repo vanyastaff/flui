@@ -7,48 +7,53 @@
 //! - **Dialogs**: [`dialog::FileDialogs`] and [`dialog::MessageBoxes`],
 //!   modal to the acquiring widget's window, one dialog per window.
 //! - **Sharing**: [`share::Share`], the system's share sheet.
-//! - **Launch at login**: [`login::LaunchAtLogin`].
-//! - **Global shortcuts**: [`shortcut::GlobalShortcuts`].
-//! - **Taskbar**: [`taskbar::Taskbar`], a window's progress and badge.
+//! - **Autostart**: [`autostart::Autostart`], starting the application when
+//!   the user logs in.
+//! - **Global shortcuts**: [`shortcuts::GlobalShortcuts`], shortcuts that
+//!   reach the application while another one has the focus.
+//! - **The launcher entry**: [`taskbar::TaskbarEntry`], progress and a count
+//!   on the application's dock or taskbar entry.
+//! - **User folders**: [`user_dirs::UserDirs`], where the user keeps
+//!   documents, downloads and the rest.
 //! - **Jump list**: [`jump_list::JumpList`], Windows only.
-//! - **The OS**: [`os::Os`], the user's folders and what the system is.
+//! - **The OS**: [`os::Os`], what the system is.
 //!
 //! An application registers [`SystemPlugin`]; a scenario registers
 //! `testing::ScriptedSystem` instead (feature `testing`).
 //!
-//! Windows provides every service. Linux reaches the launcher and the file
-//! dialogs through the XDG desktop portal on the session bus. Elsewhere, and
-//! for the services a platform's provider does not have yet, the handle is
-//! refused with `UnsupportedReason::NotYetOnThisHost`, never faked
-//! (ADR-0154 §10); the jump list is refused with `NotOnThisPlatform` off
-//! Windows.
+//! Windows provides every service. Linux reaches the launcher, the file
+//! dialogs, autostart and the global shortcuts through the XDG desktop
+//! portal on the session bus, the launcher entry through its session-bus
+//! signal, and the user folders through the XDG user directories; it
+//! refuses the message box, the share sheet and the jump list with
+//! `UnsupportedReason::NotOnThisPlatform`, since no portal has them.
+//! Elsewhere, and for the system information off Windows, the handle is
+//! refused with `UnsupportedReason::NotYetOnThisHost` until a platform's
+//! provider lands, never faked (ADR-0154 §10); the jump list is refused with
+//! `NotOnThisPlatform` everywhere but Windows.
 
+pub mod autostart;
 pub mod dialog;
 pub mod jump_list;
-pub mod login;
 pub mod os;
 #[cfg(windows)]
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
 pub mod share;
-pub mod shortcut;
+pub mod shortcuts;
 pub mod taskbar;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod user_dirs;
 #[cfg(windows)]
 mod win32;
 
 use flui_platform::capability::{CapabilityRegistrar, Plugin};
-#[cfg(not(windows))]
-use flui_platform::{
-    UnsupportedReason,
-    capability::{Capability, ProviderContext},
-};
 
 /// The system services' providers for the platform the application runs on:
 /// the Windows shell on Windows, the XDG desktop portal on Linux, and a
-/// refusal for what a platform's provider does not have yet.
+/// refusal for what a platform's provider does not have.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct SystemPlugin;
@@ -66,36 +71,53 @@ impl Plugin for SystemPlugin {
         #[cfg(windows)]
         win32::register(registrar);
         #[cfg(target_os = "linux")]
-        portal::register(registrar, None);
+        portal::register(registrar, None, None);
         #[cfg(not(windows))]
-        refuse_elsewhere(registrar);
+        refusals::register(registrar);
     }
 }
 
-/// Register a refusal of `C` for `reason`, a provider that never fakes the
-/// service.
+/// The refusals off Windows: the services no portal has, the jump list, and
+/// what a platform's provider does not have yet.
 #[cfg(not(windows))]
-fn refuse<C: Capability>(registrar: &mut CapabilityRegistrar, reason: UnsupportedReason) {
-    registrar.provide::<C>(move |_: &ProviderContext<'_>| {
-        Err::<C::Handle, _>(flui_platform::Unsupported::of::<C>(reason))
-    });
-}
+mod refusals {
+    use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
+    use flui_platform::{Unsupported, UnsupportedReason};
 
-/// The refusals off Windows: the services no provider of this platform has
-/// yet, and the jump list, which only Windows has.
-#[cfg(not(windows))]
-fn refuse_elsewhere(registrar: &mut CapabilityRegistrar) {
-    let not_yet = UnsupportedReason::NotYetOnThisHost;
-    #[cfg(not(target_os = "linux"))]
-    {
-        refuse::<flui_platform::launch::LauncherCapability>(registrar, not_yet);
-        refuse::<dialog::FileDialogCapability>(registrar, not_yet);
+    use crate::os::OsCapability;
+
+    /// Provide `C` as a refusal for `reason`.
+    fn refuse<C: Capability>(registrar: &mut CapabilityRegistrar, reason: UnsupportedReason) {
+        registrar.provide::<C>(move |_: &ProviderContext<'_>| {
+            Err::<C::Handle, _>(Unsupported::of::<C>(reason))
+        });
     }
-    refuse::<dialog::MessageBoxCapability>(registrar, not_yet);
-    refuse::<share::ShareCapability>(registrar, not_yet);
-    refuse::<login::LaunchAtLoginCapability>(registrar, not_yet);
-    refuse::<shortcut::GlobalShortcutCapability>(registrar, not_yet);
-    refuse::<taskbar::TaskbarCapability>(registrar, not_yet);
-    refuse::<os::OsCapability>(registrar, not_yet);
-    refuse::<jump_list::JumpListCapability>(registrar, UnsupportedReason::NotOnThisPlatform);
+
+    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
+        let not_yet = UnsupportedReason::NotYetOnThisHost;
+        // The portal's registration provides the rest on Linux, and refuses
+        // the message box, the share sheet and the jump list for good.
+        #[cfg(not(target_os = "linux"))]
+        {
+            use crate::autostart::AutostartCapability;
+            use crate::dialog::{FileDialogCapability, MessageBoxCapability};
+            use crate::jump_list::JumpListCapability;
+            use crate::share::ShareCapability;
+            use crate::shortcuts::GlobalShortcutCapability;
+            use crate::taskbar::TaskbarCapability;
+            use crate::user_dirs::UserDirCapability;
+            use flui_platform::launch::LauncherCapability;
+
+            refuse::<LauncherCapability>(registrar, not_yet);
+            refuse::<FileDialogCapability>(registrar, not_yet);
+            refuse::<MessageBoxCapability>(registrar, not_yet);
+            refuse::<ShareCapability>(registrar, not_yet);
+            refuse::<AutostartCapability>(registrar, not_yet);
+            refuse::<GlobalShortcutCapability>(registrar, not_yet);
+            refuse::<TaskbarCapability>(registrar, not_yet);
+            refuse::<UserDirCapability>(registrar, not_yet);
+            refuse::<JumpListCapability>(registrar, UnsupportedReason::NotOnThisPlatform);
+        }
+        refuse::<OsCapability>(registrar, not_yet);
+    }
 }

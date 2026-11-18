@@ -861,7 +861,8 @@ impl fmt::Debug for Activity {
 }
 
 /// What the host hands a UI runtime's providers beyond the window: the
-/// running Activity's bridge, while one runs (ADR-0154 §9).
+/// running Activity's bridge, while one runs (ADR-0154 §9), and the
+/// application's id, when it has one (ADR-0351).
 ///
 /// Owner-local and shared: the composition root installs what each run's
 /// host offers, and a provider's context reads it at acquisition, scoped by
@@ -869,6 +870,7 @@ impl fmt::Debug for Activity {
 #[derive(Clone, Default)]
 pub struct HostBridge {
     activity: Rc<std::cell::RefCell<Option<Rc<dyn ActivityBridge>>>>,
+    app_id: Rc<std::cell::RefCell<Option<flui_foundation::AppId>>>,
 }
 
 impl HostBridge {
@@ -876,6 +878,18 @@ impl HostBridge {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Name the application `app_id` to providers from now on, `None` for an
+    /// application that declares none: the id a desktop portal and a shell
+    /// know it by, the same one its windows carry.
+    pub fn name_application(&self, app_id: Option<flui_foundation::AppId>) {
+        drop(self.app_id.replace(app_id));
+    }
+
+    /// The application's id, as the composition root named it.
+    pub(crate) fn app_id(&self) -> Option<flui_foundation::AppId> {
+        self.app_id.borrow().clone()
     }
 
     /// Offer the Activity `activity` bridges from now on, `None` for none;
@@ -910,6 +924,7 @@ impl fmt::Debug for HostBridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HostBridge")
             .field("activity", &self.activity.borrow().is_some())
+            .field("app_id", &*self.app_id.borrow())
             .finish()
     }
 }

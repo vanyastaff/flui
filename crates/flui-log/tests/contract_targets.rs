@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_log::{FilterConfig, FilterError};
+use flui_log::filter::{FilterConfig, FilterError};
 use tracing::Level;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt as _};

@@ -30,14 +30,15 @@ registry walks, source sampling and listener/future delivery become
 use std::sync::Arc;
 
 use flui_devtools::{FrameTimingLayer, Profiler};
-use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig};
+use flui_log::config::LogConfig;
+use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 use tracing_subscriber::layer::SubscriberExt;
 
 let profiler = Arc::new(Profiler::new());
 let subscriber = LogConfig::default()
     .subscriber()?
     .with(FrameTimingLayer::new(Arc::clone(&profiler)));
-flui_log::install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
+install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
 
 // run the app; `flui-app` inherits an installed subscriber
 ```

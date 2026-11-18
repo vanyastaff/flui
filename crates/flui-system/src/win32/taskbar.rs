@@ -1,22 +1,25 @@
-//! A window's taskbar progress and badge over `ITaskbarList3`, on the owner
-//! thread, which owns the window.
+//! The application's taskbar progress and count over `ITaskbarList3`, on
+//! the owner thread, which owns the windows.
 //!
-//! The taskbar takes a change only once the window's button exists, and
-//! forgets it when Explorer restarts; both times it sends the window the
-//! registered `TaskbarButtonCreated` message. The provider subclasses each
-//! window it shows something on (`SetWindowSubclass`, found by ordinal, the window
-//! procedure's own chain, with no hook in the host) to hear that message
-//! and show the window's last progress and badge again, and removes the
-//! subclass when the window closes. The badge is an overlay icon drawn here
-//! ([`badge_pixels`]): a disk with the count, or a plain disk for a dot.
-//! Nothing is called with a borrow held, since a call to Explorer may pump
-//! messages back into the subclass.
+//! Every top-level window has a taskbar button of its own, so the entry is
+//! shown on the button of each window a [`TaskbarEntry`](crate::taskbar::TaskbarEntry)
+//! was acquired in, one state for all of them; a window that closes is
+//! forgotten. The taskbar takes a change only once a window's button
+//! exists, and forgets it when Explorer restarts; both times it sends the
+//! window the registered `TaskbarButtonCreated` message. The provider
+//! subclasses each window it shows the entry on (`SetWindowSubclass`, found
+//! by ordinal, the window procedure's own chain, with no hook in the host)
+//! to hear that message and show the entry again, and removes the subclass
+//! when the window closes. The count is an overlay icon drawn here
+//! ([`badge_pixels`]): a disk with the count, `99+` above 99. Nothing is
+//! called with a borrow held, since a call to Explorer may pump messages
+//! back into the subclass.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::{Rc, Weak};
 
+use flui_platform::WindowId;
 use flui_platform::capability::{WindowCloseWatch, WindowRef};
-use flui_platform::{SystemFailure, Unsupported, UnsupportedReason, WindowId};
 use rustc_hash::FxHashMap;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -29,8 +32,8 @@ use windows::Win32::System::LibraryLoader::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::{
-    ITaskbarList3, SUBCLASSPROC, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
-    TBPF_PAUSED, TBPFLAG, TaskbarList,
+    ITaskbarList3, SUBCLASSPROC, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPFLAG,
+    TaskbarList,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     ChangeWindowMessageFilterEx, CreateIconIndirect, DestroyIcon, HICON, ICONINFO, MSGFLT_ALLOW,
@@ -40,17 +43,15 @@ use windows::core::{BOOL, HSTRING, PCSTR, w};
 
 use super::{Owner, os_code};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
-use crate::taskbar::{
-    TaskbarBackend, TaskbarBadge, TaskbarCapability, TaskbarError, TaskbarProgress,
-};
+use crate::taskbar::{EntryState, Fraction, Honoured, Progress, TaskbarBackend};
 
 /// The scale `ITaskbarList3` reports progress against.
 const PROGRESS_TOTAL: u64 = 10_000;
 
 /// The state and value a progress is shown with: the value first, since
 /// setting one leaves the no-progress and indeterminate states.
-pub(super) fn progress_call(progress: TaskbarProgress) -> (TBPFLAG, Option<u64>) {
-    let value = |fraction: crate::taskbar::Fraction| {
+pub(super) fn progress_call(progress: Progress) -> (TBPFLAG, Option<u64>) {
+    let value = |fraction: Fraction| {
         // A fraction is finite and within 0 and 1: the product is within
         // 0 and the total, exactly representable.
         #[expect(
@@ -62,20 +63,19 @@ pub(super) fn progress_call(progress: TaskbarProgress) -> (TBPFLAG, Option<u64>)
         Some(completed.min(PROGRESS_TOTAL))
     };
     match progress {
-        TaskbarProgress::None => (TBPF_NOPROGRESS, None),
-        TaskbarProgress::Indeterminate => (TBPF_INDETERMINATE, None),
-        TaskbarProgress::Normal(fraction) => (TBPF_NORMAL, value(fraction)),
-        TaskbarProgress::Paused(fraction) => (TBPF_PAUSED, value(fraction)),
-        TaskbarProgress::Error(fraction) => (TBPF_ERROR, value(fraction)),
+        Progress::Hidden => (TBPF_NOPROGRESS, None),
+        Progress::Indeterminate => (TBPF_INDETERMINATE, None),
+        Progress::Done(fraction) => (TBPF_NORMAL, value(fraction)),
     }
 }
 
-/// The text a badge shows: its count, `99+` above 99; none for a dot.
-pub(super) fn badge_label(badge: TaskbarBadge) -> Option<String> {
-    match badge {
-        TaskbarBadge::Count(count) if count.get() > 99 => Some("99+".to_owned()),
-        TaskbarBadge::Count(count) => Some(count.to_string()),
-        TaskbarBadge::Dot | TaskbarBadge::None => None,
+/// The text a count's badge shows: the count, `99+` above 99; none for no
+/// badge.
+pub(super) fn badge_label(count: Option<u64>) -> Option<String> {
+    match count {
+        Some(count) if count > 99 => Some("99+".to_owned()),
+        Some(count) => Some(count.to_string()),
+        None => None,
     }
 }
 
@@ -160,8 +160,8 @@ pub(crate) trait TaskbarSystem: 'static {
     /// Show `state` (and `value` of [`PROGRESS_TOTAL`]) on `owner`'s button.
     fn progress(&self, owner: Owner, state: TBPFLAG, value: Option<u64>) -> Result<(), i32>;
 
-    /// Show `badge` over `owner`'s button, or none.
-    fn badge(&self, owner: Owner, badge: TaskbarBadge) -> Result<(), i32>;
+    /// Show `count` over `owner`'s button, or no badge.
+    fn badge(&self, owner: Owner, count: Option<u64>) -> Result<(), i32>;
 
     /// Hear `owner`'s `TaskbarButtonCreated` and tell `buttons`, until
     /// [`unwatch`](Self::unwatch).
@@ -171,20 +171,19 @@ pub(crate) trait TaskbarSystem: 'static {
     fn unwatch(&self, owner: Owner);
 }
 
-/// What one window's button shows, kept to show again.
+/// A window whose button shows the entry.
 struct Button {
     owner: Owner,
-    progress: TaskbarProgress,
-    badge: TaskbarBadge,
-    _watch: Option<WindowCloseWatch>,
+    _watch: WindowCloseWatch,
 }
 
 /// Makes the taskbar system of a runtime, the first time one is asked for.
 type MakeSystem = Box<dyn Fn() -> Result<Box<dyn TaskbarSystem>, i32>>;
 
-/// One UI runtime's taskbar buttons.
+/// One UI runtime's entry: what it shows and the buttons it shows it on.
 pub(crate) struct TaskbarButtons {
     buttons: RefCell<FxHashMap<WindowId, Button>>,
+    state: Cell<EntryState>,
     system: OnceCell<Result<Box<dyn TaskbarSystem>, i32>>,
     make: MakeSystem,
 }
@@ -201,88 +200,87 @@ impl TaskbarButtons {
     pub(super) fn over(make: MakeSystem) -> Self {
         Self {
             buttons: RefCell::default(),
+            state: Cell::new(EntryState::default()),
             system: OnceCell::new(),
             make,
         }
     }
 
-    fn system(&self) -> Result<&dyn TaskbarSystem, TaskbarError> {
-        self.system
-            .get_or_init(|| (self.make)())
-            .as_deref()
-            .map_err(|code| {
-                // No taskbar (a server core, a session without Explorer).
-                let _ = code;
-                TaskbarError::Unsupported(Unsupported::of::<TaskbarCapability>(
-                    UnsupportedReason::Unavailable,
-                ))
-            })
+    /// The taskbar, or `None` in a session without one (a server core, a
+    /// session without Explorer).
+    fn system(&self) -> Option<&dyn TaskbarSystem> {
+        self.system.get_or_init(|| (self.make)()).as_deref().ok()
     }
 
-    /// Record `change` for `window` and show it.
-    fn change(
-        self: &Rc<Self>,
-        window: &WindowRef,
-        change: impl FnOnce(&mut TaskbarProgress, &mut TaskbarBadge),
-    ) -> Result<(), TaskbarError> {
-        let owner = Owner::of(window).ok_or(TaskbarError::Unsupported(Unsupported::of::<
-            TaskbarCapability,
-        >(
-            UnsupportedReason::NoWindow,
-        )))?;
-        let system = self.system()?;
-        let id = window.id();
-        let known = self.buttons.borrow().contains_key(&id);
-        if !known {
-            // The subclass first: a button made from here on is heard.
-            system
-                .watch(owner, self)
-                .map_err(|code| TaskbarError::Failed(SystemFailure::Os(code)))?;
-            let closing: Weak<Self> = Rc::downgrade(self);
-            let watch = window.lifetime().on_close(move || {
-                if let Some(buttons) = closing.upgrade() {
-                    buttons.forget(id);
-                }
-            });
-            let replaced = self.buttons.borrow_mut().insert(
-                id,
-                Button {
-                    owner,
-                    progress: TaskbarProgress::None,
-                    badge: TaskbarBadge::None,
-                    _watch: Some(watch),
-                },
-            );
-            drop(replaced);
-        }
-        let (progress, badge) = {
-            let mut buttons = self.buttons.borrow_mut();
-            let button = buttons
-                .get_mut(&id)
-                .expect("BUG: the button was recorded above, on this thread");
-            change(&mut button.progress, &mut button.badge);
-            (button.progress, button.badge)
+    /// Show the entry on `window`'s button from now on, until it closes. A
+    /// window with no Win32 handle, or one already shown on, is left as it
+    /// is.
+    fn add(self: &Rc<Self>, window: &WindowRef) {
+        let (Some(owner), Some(system)) = (Owner::of(window), self.system()) else {
+            return;
         };
-        show(system, owner, progress, badge)
+        let id = window.id();
+        if window.lifetime().is_closed() || self.buttons.borrow().contains_key(&id) {
+            return;
+        }
+        // The subclass first: a button made from here on is heard.
+        if let Err(code) = system.watch(owner, self) {
+            tracing::warn!(code, "the taskbar button's subclass was refused");
+            return;
+        }
+        let closing: Weak<Self> = Rc::downgrade(self);
+        let watch = window.lifetime().on_close(move || {
+            if let Some(buttons) = closing.upgrade() {
+                buttons.forget(id);
+            }
+        });
+        let replaced = self.buttons.borrow_mut().insert(
+            id,
+            Button {
+                owner,
+                _watch: watch,
+            },
+        );
+        drop(replaced);
+        show_on(system, owner, self.state.get());
     }
 
-    /// `owner`'s button was made, or made again: show what it held.
+    /// Show `state` on every button. With no button the taskbar is not
+    /// reached: a window added later shows the state it finds.
+    fn show(&self, state: EntryState) {
+        self.state.set(state);
+        let owners: Vec<Owner> = self
+            .buttons
+            .borrow()
+            .values()
+            .map(|button| button.owner)
+            .collect();
+        if owners.is_empty() {
+            return;
+        }
+        let Some(system) = self.system() else {
+            return;
+        };
+        for owner in owners {
+            show_on(system, owner, state);
+        }
+    }
+
+    /// `owner`'s button was made, or made again: show the entry on it.
     pub(super) fn button_created(&self, owner: Owner) {
-        let shown = self.buttons.try_borrow().ok().and_then(|buttons| {
-            buttons
-                .values()
-                .find(|button| button.owner == owner)
-                .map(|button| (button.progress, button.badge))
-        });
-        if let (Some((progress, badge)), Ok(system)) = (shown, self.system()) {
-            let _ = show(system, owner, progress, badge);
+        let known = self
+            .buttons
+            .try_borrow()
+            .is_ok_and(|buttons| buttons.values().any(|button| button.owner == owner));
+        if let (true, Some(system)) = (known, self.system()) {
+            show_on(system, owner, self.state.get());
         }
     }
 
     /// The window closed: stop hearing its button and forget it.
     fn forget(&self, id: WindowId) {
         let removed = self.buttons.borrow_mut().remove(&id);
-        if let (Some(button), Ok(system)) = (&removed, self.system()) {
+        if let (Some(button), Some(system)) = (&removed, self.system()) {
             system.unwatch(button.owner);
         }
         drop(removed);
@@ -300,20 +298,15 @@ impl Drop for TaskbarButtons {
     }
 }
 
-/// Show `progress` and `badge` on `owner`'s button. A button not made yet
-/// refuses; it is shown again when the taskbar makes it.
-fn show(
-    system: &dyn TaskbarSystem,
-    owner: Owner,
-    progress: TaskbarProgress,
-    badge: TaskbarBadge,
-) -> Result<(), TaskbarError> {
-    let (state, value) = progress_call(progress);
-    let progressed = system.progress(owner, state, value);
-    let badged = system.badge(owner, badge);
-    progressed
-        .and(badged)
-        .map_err(|code| TaskbarError::Failed(SystemFailure::Os(code)))
+/// Show `state` on `owner`'s button. A button not made yet refuses; it is
+/// shown again when the taskbar makes it.
+fn show_on(system: &dyn TaskbarSystem, owner: Owner, state: EntryState) {
+    let (flag, value) = progress_call(state.progress);
+    let progressed = system.progress(owner, flag, value);
+    let badged = system.badge(owner, state.count);
+    if let Err(code) = progressed.and(badged) {
+        tracing::debug!(code, "the taskbar button took no change yet");
+    }
 }
 
 /// [`TaskbarBackend`] over `ITaskbarList3`.
@@ -322,22 +315,28 @@ pub(crate) struct WindowsTaskbar {
 }
 
 impl WindowsTaskbar {
-    pub(crate) fn new(buttons: Rc<TaskbarButtons>) -> Self {
+    /// The entry of `buttons`' runtime, shown from now on on `window`'s
+    /// button as well, when there is one.
+    pub(crate) fn new(buttons: Rc<TaskbarButtons>, window: Option<&WindowRef>) -> Self {
+        if let Some(window) = window {
+            buttons.add(window);
+        }
         Self { buttons }
     }
 }
 
 impl TaskbarBackend for WindowsTaskbar {
-    fn set_progress(
-        &self,
-        window: &WindowRef,
-        progress: TaskbarProgress,
-    ) -> Result<(), TaskbarError> {
-        self.buttons.change(window, |shown, _| *shown = progress)
+    fn show(&self, state: EntryState) {
+        self.buttons.show(state);
     }
 
-    fn set_badge(&self, window: &WindowRef, badge: TaskbarBadge) -> Result<(), TaskbarError> {
-        self.buttons.change(window, |_, shown| *shown = badge)
+    fn honours(&self) -> Honoured {
+        if self.buttons.system().is_some() {
+            // `ITaskbarList3` shows every part, on a button it confirms.
+            Honoured::new(true, true, true, true)
+        } else {
+            Honoured::new(false, false, false, false)
+        }
     }
 }
 
@@ -533,13 +532,11 @@ impl TaskbarSystem for ComTaskbar {
         }
     }
 
-    fn badge(&self, owner: Owner, badge: TaskbarBadge) -> Result<(), i32> {
-        let label = badge_label(badge);
-        let icon = match badge {
-            TaskbarBadge::None => None,
-            TaskbarBadge::Dot | TaskbarBadge::Count(_) => {
-                Some(badge_icon(owner, label.as_deref())?)
-            }
+    fn badge(&self, owner: Owner, count: Option<u64>) -> Result<(), i32> {
+        let label = badge_label(count);
+        let icon = match &label {
+            None => None,
+            Some(label) => Some(badge_icon(owner, Some(label))?),
         };
         let description = HSTRING::from(label.unwrap_or_default());
         // SAFETY: as above; the taskbar copies the icon, which is destroyed
@@ -685,61 +682,44 @@ fn chain_on(call: SubclassCall) -> LRESULT {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::num::NonZeroU32;
     use std::rc::Rc;
 
-    use windows::Win32::UI::Shell::{
-        TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED,
-    };
+    use windows::Win32::UI::Shell::{TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL};
 
     use super::{
         Owner, TaskbarButtons, TaskbarSystem, WindowsTaskbar, badge_label, badge_pixels,
         progress_call,
     };
-    use crate::taskbar::{Fraction, TaskbarBackend, TaskbarBadge, TaskbarProgress};
+    use crate::taskbar::{EntryState, Fraction, Honoured, Progress, TaskbarBackend};
     use crate::testing::win32::{FakeTaskbar, TaskbarCall, win32_window};
 
     #[test]
     fn a_progress_becomes_the_taskbars_state_and_value() {
         let half = Fraction::try_new(0.5).expect("a fraction");
+        let whole = Fraction::try_new(1.0).expect("a fraction");
         let cases = [
-            (TaskbarProgress::None, (TBPF_NOPROGRESS, None)),
-            (TaskbarProgress::Indeterminate, (TBPF_INDETERMINATE, None)),
-            (TaskbarProgress::Normal(half), (TBPF_NORMAL, Some(5_000))),
-            (
-                TaskbarProgress::Paused(Fraction::ONE),
-                (TBPF_PAUSED, Some(10_000)),
-            ),
-            (
-                TaskbarProgress::Error(Fraction::ZERO),
-                (TBPF_ERROR, Some(0)),
-            ),
+            (Progress::Hidden, (TBPF_NOPROGRESS, None)),
+            (Progress::Indeterminate, (TBPF_INDETERMINATE, None)),
+            (Progress::Done(half), (TBPF_NORMAL, Some(5_000))),
+            (Progress::Done(whole), (TBPF_NORMAL, Some(10_000))),
         ];
         for (progress, expected) in cases {
             assert_eq!(progress_call(progress), expected, "{progress:?}");
         }
-        assert_eq!(Fraction::try_new(f64::NAN), None);
-        assert_eq!(Fraction::try_new(1.5), None);
-        assert_eq!(Fraction::try_new(-0.1), None);
     }
 
     #[test]
-    fn a_badge_shows_its_count_up_to_99_and_a_dot_nothing_but_the_disk() {
-        let count = |count| TaskbarBadge::Count(NonZeroU32::new(count).expect("a count"));
-        assert_eq!(badge_label(count(7)).as_deref(), Some("7"));
-        assert_eq!(badge_label(count(99)).as_deref(), Some("99"));
-        assert_eq!(badge_label(count(100)).as_deref(), Some("99+"));
-        assert_eq!(badge_label(TaskbarBadge::Dot), None);
+    fn a_badge_shows_its_count_up_to_99() {
+        assert_eq!(badge_label(Some(0)).as_deref(), Some("0"));
+        assert_eq!(badge_label(Some(99)).as_deref(), Some("99"));
+        assert_eq!(badge_label(Some(100)).as_deref(), Some("99+"));
+        assert_eq!(badge_label(None), None);
 
-        let dot = badge_pixels(16, None);
+        let empty = badge_pixels(16, None);
         let seven = badge_pixels(16, Some("7"));
-        assert_eq!(dot.len(), 256);
-        assert_eq!(dot[0] >> 24, 0, "a corner is outside the disk");
-        assert_eq!(dot[8 * 16 + 8] >> 24, 0xFF, "the centre is inside it");
-        assert!(
-            !dot.iter().any(|pixel| pixel & 0x00FF_FFFF == 0x00FF_FFFF),
-            "a dot draws no label"
-        );
+        assert_eq!(empty.len(), 256);
+        assert_eq!(empty[0] >> 24, 0, "a corner is outside the disk");
+        assert_eq!(empty[8 * 16 + 8] >> 24, 0xFF, "the centre is inside it");
         assert!(
             seven.iter().any(|pixel| pixel & 0x00FF_FFFF == 0x00FF_FFFF),
             "a count draws its digits in white"
@@ -748,31 +728,39 @@ mod tests {
         assert_eq!(wide.len(), 1024, "an icon of a scaled display");
     }
 
-    #[test]
-    fn a_button_made_late_or_again_shows_what_its_window_last_asked() {
-        let calls: Rc<RefCell<Vec<TaskbarCall>>> = Rc::default();
+    /// The calls a fake taskbar took.
+    type Calls = Rc<RefCell<Vec<TaskbarCall>>>;
+
+    /// Buttons over a fake taskbar, the calls it took and whether its
+    /// buttons are made.
+    fn buttons() -> (Rc<TaskbarButtons>, Calls, Rc<Cell<bool>>) {
+        let calls: Calls = Rc::default();
         let made = Rc::new(Cell::new(false));
-        let system = FakeTaskbar {
+        let system = RefCell::new(Some(FakeTaskbar {
             calls: Rc::clone(&calls),
             made: Rc::clone(&made),
-        };
-        let system = RefCell::new(Some(system));
+        }));
         let buttons = Rc::new(TaskbarButtons::over(Box::new(move || {
             Ok(Box::new(system.borrow_mut().take().expect("made once")) as Box<dyn TaskbarSystem>)
         })));
+        (buttons, calls, made)
+    }
+
+    #[test]
+    fn a_button_made_late_or_again_shows_the_entry_last_set() {
+        let (buttons, calls, made) = buttons();
         let (window, closer) = win32_window(0x1234);
         let owner = Owner::of(&window).expect("a Win32 window");
-        let taskbar = WindowsTaskbar::new(Rc::clone(&buttons));
+        let taskbar = WindowsTaskbar::new(Rc::clone(&buttons), Some(&window));
         let half = Fraction::try_new(0.5).expect("a fraction");
-        let three = TaskbarBadge::Count(NonZeroU32::new(3).expect("a count"));
+        let state = EntryState::new(Progress::Done(half), Some(3));
 
-        assert!(
-            taskbar
-                .set_progress(&window, TaskbarProgress::Paused(half))
-                .is_err(),
-            "no button yet"
+        taskbar.show(state);
+        assert_eq!(
+            taskbar.honours(),
+            Honoured::new(true, true, true, true),
+            "the taskbar shows every part"
         );
-        assert!(taskbar.set_badge(&window, three).is_err());
         calls.borrow_mut().clear();
 
         made.set(true);
@@ -780,10 +768,10 @@ mod tests {
         assert_eq!(
             *calls.borrow(),
             [
-                TaskbarCall::Progress(TBPF_PAUSED, Some(5_000)),
-                TaskbarCall::Badge(three)
+                TaskbarCall::Progress(TBPF_NORMAL, Some(5_000)),
+                TaskbarCall::Badge(Some(3))
             ],
-            "the button shows the last progress and badge once it is made"
+            "the button shows the last entry once it is made"
         );
 
         calls.borrow_mut().clear();
@@ -795,6 +783,47 @@ mod tests {
         );
         calls.borrow_mut().clear();
         buttons.button_created(owner);
-        assert!(calls.borrow().is_empty());
+        taskbar.show(EntryState::default());
+        assert!(calls.borrow().is_empty(), "nothing is shown on it again");
+    }
+
+    #[test]
+    fn the_entry_is_shown_on_every_window_it_was_acquired_in() {
+        let (buttons, calls, made) = buttons();
+        made.set(true);
+        let (first, _first_closer) = win32_window(0x1);
+        let (second, _second_closer) = win32_window(0x2);
+        let one = WindowsTaskbar::new(Rc::clone(&buttons), Some(&first));
+        one.show(EntryState::new(Progress::Indeterminate, None));
+        calls.borrow_mut().clear();
+
+        // A window acquiring later shows the entry as it stands.
+        let _two = WindowsTaskbar::new(Rc::clone(&buttons), Some(&second));
+        assert_eq!(
+            *calls.borrow(),
+            [
+                TaskbarCall::Watch,
+                TaskbarCall::Progress(TBPF_INDETERMINATE, None),
+                TaskbarCall::Badge(None)
+            ]
+        );
+        calls.borrow_mut().clear();
+
+        one.show(EntryState::new(Progress::Hidden, Some(1)));
+        let shown = calls
+            .borrow()
+            .iter()
+            .filter(|call| **call == TaskbarCall::Badge(Some(1)))
+            .count();
+        assert_eq!(shown, 2, "both buttons: {:?}", calls.borrow());
+    }
+
+    #[test]
+    fn a_session_without_a_taskbar_honours_nothing() {
+        let buttons = Rc::new(TaskbarButtons::over(Box::new(|| Err(1))));
+        let (window, _closer) = win32_window(0x1);
+        let taskbar = WindowsTaskbar::new(buttons, Some(&window));
+        taskbar.show(EntryState::new(Progress::Indeterminate, Some(2)));
+        assert_eq!(taskbar.honours(), Honoured::new(false, false, false, false));
     }
 }

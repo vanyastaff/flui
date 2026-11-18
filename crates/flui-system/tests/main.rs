@@ -7,7 +7,10 @@ mod dialogs;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod portal;
+#[cfg(target_os = "linux")]
+mod portal_services;
 mod services;
+mod shell_services;
 
 use std::cell::RefCell;
 use std::marker::PhantomData;

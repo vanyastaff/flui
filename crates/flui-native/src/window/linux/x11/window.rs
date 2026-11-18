@@ -110,7 +110,7 @@ use flui_platform::{
     CursorGrab, DisplaySnapshot, PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported,
     UnsupportedReason, WindowCapabilities, WindowCommand, WindowExtent, WindowFrame,
     WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowLevel, WindowMode, WindowOptions,
-    WindowState,
+    WindowPosition, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use raw_window_handle::{
@@ -133,8 +133,8 @@ use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_mode,
 };
 use super::placement::{
-    FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
-    window_scale,
+    FrameExtents, device_extent, display_of, logical_geometry, outer_bounds, window_scale,
+    x11_coordinates,
 };
 use super::protocols::{ClientProcess, CounterWrites, NameEncoding, ResizeSync, SyncRequest};
 use super::support::{SupportAtoms, WindowManager, WindowManagerSupport, capabilities};
@@ -154,8 +154,9 @@ use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{NativeFate, Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
+use crate::window::desktop::DisplayFrame;
 use crate::window::linux::class::AppClass;
-use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay};
+use crate::window::plan::{FrameInset, OpenPlan};
 use crate::window::state::{
     ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
 };
@@ -878,9 +879,11 @@ impl X11Window {
         if let Ok(bounds) = ScreenBounds::try_new(outer, Bounds::new(read.origin, read.content)) {
             record.bounds = Some(bounds);
         }
+        // The display the window is on: the output it overlaps most, else the
+        // nearest; its position is measured there.
         let display = snapshot
             .as_ref()
-            .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
+            .and_then(|snapshot| display_of(snapshot, outer));
         let scale = window_scale(display, record.scale);
         record.hints_rescaled |= record.scale != scale;
         record.scale = scale;
@@ -897,7 +900,7 @@ impl X11Window {
         // Mapped under an unmapped ancestor (a window manager's frame on
         // another workspace) or fully covered.
         let occluded = read.map_state == MapState::UNVIEWABLE || record.obscured;
-        let geometry = logical_geometry(outer, scale).and_then(|geometry| {
+        let geometry = logical_geometry(outer, display, scale).and_then(|geometry| {
             let content = flui_platform::WindowExtent::try_new(Size::new(
                 scale.to_logical(f64::from(read.content.width)),
                 scale.to_logical(f64::from(read.content.height)),
@@ -931,7 +934,7 @@ impl X11Window {
                 .with_constraints(record.constraints)
                 .with_resizable(record.resizable)
                 .with_frame(record.frame)
-                .with_display(display.map(|display| display.id));
+                .with_display(display.map(DisplayFrame::display));
             ReportedFacts {
                 metrics,
                 brightness: self.appearance(),
@@ -1544,18 +1547,24 @@ impl X11Window {
         Ok(())
     }
 
-    /// Move the window's outer top-left corner to `at`, in logical pixels.
-    /// With the north-west gravity its hints give, the window manager places
-    /// the frame there (ICCCM 4.1.2.3).
-    fn place(&self, at: Point<f64>) -> Result<(), ApplyError> {
-        let scale = self.scale();
-        let (Some(x), Some(y)) = (
-            device_coordinate(at.x, scale),
-            device_coordinate(at.y, scale),
-        ) else {
-            return Err(ApplyError::failed(format!(
-                "{at:?} is beyond the 16-bit coordinates of X11"
-            )));
+    /// Move the window's outer top-left corner to `at`, a point of a display
+    /// that converts through that display's own origin and scale. With the
+    /// north-west gravity its hints give, the window manager places the frame
+    /// there (ICCCM 4.1.2.3).
+    ///
+    /// # Errors
+    /// [`ApplyError::DisplayGone`] for a display the snapshot no longer holds,
+    /// [`PlatformFailure::OutOfRange`](flui_platform::PlatformFailure::OutOfRange)
+    /// for a point past X11's 16-bit coordinates, both before any request.
+    fn place(&self, at: WindowPosition) -> Result<(), ApplyError> {
+        let frame = self
+            .display_snapshot()
+            .and_then(|snapshot| DisplayFrame::find(&snapshot, at.display()))
+            .ok_or(ApplyError::DisplayGone(at.display()))?;
+        let Some((x, y)) = x11_coordinates(frame, at.at()) else {
+            return Err(ApplyError::Platform(
+                flui_platform::PlatformFailure::OutOfRange,
+            ));
         };
         self.xcb()
             .configure_window(
@@ -1964,7 +1973,7 @@ impl PlatformWindow for X11Window {
                 self.record.borrow_mut().title = title;
             }
             WindowCommand::SetPosition(at) => self.place(at)?,
-            WindowCommand::SetSize(size) => self.resize(size)?,
+            WindowCommand::SetSize(size) => self.resize(size.get())?,
             WindowCommand::SetConstraints(constraints) => {
                 self.record.borrow_mut().constraints = constraints;
                 self.write_size_hints(None);
@@ -2049,6 +2058,20 @@ impl PlatformWindow for X11Window {
     /// X11 takes no refresh-rate request.
     fn set_frame_rate_hint(&self, _hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+    }
+
+    /// `x11:<XID>`: the server's id names the window to every client while
+    /// it exists, so the name needs nothing held.
+    fn portal_parent(
+        &self,
+        answer: flui_platform::capability::Resolver<flui_platform::capability::PortalParent>,
+    ) {
+        let parent = std::num::NonZeroU32::new(self.xid).map_or_else(
+            flui_platform::capability::PortalParent::none,
+            flui_platform::capability::PortalParent::x11,
+        );
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(parent);
     }
 
     /// The chrome regions a press on a window without decorations is answered
@@ -2462,15 +2485,14 @@ impl X11Windows {
         let frame = options.frame.at_open(&window_capabilities);
         let options = options.frame(frame);
         let snapshot = owner.displays().snapshot().ok();
-        let placement = PlacementDisplay::choose(snapshot.as_ref(), options.display);
         let plan = OpenPlan::new(
             &options,
             &opening,
             &window_capabilities,
-            placement,
-            self.frame_inset.logical(placement.scale_factor),
+            snapshot.as_ref(),
+            |scale| self.frame_inset.logical(scale),
         );
-        let scale = placement.scale_factor;
+        let scale = plan.scale;
         let (Some(width), Some(height)) = (
             device_extent(plan.content_size.width, scale),
             device_extent(plan.content_size.height, scale),
@@ -2515,11 +2537,15 @@ impl X11Windows {
         let window_ref = WindowRef { xid, id };
         let facets = self.positions.for_window(&window_ref);
         let capabilities = capabilities(support);
-        // Until the first read of the server: what was asked for, or an empty
-        // window where that describes none.
+        // Until the first read of the server: the window as it was created, at
+        // the place the plan put it on its display, or at none where the plan
+        // placed nothing (a display the snapshot lacks, a host that does not
+        // place at open) or the place left the server's 16-bit coordinates
+        // and the window was created at the root's corner; an empty window
+        // where that describes none.
+        let placed = position.and(plan.placed);
         let initial = WindowState::new(
-            WindowGeometry::try_new(opening.position, plan.content_size)
-                .unwrap_or(WindowGeometry::EMPTY),
+            WindowGeometry::try_new(placed, plan.content_size).unwrap_or(WindowGeometry::EMPTY),
             flui_platform::WindowExtent::try_new(plan.content_size).unwrap_or_default(),
         )
         .with_capabilities(capabilities);

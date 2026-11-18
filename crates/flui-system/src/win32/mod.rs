@@ -8,12 +8,13 @@
 //!   widget's window, so the dialog is modal to it while the owner thread's
 //!   own loop keeps running frames; a dialog ends through the thread's
 //!   dismissal window when its caller lets it go or its window closes.
-//! - The launcher, launch at login, the jump list and the user's folders
-//!   run each request on a short-lived apartment thread, at most
+//! - The launcher, autostart, the jump list and the user's folders run each
+//!   request on a short-lived apartment thread, at most
 //!   [`threads::MAX_IN_FLIGHT`] at once per UI runtime ([`threads`]).
-//! - The share sheet, the global shortcuts and the taskbar run on the owner
-//!   thread, whose apartment the host entered: they call the window's own
-//!   thread's objects and read no file there.
+//! - The share sheet, the global shortcuts, the taskbar entry and the
+//!   system information run on the owner thread, whose apartment the host
+//!   entered: they call the window's own thread's objects and read no file
+//!   there.
 //!
 //! Every OS call sits behind a trait of its file, so the provider's rules
 //! (what a request becomes, what an answer means, who hears it on every
@@ -22,19 +23,19 @@
 
 // Each module below calls Win32 or COM: the workspace's `unsafe_code` lint is
 // expected per module, and each block names its invariant.
+#[expect(unsafe_code, reason = "the Run key is read and written through Win32")]
+mod autostart;
 #[expect(unsafe_code, reason = "the common item dialogs are COM objects")]
 mod dialogs;
 #[expect(unsafe_code, reason = "the jump list is a COM object")]
 mod jump_list;
 #[expect(unsafe_code, reason = "the shell's launch, reveal and trash calls")]
 pub(crate) mod launcher;
-#[expect(unsafe_code, reason = "the Run key is read and written through Win32")]
-mod login;
 #[expect(unsafe_code, reason = "MessageBoxW and the box's own end")]
 mod message_box;
 #[expect(unsafe_code, reason = "a dialog thread's dismissal window")]
 mod modal;
-#[expect(unsafe_code, reason = "the known folders and the version calls")]
+#[expect(unsafe_code, reason = "the version and system information calls")]
 mod os;
 #[expect(unsafe_code, reason = "the share sheet's interop call")]
 mod share;
@@ -47,6 +48,8 @@ pub(crate) mod shortcuts;
 pub(crate) mod taskbar;
 #[expect(unsafe_code, reason = "the apartment each shell thread enters")]
 mod threads;
+#[expect(unsafe_code, reason = "the known folders' lookup")]
+mod user_dirs;
 
 use std::ffi::OsStr;
 use std::num::NonZeroIsize;
@@ -58,13 +61,14 @@ use flui_platform::{SystemFailure, Unsupported};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
 
+use crate::autostart::{Autostart, AutostartCapability};
 use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
 use crate::jump_list::{JumpList, JumpListCapability};
-use crate::login::{LaunchAtLogin, LaunchAtLoginCapability};
 use crate::os::{Os, OsCapability};
 use crate::share::{Share, ShareCapability};
-use crate::shortcut::{GlobalShortcutCapability, GlobalShortcuts};
-use crate::taskbar::{Taskbar, TaskbarCapability};
+use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
+use crate::taskbar::{TaskbarCapability, TaskbarEntry};
+use crate::user_dirs::{UserDirCapability, UserDirs};
 
 pub(crate) use threads::ShellThreads;
 
@@ -138,9 +142,9 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
     registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
         Share::try_new(share::WindowsShare::new(ctx), ctx)
     });
-    registrar.provide::<LaunchAtLoginCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(LaunchAtLogin::new(
-            login::WindowsLaunchAtLogin::new(ctx.runtime_local::<ShellThreads>()),
+    registrar.provide::<AutostartCapability>(|ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(Autostart::new(
+            autostart::WindowsAutostart::new(ctx.runtime_local::<ShellThreads>()),
             ctx,
         ))
     });
@@ -151,10 +155,20 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         ))
     });
     registrar.provide::<TaskbarCapability>(|ctx: &ProviderContext<'_>| {
-        Taskbar::try_new(
-            taskbar::WindowsTaskbar::new(ctx.runtime_local::<taskbar::TaskbarButtons>()),
+        let window = ctx.window();
+        Ok::<_, Unsupported>(TaskbarEntry::new(
+            taskbar::WindowsTaskbar::new(
+                ctx.runtime_local::<taskbar::TaskbarButtons>(),
+                window.as_ref(),
+            ),
             ctx,
-        )
+        ))
+    });
+    registrar.provide::<UserDirCapability>(|ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(UserDirs::new(
+            user_dirs::WindowsUserDirs::new(ctx.runtime_local::<ShellThreads>()),
+            ctx,
+        ))
     });
     registrar.provide::<JumpListCapability>(|ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(JumpList::new(
@@ -163,10 +177,7 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         ))
     });
     registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Os::new(
-            os::WindowsOs::new(ctx.runtime_local::<ShellThreads>()),
-            ctx,
-        ))
+        Ok::<_, Unsupported>(Os::new(os::WindowsOs, ctx))
     });
 }
 
