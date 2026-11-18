@@ -5876,7 +5876,8 @@ OLE's calls on a window's registered target (answers, drop, fetches of every
 format, a refusal, a provider fetching from inside itself, a window its drag
 callback closes), the deferred start through a real `DoDragDrop`, a second
 window's frames while the loop rests, a drop into a FLUI window through the
-real loop, woken by posted mouse moves rather than the system pointer, and
+real loop, woken by posted mouse moves rather than the system pointer (on the
+desktop that takes input, ADR-0355 §4), and
 `window_at` across two placed real windows.
 `ole_drag_drop_contracts` pins the pure half everywhere, and
 `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else` the pace. Not run: a drag to

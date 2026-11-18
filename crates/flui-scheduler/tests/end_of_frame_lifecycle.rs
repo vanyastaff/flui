@@ -1,5 +1,5 @@
 //! Acceptance tests for `UpdateScheduler::end_of_frame`'s demand-driven
-//! registration (issue #1055). Design-independent of the implementation
+//! registration. Design-independent of the implementation
 //! (weak-slot vs `event-listener` vs anything else) — they exercise only
 //! the public API.
 #![forbid(unsafe_code)]
@@ -16,7 +16,7 @@ use flui_scheduler::UpdateScheduler;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Acceptance criteria for the demand-driven, cancellation-safe registration
-// (issue #1055).
+// (`end_of_frame`).
 //
 // Two construction rules hold for every oracle in this file, and both exist
 // because the obvious version of the test passes against the unfixed code:

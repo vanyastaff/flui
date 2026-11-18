@@ -1,6 +1,5 @@
-//! Fixed-bucket latency histograms over pulled [`FrameSnapshot`]s — issue
-//! #556's frame-pacing observability, closing the plan's "p50/p90/p99 for
-//! frame interval, produce-to-present, and input-to-present" deliverable.
+//! Fixed-bucket latency histograms over pulled [`FrameSnapshot`]s: p50, p90
+//! and p99 of the frame interval, produce-to-present and input-to-present.
 //!
 //! # Why fixed buckets, not a percentile library
 //!

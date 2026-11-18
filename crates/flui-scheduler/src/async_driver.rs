@@ -41,7 +41,7 @@
 //!
 //! # Readiness index
 //!
-//! Readiness discovery is separate from task ownership (issue #1056): the
+//! Readiness discovery is separate from task ownership: the
 //! store keeps `tasks` (every live task, keyed by id, owner-local) beside
 //! `ready` (the ids due a poll, in wake-arrival order, in the cross-thread
 //! half), so a pump on an idle driver touches neither a dormant task's slot
@@ -477,7 +477,7 @@ impl TaskStore {
             };
 
             // Armed for the poll only: if `future.poll` panics, `PumpGuard`
-            // removes this slot on unwind (issue #1057).
+            // removes this slot on unwind.
             guard.in_flight = Some(id);
 
             let mut ctx = Context::from_waker(&waker);
@@ -1250,8 +1250,7 @@ mod tests {
         }
     }
 
-    /// A panic inside `future.poll` must not leave a zombie slot behind
-    /// (issue #1057).
+    /// A panic inside `future.poll` must not leave a zombie slot behind.
     fn async_driver_poll_panic_does_not_leave_a_zombie_slot() {
         let (_scheduler, frame) = owner_frame();
         let driver = frame.async_driver();

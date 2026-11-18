@@ -1,5 +1,5 @@
 //! [`FrameClock`] — the per-presentation, platform-free physical-time policy
-//! state machine (issue #556).
+//! state machine.
 //!
 //! # The three-owner split
 //!
@@ -1234,7 +1234,7 @@ mod tests {
 
     // ----------------------------------------------------------------
     // `set_min_produce_interval` as a target-frame-rate throttle (the
-    // raster-backpressure slice of this file's own module-header issue): a
+    // raster backpressure the module header describes): a
     // caller-requested cadence lower than the feed's own rate is enforced
     // entirely through `poll`'s existing capacity check and the caller's
     // own next-wake scheduling — never a sleep or timer this clock owns.

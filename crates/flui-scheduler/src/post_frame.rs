@@ -26,12 +26,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use crate::async_driver::{RetirePanic, TaskStore};
-use crate::{AsyncDriver, CallbackId, FrameTiming, UpdateScheduler, WeakUpdateScheduler};
+use crate::{AsyncDriver, FrameTiming, UpdateScheduler, WeakUpdateScheduler};
+use flui_foundation::FrameCallbackId;
 
 pub(crate) type OwnerPostFrameCallback = Box<dyn FnOnce(&FrameTiming) + 'static>;
 
 pub(crate) struct PostFrameEntry {
-    pub(crate) id: CallbackId,
+    pub(crate) id: FrameCallbackId,
     pub(crate) callback: OwnerPostFrameCallback,
     target: CallbackTarget,
 }
@@ -425,13 +426,13 @@ impl OwnerFrame {
     ///
     /// A queue drained by another scheduler would hand its callbacks a foreign
     /// frame's `FrameTiming`, remove them before their own frame ever runs
-    /// them, and interleave `CallbackId`s from another id sequence into a sort
+    /// them, and interleave `FrameCallbackId`s from another id sequence into a sort
     /// where they carry no meaning. On mismatch (or a since-dropped owning
     /// scheduler) this returns `Err` and leaves the queue untouched.
     pub(crate) fn take_post_frame_queue_for(
         &self,
         scheduler: &UpdateScheduler,
-    ) -> Result<Vec<CallbackId>, PostFrameScheduleError> {
+    ) -> Result<Vec<FrameCallbackId>, PostFrameScheduleError> {
         let Some(owner) = self.scheduler.upgrade() else {
             tracing::error!(
                 driving_scheduler = scheduler.debug_ptr(),
@@ -513,7 +514,7 @@ impl OwnerFrame {
         !self.post_frame.queue.borrow().is_empty()
     }
 
-    pub(crate) fn take_active_post_frame(&self, id: CallbackId) -> Option<PostFrameEntry> {
+    pub(crate) fn take_active_post_frame(&self, id: FrameCallbackId) -> Option<PostFrameEntry> {
         let mut active = self.post_frame.active.borrow_mut();
         let index = active.iter().position(|entry| entry.id == id)?;
         if !active[index].target.eligible() {
