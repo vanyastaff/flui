@@ -77,45 +77,43 @@ impl SubpixelBin {
     /// representability separately and omits those positions rather than drawing
     /// at a saturated coordinate.
     ///
-    /// Truncates toward zero and then bins the fraction, with the same edges
-    /// as `cosmic_text::SubpixelBin::new`.
+    /// Floors and then bins the fraction, with `cosmic_text::SubpixelBin::new`'s
+    /// edges for a non-negative position: `[0, 0.125)` is the pixel's own
+    /// zero bin, a quarter's bin is centred on its quarter, and `[0.875, 1)`
+    /// is the next pixel's zero bin. One rule holds for every sign, so a
+    /// position moved by whole pixels keeps its bin and moves its pixel by
+    /// as many; cosmic-text truncates instead and mirrors the edges below 0,
+    /// which places a glyph differently on each side of 0.
     #[must_use]
     pub fn split(position: f32) -> (i32, Self) {
         if position.is_nan() {
             return (0, Self::Zero);
         }
+        let floor = position.floor();
+        // 2^31 and -2^31 are exact in f32; a floor outside them saturates.
+        if floor >= 2_147_483_648.0 {
+            return (i32::MAX, Self::Zero);
+        }
+        if floor < -2_147_483_648.0 {
+            return (i32::MIN, Self::Zero);
+        }
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "float-to-integer saturation is the public split policy; truncation is the bin rule"
+            reason = "the floor is a whole number inside the i32 range, checked above"
         )]
-        let trunc = position as i32;
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "the truncated coordinate came from an f32"
-        )]
-        let fract = position - trunc as f32;
-        if position.is_sign_negative() {
-            if fract > -0.125 {
-                (trunc, Self::Zero)
-            } else if fract > -0.375 {
-                (trunc.saturating_sub(1), Self::Three)
-            } else if fract > -0.625 {
-                (trunc.saturating_sub(1), Self::Two)
-            } else if fract > -0.875 {
-                (trunc.saturating_sub(1), Self::One)
-            } else {
-                (trunc.saturating_sub(1), Self::Zero)
-            }
-        } else if fract < 0.125 {
-            (trunc, Self::Zero)
+        let whole = floor as i32;
+        // Exact: a float less its floor is representable.
+        let fract = position - floor;
+        if fract < 0.125 {
+            (whole, Self::Zero)
         } else if fract < 0.375 {
-            (trunc, Self::One)
+            (whole, Self::One)
         } else if fract < 0.625 {
-            (trunc, Self::Two)
+            (whole, Self::Two)
         } else if fract < 0.875 {
-            (trunc, Self::Three)
+            (whole, Self::Three)
         } else {
-            (trunc.saturating_add(1), Self::Zero)
+            (whole.saturating_add(1), Self::Zero)
         }
     }
 

@@ -236,7 +236,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
                 .fonts_mut()
                 .prepare_run(&run)
                 .expect("the submitted font face registers for rasterization");
-            for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+            for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
                 let image = rasterizer
                     .rasterize(glyph.key)
                     .expect("Roboto glyph rasterizes");

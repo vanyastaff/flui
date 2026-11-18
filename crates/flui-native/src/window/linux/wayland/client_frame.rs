@@ -1582,7 +1582,7 @@ pub(crate) mod title {
                 let Ok(key) = self.rasterizer.fonts_mut().prepare_run(&run) else {
                     continue;
                 };
-                for glyph in run.placed_glyphs(key, (0.0, 0.0), scale_f32) {
+                for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), scale_f32) {
                     let Some(image) = self.rasterizer.rasterize(glyph.key) else {
                         continue;
                     };
