@@ -15,10 +15,12 @@
 /// let status = AnimationStatus::Forward;
 /// assert!(status.is_directional());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Default)]
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a direction, or rest after one, in each of two directions: there is no fifth phase"
+)]
 pub enum AnimationStatus {
     /// The reverse-settled phase, also used for the lower bound.
     #[default]

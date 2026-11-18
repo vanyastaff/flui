@@ -5094,7 +5094,7 @@ impl flui_widgets::ScrollPhysics for PinnedPhysics {
         &self,
         _metrics: &flui_widgets::ScrollMetrics,
         _velocity_px_per_sec: f64,
-    ) -> Option<Box<dyn flui_animation::simulation::Simulation>> {
+    ) -> Option<Box<dyn flui_animation::Simulation>> {
         None
     }
 }

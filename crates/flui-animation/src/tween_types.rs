@@ -133,7 +133,7 @@ impl Rounding {
 /// use flui_animation::{Animatable, IntTween, Rounding};
 ///
 /// assert_eq!(IntTween::new(-5, 0).transform(0.5), -2);
-/// assert_eq!(IntTween::new(0, 10).with_rounding(Rounding::Floor).transform(0.55), 5);
+/// assert_eq!(IntTween::new(0, 10).rounding(Rounding::Floor).transform(0.55), 5);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -160,7 +160,7 @@ impl IntTween {
 
     /// The same tween with another rounding.
     #[must_use]
-    pub const fn with_rounding(mut self, rounding: Rounding) -> Self {
+    pub const fn rounding(mut self, rounding: Rounding) -> Self {
         self.rounding = rounding;
         self
     }

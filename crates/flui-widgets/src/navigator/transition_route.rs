@@ -233,9 +233,8 @@ impl TransitionInner {
                     .set(self.finalize_calls.get().saturating_add(1));
                 binding.finalize();
             }
-            // A `dismissed` that fails the guard above: still an active route.
-            // `AnimationStatus` is `#[non_exhaustive]`.
-            _ => {}
+            // A reverse-settled status that fails the guard above: still an active route.
+            AnimationStatus::ReverseSettled => {}
         }
     }
 

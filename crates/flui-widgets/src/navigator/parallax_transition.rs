@@ -191,7 +191,7 @@ impl PageTransitionBuilder for ParallaxPageTransition {
                     Rc::clone(primary),
                     SharedCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
                 )
-                .with_reverse_curve(SharedCurve::new(
+                .reverse_curve(SharedCurve::new(
                     curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
                 )),
             )
@@ -202,7 +202,7 @@ impl PageTransitionBuilder for ParallaxPageTransition {
             middle_to_leading().animate(Rc::clone(secondary))
         } else {
             let curved = CurvedAnimation::new(Rc::clone(secondary), curves::LINEAR_TO_EASE_OUT)
-                .with_reverse_curve(curves::EASE_IN_TO_LINEAR);
+                .reverse_curve(curves::EASE_IN_TO_LINEAR);
             middle_to_leading().animate(Rc::new(curved) as Rc<dyn Animation<f64>>)
         };
 

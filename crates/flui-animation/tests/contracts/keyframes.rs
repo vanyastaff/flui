@@ -11,10 +11,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Curve, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger, StaggerOrigin,
-    Steps, TwoWayConverter, curves,
+    Animatable, Curve, JumpAt, Keyframes, KeyframesError, Linear, Stagger, StaggerOrigin, Steps,
+    TwoWayConverter, curves,
 };
-use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::{Lerp, Rect};
 use proptest::prelude::*;
 
 fn ms(value: u64) -> Duration {

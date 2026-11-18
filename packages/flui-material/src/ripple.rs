@@ -48,8 +48,10 @@ use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use flui_sdk::animation::prelude::*;
-use flui_sdk::animation::{Vsync, curves};
+use flui_sdk::animation::{
+    AnimatedValue, AnimatedValueView, Animation, AnimationController, AnimationError,
+    AnimationStatus, Curve, DrivenController, MotionSpec, Vsync, curves,
+};
 use flui_sdk::foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_sdk::geometry::{Point, Rect, Size};
 use flui_sdk::painting::{Canvas, Clip, ClipOp, Color, Paint};
@@ -400,7 +402,7 @@ fn start_run(
             }))
             .detach();
     }
-    if let Err(error) = owner.controller().forward_from(Some(0.0)) {
+    if let Err(error) = owner.controller().forward_from(0.0) {
         tracing::debug!(?error, label, "InkWell ripple run failed to start");
     }
     (owner, listening)
@@ -482,12 +484,9 @@ impl Indication {
     /// state that shows one).
     fn start_layer(&self) -> Result<(), AnimationError> {
         let vsync = self.vsync.borrow().clone();
-        let layer = AnimatedValue::with_debug_label(
-            "InkWell.state_layer",
-            0.0,
-            MotionSpec::default(),
-            vsync.as_ref(),
-        )?;
+        let layer = AnimatedValue::builder(0.0, MotionSpec::default())
+            .debug_label("InkWell.state_layer")
+            .build_on(vsync.as_ref())?;
         let view = layer.animation();
         let notifier = Rc::clone(&self.repaint);
         let indication = Weak::clone(&self.this);

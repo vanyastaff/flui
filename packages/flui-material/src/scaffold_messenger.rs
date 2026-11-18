@@ -563,9 +563,7 @@ impl MessengerCore {
             // Forward/Reverse carry no further consequence here — the
             // controller's own `status()` already IS the observable state
             // (see the module docs' "The drain state machine" section).
-            // `AnimationStatus` is `#[non_exhaustive]`; every variant it has
-            // today is handled above.
-            _ => {}
+            AnimationStatus::Forward | AnimationStatus::Reverse => {}
         }
     }
 

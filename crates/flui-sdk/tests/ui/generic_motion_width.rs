@@ -1,4 +1,4 @@
-use flui_sdk::animation::{Lerp, TwoWayConverter};
+use flui_sdk::{animation::TwoWayConverter, geometry::Lerp};
 
 #[derive(Clone, TwoWayConverter)]
 struct Generic<T: TwoWayConverter + Lerp>(T);

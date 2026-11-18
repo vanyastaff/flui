@@ -132,7 +132,7 @@ mod harness_snapshot;
 
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use flui_animation::curve::SharedCurve;
+use flui_animation::SharedCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
@@ -12741,7 +12741,7 @@ fn harness_render_animated_size_rests_without_a_frame_loop() {
 /// A curve that panics once when evaluated.
 struct ArmedCurve(Arc<std::sync::atomic::AtomicBool>);
 
-impl flui_animation::curve::Curve for ArmedCurve {
+impl flui_animation::Curve for ArmedCurve {
     fn transform(&self, t: f64) -> f64 {
         assert!(
             !self.0.swap(false, std::sync::atomic::Ordering::SeqCst),
