@@ -74,6 +74,69 @@ tracing = { workspace = true }
 windows-collections = { workspace = true }
 raw-window-handle = { workspace = true }
 
+# The macOS providers: AppKit's panels, alert, share picker and Dock tile on
+# the main thread, Foundation's file manager, Launch Services through
+# `NSWorkspace`, the login item through ServiceManagement, and the hot keys
+# through Carbon's event manager (ADR-0154 §1). Work that touches the file
+# system or waits on a daemon runs on a Grand Central Dispatch queue.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSFileManager",
+    "NSGeometry",
+    "NSObject",
+    "NSPathUtilities",
+    "NSProcessInfo",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }
+objc2-app-kit = { workspace = true, features = [
+    "std",
+    "block2",
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSControl",
+    "NSDockTile",
+    "NSGraphics",
+    "NSImage",
+    "NSImageView",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSProgressIndicator",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSSavePanel",
+    "NSSharingService",
+    "NSSharingServicePickerTouchBarItem",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+# No `UTType` binding crate: it links UniformTypeIdentifiers, which macOS
+# 10.13 to 10.15 do not have, so a binary linking it would not start there.
+# The class is looked up at run time, behind its gate (`macos::version`).
+objc2-service-management = { workspace = true, features = [
+    "std",
+    "objc2",
+    "objc2-foundation",
+    "SMAppService",
+    "SMErrors",
+] }
+block2 = { workspace = true }
+dispatch2 = { workspace = true }
+libc = { workspace = true }
+raw-window-handle = { workspace = true }
+# A panic an AppKit callback or a dispatched block contains is logged.
+tracing = { workspace = true }
+
 [dev-dependencies]
 flui-platform = { workspace = true, features = ["testing"] }
 flui-sdk = { workspace = true }

@@ -6,10 +6,16 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum SystemFailure {
-    /// An operating-system call failed with this code: an `errno` on Unix,
-    /// a Win32 error code on Windows.
+    /// An operating-system call failed with this code: an `errno` on Unix
+    /// (on macOS also the POSIX code an `NSError` carries), a Win32 error
+    /// code on Windows.
     #[error("the operating system failed with code {0}")]
     Os(i32),
+    /// A macOS framework failed with this code outside the POSIX domain:
+    /// the code of an `NSError` that carries no POSIX code (a Cocoa or
+    /// ServiceManagement error), or an `OSStatus` (Carbon's event manager).
+    #[error("the system framework failed with code {0}")]
+    Framework(i64),
     /// The desktop portal ended the request with this response: neither an
     /// answer (`0`) nor the user's cancel (`1`). `2` is the portal's "ended
     /// some other way".

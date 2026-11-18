@@ -125,8 +125,11 @@ impl Trigger {
 
     /// The key, for a provider that names it its system's way.
     #[cfg_attr(
-        not(windows),
-        expect(dead_code, reason = "the Windows provider names keys by virtual key")
+        not(any(windows, target_os = "macos", test)),
+        expect(
+            dead_code,
+            reason = "the Windows and macOS providers name keys their systems' way"
+        )
     )]
     pub(crate) fn key(&self) -> TriggerKey {
         self.key
@@ -407,7 +410,7 @@ impl ShortcutFeed {
     /// The most presses and releases a binding holds that nobody took.
     pub const MAX_QUEUED: usize = 256;
 
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(FeedState {
             queued: VecDeque::new(),
             waiting: VecDeque::new(),
