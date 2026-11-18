@@ -47,6 +47,7 @@ use std::{
 };
 
 use flui_foundation::IdMint;
+use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
@@ -1078,54 +1079,34 @@ impl UpdateScheduler {
             // `FrameCallbackId`s — meaningless in this scheduler's sequence —
             // would corrupt the sort below. On a mismatch the take traces the
             // error and the owner-local queue is left untouched.
-            let callback_result = self.dispatch_post_frame_callbacks(owner, &timing);
-            if callback_result.is_err() {
+            // The post-frame callbacks' panic comes first in the frame's own
+            // order, so it is the one a caller observes when both panicked.
+            let mut first = FirstPanic::new();
+            if let Err(payload) = self.dispatch_post_frame_callbacks(owner, &timing) {
                 owner.record_execution_failure();
+                first.record(payload);
             }
 
-            // Notify frame completion futures. Caught here, alongside
-            // `callback_result`, rather than left to propagate bare: a
-            // panicking waker would otherwise escape straight past the phase
-            // reset below and leave the scheduler stuck at `PostFrame`
-            // with `current_vsync_time` still set, reachable through
-            // `drive_frame`'s `Ok` arm rather than its `Err` one.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: frame-completion wakers run contained before the phase reset"
-            )]
-            let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Frame-completion wakers run contained: a panicking waker would
+            // otherwise escape past the phase reset below and leave the
+            // scheduler at `PostFrame` with `current_vsync_time` still set.
+            // `notify_frame_completion` traces its own panic, so one
+            // discarded behind the callbacks' is not lost.
+            let _notified = first.contain(|| {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
                     Some(&owner.execution_failure_signal()),
                 );
-            }));
+            });
 
-            if callback_result.is_err() || notify_result.is_err() {
+            if first.is_held() {
                 self.inner
                     .wake
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
                 *self.inner.frame.current_vsync_time.borrow_mut() = None;
             }
-            // The post-frame callback's panic happened first in this frame's
-            // own order, so it is what a caller observes when both panicked;
-            // `notify_frame_completion` already traced its own panic via
-            // `tracing::error!` above, so a discarded notify payload here is
-            // not silently lost, only not the one that propagates. Matching
-            // on both `Result`s (rather than `Option::or`-ing their errors
-            // together) is what routes the DISCARDED side through
-            // `discard_payload` instead of an uncontained `drop` --
-            // the payload can itself be a type whose own `Drop` panics.
-            match (callback_result, notify_result) {
-                (Ok(()), Ok(())) => {}
-                (Err(payload), Ok(())) | (Ok(()), Err(payload)) => {
-                    std::panic::resume_unwind(payload);
-                }
-                (Err(callback_payload), Err(notify_payload)) => {
-                    flui_foundation::panic::discard_payload(notify_payload);
-                    std::panic::resume_unwind(callback_payload);
-                }
-            }
+            first.resume();
         }
 
         // Return to idle

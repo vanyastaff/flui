@@ -2,7 +2,7 @@
 
 use flui_foundation::panic::FirstPanic;
 use std::cell::{Cell, RefCell};
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::resume_unwind;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
@@ -120,20 +120,19 @@ pub(crate) fn retire_with_execution_custody<T>(
 ) {
     let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
     let held = std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get());
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a retired value's drop runs contained; an earlier failure stays first"
-    )]
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
-        if held {
-            flui_foundation::panic::discard_payload(payload);
-            return;
-        }
-        if let Some(signal) = signal {
-            signal.set(true);
-        }
-        resume_unwind(payload);
+    let mut retired = FirstPanic::new();
+    if retired.contain(move || drop(value)).is_some() {
+        return;
     }
+    if held {
+        // Dropping the collector discards its payload.
+        drop(retired);
+        return;
+    }
+    if let Some(signal) = signal {
+        signal.set(true);
+    }
+    retired.resume();
 }
 
 impl Drop for ExecutionPermit<'_> {

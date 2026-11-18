@@ -1013,37 +1013,25 @@ fn refuse(
     failure_slot: Option<&RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>>,
 ) -> TaskToken {
     let token = TaskToken::refused();
-    let released = if let Some(slot) = failure_slot {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a refused future's retirement runs contained; the payload is handed back"
-        )]
-        catch_unwind(AssertUnwindSafe(|| {
+    let mut released = FirstPanic::new();
+    if let Some(slot) = failure_slot {
+        let _retired = released.contain(|| {
             crate::scheduler::execution::retire_with_execution_custody(slot, future);
-        }))
-    } else {
-        release_opaque(future)
-    };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: the refusal diagnostic runs tracing subscribers, contained"
-    )]
-    let diagnostic = catch_unwind(|| {
+        });
+    } else if let Err(payload) = release_opaque(future) {
+        released.record(payload);
+    }
+    // The diagnostic runs tracing subscribers; a panic from one is discarded
+    // with its collector.
+    let mut diagnostic = FirstPanic::new();
+    let _traced = diagnostic.contain(|| {
         tracing::warn!(
             "AsyncDriver: the ui_runtime that owned this driver is gone; dropping the spawned future"
         );
     });
-    if let Err(payload) = diagnostic {
-        flui_foundation::panic::discard_payload(payload);
-    }
-    if let Err(payload) = released {
-        if std::thread::panicking() {
-            // The incoming unwind stays the failure that propagates.
-            flui_foundation::panic::discard_payload(payload);
-        } else {
-            resume_unwind(payload);
-        }
-    }
+    drop(diagnostic);
+    // An unwind already in progress stays the failure that propagates.
+    released.resume();
     token
 }
 

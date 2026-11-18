@@ -541,14 +541,19 @@ impl Drop for OwnerFrame {
             );
             first
         });
-        if let Some(payload) = first {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        resume_first(first);
     }
+}
+
+/// Raise a destructor's first retirement failure, unless the thread is
+/// already unwinding: that unwind stays the failure, and this one is
+/// discarded (ADR-0281).
+fn resume_first(failure: Option<RetirePanic>) {
+    let mut first = FirstPanic::new();
+    if let Some(payload) = failure {
+        first.record(payload);
+    }
+    first.resume();
 }
 
 impl std::fmt::Debug for OwnerFrame {
@@ -890,13 +895,7 @@ impl PresentationFrameScope {
 
 impl Drop for PresentationFrameScope {
     fn drop(&mut self) {
-        if let Some(payload) = self.close() {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        resume_first(self.close());
     }
 }
 
