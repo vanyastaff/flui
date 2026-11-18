@@ -162,7 +162,7 @@ feature in `flui-painting` and `flui-engine`. It is not merged.
   - Same-key bitmap determinism: the grow test asserts `slot.texel` and `size` from the entries
     map, which `grow` never changes, and nothing rasterizes a key twice and compares bitmaps.
   - Baseline agreement to 1 px: the prototype truncates Parley's absolute y, while today's path
-    rounds the baseline (`(run.line_y * scale).round()`) and truncates only the glyph offset.
+    rounds the baseline (`(run.line_y * scale).round()`) and floors the glyph offset.
   - Variable fonts and synthetic bold and italic.
   - CJK segmentation: ICU4X logs "no segmentation model" because Parley's `complex-scripts`
     feature is off.
