@@ -26,8 +26,12 @@
 //! portal on the session bus, the launcher entry through its session-bus
 //! signal, and the user folders through the XDG user directories; it
 //! refuses the message box, the share sheet and the jump list with
-//! `UnsupportedReason::NotOnThisPlatform`, since no portal has them.
-//! Elsewhere, and for the system information off Windows, the handle is
+//! `UnsupportedReason::NotOnThisPlatform`, since no portal has them. A web
+//! page launches URIs, picks and saves files, shows a message box, shares,
+//! and badges an installed application's icon through the browser, and
+//! refuses autostart, global shortcuts, the user folders, the jump list and
+//! the system information with `NotOnThisPlatform`: a page has none of
+//! them. Elsewhere, and for the system information off Windows, the handle is
 //! refused with `UnsupportedReason::NotYetOnThisHost` until a platform's
 //! provider lands, never faked (ADR-0154 §10); the jump list is refused with
 //! `NotOnThisPlatform` everywhere but Windows.
@@ -46,14 +50,17 @@ pub mod taskbar;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod user_dirs;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod web;
 #[cfg(windows)]
 mod win32;
 
 use flui_platform::capability::{CapabilityRegistrar, Plugin};
 
 /// The system services' providers for the platform the application runs on:
-/// the Windows shell on Windows, the XDG desktop portal on Linux, and a
-/// refusal for what a platform's provider does not have.
+/// the Windows shell on Windows, the XDG desktop portal on Linux, the
+/// browser on the web, and a refusal for what a platform's provider does
+/// not have.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct SystemPlugin;
@@ -72,14 +79,16 @@ impl Plugin for SystemPlugin {
         win32::register(registrar);
         #[cfg(target_os = "linux")]
         portal::register(registrar, None, None);
-        #[cfg(not(windows))]
+        #[cfg(target_arch = "wasm32")]
+        web::register(registrar);
+        #[cfg(not(any(windows, target_arch = "wasm32")))]
         refusals::register(registrar);
     }
 }
 
 /// The refusals off Windows: the services no portal has, the jump list, and
 /// what a platform's provider does not have yet.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_arch = "wasm32")))]
 mod refusals {
     use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
     use flui_platform::{Unsupported, UnsupportedReason};

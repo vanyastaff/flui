@@ -1394,6 +1394,23 @@ jobs:
           WASM_BINDGEN_TEST_WEBDRIVER_JSON="$capabilities" \
             cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked
 
+      # The system services' web providers (`flui-system`'s `web::tests`, in
+      # its lib test: they drive the providers' private seams) on the same
+      # headless Chrome: the pickers, the launcher and the badge, with no
+      # picker or window opened.
+      - name: cargo test -p flui-system --lib (headless Chrome)
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+        run: |
+          set -euo pipefail
+          capabilities="$RUNNER_TEMP/webdriver.json"
+          jq -n --arg binary "$CHROME_PATH" '{"goog:chromeOptions": {binary: $binary,
+            args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]}}' \
+            > "$capabilities"
+          WASM_BINDGEN_TEST_WEBDRIVER_JSON="$capabilities" \
+            cargo test -p flui-system --target wasm32-unknown-unknown --lib --features testing --locked
+
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — source-derived native package selection, including
   # each selected package's tests, examples and benches. Clippy does not
