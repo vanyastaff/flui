@@ -7004,7 +7004,7 @@ GPU-память простаивающего или невидимого окн
   все. Cut, Copy и извлечённый текст на устройстве не запускались — строка
   `ime-composition-and-candidate-placement` паритета; потеря клавиш форматтером при быстрой печати —
   `docs/gaps.md`. Проверки и непрогнанное — в теле PR.
-- [ ] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
+- [x] **LY124** — ветки `native/fullscreen-policy` (Win32, PR #2680) и `native/fullscreen-policy-unix-apple`. Обе находки подтверждены на `main` @
   `e166cabd3` запуском на Windows: F11, которое обработчик пропустил, переводило окно в
   полноэкранный режим; `SetMode(Maximized)` полноэкранного окна, развёрнутого до этого,
   публиковало `[Fullscreen, Normal, Normal, Maximized]`. Переключатель, терявший «развёрнуто»,
@@ -7034,12 +7034,35 @@ GPU-память простаивающего или невидимого окн
   дисплеев); документы говорят правило как есть — ни один хост не переключает полноэкранный
   режим своим решением, смена системой (зелёная кнопка macOS, Escape браузера) сообщается и не
   оспаривается; устаревшие фрагменты changelog о F11 переписаны.
-  Остаётся строимое, поэтому строка открыта: X11, Wayland и AppKit исполняют выход несколькими
-  ответами системы окон и публикуют режим между (openbox на Xvfb в WSL: `Normal` трижды до
-  `Maximized`, и при развороте до снятия полноэкранного). Нужно: хост держит режим снимка, пока
-  запрошенная им смена режима в пути, с ограничением по времени и ходом владельца по его
-  истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
-  AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
+  X11, Wayland и AppKit (подтверждено на `main` @ `7b596b26b`: openbox на Xvfb в WSL публиковал
+  `[Normal, Normal, Normal, Maximized]` для `SetMode(Maximized)` полноэкранного окна, развёрнутого
+  до этого; скриптовый композитор — `[Normal, Maximized]`). Ни у одного из них нет клавиши
+  полноэкранного режима (у AppKit нет и главного меню). Построено одно правило в ячейке
+  состояния: `WindowStateCell::expect_mode` — хост, попросивший режим, держит в снимке режим и
+  прямоугольник возврата, из которых окно ушло, пока чтение не найдёт запрошенный режим; после
+  этого ещё `MODE_SETTLE` (250 мс) против шага, который система окон не успела сделать (openbox,
+  выводя из полноэкранного в обычный окно, развёрнутое до этого, читает обычный, снова
+  разворачивает и лишь затем снимает разворот), всего не дольше `MODE_ANSWER_LIMIT` (1 с), после
+  чего публикуется прочитанное. Геометрия, метрики и прочее идут как прочитаны: рендерер рисует
+  окно, какое оно есть. Конец ожидания без событий: X11 будит цикл и помечает окно
+  (`LoopWindows::mode_deadline`), Wayland будит цикл (`LoopWindow::mode_due`), AppKit планирует
+  чтение на полосе владельца. X11 не запоминает прямоугольник возврата из шага на пути к другому
+  режиму, а команда действует по режиму сервера, не снимка. AppKit ждёт и переход, начатый
+  пользователем (зелёная кнопка, системное сочетание): это просьба пользователя через системный
+  хром, исполняется и сообщается, как кнопка разворота у менеджера окон Linux; приземляется в
+  полноэкранный или обратно в масштабированный/обычный, из которого вошли
+  (`ModeSequence::fullscreen_transition`). Тесты, в скобках результат с откатом строки проводки:
+  `a_fullscreen_window_changes_mode_in_one_step` (X11, openbox; без `expect_mode` в `enter_mode` —
+  `[Normal, Normal, Normal, Maximized]`), `a_mode_change_another_client_overtakes_is_published_when_the_wait_ends`
+  (X11; без пометки в `read_stale` снимок остаётся в обычном режиме),
+  `a_mode_the_compositor_reaches_in_two_configures_is_published_once` (Wayland; без
+  `expect_mode` — `[Normal, Maximized]`), `a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends`
+  (Wayland; без `mode_due` в таймауте цикла снимок остаётся `Fullscreen`), модельные
+  `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` (ячейка) и
+  `a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` (AppKit). Прогон на Mac и
+  под настольными менеджером окон и композитором (mutter, KWin, Weston) — в строке `fullscreen`
+  `crates/flui-native/platform-parity.toml`; запись `docs/gaps.md` о промежуточном режиме
+  удалена. Проверки и непрогнанное — в теле PR.
 
 - [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0350 (заменяет первое предложение
   §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`

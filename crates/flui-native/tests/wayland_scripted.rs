@@ -98,6 +98,14 @@ mod cases {
                 a_configure_storm_settles_on_the_last_configure,
             ),
             (
+                "a_mode_the_compositor_reaches_in_two_configures_is_published_once",
+                a_mode_the_compositor_reaches_in_two_configures_is_published_once,
+            ),
+            (
+                "a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends",
+                a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends,
+            ),
+            (
                 "a_compositor_that_hangs_up_while_a_window_opens_fails_the_open",
                 a_compositor_that_hangs_up_while_a_window_opens_fails_the_open,
             ),
@@ -300,6 +308,20 @@ mod cases {
                     self.compositor.heard()
                 );
             }
+        }
+
+        /// Play `configure` and turn the loop until the window acknowledged
+        /// it: the window carries a configure out, and publishes what it
+        /// says, in the turn that acknowledges it.
+        fn configure(&self, configure: Configure) {
+            let sent = self.compositor.heard().configures.len();
+            self.compositor.play(Step::Configure(configure));
+            let heard =
+                self.heard_until("the configure sent", |heard| heard.configures.len() > sent);
+            let serial = heard.configures[sent];
+            self.turn_until("the configure acknowledged", |session| {
+                session.compositor.heard().acknowledged.contains(&serial)
+            });
         }
 
         /// Present one frame, as the raster side does.
@@ -996,6 +1018,99 @@ mod cases {
             session.scale() == Some(1.0)
         });
         assert_eq!(session.window.state().outer.position(), None);
+    }
+
+    /// A `SetMode` out of fullscreen the compositor answers in two configures
+    /// changes the published mode once, from fullscreen to the mode asked:
+    /// the configure between, normal on the way to maximized or the
+    /// maximized mode a compositor restores on the way to normal, is
+    /// acknowledged and drawn at its size, and no snapshot names its mode.
+    /// Back in normal mode the window has the size it had before.
+    fn a_mode_the_compositor_reaches_in_two_configures_is_published_once() {
+        use flui_platform::{WindowCommand, WindowMode};
+        let normal = || Configure::default().state(ToplevelState::Activated);
+        let maximized = || normal().size(1920, 1040).state(ToplevelState::Maximized);
+        let fullscreen = || normal().size(1920, 1080).state(ToplevelState::Fullscreen);
+        // (the configures that take the window to fullscreen, the mode asked
+        // out of it, the configures that answer, the mode between)
+        let table: [(&[Configure], WindowMode, [Configure; 2], WindowMode); 2] = [
+            (
+                &[fullscreen()],
+                WindowMode::Maximized,
+                [normal(), maximized()],
+                WindowMode::Normal,
+            ),
+            (
+                &[maximized(), fullscreen()],
+                WindowMode::Normal,
+                [maximized(), normal()],
+                WindowMode::Maximized,
+            ),
+        ];
+        for (into, asked, answers, between) in table {
+            let session = Session::open(Offer::default(), WindowOptions::default().title("modes"));
+            session.turn_until("the window's first frame", |session| {
+                session.compositor.heard().frames > 0
+            });
+            let opened = session.window.state().content_size;
+            for configure in into {
+                session.configure(configure.clone());
+            }
+            assert_eq!(session.window.state().mode, WindowMode::Fullscreen);
+            let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+            let log = Rc::clone(&seen);
+            let window = Rc::downgrade(&session.window);
+            session.handler.react_to_state_change(move || {
+                if let Some(window) = window.upgrade() {
+                    log.borrow_mut().push(window.state().mode);
+                }
+            });
+            session
+                .window
+                .admit_and_apply(WindowCommand::SetMode(asked))
+                .expect("the compositor takes every mode");
+            for configure in answers {
+                session.configure(configure);
+            }
+            let state = session.window.state();
+            let seen = seen.borrow().clone();
+            assert!(
+                !seen.contains(&between),
+                "{asked:?} read {between:?} on the way: {seen:?}"
+            );
+            assert_eq!(state.mode, asked, "{seen:?}");
+            if asked == WindowMode::Normal {
+                assert_eq!(state.content_size, opened);
+            }
+        }
+    }
+
+    /// A mode change the compositor does not carry out is published once the
+    /// window stops waiting for it, with nothing from the compositor to wake
+    /// the loop then: one blocking stretch of the loop, longer than the
+    /// wait, ends with the mode the compositor configured.
+    fn a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends() {
+        use flui_platform::{WindowCommand, WindowMode};
+        let session = Session::open(Offer::default(), WindowOptions::default().title("refused"));
+        session.turn_until("the window's first frame", |session| {
+            session.compositor.heard().frames > 0
+        });
+        let normal = Configure::default().state(ToplevelState::Activated);
+        session.configure(
+            normal
+                .clone()
+                .size(1920, 1080)
+                .state(ToplevelState::Fullscreen),
+        );
+        session
+            .window
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .expect("the compositor takes every mode");
+        // Out of fullscreen, but never maximized.
+        session.configure(normal);
+        assert_eq!(session.window.state().mode, WindowMode::Fullscreen);
+        run_for(&session.platform, Duration::from_millis(2_500)).expect("the loop turns");
+        assert_eq!(session.window.state().mode, WindowMode::Normal);
     }
 
     /// A burst of configures, each of another size, sent before the loop

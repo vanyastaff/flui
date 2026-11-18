@@ -360,7 +360,13 @@ pub struct WindowState {
     pub outer: WindowGeometry,
     /// The content (client) area extent.
     pub content_size: WindowExtent,
-    /// How the window occupies its display.
+    /// How the window occupies its display: a mode the window settled in.
+    /// A [`WindowCommand::SetMode`] the window system carries out in several
+    /// steps (a window manager or compositor answering in turn, a full-screen
+    /// animation) changes it once, from the mode the window left to the mode
+    /// asked; until the window system reaches that mode, or the host stops
+    /// waiting for it, a snapshot keeps the mode the window left while its
+    /// geometry and metrics follow the window.
     pub mode: WindowMode,
     /// The rectangle the window returns to from a maximized or fullscreen
     /// mode, when the OS reports it. Its position names the display it lies

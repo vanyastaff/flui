@@ -630,6 +630,9 @@ pub(crate) mod mode {
         heading: Option<WindowMode>,
         /// The mode a window that opened hidden enters when it is first shown.
         when_shown: Option<WindowMode>,
+        /// The mode the window last entered full screen from, zoomed or
+        /// normal, which AppKit puts back as it leaves full screen.
+        fullscreen_from: Option<WindowMode>,
     }
 
     impl ModeSequence {
@@ -698,6 +701,39 @@ pub(crate) mod mode {
         pub(crate) fn step_started(&mut self, now: Instant) {
             self.expire(now);
             self.animating_since = Some(now);
+        }
+
+        /// AppKit starts a full-screen transition at `now`, `entering` it or
+        /// leaving it (`windowWillEnterFullScreen:`,
+        /// `windowWillExitFullScreen:`), for a window with `flags`: the step
+        /// starts, and the answer is the mode the transition lands in, which
+        /// the window's snapshot waits for. A transition a command sent lands
+        /// where the command heads. One the user started (the green button,
+        /// the system's full-screen shortcut) lands in full screen
+        /// as it enters, and as it leaves, in the mode the window entered full
+        /// screen from, zoomed or normal, which AppKit puts back.
+        pub(crate) fn fullscreen_transition(
+            &mut self,
+            now: Instant,
+            entering: bool,
+            flags: WindowFlags,
+        ) -> WindowMode {
+            self.expire(now);
+            let heading = self.heading(now);
+            self.step_started(now);
+            if entering {
+                // The frame is still the one the window had before.
+                self.fullscreen_from = Some(if flags.is_maximized() {
+                    WindowMode::Maximized
+                } else {
+                    WindowMode::Normal
+                });
+            }
+            match heading {
+                Some(target) => target,
+                None if entering => WindowMode::Fullscreen,
+                None => self.fullscreen_from.unwrap_or(WindowMode::Normal),
+            }
         }
 
         /// The step that was animating is over, or failed: the window's flags
@@ -953,6 +989,55 @@ pub(crate) mod mode {
             assert_eq!(
                 sequence.command(start + ANIMATION_LIMIT, flags("R"), Maximized),
                 [ModeStep::Zoom]
+            );
+        }
+
+        /// A full-screen transition lands where the command that sent it
+        /// heads; one the user started lands in full screen, and back in the
+        /// zoomed state or normal mode the window entered it from.
+        #[test]
+        fn a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from() {
+            let start = Instant::now();
+            // (the case, the command before, the flags as the transition
+            // enters, as it leaves, where entering and leaving land)
+            let table = [
+                ("the user's, from normal", None, "R", (Fullscreen, Normal)),
+                (
+                    "the user's, from zoomed",
+                    None,
+                    "ZR",
+                    (Fullscreen, Maximized),
+                ),
+                (
+                    "a command's to full screen",
+                    Some(Fullscreen),
+                    "R",
+                    (Fullscreen, Normal),
+                ),
+            ];
+            for (case, command, entering_flags, (enters, leaves)) in table {
+                let mut sequence = ModeSequence::default();
+                if let Some(mode) = command {
+                    sequence.command(start, flags(entering_flags), mode);
+                }
+                let entered = sequence.fullscreen_transition(start, true, flags(entering_flags));
+                assert_eq!(entered, enters, "{case}: entering");
+                sequence.step_ended();
+                let left = sequence.fullscreen_transition(at(start, 1), false, flags("FR"));
+                assert_eq!(left, leaves, "{case}: leaving");
+            }
+            // A command out of full screen heads where it asked, whatever
+            // the window came from.
+            let mut sequence = ModeSequence::default();
+            sequence.fullscreen_transition(start, true, flags("ZR"));
+            sequence.step_ended();
+            assert_eq!(
+                sequence.command(at(start, 1), flags("FR"), Normal),
+                [ModeStep::ExitFullscreen]
+            );
+            assert_eq!(
+                sequence.fullscreen_transition(at(start, 1), false, flags("FR")),
+                Normal
             );
         }
 

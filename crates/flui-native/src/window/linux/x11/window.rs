@@ -160,7 +160,8 @@ use crate::window::desktop::DisplayFrame;
 use crate::window::linux::class::AppClass;
 use crate::window::plan::{FrameInset, OpenPlan};
 use crate::window::state::{
-    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
+    MODE_ANSWER_LIMIT, ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of,
+    not_carried_out,
 };
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
@@ -445,6 +446,10 @@ struct Record {
     outer_to_fit: Option<Size<f64>>,
     /// The last visibility the server reported: fully covered.
     obscured: bool,
+    /// The mode the server's properties said at the last read, which a
+    /// command acts on: the snapshot keeps the mode the window left while the
+    /// window manager answers a mode change in steps.
+    mode: WindowMode,
     /// The rectangle the window returns to from another mode: the outer
     /// geometry it had the last time it was in normal mode.
     normal_geometry: Option<WindowGeometry>,
@@ -617,9 +622,20 @@ impl X11Window {
         published.state
     }
 
-    /// The mode a command acts on: [`state_now`](Self::state_now)'s.
+    /// The mode a command acts on: what [`state_now`](Self::state_now) read
+    /// of the server, which the snapshot may not show yet while the window
+    /// manager answers a mode change in steps.
     fn mode_now(&self) -> WindowMode {
-        self.state_now().mode
+        let _: WindowState = self.state_now();
+        self.record.borrow().mode
+    }
+
+    /// The window asked its window manager for `mode`: the snapshot keeps
+    /// the mode the window left until the server's properties say `mode`, or
+    /// for [`MODE_ANSWER_LIMIT`] (`WindowStateCell::expect_mode`).
+    fn expect_mode(&self, mode: WindowMode) {
+        self.cell
+            .expect_mode(mode, Instant::now() + MODE_ANSWER_LIMIT);
     }
 
     /// The loop has the window follow its state at the turn's read.
@@ -823,6 +839,12 @@ impl X11Window {
         // What a window manager wrote on the window stands while one runs.
         let frame = support.kept(read.frame);
         let mode = mode_of(support.kept(mode_flags(read.wm_state, read.net_state)));
+        record.mode = mode;
+        // A step on the way to another mode is no place the window returns to.
+        let settled = self
+            .cell
+            .mode_in_flight(Instant::now())
+            .is_none_or(|asked| asked == mode);
         let level = support.kept(read.level);
         let cursor_grab = self.input.pointer_grab(self.window_ref());
         let outer = outer_bounds(read.origin, read.content, frame);
@@ -859,7 +881,9 @@ impl X11Window {
             ))?;
             let normal = match mode {
                 WindowMode::Normal => {
-                    record.normal_geometry = Some(geometry);
+                    if settled {
+                        record.normal_geometry = Some(geometry);
+                    }
                     None
                 }
                 _ => record.normal_geometry,
@@ -1242,7 +1266,11 @@ impl X11Window {
             return Ok(());
         }
         let states = self.atoms.states;
-        let minimized = self.mode_now() == WindowMode::Minimized;
+        let current = self.mode_now();
+        if current != mode {
+            self.expect_mode(mode);
+        }
+        let minimized = current == WindowMode::Minimized;
         match mode {
             WindowMode::Minimized => self.send_to_root(ClientMessageEvent::new(
                 32,
@@ -1477,6 +1505,7 @@ impl X11Window {
         };
         let mode = self.mode_now();
         if !self.unmapped() && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
+            self.expect_mode(WindowMode::Normal);
             let states = self.atoms.states;
             self.send_state(StateAction::Remove, states.fullscreen, 0);
             self.send_state(
@@ -2544,6 +2573,7 @@ impl X11Windows {
                     .filter(|_| plan.unmapped_until_shown())
                     .map(WindowGeometry::size),
                 obscured: false,
+                mode: opens_in,
                 normal_geometry: plan.normal_geometry,
                 content: None,
                 focus_told: false,
@@ -2803,6 +2833,16 @@ impl LoopWindows for X11Windows {
     fn read_stale(&self) {
         // Read now if no window asked for it in this turn.
         let _: WindowManagerSupport = self.support();
+        let now = Instant::now();
+        for window in self.table.borrow().windows.values() {
+            if window
+                .cell
+                .mode_deadline()
+                .is_some_and(|until| until <= now)
+            {
+                window.mark_stale();
+            }
+        }
         if !self.unread.take() {
             return;
         }
@@ -2822,6 +2862,15 @@ impl LoopWindows for X11Windows {
             });
         }
         failure.resume();
+    }
+
+    fn mode_deadline(&self) -> Option<Instant> {
+        let table = self.table.borrow();
+        let waits = table
+            .windows
+            .values()
+            .filter_map(|window| window.cell.mode_deadline());
+        waits.min()
     }
 
     fn chrome_event(&self, event: &Event) -> bool {

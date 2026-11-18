@@ -164,6 +164,14 @@ mod cases {
             a_command_acts_on_the_window_as_it_is_now,
         ),
         (
+            "a_fullscreen_window_changes_mode_in_one_step",
+            a_fullscreen_window_changes_mode_in_one_step,
+        ),
+        (
+            "a_mode_change_another_client_overtakes_is_published_when_the_wait_ends",
+            a_mode_change_another_client_overtakes_is_published_when_the_wait_ends,
+        ),
+        (
             "a_window_minimized_as_it_hears_its_show_stays_minimized",
             a_window_minimized_as_it_hears_its_show_stays_minimized,
         ),
@@ -2215,6 +2223,104 @@ mod cases {
             .expect("a window shows");
         fixture.settle();
         assert!(fixture.window.state().visible, "shown again");
+    }
+
+    /// A `SetMode` the window manager carries out in several answers changes
+    /// the published mode once, from the mode the window left to the mode
+    /// asked, and the window comes back to the place it had before: a window
+    /// leaving fullscreen for maximized returns to the normal rectangle it
+    /// was maximized from, one leaving it for normal to that rectangle. The
+    /// window manager answers each `_NET_WM_STATE` request as a property
+    /// change of its own, and openbox passes through normal mode on its way.
+    fn a_fullscreen_window_changes_mode_in_one_step() {
+        use WindowMode::{Fullscreen, Maximized, Normal};
+        // (the mode the window enters fullscreen from, the mode it leaves
+        // fullscreen for, the mode no snapshot between may show)
+        let table = [
+            (Maximized, Maximized, Normal),
+            (Normal, Maximized, Normal),
+            (Maximized, Normal, Maximized),
+        ];
+        for (from, to, between) in table {
+            let handler = RecordingWindowHandler::new();
+            let mut fixture = X11Fixture::open_with("one step", Rc::clone(&handler));
+            let opened = fixture.window.state().outer;
+            let enter = |fixture: &mut X11Fixture, mode| {
+                fixture
+                    .window
+                    .admit_and_apply(WindowCommand::SetMode(mode))
+                    .expect("openbox takes every mode");
+                fixture.settle();
+                assert_eq!(fixture.window.state().mode, mode, "{from:?} to {to:?}");
+            };
+            if from == Maximized {
+                enter(&mut fixture, Maximized);
+            }
+            enter(&mut fixture, Fullscreen);
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let log = Rc::clone(&seen);
+            let window = Rc::downgrade(&fixture.window);
+            handler.react_to_state_change(move || {
+                if let Some(window) = window.upgrade() {
+                    log.borrow_mut().push(window.state().mode);
+                }
+            });
+            enter(&mut fixture, to);
+            let seen = seen.borrow().clone();
+            assert!(
+                !seen.contains(&between),
+                "{from:?} to {to:?} read {between:?} on the way: {seen:?}"
+            );
+            let state = fixture.window.state();
+            let returns = match to {
+                Normal => state.outer,
+                _ => state.normal_geometry.expect("a maximized window's normal"),
+            };
+            assert_eq!(returns, opened, "{from:?} to {to:?}: {state:?}");
+        }
+    }
+
+    /// A mode change the window manager ends elsewhere is published once the
+    /// window stops waiting for it, with no event of the server's to wake
+    /// the window then: another client asks for out of fullscreen and maximized
+    /// right after the window asked for fullscreen, so the window
+    /// manager ends in a mode neither the snapshot nor the command named.
+    fn a_mode_change_another_client_overtakes_is_published_when_the_wait_ends() {
+        let fixture = X11Fixture::open("overtaken");
+        assert_eq!(fixture.window.state().mode, WindowMode::Normal);
+        let server = &fixture.server;
+        let net_wm_state = atom(server, "_NET_WM_STATE");
+        let [horizontal, vertical, fullscreen] = [
+            "_NET_WM_STATE_MAXIMIZED_HORZ",
+            "_NET_WM_STATE_MAXIMIZED_VERT",
+            "_NET_WM_STATE_FULLSCREEN",
+        ]
+        .map(|name| atom(server, name));
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .expect("openbox takes fullscreen");
+        // EWMH: action 1 adds, 0 removes; source 2 is a pager's request.
+        for data in [[0, fullscreen, 0, 2, 0], [1, horizontal, vertical, 2, 0]] {
+            server
+                .send_event(
+                    false,
+                    fixture.root(),
+                    EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                    ClientMessageEvent::new(32, fixture.xid, net_wm_state, data),
+                )
+                .expect("request");
+        }
+        server.flush().expect("flush");
+        until("the window manager to maximize the window", || {
+            let names = state_names(server, fixture.xid);
+            names.contains(&"_NET_WM_STATE_MAXIMIZED_HORZ".to_owned())
+                && !names.contains(&"_NET_WM_STATE_FULLSCREEN".to_owned())
+        });
+        // Every event of the change is read well before the wait ends; the
+        // turns after it hear nothing new.
+        run_for(&fixture.platform, Duration::from_millis(1_500)).expect("the loop turns");
+        assert_eq!(fixture.window.state().mode, WindowMode::Maximized);
     }
 
     /// A command acts on the window as it is, not as its last snapshot had

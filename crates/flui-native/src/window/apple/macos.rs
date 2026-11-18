@@ -106,7 +106,8 @@ use crate::{
     owner::slot::{OwnerCell, OwnerWeak},
     owner::window_delivery::{Retirement, WindowDelivery},
     window::state::{
-        ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
+        MODE_ANSWER_LIMIT, ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of,
+        reported_frame,
     },
 };
 use flui_platform::{
@@ -2661,6 +2662,22 @@ impl MacOSWindow {
         });
     }
 
+    /// The window asked AppKit for `asked`, or AppKit started a full-screen
+    /// transition that lands there: the snapshot keeps the mode the window
+    /// left until a read finds `asked`, for at most `limit`
+    /// (`WindowStateCell::expect_mode`), and the window is read again once
+    /// that passes, so a step AppKit refused is published then.
+    fn wait_out_mode(&self, asked: WindowMode, limit: std::time::Duration) {
+        self.snapshot
+            .expect_mode(asked, std::time::Instant::now() + limit);
+        let window = Arc::clone(&self.redraw().window);
+        crate::owner::apple::macos::exec_after_on_owner(self.owner, limit, move || {
+            if let Some(window) = window.upgrade() {
+                window.publish_state();
+            }
+        });
+    }
+
     fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         // SAFETY: see the note above these bodies.
         let flags = unsafe { self.read_flags() };
@@ -2677,6 +2694,9 @@ impl MacOSWindow {
         };
         if heading.is_some() {
             self.read_again_when_the_step_gives_up();
+            self.wait_out_mode(mode, ANIMATION_LIMIT);
+        } else if !steps.is_empty() {
+            self.wait_out_mode(mode, MODE_ANSWER_LIMIT);
         }
         if !steps.is_empty() {
             self.record_normal();

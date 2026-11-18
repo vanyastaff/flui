@@ -173,7 +173,8 @@ mod toplevel {
     use crate::text::WindowTextInput;
     use crate::window::linux::class::AppClass;
     use crate::window::state::{
-        ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out, system_frame_or_none,
+        MODE_ANSWER_LIMIT, ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out,
+        system_frame_or_none,
     };
 
     /// What the compositor said of one window since the owner last looked,
@@ -1378,6 +1379,20 @@ mod toplevel {
             self.surface.0.commit();
         }
 
+        /// The window asks the compositor for `mode`, which it may answer in
+        /// several configures (Weston restores a maximized mode on the way out
+        /// of fullscreen): the snapshot keeps the mode the window left until a
+        /// configure says `mode`, or for [`MODE_ANSWER_LIMIT`]
+        /// (`WindowStateCell::expect_mode`). A window already in `mode` waits
+        /// for nothing.
+        fn expect_mode(&self, mode: WindowMode) {
+            let states = self.applied.borrow().sizing.states();
+            if crate::window::state::mode_of(states.mode_flags()) != mode {
+                self.state
+                    .expect_mode(mode, Instant::now() + MODE_ANSWER_LIMIT);
+            }
+        }
+
         /// Ask the compositor to stop sizing the window: out of fullscreen
         /// and out of maximized. A compositor that puts a window maximized
         /// before fullscreen back in it as it leaves fullscreen is asked again
@@ -1879,8 +1894,16 @@ mod toplevel {
                     }
                     self.show_frame_change();
                 }
-                WindowCommand::SetMode(WindowMode::Normal) => self.leave_compositor_modes(),
+                WindowCommand::SetMode(WindowMode::Normal) => {
+                    self.expect_mode(WindowMode::Normal);
+                    self.leave_compositor_modes();
+                }
                 WindowCommand::SetMode(mode) => {
+                    // The compositor never says a window is minimized: there
+                    // is no answer to wait for.
+                    if mode != WindowMode::Minimized {
+                        self.expect_mode(mode);
+                    }
                     let fullscreen = {
                         let mut applied = self.applied.borrow_mut();
                         applied.leaving_maximized = false;
@@ -2132,6 +2155,10 @@ mod toplevel {
                 return None;
             }
             self.pacing().gives_up_at()
+        }
+
+        fn mode_due(&self) -> Option<Instant> {
+            self.state.mode_deadline().filter(|_| !self.closed.get())
         }
 
         fn frame_hold(&self) -> FrameHold {

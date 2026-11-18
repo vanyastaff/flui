@@ -15,7 +15,8 @@ use objc2_foundation::NSRect;
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
 use crate::owner::apple::macos::HostDisplays;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
-use crate::window::apple::geometry::mode::HeldCommand;
+use crate::window::apple::geometry::mode::{ANIMATION_LIMIT, HeldCommand};
+use crate::window::state::MODE_ANSWER_LIMIT;
 
 /// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
 /// window not on any screen) or the source leaves that screen out.
@@ -226,7 +227,7 @@ fn get_or_create_delegate_class() -> &'static Class {
                         // Full screen wins over a level while it lasts; the
                         // level comes back when the window leaves it.
                         window.apply_level(true);
-                        window.handle_transition_started();
+                        window.handle_fullscreen_transition_started(true);
                     }
                 },
             );
@@ -245,7 +246,7 @@ fn get_or_create_delegate_class() -> &'static Class {
                 || {
                     // SAFETY: see the shared invariant above.
                     if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                        window.handle_transition_started();
+                        window.handle_fullscreen_transition_started(false);
                     }
                 },
             );
@@ -548,6 +549,25 @@ impl MacOSWindow {
             .step_started(std::time::Instant::now());
     }
 
+    /// A full-screen transition has started, `entering` full screen or
+    /// leaving it, from a command or from the user (the green button, the
+    /// system's shortcut): the user's is the user's own request through the
+    /// system's chrome, which the window carries out and reports, as a window
+    /// manager's maximize button is on Linux. The snapshot keeps the mode the
+    /// window left until the transition lands
+    /// (`ModeSequence::fullscreen_transition`).
+    fn handle_fullscreen_transition_started(&self, entering: bool) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, on the
+        // main thread AppKit sends its notifications on.
+        let flags = unsafe { self.read_flags() };
+        let lands_in = self.state.lock().sequence.fullscreen_transition(
+            std::time::Instant::now(),
+            entering,
+            flags,
+        );
+        self.wait_out_mode(lands_in, ANIMATION_LIMIT);
+    }
+
     /// A step that animates is over (or failed): publish the window, then send
     /// the mode held back for it, if there is one.
     ///
@@ -557,9 +577,14 @@ impl MacOSWindow {
     /// screen zoomed still reads as unzoomed, and a held `Normal` would plan no
     /// un-zoom and leave it maximized. It is also taken after the publish,
     /// since a subscriber that runs in it may command a newer one. A window
-    /// dropped before that turn has no mode left to take.
+    /// dropped before that turn has no mode left to take. The mode the
+    /// snapshot waits for is waited for a short while more, past the frame
+    /// AppKit puts back and the held mode's step.
     fn handle_transition_ended(self: &Rc<Self>) {
         self.state.lock().sequence.step_ended();
+        if let Some(asked) = self.snapshot.mode_in_flight(std::time::Instant::now()) {
+            self.wait_out_mode(asked, MODE_ANSWER_LIMIT);
+        }
         // A window that left full screen, or failed to enter it, stands at
         // its own level again; one still full screen stays at the normal one.
         // SAFETY: `ns_window` is alive for the lifetime of `self`, on the
