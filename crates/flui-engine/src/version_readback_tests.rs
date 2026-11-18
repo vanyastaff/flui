@@ -1481,13 +1481,21 @@ fn a_frame_counts_the_chunks_it_records() {
     capture
         .render_scene(&Scene::of_version(row.version()))
         .expect("the first frame renders");
+    let counters = capture.counters();
+    assert!(
+        counters.recording_cache_bytes > 0,
+        "the row's recordings are kept"
+    );
     assert_eq!(
-        capture.counters(),
+        counters,
         RasterCounters {
             nodes_entered: 5,
             cull_tests: 0,
             chunks_recorded: 4,
             region_passes: 0,
+            recording_cache_hits: 0,
+            recording_cache_evictions: 0,
+            recording_cache_bytes: counters.recording_cache_bytes,
         },
         "a full frame walks the whole row"
     );
@@ -1507,13 +1515,17 @@ fn a_frame_counts_the_chunks_it_records() {
         "{:?}",
         capture.last_plan()
     );
+    let counters = capture.counters();
     assert_eq!(
-        capture.counters(),
+        counters,
         RasterCounters {
             nodes_entered: 2,
             cull_tests: 5,
             chunks_recorded: 1,
             region_passes: 1,
+            recording_cache_hits: 0,
+            recording_cache_evictions: 0,
+            recording_cache_bytes: counters.recording_cache_bytes,
         },
         "a partial frame over one box"
     );
@@ -1527,4 +1539,711 @@ fn a_frame_counts_the_chunks_it_records() {
         RasterCounters::default(),
         "a skipped frame keeps no count of the frame before it"
     );
+}
+
+/// One chunk owned by `owner`, at `writer`'s next content version, painted by
+/// `paint`.
+fn chunk_of(writer: &mut SceneWriter<'_>, owner: usize, paint: fn(&mut Canvas)) -> Arc<Chunk> {
+    let mut canvas = Canvas::new();
+    paint(&mut canvas);
+    Arc::new(Chunk::new(
+        RenderId::new(owner),
+        0,
+        writer.next_content_version().expect("a content version"),
+        canvas.finish(),
+    ))
+}
+
+/// Publishes a root of `chunks`, the ones from `clipped` on under a rounded
+/// clip of `radius` when there is one, and answers the version.
+fn publish_root(
+    owner: &mut SceneOwner,
+    chunks: &[Arc<Chunk>],
+    clipped: Option<(usize, f64)>,
+) -> SceneVersion {
+    use flui_foundation::geometry::{RRect, Radius};
+    use flui_layer::{ClipRRectLayer, Layer};
+    use flui_painting::paint::Clip;
+
+    let mut writer = owner.writer();
+    let mut content = BoundaryContent::builder();
+    for (index, chunk) in chunks.iter().enumerate() {
+        if let Some((_, radius)) = clipped.filter(|&(from, _)| from == index) {
+            content.push_effect(
+                Layer::from(ClipRRectLayer::new(
+                    RRect::from_rect_and_radius(
+                        Rect::from_xywh(2.0, 2.0, 120.0, 120.0),
+                        Radius::circular(radius),
+                    ),
+                    Clip::AntiAlias,
+                )),
+                RenderId::new(40),
+                0,
+            );
+        }
+        content.chunk(Arc::clone(chunk));
+    }
+    if clipped.is_some() {
+        content.pop_effect();
+    }
+    writer.push(SceneOp::Publish {
+        node: writer.current().root(),
+        content: Arc::new(content.finish()),
+    });
+    owner.apply(SURFACE).expect("the root applies");
+    owner.current().clone()
+}
+
+fn paint_text(canvas: &mut Canvas, word: &str, at: Offset<f64>) {
+    use flui_painting::TextPainter;
+    use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+
+    let mut painter = TextPainter::new()
+        .with_text(
+            TextSpan::new(word.to_owned()).with_style(
+                TextStyle::new()
+                    .with_font_size(14.0)
+                    .with_color(Color::BLACK),
+            ),
+        )
+        .with_text_direction(TextDirection::Ltr);
+    painter
+        .layout(
+            &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+            0.0,
+            100.0,
+        )
+        .expect("the fixture's text lays out");
+    painter.paint(canvas, at);
+}
+
+fn paint_gradient(canvas: &mut Canvas, rect: Rect<f64>, [from, to]: [Color; 2]) {
+    use flui_painting::paint::{Shader, TileMode};
+
+    canvas.draw_rect(
+        rect,
+        &Paint::fill(Color::WHITE).with_shader(Shader::linear_gradient(
+            Offset::new(rect.left(), rect.top()),
+            Offset::new(rect.right(), rect.top()),
+            vec![from, to],
+            None,
+            TileMode::Clamp,
+        )),
+    );
+}
+
+/// A small triangle, tessellated rather than drawn supersampled.
+fn paint_triangle(canvas: &mut Canvas, at: Offset<f64>) {
+    use flui_foundation::geometry::Point;
+    use flui_painting::paint::Path;
+
+    let mut path = Path::new();
+    path.move_to(Point::new(at.dx, at.dy));
+    path.line_to(Point::new(at.dx + 14.0, at.dy));
+    path.line_to(Point::new(at.dx + 7.0, at.dy + 12.0));
+    path.close();
+    canvas.draw_path(&path, &Paint::fill(Color::GREEN));
+}
+
+/// A 4×4 image of two colours, small enough for the shared atlas.
+fn paint_image(canvas: &mut Canvas, rect: Rect<f64>) {
+    let texels = [RED, BLUE].concat().repeat(8);
+    canvas.draw_image(
+        flui_painting::paint::Image::from_rgba8(4, 4, texels),
+        rect,
+        None,
+    );
+}
+
+/// The chunks of [`mixed_scene`].
+const MIXED_CHUNKS: u64 = 8;
+
+/// A root of text, rects, a gradient, a path and an image, then text, a
+/// gradient and a path again, one chunk each: the later ones replay onto
+/// arenas the earlier ones filled.
+fn mixed_scene() -> SceneVersion {
+    let mut owner = SceneOwner::new();
+    let chunks = {
+        let mut writer = owner.writer();
+        [
+            chunk_of(&mut writer, 2, |canvas| {
+                paint_text(canvas, "Cached", Offset::new(4.0, 4.0));
+            }),
+            chunk_of(&mut writer, 3, |canvas| {
+                canvas.draw_rect(
+                    Rect::from_xywh(4.0, 30.0, 20.0, 10.0),
+                    &Paint::fill(Color::RED),
+                );
+                canvas.draw_rect(
+                    Rect::from_xywh(30.0, 30.0, 20.0, 10.0),
+                    &Paint::fill(Color::BLUE),
+                );
+            }),
+            chunk_of(&mut writer, 4, |canvas| {
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(4.0, 50.0, 60.0, 12.0),
+                    [Color::RED, Color::BLUE],
+                );
+            }),
+            chunk_of(&mut writer, 5, |canvas| {
+                paint_triangle(canvas, Offset::new(70.0, 50.0));
+            }),
+            chunk_of(&mut writer, 6, |canvas| {
+                paint_image(canvas, Rect::from_xywh(4.0, 70.0, 16.0, 16.0));
+            }),
+            chunk_of(&mut writer, 7, |canvas| {
+                paint_text(canvas, "again", Offset::new(30.0, 70.0));
+            }),
+            chunk_of(&mut writer, 8, |canvas| {
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(4.0, 96.0, 60.0, 12.0),
+                    [Color::GREEN, Color::BLACK],
+                );
+            }),
+            chunk_of(&mut writer, 9, |canvas| {
+                paint_triangle(canvas, Offset::new(70.0, 96.0));
+            }),
+        ]
+    };
+    publish_root(&mut owner, &chunks, None)
+}
+
+/// What one frame did, recorded and drew.
+struct Drawn {
+    counters: crate::frame_protocol::RasterCounters,
+    ir: Vec<u8>,
+    pixels: Vec<u8>,
+}
+
+/// Draws `version` in full, with the cache unread when `reason` is
+/// `DamageOff`.
+fn full_frame(
+    capture: &mut RetainedCapture,
+    version: &SceneVersion,
+    reason: flui_layer::FullReason,
+) -> Drawn {
+    apply(capture, DamageRegion::Full(reason));
+    capture
+        .render_scene(&Scene::of_version(version.clone()))
+        .expect("a full frame renders");
+    assert!(
+        matches!(
+            capture.last_plan(),
+            Some(FramePlan::Direct | FramePlan::RetainedFull)
+        ),
+        "{:?}",
+        capture.last_plan()
+    );
+    drawn(capture)
+}
+
+fn drawn(capture: &RetainedCapture) -> Drawn {
+    Drawn {
+        counters: capture.counters(),
+        ir: capture
+            .last_ir()
+            .expect("the capture keeps its IR")
+            .to_vec(),
+        pixels: capture.read_rgba().expect("readback"),
+    }
+}
+
+/// How many of the pixels of `a` and `b` differ.
+fn pixels_differing(a: &[u8], b: &[u8]) -> usize {
+    let (a, _) = a.as_chunks::<4>();
+    let (b, _) = b.as_chunks::<4>();
+    a.iter().zip(b).filter(|(a, b)| a != b).count()
+}
+
+/// A chunk whose content, transform and surroundings are unchanged replays
+/// what it recorded (ADR-0304 §9, ADR-0006 §6): a second full frame of a
+/// version of text, rects, a gradient, a path and an image records no chunk,
+/// splices every one from the cache, and builds the IR the first frame
+/// recorded, byte for byte, which draws the same pixels.
+#[test]
+fn a_cached_chunk_replays_the_command_stream_it_recorded() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let version = mixed_scene();
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
+    assert_eq!(
+        (
+            first.counters.chunks_recorded,
+            first.counters.recording_cache_hits
+        ),
+        (MIXED_CHUNKS, 0),
+        "the first frame records every chunk"
+    );
+    assert!(
+        first
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|&pixel| pixel != WHITE),
+        "precondition: the version draws"
+    );
+
+    let second = full_frame(&mut capture, &version, FullReason::FirstFrame);
+    assert_eq!(
+        (
+            second.counters.chunks_recorded,
+            second.counters.recording_cache_hits
+        ),
+        (0, MIXED_CHUNKS),
+        "the second frame replays every chunk"
+    );
+    assert!(
+        second.ir == first.ir,
+        "the replayed IR is the recorded one ({} and {} bytes)",
+        second.ir.len(),
+        first.ir.len()
+    );
+    assert_eq!(pixels_differing(&first.pixels, &second.pixels), 0);
+}
+
+/// An empty root, drawn in full between two frames of another version.
+fn empty_frame(capture: &mut RetainedCapture) {
+    let mut owner = SceneOwner::new();
+    let version = publish_root(&mut owner, &[], None);
+    full_frame(capture, &version, flui_layer::FullReason::FirstFrame);
+}
+
+/// A kept recording names glyph and image texels, so each event that moves
+/// them misses every one (ADR-0304 §9, `ResourceEpoch`): after a critical
+/// reclaim, a switch of font source or an image-atlas reset, the next full
+/// frame records every chunk anew and draws what a fresh renderer draws. The
+/// first row, a frame between that moves nothing, replays every chunk.
+#[test]
+fn an_atlas_reset_misses_every_cached_recording() {
+    use flui_foundation::memory::MemoryPressureLevel;
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    // (row, what happens between the frames, whether the second frame and
+    // the fresh one draw through the plugin font source, whether it hits)
+    type Between = fn(&mut RetainedCapture);
+    let rows: [(&str, Between, bool, bool); 4] = [
+        ("a frame between", empty_frame, false, true),
+        (
+            "a critical reclaim",
+            |capture| capture.reclaim(MemoryPressureLevel::Critical),
+            false,
+            false,
+        ),
+        ("a font-source switch", |_| {}, true, false),
+        (
+            "an image-atlas reset",
+            |capture| {
+                capture.mark_image_atlas_full();
+                empty_frame(capture);
+            },
+            false,
+            false,
+        ),
+    ];
+    let version = mixed_scene();
+    let second_frame = |capture: &mut RetainedCapture, plugin: bool| {
+        apply(capture, DamageRegion::Full(FullReason::FirstFrame));
+        let scene = Scene::of_version(version.clone());
+        if plugin {
+            capture.render_plugin_frame(&scene, false)
+        } else {
+            capture.render_scene(&scene)
+        }
+        .expect("the second frame renders");
+        drawn(capture)
+    };
+    for (row, between, plugin, hits) in rows {
+        let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        capture.keep_recorded_ir();
+        let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
+        assert_eq!(
+            first.counters.chunks_recorded, MIXED_CHUNKS,
+            "{row}: the first frame records every chunk"
+        );
+        between(&mut capture);
+        let second = second_frame(&mut capture, plugin);
+        let expected = if hits {
+            (0, MIXED_CHUNKS)
+        } else {
+            (MIXED_CHUNKS, 0)
+        };
+        assert_eq!(
+            (
+                second.counters.chunks_recorded,
+                second.counters.recording_cache_hits
+            ),
+            expected,
+            "{row}: chunks recorded and replayed"
+        );
+        let mut fresh = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        fresh.keep_recorded_ir();
+        let oracle = second_frame(&mut fresh, plugin);
+        assert_eq!(
+            pixels_differing(&second.pixels, &oracle.pixels),
+            0,
+            "{row}: the frame draws what a fresh renderer draws"
+        );
+    }
+}
+
+/// A frame that drew nothing on screen is retried as a full frame of the
+/// version it held. After a frame that failed once begun the retry records
+/// no chunk: each comes from the cache, and the pixels are a fresh
+/// renderer's. After a frame that panicked once recorded it records every
+/// chunk again, since a raster panic drops the recordings (ADR-0304 §10),
+/// and its counters report the recordings the panic dropped with those a
+/// reclaim dropped before the panicked frame. The engine has no path that
+/// re-renders a held version of its own, so each retry is the forced full
+/// frame the frame protocol owes after the failure.
+#[test]
+fn a_frame_not_shown_is_retried_without_recording() {
+    use flui_foundation::memory::MemoryPressureLevel;
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let version = mixed_scene();
+    let scene = Scene::of_version(version.clone());
+    let mut fresh = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    fresh.keep_recorded_ir();
+    let oracle = full_frame(&mut fresh, &version, FullReason::FirstFrame);
+
+    // A frame shown, then one that fails after it began.
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    full_frame(&mut capture, &version, FullReason::FirstFrame);
+    apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+    capture.fail_next_frame_after_begin();
+    assert!(
+        capture.render_scene(&scene).is_err(),
+        "the injected failure fails the frame"
+    );
+    capture.render_scene(&scene).expect("the retry renders");
+    let retry = drawn(&capture);
+    assert_eq!(
+        (
+            retry.counters.chunks_recorded,
+            retry.counters.recording_cache_hits
+        ),
+        (0, MIXED_CHUNKS),
+        "after a failed frame: the retry replays every chunk"
+    );
+    assert_eq!(
+        pixels_differing(&retry.pixels, &oracle.pixels),
+        0,
+        "after a failed frame: the retry draws what a fresh renderer draws"
+    );
+
+    // A frame shown, a reclaim that drops its recordings, then a frame that
+    // records them again and panics before it is submitted.
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    full_frame(&mut capture, &version, FullReason::FirstFrame);
+    capture.reclaim(MemoryPressureLevel::Critical);
+    apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+    capture.panic_after_next_record();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test holds the raster frame's own panic"
+    )]
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture.render_scene(&scene)
+    }));
+    assert!(unwound.is_err(), "the injected panic unwinds the frame");
+    capture.render_scene(&scene).expect("the retry renders");
+    let retry = drawn(&capture);
+    assert_eq!(
+        (
+            retry.counters.chunks_recorded,
+            retry.counters.recording_cache_hits,
+            retry.counters.recording_cache_evictions
+        ),
+        (MIXED_CHUNKS, 0, 2 * MIXED_CHUNKS),
+        "after a panicked frame: the retry records every chunk and reports \
+         what the reclaim and the panic dropped"
+    );
+    assert_eq!(
+        pixels_differing(&retry.pixels, &oracle.pixels),
+        0,
+        "after a panicked frame: the retry draws what a fresh renderer draws"
+    );
+}
+
+/// A kept recording spliced after another prefix builds the IR that
+/// recording it there builds: its first element merges into what the prefix
+/// left or opens its own, as recorded in place, every offset rebased, and its
+/// draws take the clip they are spliced under. Each row draws a root of two
+/// chunks twice, the first chunk changed between the frames and the second
+/// kept: one capture reads the cache, the other draws with damage off and so
+/// records both chunks each frame.
+#[test]
+fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    type Painting = fn(&mut Canvas);
+    let rect: Painting = |canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(10.0, 10.0, 20.0, 10.0),
+            &Paint::fill(Color::RED),
+        );
+    };
+    let other_rect: Painting = |canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(40.0, 10.0, 20.0, 10.0),
+            &Paint::fill(Color::BLUE),
+        );
+    };
+    let path: Painting = |canvas| paint_triangle(canvas, Offset::new(10.0, 40.0));
+    let gradient: Painting = |canvas| {
+        paint_gradient(
+            canvas,
+            Rect::from_xywh(10.0, 60.0, 40.0, 8.0),
+            [Color::RED, Color::BLUE],
+        );
+    };
+    let text: Painting = |canvas| paint_text(canvas, "ab", Offset::new(10.0, 80.0));
+    // (row, first chunk in frame one, in frame two, the kept chunk, its
+    // rounded clip's radius in each frame)
+    type Radii = Option<(f64, f64)>;
+    let rows: [(&str, Painting, Painting, Painting, Radii); 9] = [
+        (
+            "a rect after a path, then after a rect",
+            path,
+            rect,
+            other_rect,
+            None,
+        ),
+        (
+            "a rect after a rect, then after a path",
+            rect,
+            path,
+            other_rect,
+            None,
+        ),
+        (
+            "a path, a rect and a path after a rect, then after a path",
+            rect,
+            path,
+            |canvas| {
+                paint_triangle(canvas, Offset::new(40.0, 40.0));
+                canvas.draw_rect(
+                    Rect::from_xywh(70.0, 40.0, 10.0, 10.0),
+                    &Paint::fill(Color::RED),
+                );
+                paint_triangle(canvas, Offset::new(90.0, 40.0));
+            },
+            None,
+        ),
+        (
+            "a path after a path, then after a rect",
+            path,
+            rect,
+            |canvas| paint_triangle(canvas, Offset::new(40.0, 40.0)),
+            None,
+        ),
+        (
+            "a path, a rect and a path after a path, then after a rect",
+            path,
+            rect,
+            |canvas| {
+                paint_triangle(canvas, Offset::new(40.0, 40.0));
+                canvas.draw_rect(
+                    Rect::from_xywh(70.0, 40.0, 10.0, 10.0),
+                    &Paint::fill(Color::RED),
+                );
+                paint_triangle(canvas, Offset::new(90.0, 40.0));
+            },
+            None,
+        ),
+        (
+            "a gradient after a rect, then after a gradient",
+            rect,
+            gradient,
+            |canvas| {
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(60.0, 60.0, 40.0, 8.0),
+                    [Color::GREEN, Color::BLACK],
+                );
+                canvas.draw_rect(
+                    Rect::from_xywh(70.0, 70.0, 10.0, 10.0),
+                    &Paint::fill(Color::GREEN),
+                );
+            },
+            None,
+        ),
+        (
+            "text after a rect, then after text",
+            rect,
+            text,
+            |canvas| {
+                paint_text(canvas, "cd", Offset::new(60.0, 80.0));
+                canvas.draw_rect(
+                    Rect::from_xywh(70.0, 100.0, 10.0, 10.0),
+                    &Paint::fill(Color::GREEN),
+                );
+            },
+            None,
+        ),
+        (
+            "a rect after a gradient, then after text",
+            gradient,
+            text,
+            other_rect,
+            None,
+        ),
+        (
+            "a rect under a rounded clip whose radius changes",
+            rect,
+            other_rect,
+            |canvas| {
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
+                    &Paint::fill(Color::GREEN),
+                );
+                paint_triangle(canvas, Offset::new(2.0, 2.0));
+            },
+            Some((4.0, 12.0)),
+        ),
+    ];
+    for (row, before, after, kept, radius) in rows {
+        let mut owner = SceneOwner::new();
+        let (first, shared) = {
+            let mut writer = owner.writer();
+            (
+                chunk_of(&mut writer, 2, before),
+                chunk_of(&mut writer, 3, kept),
+            )
+        };
+        let clip = |radius: Option<f64>| radius.map(|radius| (1, radius));
+        let one = publish_root(
+            &mut owner,
+            &[first, Arc::clone(&shared)],
+            clip(radius.map(|(one, _)| one)),
+        );
+        let second = chunk_of(&mut owner.writer(), 2, after);
+        let two = publish_root(
+            &mut owner,
+            &[second, shared],
+            clip(radius.map(|(_, two)| two)),
+        );
+
+        let mut cached = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        cached.keep_recorded_ir();
+        let mut recorded = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        recorded.keep_recorded_ir();
+        let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
+        let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
+        assert!(
+            cached_one.ir == recorded_one.ir,
+            "{row}: precondition: both captures record the first frame alike"
+        );
+        let cached_two = full_frame(&mut cached, &two, FullReason::FirstFrame);
+        let recorded_two = full_frame(&mut recorded, &two, FullReason::DamageOff);
+        assert_eq!(
+            (
+                cached_two.counters.chunks_recorded,
+                cached_two.counters.recording_cache_hits
+            ),
+            (1, 1),
+            "{row}: the kept chunk is spliced"
+        );
+        assert_eq!(
+            (
+                recorded_two.counters.chunks_recorded,
+                recorded_two.counters.recording_cache_hits
+            ),
+            (2, 0),
+            "{row}: with damage off the cache is not read"
+        );
+        assert!(
+            cached_two.ir == recorded_two.ir,
+            "{row}: the spliced IR is the one recorded in place ({} and {} bytes)",
+            cached_two.ir.len(),
+            recorded_two.ir.len()
+        );
+        assert_eq!(
+            pixels_differing(&cached_two.pixels, &recorded_two.pixels),
+            0,
+            "{row}: the spliced frame draws as the recorded one"
+        );
+    }
+}
+
+/// A fill of the whole target records the target's size, so a chunk drawn
+/// at one size and then at another records again at the second and fills
+/// it, as a fresh renderer does.
+#[test]
+fn a_target_fill_drawn_at_a_new_size_fills_the_new_size() {
+    use flui_painting::paint::BlendMode;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut owner = SceneOwner::new();
+    let fill = chunk_of(&mut owner.writer(), 2, |canvas| {
+        canvas.draw_color(Color::RED, BlendMode::SrcOver);
+    });
+    let scene = Scene::of_version(publish_root(&mut owner, &[fill], None));
+    renderer
+        .render_scene(&scene, (32, 32))
+        .expect("the small frame renders");
+    let large = renderer
+        .render_scene(&scene, (64, 64))
+        .expect("the large frame renders");
+    let fresh = crate::test_support::renderer_or_skip()
+        .expect("a second renderer on the same device")
+        .render_scene(&scene, (64, 64))
+        .expect("the fresh frame renders");
+    let corner = ((63 * 64 + 63) * 4) as usize;
+    assert_eq!(&large[corner..corner + 4], &RED, "the far corner is filled");
+    assert_eq!(pixels_differing(&large, &fresh), 0);
+}
+
+/// A chunk drawn while the glyph atlas was too full to place a glyph it
+/// asked for is not kept: the next frame records it again, with its glyphs,
+/// replays the other chunks, and draws what a fresh renderer draws.
+#[test]
+fn a_chunk_drawn_without_a_glyph_is_recorded_again() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    // The two chunks of the mixed scene that draw text.
+    const TEXT_CHUNKS: u64 = 2;
+    let version = mixed_scene();
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    capture.hold_glyph_atlas_full(true);
+    let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
+    assert_eq!(first.counters.chunks_recorded, MIXED_CHUNKS);
+    capture.hold_glyph_atlas_full(false);
+    let second = full_frame(&mut capture, &version, FullReason::FirstFrame);
+    assert_eq!(
+        (
+            second.counters.chunks_recorded,
+            second.counters.recording_cache_hits
+        ),
+        (TEXT_CHUNKS, MIXED_CHUNKS - TEXT_CHUNKS),
+        "the text chunks record again, the others replay"
+    );
+    let mut fresh = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    fresh.keep_recorded_ir();
+    let oracle = full_frame(&mut fresh, &version, FullReason::FirstFrame);
+    assert_ne!(
+        pixels_differing(&first.pixels, &oracle.pixels),
+        0,
+        "precondition: the first frame drew without its glyphs"
+    );
+    assert_eq!(pixels_differing(&second.pixels, &oracle.pixels), 0);
 }

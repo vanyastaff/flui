@@ -464,9 +464,11 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         render_texture: &wgpu::Texture,
         _intermediate_active: bool,
         partial: Option<&crate::damage::RegionPlan>,
+        reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
-        let recorded = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
+        let recorded =
+            crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
         let painter = &mut *self.painter;
 
         // Profiler scope wraps painter.render. The scope borrows
@@ -530,6 +532,14 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         self.painter
             .submit_frame_encoder(encoder, permits)
             .map(|_| ())
+    }
+
+    fn recording_cache_counts(&mut self) -> (u64, u64) {
+        self.painter.take_recording_cache_counts()
+    }
+
+    fn unwound(&mut self) {
+        self.painter.drop_recordings();
     }
 
     fn finish(&mut self) {
