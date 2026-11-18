@@ -104,6 +104,23 @@ impl Page {
             .or_else(|| self.document.body().map(Node::from))
     }
 
+    /// Whether the browser's file input fires `cancel` when its chooser is
+    /// dismissed with nothing picked (Chromium 113, Firefox 91, Safari
+    /// 16.4), so that an input ends without a bound on the window's focus.
+    ///
+    /// No API says whether the event is fired, so a method that arrived no
+    /// earlier in every engine stands for it: `Headers.prototype.getSetCookie`
+    /// (Chromium 113, Firefox 112, Safari 17). A browser that has it fires
+    /// `cancel`; one without it is taken for one that may not, which costs a
+    /// Firefox before 112 or a Safari before 17 only the bound it does not
+    /// need.
+    pub(crate) fn input_fires_cancel(&self) -> bool {
+        property(self.view.as_ref(), "Headers")
+            .and_then(|headers| property(&headers, "prototype"))
+            .and_then(|prototype| method(&prototype, "getSetCookie"))
+            .is_some()
+    }
+
     /// The window's method `name`, when the browser has it: the File System
     /// Access pickers exist only in Chromium, in a secure context.
     pub(crate) fn window_method(&self, name: &str) -> Option<Function> {

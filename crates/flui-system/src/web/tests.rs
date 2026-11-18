@@ -41,7 +41,7 @@ use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{Element, Event, EventInit, HtmlCanvasElement, HtmlDialogElement, HtmlInputElement};
 
 use super::badge::WebBadge;
-use super::dialogs::{PagePicker, WebDialogs};
+use super::dialogs::WebDialogs;
 use super::launcher::WebLauncher;
 use super::message_box::WebMessageBoxes;
 use super::page::{Activation, Page};
@@ -332,15 +332,12 @@ impl Drop for CanvasWindow {
 /// focus.
 const TEST_FOCUS_GRACE_MS: i32 = 20;
 
-/// A test page's file dialogs for `window` over `page`, the page's picker
-/// shared through `owner`.
+/// A test page's file dialogs for `window` over `page`.
 fn dialogs_on(owner: &TestOwner, window: &CanvasWindow, page: Rc<Page>) -> FileDialogs {
     quiet_input_pickers();
-    let ctx = owner.ctx(&window.window);
     FileDialogs::try_new(
-        WebDialogs::new(page, ctx.runtime_local::<PagePicker>())
-            .with_focus_grace(TEST_FOCUS_GRACE_MS),
-        &ctx,
+        WebDialogs::new(page).with_focus_grace(TEST_FOCUS_GRACE_MS),
+        &owner.ctx(&window.window),
     )
     .expect("a window has dialogs")
 }
@@ -574,25 +571,126 @@ fn define(target: &JsValue, name: &str, value: &JsValue) {
     js_sys::Object::define_property(target, &JsValue::from_str(name), &descriptor);
 }
 
-/// Give `input` the files of a picked folder (each its `webkitRelativePath`
-/// and its text) and dispatch `change`, as the browser does when the user
-/// picks the folder. A page cannot make a file with a `webkitRelativePath`,
-/// so each file is given its own, and the input a list of them.
-fn pick_folder(input: &HtmlInputElement, files: &[(&str, &str)]) {
-    let list = Array::new();
-    for (relative_path, text) in files {
-        let name = relative_path.rsplit('/').next().unwrap_or(relative_path);
+/// The files a test hands an input in place of the browser's list, and what
+/// the provider did with them: a page cannot make a file that says where it
+/// is under a folder, or one whose declared size is not its contents', so
+/// each stand-in states its own.
+struct ListedFiles {
+    files: Array,
+    /// The name of each file whose contents were asked for.
+    read: Array,
+    /// Each place of the list that was looked at.
+    touched: Array,
+}
+
+impl ListedFiles {
+    fn new() -> Self {
+        Self {
+            files: Array::new(),
+            read: Array::new(),
+            touched: Array::new(),
+        }
+    }
+
+    /// Add the file at `path` holding `text`: a path with a folder before
+    /// its name is the file's `webkitRelativePath`, as a folder's file has
+    /// one; a name alone is a file picked by itself, which has none.
+    fn file(self, path: &str, text: &str) -> Self {
+        self.listing(path, text, None)
+    }
+
+    /// Add a file as [`file`](Self::file) does, which declares `size` bytes
+    /// whatever its text holds.
+    fn declaring(self, path: &str, text: &str, size: f64) -> Self {
+        self.listing(path, text, Some(size))
+    }
+
+    fn listing(self, path: &str, text: &str, size: Option<f64>) -> Self {
+        let name = path.rsplit('/').next().unwrap_or(path);
         let parts = Array::of1(&JsValue::from_str(text));
         let file = web_sys::File::new_with_str_sequence(&parts, name).expect("a file");
-        define(
-            &file,
-            "webkitRelativePath",
-            &JsValue::from_str(relative_path),
-        );
-        list.push(&file);
+        if path.contains('/') {
+            define(&file, "webkitRelativePath", &JsValue::from_str(path));
+        }
+        if let Some(size) = size {
+            define(&file, "size", &JsValue::from_f64(size));
+        }
+        js_sys::Function::new_with_args(
+            "file, read",
+            "const contents = file.arrayBuffer.bind(file);
+            Object.defineProperty(file, 'arrayBuffer', { configurable: true, value: () => {
+                read.push(file.name);
+                return contents();
+            } });",
+        )
+        .call2(&JsValue::UNDEFINED, &file, &self.read)
+        .expect("the file records its reads");
+        self.files.push(&file);
+        self
     }
-    define(input, "files", &list);
-    dispatch(input, "change", false);
+
+    /// Give `input` the files and dispatch `change`, as the browser does
+    /// when the user picks them.
+    fn pick_into(&self, input: &HtmlInputElement) {
+        let list = js_sys::Function::new_with_args(
+            "files, touched",
+            "return new Proxy(files, { get(files, place) {
+                if (place !== 'length') touched.push(String(place));
+                return files[place];
+            } });",
+        )
+        .call2(&JsValue::UNDEFINED, &self.files, &self.touched)
+        .expect("the list records what is looked at");
+        define(input, "files", &list);
+        dispatch(input, "change", false);
+    }
+
+    /// The names of the files whose contents the provider asked for.
+    fn read(&self) -> Vec<String> {
+        self.read
+            .iter()
+            .filter_map(|name| name.as_string())
+            .collect::<Vec<String>>()
+    }
+
+    /// The places of the list the provider looked at.
+    fn touched(&self) -> Vec<String> {
+        self.touched
+            .iter()
+            .filter_map(|place| place.as_string())
+            .collect::<Vec<String>>()
+    }
+}
+
+/// Give `input` the files of a picked folder (each its `webkitRelativePath`
+/// and its text) and dispatch `change`, as the browser does when the user
+/// picks the folder.
+fn pick_folder(input: &HtmlInputElement, files: &[(&str, &str)]) {
+    files
+        .iter()
+        .fold(ListedFiles::new(), |listed, (relative_path, text)| {
+            listed.file(relative_path, text)
+        })
+        .pick_into(input);
+}
+
+/// Make the page's browser one whose file input fires no `cancel`, until
+/// the guard drops: the provider tells by `Headers.prototype.getSetCookie`,
+/// which no engine has without the event.
+fn without_input_cancel() -> Replaced {
+    let view: JsValue = the_view().into();
+    let prototype = Reflect::get(&view, &"Headers".into())
+        .and_then(|headers| Reflect::get(&headers, &"prototype".into()))
+        .expect("the page has headers");
+    Replaced::new(&prototype, "getSetCookie", &JsValue::UNDEFINED)
+}
+
+/// Wait `ms` milliseconds, the browser running its tasks meanwhile.
+async fn browser_wait(ms: i32) {
+    let promise = Promise::new(&mut |resolve, _| {
+        let _ = the_view().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+    });
+    let _ = JsFuture::from(promise).await;
 }
 
 /// The picks an open dialog landed; panics on any other outcome.
@@ -614,7 +712,7 @@ fn the_folder(picks: &Picks) -> (String, Vec<(String, String)>) {
         .iter()
         .map(|file| {
             (
-                file.path().to_string_lossy().into_owned(),
+                file.path().as_str().to_owned(),
                 String::from_utf8_lossy(file.contents()).into_owned(),
             )
         })
@@ -640,8 +738,38 @@ async fn a_dismissed_input_answers_a_cancel() {
 }
 
 #[wasm_bindgen_test]
+async fn an_input_on_an_engine_that_fires_cancel_is_not_timed_after_the_focus() {
+    let _no_directory_picker = without_directory_picker();
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let dialogs = dialogs(&owner, &window, true);
+    for shown_for in InputFor::EACH {
+        let answered = land(dialogs.open(shown_for.request()));
+        let input = the_input(&window);
+
+        // The chooser closed and the window has the focus again, while the
+        // browser still lists the folder or asks the user to confirm it.
+        dispatch(&the_view(), "focus", false);
+        browser_wait(TEST_FOCUS_GRACE_MS * 4).await;
+        owner.settle().await;
+        assert_eq!(*answered.borrow(), None, "no cancel for {shown_for:?}");
+        assert!(window.find("input").is_some(), "the input is still up");
+
+        // The pick the browser reports then is the answer.
+        shown_for.pick(&input);
+        owner.until_landed(&answered).await;
+        assert!(
+            matches!(&*answered.borrow(), Some(Ok(Ok(Some(picks)))) if picks.len() == 1),
+            "the late pick of {shown_for:?}: {:?}",
+            answered.borrow()
+        );
+    }
+}
+
+#[wasm_bindgen_test]
 async fn an_input_with_no_change_after_the_window_regains_focus_answers_a_cancel() {
     let _no_directory_picker = without_directory_picker();
+    let _no_cancel = without_input_cancel();
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let dialogs = dialogs(&owner, &window, true);
@@ -690,28 +818,38 @@ async fn picks_past_the_requests_bound_are_refused_before_they_are_read() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let dialogs = dialogs(&owner, &window, true);
-    let answered = land(
-        dialogs.open(
-            OpenRequest::files()
-                .allow_multiple()
-                .max_bytes(8)
-                .filter(input_only()),
-        ),
-    );
+    let request = || {
+        OpenRequest::files()
+            .allow_multiple()
+            .max_bytes(8)
+            .filter(input_only())
+    };
+    let too_large = Some(Ok(Err(DialogError::TooLarge {
+        actual: 9,
+        limit: 8,
+    })));
 
-    pick(
-        &the_input(&window),
-        &[("a.my-notes", "12345"), ("b.my-notes", "6789")],
-    );
+    // The sizes the browser declares are past the bound, whatever the files
+    // hold: nothing is read.
+    let declared = ListedFiles::new()
+        .declaring("a.my-notes", "12", 6.0)
+        .declaring("b.my-notes", "34", 3.0);
+    let answered = land(dialogs.open(request()));
+    declared.pick_into(&the_input(&window));
     owner.until_landed(&answered).await;
+    assert_eq!(*answered.borrow(), too_large);
+    assert_eq!(declared.read(), Vec::<String>::new(), "no file was read");
 
-    assert_eq!(
-        *answered.borrow(),
-        Some(Ok(Err(DialogError::TooLarge {
-            actual: 9,
-            limit: 8
-        })))
-    );
+    // A file that holds more than it declared is caught as it is read, and
+    // the file after it is not read.
+    let grown = ListedFiles::new()
+        .declaring("a.my-notes", "123456789", 1.0)
+        .file("b.my-notes", "0");
+    let answered = land(dialogs.open(request()));
+    grown.pick_into(&the_input(&window));
+    owner.until_landed(&answered).await;
+    assert_eq!(*answered.borrow(), too_large);
+    assert_eq!(grown.read(), ["a.my-notes"]);
 }
 
 #[wasm_bindgen_test]
@@ -769,6 +907,33 @@ async fn a_page_shows_one_picker_whichever_window_asks() {
     }
 }
 
+#[wasm_bindgen_test]
+async fn a_page_shows_one_picker_whichever_runtime_asks() {
+    let _no_directory_picker = without_directory_picker();
+    // Two UI runtimes of one page, each with a window of its own.
+    let (first_owner, second_owner) = (TestOwner::new(), TestOwner::new());
+    let first = CanvasWindow::new(&first_owner);
+    let second = CanvasWindow::new(&second_owner);
+    let shown = land(dialogs(&first_owner, &first, true).open(InputFor::Files.request()));
+
+    let refused = land(dialogs(&second_owner, &second, true).open(InputFor::Folder.request()));
+    second_owner.until_landed(&refused).await;
+    assert_eq!(
+        *refused.borrow(),
+        Some(Ok(Err(DialogError::Busy))),
+        "the browser's chooser is the page's, whichever runtime showed it"
+    );
+    assert!(second.find("input").is_none(), "no second input was shown");
+
+    // The other runtime's chooser ends: the page is free for this one.
+    dispatch(&the_input(&first), "cancel", false);
+    first_owner.until_landed(&shown).await;
+    let next = land(dialogs(&second_owner, &second, true).open(InputFor::Folder.request()));
+    dispatch(&the_input(&second), "cancel", false);
+    second_owner.until_landed(&next).await;
+    assert_eq!(*next.borrow(), Some(Ok(Ok(None))));
+}
+
 /// The refusal of a dialog for `reason`, as it lands.
 fn refused_as(reason: UnsupportedReason) -> Option<Result<OpenResult, Abandoned>> {
     Some(Ok(Err(DialogError::Unsupported(Unsupported::of::<
@@ -803,7 +968,8 @@ struct DirectoryPickerStandIn {
     /// The `mode` each call asked for.
     modes: Rc<RefCell<Vec<Option<String>>>>,
     /// What the handles it answered with were asked for: `entry` and a name
-    /// for each entry a walk met, `file` and a name for each file opened.
+    /// for each entry a walk met, `file` and a name for each file opened,
+    /// `read` and a name for each file whose contents were asked for.
     asked: Array,
     _picker: Closure<dyn FnMut(JsValue) -> JsValue>,
     _replaced: Replaced,
@@ -836,16 +1002,27 @@ impl DirectoryPickerStandIn {
     }
 
     /// Answer the picker with the folder `name` holding `tree`: a JSON
-    /// object whose strings are files, by their text, and whose objects are
-    /// the folders under it. A folder lists what it holds through
-    /// `values()`, as a `FileSystemDirectoryHandle` does.
+    /// object whose strings are files, by their text, whose pairs are files
+    /// by their text and the size they declare whatever the text holds, and
+    /// whose objects are the folders under it. A folder lists what it holds
+    /// through `values()`, as a `FileSystemDirectoryHandle` does.
     fn choose(&self, name: &str, tree: &str) {
         let handle = js_sys::Function::new_with_args(
             "name, tree, asked",
-            "const handle = (name, held) => typeof held === 'string'
+            "const fileOf = (name, text, size) => {
+                const file = new File([text], name);
+                const contents = file.arrayBuffer.bind(file);
+                Object.defineProperty(file, 'arrayBuffer', { value: () => {
+                    asked.push('read ' + name);
+                    return contents();
+                } });
+                if (size !== undefined) Object.defineProperty(file, 'size', { value: size });
+                return file;
+            };
+            const handle = (name, held) => typeof held === 'string' || Array.isArray(held)
                 ? { kind: 'file', name, getFile: async () => {
                       asked.push('file ' + name);
-                      return new File([held], name);
+                      return fileOf(name, ...[held].flat());
                   } }
                 : { kind: 'directory', name, values: async function* () {
                       for (const [child, inside] of Object.entries(held)) {
@@ -993,32 +1170,62 @@ async fn a_folder_past_the_requests_bounds_is_refused_before_it_is_read() {
             ["entry a.txt", "entry src", "entry c.txt"],
             "the walk ends at the entry past the bound, and no file is opened"
         );
-
+    }
+    {
+        // The sizes the browser declares are past the bound, whatever the
+        // files hold: each is opened for its size, and none is read.
+        let picker = DirectoryPickerStandIn::install();
         let heavy = land(dialogs.open(OpenRequest::folders().max_bytes(8)));
-        picker.choose("Project", r#"{"a.txt":"12345","src":{"b.txt":"6789"}}"#);
+        picker.choose("Project", r#"{"a.txt":["12",6],"src":{"b.txt":["34",3]}}"#);
         owner.until_landed(&heavy).await;
         assert_eq!(*heavy.borrow(), too_large);
+        assert_eq!(
+            picker.asked(),
+            [
+                "entry a.txt",
+                "entry src",
+                "entry b.txt",
+                "file a.txt",
+                "file b.txt"
+            ]
+        );
+    }
+    {
+        // A file that holds more than it declared is caught as it is read,
+        // and the file after it is not read.
+        let picker = DirectoryPickerStandIn::install();
+        let grown = land(dialogs.open(OpenRequest::folders().max_bytes(8)));
+        picker.choose("Project", r#"{"a.txt":["123456789",1],"b.txt":"0"}"#);
+        owner.until_landed(&grown).await;
+        assert_eq!(*grown.borrow(), too_large);
+        assert_eq!(
+            picker.asked().last().map(String::as_str),
+            Some("read a.txt")
+        );
     }
 
     let _no_directory_picker = without_directory_picker();
+    // An input's files are counted before one of them is looked at.
+    let crowded_files = ListedFiles::new()
+        .file("Project/a.txt", "1")
+        .file("Project/b.txt", "2");
     let crowded = land(dialogs.open(OpenRequest::folders().max_entries(1)));
-    pick_folder(
-        &the_input(&window),
-        &[("Project/a.txt", "1"), ("Project/b.txt", "2")],
-    );
+    crowded_files.pick_into(&the_input(&window));
     owner.until_landed(&crowded).await;
     assert_eq!(
         *crowded.borrow(),
         Some(Ok(Err(DialogError::TooManyEntries { limit: 1 })))
     );
+    assert_eq!(crowded_files.touched(), Vec::<String>::new());
 
+    let heavy_files = ListedFiles::new()
+        .declaring("Project/a.txt", "12", 6.0)
+        .declaring("Project/src/b.txt", "34", 3.0);
     let heavy = land(dialogs.open(OpenRequest::folders().max_bytes(8)));
-    pick_folder(
-        &the_input(&window),
-        &[("Project/a.txt", "12345"), ("Project/src/b.txt", "6789")],
-    );
+    heavy_files.pick_into(&the_input(&window));
     owner.until_landed(&heavy).await;
     assert_eq!(*heavy.borrow(), too_large);
+    assert_eq!(heavy_files.read(), Vec::<String>::new(), "no file was read");
 }
 
 #[wasm_bindgen_test]

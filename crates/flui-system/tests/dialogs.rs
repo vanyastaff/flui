@@ -5,7 +5,6 @@
 
 use std::cell::RefCell;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -16,8 +15,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, FolderFile, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult, PickedFile,
-    PickedForm, Picks, SaveLocation, SaveRequest, SaveResult,
+    FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult,
+    PickedFile, PickedForm, Picks, SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -195,7 +194,7 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
 
 /// A folder a system handed over without a path, holding one file.
 fn handed_folder() -> PickedFile {
-    let notes = FolderFile::try_new("notes.txt", Arc::from(&b"words"[..])).expect("a path");
+    let notes = folder_file("notes.txt", b"words");
     PickedFile::try_from_folder("Project", vec![notes]).expect("a folder")
 }
 
@@ -1003,18 +1002,24 @@ fn a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate
     assert_eq!(PickedFile::try_download("a/b"), None);
 }
 
+/// The file at `path` under a handed-over folder, holding `contents`.
+fn folder_file(path: &str, contents: &'static [u8]) -> FolderFile {
+    FolderFile::new(
+        FolderPath::try_new(path).expect("a path under a folder"),
+        Arc::from(contents),
+    )
+}
+
 #[test]
 fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they_are() {
-    let held = |path: &str, contents: &'static [u8]| {
-        FolderFile::try_new(path, Arc::from(contents)).expect("a path under a folder")
-    };
     // In no order, as a browser lists a folder.
     let folder = PickedFile::try_from_folder(
         "Project",
         vec![
-            held("src/main.rs", b"fn main() {}"),
-            held("README.md", b"private words"),
-            held("src/lib.rs", b""),
+            folder_file("src/main.rs", b"fn main() {}"),
+            folder_file("src.txt", b"beside the folder"),
+            folder_file("README.md", b"private words"),
+            folder_file("src/lib.rs", b""),
         ],
     )
     .expect("a folder");
@@ -1030,18 +1035,20 @@ fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they
             files
         }
     );
-    let read: Vec<(PathBuf, &[u8])> = files
+    let read: Vec<(&str, &[u8])> = files
         .iter()
-        .map(|file| (file.path().to_path_buf(), file.contents()))
+        .map(|file| (file.path().as_str(), file.contents()))
         .collect();
     assert_eq!(
         read,
         [
-            (PathBuf::from("README.md"), &b"private words"[..]),
-            (Path::new("src").join("lib.rs"), &b""[..]),
-            (Path::new("src").join("main.rs"), &b"fn main() {}"[..]),
+            ("README.md", &b"private words"[..]),
+            ("src/lib.rs", &b""[..]),
+            ("src/main.rs", &b"fn main() {}"[..]),
+            ("src.txt", &b"beside the folder"[..]),
         ],
-        "the files come in the order of their paths, whatever order they were listed in"
+        "name by name from the folder down, whatever order they were listed in: \
+         a folder's files come before the file named after it"
     );
     let shown = format!("{folder:?} {files:?}");
     assert!(
@@ -1049,40 +1056,7 @@ fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they
         "a folder shows its name and its files' paths, never what they hold: {shown}"
     );
 
-    // A path under a folder only descends from it.
-    for path in [
-        "", "/a", "a/", "a//b", ".", "a/./b", "..", "a/../b", "a\\b", "a\0b",
-    ] {
-        assert_eq!(
-            FolderFile::try_new(path, Arc::from(&b""[..])),
-            None,
-            "{path:?} is not a path under a folder"
-        );
-    }
-    #[cfg(windows)]
-    for path in ["C:", "C:/a", "a/C:b"] {
-        assert_eq!(
-            FolderFile::try_new(path, Arc::from(&b""[..])),
-            None,
-            "{path:?} holds a drive, which replaces the folder it is joined to"
-        );
-    }
-    // A folder holds what its file system allows.
-    for path in [" ", "docs/Icon\r", ".git/config"] {
-        assert!(
-            FolderFile::try_new(path, Arc::from(&b""[..])).is_some(),
-            "{path:?} is a path under a folder"
-        );
-    }
-    for path in ["notes.txt", "src/main.rs"] {
-        let joined = Path::new("Project").join(held(path, b"").path());
-        assert!(
-            joined.starts_with("Project"),
-            "{path:?} joined to its folder stays under it: {joined:?}"
-        );
-    }
-
-    for name in ["", ".", "..", "a/b", "a\\b"] {
+    for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
         assert_eq!(
             PickedFile::try_from_folder(name, Vec::new()),
             None,
@@ -1090,7 +1064,10 @@ fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they
         );
     }
     assert_eq!(
-        PickedFile::try_from_folder("Project", vec![held("a.txt", b"1"), held("a.txt", b"2")]),
+        PickedFile::try_from_folder(
+            "Project",
+            vec![folder_file("a.txt", b"1"), folder_file("a.txt", b"2")]
+        ),
         None,
         "two files at one path"
     );
@@ -1106,6 +1083,141 @@ fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they
         None,
         "a folder at a path is read by its application"
     );
+}
+
+#[test]
+fn a_path_under_a_folder_is_its_names_and_none_climbs_out() {
+    let path = FolderPath::try_new("src/web/mod.rs").expect("a path");
+    assert_eq!(path.as_str(), "src/web/mod.rs");
+    assert_eq!(
+        path.components().collect::<Vec<&str>>(),
+        ["src", "web", "mod.rs"]
+    );
+    assert_eq!(path.file_name(), "mod.rs");
+
+    // As a walk builds it: an entry of the folder, then entries under it.
+    let walked = FolderPath::try_from_name("src")
+        .and_then(|folder| folder.try_child("web"))
+        .and_then(|folder| folder.try_child("mod.rs"));
+    assert_eq!(walked, Some(path));
+    assert_eq!(
+        FolderPath::try_from_name("README.md").map(|path| path.file_name().to_owned()),
+        Some("README.md".to_owned())
+    );
+
+    // The same rule on every host: no empty name, none that stays or climbs,
+    // no separator of any host, no NUL.
+    for path in [
+        "", "/a", "a/", "a//b", ".", "a/./b", "..", "a/../b", "a\\b", "a\0b",
+    ] {
+        assert_eq!(FolderPath::try_new(path), None, "{path:?} is not a path");
+    }
+    let folder = FolderPath::try_from_name("src").expect("a name");
+    for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+        assert_eq!(FolderPath::try_from_name(name), None, "{name:?}");
+        assert_eq!(folder.try_child(name), None, "{name:?}");
+    }
+    // A folder holds what its file system allows, and a name is kept as it
+    // is on every host, whatever one of them would read into it.
+    for path in [
+        " ",
+        "docs/Icon\r",
+        ".git/config",
+        "NUL",
+        "C:",
+        "a.",
+        "aux.c",
+    ] {
+        assert_eq!(
+            FolderPath::try_new(path).as_ref().map(FolderPath::as_str),
+            Some(path),
+            "{path:?} is a path under a folder"
+        );
+    }
+}
+
+#[test]
+fn what_a_system_hands_over_is_held_to_the_requests_bounds_on_every_host() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let three_files = || {
+        PickedFile::try_from_folder(
+            "Project",
+            vec![
+                folder_file("a.txt", b"12"),
+                folder_file("src/b.txt", b"345"),
+                folder_file("src/c.txt", b"6789"),
+            ],
+        )
+        .expect("a folder")
+    };
+    let handed = |name: &str, contents: &'static [u8]| {
+        PickedFile::try_from_contents(name, Arc::from(contents)).expect("a file name")
+    };
+
+    let cases: [(OpenRequest, Vec<PickedFile>, Result<(), DialogError>); 8] = [
+        (
+            OpenRequest::folders().max_entries(2),
+            vec![three_files()],
+            Err(DialogError::TooManyEntries { limit: 2 }),
+        ),
+        (
+            OpenRequest::folders().max_entries(3),
+            vec![three_files()],
+            Ok(()),
+        ),
+        (
+            OpenRequest::folders().max_bytes(8),
+            vec![three_files()],
+            Err(DialogError::TooLarge {
+                actual: 9,
+                limit: 8,
+            }),
+        ),
+        (
+            OpenRequest::folders().max_bytes(9),
+            vec![three_files()],
+            Ok(()),
+        ),
+        (
+            OpenRequest::files().allow_multiple().max_bytes(8),
+            vec![handed("a.txt", b"12345"), handed("b.txt", b"6789")],
+            Err(DialogError::TooLarge {
+                actual: 9,
+                limit: 8,
+            }),
+        ),
+        (
+            OpenRequest::files().allow_multiple().max_bytes(9),
+            vec![handed("a.txt", b"12345"), handed("b.txt", b"6789")],
+            Ok(()),
+        ),
+        // A pick at a path is read by its application: nothing bounds it.
+        (
+            OpenRequest::folders().max_entries(0).max_bytes(0),
+            vec![file("Project")],
+            Ok(()),
+        ),
+        (
+            OpenRequest::folders().max_entries(0).max_bytes(0),
+            vec![PickedFile::try_from_folder("Empty", Vec::new()).expect("a folder")],
+            Ok(()),
+        ),
+    ];
+    for (request, picks, admitted) in cases {
+        let picked = Picks::try_new(picks).expect("the case names a pick");
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let shown = format!("{request:?} answered {picked:?}");
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        assert_eq!(
+            *answered.borrow(),
+            Some(Ok(admitted.map(|()| Some(picked)))),
+            "{shown}"
+        );
+    }
 }
 
 #[test]

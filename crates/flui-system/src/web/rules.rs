@@ -1,14 +1,14 @@
 //! What the web providers decide without a page: how a dialog's filters
-//! become the browser's, which folder a file input answered and whether a
-//! pick can carry it, what a download is named, where a launched URI goes,
-//! which answer a message box's button is, and what a browser's exception
-//! means. Kept apart from the DOM so the rules are tested on every host.
+//! become the browser's, which folder a file input answered, what a download
+//! is named, where a launched URI goes, which answer a message box's button
+//! is, and what a browser's exception means. Kept apart from the DOM so the
+//! rules are tested on every host.
 
 use flui_platform::{BrowserException, SystemFailure, Unsupported, UnsupportedReason};
 
 use crate::dialog::{
-    DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons, is_file_name,
-    is_name_in_folder, is_path_in_folder,
+    DialogError, FileDialogCapability, FileFilter, FolderListing, FolderPath, MessageAnswer,
+    MessageButtons,
 };
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
@@ -199,18 +199,10 @@ pub(crate) fn no_folder_chooser() -> DialogError {
     ))
 }
 
-/// A folder as a browser handed it over, before a byte of it is read: its
-/// name, and where each of its files is under it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FolderListing<'a> {
-    pub(crate) name: &'a str,
-    /// One per file, in the files' order, each relative to the folder.
-    pub(crate) paths: Vec<&'a str>,
-}
-
 /// The folder an `<input type=file webkitdirectory>` answered, from its
-/// files' `webkitRelativePath`s in the files' order (`Photos/2024/a.jpg`:
-/// the picked folder's name, then where the file is under it).
+/// files, each beside its `webkitRelativePath` (`Photos/2024/a.jpg`: the
+/// picked folder's name, then where the file is under it): the folder
+/// listed, each file at its path, before a byte is read.
 ///
 /// - No file is `None`, a cancel: what the input answers for a dismissed
 ///   chooser, and for a folder that holds no file, which it cannot tell
@@ -220,67 +212,36 @@ pub(crate) struct FolderListing<'a> {
 ///   (Chrome for Android before 132, Safari on iOS before 18.4), or shows
 ///   one and does not say where its files are (Firefox for Android 141).
 ///   That is [`no_folder_chooser`], since no later call fares better.
-/// - A path with no folder before its file, or files of two folders, is not
-///   an answer an input picking one folder has
-///   ([`SystemFailure::MalformedAnswer`]).
-pub(crate) fn input_folder<'a>(
-    relative_paths: impl IntoIterator<Item = &'a str>,
-) -> Result<Option<FolderListing<'a>>, DialogError> {
+/// - A path with no folder before its file, files of two folders, a name
+///   no folder holds or two files at one path are not an answer an input
+///   picking one folder has ([`SystemFailure::MalformedAnswer`]).
+pub(crate) fn input_folder<F>(
+    files: impl IntoIterator<Item = (String, F)>,
+) -> Result<Option<FolderListing<F>>, DialogError> {
     let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
-    let mut name: Option<&str> = None;
-    let mut paths = Vec::new();
+    let mut name: Option<String> = None;
+    let mut placed: Vec<(FolderPath, F)> = Vec::new();
     let mut unplaced = 0_usize;
-    for relative_path in relative_paths {
+    for (relative_path, file) in files {
         if relative_path.is_empty() {
             unplaced += 1;
             continue;
         }
         let (folder, path) = relative_path.split_once('/').ok_or(malformed)?;
-        if *name.get_or_insert(folder) != folder {
-            return Err(malformed);
+        match &name {
+            Some(name) if name != folder => return Err(malformed),
+            Some(_) => {}
+            None => name = Some(folder.to_owned()),
         }
-        paths.push(path);
+        placed.push((FolderPath::try_new(path).ok_or(malformed)?, file));
     }
     match (name, unplaced) {
         (None, 0) => Ok(None),
         (None, _) => Err(no_folder_chooser()),
-        (Some(name), 0) => Ok(Some(FolderListing { name, paths })),
+        (Some(name), 0) => FolderListing::try_new(name, placed)
+            .map(Some)
+            .ok_or(malformed),
         (Some(_), _) => Err(malformed),
-    }
-}
-
-/// Where the entry named `name` is under the picked folder, in the folder
-/// at `folder_path` under it (empty for the picked folder itself): the path
-/// a walk of a directory handle gives each entry it meets.
-/// [`SystemFailure::MalformedAnswer`] for a name no folder holds, a `/` in
-/// it among them, so a path has one component per folder walked.
-pub(crate) fn entry_path(folder_path: &str, name: &str) -> Result<String, DialogError> {
-    if !is_name_in_folder(name) {
-        return Err(DialogError::Failed(SystemFailure::MalformedAnswer));
-    }
-    Ok(if folder_path.is_empty() {
-        name.to_owned()
-    } else {
-        format!("{folder_path}/{name}")
-    })
-}
-
-/// Admit a folder a browser handed over as one a pick can carry, before a
-/// byte of it is read: its name one a folder can hold, each of its files at
-/// a path under it of such names, and no two at one path
-/// ([`PickedFile::try_from_folder`](crate::dialog::PickedFile::try_from_folder),
-/// [`FolderFile::try_new`](crate::dialog::FolderFile::try_new));
-/// [`SystemFailure::MalformedAnswer`] otherwise.
-pub(crate) fn admit_folder(folder: &FolderListing<'_>) -> Result<(), DialogError> {
-    let mut sorted = folder.paths.clone();
-    sorted.sort_unstable();
-    let carried = is_name_in_folder(folder.name)
-        && sorted.iter().all(|path| is_path_in_folder(path))
-        && sorted.windows(2).all(|pair| pair[0] != pair[1]);
-    if carried {
-        Ok(())
-    } else {
-        Err(DialogError::Failed(SystemFailure::MalformedAnswer))
     }
 }
 
@@ -328,26 +289,21 @@ pub(crate) fn unavailable() -> DialogError {
     ))
 }
 
-/// Admit picks, each a name and the MIME type the browser gives it, before
-/// a byte of them is read. Every name must be one a pick can carry
-/// ([`PickedFile::try_from_contents`](crate::dialog::PickedFile::try_from_contents)),
-/// [`SystemFailure::MalformedAnswer`] otherwise; and every pick must match
-/// one of the request's `filters` where there are any
+/// Admit picks, each a name and the MIME type the browser gives it, against
+/// the request's `filters`: every pick must match one where there are any
 /// ([`FileFilter::matches`]), since a file input only suggests them
-/// (ADR-0360 §4), [`DialogError::NotInFilter`] otherwise.
+/// (ADR-0360 §4); [`DialogError::NotInFilter`] otherwise.
 pub(crate) fn admit_picks<'a>(
     picks: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     filters: &[FileFilter],
 ) -> Result<(), DialogError> {
-    let mut in_filter = true;
-    for (name, mime_type) in picks {
-        if !is_file_name(name) {
-            return Err(DialogError::Failed(SystemFailure::MalformedAnswer));
-        }
-        in_filter &=
-            filters.is_empty() || filters.iter().any(|filter| filter.matches(name, mime_type));
+    if filters.is_empty() {
+        return Ok(());
     }
-    if in_filter {
+    let admitted = picks
+        .into_iter()
+        .all(|(name, mime_type)| filters.iter().any(|filter| filter.matches(name, mime_type)));
+    if admitted {
         Ok(())
     } else {
         Err(DialogError::NotInFilter)
@@ -718,19 +674,26 @@ mod tests {
 
     const MALFORMED: DialogError = DialogError::Failed(SystemFailure::MalformedAnswer);
 
+    /// The folder named `name` whose files are at `paths`, each file its
+    /// own place in the list the input gave.
+    fn listed(name: &str, paths: &[(&str, usize)]) -> Option<FolderListing<usize>> {
+        let files = paths
+            .iter()
+            .map(|(path, at)| Some((FolderPath::try_new(path)?, *at)))
+            .collect::<Option<Vec<(FolderPath, usize)>>>()?;
+        FolderListing::try_new(name, files)
+    }
+
     /// What an input's files answer for a folder dialog.
-    type InputAnswer<'a> = Result<Option<FolderListing<'a>>, DialogError>;
+    type InputAnswer = Result<Option<FolderListing<usize>>, DialogError>;
 
     #[test]
     fn a_folder_input_names_one_folder_and_where_each_file_is_under_it() {
-        let cases: [(&[&str], InputAnswer<'_>); 8] = [
-            (
-                &["Project/a.txt", "Project/src/main.rs"],
-                Ok(Some(FolderListing {
-                    name: "Project",
-                    paths: vec!["a.txt", "src/main.rs"],
-                })),
-            ),
+        let project = listed("Project", &[("a.txt", 1), ("src/main.rs", 0)]);
+        assert!(project.is_some(), "the expected folder is one");
+        let cases: [(&[&str], InputAnswer); 13] = [
+            // Each file stays with its path, whatever order the input gave.
+            (&["Project/src/main.rs", "Project/a.txt"], Ok(project)),
             // A dismissed chooser, or a folder that holds no file.
             (&[], Ok(None)),
             // The input took `webkitdirectory` and showed a file chooser, or
@@ -741,50 +704,19 @@ mod tests {
             (&["Project/a.txt", "Other/b.txt"], Err(MALFORMED)),
             (&["Project/a.txt", ""], Err(MALFORMED)),
             (&["", "Project/a.txt"], Err(MALFORMED)),
+            // Names no folder holds, and two files at one path.
+            (&["Project/../secret"], Err(MALFORMED)),
+            (&["Project/src//main.rs"], Err(MALFORMED)),
+            (&["Project/src\\main.rs"], Err(MALFORMED)),
+            (&["../a.txt"], Err(MALFORMED)),
+            (&["Project/a.txt", "Project/a.txt"], Err(MALFORMED)),
         ];
         for (relative_paths, folder) in cases {
-            assert_eq!(
-                input_folder(relative_paths.iter().copied()),
-                folder,
-                "{relative_paths:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_folder_a_pick_cannot_carry_is_refused_before_it_is_read() {
-        let cases: [(&str, &[&str], Result<(), DialogError>); 10] = [
-            ("Project", &["a.txt", "src/main.rs"], Ok(())),
-            ("Project", &[], Ok(())),
-            // What a file system allows: a blank name, and the carriage
-            // return macOS ends a folder's icon file with.
-            ("Project", &[" ", "docs/Icon\r"], Ok(())),
-            ("Project", &["../secret"], Err(MALFORMED)),
-            ("Project", &["src//main.rs"], Err(MALFORMED)),
-            ("Project", &["src/./main.rs"], Err(MALFORMED)),
-            ("Project", &["src\\main.rs"], Err(MALFORMED)),
-            ("Project", &["a.txt", "b.txt", "a.txt"], Err(MALFORMED)),
-            ("..", &["a.txt"], Err(MALFORMED)),
-            ("", &["a.txt"], Err(MALFORMED)),
-        ];
-        for (name, paths, admitted) in cases {
-            let folder = FolderListing {
-                name,
-                paths: paths.to_vec(),
-            };
-            assert_eq!(admit_folder(&folder), admitted, "{name:?} {paths:?}");
-        }
-    }
-
-    #[test]
-    fn a_walked_entry_is_one_name_under_its_folders_path() {
-        assert_eq!(entry_path("", "a.txt"), Ok("a.txt".to_owned()));
-        assert_eq!(
-            entry_path("src/web", "mod.rs"),
-            Ok("src/web/mod.rs".to_owned())
-        );
-        for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
-            assert_eq!(entry_path("src", name), Err(MALFORMED), "{name:?}");
+            let files = relative_paths
+                .iter()
+                .enumerate()
+                .map(|(at, relative_path)| ((*relative_path).to_owned(), at));
+            assert_eq!(input_folder(files), folder, "{relative_paths:?}");
         }
     }
 
@@ -852,14 +784,6 @@ mod tests {
             Ok(()),
             "no filter means every file"
         );
-        // A name no pick carries refuses the answer before the filters are
-        // asked, and before anything is read.
-        for filters in [&filters[..], &[]] {
-            assert_eq!(
-                admit_picks([("photo.png", None), ("a\nb.png", None)], filters),
-                Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
-            );
-        }
     }
 
     #[test]
