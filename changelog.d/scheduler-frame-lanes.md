@@ -24,3 +24,6 @@
   `Vsync` controller of the runtime, deferred work an async task (`AsyncDriver::spawn_local`), and
   per-frame cost `FrameClock`'s `FrameSnapshot`.
 - **`flui-foundation`**: `TaskId`, which only the priority task queue minted.
+- **`flui-protocol`**: protocol 0.26 drops the unsettled reasons `transient_callbacks` and
+  `image_loads` and `UnsettledCause::count`, which no runtime predicate filled; an app speaking
+  0.26 refuses older agent clients (`BREAKING`).

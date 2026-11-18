@@ -76,6 +76,9 @@ Option 1.
    microtask queue, no priority task queue and no timings callback. Work for a later frame is an
    async task (`AsyncDriver::spawn_local`), a dirty mark on the tree, a `Vsync` controller of the
    runtime, or a post-frame callback; the lifecycle listeners and the completion futures stay.
+   The agent protocol's unsettled causes name only what the runtime reads: protocol 0.26 drops
+   `transient_callbacks` with the lane, and `image_loads` and a cause's `count`, which no
+   runtime predicate fills, with it (`flui_protocol::BREAKING`).
 3. **The frame drive takes no deadline.** `__runtime::DriveFrame::drive_frame(timestamp, prepare,
    pipeline)`. `FrameRequest::target_present` and the presentation reports stay on the request and
    in `HostInput::Frame`, so a recording keeps what the platform said; no step of the frame reads
@@ -93,6 +96,8 @@ Option 1.
 - Good, because a host no longer computes an idle deadline per frame.
 - Bad, because a port of Flutter code that called `scheduleFrameCallback` or `scheduleTask` is
   rewritten against a `Vsync` controller or an async task.
+- Bad, because an app speaking protocol 0.26 refuses an agent client of 0.25 or older, which
+  could read a cause the app no longer sends.
 - Neutral, because `target_present` and the presentation reports have no consumer in the frame
   path until frame pacing reads them; they are recorded.
 
@@ -107,6 +112,8 @@ Option 1.
   pipeline; `a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks` the abort from
   the pipeline.
 - `lifecycle_reenable_edge_schedules_exactly_one_frame` pins decision 4.
+- `every_published_schema_is_additive_to_the_next` (flui-protocol) lets 0.26 lose exactly the
+  two unsettled reasons and the `count` its `BREAKING` entry names.
 - `callbacks_run_with_no_scheduler_lock_held` destructures the scheduler's state with no trailing
   `..`, so a lane added back fails to compile there until it is classified.
 
