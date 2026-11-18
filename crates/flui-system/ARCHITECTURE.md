@@ -36,7 +36,9 @@ have them:
   answer the request cannot have (a button the box does not offer, several picks for one, a
   filter index past the request's, a pick of a form the request does not ask for: a handed-over
   folder to a file dialog or a save, a handed-over file to a folder dialog, a download to an
-  open) is `SystemFailure::MalformedAnswer`.
+  open) is `SystemFailure::MalformedAnswer`. What a backend hands over rather than names by a
+  path is held to the open request's bounds by the handle as well: a folder of more files than
+  `max_entries` is `TooManyEntries`, contents past `max_bytes` together are `TooLarge`.
 - A request its caller can call off ends when its value drops: a `Dialog` (ADR-0344) and a
   `ShortcutBinding`, each through the hold its backend returned. A window shows one dialog at a
   time, whichever handle asked: `FileDialogs` and `MessageBoxes` share the runtime's
@@ -322,14 +324,20 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   their paths. It is read whole when the dialog answers, as a handed-over file is, since a
   browser gives a page one of two things for a folder and only a list of files is common to
   both: a handle to walk, or the files with their paths. So files are all the form carries, and a
-  folder that holds none, at any depth, leaves no trace in it. A `FolderFile`'s path is relative,
-  each component one name (not `.` or `..`, no separator of any host, no NUL, no drive on
-  Windows), so joining it to a folder only descends from it; any other name a file system allows
-  is carried, a blank one or one with a control character among them. The folder is bounded
-  twice: by `OpenRequest::max_entries` files and folders (`DEFAULT_MAX_ENTRIES` unless the
-  request says, past it `DialogError::TooManyEntries`, the folder walked no further), and by
-  `max_bytes` for its files together. A desktop dialog answers a folder's path, which neither
-  bounds.
+  folder that holds none, at any depth, leaves no trace in it. A file's place is a `FolderPath`:
+  the names from the folder down to the file, each held to one rule on every host (not empty,
+  not `.` or `..`, no `/`, `\` or NUL), so a path has one name per folder passed and none that
+  climbs; any other name a file system allows is kept, a blank one or one with a control
+  character among them. It is not a path of the host, and promises nothing of one made from it
+  (Windows reads `NUL` and `C:` its own way and drops a trailing dot): an application that
+  writes the files to disk maps the names first. A folder is listed and checked once, before
+  its files are read (`FolderListing`: its name one a folder holds, no two files at one path,
+  the files in the order of their paths), and each file stays beside its path until the pick
+  is made of them. The folder is bounded twice: by `OpenRequest::max_entries` files
+  (`DEFAULT_MAX_ENTRIES` unless the request says, past it `DialogError::TooManyEntries`), and
+  by `max_bytes` for its files together; the handle holds every backend's answer to both, and
+  a backend that walks the folder counts the folders it meets as well, so the walk ends at
+  the bound. A desktop dialog answers a folder's path, which neither bounds.
 - Every pick is held to the request's filters, and one that matches none refuses the whole answer
   with `DialogError::NotInFilter`: the answer is what the user chose, and it is not what the
   request asked for. A pick's name is the handle's to check, for every backend (`FileDialogs::open`):
@@ -371,25 +379,29 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   a cross-origin frame, which may show an input) hands over to the input while the page still
   handles the gesture, and answers `Unavailable` once the gesture is spent. A dismissed picker
   answers `AbortError`. An input ends on its `change`, its `cancel` (Chromium 113, Firefox 91,
-  Safari 16.4), `pagehide`, or, where an engine has no `cancel`, the window regaining focus with
-  no `change` within `web::dialogs::FOCUS_GRACE_MS`, which answers a cancel: a pick reported later than
-  that (a large file a phone copies first) is lost, the price of an end on every engine.
+  Safari 16.4) or `pagehide`. Only where the engine fires no `cancel` does it also end when the
+  window regains focus with no `change` within `web::dialogs::FOCUS_GRACE_MS`, which answers a
+  cancel: there a pick reported later than that (a large file a phone copies first, a folder the
+  browser lists first) is lost, the price of an end at all. An engine that fires `cancel` is
+  never timed. No API says whether the event is fired, so `Page::input_fires_cancel` reads
+  `Headers.prototype.getSetCookie`, which came with Chromium 113 and after the event elsewhere
+  (Firefox 112, Safari 17): a Firefox before 112 or a Safari before 17 keeps a bound it does not
+  need.
 - **Folder.** The directory picker (`showDirectoryPicker`, asked to read) where the browser has
   it, its handle walked through each folder's `values()`; `<input type=file webkitdirectory>`
   otherwise, and in the picker's place under the rules of an open (the gesture, `SecurityError`,
   one picker per page, the input's ends), its files' `webkitRelativePath`s naming the folder and
   where each file is under it. Both answer one folder as `PickedForm::Folder`, whatever the
-  request allows: a browser's chooser takes one. The folder's name and its files' paths are held
-  to what a pick carries, the entries to `max_entries` as they are met and the files' declared
-  sizes to `max_bytes`, all before a byte is read. A browser with neither API answers
+  request allows: a browser's chooser takes one. The folder is listed once and held to what a
+  pick carries, the walk's entries to `max_entries` as they are met, an input's files counted
+  before one of them is looked at, and the files' declared sizes to `max_bytes`, all before a
+  byte is read. A browser with neither API answers
   `NotOnThisDevice` before the gesture is asked about, since no later call fares better. An
   input may take the attribute and show a file chooser all the same (Chrome for Android before
   132, Safari on iOS before 18.4), or pick a folder without saying where its files are (Firefox
   for Android 141): its files then all have an empty path, which is answered `NotOnThisDevice`
   too. An input answers no file for a folder that holds none, which it cannot tell from a
-  dismissed chooser: a cancel. A folder the browser lists, or asks the user to confirm, for
-  longer than the focus bound after the window regained focus is answered as a cancel as well,
-  as a late file is.
+  dismissed chooser: a cancel.
 - **Save.** The save picker writes the request's contents through a writable stream, aborted on
   a failure, after the user chose even if the dialog was dropped: the browser has made or emptied
   the chosen file by then. Without a picker, outside a gesture (which the picker needs and a
@@ -398,9 +410,10 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   extension when it has none, from an object URL revoked a minute later, and answered as
   `PickedForm::Download`. The answer reports no filter: the browser says none was selected.
 - **One picker per page.** A page cannot close a browser's picker, and the browser shows one at
-  a time; the runtime's `PagePicker` refuses a second with `Busy` while one is up, whichever
-  window asked, and after its dialog was dropped: a picker of the API until its promise settles,
-  an input until it ends as above, keeping itself alive until then.
+  a time. While one is up the document carries a mark (`web::dialogs::ShownPicker`, an expando
+  as the message box's id counter is), so a second is refused with `Busy` whichever window or
+  UI runtime of the page asks, and after its dialog was dropped: a picker of the API until its
+  promise settles, an input until it ends as above, keeping itself alive until then.
 - **Launching.** `http` and `https` open in a new browsing context: a blank one first, so a
   blocked window is seen (`window.open` answers `null`, answered `Unavailable`), its `opener` cut,
   then the page followed from a link of that blank document with `rel=noreferrer`, so the page

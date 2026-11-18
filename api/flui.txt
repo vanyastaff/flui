@@ -22689,6 +22689,7 @@ variant flui::services::system::dialog::DialogError::Busy // at 0
 variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 7
 variant flui::services::system::dialog::DialogError::InvalidRequest(flui::services::system::dialog::MalformedRequest) // at 1
 variant flui::services::system::dialog::DialogError::NotAFile // at 4
+variant flui::services::system::dialog::DialogError::TooManyEntries { limit: usize } // at 8
 variant flui::services::system::dialog::DialogError::Unsupported(flui::platform::Unsupported) // at 2
 variant flui::services::system::dialog::DialogError::WindowClosed // at 3
 pub struct flui::services::system::dialog::DialogHold(_)
@@ -22722,6 +22723,27 @@ pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
 pub fn flui::services::system::dialog::FileFilter::new(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_extension(self, extension: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_mime_type(self, mime_type: impl Into<String>) -> Self
+pub struct flui::services::system::dialog::FolderFile { .. }
+impl Clone for flui::services::system::dialog::FolderFile
+impl Eq for flui::services::system::dialog::FolderFile
+impl PartialEq for flui::services::system::dialog::FolderFile
+impl core::fmt::Debug for flui::services::system::dialog::FolderFile
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::FolderFile
+pub fn flui::services::system::dialog::FolderFile::contents(&self) -> &[u8]
+pub fn flui::services::system::dialog::FolderFile::new(path: flui::services::system::dialog::FolderPath, contents: alloc::rcs::arc::Arc<[u8]>) -> Self
+pub fn flui::services::system::dialog::FolderFile::path(&self) -> &flui::services::system::dialog::FolderPath
+pub struct flui::services::system::dialog::FolderPath { .. }
+impl Clone for flui::services::system::dialog::FolderPath
+impl Eq for flui::services::system::dialog::FolderPath
+impl PartialEq for flui::services::system::dialog::FolderPath
+impl core::fmt::Debug for flui::services::system::dialog::FolderPath
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::FolderPath
+pub fn flui::services::system::dialog::FolderPath::as_str(&self) -> &str
+pub fn flui::services::system::dialog::FolderPath::components(&self) -> impl Iterator<Item = &str>
+pub fn flui::services::system::dialog::FolderPath::file_name(&self) -> &str
+pub fn flui::services::system::dialog::FolderPath::try_child(&self, name: &str) -> Option<Self>
+pub fn flui::services::system::dialog::FolderPath::try_from_name(name: &str) -> Option<Self>
+pub fn flui::services::system::dialog::FolderPath::try_new(path: &str) -> Option<Self>
 pub const flui::services::system::dialog::MAX_TEXT_LEN: usize = 4096
 #[non_exhaustive] pub enum flui::services::system::dialog::MalformedRequest
 impl Clone for flui::services::system::dialog::MalformedRequest
@@ -22816,12 +22838,14 @@ field flui::services::system::dialog::OpenRequest::accept_label: Option<String> 
 field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 4
 field flui::services::system::dialog::OpenRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 5
 field flui::services::system::dialog::OpenRequest::max_bytes: u64 // at 2
+field flui::services::system::dialog::OpenRequest::max_entries: usize // at 7
 field flui::services::system::dialog::OpenRequest::title: Option<String> // at 3
 impl Clone for flui::services::system::dialog::OpenRequest
 impl Eq for flui::services::system::dialog::OpenRequest
 impl PartialEq for flui::services::system::dialog::OpenRequest
 impl core::fmt::Debug for flui::services::system::dialog::OpenRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::OpenRequest
+pub const flui::services::system::dialog::OpenRequest::DEFAULT_MAX_ENTRIES: usize = 10_000
 pub fn flui::services::system::dialog::OpenRequest::accept_label(self, label: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::OpenRequest::allow_multiple(self) -> Self
 pub fn flui::services::system::dialog::OpenRequest::directory(self, directory: impl Into<std::path::PathBuf>) -> Self
@@ -22829,6 +22853,7 @@ pub fn flui::services::system::dialog::OpenRequest::files() -> Self
 pub fn flui::services::system::dialog::OpenRequest::filter(self, filter: flui::services::system::dialog::FileFilter) -> Self
 pub fn flui::services::system::dialog::OpenRequest::folders() -> Self
 pub fn flui::services::system::dialog::OpenRequest::is_multiple(&self) -> bool
+pub fn flui::services::system::dialog::OpenRequest::max_entries(self, max_entries: usize) -> Self
 pub fn flui::services::system::dialog::OpenRequest::picks_folders(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::OpenResult = Result<Option<flui::services::system::dialog::Picks>, flui::services::system::dialog::DialogError>
@@ -22839,11 +22864,13 @@ impl PartialEq for flui::services::system::dialog::PickedFile
 impl core::fmt::Debug for flui::services::system::dialog::PickedFile
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::PickedFile
 pub fn flui::services::system::dialog::PickedFile::contents(&self) -> Option<&[u8]>
+pub fn flui::services::system::dialog::PickedFile::files(&self) -> Option<&[flui::services::system::dialog::FolderFile]>
 pub fn flui::services::system::dialog::PickedFile::file_name(&self) -> Option<&std::ffi::os_str::OsStr>
 pub fn flui::services::system::dialog::PickedFile::form(&self) -> flui::services::system::dialog::PickedForm<'_>
 pub fn flui::services::system::dialog::PickedFile::path(&self) -> Option<&std::path::Path>
 pub fn flui::services::system::dialog::PickedFile::try_download(name: impl Into<String>) -> Option<Self>
 pub fn flui::services::system::dialog::PickedFile::try_from_contents(name: impl Into<String>, contents: alloc::rcs::arc::Arc<[u8]>) -> Option<Self>
+pub fn flui::services::system::dialog::PickedFile::try_from_folder(name: impl Into<String>, files: Vec<flui::services::system::dialog::FolderFile>) -> Option<Self>
 pub fn flui::services::system::dialog::PickedFile::try_new(path: impl Into<std::path::PathBuf>) -> Option<Self>
 pub struct flui::services::system::dialog::Picks { .. }
 impl Clone for flui::services::system::dialog::Picks
@@ -22900,6 +22927,7 @@ impl<'a> core::fmt::Debug for flui::services::system::dialog::PickedForm<'a>
 impl<'a> core::marker::StructuralPartialEq for flui::services::system::dialog::PickedForm<'a>
 variant flui::services::system::dialog::PickedForm::Contents { name: &'a str, contents: &'a [u8] } // at 1
 variant flui::services::system::dialog::PickedForm::Download { name: &'a str } // at 2
+variant flui::services::system::dialog::PickedForm::Folder { name: &'a str, files: &'a [flui::services::system::dialog::FolderFile] } // at 3
 variant flui::services::system::dialog::PickedForm::Path(&'a std::path::Path) // at 0
 impl Clone for flui::services::system::jump_list::JumpList
 impl core::fmt::Debug for flui::services::system::jump_list::JumpList
