@@ -1,8 +1,8 @@
 ### Added
 
-- `Subscription::for_removal`: a custom source's owned subscription, whose
-  removal runs once at the first detach or the drop that follows — the value
-  notification's twin of ADR-0180's status guard.
+- `Subscription::for_source`: a custom source's owned subscription, holding the source
+  weakly with a `Copy` token and a removal function that runs once, at the first
+  detach or the drop that follows (ADR-0379).
 - `Listenable::listen_with_recovery`: the required relay registration under an
   owned `Subscription`, keeping ADR-0219's delivery-scope custody.
 - `ChangeNotifier::add_with_recovery`: the channel-level registration for

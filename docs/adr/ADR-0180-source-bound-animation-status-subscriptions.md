@@ -1,6 +1,7 @@
 # ADR-0180: Animation status subscriptions own source-bound removal
 
-- **Status:** Accepted (2026-10-11)
+- **Status:** Superseded (2026-11-18)
+- **Superseded-by:** [ADR-0379](ADR-0379-an-animation-status-subscription-is-the-foundation-subscription.md)
 - **Date:** 2026-10-09
 - **Related:** [ADR-0177](ADR-0177-controller-ordered-delivery.md),
   [ADR-0178](ADR-0178-notification-first-failure-custody.md),
@@ -20,7 +21,7 @@ the shared first-failure custody policy.
 
 ## Decision
 
-`Animation<T>::subscribe_status` returns a non-cloneable, must-use
+`Animation<T>::listen_status` returns a non-cloneable, must-use
 `StatusSubscription`. Dropping the subscription withdraws its own registration.
 `detach` transfers callback lifetime to the source without invoking removal.
 There is no public status ID or source-selected status removal method. Value

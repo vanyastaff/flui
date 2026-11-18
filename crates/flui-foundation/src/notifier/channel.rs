@@ -27,7 +27,7 @@ pub type NotifierCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
 
 /// A callback that runs inside the notifying delivery's [`RecoveryScope`]: the
 /// form a relay registers so the first failure of the whole delivery stays
-/// authoritative (for example a custom animation's `observe_status`).
+/// authoritative (for example a custom animation's `listen_status_with_recovery`).
 pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 
 /// A registered callback withdrawn from its channel, for the withdrawing owner

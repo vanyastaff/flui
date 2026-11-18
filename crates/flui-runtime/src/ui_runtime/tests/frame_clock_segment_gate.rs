@@ -354,7 +354,7 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
             move |outcome| outcomes.borrow_mut().push(outcome)
         });
         let completions = Rc::new(Cell::new(0));
-        let _subscription = controller.subscribe_status(Rc::new({
+        let _subscription = controller.listen_status(Rc::new({
             let completions = Rc::clone(&completions);
             move |status| {
                 if status == AnimationStatus::ForwardSettled {

@@ -335,7 +335,7 @@ struct ChildEntry {
     /// animates against. One handle for the entry's life, so a rebuilt
     /// transition keeps following the same progress.
     animation: Terminal<Rc<dyn Animation<f64>>>,
-    status_subscription: Option<flui_animation::StatusSubscription>,
+    status_subscription: Option<flui_foundation::Subscription>,
     /// Flipped by the status-listener callback when `controller` reaches
     /// [`AnimationStatus::ReverseSettled`] (a completed reverse run). Read — and
     /// acted on — by [`AnimatedSwitcherState::build`]'s sweep; see the
@@ -417,7 +417,7 @@ impl ChildEntry {
 
         let dismissed = Rc::clone(&self.dismissed);
         drop(self.status_subscription.take());
-        self.status_subscription = Some(self.controller.controller().subscribe_status(
+        self.status_subscription = Some(self.controller.controller().listen_status(
             std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::ReverseSettled {
                     dismissed.set(true);

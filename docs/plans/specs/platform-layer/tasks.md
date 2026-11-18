@@ -1,8 +1,9 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 118 закрыты и 16 открыты (сверено с `main` @ `5b4e3202b`); записи — в разделе
-  «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
+  Из 134 задач серии 119 закрыты и 15 открыты (сверено с `main` @ `5b4e3202b` и закрытием
+  LY139); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
+  задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
     провайдеры Android;
@@ -18,8 +19,6 @@
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
   - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
-  - LY139 — пометка первого клика с регионом, запись истечения буфера macOS и жизненный цикл окна
-    iOS без замков, курсор macOS на типизированных вызовах;
   - LY145 — шаги закрытия, выхода и конца сеанса и сборка возможностей в `flui-runtime`;
   - LY148 — долг кадра у перекрытого окна, уход композитного менеджера X11, отключённый удалённый
     сеанс Win32.
@@ -9214,31 +9213,46 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
 
-- [ ] **LY139** (открыта: пометка первого клика и три оставшиеся формы) — решение ADR-0369, на
-  `main`. Построено: состояние окна macOS — `RefCell`, `assert_not_impl_any!(MacOSWindow: Send,
-  Sync)`; главно-поточная часть управления циклом — `Cell` за `MainThreadBound`, переходы чистые
-  (`owner::apple::loop_state`) и записываются до сообщения приложению, так что повторный вход
-  «занятым» не бывает; окно iOS — `Rc`/`RefCell`/`Cell`, `assert_not_impl_any!(IOSWindow: Send,
-  Sync)`; `FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView` — `define_class!` с
-  `ContainedIvars`; полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят;
-  `acceptsFirstMouse:` следует конвенции AppKit: нажатие на область перемещения заголовка,
-  нарисованного приложением, активирует и двигает окно, нажатие на содержимое только активирует
-  (модель `input::apple::title_bar::first_mouse`). Тесты:
-  `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`,
+- [x] **LY139** — решение ADR-0369, ветки `native/apple-owner-thread-forms` и
+  `native/apple-first-click-and-locks`. Построено: состояние окна macOS — `RefCell`,
+  `assert_not_impl_any!(MacOSWindow: Send, Sync)`; главно-поточная часть управления циклом —
+  `Cell` за `MainThreadBound`, переходы чистые (`owner::apple::loop_state`) и записываются до
+  сообщения приложению, так что повторный вход «занятым» не бывает; окно iOS —
+  `Rc`/`RefCell`/`Cell`, `assert_not_impl_any!(IOSWindow: Send, Sync)`, его жизненный цикл —
+  `RefCell<IOSLifecycle>`, а флаг закрытия и исполнение — `Rc<SurfaceAdmission>` из `Cell`, который
+  цель поверхности (`Send + Sync` по контракту) читает через `NativeOwner` только на главном
+  потоке; запись истечения буфера обмена macOS — `Cell<ExpiringRecord<isize>>`: её копия уходит в
+  операцию полосы и возвращается решённой, на полосе запись не трогается; `FLUIWindow`,
+  `FLUIWindowDelegate`, `FLUIContentView` — `define_class!` с `ContainedIvars`; курсор macOS — на
+  типизированных вызовах objc2 (геттеры `NSCursor` и инициализаторы `NSImage`/`NSCursor` объявлены
+  `nonnull` в заголовках AppKit, инициализатор `NSBitmapImageRep` — `nullable` и остаётся
+  ошибкой); полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят. Первый клик:
+  `InputRegionKind::FirstClick` (виджет `FirstClick`), пометка `PointerPress::is_first_click`;
+  `acceptsFirstMouse:` двигает окно с области перемещения заголовка, доставляет нажатие внутри
+  региона первого клика (края включены в логических единицах, как у проверки попадания) с
+  пометкой (билет по номеру и времени события, `FirstClickTicket`) и только активирует окно в
+  остальных местах; регион хоста — грубый предфильтр, а привязка жестов на каждом хосте
+  пропускает помеченное нажатие, только если путь попадания проходит через коробку `FirstClick`
+  (`FirstClickTarget`), и отдаёт его только поддереву коробки на этом пути
+  (`HitTestEntry::subtree_entries`); коробка входит в путь и тогда, когда цель внутри неё
+  прозрачна (`RenderObject::joins_hits_below`); отказанный первый клик решается до вытеснения
+  контакта на пределе и до выдачи идентификатора последовательности; запись ввода несёт пометку
+  и возможность `first_click` (протокол 0.28), отказ — весь контакт. Тесты:
+  `first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click`,
+  `first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click`,
+  `a_refused_first_click_takes_no_contact_room_and_no_sequence`,
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`,
+  `first_click::a_first_click_reaches_only_the_widgets_that_accept_it` (без проверки в привязке
+  падает: первый клик вне региона нажимает простой квадрат),
+  `first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click` (падает,
+  если привязка проверяет только прямоугольник региона: виджет поверх получает первый клик),
+  `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting` (строки региона
+  первого клика падают без его проверки в модели), `a_first_click_is_marked_only_on_the_press_it_was_answered_for`,
   `an_explicit_quit_fences_a_reopen_already_accepted`, `a_reopen_during_a_drain_is_told_by_that_drain`.
-  Остаётся код: (1) пометка первого клика на нажатии, которую каждый распознаватель по умолчанию
-  игнорирует, и регион нового вида для элемента, принимающего этот клик (обход регионов
-  `flui-rendering`, `InputRegionKind`, проекция каждого хоста;
-  [gaps](../../../gaps.md#pointer-and-keyboard-gaps)); (2) запись истечения буфера обмена macOS
-  под `parking_lot::Mutex` (`crates/flui-native/src/clipboard/apple/macos.rs:61`), потому что её
-  модульные тесты зовут её с потоков тестовой полосы; (3) жизненный цикл окна iOS —
-  `Arc<parking_lot::Mutex<IOSLifecycle>>` и `Arc<AtomicBool>`, общие с `Send + Sync` целью
-  поверхности (`crates/flui-native/src/window/apple/ios.rs:1218`); (2) и (3) записаны в
-  [gaps](../../../gaps.md#accepted-adr-sections-not-built-yet) (ADR-0327 §1); (4) курсор macOS шлёт
-  сырой `msg_send!` (`window/apple/macos/cursor.rs`), пока каждый геттер objc2, объявленный
-  ненулевым, не проверен ([gaps](../../../gaps.md#quality-bar-partials-with-no-entry)). Должно на
-  Mac (строка parity «Frameless windows, custom title bar»): первый клик по неактивному окну и набор
-  `appkit_window`.
+  macOS и iOS только проверены типами (nightly в WSL). Записи ввода не несут пометку
+  ([gaps](../../../gaps.md#pointer-and-keyboard-gaps)). Должно на Mac (строки parity «Frameless
+  windows, custom title bar» и «Cursor shapes»): первый клик по неактивному окну, курсоры и набор
+  `appkit_window`; на iPad (строка «Suspend, resume, GPU-surface loss»): жизненный цикл сцены.
 
 - [x] **LY140** — ветка `native/android-accessibility-activation`. Проверено на `main` @
   `59a808aeb` чтением и тестами. Подтвердились обе находки: у `notify_activation(false)` на

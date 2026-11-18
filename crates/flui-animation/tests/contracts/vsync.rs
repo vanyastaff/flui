@@ -57,7 +57,7 @@ fn a_listener_may_unregister_from_inside_tick_all() {
     let c = owner.controller().clone();
     let slot = Rc::new(RefCell::new(Some(owner)));
     let retiring = Rc::downgrade(&slot);
-    let _subscription = c.subscribe_status(Rc::new(move |status| {
+    let _subscription = c.listen_status(Rc::new(move |status| {
         if status == AnimationStatus::ForwardSettled {
             let slot = retiring.upgrade().expect("logical owner is live");
             let owner = slot.borrow_mut().take();

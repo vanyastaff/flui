@@ -5,7 +5,8 @@
 use crate::common::cases::run_cases;
 
 /// Input regions: what a window hands the OS for `SystemGestureExclusion`, mapped from
-/// layout through transforms and clips, and re-sent only when its projection changed.
+/// layout through transforms and clips, and re-sent only when its projection changed; and
+/// where `FirstClick` lets the click that activates a window act.
 #[test]
 fn input_regions() {
     run_cases(
@@ -24,6 +25,10 @@ fn input_regions() {
             ("system_gesture_exclusion::fractional_region_edges_round_outward", crate::system_gesture_exclusion::fractional_region_edges_round_outward),
             ("system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic", crate::system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic),
             ("system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped", crate::system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped),
+            ("first_click::a_first_click_reaches_only_the_widgets_that_accept_it", crate::first_click::a_first_click_reaches_only_the_widgets_that_accept_it),
+            ("first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click", crate::first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click),
+            ("first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click", crate::first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click),
+            ("first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click", crate::first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click),
         ],
     );
 }

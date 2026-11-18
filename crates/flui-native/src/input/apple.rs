@@ -794,12 +794,15 @@ pub(crate) mod title_bar {
     //! A press on a title bar the application draws (ADR-0286 §8): where the
     //! chrome regions put a left press, and what a double-click on the bar
     //! does after the user's setting. AppKit reads the setting and moves the
-    //! window; this decides.
+    //! window; this decides. Also what a press into a window that is not key
+    //! does (`acceptsFirstMouse:`): it moves the window from the bar, reaches
+    //! the application marked as the first click where a first-click region
+    //! holds it, and only activates the window anywhere else.
 
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::DevicePoint;
-    use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, chrome_hit};
+    use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, InputRegionKind, chrome_hit};
 
     /// What a left press on the window does.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -895,19 +898,104 @@ pub(crate) mod title_bar {
         /// content, where the click that brings a window forward does not act
         /// on what it lands on.
         Activates,
-        /// It makes the window key and acts: a press on the move area of a
-        /// title bar the application draws starts moving the window at once,
-        /// as a press on the system's title bar of a window behind does.
-        ActivatesAndActs,
+        /// It makes the window key and moves it: a press on the move area of
+        /// a title bar the application draws starts moving the window at
+        /// once, as a press on the system's title bar of a window behind
+        /// does.
+        Moves,
+        /// It makes the window key and reaches the application, marked as the
+        /// first click: it landed in an [`InputRegionKind::FirstClick`]
+        /// region. The region is a rough pre-filter: the gesture binding
+        /// decides by the press's hit path whether it reaches a widget.
+        Delivered,
     }
 
-    /// What the click whose press is `press` does when it lands in a window
-    /// that is not key.
-    pub(crate) fn first_mouse(press: Press) -> FirstMouse {
-        match press {
-            Press::Drag | Press::DoubleClick => FirstMouse::ActivatesAndActs,
-            Press::App => FirstMouse::Activates,
+    impl FirstMouse {
+        /// Whether AppKit delivers the press as well as activating the window:
+        /// the answer to `acceptsFirstMouse:`.
+        pub(crate) fn delivers(self) -> bool {
+            self != Self::Activates
         }
+    }
+
+    /// Which press an `NSEvent` is: its event number (`-[NSEvent eventNumber]`)
+    /// and its timestamp. The number alone does not tell presses apart:
+    /// synthesized events all carry 0.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct PressStamp {
+        number: isize,
+        /// The timestamp's bits (`f64::to_bits`), seconds since boot.
+        timestamp: u64,
+    }
+
+    impl PressStamp {
+        /// The press numbered `number` at `timestamp` seconds since boot.
+        pub(crate) fn new(number: isize, timestamp: f64) -> Self {
+            Self {
+                number,
+                timestamp: timestamp.to_bits(),
+            }
+        }
+    }
+
+    /// The press `acceptsFirstMouse:` last delivered as a first click, by its
+    /// stamp: AppKit asks before it sends the press, and the press it then
+    /// sends is marked when its stamp matches. Any press spends the ticket,
+    /// so an answer whose press never came marks no later one.
+    #[derive(Debug, Default)]
+    pub(crate) struct FirstClickTicket(std::cell::Cell<Option<PressStamp>>);
+
+    impl FirstClickTicket {
+        /// `acceptsFirstMouse:` delivers the press `stamp` as a first click.
+        pub(crate) fn issue(&self, stamp: PressStamp) {
+            self.0.set(Some(stamp));
+        }
+
+        /// The press `stamp` arrived: whether it is the first click the ticket
+        /// was issued for.
+        pub(crate) fn redeem(&self, stamp: PressStamp) -> bool {
+            self.0.take() == Some(stamp)
+        }
+    }
+
+    /// What the press `reading` does when it lands in a window that is not
+    /// key, against `regions` projected at `scale`. Any button's press in a
+    /// first-click region is delivered: the widget there reads the button.
+    pub(crate) fn first_mouse(
+        regions: &[DeviceInputRegion],
+        scale: f64,
+        reading: PressReading,
+    ) -> FirstMouse {
+        match press_of(regions, scale, reading) {
+            Press::Drag | Press::DoubleClick => FirstMouse::Moves,
+            Press::App => {
+                let accepted = regions.iter().any(|region| {
+                    region.kind() == InputRegionKind::FirstClick
+                        && holds_with_edges(region, reading.x, reading.y, scale)
+                });
+                if accepted {
+                    FirstMouse::Delivered
+                } else {
+                    FirstMouse::Activates
+                }
+            }
+        }
+    }
+
+    /// Whether `region`, projected at `scale`, holds the logical point
+    /// `(x, y)`, its edges included: read back in logical units, as the
+    /// framework's hit test counts a box. The device rectangle was rounded
+    /// outward from the logical one, so this holds every point the hit test
+    /// of the region's box holds, and the binding never refuses a press for
+    /// lying past an edge the host let through the other way.
+    fn holds_with_edges(region: &DeviceInputRegion, x: f64, y: f64, scale: f64) -> bool {
+        if !(scale.is_finite() && scale > 0.0) {
+            return false;
+        }
+        let rect = region.rect();
+        let [left, top, right, bottom] =
+            [rect.min.x, rect.min.y, rect.max.x, rect.max.y].map(|edge| f64::from(edge) / scale);
+        left <= x && x <= right && top <= y && y <= bottom
     }
 
     /// What a double-click on the bar does: `action` is `AppleActionOnDoubleClick`
@@ -930,11 +1018,13 @@ pub(crate) mod title_bar {
         use flui_platform::input_regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
 
         use super::{
-            DoubleClick, FirstMouse, Press, PressReading, double_click, first_mouse, press_of,
+            DoubleClick, FirstClickTicket, FirstMouse, Press, PressReading, PressStamp,
+            double_click, first_mouse, press_of,
         };
 
         #[test]
         fn a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting() {
+            use FirstMouse::{Activates, Delivered, Moves};
             let region = |kind, left, right| {
                 DeviceInputRegion::new(
                     kind,
@@ -946,48 +1036,41 @@ pub(crate) mod title_bar {
             };
             let regions = [
                 region(InputRegionKind::WindowMove, 0, 800),
+                // A button on the bar, which takes the first click too.
                 region(InputRegionKind::WindowContent, 200, 260),
+                region(InputRegionKind::FirstClick, 200, 260),
                 region(
                     InputRegionKind::CaptionButton(CaptionButton::Close),
                     700,
                     760,
                 ),
+                // Content beside the bar that takes the first click.
+                region(InputRegionKind::FirstClick, 900, 1000),
             ];
-            // (x, y, scale, clicks): logical points on a 2x screen.
+            // (x, y, scale, clicks): logical points on a 2x screen; then what
+            // a left press does, and what it and another button's press do
+            // when they land in a window that is not key.
             let cases = [
-                (
-                    (10.0, 10.0, 2.0, 1),
-                    Press::Drag,
-                    FirstMouse::ActivatesAndActs,
-                ),
-                (
-                    (10.0, 10.0, 2.0, 2),
-                    Press::DoubleClick,
-                    FirstMouse::ActivatesAndActs,
-                ),
-                (
-                    (10.0, 10.0, 2.0, 3),
-                    Press::Drag,
-                    FirstMouse::ActivatesAndActs,
-                ),
-                (
-                    (10.0, 10.0, 2.0, 4),
-                    Press::DoubleClick,
-                    FirstMouse::ActivatesAndActs,
-                ),
-                ((110.0, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
-                ((110.0, 10.0, 2.0, 2), Press::App, FirstMouse::Activates),
-                ((360.0, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
-                ((10.0, 40.0, 2.0, 1), Press::App, FirstMouse::Activates),
-                (
-                    (99.9, 10.0, 2.0, 1),
-                    Press::Drag,
-                    FirstMouse::ActivatesAndActs,
-                ),
-                ((f64::NAN, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
-                ((1e12, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
+                ((10.0, 10.0, 2.0, 1), Press::Drag, Moves, Activates),
+                ((10.0, 10.0, 2.0, 2), Press::DoubleClick, Moves, Activates),
+                ((10.0, 10.0, 2.0, 3), Press::Drag, Moves, Activates),
+                ((10.0, 10.0, 2.0, 4), Press::DoubleClick, Moves, Activates),
+                ((110.0, 10.0, 2.0, 1), Press::App, Delivered, Delivered),
+                ((110.0, 10.0, 2.0, 2), Press::App, Delivered, Delivered),
+                // The first pixel past the button is the bar's again; the
+                // first-click pre-filter still holds the button's edge, which
+                // the framework's hit test of the button includes too.
+                ((130.0, 10.0, 2.0, 1), Press::Drag, Moves, Delivered),
+                ((130.5, 10.0, 2.0, 1), Press::Drag, Moves, Activates),
+                ((360.0, 10.0, 2.0, 1), Press::App, Activates, Activates),
+                ((460.0, 10.0, 2.0, 1), Press::App, Delivered, Delivered),
+                ((460.0, 40.0, 2.0, 1), Press::App, Activates, Activates),
+                ((10.0, 40.0, 2.0, 1), Press::App, Activates, Activates),
+                ((99.9, 10.0, 2.0, 1), Press::Drag, Moves, Activates),
+                ((f64::NAN, 10.0, 2.0, 1), Press::App, Activates, Activates),
+                ((1e12, 10.0, 2.0, 1), Press::App, Activates, Activates),
             ];
-            for ((x, y, scale, clicks), expected, into_inactive) in cases {
+            for ((x, y, scale, clicks), expected, left_first, other_first) in cases {
                 // The reading the view makes of a left press, through the one
                 // answer its delivery and `acceptsFirstMouse:` both take.
                 let left = PressReading {
@@ -996,25 +1079,59 @@ pub(crate) mod title_bar {
                     y,
                     click_count: clicks,
                 };
-                let answered = press_of(&regions, scale, left);
-                assert_eq!(answered, expected, "({x}, {y}) at {scale}x, click {clicks}");
+                let at = format!("({x}, {y}) at {scale}x, click {clicks}");
+                assert_eq!(press_of(&regions, scale, left), expected, "{at}");
                 assert_eq!(
-                    first_mouse(answered),
-                    into_inactive,
-                    "({x}, {y}) at {scale}x, click {clicks}, into an inactive window"
+                    first_mouse(&regions, scale, left),
+                    left_first,
+                    "{at}, into an inactive window"
                 );
-                // Any other button reaches the application and only activates.
-                let other = press_of(
-                    &regions,
-                    scale,
-                    PressReading {
-                        left: false,
-                        ..left
-                    },
+                assert_eq!(left_first.delivers(), left_first != Activates);
+                // Any other button reaches the application; into an inactive
+                // window only a first-click region delivers it.
+                let other = PressReading {
+                    left: false,
+                    ..left
+                };
+                assert_eq!(
+                    press_of(&regions, scale, other),
+                    Press::App,
+                    "{at}, another button"
                 );
-                assert_eq!(other, Press::App, "({x}, {y}), another button");
-                assert_eq!(first_mouse(other), FirstMouse::Activates);
+                assert_eq!(
+                    first_mouse(&regions, scale, other),
+                    other_first,
+                    "{at}, another button into an inactive window"
+                );
             }
+        }
+
+        #[test]
+        fn a_first_click_is_marked_only_on_the_press_it_was_answered_for() {
+            let press = PressStamp::new;
+            let ticket = FirstClickTicket::default();
+            assert!(!ticket.redeem(press(7, 1.0)), "no answer, no mark");
+            ticket.issue(press(7, 1.0));
+            assert!(
+                ticket.redeem(press(7, 1.0)),
+                "the press answered for is marked"
+            );
+            assert!(!ticket.redeem(press(7, 1.0)), "once");
+            // An answer whose press never came marks no later press.
+            ticket.issue(press(8, 2.0));
+            assert!(!ticket.redeem(press(9, 2.5)));
+            assert!(
+                !ticket.redeem(press(8, 2.0)),
+                "the press that came spent the ticket"
+            );
+            // Synthesized events all carry the number 0: the timestamp tells
+            // a stale answer from a later press.
+            ticket.issue(press(0, 3.0));
+            assert!(!ticket.redeem(press(0, 3.5)));
+            // A second question about the same press keeps it marked.
+            ticket.issue(press(10, 4.0));
+            ticket.issue(press(10, 4.0));
+            assert!(ticket.redeem(press(10, 4.0)));
         }
 
         #[test]
@@ -1348,6 +1465,8 @@ pub(crate) mod macos {
         /// Set by the window while it holds the pointer locked: the mouse's
         /// motion is then raw motion, and no move is delivered.
         locked: Cell<bool>,
+        /// The press `acceptsFirstMouse:` last delivered as a first click.
+        first_click: title_bar::FirstClickTicket,
     }
 
     /// The window's input regions in device pixels, and the scale they were
@@ -1358,19 +1477,40 @@ pub(crate) mod macos {
         scale: flui_foundation::geometry::DevicePixelRatio,
     }
 
+    /// Whether `event` is a button press, of any button: the events
+    /// `acceptsFirstMouse:` is asked about, and the only ones whose
+    /// `eventNumber` AppKit defines.
+    fn is_press(event: &NSEvent) -> bool {
+        let kind = event.r#type();
+        kind == NSEventType::LeftMouseDown
+            || kind == NSEventType::RightMouseDown
+            || kind == NSEventType::OtherMouseDown
+    }
+
+    /// Which press `event` is; `None` for any other event, whose
+    /// `eventNumber` AppKit leaves undefined (and may raise for).
+    fn press_stamp(event: &NSEvent) -> Option<title_bar::PressStamp> {
+        is_press(event).then(|| title_bar::PressStamp::new(event.eventNumber(), event.timestamp()))
+    }
+
     impl ViewInputs {
-        /// What the press `event` does: a left press on a move area of a title
-        /// bar the application draws moves the window, and reaches nobody.
-        fn title_bar_press(&self, view: &ContentView<'_>, event: &NSEvent) -> Press {
-            // Read from AppKit before the regions are borrowed: no borrow is
-            // held across a message.
+        /// How the view reads the press `event`, every value read from AppKit
+        /// before the regions are borrowed: no borrow is held across a
+        /// message.
+        fn press_reading(view: &ContentView<'_>, event: &NSEvent) -> title_bar::PressReading {
             let location = event.locationInWindow();
-            let reading = title_bar::PressReading {
+            title_bar::PressReading {
                 left: event.r#type() == NSEventType::LeftMouseDown,
                 x: location.x,
                 y: view.height() - location.y,
                 click_count: event.clickCount(),
-            };
+            }
+        }
+
+        /// What the press `event` does: a left press on a move area of a title
+        /// bar the application draws moves the window, and reaches nobody.
+        fn title_bar_press(&self, view: &ContentView<'_>, event: &NSEvent) -> Press {
+            let reading = Self::press_reading(view, event);
             let chrome = self.chrome.borrow();
             title_bar::press_of(chrome.projected.sent(), chrome.scale.get(), reading)
         }
@@ -1378,6 +1518,9 @@ pub(crate) mod macos {
 
     impl ViewInput for ViewInputs {
         fn event(&self, view: &ContentView<'_>, event: &NSEvent) {
+            // A press spends the first-click ticket, whatever it does next.
+            let first_click =
+                press_stamp(event).is_some_and(|stamp| self.first_click.redeem(stamp));
             // Each AppKit call below runs with no borrow held: the drag runs a
             // tracking loop of its own, and the window's callbacks may re-enter.
             match self.title_bar_press(view, event) {
@@ -1401,13 +1544,28 @@ pub(crate) mod macos {
                 .borrow_mut()
                 .convert(event, height, self.locked.get());
             for input in inputs {
-                view.dispatch_input(input);
+                view.dispatch_input(if first_click {
+                    marked_first_click(input)
+                } else {
+                    input
+                });
             }
         }
 
         fn accepts_first_mouse(&self, view: &ContentView<'_>, event: &NSEvent) -> bool {
-            title_bar::first_mouse(self.title_bar_press(view, event))
-                == title_bar::FirstMouse::ActivatesAndActs
+            let reading = Self::press_reading(view, event);
+            let answer = {
+                let chrome = self.chrome.borrow();
+                title_bar::first_mouse(chrome.projected.sent(), chrome.scale.get(), reading)
+            };
+            // Read from AppKit only for a press it will deliver marked, with
+            // the regions let go.
+            if answer == title_bar::FirstMouse::Delivered
+                && let Some(stamp) = press_stamp(event)
+            {
+                self.first_click.issue(stamp);
+            }
+            answer.delivers()
         }
 
         fn set_input_regions(
@@ -1428,6 +1586,19 @@ pub(crate) mod macos {
 
         fn set_pointer_locked(&self, locked: bool) {
             self.locked.set(locked);
+        }
+    }
+
+    /// `input` with its press marked as the click that brought the window
+    /// forward; anything but a press unchanged.
+    fn marked_first_click(input: flui_platform::PlatformInput) -> flui_platform::PlatformInput {
+        use flui_platform::PlatformInput;
+        use flui_platform::pointer::PointerEvent;
+        match input {
+            PlatformInput::Pointer(PointerEvent::Down(press)) => {
+                PlatformInput::Pointer(PointerEvent::Down(press.with_first_click()))
+            }
+            other => other,
         }
     }
 

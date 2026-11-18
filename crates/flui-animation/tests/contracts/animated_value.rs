@@ -1080,7 +1080,7 @@ fn owner_retirement_joins_every_delivery_channel() {
             assert!(OWNER.with(|owner| owner.replace(Some(value))).is_none());
             let first: fn() = if earlier_failure { fail } else { healthy };
             // Both holder vectors live to the same tail drop.
-            let mut subscriptions = Vec::<flui_animation::StatusSubscription>::new();
+            let mut subscriptions = Vec::<flui_foundation::Subscription>::new();
             let mut value_listeners = Vec::<flui_foundation::Subscription>::new();
             let mut waiters = Vec::new();
             match channel {
@@ -1089,8 +1089,8 @@ fn owner_retirement_joins_every_delivery_channel() {
                     value_listeners.push(view.listen(Rc::new(release_owner)));
                 }
                 "status" => {
-                    subscriptions.push(view.subscribe_status(Rc::new(move |_| first())));
-                    subscriptions.push(view.subscribe_status(Rc::new(|_| release_owner())));
+                    subscriptions.push(view.listen_status(Rc::new(move |_| first())));
+                    subscriptions.push(view.listen_status(Rc::new(|_| release_owner())));
                 }
                 "continuation" => {
                     run.when_complete_or_cancel(move |_| first());
@@ -1278,7 +1278,7 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
     let _listening = view.listen(Rc::new(move || {
         let _keep = &capture;
     }));
-    let first = view.subscribe_status({
+    let first = view.listen_status({
         let storage = Rc::downgrade(&storage);
         let next_run = Rc::clone(&next_run);
         Rc::new(move |status| {
@@ -1292,7 +1292,7 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
             assert!(storage.replace(Some(owner)).is_none());
         })
     });
-    let second = view.subscribe_status({
+    let second = view.listen_status({
         let storage = Rc::downgrade(&storage);
         Rc::new(move |status| {
             if status != AnimationStatus::ForwardSettled {
