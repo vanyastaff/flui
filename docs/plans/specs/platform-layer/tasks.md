@@ -9245,9 +9245,12 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   запись протокола сохраняет имя опубликованной схемы) и держит `KeyboardPlacement` (`Hidden`,
   `Docked { inset }`, `Floating { frame }`) и движение вставки; пристыкованная без вставки —
   `Hidden`, плавающая рамка без площади — `InvalidInsets::EmptyFrame`. `view_insets` несёт только
-  пристыкованную; рамку плавающей рантайм публикует один раз на окно, над корнем, как
-  `FloatingKeyboard`, а читает её `MediaQuery::floating_keyboard_of`: размер `MediaQueryData` не
-  изменился, поэтому вложенный `MediaQuery` ничего лишнего не копирует. Правило размещения одно для
+  пристыкованную; рамку плавающей элемент корня окна публикует как предоставленное значение
+  `FloatingKeyboard` (ADR-0322 §5) только пока клавиатура плавает, а читает её
+  `MediaQuery::floating_keyboard_of`: размер `MediaQueryData` не изменился, вложенный `MediaQuery`
+  ничего лишнего не копирует, а корень без плавающей клавиатуры не добавляет слоя в inherited
+  scope (наследуемый вид над каждым корнем удлинял цепочку слоёв, и свёртка в таблицы поднимала
+  байты строк perf `flui-material` — 28948 против 28108 у `list_tile_over_text`). Правило размещения одно для
   хостов с рамкой (`window::keyboard::placement`): вне вида или без площади — скрытая, низ рамки
   на полточки и больше выше пола — плавающая (разность двух низов в единицах платформы, до
   масштабирования, без округлений), иначе пристыкованная; пол на iOS — низ вида, на Web — низ
@@ -9274,8 +9277,9 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   скрытие как изменение кадра — вставка) и `a_later_notice_of_one_move_starts_no_second_motion`;
   строка `a_floating_keyboard_has_no_inset` в `window_insets` (`flui-platform`);
   `a_floating_keyboard_reaches_the_media_query_as_a_frame` и
-  `a_window_opened_under_a_floating_keyboard_reads_its_frame` (`flui-testing`; без записи рамки при
-  применении и без чтения её при открытии окна — падают);
+  `a_window_opened_under_a_floating_keyboard_reads_its_frame` и
+  `a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go` (`flui-testing`; без записи
+  рамки при применении, без чтения её при открытии окна и без публикации из корня — падают);
   `keyboard_placements_keep_their_wire_values_and_replay` (журнал `flui-native`; углы, ширина и
   высота которых не складываются обратно, — запись ширины вместо правого края падает) и
   `a_floating_keyboard_recorded_with_an_inset_is_refused` (запись ввода; без отказа — падает); в

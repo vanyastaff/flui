@@ -156,7 +156,8 @@ impl Drop for MediaQueryRegistration {
 }
 
 /// Publishes one presentation's [`MediaQuerySource`] as the root `MediaQuery`,
-/// under the `FloatingKeyboard` that carries the window's floating keyboard.
+/// and the window's floating keyboard, while one floats, as a provided
+/// `FloatingKeyboard`.
 ///
 /// Installed by the primary root attach paths and the addressed sized attach
 /// used by headless multi-window consumers. Each wrapper publishes only its
@@ -222,10 +223,21 @@ impl flui_view::ViewState<MediaQueryRoot> for MediaQueryRootState {
         self.registration.take();
     }
 
+    /// The window's floating keyboard while one floats, and nothing
+    /// otherwise: a root that publishes nothing adds no layer to every
+    /// node's inherited scope.
+    fn provide(
+        &self,
+        _view: &MediaQueryRoot,
+        _ctx: &dyn BuildContext,
+        values: &mut flui_view::Provided<'_>,
+    ) {
+        if let Some(frame) = self.source.floating_keyboard.get() {
+            values.value(FloatingKeyboard::new(frame));
+        }
+    }
+
     fn build(&self, view: &MediaQueryRoot, _ctx: &dyn BuildContext) -> impl IntoView {
-        FloatingKeyboard::new(
-            self.source.floating_keyboard.get(),
-            MediaQuery::new(self.source.snapshot(), view.child.clone()),
-        )
+        MediaQuery::new(self.source.snapshot(), view.child.clone())
     }
 }

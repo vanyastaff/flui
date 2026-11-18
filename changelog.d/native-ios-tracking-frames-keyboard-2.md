@@ -4,8 +4,9 @@
   inset it covers, or floating with its frame (an iPad's floating, undocked or split keyboard).
   `SoftKeyboard::placement` and `SoftKeyboard::floating_frame` read it.
 - `MediaQuery::floating_keyboard_of` reads the frame of a keyboard floating over the window, so
-  a layout can keep a field or a toolbar clear of it; `FloatingKeyboard` publishes one to a
-  subtree, as the runtime does for each window. `MediaQueryData` is unchanged.
+  a layout can keep a field or a toolbar clear of it. `FloatingKeyboard` is that frame as a
+  value a view's `provide` hook publishes to its subtree, as each window's root does while a
+  keyboard floats. `MediaQueryData` is unchanged.
 - `HeadlessWindow::with_insets` opens a test window with insets already covering it.
 
 ### Changed

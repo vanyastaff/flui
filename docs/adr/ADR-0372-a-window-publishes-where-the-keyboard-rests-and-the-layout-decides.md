@@ -96,24 +96,31 @@ to float.
 ### §2 Applying it
 
 Applying a keyboard writes `view_insets = target()` at rest, and a moving one is sampled at each
-frame's vsync as ADR-0277 §3 says. `MediaQueryData` is unchanged. The floating frame is published
-once per window, above its root, as its own inherited value, at once when the keyboard is
-reported:
+frame's vsync as ADR-0277 §3 says. `MediaQueryData` is unchanged. The floating frame is a value
+the window's root element publishes (ADR-0322 §5), at once when the keyboard is reported, and only
+while a keyboard floats:
 
 ```rust
 // flui_view::environment
-pub struct FloatingKeyboard { /* frame: Option<Rect>, child */ }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatingKeyboard { /* frame: Rect */ }
 impl FloatingKeyboard {
-    pub fn new(frame: Option<Rect>, child: impl IntoView) -> Self;
+    pub const fn new(frame: Rect) -> Self;
+    pub const fn frame(&self) -> Rect;
 }
+impl ProvidedValue for FloatingKeyboard { /* notifies when the frame changes */ }
 impl MediaQuery {
     /// The frame of the keyboard floating over the window; a dependency on it alone.
     pub fn floating_keyboard_of(ctx: &dyn BuildContext) -> Option<Rect>;
 }
 ```
 
-The runtime installs the `FloatingKeyboard` (one element a window), and a test or a preview wraps
-a subtree in its own.
+A root that publishes nothing adds no layer to the inherited scope of the nodes below it, so a
+window with no floating keyboard costs its tree nothing; an inherited view above every root would
+lengthen every node's provider chain, and the controls' baselines measured the tables that folding
+it allocates. A keyboard that starts or stops floating re-derives the scope below the root once
+and wakes the widgets that read an inherited value; one the user drags notifies only the readers
+of the frame. A test or a preview publishes its own from a view's `provide` hook.
 
 ### §3 What each host publishes
 
@@ -174,8 +181,8 @@ respelled.
 - Good: a nested `MediaQuery` copies nothing more than before.
 - Bad: a breaking change: `KeyboardInset` is `SoftKeyboard`, its constructors and
   `HeadlessHost::move_keyboard` take a placement (pre-1.0).
-- Bad: the floating frame is read through its own inherited value, one more element at each
-  window's root, and no widget of the framework reads it yet (`docs/gaps.md`).
+- Bad: a keyboard that starts or stops floating rebuilds every widget that reads an inherited
+  value once, and no widget of the framework reads the frame yet (`docs/gaps.md`).
 - Bad: a floating keyboard that UIKit does not place (a shortcuts bar dropped floating) is
   published as hidden: the layout learns that nothing is docked, not where the bar is.
 - Neutral: a floating keyboard over a window whose bottom it straddles (a short Stage Manager
@@ -197,7 +204,8 @@ respelled.
   that ends above the layout viewport's bottom is published floating, in logical pixels.
 - `flui-platform` `window_insets` row `a_floating_keyboard_has_no_inset`; `flui-testing`
   `a_floating_keyboard_reaches_the_media_query_as_a_frame` and
-  `a_window_opened_under_a_floating_keyboard_reads_its_frame`.
+  `a_window_opened_under_a_floating_keyboard_reads_its_frame` and
+  `a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go`.
 - `keyboard_placements_keep_their_wire_values_and_replay` (the journal) and
   `a_floating_keyboard_recorded_with_an_inset_is_refused` (the input recording); the
   `wire_schema` test publishes protocol 0.27.

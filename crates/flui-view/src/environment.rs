@@ -369,14 +369,14 @@ impl MediaQuery {
     /// must stay in view (a focused field, a toolbar) reads this and moves out
     /// from under the frame.
     ///
-    /// The frame is the window's and is published once above its root as a
+    /// The frame is the window's and its root publishes it as a
     /// [`FloatingKeyboard`], not as a field of [`MediaQueryData`]: every
     /// `MediaQuery` a widget nests would copy it. The dependency is on the
-    /// frame alone.
+    /// frame alone, and a widget that read `None` rebuilds when a keyboard
+    /// starts floating.
     #[must_use]
     pub fn floating_keyboard_of(ctx: &dyn BuildContext) -> Option<Rect> {
-        ctx.depend_on::<FloatingKeyboard, _>(|published| published.frame)
-            .flatten()
+        ctx.depend_on::<FloatingKeyboard, _>(FloatingKeyboard::frame)
     }
 
     /// The system-gesture edges, depending on `system_gesture_insets` only.
@@ -459,56 +459,41 @@ impl_inherited_view!(MediaQuery);
 // ---------------------------------------------------------------------------
 // The soft keyboard floating over the window.
 
-/// Publishes the frame of the soft keyboard floating over the window to a
-/// subtree, in logical pixels in the window's content coordinates (ADR-0372).
+/// The soft keyboard floating over the window, a value published to a
+/// subtree (ADR-0322 §5, ADR-0372): its frame in logical pixels in the
+/// window's content coordinates.
 ///
-/// The runtime installs one above every root with what the window reports;
-/// a test or a preview wraps a subtree in its own to show a layout under a
-/// floating keyboard. A widget reads it with
+/// The runtime publishes one from each window's root while a keyboard floats
+/// over the window and none otherwise, so a window with no floating keyboard
+/// adds nothing to its tree's inherited scope. A keyboard that starts or
+/// stops floating re-derives the scope below the root once; one the user
+/// drags rebuilds only the widgets that read it. A test or a preview
+/// publishes its own from a view's `provide` hook. A widget reads it with
 /// [`MediaQuery::floating_keyboard_of`].
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FloatingKeyboard {
-    frame: Option<Rect>,
-    child: BoxedView,
+    frame: Rect,
 }
 
 impl FloatingKeyboard {
-    /// Wrap `child` in a subtree over which the keyboard floats at `frame`;
-    /// `None` while none floats.
+    /// The keyboard floating at `frame`.
     #[must_use]
-    pub fn new(frame: Option<Rect>, child: impl IntoView) -> Self {
-        Self {
-            frame,
-            child: BoxedView::new(child.into_view()),
-        }
+    pub const fn new(frame: Rect) -> Self {
+        Self { frame }
+    }
+
+    /// Where the keyboard floats.
+    #[must_use]
+    pub const fn frame(&self) -> Rect {
+        self.frame
     }
 }
 
-impl std::fmt::Debug for FloatingKeyboard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FloatingKeyboard")
-            .field("frame", &self.frame)
-            .finish_non_exhaustive()
-    }
-}
-
-impl InheritedView for FloatingKeyboard {
-    type Data = Option<Rect>;
-
-    fn data(&self) -> &Self::Data {
-        &self.frame
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
+impl crate::ProvidedValue for FloatingKeyboard {
     fn update_should_notify(&self, old: &Self) -> bool {
-        self.frame != old.frame
+        self != old
     }
 }
-
-impl_inherited_view!(FloatingKeyboard);
 
 // ---------------------------------------------------------------------------
 // The platform whose conventions the subtree follows.

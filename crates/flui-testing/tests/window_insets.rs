@@ -232,3 +232,51 @@ pub(crate) fn a_window_opened_under_a_floating_keyboard_reads_its_frame() {
     assert_eq!(first.floating_keyboard, Some(frame));
     assert_eq!(first.media.view_insets, EdgeInsets::ZERO);
 }
+
+/// Records the floating keyboard each of its builds reads, and nothing else.
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct FloatingKeyboardReader {
+    seen: Rc<RefCell<Vec<Option<Rect>>>>,
+}
+
+impl flui_view::prelude::StatelessView for FloatingKeyboardReader {
+    fn build(
+        &self,
+        ctx: &dyn flui_view::prelude::BuildContext,
+    ) -> impl flui_view::prelude::IntoView {
+        self.seen
+            .borrow_mut()
+            .push(MediaQuery::floating_keyboard_of(ctx));
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A widget that reads only the floating keyboard hears it come, move and
+/// go: the root publishes the frame only while a keyboard floats, and a
+/// widget that found none rebuilds when one starts.
+pub(crate) fn a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 800));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    host.attach(&FloatingKeyboardReader {
+        seen: Rc::clone(&seen),
+    })
+    .expect("a fresh host has no root yet");
+    let _ = host.pump(FRAME);
+    let floating_at = |frame: Rect| {
+        WindowInsets::ZERO.with_keyboard(
+            SoftKeyboard::try_at_rest(KeyboardPlacement::Floating { frame })
+                .expect("a valid keyboard"),
+        )
+    };
+    let frame = Rect::from_xywh(40.0, 300.0, 320.0, 240.0);
+    let dropped = Rect::from_xywh(60.0, 120.0, 320.0, 240.0);
+    for insets in [floating_at(frame), floating_at(dropped), WindowInsets::ZERO] {
+        host.set_window_insets(host.primary_window(), insets);
+        let _ = host.pump(FRAME);
+    }
+    assert_eq!(
+        *seen.borrow(),
+        [None, Some(frame), Some(dropped), None],
+        "one build for each change of the frame"
+    );
+}
