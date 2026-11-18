@@ -507,9 +507,11 @@ The tests that do so: `android_manifest::tests::the_base_names_flui_activity_wit
 `the_platform_starts_only_over_its_own_java_classes`, `the_host_queue_is_read_as_the_java_classes_lay_it_out`
 and `android_lifecycle_mapping_delivers_every_memory_call` (`flui-native`).
 
-- `cargo xtask workspace` fails a member's build script that spawns `javac`, `d8`, `swiftc` or
-  another platform compiler or packager, and `deny.toml` bans the crates that run them from a build
-  script (ADR-0154 decision 5, decision 21 here); a generated project file that differs from the
+- `deny.toml` bans `android-build` and `swift-rs`, the crates that run `javac`, `d8` or
+  `swift build` from a build script, and `cargo xtask workspace` refuses any build script in a
+  capability crate (ADR-0154 decisions 5 and 6); no gate reads a framework crate's own build
+  script for a spawn of the tools ([gaps](../gaps.md#accepted-adr-sections-not-built-yet))
+  (decision 21); a generated project file that differs from the
   output of its generator fails the golden check of that generator (decisions 6 and 21).
 
 ## Pros and cons of the options

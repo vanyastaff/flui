@@ -19,7 +19,9 @@
 //!   `edge-exceptions`. A refused edge needs the dependent's `edge-exceptions`
 //!   entry, as for the tiers. A capability crate is the facade's optional
 //!   normal dependency; its facade feature (the crate name without `flui-`)
-//!   enables exactly that dependency (ADR-0154 §8).
+//!   enables exactly that dependency (ADR-0154 §8). A capability crate has no
+//!   build script: no root `build.rs` that `build = false` does not switch
+//!   off, and no `build = "<path>"` (ADR-0154 §6).
 //! - **Reach declarations** (ADR-0081 §2). `reach-forbid` and
 //!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
@@ -47,17 +49,14 @@
 //!   `0.N` version (ADR-0081 §3, ADR-0088 §4); examples and tools are `publish = false`.
 //! - **Train guard** (ADR-0088 §5). `flui-foundation` declares
 //!   `links = "flui_train"`, and no other member does.
-//! - **Build scripts** (ADR-0154 decision 5, ADR-0255 decision 21). No
-//!   member's build script spawns a platform compiler or packager (`javac`,
-//!   `d8`, `swiftc`, …); [`mod@build_scripts`] says what counts as spawning.
 //! - **Unreachable tests.** Under `autotests = false` a new `tests/*.rs` file is
 //!   silently never compiled unless a `[[test]]` target declares or mounts it;
 //!   that went unnoticed for eleven days across five crates once.
 //! - **ADR numbers** are unique, because code and docs cite them.
 //!
-//! `--self-test` runs the tier rule and the train guard over a built-in graph,
-//! and the build-script rule over built-in scripts, each with planted
-//! violations, and fails unless they report exactly those (ADR-0078 §4).
+//! `--self-test` runs the tier rule and the train guard over a built-in graph
+//! with planted violations and fails unless it reports exactly those
+//! (ADR-0078 §4).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -70,7 +69,6 @@ use toml::{Table, Value as Toml};
 
 use crate::util;
 
-mod build_scripts;
 mod crates_map;
 mod reach;
 mod tiers;
@@ -80,9 +78,8 @@ pub(crate) use reach::{ReachArgs, reach};
 /// Arguments for `cargo xtask workspace`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct WorkspaceArgs {
-    /// Run the tier and build-script rules over built-in inputs with planted
-    /// violations instead of the workspace; exit 1 unless they report exactly
-    /// those.
+    /// Run the tier rule over a built-in graph with planted violations instead
+    /// of the workspace; exit 1 unless it reports exactly those.
     #[arg(long)]
     self_test: bool,
     /// Regenerate the `docs/crates.md` tier table from the manifests.
@@ -94,7 +91,7 @@ pub(crate) struct WorkspaceArgs {
 /// numbers. Exit code 1 lists every finding.
 pub(crate) fn workspace(args: &WorkspaceArgs) -> anyhow::Result<ExitCode> {
     if args.self_test {
-        return Ok(self_test());
+        return Ok(tiers::self_test());
     }
     let root = util::repo_root();
     let metadata = util::metadata(&root)?;
@@ -127,11 +124,6 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
             .map(ToString::to_string),
     );
     tiers::check_adr_citations(root, &members, &mut findings);
-    findings.extend(
-        build_scripts::check(&build_scripts::load(root, metadata)?)
-            .iter()
-            .map(ToString::to_string),
-    );
     let edges = check_allowed_dependents(&members, &mut findings);
     check_manifests(root, &members, metadata, &mut findings)?;
     check_unique_adr_numbers(root, &mut findings)?;
@@ -147,43 +139,6 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
             tier_names.len(),
         ),
     ))
-}
-
-/// `(subject, object, kind)`: what a self-test compares of a finding.
-type Identity = (String, String, &'static str);
-
-/// One rule's self-test: how many findings it plants, the planted ones it
-/// missed and the ones it reported that nobody planted.
-struct SelfTest {
-    planted: usize,
-    missed: Vec<Identity>,
-    extra: Vec<Identity>,
-}
-
-/// `cargo xtask workspace --self-test`.
-fn self_test() -> ExitCode {
-    let mut planted = 0;
-    let mut failed = false;
-    for SelfTest {
-        planted: count,
-        missed,
-        extra,
-    } in [tiers::self_test(), build_scripts::self_test()]
-    {
-        planted += count;
-        for (from, to, kind) in &missed {
-            println!("self-test: MISSED ({from}, {to}, {kind})");
-        }
-        for (from, to, kind) in &extra {
-            println!("self-test: FALSE POSITIVE ({from}, {to}, {kind})");
-        }
-        failed |= !missed.is_empty() || !extra.is_empty();
-    }
-    if failed {
-        return ExitCode::FAILURE;
-    }
-    println!("workspace: self-test ok ({planted} expected findings, no others)");
-    ExitCode::SUCCESS
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
@@ -215,6 +170,9 @@ struct Node {
     flui: Json,
     /// `[package] links`, when declared.
     links: Option<String>,
+    /// The build script Cargo compiles, relative to the repository root: a
+    /// root `build.rs` unless `build = false`, or `build = "<path>"`.
+    build_script: Option<String>,
     deps: Vec<Dep>,
     /// `[features]`: each feature and the features or dependencies it enables.
     features: BTreeMap<String, Vec<String>>,
@@ -283,6 +241,8 @@ struct Member {
     rel: String,
     /// `[package] links`, when declared: only the train guard sets it.
     links: Option<String>,
+    /// The build script Cargo compiles, as on [`Node`].
+    build_script: Option<String>,
     deps: Vec<Dep>,
     /// `[features]`: each feature and the features or dependencies it enables.
     features: BTreeMap<String, Vec<String>>,
@@ -335,6 +295,12 @@ impl Members {
                     rel: relative(root, package.manifest_path.as_std_path())?,
                     flui: package.metadata["flui"].clone(),
                     links: package.links.clone(),
+                    build_script: package
+                        .targets
+                        .iter()
+                        .find(|target| target.is_custom_build())
+                        .map(|target| relative(root, target.src_path.as_std_path()))
+                        .transpose()?,
                     deps: package
                         .dependencies
                         .iter()
@@ -361,6 +327,7 @@ impl Members {
             rel,
             flui,
             links,
+            build_script,
             deps,
             features,
         } in nodes
@@ -407,6 +374,7 @@ impl Members {
                 name,
                 rel,
                 links,
+                build_script,
                 deps,
                 features,
             });

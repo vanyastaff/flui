@@ -5391,32 +5391,25 @@ GPU-память простаивающего или невидимого окн
   `[workspace.metadata.flui.reach.kind.capability]` запрещает `flui-native`, `flui-app`,
   `flui-engine`, `winit`, `wgpu` и `tokio`. `workspace --self-test` сажает нарушение на каждое
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
-  kind нет. Запрет платформенного компилятора в сборочном скрипте (ADR-0154 решение 5, ADR-0255
-  решение 21; оба ADR распространяют его на каждый `build.rs`, поэтому правило проверяет скрипт
-  любого члена workspace, крейты возможностей в том числе): `tools/xtask/src/workspace/build_scripts.rs`
-  читает `custom-build`-цель, которую сообщает Cargo (и `build = "…"`), с файлами её `mod`, как
-  синтаксис Rust и находит `javac`, `kotlinc`, `jar`, `d8`, `r8`, `dx`, `swiftc`, `swift`,
-  `xcrun`, `xcodebuild`, `aapt`, `aapt2`, `apksigner`, `zipalign`, `bundletool`, `gradle` и
-  `gradlew` в программе `Command::new(…)` и в операндах `.arg`/`.args` — литералом, путём с
-  `.exe`/`.bat`/`.cmd`/`.jar`, строкой формата, через `const`, `static`, `let` или функцию
-  файла; комментарий и строка `cargo:` находкой не являются. Крейты-обёртки (`android-build`,
-  `swift-rs`) запрещены в `deny.toml` — инструмент, который CI уже запускает, ступень раньше
-  xtask (ADR-0303). Правило живёт в `workspace`, потому что этот гейт уже загружает
-  `cargo metadata`, читает манифест и разбирает исходники каждого члена; `android-dex`, который
-  ADR-0154 и ADR-0255 называли, держит одну запись dex и метаданных не читает — их строки
-  подтверждения переписаны на `workspace` и `deny.toml`. `workspace --self-test` сажает семь
-  нарушений (литерал, путь `kotlinc.exe`, `const` с `d8.bat`, функция с `format!` для
-  `swiftc`, `sh -c "xcodebuild …"`, `java -jar r8.jar` внутри `assert!`, `./gradlew` в
-  смонтированном файле крейта другого kind) и тихий скрипт (компилятор в комментариях и строках
-  `cargo:`, запуск `rustc`). Тесты таблицы `workspace_gate_contract`:
-  `a_build_script_that_runs_a_platform_compiler_is_reported` (`build = "build/main.rs"`, `javac`
-  в `mod java`), `a_build_script_that_names_a_compiler_only_in_comments_passes`,
-  `each_self_test_reports_exactly_its_planted_findings`. С отключённым правилом самотест
-  печатает `MISSED` на все семь, а первый и третий тесты падают. На `main` все пять сборочных
-  скриптов (`flui-app`, `flui-engine`, `flui-foundation`, `flui-native`, `flui-hot-reload`)
-  проходят; единственный крейт возможности, `flui-system`, скрипта не имеет. Проверки на Windows:
-  `workspace`, `workspace --self-test`, `deps`, clippy `-D warnings` и nextest `xtask`,
-  `checks`.
+  kind нет. Запрет `javac`, `d8` и `swiftc` в сборочном скрипте (ADR-0154 решение 5) держится
+  правилом решения 6: у крейта возможности нет сборочного скрипта. kind-правило
+  (`CapabilityBuildScript`) отказывает крейту возможности, для которого Cargo сообщает
+  `custom-build`-цель: корневой `build.rs`, не выключенный `build = false`, или любой
+  `build = "<путь>"`; исходники не разбираются, так что запуск инструмента любым способом
+  (параметр функции, псевдоним `Command`, `duct`, строка оболочки) невозможен по построению, а
+  `cc` с `.m` тоже. `deny.toml` запрещает `android-build` и `swift-rs`, которые запускают эти
+  инструменты из сборочного скрипта, во всём графе. Сборочные скрипты крейтов фреймворка гейт
+  не читает: это пункт ADR-0255 решения 21 в `docs/gaps.md` («Accepted ADR sections not built
+  yet»); пять скриптов на `main` запускают только `rustc`. Строки подтверждения ADR-0154 и
+  ADR-0255, называвшие `android-dex`, переписаны на `workspace` и `deny.toml`.
+  `workspace --self-test` сажает `cap-build` (корневой `build.rs`) и `cap-build-path`
+  (`build = "gen.rs"`), `cap-build-off` (`build.rs` при `build = false`) молчит; без проверки
+  самотест печатает `MISSED` на обе. Тесты таблицы `workspace_gate_contract`:
+  `a_capability_crates_build_script_is_reported` (корневой `build.rs` и `build = "gen.rs"`
+  найдены, `build.rs` при `build = false` и скрипт крейта kind `internal` — нет; без проверки
+  падает) и `the_self_test_reports_exactly_its_planted_findings`. Единственный крейт
+  возможности, `flui-system`, скрипта не имеет. Проверки на Windows: `workspace`,
+  `workspace --self-test`, `deps`, clippy `-D warnings` и nextest `xtask`, `checks`.
 - [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
   дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
   Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:
