@@ -349,17 +349,28 @@ impl AndroidLoop {
             waker.wake();
             Ok(())
         }));
+        // Made before the view, which tells it of each setting it reports
+        // changed before it wakes the owner.
+        let preferences = H::preferences(&app, api, &owner_signal);
+        let settings_notice: Box<dyn Fn() + Send + Sync> = {
+            let preferences = Arc::downgrade(&preferences);
+            Box::new(move || {
+                if let Some(preferences) = preferences.upgrade() {
+                    preferences.notice();
+                }
+            })
+        };
         let java_view = java_view::JavaView::start(
             app.clone(),
             Arc::downgrade(&owner_signal),
             H::input_method(),
+            settings_notice,
             H::transfer,
         );
         let host_queue = java_host::HostQueue::start(app.clone(), Arc::downgrade(&owner_signal));
         let results =
             super::result_bridge::ResultBridge::new(&app, epoch, Arc::downgrade(&owner_signal));
         let owner = Arc::downgrade(&owner_signal);
-        let preferences = H::preferences(&app, api, &owner_signal);
         let clipboard = H::clipboard(&app, api);
         let activity_callbacks = H::activity();
         let app_delivery = Arc::new(AppDelivery::new());

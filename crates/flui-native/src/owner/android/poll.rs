@@ -105,19 +105,29 @@ impl LoopReads {
     }
 
     /// What the loop does on `heard`: it tells the source of the notice
-    /// (`notice`, which lets a source whose retries ran out read again), and
-    /// it reads now (`read`) for a change it is told of, or at its next turn
-    /// for a start, which runs before the Activity's frames do.
+    /// (`notice`, which lets the next read ask the system), unless the view
+    /// told it as it reported, and it reads now (`read`) for a change it is
+    /// told of, or at its next turn for a start, which runs before the
+    /// Activity's frames do.
     pub(crate) fn hear(
         &mut self,
         heard: PreferenceNotice,
         notice: impl FnOnce(),
         read: impl FnOnce(),
     ) {
-        notice();
         match heard {
-            PreferenceNotice::ConfigurationChanged | PreferenceNotice::SettingsReported => read(),
-            PreferenceNotice::Started => self.owed = true,
+            PreferenceNotice::ConfigurationChanged => {
+                notice();
+                read();
+            }
+            // The view told the source as it reported, before its wake, so
+            // the turn that wake brought may have read already; a read here
+            // then finds the answer current and asks the system nothing.
+            PreferenceNotice::SettingsReported => read(),
+            PreferenceNotice::Started => {
+                notice();
+                self.owed = true;
+            }
         }
     }
 
@@ -301,21 +311,22 @@ mod tests {
         assert!(!reads.take_due(None, at(3603)));
     }
 
-    /// Every notice tells the source; a change the loop is told of is read
-    /// at once, a start at the loop's next turn.
+    /// A configuration change and a start tell the source (a view report
+    /// told it as the view reported); a change the loop is told of is read at
+    /// once, a start at the loop's next turn.
     #[test]
     fn each_preference_notice_tells_the_source_and_reads() {
         let now = Instant::now();
-        for (heard, reads_now, owed_after) in [
-            (PreferenceNotice::ConfigurationChanged, true, false),
-            (PreferenceNotice::SettingsReported, true, false),
-            (PreferenceNotice::Started, false, true),
+        for (heard, tells, reads_now, owed_after) in [
+            (PreferenceNotice::ConfigurationChanged, true, true, false),
+            (PreferenceNotice::SettingsReported, false, true, false),
+            (PreferenceNotice::Started, true, false, true),
         ] {
             let mut reads = LoopReads::first();
             assert!(reads.take_due(None, now));
             let (mut noticed, mut read) = (false, false);
             reads.hear(heard, || noticed = true, || read = true);
-            assert!(noticed, "{heard:?}: the source is not told");
+            assert_eq!(noticed, tells, "{heard:?}: the source is told");
             assert_eq!(read, reads_now, "{heard:?}: read now");
             assert_eq!(
                 reads.take_due(None, now),

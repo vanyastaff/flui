@@ -350,10 +350,9 @@ pub trait Platform: sealed::Sealed + 'static {
     /// returned, to its runtimes. Call on the owner thread once the delivery
     /// is accepted. A host that counts a change as delivered only then (macOS,
     /// Android) reads a change it handed out and never heard confirmed again
-    /// in the next owner turn; the rest ignore the call.
-    fn preferences_delivered(&self, values: &flui_platform::SystemPreferences) {
-        let _ = values;
-    }
+    /// in the next owner turn; the rest ignore the call. A confirmation of a
+    /// read older than one already confirmed is ignored.
+    fn preferences_delivered(&self, values: &flui_platform::SystemPreferences);
 
     // ==================== Display Management ====================
 

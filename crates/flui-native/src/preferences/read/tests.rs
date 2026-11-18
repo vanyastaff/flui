@@ -320,9 +320,11 @@ impl Rig {
         self.run_posted_turns();
     }
 
-    /// `FluiView` reports a changed setting: its report wakes the owner, and
-    /// the loop hears it after the turn.
+    /// `FluiView` reports a changed setting: as `JavaView::settings_changed`
+    /// does, it tells the source, then wakes the owner; the loop hears it
+    /// after the turn.
     fn android_view_report(&self) {
+        self.source.notice();
         let _ = self.signal.wake();
         self.run_posted_turns();
         self.hear(PreferenceNotice::SettingsReported);
@@ -567,6 +569,9 @@ fn a_change_a_turn_drops_is_read_again_once() {
 fn a_change_read_in_owner_work_wakes_the_owner() {
     let rig = Rig::settled(Host::AppKit);
     rig.change(values(650));
+    // A notice that wakes nobody, as the Android loop's are: the window's
+    // work is the first to read after it.
+    rig.source.notice();
     let source = Arc::clone(&rig.source);
     rig.signal.run_for_window(Arc::new(move || {
         let _ = source.sample();
@@ -613,6 +618,7 @@ fn a_read_off_the_owner_thread_is_refused_and_changes_nothing() {
 fn a_panicking_read_is_a_failed_read() {
     let rig = Rig::settled(Host::Android);
     rig.system().answer = Answer::Panic;
+    rig.source.notice();
     let read = rig.source.sample();
     assert!(
         matches!(&read, Err(PlatformError::Preferences { message }) if message.contains("the getter panicked")),
@@ -623,6 +629,54 @@ fn a_panicking_read_is_a_failed_read() {
         Some(rig.system().now + FIRST_RETRY),
         "the panic owes a retry"
     );
+}
+
+/// The application's turn reads the preferences on every wake, but only a
+/// notice asks the system: turns for other work read nothing, and one notice
+/// reads once.
+#[test]
+fn application_turns_ask_the_system_only_after_a_notice() {
+    for (notice, host, deliver) in NOTICES {
+        let rig = Rig::settled(host);
+        for _ in 0..10 {
+            let _ = rig.signal.wake();
+            rig.run_posted_turns();
+        }
+        assert_eq!(rig.posts(), 10, "{notice}: the unrelated turns");
+        assert_eq!(rig.system().reads, 0, "{notice}: turns read the system");
+
+        rig.change(values(700));
+        deliver(&rig);
+        assert_eq!(
+            rig.delivered.borrow().last(),
+            Some(&values(700)),
+            "{notice}"
+        );
+        assert_eq!(rig.system().reads, 1, "{notice}: reads for one notice");
+    }
+}
+
+/// A delivery that re-enters the owner, which reads and delivers a newer
+/// value, confirms the older read last: that confirmation is ignored, so the
+/// newer value stays the delivered one and reading it again owes nothing.
+#[test]
+fn a_confirmation_of_an_older_read_is_ignored() {
+    let rig = Rig::settled(Host::Android);
+    rig.change(values(600));
+    rig.source.notice();
+    let older = rig.source.sample().expect("the outer read");
+    rig.change(values(700));
+    rig.source.notice();
+    let newer = rig.source.sample().expect("the nested read");
+    rig.source.delivered(&newer);
+    rig.source.delivered(&older);
+    assert_eq!(rig.posts(), 1, "the outer read's wake");
+
+    // The turn that wake brings drops what it reads: a value it is owed
+    // would wake the owner once more.
+    rig.drops.set(usize::MAX);
+    rig.run_posted_turns();
+    assert_eq!(rig.posts(), 1, "the newer value was owed again");
 }
 
 /// A cold source has delivered nothing: its first read is a change, and an
@@ -642,28 +696,31 @@ fn a_value_is_accepted_only_once_delivered() {
         admission.read_observation(now, || panic!("early native retry")),
         Err(PlatformError::PreferencesDeferred)
     ));
-    let observation = values(700);
-    let read = |at| {
+    let at = now + FIRST_RETRY;
+    let read = |answer: &SystemPreferences| {
         admission
-            .read_observation(at, || Ok(observation.clone()))
+            .read_observation(at, || Ok(answer.clone()))
             .expect("the system answers")
             .1
     };
-    assert_eq!(read(now + FIRST_RETRY), Change::New, "a cold source");
-    assert_eq!(read(now + FIRST_RETRY), Change::New, "read, not delivered");
-    admission.owe(&observation);
+    let (first, second) = (values(700), values(900));
+    assert_eq!(read(&first), Change::New, "a cold source");
     assert_eq!(
-        read(now + FIRST_RETRY),
-        Change::OwedBefore,
-        "owed, not delivered"
+        read(&second),
+        Change::New,
+        "read, not delivered: the latest answer holds"
     );
-    let other = values(900);
-    let (_, change) = admission
-        .read_observation(now + FIRST_RETRY, || Ok(other.clone()))
-        .expect("the system answers");
-    assert_eq!(change, Change::New, "another value is owed afresh");
-    admission.deliver(&observation);
-    assert_eq!(read(now + FIRST_RETRY), Change::Unchanged, "delivered");
+    admission.owe(&first);
+    assert_eq!(read(&second), Change::OwedBefore, "owed, not delivered");
+    admission.notice();
+    assert_eq!(read(&second), Change::New, "another value, after a notice");
+    assert!(
+        !admission.confirm(&first),
+        "a delivery of an older read confirmed"
+    );
+    assert!(admission.confirm(&second), "the latest read's delivery");
+    admission.notice();
+    assert_eq!(read(&second), Change::Unchanged, "delivered");
 }
 
 /// One read at a time; a failed or unwound read owes a retry, and a read

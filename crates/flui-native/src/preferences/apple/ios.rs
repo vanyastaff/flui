@@ -85,6 +85,10 @@ impl SystemPreferenceSource for IOSPreferences {
             None => preferences,
         })
     }
+
+    /// UIKit is read in full on each call and keeps no accepted value: its
+    /// observers only wake the owner.
+    fn delivered(&self, _: &SystemPreferences) {}
 }
 
 impl UIKitPreferences for IOSPreferences {

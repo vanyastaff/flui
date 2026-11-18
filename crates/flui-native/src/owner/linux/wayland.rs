@@ -3283,6 +3283,12 @@ mod event_loop {
                 .ok_or(PlatformError::PreferencesDeferred)?
                 .sample()
         }
+
+        fn delivered(owner: &WaylandLoop, values: &flui_platform::SystemPreferences) {
+            if let Some(source) = owner.portal.source() {
+                source.delivered(values);
+            }
+        }
     }
 
     impl SessionLoop for WaylandLoop {

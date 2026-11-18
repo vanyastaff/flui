@@ -14,11 +14,15 @@
 //!
 //! - a healthy source names no instant it needs the owner at, so nothing in it
 //!   runs between notices;
+//! - the system is asked only after a notice or at a retry; every other read
+//!   (the application's turn reads on every wake) returns the latest answer
+//!   as it is;
 //! - the source counts a value as accepted only once its caller confirms the
-//!   delivery ([`NoticedPreferences::delivered`]). A change read inside the
-//!   application's turn is owed to that turn: delivered there, it costs no
-//!   further wake; dropped there, the turn's end wakes the owner once more
-//!   for it. A change read anywhere else (the Android loop on a notice, the
+//!   delivery of the latest read ([`NoticedPreferences::delivered`]; one of an
+//!   older read, which a re-entrant delivery overtook, is ignored). A change
+//!   read inside the application's turn is owed to that turn: delivered
+//!   there, it costs no further wake; dropped there, the turn's end wakes the
+//!   owner once more for it. A change read anywhere else (the Android loop on a notice, the
 //!   first read, an owner-work turn) wakes the owner;
 //! - a read that fails or panics is retried on [`READ_RETRIES`]; once the
 //!   retries are spent, or the application is where a retry may not wake it,
@@ -246,11 +250,13 @@ impl<S: SystemReads> SystemPreferenceSource for NoticedPreferences<S> {
         }
     }
 
-    /// The caller delivered `values`: they are the source's accepted value,
-    /// and the delivery the turn owed is settled.
+    /// The caller delivered `values`: when they are the latest read's answer
+    /// they are the source's accepted value and the delivery the turn owed is
+    /// settled; a confirmation of an older read changes nothing.
     fn delivered(&self, values: &SystemPreferences) {
-        self.admission.deliver(values);
-        if let Some(signal) = self.signal.upgrade() {
+        if self.admission.confirm(values)
+            && let Some(signal) = self.signal.upgrade()
+        {
             signal.confirm_delivery();
         }
     }
@@ -283,6 +289,17 @@ struct Admission {
     /// The value the owner's caller last confirmed it delivered; `None` on
     /// a cold source.
     delivered: Option<SystemPreferences>,
+    /// What the latest read that answered returned. Only a delivery of it
+    /// is confirmed: a confirmation of an older read (a delivery that
+    /// re-entered the owner, which read and delivered a newer value) is
+    /// ignored.
+    latest: Option<SystemPreferences>,
+    /// The latest answer still holds: no notice came since it, and no read
+    /// failed since. While it holds, a read returns it without asking the
+    /// system.
+    current: bool,
+    /// A notice came while a read ran.
+    noticed_while_reading: bool,
     /// A changed value an application turn was owed, which no delivery
     /// confirmed since; reading it again in a turn owes nothing more until a
     /// notice.
@@ -307,12 +324,24 @@ impl ReadAdmission {
     /// Read the system and compare it with what was delivered. A cold source
     /// has nothing delivered; an error never manufactures a value or returns
     /// an older one as a successful refresh. Nothing is accepted here: only
-    /// a confirmed delivery is ([`Self::deliver`]).
+    /// a confirmed delivery is ([`Self::confirm`]).
     fn read_observation(
         &self,
         now: web_time::Instant,
         sample: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
     ) -> Result<(SystemPreferences, Change), PlatformError> {
+        // Every application turn reads; while the latest answer still holds
+        // (no notice, failure or retry since) it is the answer, and the
+        // system is not asked.
+        {
+            let state = self.state.lock();
+            if state.current
+                && state.stage == Stage::Ready
+                && let Some(latest) = &state.latest
+            {
+                return Ok((latest.clone(), state.change_of(latest)));
+            }
+        }
         let attempt = self.begin(now)?;
         let current = sample()?;
         let change = attempt.answered(&current);
@@ -324,10 +353,17 @@ impl ReadAdmission {
         self.state.lock().owed = Some(values.clone());
     }
 
-    fn deliver(&self, values: &SystemPreferences) {
+    /// The caller delivered `values`. Accepted when they are the latest
+    /// answer; a confirmation of an older read is ignored. Returns whether it
+    /// was accepted.
+    fn confirm(&self, values: &SystemPreferences) -> bool {
         let mut state = self.state.lock();
+        if state.latest.as_ref() != Some(values) {
+            return false;
+        }
         state.delivered = Some(values.clone());
         state.owed = None;
+        true
     }
 
     fn retry_deadline(&self) -> Option<web_time::Instant> {
@@ -340,9 +376,12 @@ impl ReadAdmission {
 
     fn notice(&self) {
         let mut state = self.state.lock();
-        if state.stage == Stage::AwaitingNotice {
-            state.stage = Stage::Ready;
+        match state.stage {
+            Stage::AwaitingNotice => state.stage = Stage::Ready,
+            Stage::Reading => state.noticed_while_reading = true,
+            Stage::Ready | Stage::RetryAt(_) => {}
         }
+        state.current = false;
     }
 
     fn await_notice(&self) {
@@ -388,9 +427,20 @@ impl ReadAttempt<'_> {
         let mut state = self.admission.state.lock();
         state.stage = Stage::Ready;
         state.failures = 0;
-        if state.delivered.as_ref() == Some(current) {
+        // A notice that came while the system was read may postdate the
+        // answer: the next read asks again.
+        state.current = !std::mem::take(&mut state.noticed_while_reading);
+        state.latest = Some(current.clone());
+        state.change_of(current)
+    }
+}
+
+impl Admission {
+    /// What `answer` is against the value delivered and the one owed.
+    fn change_of(&self, answer: &SystemPreferences) -> Change {
+        if self.delivered.as_ref() == Some(answer) {
             Change::Unchanged
-        } else if state.owed.as_ref() == Some(current) {
+        } else if self.owed.as_ref() == Some(answer) {
             Change::OwedBefore
         } else {
             Change::New
@@ -404,6 +454,8 @@ impl Drop for ReadAttempt<'_> {
             return;
         }
         let mut state = self.admission.state.lock();
+        state.current = false;
+        state.noticed_while_reading = false;
         let spent = state.failures;
         state.failures = spent.saturating_add(1);
         state.stage = READ_RETRIES

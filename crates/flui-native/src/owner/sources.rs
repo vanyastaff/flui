@@ -24,9 +24,7 @@ pub(crate) trait SystemPreferenceSource {
     /// The application delivered `values`, which it read through
     /// [`sample`](Self::sample) (`Platform::preferences_delivered`). A source
     /// that counts a value as accepted only once it is delivered (the AppKit
-    /// and Android source) settles it here; the rest ignore it.
-    #[cfg(any(target_os = "android", target_os = "macos", test))]
-    fn delivered(&self, values: &SystemPreferences) {
-        let _ = values;
-    }
+    /// and Android source) settles it here; every other source says, in its
+    /// own no-op, why it has nothing to settle.
+    fn delivered(&self, values: &SystemPreferences);
 }

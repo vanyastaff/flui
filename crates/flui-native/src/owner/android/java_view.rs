@@ -319,6 +319,9 @@ pub(crate) struct JavaView {
     transfer: Arc<dyn ViewTransfer>,
     /// What answers the input method's calls through the view.
     input_method: Box<dyn InputMethod>,
+    /// Tells the preference source of a changed setting, on the Java main
+    /// thread; it takes only the source's own lock.
+    settings_notice: Box<dyn Fn() + Send + Sync>,
     /// What answers TalkBack's calls through the view's node provider: the
     /// bridge of the window over the view, while it lives.
     accessibility: BridgeSlot<dyn ViewAccessibility>,
@@ -342,10 +345,13 @@ impl std::fmt::Debug for JavaView {
 impl JavaView {
     /// The bridge, with the view's installation posted to the Java main thread
     /// and the drag-and-drop transport `transfer` makes for it.
+    /// `settings_notice` tells the preference source of each setting the
+    /// view reports changed.
     pub(super) fn start(
         app: AndroidApp,
         signal: Weak<OwnerSignal>,
         input_method: Box<dyn InputMethod>,
+        settings_notice: Box<dyn Fn() + Send + Sync>,
         transfer: TransferFor,
     ) -> Arc<Self> {
         let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
@@ -353,6 +359,7 @@ impl JavaView {
             signal,
             transfer: transfer(this.clone()),
             input_method,
+            settings_notice,
             accessibility: BridgeSlot::default(),
             installation: ViewInstall::new(),
             events: Mutex::new(VecDeque::new()),
@@ -447,6 +454,14 @@ impl JavaView {
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();
         }
+    }
+
+    /// A setting behind the preferences changed: the preference source is
+    /// told before the owner wakes, so the turn the wake brings reads the
+    /// system (ADR-0378).
+    fn settings_changed(&self) {
+        (self.settings_notice)();
+        self.push_event(ViewEvent::SettingsChanged);
     }
 
     pub(crate) fn push_drag(&self, event: DragDropEvent) {
@@ -1023,7 +1038,7 @@ extern "system" fn native_settings_changed<'local>(
         |()| (),
         |_| {
             if let Some(view) = bridge(handle) {
-                view.push_event(ViewEvent::SettingsChanged);
+                view.settings_changed();
             }
             Ok(())
         },
