@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use futures_util::future::{Either, select};
 use zbus::{MatchRule, MessageStream, OwnedObjectPath, OwnedVariant};
 
-use super::{Dismissal, PortalError};
+use super::{Desktop, Dismissal, Interface, PortalError};
 
 pub(super) const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 pub(super) const PATH: &str = "/org/freedesktop/portal/desktop";
@@ -32,7 +32,24 @@ pub(super) enum Response {
     Dismissed,
 }
 
-/// Call `method` of `interface` and wait for its `Request`'s `Response`.
+/// The path the portal gives an object of this connection's named `token`
+/// under `kind` (`request` or `session`): the client knows it before the
+/// call, so it can listen first.
+pub(super) fn object_path(
+    connection: &zbus::Connection,
+    kind: &str,
+    token: &str,
+) -> Result<String, PortalError> {
+    let sender = connection
+        .unique_name()
+        .ok_or(PortalError::Failed(SystemFailure::Bus))?
+        .trim_start_matches(':')
+        .replace('.', "_");
+    Ok(format!("{PATH}/{kind}/{sender}/{token}"))
+}
+
+/// Call `method` of `interface` on `desktop` and wait for its `Request`'s
+/// `Response`.
 ///
 /// `token` is the request's `handle_token`, already in `body`'s options: it
 /// names the `Request` object before the call, so the subscription to its
@@ -48,8 +65,8 @@ pub(super) enum Response {
 /// all when that happened first, otherwise closed through its `Request`
 /// object's `Close`, which takes the portal's dialog down.
 pub(super) async fn call<B>(
-    connection: &zbus::Connection,
-    interface: &str,
+    desktop: &Desktop,
+    interface: Interface,
     method: &str,
     token: &str,
     body: &B,
@@ -58,36 +75,47 @@ pub(super) async fn call<B>(
 where
     B: serde::Serialize + zbus::DynamicType,
 {
-    let sender = connection
-        .unique_name()
-        .ok_or(PortalError::Failed(SystemFailure::Bus))?
-        .trim_start_matches(':')
-        .replace('.', "_");
-    let expected = format!("{PATH}/request/{sender}/{token}");
+    let Desktop {
+        connection,
+        owner,
+        retired,
+        ..
+    } = desktop;
+    let expected = object_path(connection, "request", token)?;
     let mut departures = subscribe_departures(connection).await?;
-    let bus = zbus::fdo::DBusProxy::new(connection).await?;
-    let owner = owner(&bus).await?;
-    let mut responses = subscribe(connection, &owner, &expected).await?;
+    let mut responses = subscribe(connection, owner.as_str(), &expected).await?;
+    desktop.require(interface).await?;
 
-    if dismissal.is_some_and(Dismissal::is_dismissed) {
+    if retired.is_dismissed() || dismissal.is_some_and(Dismissal::is_dismissed) {
         return Ok(Response::Dismissed);
     }
     let reply = connection
-        .call_method(Some(owner.as_str()), PATH, Some(interface), method, body)
+        .call_method(
+            Some(owner.as_str()),
+            PATH,
+            Some(interface.name),
+            method,
+            body,
+        )
         .await?;
     let handle = reply.body().deserialize::<OwnedObjectPath>()?;
     if handle.as_str() != expected {
         // A portal older than `handle_token` names the object itself; its
         // answer can only be heard from here on.
-        responses = subscribe(connection, &owner, handle.as_str()).await?;
+        responses = subscribe(connection, owner.as_str(), handle.as_str()).await?;
     }
 
     let departed = std::pin::pin!(departure(&mut departures, owner.as_str()));
+    // The caller letting the request go, or the UI runtime retiring.
     let dismissed = std::pin::pin!(async {
-        match dismissal {
-            Some(dismissal) => dismissal.dismissed().await,
-            None => std::future::pending::<()>().await,
-        }
+        let caller = std::pin::pin!(async {
+            match dismissal {
+                Some(dismissal) => dismissal.dismissed().await,
+                None => std::future::pending::<()>().await,
+            }
+        });
+        let owner_retired = std::pin::pin!(retired.dismissed());
+        let _ = select(caller, owner_retired).await;
     });
     let message = match select(responses.next(), select(departed, dismissed)).await {
         Either::Left((message, _)) => message.ok_or(PortalError::Failed(SystemFailure::Bus))??,
@@ -97,7 +125,7 @@ where
             )));
         }
         Either::Right((Either::Right(_), _)) => {
-            close(connection, &owner, &handle).await;
+            close(connection, owner.as_str(), &handle).await;
             return Ok(Response::Dismissed);
         }
     };
@@ -129,7 +157,7 @@ async fn close(connection: &zbus::Connection, owner: &str, handle: &OwnedObjectP
 
 /// The portal's unique owner, starting an installed portal that is not
 /// running: asking for an owner does not start one.
-async fn owner(
+pub(super) async fn owner(
     bus: &zbus::fdo::DBusProxy<'_>,
 ) -> Result<zbus::names::OwnedUniqueName, PortalError> {
     let name = zbus::names::BusName::try_from(DESTINATION)?;
@@ -145,7 +173,7 @@ async fn owner(
 }
 
 /// The `Response` signals `owner` sends on the `Request` object at `path`.
-async fn subscribe(
+pub(super) async fn subscribe(
     connection: &zbus::Connection,
     owner: &str,
     path: &str,
@@ -162,7 +190,9 @@ async fn subscribe(
 
 /// The bus's notices that the portal's name changed owner: any change
 /// means the owner a request was sent to is gone.
-async fn subscribe_departures(connection: &zbus::Connection) -> Result<MessageStream, PortalError> {
+pub(super) async fn subscribe_departures(
+    connection: &zbus::Connection,
+) -> Result<MessageStream, PortalError> {
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(BUS)
@@ -175,7 +205,7 @@ async fn subscribe_departures(connection: &zbus::Connection) -> Result<MessageSt
 
 /// Wait until the bus says `owner` no longer owns the portal's name, or the
 /// connection ends.
-async fn departure(departures: &mut MessageStream, owner: &str) {
+pub(super) async fn departure(departures: &mut MessageStream, owner: &str) {
     while let Some(message) = departures.next().await {
         if message.is_ok_and(|message| owner_left(&message, owner)) {
             return;

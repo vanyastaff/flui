@@ -342,6 +342,11 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// [`snapshot`](Self::snapshot) samples again. Any thread, at any point.
     fn invalidate(&self);
 
+    /// The last published snapshot; never samples. What a window reads its
+    /// position against while it reports its state: the displays an
+    /// application read, so a position it was given converts back exactly.
+    fn published(&self) -> DisplaySnapshot;
+
     /// The display `hwnd` is on, from the last sample; never samples.
     fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId>;
 

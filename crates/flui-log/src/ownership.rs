@@ -6,9 +6,8 @@
 //! service may well be running inside a process whose observability is already
 //! owned by somebody else.
 //!
-//! The historical entry points answered that question by panicking. Every
-//! policy here answers it without panicking, and every outcome is a value the
-//! caller can inspect.
+//! Every policy here answers it without panicking, and every outcome is a
+//! value the caller can inspect.
 
 use tracing::Subscriber;
 

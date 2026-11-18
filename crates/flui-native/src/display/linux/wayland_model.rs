@@ -11,8 +11,10 @@
 //!
 //! # What an output is
 //!
-//! - **Bounds** are in the compositor's logical space, the only global space
-//!   Wayland has. The position and size come from `zxdg_output_v1` when the
+//! - **Bounds** are the output's logical extent, and its origin its place in
+//!   the compositor's logical space, the only global space
+//!   Wayland has (which orders the outputs and is no position of a window).
+//!   The position and size come from `zxdg_output_v1` when the
 //!   compositor offers it, otherwise from `wl_output.geometry` and the current
 //!   mode divided by the integer scale (swapped for a quarter-turn transform).
 //! - **Scale** is the current mode's width over the logical width when a
@@ -34,7 +36,7 @@
 //!   compositor cannot describe an output, the colour is absent on this
 //!   device.
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::{
     CapabilityAbsence, ColorGamut, DisplayColor, DisplayKey, Headroom, RefreshPeriod,
 };
@@ -514,7 +516,15 @@ fn view_of(
         .logical_position
         .or(state.position)
         .unwrap_or_default();
-    let bounds = Bounds::new(Point::new(x, y), extent.size);
+    // The compositor lays its outputs out in its own logical space, which is
+    // each output's logical pixels: the extent is the output's logical size
+    // as it is, and the position orders the outputs. Wayland reports no work
+    // area, so all of an output is usable.
+    let bounds = flui_platform::DisplayBounds::whole(Size::new(
+        f64::from(extent.size.width),
+        f64::from(extent.size.height),
+    ))
+    .ok()?;
     let ratio = extent.ratio;
     let identity = match key_name {
         Some(name) => Identity::Keyed(DisplayKey::WaylandOutput(name.to_owned())),
@@ -524,8 +534,8 @@ fn view_of(
         identity,
         natives: vec![global],
         name: label_of(state),
+        origin: flui_platform::DesktopOrigin::new(x, y),
         bounds,
-        usable_bounds: bounds,
         scale_factor: ratio,
         // `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or
         // less means the compositor does not know.
@@ -553,6 +563,7 @@ fn label_of(state: &OutputState) -> String {
 mod tests {
     use std::time::Duration;
 
+    use flui_foundation::geometry::Rect;
     use flui_platform::DisplayRegistry;
 
     use super::super::view::FreshIds;
@@ -607,7 +618,7 @@ mod tests {
         }
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
         let first = only(&outputs);
-        assert_eq!(first.bounds.size.width, 1920);
+        assert_eq!(first.bounds.extent().width, 1920.0);
         assert_eq!(first.scale_factor.get(), 1.0);
 
         // A mode and a scale change arrive as a burst: neither shows until done.
@@ -616,7 +627,11 @@ mod tests {
         assert_eq!(only(&outputs), first, "half a burst was published");
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
         let second = only(&outputs);
-        assert_eq!(second.bounds.size.width, 1920, "3840 pixels at scale 2");
+        assert_eq!(
+            second.bounds.extent().width,
+            1920.0,
+            "3840 pixels at scale 2"
+        );
         assert_eq!(second.scale_factor.get(), 2.0);
         assert_eq!(
             second.refresh_period.map(RefreshPeriod::get),
@@ -833,10 +848,13 @@ mod tests {
         );
         let view = only(&outputs);
         assert_eq!(view.scale_factor.get(), 1.5);
-        assert_eq!(view.bounds.origin.x, 1280);
-        assert_eq!(view.bounds.size.width, 2560);
-        assert_eq!(view.bounds.size.height, 1440);
-        assert_eq!(view.usable_bounds, view.bounds);
+        assert_eq!(view.origin.get().x, 1280);
+        assert_eq!(view.bounds.extent().width, 2560.0);
+        assert_eq!(view.bounds.extent().height, 1440.0);
+        assert_eq!(
+            view.bounds.usable(),
+            Rect::from_ltrb(0.0, 0.0, 2560.0, 1440.0)
+        );
         assert!(!view.is_primary, "Wayland has no primary output");
     }
 
@@ -901,7 +919,11 @@ mod tests {
             assert_eq!(view.scale_factor.get(), scale, "{case}");
             // The bounds are the ones the scale describes: a mode read at the
             // base ratio is its own pixels.
-            assert_eq!(view.bounds.size, Size::new(width, height), "{case}");
+            assert_eq!(
+                view.bounds.extent(),
+                Size::new(f64::from(width), f64::from(height)),
+                "{case}"
+            );
         }
     }
 
@@ -923,9 +945,9 @@ mod tests {
             ],
         );
         let view = only(&outputs);
-        assert_eq!(view.bounds.size.width, 1080);
-        assert_eq!(view.bounds.size.height, 1920);
-        assert_eq!(view.bounds.origin.x, -1080);
+        assert_eq!(view.bounds.extent().width, 1080.0);
+        assert_eq!(view.bounds.extent().height, 1920.0);
+        assert_eq!(view.origin.get().x, -1080);
         assert_eq!(view.name, "Display", "nothing to label it with");
     }
 
@@ -954,7 +976,7 @@ mod tests {
         ));
         let view = only(&outputs);
         assert_eq!(view.scale_factor.get(), 1.5);
-        assert_eq!(view.bounds.size.width, 2560);
+        assert_eq!(view.bounds.extent().width, 2560.0);
         // Once listed, a later burst applies at its own `done` as usual.
         outputs.apply(GLOBAL, OutputEvent::Scale(1));
         assert_eq!(only(&outputs), view);

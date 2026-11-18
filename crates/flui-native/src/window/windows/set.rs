@@ -17,7 +17,7 @@ use windows::Win32::{
 
 use flui_platform::{
     CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler,
-    WindowIdMint, WindowOptions,
+    WindowIdMint, WindowOptions, WindowPosition,
 };
 
 use super::frame_timing::{DisplayAdapter, presentation_absence};
@@ -31,6 +31,7 @@ use crate::owner::OpenWindows;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
+use crate::window::desktop::DisplayFrame;
 use crate::window::state::device_extent;
 
 /// The windows of FLUI's class the platform tracks, keyed by HWND, and what
@@ -379,16 +380,21 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
 /// DPI constants
 pub(crate) const USER_DEFAULT_SCREEN_DPI: u32 = 96;
 
-/// Convert logical pixels to device pixels
-#[inline]
-pub(crate) fn logical_to_device(logical: f64, scale_factor: f64) -> i32 {
-    (logical * scale_factor).round() as i32
-}
-
 /// The largest device coordinate or extent a window command may name. It
 /// leaves room below `i32::MAX` for the frame `AdjustWindowRectExForDpi` adds
 /// and for an origin plus a size.
 pub(crate) const DEVICE_COORDINATE_LIMIT: i32 = 0x3FFF_0000;
+
+/// The desktop pixel position `at` on `frame` names, as a Win32 coordinate:
+/// `None` past [`DEVICE_COORDINATE_LIMIT`] either way, which a command is
+/// refused for and an opening places nothing at.
+pub(crate) fn desktop_point(frame: DisplayFrame, at: Point<f64>) -> Option<(i32, i32)> {
+    let pixel = frame.to_desktop(at)?;
+    let within = |coordinate: i32| {
+        (-DEVICE_COORDINATE_LIMIT..=DEVICE_COORDINATE_LIMIT).contains(&coordinate)
+    };
+    (within(pixel.x) && within(pixel.y)).then_some((pixel.x, pixel.y))
+}
 
 /// Convert logical pixels to device pixels, or `None` when the result is not
 /// a finite device value within [`DEVICE_COORDINATE_LIMIT`]: geometry Win32
@@ -474,18 +480,29 @@ pub(crate) struct OpenSpot {
 /// `WindowOptions::geometry`) and its `options` into physical pixels.
 ///
 /// `opening.content` is the content size, so `outer_of` (the window frame at a
-/// DPI) turns it into the outer size. `opening.position` and
-/// `options.normal_geometry` are relative to the origin of `target`'s usable
-/// area in that display's logical pixels and convert through that display's own
-/// scale; with no `target` they are global logical pixels at `system_scale`.
+/// DPI) turns it into the outer size, at the scale of the display the window
+/// opens on: the one its position names, else the one the rectangle it
+/// returns to names, else the system's (`system_scale`). Each position
+/// converts through its own display's origin and scale in `desktop`
+/// ([`DisplayFrame`]); a position on a display `desktop` no longer holds, or
+/// one past what a Win32 coordinate holds, places nothing, and the system
+/// places the window.
 pub(crate) fn open_spot(
     options: &WindowOptions,
     opening: &flui_platform::OpeningGeometry,
-    target: Option<&flui_platform::DisplayDescription>,
+    desktop: &flui_platform::DisplaySnapshot,
     system_scale: DevicePixelRatio,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
 ) -> OpenSpot {
-    let ratio = target.map_or(system_scale, |display| display.scale_factor);
+    let frame_of = |position: WindowPosition| DisplayFrame::find(desktop, position.display());
+    let returns_to = options
+        .normal_geometry
+        .and_then(flui_platform::WindowGeometry::position);
+    let target = opening
+        .position
+        .and_then(frame_of)
+        .or_else(|| returns_to.and_then(frame_of));
+    let ratio = target.map_or(system_scale, DisplayFrame::scale);
     let scale = ratio.get();
     let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
     // The hosts' one extent rule; a side that is no size stays none.
@@ -495,26 +512,21 @@ pub(crate) fn open_spot(
         extent(opening.content.height()),
     );
     let outer = outer_of(dpi, content);
-    let anchor = target.map_or((0, 0), |display| {
-        (
-            display.usable_bounds.origin.x,
-            display.usable_bounds.origin.y,
-        )
-    });
-    let place = |at: Point<f64>| {
-        (
-            anchor.0.saturating_add(logical_to_device(at.x, scale)),
-            anchor.1.saturating_add(logical_to_device(at.y, scale)),
-        )
-    };
-    let origin = opening.position.map(place);
+    let place = |at: WindowPosition| desktop_point(frame_of(at)?, at.at());
+    let origin = opening.position.and_then(place);
     let normal = options.normal_geometry.and_then(|geometry| {
-        let (left, top) = geometry.position().map(place).or(origin)?;
+        let (left, top) = geometry.position().and_then(place).or(origin)?;
+        // The rectangle is in the logical pixels of the display it returns
+        // to; a side past a Win32 coordinate places no rectangle.
+        let ratio = returns_to
+            .and_then(frame_of)
+            .map_or(ratio, DisplayFrame::scale);
+        let side = |logical: f64| checked_logical_to_device(logical, ratio.get());
         Some((
             left,
             top,
-            left.saturating_add(logical_to_device(geometry.size().width, scale)),
-            top.saturating_add(logical_to_device(geometry.size().height, scale)),
+            left.checked_add(side(geometry.size().width)?)?,
+            top.checked_add(side(geometry.size().height)?)?,
         ))
     });
     OpenSpot {
@@ -574,347 +586,4 @@ pub(crate) fn outer_size(
         .checked_sub(rect.left)
         .zip(rect.bottom.checked_sub(rect.top))
         .ok_or_else(|| windows::Win32::Foundation::E_INVALIDARG.into())
-}
-
-#[cfg(test)]
-#[cfg(test)]
-mod open_tests {
-    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
-    use flui_platform::{
-        DisplayDescription, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
-        WindowOptions,
-    };
-
-    use flui_testing::window_commands::AdmitAndApply as _;
-
-    use super::open_spot;
-    use crate::platform::Platform as _;
-
-    const FRAME: (i32, i32) = (16, 39);
-
-    fn geometry(position: Option<Point<f64>>, size: Size<f64>) -> WindowGeometry {
-        WindowGeometry::try_new(position, size).expect("a finite rectangle")
-    }
-
-    fn with_frame(_dpi: u32, content: (i32, i32)) -> (i32, i32) {
-        (content.0 + FRAME.0, content.1 + FRAME.1)
-    }
-
-    fn ratio(scale: f64) -> DevicePixelRatio {
-        DevicePixelRatio::try_new(scale).expect("a positive ratio")
-    }
-
-    fn display(scale: f64, origin: (i32, i32)) -> DisplayDescription {
-        let registry = DisplayRegistry::new();
-        let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-        DisplayDescription::new(
-            id,
-            "d",
-            Bounds::new(Point::new(origin.0, origin.1), Size::new(3840, 2160)),
-            ratio(scale),
-        )
-    }
-
-    fn the_size_is_the_content_and_the_frame_is_added() {
-        let options = WindowOptions::default().size(Size::new(800.0, 600.0));
-        let spot = open_spot(
-            &options,
-            &options.geometry().expect("valid options"),
-            None,
-            ratio(1.0),
-            with_frame,
-        );
-        assert_eq!(spot.outer, (816, 639));
-        assert_eq!(spot.origin, None);
-    }
-
-    fn a_position_converts_through_the_named_displays_own_scale() {
-        // A 2x display that starts at device x 1920: 100 logical is 200 device
-        // pixels from its origin, whatever the system scale is.
-        let target = display(2.0, (1920, 0));
-        let options = WindowOptions::default()
-            .size(Size::new(800.0, 600.0))
-            .position(Some(Point::new(100.0, 50.0)));
-        let spot = open_spot(
-            &options,
-            &options.geometry().expect("valid options"),
-            Some(&target),
-            ratio(1.0),
-            with_frame,
-        );
-        assert_eq!(spot.scale, 2.0);
-        assert_eq!(spot.outer, (1600 + 16, 1200 + 39));
-        assert_eq!(spot.origin, Some((1920 + 200, 100)));
-    }
-
-    fn without_a_display_the_position_is_global_at_the_system_scale() {
-        let options = WindowOptions::default().position(Some(Point::new(100.0, 50.0)));
-        let spot = open_spot(
-            &options,
-            &options.geometry().expect("valid options"),
-            None,
-            ratio(1.5),
-            with_frame,
-        );
-        assert_eq!(spot.origin, Some((150, 75)));
-    }
-
-    fn the_normal_rectangle_is_the_outer_geometry_it_returns_to() {
-        let target = display(1.0, (0, 0));
-        let options = WindowOptions::default()
-            .mode(WindowMode::Maximized)
-            .normal_geometry(Some(geometry(
-                Some(Point::new(100.0, 80.0)),
-                Size::new(700.0, 500.0),
-            )));
-        let spot = open_spot(
-            &options,
-            &options.geometry().expect("valid options"),
-            Some(&target),
-            ratio(1.0),
-            with_frame,
-        );
-        assert_eq!(spot.normal, Some((100, 80, 800, 580)));
-    }
-
-    fn a_normal_rectangle_without_a_position_follows_the_windows_own() {
-        let options = WindowOptions::default()
-            .position(Some(Point::new(30.0, 40.0)))
-            .normal_geometry(Some(geometry(None, Size::new(300.0, 200.0))));
-        let spot = open_spot(
-            &options,
-            &options.geometry().expect("valid options"),
-            None,
-            ratio(1.0),
-            with_frame,
-        );
-        assert_eq!(spot.normal, Some((30, 40, 330, 240)));
-        let unplaced =
-            WindowOptions::default().normal_geometry(Some(geometry(None, Size::new(300.0, 200.0))));
-        assert_eq!(
-            open_spot(
-                &unplaced,
-                &unplaced.geometry().expect("valid options"),
-                None,
-                ratio(1.0),
-                with_frame
-            )
-            .normal,
-            None
-        );
-    }
-
-    fn an_opening_rectangle_at_the_edge_of_the_range_saturates() {
-        let options = WindowOptions::default()
-            .mode(WindowMode::Maximized)
-            .normal_geometry(Some(geometry(
-                Some(Point::new(3.0e9, 3.0e9)),
-                Size::new(700.0, 500.0),
-            )));
-        let spot = open_spot(
-            &options,
-            &options.geometry().expect("valid options"),
-            None,
-            ratio(1.0),
-            with_frame,
-        );
-        assert_eq!(
-            spot.normal,
-            Some((i32::MAX, i32::MAX, i32::MAX, i32::MAX)),
-            "no wrap into a rectangle on the other side of the desktop"
-        );
-    }
-
-    #[test]
-    fn open_geometry() {
-        crate::table_test::run_table(
-            "open_geometry",
-            &[
-                (
-                    "the_size_is_the_content_and_the_frame_is_added",
-                    the_size_is_the_content_and_the_frame_is_added as fn(),
-                ),
-                (
-                    "a_position_converts_through_the_named_displays_own_scale",
-                    a_position_converts_through_the_named_displays_own_scale as fn(),
-                ),
-                (
-                    "without_a_display_the_position_is_global_at_the_system_scale",
-                    without_a_display_the_position_is_global_at_the_system_scale as fn(),
-                ),
-                (
-                    "the_normal_rectangle_is_the_outer_geometry_it_returns_to",
-                    the_normal_rectangle_is_the_outer_geometry_it_returns_to as fn(),
-                ),
-                (
-                    "an_opening_rectangle_at_the_edge_of_the_range_saturates",
-                    an_opening_rectangle_at_the_edge_of_the_range_saturates as fn(),
-                ),
-                (
-                    "a_normal_rectangle_without_a_position_follows_the_windows_own",
-                    a_normal_rectangle_without_a_position_follows_the_windows_own as fn(),
-                ),
-            ],
-        );
-    }
-
-    fn near(actual: f64, wanted: f64) -> bool {
-        (actual - wanted).abs() <= 2.0
-    }
-
-    /// A real window opened with a content size reports that content size:
-    /// the frame is added to the outer window, not taken out of the content.
-    fn a_real_window_opens_with_the_content_size_it_asked_for() {
-        let platform = crate::WindowsPlatform::try_new().expect("platform");
-        let window = platform
-            .open_window(
-                WindowOptions::default()
-                    .size(Size::new(640.0, 480.0))
-                    .visible(false),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
-            .expect("window");
-        let state = window.state();
-        assert!(
-            near(state.content_size.width(), 640.0) && near(state.content_size.height(), 480.0),
-            "content {:?}",
-            state.content_size
-        );
-        assert!(
-            state.outer.size().width > state.content_size.width()
-                && state.outer.size().height > state.content_size.height(),
-            "the outer window carries a frame"
-        );
-    }
-
-    /// A size set on a maximized window is the size it returns to: the window
-    /// stays maximized and restores to the content size asked for.
-    fn a_size_set_while_maximized_is_the_size_restored_to() {
-        let platform = crate::WindowsPlatform::try_new().expect("platform");
-        let window = platform
-            .open_window(
-                WindowOptions::default().visible(false),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
-            .expect("window");
-        window
-            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
-            .expect("maximize");
-        window
-            .admit_and_apply(WindowCommand::SetSize(Size::new(500.0, 400.0)))
-            .expect("resize while maximized");
-        assert_eq!(
-            window.state().mode,
-            WindowMode::Maximized,
-            "still maximized"
-        );
-        window
-            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
-            .expect("restore");
-        let state = window.state();
-        assert!(
-            near(state.content_size.width(), 500.0) && near(state.content_size.height(), 400.0),
-            "restored to {:?}",
-            state.content_size
-        );
-    }
-
-    /// A window that opens maximized returns to the rectangle it was given.
-    fn a_window_opened_maximized_returns_to_its_normal_rectangle() {
-        let platform = crate::WindowsPlatform::try_new().expect("platform");
-        let window = platform
-            .open_window(
-                WindowOptions::default()
-                    .mode(WindowMode::Maximized)
-                    .normal_geometry(Some(geometry(
-                        Some(Point::new(120.0, 100.0)),
-                        Size::new(700.0, 500.0),
-                    ))),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
-            .expect("window");
-        assert_eq!(window.state().mode, WindowMode::Maximized);
-        window
-            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
-            .expect("restore");
-        let outer = window.state().outer;
-        assert!(
-            near(outer.size().width, 700.0) && near(outer.size().height, 500.0),
-            "returned to {outer:?}"
-        );
-        let at = outer
-            .position()
-            .expect("a Win32 window reports its position");
-        assert!(near(at.x, 120.0) && near(at.y, 100.0), "at {at:?}");
-    }
-
-    /// Maximized and fullscreen windows both report the rectangle they return
-    /// to, taken from Win32's own `rcNormalPosition`: entering fullscreen from
-    /// a maximized window does not make the maximized rectangle the one to
-    /// return to.
-    fn maximized_and_fullscreen_windows_report_their_normal_rectangle() {
-        let platform = crate::WindowsPlatform::try_new().expect("platform");
-        let window = platform
-            .open_window(
-                WindowOptions::default()
-                    .size(Size::new(640.0, 480.0))
-                    .position(Some(Point::new(150.0, 120.0)))
-                    .visible(false),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
-            .expect("window");
-        let normal = window.state().outer;
-        let same_as_normal = |state: flui_platform::WindowState, what: &str| {
-            let reported = state
-                .normal_geometry
-                .unwrap_or_else(|| panic!("{what} reports the rectangle it returns to"));
-            assert!(
-                near(reported.size().width, normal.size().width)
-                    && near(reported.size().height, normal.size().height),
-                "{what}: {reported:?} is not {normal:?}"
-            );
-            let (at, was) = (
-                reported.position().expect("a position"),
-                normal.position().expect("a position"),
-            );
-            assert!(
-                near(at.x, was.x) && near(at.y, was.y),
-                "{what}: at {at:?}, was {was:?}"
-            );
-        };
-
-        window
-            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
-            .expect("maximize");
-        same_as_normal(window.state(), "a maximized window");
-        window
-            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
-            .expect("fullscreen");
-        same_as_normal(window.state(), "a fullscreen window entered from maximized");
-    }
-
-    #[test]
-    fn open_real_window() {
-        crate::table_test::run_table(
-            "open_real_window",
-            &[
-                (
-                    "maximized_and_fullscreen_windows_report_their_normal_rectangle",
-                    maximized_and_fullscreen_windows_report_their_normal_rectangle as fn(),
-                ),
-                (
-                    "a_real_window_opens_with_the_content_size_it_asked_for",
-                    a_real_window_opens_with_the_content_size_it_asked_for as fn(),
-                ),
-                (
-                    "a_size_set_while_maximized_is_the_size_restored_to",
-                    a_size_set_while_maximized_is_the_size_restored_to as fn(),
-                ),
-                (
-                    "a_window_opened_maximized_returns_to_its_normal_rectangle",
-                    a_window_opened_maximized_returns_to_its_normal_rectangle as fn(),
-                ),
-            ],
-        );
-    }
 }

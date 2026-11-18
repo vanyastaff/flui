@@ -17,6 +17,21 @@ use flui_platform::WindowOptions;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
+/// What a display spans in device pixels: its logical extent at its scale,
+/// rounded, which a change of page zoom moves the scale of and not this.
+fn device_size(display: &flui_platform::DisplayDescription) -> (i64, i64) {
+    let device = |logical: f64| (logical * display.scale_factor.get()).round() as i64;
+    let extent = display.bounds.extent();
+    (device(extent.width), device(extent.height))
+}
+
+/// What a display's usable area spans in device pixels.
+fn device_usable(display: &flui_platform::DisplayDescription) -> (i64, i64) {
+    let device = |logical: f64| (logical * display.scale_factor.get()).round() as i64;
+    let usable = display.bounds.usable();
+    (device(usable.width()), device(usable.height()))
+}
+
 #[wasm_bindgen(inline_js = r#"
 let restore;
 let rafQueue = [];
@@ -876,7 +891,7 @@ async fn web_screen_change_event_refreshes_the_snapshot() {
     let running = Running::start();
     assert_eq!(window_screen_listeners(), 1, "screen.onchange exists");
     assert_eq!(
-        running.snapshot().primary().map(|d| d.bounds.size.width),
+        running.snapshot().primary().map(|d| device_size(d).0),
         Some(1280)
     );
     // The window moved to a screen of the same pixel ratio and another size:
@@ -885,7 +900,7 @@ async fn web_screen_change_event_refreshes_the_snapshot() {
     settle().await;
     assert_eq!(running.wakes(), 1);
     assert_eq!(
-        running.snapshot().primary().map(|d| d.bounds.size.width),
+        running.snapshot().primary().map(|d| device_size(d).0),
         Some(1600)
     );
     running.quit();
@@ -924,7 +939,16 @@ async fn web_lists_screens_only_with_granted_permission() {
         // which includes page zoom, but its bounds are measured with the 2 its
         // ScreenDetailed reports, which does not.
         assert_eq!(main.scale_factor.get(), 1.0);
-        assert_eq!(main.bounds.size.width, 3840);
+        assert_eq!(device_size(main).0, 3840);
+        // The origin is where the browser lays a screen out, in CSS pixels:
+        // the side screen at CSS left 1920 with its own ratio of 1.5 is at
+        // 1920, not at its 2880 device pixels.
+        let side = snapshot
+            .displays()
+            .iter()
+            .find(|display| !display.is_primary)
+            .expect("the side screen");
+        assert_eq!(side.origin, flui_platform::DesktopOrigin::new(1920, 0));
         running.quit();
         settle().await;
     }
@@ -942,7 +966,7 @@ async fn web_lists_screens_only_with_granted_permission() {
     );
     assert_eq!(running.snapshot().displays().len(), 1);
     assert_eq!(
-        running.snapshot().displays()[0].bounds.size.width,
+        device_size(&running.snapshot().displays()[0]).0,
         1280,
         "the one screen is window.screen"
     );
@@ -1083,11 +1107,11 @@ async fn web_listed_screen_that_changes_size_is_seen() {
     let _probe = Probe;
     let running = Running::start();
     settle().await;
-    assert_eq!(running.snapshot().displays()[1].bounds.size.width, 2880);
+    assert_eq!(device_size(&running.snapshot().displays()[1]).0, 2880);
     // A screen other than the window's changes resolution; the list is the same.
     change_side_screen(2560);
     settle().await;
-    assert_eq!(running.snapshot().displays()[1].bounds.size.width, 3840);
+    assert_eq!(device_size(&running.snapshot().displays()[1]).0, 3840);
     running.quit();
     settle().await;
 }
@@ -1133,7 +1157,7 @@ async fn web_period_belongs_to_the_screen_the_window_is_on() {
     current_screen_changes_size(2000);
     settle().await;
     assert_eq!(has_period(&running.snapshot()), vec![true, false]);
-    assert_eq!(running.snapshot().displays()[0].bounds.size.width, 4000);
+    assert_eq!(device_size(&running.snapshot().displays()[0]).0, 4000);
 
     // The window moves to the other screen: what was measured on the first
     // describes neither, and the measurement starts over on the second.
@@ -1222,25 +1246,13 @@ async fn web_bounds_do_not_inflate_with_page_zoom_with_screen_access() {
         1.25,
         "the scale includes page zoom"
     );
-    assert_eq!(
-        (main.bounds.size.width, main.bounds.size.height),
-        (3440, 1440)
-    );
-    assert_eq!(
-        (
-            main.usable_bounds.size.width,
-            main.usable_bounds.size.height
-        ),
-        (3440, 1440)
-    );
+    assert_eq!(device_size(&main), (3440, 1440));
+    assert_eq!(device_usable(&main), (3440, 1440));
     set_pixel_ratio(1.5);
     settle().await;
     let main = running.snapshot().displays()[0].clone();
     assert_eq!(main.scale_factor.get(), 1.5);
-    assert_eq!(
-        (main.bounds.size.width, main.bounds.size.height),
-        (3440, 1440)
-    );
+    assert_eq!(device_size(&main), (3440, 1440));
     running.quit();
     settle().await;
 }
@@ -1252,10 +1264,7 @@ async fn web_bounds_do_not_inflate_with_page_zoom_without_screen_access() {
     // A 1280 x 720 (CSS pixel) screen on a display scaled to 200%, page at 100%.
     set_pixel_ratio(2.0);
     let running = Running::start();
-    let size = |snapshot: &DisplaySnapshot| {
-        let bounds = snapshot.displays()[0].bounds;
-        (bounds.size.width, bounds.size.height)
-    };
+    let size = |snapshot: &DisplaySnapshot| device_size(&snapshot.displays()[0]);
     assert_eq!(size(&running.snapshot()), (2560, 1440));
     // Zoom to 125%: the pixel ratio is 2.5, the screen is the same screen.
     set_pixel_ratio(2.5);

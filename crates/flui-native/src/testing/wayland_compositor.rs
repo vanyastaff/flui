@@ -60,6 +60,8 @@ use wayland_protocols::wp::pointer_gestures::zv1::server::zwp_pointer_gestures_v
 };
 use wayland_protocols::wp::viewporter::server::wp_viewport::{self, WpViewport};
 use wayland_protocols::wp::viewporter::server::wp_viewporter::{self, WpViewporter};
+use wayland_protocols::xdg::foreign::zv2::server::zxdg_exported_v2::{self, ZxdgExportedV2};
+use wayland_protocols::xdg::foreign::zv2::server::zxdg_exporter_v2::{self, ZxdgExporterV2};
 use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::{self, XdgToplevel};
@@ -138,6 +140,7 @@ pub struct Offer {
     first: Option<Configure>,
     withhold_frame_callbacks: bool,
     hang_up: Option<HangUp>,
+    exporter: bool,
 }
 
 impl Default for Offer {
@@ -153,6 +156,7 @@ impl Default for Offer {
             first: Some(Configure::default().state(ToplevelState::Activated)),
             withhold_frame_callbacks: false,
             hang_up: None,
+            exporter: false,
         }
     }
 }
@@ -233,6 +237,15 @@ impl Offer {
     #[must_use]
     pub fn hang_up(mut self, moment: HangUp) -> Self {
         self.hang_up = Some(moment);
+        self
+    }
+
+    /// Offer `zxdg_exporter_v2` (`xdg-foreign`): each export is handed the
+    /// handle `flui-export-<n>`, counting from 1, and [`Heard::exported`]
+    /// lists those still alive.
+    #[must_use]
+    pub fn exporter(mut self) -> Self {
+        self.exporter = true;
         self
     }
 }
@@ -411,6 +424,11 @@ pub struct Heard {
     pub swipes: u32,
     /// How many hold objects the client made.
     pub holds: u32,
+    /// How many toplevels the client exported (`xdg-foreign`).
+    pub exports: u32,
+    /// The handles of the exports the client has not destroyed yet, oldest
+    /// first.
+    pub exported: Vec<String>,
 }
 
 /// What the test thread and the compositor's thread share.
@@ -710,6 +728,9 @@ impl Compositor {
         }
         if let Some(version) = offer.seat {
             display.create_global::<Self, WlSeat, ()>(version, ());
+        }
+        if offer.exporter {
+            display.create_global::<Self, ZxdgExporterV2, ()>(1, ());
         }
         let outputs = offer
             .outputs
@@ -1245,6 +1266,63 @@ impl Dispatch<WlBuffer, BufferSize> for Compositor {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+    }
+}
+
+impl GlobalDispatch<ZxdgExporterV2, ()> for Compositor {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<ZxdgExporterV2>,
+        (): &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<ZxdgExporterV2, ()> for Compositor {
+    /// An export is named at once, as the protocol has it.
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &ZxdgExporterV2,
+        request: zxdg_exporter_v2::Request,
+        (): &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let zxdg_exporter_v2::Request::ExportToplevel { id, .. } = request {
+            let mut handle = String::new();
+            state.shared.note(|heard| {
+                heard.exports += 1;
+                handle = format!("flui-export-{}", heard.exports);
+                heard.exported.push(handle.clone());
+            });
+            let exported = data_init.init(id, handle.clone());
+            exported.handle(handle);
+        }
+    }
+}
+
+impl Dispatch<ZxdgExportedV2, String> for Compositor {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &ZxdgExportedV2,
+        _: zxdg_exported_v2::Request,
+        _: &String,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        // `destroy` is its one request, answered by `destroyed`.
+    }
+
+    fn destroyed(state: &mut Self, _: ClientId, _: &ZxdgExportedV2, handle: &String) {
+        state
+            .shared
+            .note(|heard| heard.exported.retain(|live| live != handle));
     }
 }
 

@@ -905,7 +905,10 @@ mod win32 {
                     Box::new(|window, reentered| {
                         window
                             .admit_and_apply(WindowCommand::SetSize(
-                                flui_foundation::geometry::Size::new(320.0, 200.0),
+                                flui_platform::WindowExtent::try_new(
+                                    flui_foundation::geometry::Size::new(320.0, 200.0),
+                                )
+                                .expect("a finite extent"),
                             ))
                             .expect("a resize");
                         pump_until(reentered)

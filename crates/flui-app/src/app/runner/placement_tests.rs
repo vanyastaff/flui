@@ -7,10 +7,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::ManualClock;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
+use flui_platform::PlacementOffset;
 use flui_platform::capability::ProviderContext;
 use flui_platform::{
-    PlatformWindow, Storage, StorageName, Unsupported, WindowInteraction, WindowMode,
+    PlatformWindow, Storage, StorageName, Unsupported, WindowExtent, WindowInteraction, WindowMode,
     WindowPlacement,
 };
 use flui_testing::storage::MemoryStorage;
@@ -28,10 +29,10 @@ const NAME: StorageName = StorageName::machine_local("window-main");
 fn stored() -> WindowPlacement {
     WindowPlacement::new(
         None,
-        Some(Point::new(40.0, 30.0)),
-        Size::new(640.0, 480.0),
+        Some(PlacementOffset::try_new(Point::new(40.0, 30.0)).expect("a finite offset")),
+        WindowExtent::try_new(Size::new(640.0, 480.0)).expect("a finite extent"),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     )
 }
 
@@ -82,6 +83,28 @@ fn turn_at(run: &HeadlessRunHandle, clock: &ManualClock) {
 
 fn recording() -> usize {
     APP_RUNTIME.with(|slot| slot.borrow().placement.shared().live.borrow().len())
+}
+
+/// A configured position is whole logical pixels of the primary display: the
+/// configuration alone names no display, so the runner places it on the
+/// owner's primary display when it opens the window, and the window's first
+/// snapshot is there.
+#[test]
+fn a_configured_position_opens_on_the_primary_display() {
+    let application = Application::new().config(AppConfig::new().position(40, 30));
+    let (run, _clock) = start_on_manual_clock(application);
+    let windows = run.open_windows();
+    let [window] = windows.as_slice() else {
+        panic!("one window is open, not {}", windows.len());
+    };
+    let state = window.state();
+    let at = state
+        .outer
+        .position()
+        .expect("the headless host reports where its window is");
+    assert_eq!(at.at(), Point::new(40.0, 30.0));
+    assert_eq!(Some(at.display()), state.display, "on the window's display");
+    run.join().expect("the run ends");
 }
 
 /// A window that remembers its placement reads the stored one once, before

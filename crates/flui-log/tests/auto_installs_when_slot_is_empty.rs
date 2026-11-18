@@ -9,7 +9,8 @@
 
 mod support;
 
-use flui_log::{LogConfig, SubscriberOwnership, SubscriberPolicy};
+use flui_log::config::LogConfig;
+use flui_log::ownership::{SubscriberOwnership, SubscriberPolicy};
 use support::HostSubscriber;
 
 #[test]

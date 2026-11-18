@@ -46,7 +46,7 @@ use flui_platform::{DisplayDescription, DisplayId, DisplayKey, DisplaySnapshot, 
 
 #[cfg(not(target_arch = "aarch64"))]
 use super::screen::MacosPotentialHeadroom;
-use super::screen::device_bounds_of_screen;
+use super::screen::screen_bounds;
 use super::screen::{macos_display_key, macos_display_persistent_key, screen_color};
 use crate::display::scale::ScaleStreaks;
 use crate::display::source::DisplaySource;
@@ -182,21 +182,27 @@ impl MacosDisplays {
             if let Some(refused) = refused {
                 refused.report();
             }
-            let scale = ratio.get();
             // NSScreen frames are in points with a bottom-left origin on the
-            // primary screen; the snapshot carries device pixels of this
-            // screen from the primary screen's top-left corner, like every
-            // other platform's, so a window's top-left position and a
-            // display's origin are measured the same way.
-            let bounds = device_bounds_of_screen(bounds_of(screen.frame()), primary_height, scale);
-            let usable_bounds =
-                device_bounds_of_screen(bounds_of(screen.visibleFrame()), primary_height, scale);
+            // primary screen; the snapshot carries the screen's place in that
+            // desktop from the primary's top-left corner, and its bounds in
+            // its own points, which are its logical pixels.
+            let Some((origin, bounds)) = screen_bounds(
+                bounds_of(screen.frame()),
+                bounds_of(screen.visibleFrame()),
+                primary_height,
+            ) else {
+                continue;
+            };
             // The name System Settings shows ("Built-in Retina Display", a
             // monitor's model), macOS 10.15 and later.
-            let mut display =
-                DisplayDescription::new(id, screen.localizedName().to_string(), bounds, ratio)
-                    .with_usable_bounds(usable_bounds)
-                    .with_primary(index == 0);
+            let mut display = DisplayDescription::new(
+                id,
+                screen.localizedName().to_string(),
+                origin,
+                bounds,
+                ratio,
+            )
+            .with_primary(index == 0);
             if let Some(uuid) = display_id_of(&screen)
                 .and_then(|number| u32::try_from(number).ok())
                 .and_then(display_uuid)
@@ -311,6 +317,10 @@ impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
     /// One atomic store, so any thread may call it.
     fn invalidate(&self) {
         self.source.invalidate();
+    }
+
+    fn published(&self) -> DisplaySnapshot {
+        self.source.published()
     }
 
     /// A display the published snapshot does not hold yet (a monitor plugged

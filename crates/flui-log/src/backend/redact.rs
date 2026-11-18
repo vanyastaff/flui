@@ -2,7 +2,7 @@
 //!
 //! [`RedactLayer`] wraps a sink and re-records events, span attributes, and
 //! late span records with each field classified by
-//! [`FieldPrivacy::classify`](super::privacy::FieldPrivacy::classify) before
+//! [`FieldPrivacy::classify`](crate::privacy::FieldPrivacy::classify) before
 //! the sink sees them. The sink itself stays policy-free: logcat and the Apple
 //! layer render whatever values arrive, and what arrives for a private field
 //! is the [`REDACTED_VALUE`] placeholder rather than the value.
@@ -12,12 +12,13 @@
 //! sink gets the contract by being constructed wrapped, and a field can only
 //! bypass classification by not being a `tracing` field at all.
 //!
-//! When nothing in a payload needs redaction the original event or attribute
-//! set is forwarded untouched — typed values, message `Arguments`, and parent
-//! linkage all reach the sink exactly as recorded. Synthesis happens only on
-//! the paths where a value must be replaced, and the synthesized payload keeps
-//! the original callsite metadata, field order, scalar types, and explicit /
-//! contextual / root parent kind.
+//! A payload is classified first by name, kind and origin alone, rendering
+//! nothing. When no field is private the original event or attribute set is
+//! forwarded untouched — typed values, message `Arguments`, and parent linkage
+//! all reach the sink exactly as recorded, and each value is rendered once, by
+//! the sink. Synthesis happens only on the paths where a value must be
+//! replaced, and the synthesized payload keeps the original callsite metadata,
+//! field order, scalar types, and explicit / contextual / root parent kind.
 //!
 //! Compiled on **every** target for the same reason as [`super::record`]: only
 //! the sinks it wraps are target-gated, so the behaviour is covered by unit
@@ -48,7 +49,7 @@ use tracing_log::NormalizeEvent as _;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-use super::privacy::{EventOrigin, FieldKind, FieldPrivacy, REDACTED_VALUE};
+use crate::privacy::{EventOrigin, FieldKind, FieldPrivacy, REDACTED_VALUE};
 
 /// Capacity of the synthesized value set.
 ///
@@ -138,11 +139,83 @@ impl Recorded {
     }
 }
 
-/// Visits a payload once, classifying every field.
+/// Classifies a payload's fields by name, kind and origin without rendering a
+/// single value.
+///
+/// The first of the two passes over a payload. Most payloads hold no private
+/// field and reach the sink untouched, so their values are rendered once, by
+/// the sink; only a payload this pass finds a private field in is visited
+/// again by [`ClassifyingVisitor`], which renders the public values it must
+/// replay. A `Debug` implementation therefore runs once per value whichever
+/// path the payload takes.
+///
+/// It overrides the same `Visit` callbacks as [`ClassifyingVisitor`], so both
+/// passes see the same kind for every field.
+struct PrivacyScan {
+    origin: EventOrigin,
+    found_private: bool,
+}
+
+impl PrivacyScan {
+    /// Whether `record` reports a field that classifies as private.
+    fn finds_private(origin: EventOrigin, record: impl FnOnce(&mut Self)) -> bool {
+        let mut scan = Self {
+            origin,
+            found_private: false,
+        };
+        record(&mut scan);
+        scan.found_private
+    }
+
+    fn note(&mut self, field: &Field, kind: FieldKind) {
+        if !self.found_private {
+            self.found_private =
+                FieldPrivacy::classify(field.name(), kind, self.origin) == FieldPrivacy::Private;
+        }
+    }
+}
+
+impl Visit for PrivacyScan {
+    fn record_i64(&mut self, field: &Field, _value: i64) {
+        self.note(field, FieldKind::Scalar);
+    }
+
+    fn record_i128(&mut self, field: &Field, _value: i128) {
+        self.note(field, FieldKind::Scalar);
+    }
+
+    fn record_u64(&mut self, field: &Field, _value: u64) {
+        self.note(field, FieldKind::Scalar);
+    }
+
+    fn record_u128(&mut self, field: &Field, _value: u128) {
+        self.note(field, FieldKind::Scalar);
+    }
+
+    fn record_f64(&mut self, field: &Field, _value: f64) {
+        self.note(field, FieldKind::Scalar);
+    }
+
+    fn record_bool(&mut self, field: &Field, _value: bool) {
+        self.note(field, FieldKind::Scalar);
+    }
+
+    fn record_str(&mut self, field: &Field, _value: &str) {
+        self.note(field, FieldKind::Dynamic);
+    }
+
+    // `record_error` and `record_bytes` funnel here through `Visit`'s default
+    // methods, as they do for `ClassifyingVisitor`.
+    fn record_debug(&mut self, field: &Field, _value: &dyn fmt::Debug) {
+        self.note(field, FieldKind::Dynamic);
+    }
+}
+
+/// Records every field of a payload [`PrivacyScan`] found a private field in,
+/// with each private value replaced by the placeholder.
 struct ClassifyingVisitor {
     origin: EventOrigin,
     entries: Vec<(Field, Recorded)>,
-    redacted_any: bool,
 }
 
 impl ClassifyingVisitor {
@@ -150,17 +223,13 @@ impl ClassifyingVisitor {
         Self {
             origin,
             entries: Vec::new(),
-            redacted_any: false,
         }
     }
 
     fn scalar(&mut self, field: &Field, value: Recorded) {
         let recorded = match FieldPrivacy::classify(field.name(), FieldKind::Scalar, self.origin) {
             FieldPrivacy::Public => value,
-            FieldPrivacy::Private => {
-                self.redacted_any = true;
-                Recorded::redacted()
-            }
+            FieldPrivacy::Private => Recorded::redacted(),
         };
         self.entries.push((field.clone(), recorded));
     }
@@ -169,10 +238,7 @@ impl ClassifyingVisitor {
     fn dynamic(&mut self, field: &Field, render: impl FnOnce() -> Recorded) {
         let recorded = match FieldPrivacy::classify(field.name(), FieldKind::Dynamic, self.origin) {
             FieldPrivacy::Public => render(),
-            FieldPrivacy::Private => {
-                self.redacted_any = true;
-                Recorded::redacted()
-            }
+            FieldPrivacy::Private => Recorded::redacted(),
         };
         self.entries.push((field.clone(), recorded));
     }
@@ -270,13 +336,13 @@ where
     fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, context: Context<'_, S>) {
         // Spans cannot arrive through the `log` bridge — `log` has no spans —
         // so span payloads are always first-party.
-        let mut visitor = ClassifyingVisitor::for_origin(EventOrigin::Native);
-        attributes.record(&mut visitor);
-
-        if !visitor.redacted_any {
+        if !PrivacyScan::finds_private(EventOrigin::Native, |scan| attributes.record(scan)) {
             self.inner.on_new_span(attributes, id, context);
             return;
         }
+
+        let mut visitor = ClassifyingVisitor::for_origin(EventOrigin::Native);
+        attributes.record(&mut visitor);
 
         with_value_set(attributes.metadata(), &visitor.entries, |values| {
             let redacted = if attributes.is_contextual() {
@@ -291,10 +357,7 @@ where
     }
 
     fn on_record(&self, span: &Id, values: &Record<'_>, context: Context<'_, S>) {
-        let mut visitor = ClassifyingVisitor::for_origin(EventOrigin::Native);
-        values.record(&mut visitor);
-
-        if !visitor.redacted_any {
+        if !PrivacyScan::finds_private(EventOrigin::Native, |scan| values.record(scan)) {
             self.inner.on_record(span, values, context);
             return;
         }
@@ -307,6 +370,9 @@ where
         let Some(metadata) = context.span(span).map(|span_ref| span_ref.metadata()) else {
             return;
         };
+
+        let mut visitor = ClassifyingVisitor::for_origin(EventOrigin::Native);
+        values.record(&mut visitor);
 
         with_value_set(metadata, &visitor.entries, |value_set| {
             self.inner.on_record(span, &Record::new(value_set), context);
@@ -329,13 +395,13 @@ where
         } else {
             EventOrigin::Native
         };
-        let mut visitor = ClassifyingVisitor::for_origin(origin);
-        event.record(&mut visitor);
-
-        if !visitor.redacted_any {
+        if !PrivacyScan::finds_private(origin, |scan| event.record(scan)) {
             self.inner.on_event(event, context);
             return;
         }
+
+        let mut visitor = ClassifyingVisitor::for_origin(origin);
+        event.record(&mut visitor);
 
         with_value_set(event.metadata(), &visitor.entries, |values| {
             if event.is_contextual() {
@@ -602,7 +668,54 @@ mod tests {
         );
     }
 
-    // --- composed with the logcat renderer, the exact Android line shape ----
+    /// A `Debug` value that counts how often it is rendered.
+    struct CountsRenders<'count>(&'count core::cell::Cell<u32>);
+
+    impl fmt::Debug for CountsRenders<'_> {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.set(self.0.get() + 1);
+            formatter.write_str("rendered")
+        }
+    }
+
+    fn a_public_debug_value_is_rendered_once_with_no_private_sibling() {
+        let renders = core::cell::Cell::new(0);
+        let capture = behind_redaction(|| {
+            tracing::info!(state.public = ?CountsRenders(&renders), frame = 7_u64, "tick");
+        });
+
+        let events = capture.events();
+        assert_eq!(events.len(), 1, "exactly one event: {events:?}");
+        assert_eq!(
+            *field(&events[0], "state.public"),
+            Seen::Debugged("rendered".to_owned())
+        );
+        assert_eq!(
+            renders.get(),
+            1,
+            "a payload with nothing to redact is rendered by the sink alone"
+        );
+    }
+
+    fn a_public_debug_value_is_rendered_once_beside_a_private_one() {
+        let renders = core::cell::Cell::new(0);
+        let capture = behind_redaction(|| {
+            tracing::info!(state.public = ?CountsRenders(&renders), path = "/home/u", "tick");
+        });
+
+        let events = capture.events();
+        assert_eq!(events.len(), 1, "exactly one event: {events:?}");
+        assert_eq!(*field(&events[0], "path"), redacted());
+        assert_eq!(
+            *field(&events[0], "state.public"),
+            Seen::Debugged("rendered".to_owned())
+        );
+        assert_eq!(
+            renders.get(),
+            1,
+            "the synthesized payload replays the one rendering the redaction pass made"
+        );
+    }
 
     #[test]
     fn redaction_contract() {
@@ -622,6 +735,14 @@ mod tests {
             (
                 "a bridged log message is redacted by default",
                 a_bridged_log_message_is_redacted_by_default,
+            ),
+            (
+                "a public Debug value is rendered once with no private sibling",
+                a_public_debug_value_is_rendered_once_with_no_private_sibling,
+            ),
+            (
+                "a public Debug value is rendered once beside a private one",
+                a_public_debug_value_is_rendered_once_beside_a_private_one,
             ),
         ]);
     }

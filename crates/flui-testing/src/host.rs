@@ -39,6 +39,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::portal_exports::HeadlessPortalExports;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
@@ -127,6 +129,9 @@ pub struct HeadlessWindow {
     chrome: Mutex<KitChrome>,
     /// Whether the host closed the window: its commands answer `Closed`.
     closed: AtomicBool,
+    /// How the window is named to a portal, when it plays an exported
+    /// Wayland window ([`HeadlessWindow::with_portal_export`]).
+    portal_exports: Option<HeadlessPortalExports>,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -292,7 +297,28 @@ impl HeadlessWindow {
             capabilities: Self::published_capabilities(false),
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
+            portal_exports: None,
         }
+    }
+
+    /// Name the window to a desktop portal as a Wayland window the compositor
+    /// exports under `handle`: every request is answered
+    /// `wayland:<handle>` and holds an export of its own until it ends or the
+    /// window closes, which [`HeadlessPortalExports::live`] counts; a closed
+    /// window answers no window. Without it the window answers no window, as
+    /// one of a system with no portals does.
+    #[must_use]
+    pub fn with_portal_export(mut self, handle: impl Into<String>) -> Self {
+        let handle: String = handle.into();
+        self.portal_exports = Some(HeadlessPortalExports::new(Arc::from(handle)));
+        self
+    }
+
+    /// The window's portal exports, when it was built
+    /// [`with_portal_export`](Self::with_portal_export).
+    #[must_use]
+    pub fn portal_exports(&self) -> Option<HeadlessPortalExports> {
+        self.portal_exports.clone()
     }
 
     /// The operating system's drag sessions this window plays: what a drag
@@ -494,6 +520,21 @@ impl PlatformWindow for HeadlessWindow {
         Err(flui_platform::Unsupported::new(
             flui_platform::UnsupportedReason::NotOnThisPlatform,
         ))
+    }
+
+    /// A new export for each request when the window plays an exported
+    /// Wayland window ([`HeadlessWindow::with_portal_export`]), else no window.
+    fn portal_parent(
+        &self,
+        answer: flui_platform::capability::Resolver<flui_platform::capability::PortalParent>,
+    ) {
+        // A closed window names nothing, as on every host.
+        let parent = match &self.portal_exports {
+            Some(exports) if !self.closed.load(Ordering::Relaxed) => exports.export(),
+            _ => flui_platform::capability::PortalParent::none(),
+        };
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(parent);
     }
 
     /// Shown and focused, with no position (as on Wayland), its logical size
@@ -2724,6 +2765,9 @@ impl HeadlessHost {
         };
         let closed = self.open.remove(position);
         closed.window.closed.store(true, Ordering::Relaxed);
+        if let Some(exports) = &closed.window.portal_exports {
+            exports.release_all();
+        }
         // A window that is gone holds no quit.
         self.quit_consented(id);
         if !self.open.is_empty() {
