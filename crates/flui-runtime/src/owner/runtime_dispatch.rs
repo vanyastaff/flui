@@ -107,7 +107,7 @@ pub(super) enum RuntimeWork {
     TestCallback(PresentationAddress, Box<dyn FnOnce(&UiRuntime)>),
     Input {
         address: PresentationAddress,
-        surface: flui_interaction::InputSurface,
+        surface: flui_interaction::ids::InputSurface,
         input: flui_platform::PlatformInput,
         reply: Rc<Cell<Option<bool>>>,
     },

@@ -13,7 +13,11 @@ use flui_interaction::ids::DeviceId;
 use flui_interaction::pointer::{
     MouseTracker, PointerMotionKind, PointerRouteHandler, PointerRouter,
 };
-use flui_interaction::{CursorIcon, HitTestEntry, HitTestResult, PointerId, RenderId};
+use flui_interaction::{
+    events::CursorIcon,
+    ids::PointerId,
+    pointer::{HitTestEntry, HitTestResult, RenderId},
+};
 
 fn pointer() -> PointerId {
     PointerId::try_from(41_u64).expect("nonzero fixture pointer")

@@ -295,7 +295,7 @@ pub(crate) fn a_composition_past_the_delay_ceiling_is_reported() {
     use std::time::Duration;
     let taps = Arc::new(AtomicUsize::new(0));
     let tapped = Arc::clone(&taps);
-    let settings = flui_interaction::GestureSettings::default()
+    let settings = flui_interaction::gesture::GestureSettings::default()
         .with_double_tap_timeout(Duration::from_secs(2));
     let (laid, log) = flui_testing::log_capture::capture(|| {
         lay_out(
@@ -331,7 +331,7 @@ pub(crate) fn a_composition_past_the_delay_ceiling_is_reported() {
 /// transform locked against rotation that begins as a pan does not turn.
 pub(crate) fn drag_and_transform_slots_carry_their_locks() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::{AxisLock, TransformLock};
+    use flui_interaction::gesture::{AxisLock, TransformLock};
     use flui_testing::replay::TouchScript;
     use std::time::Duration;
     use std::{cell::RefCell, rc::Rc};
@@ -473,8 +473,8 @@ struct SwitchingScope {
 struct SwitchingScopeState {
     claimed: SharedSignal<bool>,
     handles: Option<(
-        flui_interaction::GestureArena,
-        flui_interaction::GestureArena,
+        flui_interaction::gesture::GestureArena,
+        flui_interaction::gesture::GestureArena,
     )>,
 }
 
@@ -594,13 +594,13 @@ pub(crate) fn recognizers_follow_a_changed_arena_scope() {
 struct CountingPan(std::rc::Rc<std::cell::Cell<u32>>);
 
 impl flui_widgets::GestureRecognizerFactory for CountingPan {
-    type Recognizer = flui_interaction::DragGestureRecognizer;
+    type Recognizer = flui_interaction::gesture::DragGestureRecognizer;
 
     fn create(&self, ctx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
         self.0.set(self.0.get() + 1);
-        flui_interaction::DragGestureRecognizer::builder(
+        flui_interaction::gesture::DragGestureRecognizer::builder(
             ctx.arena().clone(),
-            flui_interaction::DragAxis::Free,
+            flui_interaction::gesture::DragAxis::Free,
         )
         .build()
     }
@@ -662,12 +662,12 @@ pub(crate) fn a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_upda
 struct CancelPanics;
 
 impl flui_widgets::GestureRecognizerFactory for CancelPanics {
-    type Recognizer = flui_interaction::DragGestureRecognizer;
+    type Recognizer = flui_interaction::gesture::DragGestureRecognizer;
 
     fn create(&self, ctx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
-        flui_interaction::DragGestureRecognizer::builder(
+        flui_interaction::gesture::DragGestureRecognizer::builder(
             ctx.arena().clone(),
-            flui_interaction::DragAxis::Free,
+            flui_interaction::gesture::DragAxis::Free,
         )
         .on_start(|_| {})
         .on_end(|_| panic!("intentional pan end panic"))
@@ -683,11 +683,11 @@ impl flui_widgets::GestureRecognizerFactory for CancelPanics {
 struct TaggedTap(std::rc::Rc<std::cell::Cell<u32>>, u32);
 
 impl flui_widgets::GestureRecognizerFactory for TaggedTap {
-    type Recognizer = flui_interaction::TapGestureRecognizer;
+    type Recognizer = flui_interaction::gesture::TapGestureRecognizer;
 
     fn create(&self, ctx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
         self.0.set(self.1);
-        flui_interaction::TapGestureRecognizer::builder(ctx.arena().clone()).build()
+        flui_interaction::gesture::TapGestureRecognizer::builder(ctx.arena().clone()).build()
     }
 
     fn update(&self, _recognizer: &Self::Recognizer) {
@@ -823,7 +823,7 @@ struct ComposedDetector {
 }
 
 struct ComposedDetectorState {
-    branch: Option<flui_interaction::GestureArena>,
+    branch: Option<flui_interaction::gesture::GestureArena>,
 }
 
 impl flui_view::StatefulView for ComposedDetector {
@@ -889,12 +889,12 @@ pub(crate) fn a_detector_in_a_composed_scope_preserves_double_tap_timing() {
 
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct ConfiguredGesture {
-    settings: flui_interaction::GestureSettings,
+    settings: flui_interaction::gesture::GestureSettings,
     detector: GestureDetector,
 }
 
 struct ConfiguredGestureState {
-    arena: Option<flui_interaction::GestureArena>,
+    arena: Option<flui_interaction::gesture::GestureArena>,
 }
 
 impl flui_view::StatefulView for ConfiguredGesture {
@@ -930,7 +930,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
     use std::{cell::Cell, rc::Rc};
 
     use flui_foundation::geometry::Point;
-    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
+    use flui_interaction::gesture::{GestureSettings, VelocityEstimator};
     use flui_platform::{
         EventTime,
         pointer::{
@@ -1023,7 +1023,7 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
     use flui_interaction::events::{
         PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{GestureSettings, PointerId};
+    use flui_interaction::{gesture::GestureSettings, ids::PointerId};
 
     for family in ["tap", "pan", "horizontal drag"] {
         for configured in [false, true] {
@@ -1093,8 +1093,8 @@ pub(crate) fn scoped_settings_control_gesture_deadlines() {
     use std::{cell::Cell, rc::Rc, time::Duration};
 
     use flui_foundation::geometry::Offset;
-    use flui_interaction::GestureSettings;
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::gesture::GestureSettings;
 
     for family in ["long press", "double tap"] {
         for configured in [false, true] {
@@ -1253,7 +1253,7 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
     use flui_interaction::events::{
         PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{DragPointerStrategy, GestureEndReason};
+    use flui_interaction::gesture::{DragPointerStrategy, GestureEndReason};
     use flui_view::SignalWriteExt;
     use std::{cell::Cell, rc::Rc};
 
@@ -1300,7 +1300,7 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         });
         let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
         let send = |laid: &crate::common::LaidOut, id: u64, y, phase| {
-            let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+            let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero touch");
             let position = Offset::new(50.0, y);
             let event = match phase {
                 0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
@@ -1415,7 +1415,7 @@ fn authored_drag_owner_replacement(horizontal: bool) {
     use flui_interaction::events::{
         PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{GestureEndReason, GestureSettings};
+    use flui_interaction::gesture::{GestureEndReason, GestureSettings};
     use flui_view::SignalWriteExt;
     use std::{cell::Cell, rc::Rc};
 
@@ -1438,20 +1438,22 @@ fn authored_drag_owner_replacement(horizontal: bool) {
             remembered.set(Some(count));
             let (started, cancels, ends, fail) =
                 (started.clone(), cancels.clone(), ends.clone(), fail.clone());
-            let on_start = move |_: &mut flui_view::EventContext<'_>,
-                                 _: flui_interaction::DragStartDetails| {
-                started.set(started.get() + 1);
-            };
-            let on_end = move |_: &mut flui_view::EventContext<'_>,
-                               details: flui_interaction::DragEndDetails| {
-                match details.reason {
-                    GestureEndReason::Completed => ends.set(ends.get() + 1),
-                    GestureEndReason::Cancelled => {
-                        cancels.set(cancels.get() + 1);
-                        assert!(!fail.replace(false), "authored settings cancellation");
+            let on_start =
+                move |_: &mut flui_view::EventContext<'_>,
+                      _: flui_interaction::gesture::DragStartDetails| {
+                    started.set(started.get() + 1);
+                };
+            let on_end =
+                move |_: &mut flui_view::EventContext<'_>,
+                      details: flui_interaction::gesture::DragEndDetails| {
+                    match details.reason {
+                        GestureEndReason::Completed => ends.set(ends.get() + 1),
+                        GestureEndReason::Cancelled => {
+                            cancels.set(cancels.get() + 1);
+                            assert!(!fail.replace(false), "authored settings cancellation");
+                        }
                     }
-                }
-            };
+                };
             let slot = if horizontal {
                 DragSlot::horizontal()
             } else {
@@ -1473,7 +1475,7 @@ fn authored_drag_owner_replacement(horizontal: bool) {
         });
         let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
         let send = |laid: &crate::common::LaidOut, id: u64, y, phase| {
-            let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+            let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero touch");
             let position = if horizontal {
                 Offset::new(y, 50.0)
             } else {
@@ -1566,8 +1568,8 @@ pub(crate) fn authored_settings_retire_tap_candidates_and_deadlines() {
 fn authored_contact_owner_replacement(family: &'static str) {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_foundation::geometry::Offset;
-    use flui_interaction::GestureSettings;
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::gesture::GestureSettings;
     use flui_view::SignalWriteExt;
     use std::{cell::Cell, rc::Rc, time::Duration};
 
@@ -1596,7 +1598,7 @@ fn authored_contact_owner_replacement(family: &'static str) {
     });
     let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
     let send = |laid: &crate::common::LaidOut, id: u64, down| {
-        let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+        let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero touch");
         let position = Offset::new(50.0, 50.0);
         let event = if down {
             make_down_event_for_id(pointer, position, PointerKind::Touch)
@@ -1655,7 +1657,7 @@ fn authored_contact_owner_replacement(family: &'static str) {
 pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admission() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_foundation::geometry::Point;
-    use flui_interaction::GestureSettings;
+    use flui_interaction::gesture::GestureSettings;
     use flui_platform::{
         EventTime,
         pointer::{
@@ -1739,7 +1741,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
 
     use crate::gesture_settings::SettingsScope;
     use flui_foundation::geometry::Point;
-    use flui_interaction::{GestureSettings, GestureSettingsSource, gesture::VelocityEstimator};
+    use flui_interaction::gesture::{GestureSettings, GestureSettingsSource, VelocityEstimator};
     use flui_platform::{
         EventTime,
         pointer::{
@@ -2561,7 +2563,7 @@ pub(crate) fn a_pressure_contact_starts_peaks_and_ends_a_force_press() {
 /// drag slot publishes after recognition: an 8 px sensor jitter reaches the
 /// callback whole without it and much reduced with it.
 pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
-    use flui_interaction::{GestureSettings, gesture::OneEuroTuning};
+    use flui_interaction::gesture::{GestureSettings, OneEuroTuning};
     use flui_platform::pointer::PointerKind;
     use std::{cell::RefCell, rc::Rc};
 
@@ -2717,7 +2719,7 @@ pub(crate) fn a_rotated_axial_drag_claims_motion_along_its_own_axis() {
 /// reaches the outer one.
 pub(crate) fn a_smart_zoom_reaches_only_the_innermost_detector_under_it() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::{SmartZoomDetails, SmartZoomSource};
+    use flui_interaction::gesture::{SmartZoomDetails, SmartZoomSource};
     use flui_testing::TrackpadScript;
     use flui_widgets::{HitTestBehavior, Padding, SizedBox};
     use std::{cell::RefCell, rc::Rc};
@@ -2841,7 +2843,7 @@ pub(crate) fn a_scope_without_settings_follows_the_scope_above() {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::gesture_settings::SettingsScope;
-    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
+    use flui_interaction::gesture::{GestureSettings, VelocityEstimator};
 
     let seen = Rc::new(RefCell::new(Vec::<VelocityEstimator>::new()));
     let tree = |estimator| {

@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_interaction::{
+use flui_interaction::text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };

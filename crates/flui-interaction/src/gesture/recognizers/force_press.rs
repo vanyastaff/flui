@@ -26,12 +26,11 @@ use super::{
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
-    ForcePressDetails,
     containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt},
-    gesture::PositionSmoother,
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     gesture::settings::GestureSettingsProvider,
+    gesture::{ForcePressDetails, PositionSmoother},
     pointer::PointerDispatch,
 };
 use flui_platform::input_capabilities::PointerKindSet;

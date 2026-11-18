@@ -112,8 +112,8 @@ mod lifecycle_derivation_tests {
 
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        HitTestEntry, HitTestResult, InteractionLane, RenderId,
         events::{PointerKind, make_down_event},
+        pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
     };
     use flui_view::WidgetsBindingObserver;
 

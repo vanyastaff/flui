@@ -9,14 +9,16 @@ use std::{
     time::Duration,
 };
 
+use flui_foundation::ManualClock;
 use flui_foundation::{
     MonotonicClock as _,
     geometry::Offset,
     panic::{FailureClass, PanicRecovery},
 };
 use flui_interaction::{
-    GestureBinding, GestureDeadlineError, GestureDeadlineUpdate, ManualClock, PointerId,
-    gesture::GestureArenaMember,
+    binding::GestureBinding,
+    gesture::{GestureArenaMember, GestureDeadlineError, GestureDeadlineUpdate},
+    ids::PointerId,
 };
 use flui_platform::EventTime;
 
@@ -539,11 +541,11 @@ fn a_shared_traversal_clone_does_not_keep_the_member_alive_after_failure() {
 
 fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::pointer::PointerDispatch;
-    use flui_interaction::{
+    use flui_interaction::gesture::{
         DoubleTapGestureRecognizer, GestureRecognizer as _, LongPressGestureRecognizer,
         MultiTapGestureRecognizer,
     };
+    use flui_interaction::pointer::PointerDispatch;
     for kind in ["long press", "double tap", "multi tap"] {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -551,7 +553,7 @@ fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
         let captured = Rc::clone(&notices);
         let down = make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch)
             .expect("down fixture");
-        let recognizer: Rc<dyn flui_interaction::GestureRecognizer> = match kind {
+        let recognizer: Rc<dyn flui_interaction::gesture::GestureRecognizer> = match kind {
             "long press" => {
                 let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
                     .on_long_press(move || {
@@ -580,7 +582,7 @@ fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
             _ => {
                 let recognizer = MultiTapGestureRecognizer::builder(
                     binding.arena().clone(),
-                    flui_interaction::MultiTapCount::TWO,
+                    flui_interaction::gesture::MultiTapCount::TWO,
                 )
                 .on_multi_tap_cancel(move |_| {
                     captured.set(captured.get() + 1);
@@ -697,8 +699,8 @@ fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation()
 
 fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::gesture::{GestureRecognizer as _, LongPressGestureRecognizer};
     use flui_interaction::pointer::PointerDispatch;
-    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
@@ -786,8 +788,8 @@ fn a_wake_failure_destroys_the_last_backend_owner_before_unwind() {
 
 fn an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
+    use flui_interaction::gesture::{GestureRecognizer as _, LongPressGestureRecognizer};
     use flui_interaction::pointer::PointerDispatch;
-    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
     let drops = Rc::new(Cell::new(0));
@@ -836,7 +838,7 @@ fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
         flui_interaction::__runtime::next_deadline_snapshot(&binding),
         Some(at(&clock))
     );
-    entry.resolve(flui_interaction::GestureDisposition::Rejected);
+    entry.resolve(flui_interaction::gesture::GestureDisposition::Rejected);
     assert_eq!(
         member.rejection_deadline.get(),
         RejectionDeadlineObservation::Armed(healthy_due),
@@ -893,17 +895,17 @@ enum VerdictFault {
 
 fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault: VerdictFault) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::pointer::PointerDispatch;
-    use flui_interaction::{
+    use flui_interaction::gesture::{
         DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
     };
+    use flui_interaction::pointer::PointerDispatch;
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
     let down = make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch)
         .expect("verdict down fixture");
     let notices = Rc::new(Cell::new(0));
     let captured = Rc::clone(&notices);
-    let recognizer: Rc<dyn flui_interaction::GestureRecognizer> = match kind {
+    let recognizer: Rc<dyn flui_interaction::gesture::GestureRecognizer> = match kind {
         "long press" => LongPressGestureRecognizer::builder(binding.arena().clone())
             .on_long_press(move || captured.set(captured.get() + 1))
             .build(),
@@ -912,7 +914,7 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
             .build(),
         _ => MultiTapGestureRecognizer::builder(
             binding.arena().clone(),
-            flui_interaction::MultiTapCount::TWO,
+            flui_interaction::gesture::MultiTapCount::TWO,
         )
         .on_multi_tap_cancel(move |_| captured.set(captured.get() + 1))
         .build(),
@@ -1075,8 +1077,8 @@ fn nested_public_verdict_operation(
     fault: NestedVerdictFault,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
+    use flui_interaction::gesture::{GestureRecognizer as _, LongPressGestureRecognizer};
     use flui_interaction::pointer::PointerDispatch;
-    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
     let notices = Rc::new(Cell::new(0));
@@ -1118,7 +1120,7 @@ fn nested_public_verdict_operation(
         reenter: RefCell::new(Some(Box::new(move || match action {
             NestedVerdictAction::Abandon => arena.abandon(pointer(2)),
             NestedVerdictAction::Resolve => {
-                child_entry.resolve(flui_interaction::GestureDisposition::Accepted);
+                child_entry.resolve(flui_interaction::gesture::GestureDisposition::Accepted);
             }
             NestedVerdictAction::HeldRelease => child_entry.release(),
         }))),
@@ -1214,7 +1216,7 @@ fn nested_public_verdict_operation(
     match action {
         NestedVerdictAction::Abandon => binding.arena().abandon(pointer(3)),
         NestedVerdictAction::Resolve => {
-            fresh_entry.resolve(flui_interaction::GestureDisposition::Accepted);
+            fresh_entry.resolve(flui_interaction::gesture::GestureDisposition::Accepted);
         }
         NestedVerdictAction::HeldRelease => fresh_entry.release(),
     }
@@ -1314,7 +1316,7 @@ fn nested_public_held_release_retirement_precedes_later_callback_failure() {
 
 fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     struct NestedPollMember {
-        arena: flui_interaction::GestureArena,
+        arena: flui_interaction::gesture::GestureArena,
         due: EventTime,
         polls: Rc<Cell<usize>>,
         panic_after_retirement: bool,

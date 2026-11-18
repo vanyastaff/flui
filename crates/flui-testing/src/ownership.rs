@@ -27,12 +27,17 @@ use std::{
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::{Axis, EdgeInsets, Offset};
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
-    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
-    PointerId, PointerKind, PointerKindSet, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    gesture::{
+        DragAxis, DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer,
+        MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
+        MultiDragUpdateDetails, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    },
     gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
+    ids::PointerId,
 };
 use flui_painting::styling::Color;
+use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::pointer::PointerKind;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::environment::GestureArenaScope;
 use flui_view::prelude::*;

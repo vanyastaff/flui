@@ -4,7 +4,7 @@ use std::rc::{Rc, Weak};
 
 use crate::ui_runtime::UiRuntime;
 use flui_foundation::{PresentationAddress, geometry::WindowMetrics, panic::FirstPanic};
-use flui_interaction::InputSurface;
+use flui_interaction::ids::InputSurface;
 use flui_platform::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState, WindowInsets};
 
 use crate::HostInput;

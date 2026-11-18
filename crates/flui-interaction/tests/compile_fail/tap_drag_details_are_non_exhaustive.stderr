@@ -1,60 +1,60 @@
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:8:13
+  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:6:13
    |
- 8 |       let _ = TapDragDownDetails {
+ 6 |       let _ = TapDragDownDetails {
    |  _____________^
- 9 | |         global_position: Offset::ZERO,
-10 | |         local_position: Offset::ZERO,
-11 | |         kind: PointerKind::Touch,
-12 | |         consecutive_tap_count: 1,
-13 | |     };
+ 7 | |         global_position: Offset::ZERO,
+ 8 | |         local_position: Offset::ZERO,
+ 9 | |         kind: PointerKind::Touch,
+10 | |         consecutive_tap_count: 1,
+11 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:14:13
+  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:12:13
    |
-14 |       let _ = TapDragUpDetails {
+12 |       let _ = TapDragUpDetails {
    |  _____________^
-15 | |         global_position: Offset::ZERO,
-16 | |         local_position: Offset::ZERO,
-17 | |         kind: PointerKind::Touch,
-18 | |         consecutive_tap_count: 1,
-19 | |     };
+13 | |         global_position: Offset::ZERO,
+14 | |         local_position: Offset::ZERO,
+15 | |         kind: PointerKind::Touch,
+16 | |         consecutive_tap_count: 1,
+17 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:20:13
+  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:18:13
    |
-20 |       let _ = TapDragStartDetails {
+18 |       let _ = TapDragStartDetails {
    |  _____________^
-21 | |         global_position: Offset::ZERO,
-22 | |         local_position: Offset::ZERO,
-23 | |         kind: PointerKind::Touch,
-24 | |         consecutive_tap_count: 1,
-25 | |     };
+19 | |         global_position: Offset::ZERO,
+20 | |         local_position: Offset::ZERO,
+21 | |         kind: PointerKind::Touch,
+22 | |         consecutive_tap_count: 1,
+23 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:26:13
+  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:24:13
    |
-26 |       let _ = TapDragUpdateDetails {
+24 |       let _ = TapDragUpdateDetails {
    |  _____________^
-27 | |         global_position: Offset::ZERO,
-28 | |         local_position: Offset::ZERO,
-29 | |         delta: Offset::ZERO,
-30 | |         kind: PointerKind::Touch,
-31 | |         consecutive_tap_count: 1,
-32 | |     };
+25 | |         global_position: Offset::ZERO,
+26 | |         local_position: Offset::ZERO,
+27 | |         delta: Offset::ZERO,
+28 | |         kind: PointerKind::Touch,
+29 | |         consecutive_tap_count: 1,
+30 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:33:13
+  --> tests/compile_fail/tap_drag_details_are_non_exhaustive.rs:31:13
    |
-33 |       let _ = TapDragEndDetails {
+31 |       let _ = TapDragEndDetails {
    |  _____________^
-34 | |         velocity: Velocity::ZERO,
-35 | |         global_position: Offset::ZERO,
-36 | |         local_position: Offset::ZERO,
-37 | |         consecutive_tap_count: 1,
-38 | |     };
+32 | |         velocity: Velocity::ZERO,
+33 | |         global_position: Offset::ZERO,
+34 | |         local_position: Offset::ZERO,
+35 | |         consecutive_tap_count: 1,
+36 | |     };
    | |_____^

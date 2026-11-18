@@ -290,7 +290,7 @@ impl UiRuntime {
     ///
     /// Resumes the first failure of the owner code the commit reaches (the
     /// field's `on_changed`, the host), as
-    /// [`TextInputOwner::complete_composition`](flui_interaction::TextInputOwner::complete_composition)
+    /// [`TextInputOwner::complete_composition`](flui_interaction::text_input::TextInputOwner::complete_composition)
     /// does.
     pub fn commit_composition_for_close(&self, id: PresentationId) {
         if let Some(presentation) = self.presentations.get(id) {
@@ -1166,7 +1166,9 @@ mod tests {
         let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
         let _token = ui_runtime
             .text_input_handle()
-            .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+            .attach(flui_interaction::text_input::TextInputClient::new(
+                Rc::clone(&erased),
+            ))
             .expect("headless presentation supports text input");
         let composing = Composition {
             range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
@@ -1227,7 +1229,9 @@ mod tests {
         let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
         let _token = ui_runtime
             .text_input_handle()
-            .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+            .attach(flui_interaction::text_input::TextInputClient::new(
+                Rc::clone(&erased),
+            ))
             .expect("headless presentation supports text input");
         let composing = Composition {
             range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),

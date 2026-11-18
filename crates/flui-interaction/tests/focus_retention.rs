@@ -17,7 +17,7 @@ use flui_platform::{
 
 fn geometric_focus_navigation_pins_ranking_and_admission() {
     use flui_foundation::geometry::Rect;
-    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    use flui_interaction::focus::{FocusDirection, TraversalEdgeBehavior};
     for (name, source, rectangles, expected) in [
         (
             "beam before diagonal",
@@ -404,7 +404,7 @@ fn commit_diagnostics_preserve_focus_round_and_queued_requests() {
 
 fn directional_edges_match_linear_scope_outcomes() {
     use flui_foundation::geometry::Rect;
-    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    use flui_interaction::focus::{FocusDirection, TraversalEdgeBehavior};
     for direction in [
         FocusDirection::Up,
         FocusDirection::Down,
@@ -458,7 +458,7 @@ fn directional_edges_match_linear_scope_outcomes() {
 
 fn directional_navigation_enters_a_scope_with_nothing_focused() {
     use flui_foundation::geometry::Rect;
-    use flui_interaction::FocusDirection;
+    use flui_interaction::focus::FocusDirection;
     for (direction, expected) in [
         (FocusDirection::Down, 0),
         (FocusDirection::Right, 0),
@@ -482,7 +482,9 @@ fn directional_navigation_enters_a_scope_with_nothing_focused() {
 fn weak_traversal_links_revalidate_groups_and_registration_generations() {
     use flui_foundation::TextDirection;
     use flui_foundation::geometry::Rect;
-    use flui_interaction::{FocusTraversalOverrides, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_interaction::focus::{
+        FocusTraversalOverrides, ReadingOrderPolicy, TraversalEdgeBehavior,
+    };
     let manager = FocusManager::new();
     let group = FocusNode::new();
     group.set_can_request_focus(false);
@@ -547,7 +549,7 @@ fn weak_traversal_links_revalidate_groups_and_registration_generations() {
 
 fn directional_provider_failure_preserves_first_failure_and_recovery() {
     use flui_foundation::geometry::Rect;
-    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    use flui_interaction::focus::{FocusDirection, TraversalEdgeBehavior};
     struct Capture {
         owner: Weak<FocusNode>,
         drops: Rc<Cell<usize>>,
@@ -620,7 +622,9 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
 fn group_policy_replacement_preserves_failure_and_future_traversal() {
     use flui_foundation::TextDirection;
     use flui_foundation::geometry::Rect;
-    use flui_interaction::{FocusNodeRegistration, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_interaction::focus::{
+        FocusNodeRegistration, ReadingOrderPolicy, TraversalEdgeBehavior,
+    };
     #[derive(Debug)]
     struct ReplacingPolicy {
         group: Weak<FocusNode>,
@@ -705,7 +709,7 @@ fn group_policy_replacement_preserves_failure_and_future_traversal() {
 
 fn directional_geometry_snapshots_run_once_and_respect_reentrant_focus() {
     use flui_foundation::geometry::Rect;
-    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    use flui_interaction::focus::{FocusDirection, TraversalEdgeBehavior};
     let manager = FocusManager::new();
     manager
         .root_scope()
@@ -980,9 +984,9 @@ fn closing_manager_leaves_shared_callbacks_with_their_caller() {
 /// the caller rather than leaked by the closed binding.
 fn closing_gestures_leave_shared_callbacks_with_their_caller() {
     use flui_interaction::__runtime::{close_gestures, close_mouse_tracker};
-    use flui_interaction::GestureBinding;
-    use flui_interaction::PointerId;
+    use flui_interaction::binding::GestureBinding;
     use flui_interaction::events::PointerEvent;
+    use flui_interaction::ids::PointerId;
 
     let (route_capture, route_probe) = capture();
     let (global_capture, global_probe) = capture();
@@ -1029,7 +1033,7 @@ fn closing_gestures_leave_shared_callbacks_with_their_caller() {
 /// releases the shared payload and mouse callbacks its caller still holds.
 fn closing_dispatch_leaves_shared_payloads_with_their_caller() {
     use flui_interaction::__runtime::{CloseWindow, close_dispatch, presentation_dispatch};
-    use flui_interaction::InteractionLane;
+    use flui_interaction::pointer::InteractionLane;
     use flui_interaction::pointer::{MouseEnterCallback, MouseRegionCallbacks};
 
     let (payload_capture, payload_probe) = capture();
@@ -1548,12 +1552,12 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
         let manager = manager_probe.upgrade().expect("live manager");
         assert_eq!(
             second_probe.upgrade().expect("live second").request_focus(),
-            flui_interaction::FocusRequestOutcome::Focused
+            flui_interaction::focus::FocusRequestOutcome::Focused
         );
         manager.unfocus();
         assert_eq!(
             last_probe.upgrade().expect("live last").request_focus(),
-            flui_interaction::FocusRequestOutcome::Focused
+            flui_interaction::focus::FocusRequestOutcome::Focused
         );
         std::panic::panic_any("first queued focus failure");
     });
@@ -2033,7 +2037,7 @@ fn scoped_keys_do_not_retain_their_manager() {
 
 fn scoped_keys_stale_tokens_do_not_remove_new_registrations() {
     let manager = FocusManager::new();
-    let handler: flui_interaction::KeyEventHandler = Rc::new(|_| KeyEventResult::Handled);
+    let handler: flui_interaction::focus::KeyEventHandler = Rc::new(|_| KeyEventResult::Handled);
     let old = manager
         .register_global_key_handler(Rc::clone(&handler))
         .expect("old registration");
@@ -2063,7 +2067,7 @@ fn scoped_keys_reject_closed_owners() {
     }));
     assert!(matches!(
         result,
-        Err(flui_interaction::GlobalKeyRegistrationError::OwnerClosed)
+        Err(flui_interaction::focus::GlobalKeyRegistrationError::OwnerClosed)
     ));
     assert!(
         probe.upgrade().is_none(),
@@ -2093,7 +2097,7 @@ impl Drop for KeyCaptureRetirement {
 fn hostile_key_registration(
     manager: &Rc<FocusManager>,
     drops: Rc<Cell<usize>>,
-) -> flui_interaction::GlobalKeyRegistration {
+) -> flui_interaction::focus::GlobalKeyRegistration {
     let capture = KeyCaptureRetirement {
         drops,
         owner: Rc::downgrade(manager),

@@ -67,7 +67,7 @@ The framework side has the document but no store surface: `TextEditingController
 `Arc<Mutex<ControllerInner>>` (`crates/flui-widgets/src/text/controller.rs:263`) whose offsets are
 UTF-8 bytes (`controller.rs:34`), while macOS already converts UTF-16 `NSRange`s at the boundary
 (`crates/flui-native/src/text/apple/macos.rs:142-145`). The session owner is
-`flui_interaction::TextInputOwner`, which imports the platform trait directly
+`flui_interaction::text_input::TextInputOwner`, which imports the platform trait directly
 (`crates/flui-interaction/src/text_input/mod.rs:27`) and routes events through
 `ImeEventCallback = Rc<dyn Fn(&ImeEvent)>` (`text_input.rs:39`).
 

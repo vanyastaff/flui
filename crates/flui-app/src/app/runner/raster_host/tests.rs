@@ -2184,7 +2184,7 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
         .attach_root_widget(
             &flui_widgets::Listener::new()
                 .child(flui_widgets::SizedBox::new(20.0, 20.0))
-                .behavior(flui_interaction::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                 .on_pointer_down(move |_, _| counted.set(counted.get() + 1)),
         )
         .expect("the root attaches");

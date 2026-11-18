@@ -483,7 +483,7 @@ impl UiRuntime {
     /// both tiers; an unobserved setting plays them (ADR-0212 §1).
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn haptics(&self) -> flui_interaction::HapticsHandle {
+    pub(crate) fn haptics(&self) -> flui_interaction::haptics::HapticsHandle {
         self.presentations.primary().haptics().handle()
     }
 

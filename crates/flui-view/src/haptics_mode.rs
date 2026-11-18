@@ -78,8 +78,8 @@ impl View for HapticsMode {
 /// disabled [`HapticsMode`], with a dependency on the enclosing mode.
 pub(crate) fn scoped(
     ctx: &(impl BuildContext + ?Sized),
-    handle: flui_interaction::HapticsHandle,
-) -> flui_interaction::HapticsHandle {
+    handle: flui_interaction::haptics::HapticsHandle,
+) -> flui_interaction::haptics::HapticsHandle {
     if HapticsMode::is_enabled(ctx) {
         handle
     } else {

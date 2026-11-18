@@ -7,9 +7,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
-use flui_interaction::RemainderHandoff;
 use flui_interaction::focus::FocusNode;
-use flui_interaction::{GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues};
+use flui_interaction::gesture::RemainderHandoff;
+use flui_interaction::gesture::{
+    GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues,
+};
 use flui_testing::MouseScript;
 use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
 use flui_view::environment::VsyncScope;
