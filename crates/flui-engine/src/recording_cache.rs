@@ -1559,9 +1559,11 @@ impl RecordingCache {
         (evictions, u64::try_from(self.bytes).unwrap_or(u64::MAX))
     }
 
-    /// Evicts over the budget and starts the next frame.
+    /// Evicts over the budget, ages the candidates the frame did not draw,
+    /// and starts the next frame.
     pub(crate) fn end_frame(&mut self) {
         self.evict_over_budget();
+        self.candidates.end_frame(self.frame);
         self.frame = self.frame.saturating_add(1);
     }
 
@@ -1591,14 +1593,17 @@ impl RecordingCache {
         self.recency.len()
     }
 
-    /// The room of the recency list and of the content and lineage indexes,
-    /// in nodes and entries.
+    /// The room of the recency list, of the content and lineage indexes and
+    /// of the candidates' list and index, in nodes and entries.
     #[cfg(test)]
-    fn room(&self) -> [usize; 3] {
+    fn room(&self) -> [usize; 5] {
+        let [candidates, candidate_places] = self.candidates.room();
         [
             self.recency.room(),
             self.by_content.room(),
             self.by_lineage.room(),
+            candidates,
+            candidate_places,
         ]
     }
 
@@ -2177,27 +2182,39 @@ mod tests {
 
     /// Whatever empties the cache, an epoch, a lineage drop or an eviction
     /// over the budget, lets go of the room of the recency list and of both
-    /// indexes, so memory the budget no longer counts is not kept.
+    /// indexes, so memory the budget no longer counts is not kept. An epoch
+    /// also lets the candidates' room go, since every key they hold names
+    /// the epoch that passed; the other two leave the candidates to age out.
     #[test]
     fn a_cache_emptied_lets_its_room_go() {
         type Empty = fn(&mut RecordingCache, flui_layer::Lineage);
-        let rows: [(&str, Empty); 3] = [
-            ("an epoch", |cache, _| cache.advance_epoch()),
-            ("a lineage drop", |cache, lineage| {
-                cache.drop_lineage(lineage);
-            }),
-            ("an eviction", |cache, _| {
-                cache.set_budget(0);
-                cache.settle();
-            }),
+        let rows: [(&str, Empty, bool); 3] = [
+            ("an epoch", |cache, _| cache.advance_epoch(), true),
+            (
+                "a lineage drop",
+                |cache, lineage| {
+                    cache.drop_lineage(lineage);
+                },
+                false,
+            ),
+            (
+                "an eviction",
+                |cache, _| {
+                    cache.set_budget(0);
+                    cache.settle();
+                },
+                false,
+            ),
         ];
-        for (row, empty) in rows {
+        for (row, empty, candidates_go) in rows {
             let mut cache = RecordingCache::new();
             let keys: Vec<RecordingKey> = versions(100)
                 .into_iter()
                 .map(|content| key(&cache, content, 0.0))
                 .collect();
+            // Drawn once, as candidates, and kept under a sibling's key.
             for &key in &keys {
+                let _ = cache.admission(key);
                 cache.insert(key, recording(UNIT));
             }
             assert!(
@@ -2206,7 +2223,13 @@ mod tests {
                 cache.room()
             );
             empty(&mut cache, keys[0].content.lineage());
-            assert_eq!((cache.len(), cache.room()), (0, [0; 3]), "{row}");
+            let room = cache.room();
+            assert_eq!((cache.len(), &room[..3]), (0, &[0; 3][..]), "{row}");
+            assert_eq!(
+                room[3..].iter().all(|&room| room == 0),
+                candidates_go,
+                "{row}: the candidates' room {room:?}"
+            );
         }
     }
 }

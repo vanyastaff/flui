@@ -902,9 +902,9 @@ impl WgpuPainter {
                 );
                 return ChunkStart::Replayed;
             }
-            // A kept chunk has repeated already: it captures again now.
             self.recording_cache.remove(&key);
-        } else if self.recording_cache.admission(key) == Admission::RecordOnly {
+        }
+        if self.recording_cache.admission(key) == Admission::RecordOnly {
             return ChunkStart::Record(None);
         }
         let _ = self.state.take_clip_opened();

@@ -2063,12 +2063,13 @@ fn an_atlas_reset_misses_every_cached_recording() {
 /// no chunk: each comes from the cache, and the pixels are a fresh
 /// renderer's. After a frame that panicked once recorded it records every
 /// chunk again, since a raster panic drops the recordings (ADR-0304 §10),
-/// and its counters report the recordings the panic dropped, which no
-/// submitted frame had reported. The engine has no path that
+/// and its counters report the recordings the panic dropped with those a
+/// reclaim dropped before the panicked frame. The engine has no path that
 /// re-renders a held version of its own, so each retry is the forced full
 /// frame the frame protocol owes after the failure.
 #[test]
 fn a_frame_not_shown_is_retried_without_recording() {
+    use flui_foundation::memory::MemoryPressureLevel;
     use flui_layer::FullReason;
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -2106,12 +2107,23 @@ fn a_frame_not_shown_is_retried_without_recording() {
         "after a failed frame: the retry draws what a fresh renderer draws"
     );
 
-    // A frame that keeps every recording, then one that replays them and
-    // panics before it is submitted, which drops them.
+    // A frame that keeps every recording, a reclaim that drops them, frames
+    // that record them again and fail before they are submitted, then the
+    // frame that admits them, which keeps them and panics before it is
+    // submitted: no frame between reports what the reclaim dropped.
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
     draw_until_admitted(&mut capture, &version);
     full_frame(&mut capture, &version, FullReason::FirstFrame);
+    capture.reclaim(MemoryPressureLevel::Critical);
+    for _ in 1..DRAWS_TO_ADMIT {
+        apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+        capture.fail_next_frame_after_record();
+        assert!(
+            capture.render_scene(&scene).is_err(),
+            "the injected failure fails the frame"
+        );
+    }
     apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
     capture.panic_after_next_record();
     #[expect(
@@ -2130,9 +2142,9 @@ fn a_frame_not_shown_is_retried_without_recording() {
             retry.counters.recording_cache_hits,
             retry.counters.recording_cache_evictions
         ),
-        (MIXED_CHUNKS, 0, MIXED_CHUNKS),
+        (MIXED_CHUNKS, 0, 2 * MIXED_CHUNKS),
         "after a panicked frame: the retry records every chunk and reports \
-         the recordings the panic dropped"
+         what the reclaim and the panic dropped"
     );
     assert_eq!(
         pixels_differing(&retry.pixels, &oracle.pixels),
