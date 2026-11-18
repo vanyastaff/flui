@@ -8,6 +8,9 @@
   them); decision 8 in how `launch_for_result` is shaped (the queue, the buffering and the bridge
   through the provider context stand); and the sentence of decision 6 and the row of its
   Confirmation table that leave `windowSoftInputMode` undecided.
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask panic-boundary` gate only (Decision, Confirmation): the rule stands and its reader
+  confirms it.
 - **Related:** [ADR-0154](ADR-0154-capability-crates.md) §9 (the host bridge through the provider
   context), [ADR-0152](ADR-0152-capability-seam-revised.md) §2 items 5, 6 and 8 (`Completion`,
   the provider context, the permission vocabulary), [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)

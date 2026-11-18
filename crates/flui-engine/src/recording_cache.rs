@@ -37,6 +37,7 @@ use crate::instancing::{
     ArcInstance, CircleInstance, ClippableInstance, GlyphInstance, LinearGradientInstance,
     RadialGradientInstance, RectInstance, ShadowInstance, SweepGradientInstance,
 };
+use crate::pixel_shift::{PixelOrigin, PixelShift, Shift, split_translation};
 use crate::state_stack::ResolvedClip;
 use crate::vertex::Vertex;
 
@@ -76,13 +77,19 @@ impl CacheReads {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ResourceEpoch(NonZeroU64);
 
-/// The device transform a chunk is recorded under, as canonical bits
-/// (ADR-0098 §4): the linear part and the whole translation, so a chunk
-/// moved by any amount records again.
+/// The device transform a chunk is recorded under, as far as its IR depends
+/// on it, in canonical bits (ADR-0098 §4): the linear part and the fraction
+/// of the translation. The whole pixels of the translation are the chunk's
+/// [`PixelOrigin`], which a replay shifts its IR by. A chunk moved by whole
+/// device pixels keeps its key when the fraction keeps its bits, which it
+/// does for a translation on a dyadic grid (whole pixels, or a quarter
+/// pixel); a non-dyadic fraction can round to other bits once the
+/// translation crosses a power of two, and that move records again, as one
+/// by a fraction of a pixel does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RasterKey {
     linear: [u64; 4],
-    translation: [u64; 2],
+    fraction: [u64; 2],
 }
 
 /// A translation at or past this many device pixels is not cached: below
@@ -90,9 +97,10 @@ pub(crate) struct RasterKey {
 const TRANSLATION_LIMIT: f64 = 8_388_608.0;
 
 impl RasterKey {
-    /// The key of a chunk entered under `ctm`; `None` for a transform that
-    /// is not a finite 2D affine one, or translates past the f32 lattice.
-    pub(crate) fn of(ctm: &Matrix4) -> Option<Self> {
+    /// The key of a chunk entered under `ctm` and the origin it is drawn at;
+    /// `None` for a transform that is not a finite 2D affine one, or
+    /// translates past the f32 lattice.
+    pub(crate) fn of(ctm: &Matrix4) -> Option<(Self, PixelOrigin)> {
         let m = &ctm.m;
         let planar = [m[2], m[3], m[6], m[7], m[8], m[9], m[11], m[14]]
             .iter()
@@ -109,10 +117,11 @@ impl RasterKey {
         {
             return None;
         }
-        Some(Self {
+        let key = Self {
             linear: [m[0], m[1], m[4], m[5]].map(canonical_bits_f64),
-            translation: [m[12], m[13]].map(canonical_bits_f64),
-        })
+            fraction: [m[12], m[13]].map(|t| canonical_bits_f64(split_translation(t).1)),
+        };
+        Some((key, PixelOrigin::of_bounded(m[12], m[13])))
     }
 }
 
@@ -122,8 +131,9 @@ pub(crate) enum AmbientScissor {
     /// None, or one holding every pixel the chunk's bounds touch: no glyph
     /// was culled, so the splice writes the scissor it finds.
     Covers,
-    /// One that cuts the chunk, in the chunk's pixel frame (less the whole
-    /// pixels of its translation).
+    /// One that cuts the chunk, in the chunk's pixel frame (less its
+    /// [`PixelOrigin`]): which glyphs the cut culled is in the IR, so a chunk
+    /// moved under a fixed scissor that cuts it records again.
     Exact { x: i64, y: i64, w: u32, h: u32 },
 }
 
@@ -154,9 +164,8 @@ impl AmbientKey {
             None => AmbientScissor::Covers,
             Some(rect) if covers(rect, ctm, bounds) => AmbientScissor::Covers,
             Some((x, y, w, h)) => {
-                // Below `TRANSLATION_LIMIT`, so the floors fit.
-                let origin_x = ctm.m[12].floor() as i64;
-                let origin_y = ctm.m[13].floor() as i64;
+                // Below `TRANSLATION_LIMIT`, so the origin is exact.
+                let (origin_x, origin_y) = PixelOrigin::of_bounded(ctm.m[12], ctm.m[13]).pixels();
                 AmbientScissor::Exact {
                     x: x.checked_sub(origin_x)?,
                     y: y.checked_sub(origin_y)?,
@@ -289,6 +298,9 @@ pub(crate) struct ChunkRecording {
     runs: Vec<DrawRun>,
     /// The SDF clip every instance and batch was recorded under.
     clip: ResolvedClip,
+    /// The whole device pixels the chunk was recorded at, which every device
+    /// position it holds is relative to.
+    origin: PixelOrigin,
     /// The glyphs the recording placed, which a replay keeps placed.
     glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
     bytes: usize,
@@ -477,6 +489,8 @@ pub(crate) struct SpliceAmbient<'a> {
     pub(crate) scissor: ScissorRect,
     pub(crate) clip: ResolvedClip,
     pub(crate) chain: &'a crate::clip_chain::ClipChain,
+    /// The whole device pixels the chunk is entered at.
+    pub(crate) origin: PixelOrigin,
 }
 
 impl DrawSegment {
@@ -549,14 +563,15 @@ impl DrawSegment {
         }
     }
 
-    /// What was appended since `mark`, recorded under `clip` and placing
-    /// `glyph_keys`; `None` when it cannot be replayed alone: an arena below
-    /// its mark (the segment was replaced) or an external image (its
+    /// What was appended since `mark`, recorded under `clip` at `origin` and
+    /// placing `glyph_keys`; `None` when it cannot be replayed alone: an arena
+    /// below its mark (the segment was replaced) or an external image (its
     /// allocation is leased at recording).
     pub(crate) fn capture_since(
         &self,
         mark: &SegmentMark,
         clip: ResolvedClip,
+        origin: PixelOrigin,
         glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
     ) -> Option<ChunkRecording> {
         let Self {
@@ -739,6 +754,7 @@ impl DrawSegment {
             cached_images: cached_images.get(mark.cached_images..)?.to_vec(),
             runs: captured_runs,
             clip,
+            origin,
             glyph_keys,
             bytes: 0,
         };
@@ -748,11 +764,12 @@ impl DrawSegment {
     }
 
     /// Appends `recording` as recording its chunk here, under `ambient`,
-    /// would: every range rebased onto the arenas as they stand, the first
-    /// element of each arena merged by that arena's own rule, the ambient
-    /// scissor, SDF clip and clip chain attached. Each arena grows through
-    /// the recording budget, as a recording's would; a refusal is recorded
-    /// on it and fails the frame.
+    /// would: every range rebased onto the arenas as they stand, every device
+    /// position moved by the whole pixels between the origin it was recorded
+    /// at and the one it is entered at, the first element of each arena
+    /// merged by that arena's own rule, the ambient scissor, SDF clip and clip
+    /// chain attached. Each arena grows through the recording budget, as a
+    /// recording's would; a refusal is recorded on it and fails the frame.
     pub(crate) fn splice(&mut self, recording: &ChunkRecording, ambient: &SpliceAmbient<'_>) {
         let Self {
             budget: _,
@@ -811,6 +828,7 @@ impl DrawSegment {
             cached_images,
             runs,
             clip,
+            origin,
             glyph_keys: _,
             bytes: _,
         } = recording;
@@ -870,14 +888,24 @@ impl DrawSegment {
             glyphs: self.glyph_batch.instances.len(),
         };
 
-        extend_clipped(&mut self.rect_batch.instances, rects, reclip, entry);
-        extend_clipped(&mut self.circle_batch.instances, circles, reclip, entry);
-        self.arc_batch.instances.extend_from_slice(arcs);
-        self.shadow_batch.instances.extend_from_slice(shadows);
+        // Every device position moves from where the chunk was recorded to
+        // where it is entered; scissors and clips are the entry's already.
+        let shift = origin.shift_to(ambient.origin);
+        extend_clipped(&mut self.rect_batch.instances, rects, shift, reclip, entry);
+        extend_clipped(
+            &mut self.circle_batch.instances,
+            circles,
+            shift,
+            reclip,
+            entry,
+        );
+        extend_moved(&mut self.arc_batch.instances, arcs, shift);
+        extend_moved(&mut self.shadow_batch.instances, shadows, shift);
         self.linear_gradient_batch
             .instances
             .extend(linear_gradients.iter().map(|&instance| {
-                let instance = instance.with_stop_offset(instance.stop_offset + stop_base);
+                let instance =
+                    moved(instance, shift).with_stop_offset(instance.stop_offset + stop_base);
                 if reclip {
                     instance.with_clip(entry)
                 } else {
@@ -887,7 +915,8 @@ impl DrawSegment {
         self.radial_gradient_batch
             .instances
             .extend(radial_gradients.iter().map(|&instance| {
-                let instance = instance.with_stop_offset(instance.stop_offset + stop_base);
+                let instance =
+                    moved(instance, shift).with_stop_offset(instance.stop_offset + stop_base);
                 if reclip {
                     instance.with_clip(entry)
                 } else {
@@ -897,28 +926,36 @@ impl DrawSegment {
         self.sweep_gradient_batch
             .instances
             .extend(sweep_gradients.iter().map(|&instance| {
-                let instance = instance.with_stop_offset(instance.stop_offset + stop_base);
+                let instance =
+                    moved(instance, shift).with_stop_offset(instance.stop_offset + stop_base);
                 if reclip {
                     instance.with_clip(entry)
                 } else {
                     instance
                 }
             }));
-        extend_clipped(&mut self.glyph_batch.instances, glyphs, reclip, entry);
+        extend_clipped(
+            &mut self.glyph_batch.instances,
+            glyphs,
+            shift,
+            reclip,
+            entry,
+        );
         self.current_gradient_stops.extend_from_slice(stops);
+        // Unit-square coordinates, which the instance places.
         self.gradient_mesh_vertices.extend_from_slice(mesh_vertices);
         self.gradient_mesh_indices
             .extend(mesh_indices.iter().map(|&index| index + mesh_vertex_base));
-        self.vertices.extend_from_slice(vertices);
+        extend_moved(&mut self.vertices, vertices, shift);
         self.indices
             .extend(indices.iter().map(|&index| index + vertex_base));
         self.cached_images
             .extend(cached_images.iter().map(|draw| CachedImageDraw {
                 scissor: ambient.scissor,
                 instance: if reclip {
-                    draw.instance.with_clip(entry)
+                    moved(draw.instance, shift).with_clip(entry)
                 } else {
-                    draw.instance
+                    moved(draw.instance, shift)
                 },
                 ..draw.clone()
             }));
@@ -1004,17 +1041,43 @@ impl DrawSegment {
     }
 }
 
-/// Appends `instances`, each under `clip` when `reclip`.
-fn extend_clipped<T: ClippableInstance + Copy>(
+/// `item` moved by `shift`, or as it is when there is none.
+fn moved<T: Shift>(item: T, shift: Option<PixelShift>) -> T {
+    match shift {
+        Some(by) => item.shifted(by),
+        None => item,
+    }
+}
+
+/// Appends `items`, each moved by `shift`; a copy when there is none.
+fn extend_moved<T: Shift>(
+    arena: &mut crate::recording_budget::BudgetVec<T>,
+    items: &[T],
+    shift: Option<PixelShift>,
+) {
+    match shift {
+        Some(by) => arena.extend(items.iter().map(|&item| item.shifted(by))),
+        None => arena.extend_from_slice(items),
+    }
+}
+
+/// Appends `instances`, each moved by `shift` and under `clip` when
+/// `reclip`.
+fn extend_clipped<T: ClippableInstance + Shift>(
     arena: &mut crate::recording_budget::BudgetVec<T>,
     instances: &[T],
+    shift: Option<PixelShift>,
     reclip: bool,
     clip: ResolvedClip,
 ) {
     if reclip {
-        arena.extend(instances.iter().map(|&instance| instance.with_clip(clip)));
+        arena.extend(
+            instances
+                .iter()
+                .map(|&instance| moved(instance, shift).with_clip(clip)),
+        );
     } else {
-        arena.extend_from_slice(instances);
+        extend_moved(arena, instances, shift);
     }
 }
 
@@ -1048,6 +1111,7 @@ fn recording_bytes(recording: &ChunkRecording) -> usize {
         cached_images,
         runs,
         clip: _,
+        origin: _,
         glyph_keys,
         bytes: _,
     } = recording;
@@ -1113,6 +1177,7 @@ fn shrink_to_fit(recording: &mut ChunkRecording) {
         cached_images,
         runs,
         clip: _,
+        origin: _,
         glyph_keys,
         bytes: _,
     } = recording;
@@ -1398,7 +1463,8 @@ mod tests {
     use flui_layer::{Bounds, ContentVersion, SceneOwner};
 
     use super::{
-        AmbientKey, AmbientScissor, ChunkRecording, RasterKey, RecordingCache, RecordingKey,
+        AmbientKey, AmbientScissor, ChunkRecording, PixelOrigin, RasterKey, RecordingCache,
+        RecordingKey,
     };
     use crate::state_stack::ResolvedClip;
 
@@ -1443,6 +1509,7 @@ mod tests {
             cached_images: Vec::new(),
             runs: Vec::new(),
             clip: ResolvedClip::NONE,
+            origin: PixelOrigin::of_bounded(0.0, 0.0),
             glyph_keys: Vec::new(),
             bytes,
         }
@@ -1453,7 +1520,7 @@ mod tests {
         let ctm = translated(x, 0.0);
         RecordingKey {
             content,
-            raster: RasterKey::of(&ctm).expect("a translation is kept"),
+            raster: RasterKey::of(&ctm).expect("a translation is kept").0,
             ambient: AmbientKey::of(None, &ctm, Bounds::Unbounded, 1.0, (64, 64))
                 .expect("no scissor is kept"),
             epoch: cache.epoch().expect("a fresh cache has an epoch"),
@@ -1461,8 +1528,7 @@ mod tests {
     }
 
     /// A transform is kept when it is a finite planar affine one whose
-    /// translation stays below 2^23 pixels; its whole translation is in the
-    /// key.
+    /// translation stays below 2^23 pixels.
     #[test]
     fn a_raster_key_holds_planar_affine_transforms_in_range() {
         let mut projective = Matrix4::IDENTITY;
@@ -1493,11 +1559,109 @@ mod tests {
         ] {
             assert_eq!(RasterKey::of(&ctm).is_some(), kept, "{row}");
         }
-        assert_ne!(
-            RasterKey::of(&translated(1.0, 0.0)),
-            RasterKey::of(&translated(2.0, 0.0)),
-            "a whole-pixel move is another key"
-        );
+    }
+
+    /// The key holds the fraction of the translation and the origin its
+    /// whole pixels, so a whole-pixel move keeps the key and moves the
+    /// origin, and a fractional one changes the key.
+    #[test]
+    fn a_raster_key_holds_the_fraction_and_the_origin_the_whole_pixels() {
+        let split = |x: f64, y: f64| RasterKey::of(&translated(x, y)).expect("in range");
+        let mut scaled = translated(3.0, 4.0);
+        scaled.m[0] = 2.0;
+        let scaled_moved = {
+            let mut ctm = translated(-6.0, 9.0);
+            ctm.m[0] = 2.0;
+            ctm
+        };
+        // (row, a transform's key and origin, another's, whether the keys
+        // are the same)
+        for (row, (key, _), (other, _), same) in [
+            ("a whole move", split(1.0, 2.0), split(4.0, -3.0), true),
+            (
+                "a whole move of a fraction",
+                split(-0.5, 2.25),
+                split(2.5, 7.25),
+                true,
+            ),
+            ("a signed zero", split(-0.0, 0.0), split(0.0, -0.0), true),
+            (
+                "a move across most of the range",
+                split(-8_388_606.5, 0.75),
+                split(8_388_606.5, 0.75),
+                true,
+            ),
+            (
+                "a fractional move",
+                split(1.25, 2.0),
+                split(1.5, 2.0),
+                false,
+            ),
+            (
+                "a whole move under a scale",
+                RasterKey::of(&scaled).expect("in range"),
+                RasterKey::of(&scaled_moved).expect("in range"),
+                true,
+            ),
+            (
+                "another scale",
+                split(3.0, 4.0),
+                RasterKey::of(&scaled).expect("in range"),
+                false,
+            ),
+        ] {
+            assert_eq!(key == other, same, "{row}");
+        }
+        let origin = |x, y| split(x, y).1.pixels();
+        assert_eq!(origin(1.0, 2.0), (1, 2));
+        assert_eq!(origin(-0.5, 2.25), (-1, 2));
+        assert_eq!(origin(-0.0, 7.999), (0, 7));
+        assert_eq!(origin(-8_388_606.5, 8_388_607.0), (-8_388_607, 8_388_607));
+        // A translation just below 0 rounds `t - floor(t)` to 1.0; the key
+        // holds a fraction below 1 there, apart from a whole translation's.
+        for tiny in [
+            -(2.0_f64.powi(-60)),
+            -(2.0_f64.powi(-54)),
+            -f64::MIN_POSITIVE,
+        ] {
+            let (key, origin) = split(tiny, 0.0);
+            let fraction = f64::from_bits(key.fraction[0]);
+            assert!((0.0..1.0).contains(&fraction), "{tiny}: {fraction}");
+            assert_eq!(origin.pixels(), (-1, 0), "{tiny}");
+            assert_ne!(key, split(0.0, 0.0).0, "{tiny}");
+        }
+    }
+
+    /// The move between two origins is their difference in whole pixels,
+    /// exact at the ends of the range, and none between equal ones; a rect
+    /// moved by it lands where one recorded at the second origin does.
+    #[test]
+    fn a_move_between_origins_is_their_difference_in_whole_pixels() {
+        use crate::instancing::RectInstance;
+        use crate::pixel_shift::Shift;
+        use flui_painting::styling::Color;
+        let origin = |x, y| PixelOrigin::of_bounded(x, y);
+        assert_eq!(origin(3.5, 4.0).shift_to(origin(3.25, 4.75)), None);
+        let rect =
+            |x: f64, y: f64| RectInstance::rect(Rect::from_xywh(x, y, 2.0, 2.0), Color::RED).bounds;
+        for (from, to) in [
+            ((0.5, 0.0), (3.5, -2.0)),
+            ((-8_388_607.0, 8_388_607.0), (8_388_607.0, -8_388_607.0)),
+        ] {
+            let by = origin(from.0, from.1)
+                .shift_to(origin(to.0, to.1))
+                .expect("the origins differ");
+            let moved = RectInstance::rect(
+                Rect::from_xywh(from.0.floor(), from.1.floor(), 2.0, 2.0),
+                Color::RED,
+            )
+            .shifted(by);
+            assert_eq!(
+                moved.bounds,
+                rect(to.0.floor(), to.1.floor()),
+                "{from:?} to {to:?}"
+            );
+        }
     }
 
     /// The scissor is keyed as `Covers` when it holds every pixel the chunk
@@ -1596,7 +1760,7 @@ mod tests {
     fn a_chunk_keeps_two_recordings() {
         let mut cache = RecordingCache::new();
         let content = versions(1)[0];
-        let [first, second, third] = [0.0, 1.0, 2.0].map(|x| key(&cache, content, x));
+        let [first, second, third] = [0.0, 0.25, 0.5].map(|x| key(&cache, content, x));
         cache.insert(first, recording(10));
         cache.insert(second, recording(10));
         cache.end_frame();

@@ -14,11 +14,10 @@ default-run = "xtask"
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
-# `cargo xtask file-length`: line spans of test-only items; `cargo xtask globals`
-# parses the workspace's Rust source with syn, and `cargo xtask module-dag` the
-# imports between a crate's top-level modules (`span-locations` gives a finding its line).
+# `cargo xtask cross-typecheck` reads each crate's module tree with syn to find the files a
+# target gates (`span-locations` gives a test-only item its lines).
 proc-macro2 = { workspace = true, features = ["span-locations"] }
-# `cargo xtask markers`: Markdown read as events, not lines.
+# `cargo xtask changelog`: Markdown read as events, not lines.
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 # `cargo xtask icon-import`: SVG path data (`kurbo`) and SVG/AVD XML (`roxmltree`).

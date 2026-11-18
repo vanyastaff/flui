@@ -70,7 +70,7 @@ fn first_baseline_row(paragraph: &ShapedParagraph, scale: f32) -> i32 {
     let mut fonts = FontRegistry::new();
     let run = paragraph.runs().next().expect("the text shapes a run");
     let key = fonts.prepare_run(&run).expect("a shaped face registers");
-    run.placed_glyphs(key, (0.0, 0.0), scale)
+    run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), scale)
         .next()
         .expect("the run has a glyph")
         .y

@@ -25,7 +25,7 @@ fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
             .fonts_mut()
             .prepare_run(&run)
             .expect("a shaped face registers");
-        for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+        for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
             if let Some(image) = rasterizer.rasterize(glyph.key)
                 && image.width() > 0
             {
@@ -179,7 +179,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
                     .fonts_mut()
                     .prepare_run(&run)
                     .expect("a shaped face registers");
-                run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                     .collect::<Vec<PlacedGlyph>>()
             })
             .collect::<Vec<PlacedGlyph>>();

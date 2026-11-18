@@ -15,6 +15,8 @@
   `StartupWMClass`); [ADR-0361](ADR-0361-a-package-owns-only-the-file-types-its-application-defines-and-states-one-build-number.md)
   for §4's Apple file types only (only a type the application crate declares and the system does
   not is exported and owned)
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
   (facade features)

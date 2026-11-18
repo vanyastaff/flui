@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-09-26)
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` gate only (§1, §3, Verification): the rule stands and its reader
+  confirms it.
 - **Revised:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
 - **Revised:** 2026-10-19 — the decoded-image cache moved into the asset registry.
 - **Revised:** 2026-10-21 — the error view builder moved into UI runtime configuration.

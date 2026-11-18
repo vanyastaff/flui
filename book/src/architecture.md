@@ -5,7 +5,7 @@ explain which crates may depend on which. Start with the [concept overview](conc
 for the trees, then use this page to find the design records behind a particular subsystem.
 
 The architectural source lives in the repository's own documentation. Crate manifests declare
-the dependency rules, enforced by `cargo xtask workspace` and `cargo xtask reach`;
+the dependency rules, which a change is read against before it merges;
 `cargo xtask docs-links` checks repository documentation links. These checks do not establish
 that every described behavior is implemented. For a decision's implementation and migration
 state, read its status and the architecture file of the owning crate.

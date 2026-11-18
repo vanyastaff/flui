@@ -232,7 +232,7 @@ pub(crate) fn exact_profiles_reach_every_measurement_and_painted_run() {
         .map(|run| {
             let key = registry.prepare_run(&run).expect("painted face");
             let glyph = run
-                .placed_glyphs(key, (0.0, 0.0), 1.0)
+                .placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                 .next()
                 .expect("painted glyph");
             (glyph.key.size(), glyph.color)
@@ -430,7 +430,7 @@ pub(crate) fn captured_answers_reach_retained_clones_without_reshaping_old_geome
         .runs()
         .map(|run| {
             let key = registry.prepare_run(&run).expect("actual glyph run");
-            run.placed_glyphs(key, (0.0, 0.0), 1.0)
+            run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                 .next()
                 .expect("actual painted glyph")
                 .key

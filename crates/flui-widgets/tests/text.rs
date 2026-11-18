@@ -132,7 +132,7 @@ pub(crate) fn icon_text_sizing_keeps_box_and_glyph_together() {
                     if let DrawOp::Paragraph { paragraph, .. } = command.op {
                         for run in paragraph.runs() {
                             let key = registry.prepare_run(&run).expect("real icon face");
-                            for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                            for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
                                 assert_ne!(glyph.key.glyph_id(), 0, "the icon must not be tofu");
                                 assert_eq!(
                                     f64::from(glyph.key.size()),
@@ -268,7 +268,7 @@ pub(crate) fn the_system_text_scale_grows_each_span_once() {
             for run in paragraph.runs() {
                 let key = registry.prepare_run(&run).expect("real text face");
                 sizes.extend(
-                    run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                    run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                         .map(|glyph| glyph.key.size()),
                 );
             }

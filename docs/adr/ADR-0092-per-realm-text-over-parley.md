@@ -20,6 +20,9 @@
 - **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md) for §5's
   `GlyphImage` representation and admission only; the raster trait, font identity,
   registry ownership and shaping decisions remain in force.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` and `xtask reach` gates only (§10, Verification): the rule stands and
+  its reader confirms it.
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the UI runtime lends its context through a shared handle; Parley
   measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload
@@ -162,7 +165,7 @@ feature in `flui-painting` and `flui-engine`. It is not merged.
   - Same-key bitmap determinism: the grow test asserts `slot.texel` and `size` from the entries
     map, which `grow` never changes, and nothing rasterizes a key twice and compares bitmaps.
   - Baseline agreement to 1 px: the prototype truncates Parley's absolute y, while today's path
-    rounds the baseline (`(run.line_y * scale).round()`) and truncates only the glyph offset.
+    rounds the baseline (`(run.line_y * scale).round()`) and floors the glyph offset.
   - Variable fonts and synthetic bold and italic.
   - CJK segmentation: ICU4X logs "no segmentation model" because Parley's `complex-scripts`
     feature is off.

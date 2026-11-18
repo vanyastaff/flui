@@ -5,10 +5,9 @@
 //! `extern "system"` or `extern "C"` frame aborts the process, and out of an
 //! `extern "C-unwind"` one it unwinds through AppKit's or libdispatch's
 //! frames; contained here, it is logged and the OS gets the entry's answer
-//! after a panic. `cargo xtask panic-boundary` holds every entry of the
-//! crate to one call of [`os_entry`], and every Objective-C class's ivars to
-//! `ContainedIvars`, as it holds `flui-native`'s to that crate's boundary of
-//! the same name and contract.
+//! after a panic. Every entry of the crate is one call of [`os_entry`], and
+//! every Objective-C class's ivars are `ContainedIvars`, as in `flui-native`,
+//! whose boundary has the same name and contract.
 
 use std::any::Any;
 use std::fmt;

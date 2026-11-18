@@ -9,6 +9,8 @@
   the "edits are one line" clause);
   [ADR-0350](ADR-0350-a-quit-the-user-asks-for-asks-every-window-and-a-phone-holds-its-background-for-the-writes-in-flight.md)
   for §4's first sentence only (a `Program` quit is also the user's quit through the platform)
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the exit order
   that flushes the registry; what a panic on a close path does),
   [ADR-0260](ADR-0260-session-end-flushes-before-it-tears-down.md) (a session end consults the guard
