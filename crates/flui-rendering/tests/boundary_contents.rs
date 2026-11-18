@@ -857,3 +857,99 @@ fn a_chunk_holding_two_paints_of_its_render_object_is_a_new_recording() {
         "the chunk that now draws the child twice is a new recording"
     );
 }
+
+/// A leaf that draws a box of the colour it holds on every second paint,
+/// and nothing on the others.
+#[derive(Debug)]
+struct DrawsEverySecondPaint {
+    color: std::rc::Rc<std::cell::Cell<[f32; 4]>>,
+    paints: std::cell::Cell<u32>,
+}
+
+impl flui_foundation::inspect::Inspect for DrawsEverySecondPaint {
+    fn kind(&self) -> &'static str {
+        "DrawsEverySecondPaint"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for DrawsEverySecondPaint {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constrain(Size::new(10.0, 10.0)))
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Leaf>) {
+        let paints = self.paints.get() + 1;
+        self.paints.set(paints);
+        if paints % 2 == 0 {
+            let rect = flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                ctx.size(),
+            );
+            let color = flui_painting::styling::Color::from_rgba_f32_array(self.color.get());
+            ctx.canvas()
+                .draw_rect(rect, &flui_painting::paint::Paint::fill(color));
+        }
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_foundation::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// A render object that owed paint and is painted twice in one content
+/// owes it on both paints, though the first cleared its mark: its chunk,
+/// sealed by the second paint, is a new recording.
+///
+/// Red-check: read whether a paint of the render object is owed from its
+/// flags alone.
+#[test]
+fn a_render_object_painted_twice_owes_paint_on_both_paints() {
+    let color = std::rc::Rc::new(std::cell::Cell::new([1.0, 0.0, 0.0, 1.0]));
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).label("root").child(
+            box_node(PaintsChildTwiceWhen(std::rc::Rc::new(
+                std::cell::Cell::new(true),
+            )))
+            .child(
+                box_node(DrawsEverySecondPaint {
+                    color: std::rc::Rc::clone(&color),
+                    paints: std::cell::Cell::new(0),
+                })
+                .label("child"),
+            ),
+        ),
+    );
+    let root = registry.get("root").expect("labelled");
+    let child = registry.get("child").expect("labelled");
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = chunk_version(&content(&scene, &owner, root), child);
+
+    color.set([0.0, 0.0, 1.0, 1.0]);
+    owner.mark_needs_paint(child);
+    let owner = frame(&mut scene, owner);
+    assert_ne!(
+        chunk_version(&content(&scene, &owner, root), child),
+        before,
+        "the recoloured chunk is a new recording"
+    );
+}

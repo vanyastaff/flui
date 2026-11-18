@@ -853,7 +853,7 @@ impl PipelineOwner<PaintPhase> {
         let debug_name = render_node.debug_name();
         let visit = composer.begin_visit(
             node_id,
-            !owes_paint,
+            owes_paint,
             RecordingInputs {
                 origin,
                 anchor: anchor.map(|frame| frame.at(origin)),
@@ -1812,7 +1812,8 @@ struct OpenRun {
     inputs: Option<RecordingInputs>,
 }
 
-/// How far a render object's entries in one content have counted.
+/// How far a render object's entries in one content have counted, and what
+/// its paints there owed.
 #[derive(Clone, Copy, Debug, Default)]
 struct Ordinals {
     effects: u32,
@@ -1820,6 +1821,9 @@ struct Ordinals {
     /// The paint that sealed its first chunk: a chunk of another paint has
     /// an ordinal that is not its place in its own paint.
     first_chunk_visit: u64,
+    /// Whether a paint of it in the content owed paint work: the first paint
+    /// clears the marks a later one would read.
+    owed_paint: bool,
 }
 
 /// The collections a paint pass fills and empties, kept by the owner across
@@ -2160,12 +2164,31 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         self.counts.nodes_painted += 1;
     }
 
-    /// Starts `owner`'s paint into the innermost content.
-    fn begin_visit(&mut self, owner: RenderId, clean: bool, inputs: RecordingInputs) -> PaintVisit {
+    /// Starts `owner`'s paint into the innermost content. The paint is clean
+    /// when the render object owes no paint work now and owed none on an
+    /// earlier paint of it in the content: that paint cleared its marks, so
+    /// a second paint by its parent cannot read them any more.
+    fn begin_visit(
+        &mut self,
+        owner: RenderId,
+        owes_paint: bool,
+        inputs: RecordingInputs,
+    ) -> PaintVisit {
         let id = self.next_visit;
         self.next_visit = id
             .checked_add(1)
             .expect("BUG: a pass paints fewer than 2^64 render objects");
+        let key = (self.build().serial, owner);
+        let clean = if owes_paint {
+            self.work.ordinals.entry(key).or_default().owed_paint = true;
+            false
+        } else {
+            !self
+                .work
+                .ordinals
+                .get(&key)
+                .is_some_and(|ordinals| ordinals.owed_paint)
+        };
         PaintVisit {
             id,
             owner,
