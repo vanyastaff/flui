@@ -5829,11 +5829,17 @@ GPU-память простаивающего или невидимого окн
   (`apple::queue`), ответ вызывающему, пока лист или контроллер показан (`apple::modal`), типы
   содержимого и правило контракта для выбора (`apple::content_types`), состав share
   (`apple::share`), папки и сведения об ОС. Показ (`ios::presenter`): от корневого контроллера
-  окна виджета по цепочке `presentedViewController` до последнего; уходящий контроллер в цепочке
-  — `Busy`; после `presentViewController:` проверяется, что UIKit взял контроллер, иначе ответ
-  сразу; поповер (share на iPad) привязан к середине вида без стрелки; исключение Objective-C
-  при создании, показе или закрытии контроллера ловится (`guarded`, `objc2::exception::catch`) и
-  отвечает `SystemFailure::MalformedAnswer`, а не роняет процесс. Конец диалога
+  окна виджета по цепочке `presentedViewController` до последнего; запрос, заставший контроллер
+  цепочки уходящим (диалог, запрошенный в ответе другого), ждёт конца его перехода
+  (`transitionCoordinator`) и смотрит цепочку снова, не больше `MAX_DISMISSALS_AWAITED` раз, иначе
+  `Busy`; после `presentViewController:` проверяется, что UIKit взял контроллер, иначе ответ
+  сразу; поповер (share на iPad) привязан к середине вида без стрелки, а якорь и делегат
+  презентации ставятся только после того, как UIKit взял контроллер (презентация, созданная для
+  непоказанного контроллера, держит его навсегда); контроллер закрывается через того, кто его
+  показал (иначе UIKit снимает только то, что над ним: лист share над пикером); исключение
+  Objective-C при создании, показе или закрытии контроллера ловится (`guarded`,
+  `objc2::exception::catch`), пишется в журнал с именем и причиной и отвечает
+  `SystemFailure::MalformedAnswer`, а не роняет процесс. Конец диалога
   (ADR-0344): UIKit никому не сообщает, когда контроллер закрыл чужой код, поэтому
   обработчики, а с ними резолвер вызывающего, держит сам контроллер (действия алерта; делегат
   пикера — связанным объектом, оба свойства делегата слабые), удержание хранит только слабые
@@ -5843,13 +5849,16 @@ GPU-память простаивающего или невидимого окн
   ищется во время выполнения, тип из деклараций приложения находится по расширению, ADR-0361),
   на iOS 13 открытие с фильтрами — `NotOnThisDevice`; каждый выбор до чтения судится правилом
   контракта (имя — правилом самих фильтров запроса, `FileFilter::names`, затем тип против
-  MIME-шаблонов), отказ — `NotInFilter`; чтение — под
-  security-scoped доступом (начат до суждения, снят после чтения), через `NSFileCoordinator`,
-  вне главного потока, в пределах `OpenRequest::max_bytes` (размер проверяется до чтения, читается
-  не больше объявленного размера, одна копия); выбор отдаётся именем и содержимым, не путём
-  (доступ кончается с чтением); диалог папки — `NotYetOnThisHost`. Сохранение — экспорт:
-  содержимое пишется во временную папку под именем запроса, пикер переносит файл, папка
-  удаляется при любом конце; без содержимого — `NotOnThisPlatform`. Свайп, закрывающий пикер, —
+  MIME-шаблонов), отказ — `NotInFilter`; затем объявленные системой размеры всех выборов
+  (`NSURLFileSizeKey`, иначе `NSURLTotalFileAllocatedSizeKey`) складываются против
+  `OpenRequest::max_bytes` до любого координированного чтения, которое и скачивает файл из
+  облака (`TooLarge` без скачивания); чтение — под security-scoped доступом (начат до суждения,
+  снят после чтения), через `NSFileCoordinator`, вне главного потока, снова в пределах
+  `max_bytes` (размер открытого файла проверяется до чтения, читается не больше него, одна
+  копия); выбор отдаётся именем и содержимым, не путём (доступ кончается с чтением); диалог папки
+  — `NotYetOnThisHost`. Сохранение — экспорт: содержимое пишется во временную папку под именем
+  запроса, пикер переносит файл, папка удаляется при любом конце, включая отказ UIKit показать
+  пикер (`keep_while_shown`); без содержимого — `NotOnThisPlatform`. Свайп, закрывающий пикер, —
   отмена (делегат пикера и делегат его презентации, первый забирает вызывающего). Message box —
   `UIAlertController` в стиле alert: кнопка по умолчанию — preferred, кнопка «закрыть» (OK в
   одиночку или Cancel) — стиль cancel. Share — `UIActivityViewController`, закрывается с окном.
@@ -5858,10 +5867,18 @@ GPU-память простаивающего или невидимого окн
   лаунчера — `NotYetOnThisHost`: её форма на iOS — счётчик на значке, которому нужно
   разрешение на уведомления (в parity строка iOS — «missing», не «na»). Контракт не менялся;
   общие правила имени файла сохранения и предела чтения переехали из `web::rules` в `dialog`
-  (`save_file_name`, `admit_read`). Каждый блок, метод делегата и задача GCD — через
-  `os_entry`, ivars делегата — `ContainedIvars`; `xtask panic-boundary` зелёный. Тесты-модели на
-  всех ОС (`ios::*::tests`, `apple::*::tests`):
-  `a_presentation_starts_from_the_last_controller_and_waits_for_one_leaving`,
+  (`save_file_name`, `admit_read`); общий ход share (проверка файлов вне главного потока, затем
+  показ) — одна функция `apple::share::share_checked` для macOS и iOS, код ошибки файловой
+  системы — одна `apple::io_code`. Каждый блок, метод делегата и задача GCD — через `os_entry`,
+  ivars делегата — `ContainedIvars`, а то, что блок держит от вызывающего, он забирает в своём
+  теле, чтобы оно уничтожалось внутри границы. Тесты-модели на всех ОС (`ios::*::tests`,
+  `apple::*::tests`):
+  `a_presentation_starts_from_the_last_controller_of_the_chain`,
+  `a_request_made_while_a_controller_leaves_waits_for_it_and_presents_then`,
+  `a_chain_that_does_not_settle_answers_busy_and_never_waits_for_good`,
+  `a_dismissal_goes_through_the_presenter_so_the_controller_itself_leaves`,
+  `the_picks_declared_sizes_are_refused_past_the_bound_before_any_is_read`,
+  `a_save_whose_picker_uikit_does_not_take_removes_its_file_at_once`,
   `a_popover_is_anchored_at_a_finite_point_in_the_middle_of_the_view`,
   `a_controller_uikit_cannot_show_answers_a_typed_refusal`,
   `a_controller_that_goes_away_unanswered_ends_its_callers_completion`,
@@ -5880,9 +5897,13 @@ GPU-память простаивающего или невидимого окн
   (`cargo heli nextest run -p flui-system`), сборка библиотеки `aarch64-apple-ios` и
   `aarch64-apple-darwin` и проверка типов тестов `wasm32-unknown-unknown` на nightly в WSL; ворота
   на полу iOS (`SINCE` 13.0) не собираются (`cargo +nightly build --lib`: ошибка константы в
-  `Version::since`); clippy для iOS и macOS — только CI. С откатом своей правки красные: слабое
-  удержание заменено сильным — `a_controller_that_goes_away_unanswered_…`; без проверки уходящего
-  контроллера — `a_presentation_starts_from_the_last_controller_…`; без проверки конечности —
+  `Version::since`); clippy для iOS и macOS — только `cross-typecheck` на `main` (ADR-0370). С откатом своей правки красные: слабое
+  удержание заменено сильным — `a_controller_that_goes_away_unanswered_…`; ответ `Busy` вместо
+  ожидания уходящего контроллера — `a_request_made_while_a_controller_leaves_…`; ожидание без
+  предела — `a_chain_that_does_not_settle_…`; закрытие уже уходящего контроллера —
+  `a_dismissal_goes_through_the_presenter_…`; сумма размеров не проверяется —
+  `the_picks_declared_sizes_are_refused_past_the_bound_…`; файл экспорта оставлен делегату при
+  отказе — `a_save_whose_picker_uikit_does_not_take_…`; без проверки конечности —
   `a_popover_is_anchored_at_a_finite_point_…`; без проверки размера до чтения —
   `the_picks_are_read_within_the_requests_bound_…`; счёт по объявленному размеру вместо
   прочитанного — `a_document_is_read_to_the_size_it_declared_…`; непрочитанный тип как отказ —

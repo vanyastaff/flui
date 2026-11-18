@@ -163,6 +163,8 @@ objc2-foundation = { workspace = true, features = [
     "NSProcessInfo",
     "NSString",
     "NSURL",
+    # A picked document's declared size, an `NSNumber`.
+    "NSValue",
 ] }
 # No `UTType` binding crate: it links UniformTypeIdentifiers, which iOS 13
 # does not have, so a binary linking it would not start there. The class is
@@ -183,6 +185,8 @@ objc2-ui-kit = { workspace = true, features = [
     "UIResponder",
     "UIView",
     "UIViewController",
+    # A dismissal under way, whose end a request waits for.
+    "UIViewControllerTransitionCoordinator",
     "UIWindow",
 ] }
 block2 = { workspace = true }

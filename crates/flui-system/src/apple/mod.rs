@@ -54,6 +54,12 @@ pub(crate) fn failure(code: ErrorCode) -> SystemFailure {
     }
 }
 
+/// The code of a failed file system call, as every provider maps one: its
+/// `errno`, or zero for an error the system gave no code for.
+pub(crate) fn io_code(error: &std::io::Error) -> ErrorCode {
+    ErrorCode::Posix(error.raw_os_error().unwrap_or(0))
+}
+
 /// The `errno` values the providers name, Darwin's.
 pub(crate) mod errno {
     /// Operation not permitted.
@@ -64,6 +70,9 @@ pub(crate) mod errno {
     /// Permission denied.
     #[cfg(any(target_os = "macos", test))]
     pub(crate) const EACCES: i32 = 13;
+    /// The file exists.
+    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
+    pub(crate) const EEXIST: i32 = 17;
     /// A component of the path is not a directory.
     pub(crate) const ENOTDIR: i32 = 20;
 }

@@ -40,28 +40,77 @@ pub(crate) fn file_error(code: ErrorCode) -> ShareError {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub(crate) use foundation::{check_files, objects};
+#[cfg(target_os = "macos")]
+pub(crate) use foundation::refused;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) use foundation::{objects, share_checked};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod foundation {
     use std::path::PathBuf;
 
+    use flui_platform::capability::{CompletionSource, Resolver, WindowRef};
+    use flui_platform::{Unsupported, UnsupportedReason};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2_foundation::{NSArray, NSString, NSURL};
 
-    use super::super::{ErrorCode, file_url};
-    use super::{ShareItem, file_error};
-    use crate::share::ShareError;
+    use super::super::queue::WorkQueue;
+    use super::super::{file_url, io_code};
+    use super::{ShareItem, file_error, items};
+    use crate::share::{ShareCapability, ShareError, ShareRequest, ShareResult};
+
+    /// The refusal of a share the system cannot show, for `reason`.
+    pub(crate) fn refused(reason: UnsupportedReason) -> ShareError {
+        ShareError::Unsupported(Unsupported::of::<ShareCapability>(reason))
+    }
 
     /// Whether every file of `files` exists: what a work item checks before
     /// the share shows anything. Off the main thread only.
-    pub(crate) fn check_files(files: &[PathBuf]) -> Result<(), ShareError> {
+    fn check_files(files: &[PathBuf]) -> Result<(), ShareError> {
         for file in files {
-            std::fs::metadata(file)
-                .map_err(|error| file_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0))))?;
+            std::fs::metadata(file).map_err(|error| file_error(io_code(&error)))?;
         }
         Ok(())
+    }
+
+    /// Share `request` on `window`: check off the main thread that its
+    /// files exist, then hand its items to `show` at the owner turn that
+    /// check settles at. `show` answers `answer`, then or later.
+    ///
+    /// A missing file answers `NotFound`, a runtime with no place for the
+    /// check `Unavailable`, and a window that closed meanwhile
+    /// `WindowClosed`, each without `show`; a check whose work item
+    /// panicked ends the caller's completion as its own ended.
+    pub(crate) fn share_checked(
+        queue: &WorkQueue,
+        completions: &CompletionSource,
+        window: &WindowRef,
+        request: ShareRequest,
+        answer: Resolver<ShareResult>,
+        show: impl FnOnce(&WindowRef, &[ShareItem], Resolver<ShareResult>) + 'static,
+    ) {
+        let items = items(&request);
+        let files = request.files;
+        let (checked, check) = completions.pending::<ShareResult>();
+        let busy = Err(refused(UnsupportedReason::Unavailable));
+        queue.run(check, busy, move || check_files(&files));
+        let window = window.clone();
+        let mut waiting = Some((answer, show));
+        checked.on_complete(move |outcome| {
+            let Some((answer, show)) = waiting.take() else {
+                return;
+            };
+            let refusal = match outcome {
+                Ok(Ok(())) if window.lifetime().is_closed() => ShareError::WindowClosed,
+                Ok(Ok(())) => return show(&window, &items, answer),
+                Ok(Err(refusal)) => refusal,
+                // The resolver drops here, unanswered, as the check's did.
+                Err(_) => return,
+            };
+            // The owner retiring first leaves nothing waiting.
+            let _ = answer.resolve(Err(refusal));
+        });
     }
 
     /// `items` as the objects a share takes; `None` when a link is no URL

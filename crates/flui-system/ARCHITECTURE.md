@@ -294,39 +294,54 @@ A picker, an alert and a share sheet are presented from the requesting window's 
 controller, or from the controller it presents on top, as deep as that chain goes
 (`ios::presenter`); a window with no UIKit window answers `NoWindow`. UIKit presents only from a
 controller that presents nothing and whose presented controller is not leaving, and otherwise
-presents nothing and calls nobody: a chain with a controller still being dismissed answers `Busy`
-(the share sheet `Unavailable`), and every presentation is checked right after it was asked for,
-so one UIKit did not take answers `Busy` at once. Whatever is presented with a popover (an iPad's
-share sheet) has it anchored in the middle of the presenter's view, with no arrow, since a request
-names no control to point at and an unanchored popover raises an exception. UIKit reports a
-controller it cannot make or present by raising an Objective-C exception, which would end the
-process from inside a widget's call: each call that makes, presents or dismisses a controller runs
-where the exception is caught (`ios::presenter::guarded`) and answers
-`SystemFailure::MalformedAnswer`, and an initializer that answers no picker answers the same.
+presents nothing and calls nobody. A request that finds a controller of the chain being dismissed
+(a dialog asked for in another's answer, whose controller is still animating away) waits for that
+transition to end (`transitionCoordinator`) and looks at the chain again, at most
+`MAX_DISMISSALS_AWAITED` times; a chain that does not settle, or a dismissal with no transition to
+hear the end of, answers `Busy` (the share sheet `Unavailable`), and a request whose dialog ended
+or whose window closed while it waited presents nothing. Every presentation is checked right
+after it was asked for, so one UIKit did not take answers `Busy` at once. Whatever is presented
+with a popover (an iPad's share sheet) has it anchored in the middle of the presenter's view, with
+no arrow, since a request names no control to point at and an unanchored popover raises an
+exception. The anchor, and the presentation's delegate, are set once UIKit took the controller:
+asking a controller that is never presented for its presentation makes one that keeps it alive
+for good, so after a refusal nothing of the presentation keeps what the request made. A
+controller is dismissed through the controller that presents it: asked of a controller that
+itself presents another (a share sheet over a picker), UIKit takes down only what is above it.
+UIKit reports a controller it cannot make or present by raising an Objective-C exception, which
+would end the process from inside a widget's call: each call that makes, presents or dismisses a
+controller runs where the exception is caught (`ios::presenter::guarded`), which logs its name and
+reason and answers `SystemFailure::MalformedAnswer`, and an initializer that answers no picker
+answers the same.
 
 UIKit tells nobody when other code dismisses a presented controller, so the controller owns what
 answers it: an alert its actions' handlers, a picker its delegate, held as an associated object
-since both delegate properties are weak. They hold the caller's resolver, and the dialog's hold
-keeps only weak references (`apple::modal::WeakPending`), so the hold dismisses a controller still
-up (the caller let go, the window closed, the runtime retired) and takes the resolver first, and a
+since its delegate property is weak. They hold the caller's resolver, and the dialog's hold keeps
+only weak references (`apple::modal::WeakPending`), so the hold dismisses a controller still up
+(the caller let go, the window closed, the runtime retired) and takes the resolver first, and a
 controller UIKit releases unanswered drops the resolver with its handlers: the caller's completion
 ends `ProviderDropped` and the window is free, instead of busy for good. A picker answers once: a
 pick, a cancel, or a swipe that dismisses it (its own delegate and its presentation's both report
-an end, and the first takes the caller), which is a cancel.
+an end, and the first takes the caller), which is a cancel. A handler takes what it holds of the
+caller out of its block when it runs, so that is dropped inside the panic boundary and not when
+UIKit disposes of the block.
 
 An open is `UIDocumentPickerViewController` opening documents in place, filtered by content type
 as on macOS from iOS 14 (`UTType`, looked up at run time; a type the application's bundle declares
 is found by its extension, ADR-0361); below it an open without filters shows every document and
-one with filters answers `NotOnThisDevice`. The picker shows no title and no accept label. Every
-pick is held to the contract's rule before any is read, by its name and then its type's
-conformance to a MIME pattern's, and one the rule refuses answers `NotInFilter`. The picks are then
-read under their security-scoped access, which is started before a document is judged and stopped
-after it is read, through `NSFileCoordinator`, so a file a provider keeps in the cloud is
-downloaded first. A folder dialog answers `NotYetOnThisHost`. A save exports: its contents are
-written to a file of the request's name (the suggested name, or `Untitled`, with the first
-filter's extension when it has none) in a folder of its own in the temporary directory, the
-picker moves that file where the user chose, and the folder is removed when the export ends,
-whichever way; a save without contents answers `NotOnThisPlatform`.
+one with filters answers `NotOnThisDevice`. The picker shows no title and no accept label. Nothing
+is read, and nothing downloaded, for an answer the request will not get: under the picks'
+security-scoped access, which is started before a document is judged and stopped after it is
+read, every pick is first held to the contract's rule, by its name and then its type's conformance
+to a MIME pattern's (`NotInFilter`), and the sizes the system declares for the picks, which it
+knows of a document still in the cloud, are summed against the request's `max_bytes`
+(`TooLarge`). Only then is each read through `NSFileCoordinator`, which downloads a file a
+provider keeps in the cloud, and bounded again by the size its opened file reports. A folder
+dialog answers `NotYetOnThisHost`. A save exports: its contents are written to a file of the
+request's name (the suggested name, or `Untitled`, with the first filter's extension when it has
+none) in a folder of its own in the temporary directory, the picker moves that file where the
+user chose, and the folder is removed when the export ends, whichever way, a picker UIKit did not
+take included; a save without contents answers `NotOnThisPlatform`.
 
 The message box is a `UIAlertController` in the alert style, which no tap and no swipe dismisses:
 the title its title, the message its message, the default button the preferred action (bold, and

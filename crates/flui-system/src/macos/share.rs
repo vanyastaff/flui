@@ -4,12 +4,12 @@
 //! The picker is handed what `apple::share` makes of the request (the text
 //! as a string, the link as a URL and each file as a file URL), and offers
 //! the services that take all of it. Each file is checked to exist off the
-//! main thread first (`apple::queue::WorkQueue`), and the picker is shown
-//! at the owner turn that answer settles at, unless the window closed
-//! meanwhile. The picker names no title, so the request's title is not
-//! shown. The share answers once the picker shows the content; which
-//! service the user picks, or whether they close it, is not reported, as
-//! the contract allows.
+//! main thread first, and the picker is shown at the owner turn that answer
+//! settles at, unless the window closed meanwhile
+//! (`apple::share::share_checked`). The picker names no title, so the
+//! request's title is not shown. The share answers once the picker shows
+//! the content; which service the user picks, or whether they close it, is
+//! not reported, as the contract allows.
 
 #[cfg(target_os = "macos")]
 pub(crate) use appkit::MacShare;
@@ -20,8 +20,8 @@ mod appkit {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use flui_platform::UnsupportedReason;
     use flui_platform::capability::{CompletionSource, Resolver, WindowRef};
-    use flui_platform::{Unsupported, UnsupportedReason};
     use objc2::rc::Retained;
     use objc2::{AnyThread as _, MainThreadMarker};
     use objc2_app_kit::NSSharingServicePicker;
@@ -29,8 +29,8 @@ mod appkit {
 
     use super::super::appkit::ns_window;
     use crate::apple::queue::WorkQueue;
-    use crate::apple::share::{ShareItem, check_files, items, objects};
-    use crate::share::{ShareBackend, ShareCapability, ShareError, ShareRequest, ShareResult};
+    use crate::apple::share::{ShareItem, objects, refused, share_checked};
+    use crate::share::{ShareBackend, ShareError, ShareRequest, ShareResult};
 
     /// [`ShareBackend`] over the share picker.
     pub(crate) struct MacShare {
@@ -54,10 +54,6 @@ mod appkit {
                 shown: Rc::default(),
             }
         }
-    }
-
-    fn refused(reason: UnsupportedReason) -> ShareError {
-        ShareError::Unsupported(Unsupported::of::<ShareCapability>(reason))
     }
 
     /// Show the picker with `items` on `window`'s content view.
@@ -92,30 +88,19 @@ mod appkit {
 
     impl ShareBackend for MacShare {
         fn share(&self, window: &WindowRef, request: ShareRequest, answer: Resolver<ShareResult>) {
-            let items = items(&request);
-            let files = request.files;
-            let (checked, check) = self.completions.pending::<ShareResult>();
-            let busy = Err(refused(UnsupportedReason::Unavailable));
-            self.queue.run(check, busy, move || check_files(&files));
             let mtm = self.mtm;
-            let window = window.clone();
             let shown = Rc::clone(&self.shown);
-            let mut answer = Some(answer);
-            checked.on_complete(move |outcome| {
-                let Some(answer) = answer.take() else {
-                    return;
-                };
-                let result = match outcome {
-                    Ok(Ok(())) if window.lifetime().is_closed() => Err(ShareError::WindowClosed),
-                    Ok(Ok(())) => show(mtm, &window, &items, &shown),
-                    Ok(Err(refusal)) => Err(refusal),
-                    // The check's work item panicked: its caller's completion
-                    // ends as the check's did.
-                    Err(_) => return,
-                };
-                // The owner retiring first leaves nothing waiting.
-                let _ = answer.resolve(result);
-            });
+            share_checked(
+                &self.queue,
+                &self.completions,
+                window,
+                request,
+                answer,
+                move |window, items, answer| {
+                    // The owner retiring first leaves nothing waiting.
+                    let _ = answer.resolve(show(mtm, window, items, &shown));
+                },
+            );
         }
     }
 }

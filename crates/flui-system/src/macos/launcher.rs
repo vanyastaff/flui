@@ -115,8 +115,7 @@ impl OpenedType {
 pub(super) fn open_for_judging(path: &Path) -> Result<(std::fs::File, OpenedType), LaunchError> {
     use std::os::unix::fs::OpenOptionsExt as _;
 
-    let io_error =
-        |error: &std::io::Error| path_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0)));
+    let io_error = |error: &std::io::Error| path_error(crate::apple::io_code(error));
     let examined = std::fs::metadata(path).map_err(|error| io_error(&error))?;
     let expected = OpenedType::of(&examined).ok_or(LaunchError::NotADocument)?;
     let file = std::fs::OpenOptions::new()
@@ -199,8 +198,8 @@ mod appkit {
         // that size that outlives the call.
         let status = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) };
         if status == -1 {
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            return Err(path_error(ErrorCode::Posix(errno)));
+            let failed = std::io::Error::last_os_error();
+            return Err(path_error(crate::apple::io_code(&failed)));
         }
         let length = buffer
             .iter()
@@ -250,7 +249,7 @@ mod appkit {
     /// Show `path` selected in the Finder, once it exists.
     fn reveal(path: &Path) -> LaunchResult {
         let metadata = std::fs::symlink_metadata(path)
-            .map_err(|error| path_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0))))?;
+            .map_err(|error| path_error(crate::apple::io_code(&error)))?;
         let url = file_url(path, metadata.is_dir()).ok_or(LaunchError::NotFound)?;
         NSWorkspace::sharedWorkspace()
             .activateFileViewerSelectingURLs(&NSArray::from_slice(&[&*url]));

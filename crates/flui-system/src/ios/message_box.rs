@@ -17,6 +17,8 @@
 //! ends first (the hold dismisses it, and no handler runs) or other code
 //! dismisses it (UIKit releases it, and its handlers with the caller's
 //! resolver, so the dialog ends unanswered rather than waiting for good).
+//! A box asked for while another controller of its window is still leaving
+//! is shown once that one has left.
 
 use crate::dialog::{MessageAnswer, MessageButtons};
 
@@ -66,7 +68,9 @@ pub(crate) use uikit::IOSMessageBoxes;
 
 #[cfg(target_os = "ios")]
 mod uikit {
+    use std::cell::Cell;
     use std::ptr::NonNull;
+    use std::rc::Rc;
 
     use block2::RcBlock;
     use flui_platform::capability::{Resolver, WindowRef};
@@ -77,7 +81,7 @@ mod uikit {
         UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle,
     };
 
-    use super::super::presenter::{dismiss, guarded, present, presenter};
+    use super::super::presenter::{dismiss, guarded, present, when_presentable};
     use super::{ActionStyle, actions};
     use crate::apple::modal::{Pending, WeakPending};
     use crate::dialog::{
@@ -96,18 +100,21 @@ mod uikit {
         }
     }
 
+    /// The alert a box shows, once it shows one: a box asked for while a
+    /// controller is leaving shows it later. UIKit keeps the alert while it
+    /// is up, and the alert its handlers; this keeps neither.
+    type ShownAlert = Rc<Cell<Option<Weak<UIAlertController>>>>;
+
     /// Dismisses an alert when its dialog ends before the user answered.
-    /// UIKit keeps the alert while it is up, and the alert its handlers:
-    /// the hold keeps neither.
     struct AlertHold {
         pending: WeakPending<MessageBoxResult>,
-        alert: Weak<UIAlertController>,
+        shown: ShownAlert,
     }
 
     impl Drop for AlertHold {
         fn drop(&mut self) {
             if self.pending.dismiss()
-                && let Some(alert) = self.alert.load()
+                && let Some(alert) = self.shown.take().and_then(|alert| alert.load())
             {
                 dismiss(&alert);
             }
@@ -128,14 +135,20 @@ mod uikit {
             mtm,
         );
         for (index, button) in actions(request.buttons).iter().enumerate() {
-            let handler_pending = pending.clone();
+            // Taken by the handler when it runs, so what it holds of the
+            // caller is dropped inside the boundary.
+            let answering = Cell::new(Some(pending.clone()));
             let given = button.answer;
             let handler = RcBlock::new(move |_action: NonNull<UIAlertAction>| {
                 os_entry(
                     "UIAlertAction handler",
                     (),
                     AfterPanic::Answer(|()| ()),
-                    || handler_pending.answer(|| Ok(given)),
+                    || {
+                        if let Some(pending) = answering.take() {
+                            pending.answer(|| Ok(given));
+                        }
+                    },
                 );
             });
             let style = match button.style {
@@ -164,22 +177,34 @@ mod uikit {
             answer: Resolver<MessageBoxResult>,
         ) -> DialogHold {
             let pending = Pending::new(answer);
-            let shown = presenter(window, self.mtm).and_then(|from| {
-                let alert = guarded(|| build_alert(self.mtm, &request, &pending))?;
-                present(&from, &alert)?;
-                Ok(alert)
-            });
-            match shown {
-                Ok(alert) => DialogHold::new(AlertHold {
-                    pending: pending.downgrade(),
-                    alert: Weak::from_retained(&alert),
-                }),
-                Err(refusal) => {
-                    // UIKit shows nothing: no handler will run.
-                    pending.answer(|| Err(refusal.dialog_error::<MessageBoxCapability>()));
-                    DialogHold::new(())
+            let hold = AlertHold {
+                pending: pending.downgrade(),
+                shown: ShownAlert::default(),
+            };
+            let shown = Rc::clone(&hold.shown);
+            let mtm = self.mtm;
+            // Until the alert is up, this closure is what keeps the
+            // caller's resolver; then the alert's handlers are.
+            when_presentable(window, mtm, move |from| {
+                if !pending.is_waiting() {
+                    // The dialog ended while a controller was leaving.
+                    return;
                 }
-            }
+                let presented = from.and_then(|from| {
+                    let alert =
+                        guarded("making an alert", || build_alert(mtm, &request, &pending))?;
+                    present(&from, &alert)?;
+                    Ok(alert)
+                });
+                match presented {
+                    Ok(alert) => shown.set(Some(Weak::from_retained(&alert))),
+                    // UIKit shows nothing: no handler will run.
+                    Err(refusal) => {
+                        pending.answer(|| Err(refusal.dialog_error::<MessageBoxCapability>()));
+                    }
+                }
+            });
+            DialogHold::new(hold)
         }
     }
 }

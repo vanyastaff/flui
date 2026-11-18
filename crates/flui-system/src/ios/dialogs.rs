@@ -111,12 +111,12 @@ mod uikit {
     use objc2_foundation::{NSArray, NSString, NSURL};
     use objc2_ui_kit::{
         UIAdaptivePresentationControllerDelegate, UIDocumentPickerDelegate,
-        UIDocumentPickerViewController, UIPresentationController,
+        UIDocumentPickerViewController, UIPresentationController, UIViewController,
     };
 
     use super::super::document_access::read_picks;
-    use super::super::export::ExportFile;
-    use super::super::presenter::{Refusal, dismiss, guarded, present, presenter};
+    use super::super::export::{ExportFile, keep_while_shown};
+    use super::super::presenter::{Refusal, dismiss, guarded, present, when_presentable};
     use super::{ExportInitializer, export_of, exported, refused_open};
     use crate::apple::content_types::{
         ContentFilter, ContentType, HasContentTypes, content_filter, unsupported, ut_type,
@@ -205,19 +205,13 @@ mod uikit {
             );
         }
 
-        /// Make `self` what `picker` reports its end to, and `picker` what
-        /// keeps it: the picker's own delegate, and its presentation's,
-        /// which hears a swipe that dismisses it. Both properties are weak,
-        /// so the picker also holds the delegate as an associated object:
-        /// it lives exactly as long as the picker, and a picker UIKit
-        /// releases unanswered releases its handler with it.
+        /// Make `self` what `picker` reports a pick and a cancel to, and
+        /// `picker` what keeps it. The delegate property is weak, so the
+        /// picker also holds the delegate as an associated object: it lives
+        /// exactly as long as the picker, and a picker UIKit releases
+        /// unanswered, or never took, releases its handler with it.
         fn attach(&self, picker: &UIDocumentPickerViewController) {
             picker.setDelegate(Some(ProtocolObject::from_ref(self)));
-            if let Some(presentation) = picker.presentationController() {
-                // SAFETY: the property is weak, and the delegate lives as
-                // long as the picker whose presentation this is.
-                unsafe { presentation.setDelegate(Some(ProtocolObject::from_ref(self))) };
-            }
             let picker: *const UIDocumentPickerViewController = picker;
             let delegate: *const Self = self;
             // SAFETY: both are live objects on the main thread; the key is
@@ -237,6 +231,31 @@ mod uikit {
                 );
             }
         }
+
+        /// Hear a swipe that dismisses `picker`, which only its
+        /// presentation reports. Asked once UIKit took the picker: a
+        /// controller that is never presented keeps the presentation made
+        /// for it, and is kept by it, for good.
+        fn hear_dismissal(&self, picker: &UIDocumentPickerViewController) {
+            if let Some(presentation) = picker.presentationController() {
+                // SAFETY: the property is weak, and the delegate lives as
+                // long as the picker whose presentation this is.
+                unsafe { presentation.setDelegate(Some(ProtocolObject::from_ref(self))) };
+            }
+        }
+    }
+
+    /// Present `picker`, which reports to `delegate`, from `from`. After a
+    /// refusal nothing keeps the picker but its caller.
+    fn present_picker(
+        from: &UIViewController,
+        picker: &UIDocumentPickerViewController,
+        delegate: &PickerDelegate,
+    ) -> Result<(), Refusal> {
+        delegate.attach(picker);
+        present(from, picker)?;
+        delegate.hear_dismissal(picker);
+        Ok(())
     }
 
     /// The picker a dialog shows, once it shows one: a save shows its
@@ -325,7 +344,7 @@ mod uikit {
                     return Err(not_here());
                 }
                 let every = NSArray::from_retained_slice(&[NSString::from_str(EVERY_DOCUMENT)]);
-                return guarded(|| {
+                return guarded("making a document picker", || {
                     UIDocumentPickerViewController::initWithDocumentTypes_inMode(
                         UIDocumentPickerViewController::alloc(self.mtm),
                         &every,
@@ -342,20 +361,21 @@ mod uikit {
                 .collect::<Option<Vec<Retained<AnyObject>>>>()
                 .ok_or_else(not_here)?;
             let types = NSArray::from_retained_slice(&types);
-            let picker: Option<Retained<UIDocumentPickerViewController>> = guarded(|| {
-                // SAFETY: `initForOpeningContentTypes:asCopy:` takes an array
-                // of `UTType`s, which `types` is, on a system that has it, as
-                // the proof says, and answers the picker or nil; the picker
-                // is made on the main thread.
-                unsafe {
-                    msg_send![
-                        UIDocumentPickerViewController::alloc(self.mtm),
-                        initForOpeningContentTypes: &*types,
-                        asCopy: false
-                    ]
-                }
-            })
-            .map_err(not_presented)?;
+            let picker: Option<Retained<UIDocumentPickerViewController>> =
+                guarded("making a document picker", || {
+                    // SAFETY: `initForOpeningContentTypes:asCopy:` takes an array
+                    // of `UTType`s, which `types` is, on a system that has it, as
+                    // the proof says, and answers the picker or nil; the picker
+                    // is made on the main thread.
+                    unsafe {
+                        msg_send![
+                            UIDocumentPickerViewController::alloc(self.mtm),
+                            initForOpeningContentTypes: &*types,
+                            asCopy: false
+                        ]
+                    }
+                })
+                .map_err(not_presented)?;
             // A picker the system did not make is a failure it answered,
             // not one to panic on.
             picker.ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))
@@ -375,7 +395,7 @@ mod uikit {
         file: &NSURL,
     ) -> Result<Retained<UIDocumentPickerViewController>, Refusal> {
         let files = NSArray::from_slice(&[file]);
-        guarded(|| {
+        guarded("making an export picker", || {
             let picker = UIDocumentPickerViewController::alloc(mtm);
             match export_initializer {
                 Some(_proof) => UIDocumentPickerViewController::initForExportingURLs_asCopy(
@@ -415,10 +435,6 @@ mod uikit {
                 Ok(picker) => picker,
                 Err(refusal) => return refuse(answer, refusal),
             };
-            let from = match presenter(window, self.mtm) {
-                Ok(from) => from,
-                Err(refusal) => return refuse(answer, not_presented(refusal)),
-            };
             picker.setAllowsMultipleSelection(request.is_multiple());
             picker.setShouldShowFileExtensions(true);
             let directory = request
@@ -448,16 +464,25 @@ mod uikit {
                     });
                 }
             });
-            delegate.attach(&picker);
-            if let Err(refusal) = present(&from, &picker) {
-                // UIKit took nothing: no delegate method will run.
-                pending.answer(|| Err(not_presented(refusal)));
-                return DialogHold::new(());
-            }
-            DialogHold::new(PickerHold {
+            let hold = PickerHold {
                 pending: pending.downgrade(),
-                shown: Rc::new(Cell::new(Some(Weak::from_retained(&picker)))),
-            })
+                shown: ShownPicker::default(),
+            };
+            let shown = Rc::clone(&hold.shown);
+            // Until the picker is up, this closure is what keeps the
+            // caller's resolver; then the picker's delegate is.
+            when_presentable(window, self.mtm, move |from| {
+                if !pending.is_waiting() {
+                    // The dialog ended while a controller was leaving.
+                    return;
+                }
+                match from.and_then(|from| present_picker(&from, &picker, &delegate)) {
+                    Ok(()) => shown.set(Some(Weak::from_retained(&picker))),
+                    // UIKit took nothing: no delegate method will run.
+                    Err(refusal) => pending.answer(|| Err(not_presented(refusal))),
+                }
+            });
+            DialogHold::new(hold)
         }
 
         fn save(
@@ -512,12 +537,8 @@ mod uikit {
                     return pending
                         .answer(|| Err(DialogError::Failed(SystemFailure::MalformedAnswer)));
                 };
-                let made = presenter(&window, mtm).and_then(|from| {
-                    let picker = exporting_picker(mtm, export_initializer, &file)?;
-                    Ok((from, picker))
-                });
-                let (from, picker) = match made {
-                    Ok(made) => made,
+                let picker = match exporting_picker(mtm, export_initializer, &file) {
+                    Ok(picker) => picker,
                     Err(refusal) => return pending.answer(|| Err(not_presented(refusal))),
                 };
                 let directory = directory
@@ -526,11 +547,13 @@ mod uikit {
                 if let Some(directory) = directory {
                     picker.setDirectoryURL(Some(&directory));
                 }
-                // The file lives until the picker is released, and the
-                // delegate with it, whichever way the export ended.
+                // The file lives as long as the picker that is up, kept by
+                // the picker's delegate, whichever way the export ends.
+                let kept: Rc<Cell<Option<ExportFile>>> = Rc::default();
+                let keeps = Rc::clone(&kept);
                 let ended = pending.clone();
                 let delegate = PickerDelegate::new(mtm, move |end| {
-                    let _export = &export;
+                    let _keeps = &keeps;
                     match end {
                         PickerEnd::Cancelled => ended.answer(|| Ok(None)),
                         PickerEnd::Picked(urls) => {
@@ -538,12 +561,21 @@ mod uikit {
                         }
                     }
                 });
-                delegate.attach(&picker);
-                if let Err(refusal) = present(&from, &picker) {
-                    // UIKit took nothing: no delegate method will run.
-                    return pending.answer(|| Err(not_presented(refusal)));
-                }
-                shown.set(Some(Weak::from_retained(&picker)));
+                let shown = Rc::clone(&shown);
+                when_presentable(&window, mtm, move |from| {
+                    if !pending.is_waiting() {
+                        // The dialog ended while a controller was leaving;
+                        // dropping the file removes it.
+                        return;
+                    }
+                    let presented = from.and_then(|from| present_picker(&from, &picker, &delegate));
+                    match keep_while_shown(export, &kept, presented) {
+                        Ok(()) => shown.set(Some(Weak::from_retained(&picker))),
+                        // UIKit took nothing: no delegate method will run,
+                        // and the file is gone already.
+                        Err(refusal) => pending.answer(|| Err(not_presented(refusal))),
+                    }
+                });
             });
             DialogHold::new(hold)
         }
