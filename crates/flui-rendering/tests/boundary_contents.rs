@@ -892,7 +892,7 @@ impl flui_rendering::traits::RenderBox for DrawsEverySecondPaint {
     fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Leaf>) {
         let paints = self.paints.get() + 1;
         self.paints.set(paints);
-        if paints % 2 == 0 {
+        if paints.is_multiple_of(2) {
             let rect = flui_foundation::geometry::Rect::from_origin_size(
                 flui_foundation::geometry::Point::ZERO,
                 ctx.size(),
