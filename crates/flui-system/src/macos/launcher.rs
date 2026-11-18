@@ -11,7 +11,7 @@
 //! (`runs_when_opened`), must not be a Unix executable, and must not be an
 //! application bundle, as Launch Services' `NSURLIsApplicationKey` says;
 //! only then is that final path handed on. Every request runs as a work
-//! item off the main thread ([`WorkQueue`]), since each touches the file
+//! item off the main thread (`queue::WorkQueue`), since each touches the file
 //! system or asks Launch Services, which may wait on a volume.
 
 use std::path::Path;

@@ -12858,6 +12858,7 @@ impl core::fmt::Display for flui::platform::SystemFailure
 impl core::hash::Hash for flui::platform::SystemFailure
 impl core::marker::StructuralPartialEq for flui::platform::SystemFailure
 variant flui::platform::SystemFailure::Bus // at 2
+variant flui::platform::SystemFailure::Framework(i64) // at 4
 variant flui::platform::SystemFailure::MalformedAnswer // at 3
 variant flui::platform::SystemFailure::Os(i32) // at 0
 variant flui::platform::SystemFailure::PortalResponse(u32) // at 1

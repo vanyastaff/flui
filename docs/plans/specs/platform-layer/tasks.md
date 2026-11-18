@@ -5532,6 +5532,55 @@ GPU-память простаивающего или невидимого окн
   iOS, Android, wasm не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`,
   `reveal_path`, `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в
   `docs/gaps.md`.
+- [x] **LY58** (закрыта веткой `system/macos-providers`: провайдеры macOS всех служб, кроме
+  jump list; прогоны на Mac — заметки строк parity). `crates/flui-system/src/macos/` на objc2:
+  файловые диалоги — листы `NSOpenPanel`/`NSSavePanel` на окне виджета, message box — лист
+  `NSAlert`, share — поповер `NSSharingServicePicker`; ответ листа и удержание делят резолвер
+  (`macos::sheet::Pending`), сброшенное удержание (вызывающий ушёл, окно закрылось, runtime
+  отставлен) закрывает лист `endSheet:returnCode:`, и обработчик никому не отвечает (ADR-0344).
+  Фильтры (ADR-0360 §3, §4): расширение — `UTType` его последней части, MIME — его тип, семейство
+  (`image/*`, `audio/*`, `video/*`, `text/*`, `font/*`) — системный тип, иное семейство —
+  `NotOnThisPlatform`; многочастное расширение (`tar.gz`) открывающая панель проверяет по имени
+  делегатом (`panel:shouldEnableURL:`); меню фильтров нет, сохранение не сообщает выбранный
+  фильтр. Лаунчер — `NSWorkspace` вне главного потока (очередь GCD, не больше
+  `WorkQueue::MAX_IN_FLIGHT` на runtime): документ открывается, итоговый путь (`F_GETPATH`)
+  судится полом имён, битом исполнения и `NSURLIsApplicationKey`, затем `openURL:` по нему;
+  reveal — `activateFileViewerSelectingURLs:`, trash — `trashItemAtURL:`. Автозапуск —
+  `SMAppService.mainAppService` (macOS 13; ниже — `NotOnThisDevice`), выключение пользователем
+  (`requiresApproval`) не перезаписывается: включение отвечает `Disabled`. Глобальные сочетания
+  — Carbon `RegisterEventHotKey` (нажатие и отпускание, номера не переиспользуются). Запись
+  лаунчера — плитка Dock (значок и полоса, неопределённый прогресс не показывается). Папки —
+  `URLsForDirectory:inDomains:`, сведения об ОС — `NSProcessInfo` и Rosetta. Ворота версий —
+  `macos::version` той же формы, что в `flui-native` (до него ёмкостный крейт не дотягивается),
+  пол — `macos/floor.rs` от `cargo xtask platform-floor`; класс выше пола ищется во время
+  выполнения (`UTType`, `SMAppService`). Контракт: `SystemFailure::Framework(i64)` — код
+  `NSError` вне POSIX или `OSStatus`. Каждый блок, задача GCD, метод класса и обработчик Carbon —
+  через `owner::panic_boundary::os_entry`, ivars класса — `ContainedIvars`; `xtask
+  panic-boundary` зелёный. Тесты-модели на всех ОС (`macos::*::tests`):
+  `only_a_document_or_a_plain_folder_is_handed_on`,
+  `a_file_system_error_is_named_where_the_contract_names_it`,
+  `a_filter_allows_each_type_once_and_a_several_part_extension_by_its_last_part`,
+  `a_mime_family_macos_has_no_type_for_is_refused_rather_than_widened`,
+  `a_name_matches_as_the_contract_says`,
+  `an_ended_panel_answers_its_picks_a_cancel_or_why_it_could_not`,
+  `the_first_of_the_answer_and_the_dismissal_takes_the_caller`,
+  `each_button_answers_its_answer_and_no_other_response_is_one`,
+  `enabling_registers_once_and_the_users_switch_off_stands`,
+  `disabling_unregisters_what_is_registered_and_nothing_else`,
+  `a_refusal_and_a_failure_are_named_and_an_unbundled_application_has_no_item`,
+  `a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_numbers_are_never_reused`,
+  `a_trigger_is_its_key_code_and_flags_and_is_shown_as_macos_writes_it`,
+  `the_tile_shows_the_count_and_a_known_extent_and_says_so`,
+  `each_folder_is_the_one_foundation_keeps_and_templates_none`,
+  `the_system_is_macos_at_its_version_on_the_machines_processor`,
+  `a_runtime_holds_a_bounded_number_of_places_and_each_comes_back_when_dropped`, ворота
+  `the_login_item_is_there_from_macos_13_on`, `content_types_are_there_from_macos_11_on`,
+  `a_gate_opens_from_its_version_on_and_never_for_an_unknown_one`. Проверено: модели на Windows и
+  Linux (WSL), проверка типов `aarch64-apple-darwin` на nightly в WSL; clippy для macOS — только
+  CI. Не запускалось: ни одна панель, лист, запуск, сочетание, вход в систему, плитка Dock на
+  Mac; цель `x86_64-apple-darwin` (ворота `UTType`) не проверялась здесь. Чего macOS не достаёт
+  до контракта (буква сочетания по позиции ANSI, номера Carbon общие для двух runtime, английские
+  подписи кнопок, суффикс многочастного расширения при сохранении) — `docs/gaps.md`.
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`

@@ -152,6 +152,85 @@ A user folder is `SHGetKnownFolderPath`'s, on a shell thread, since a redirected
 the network; `PublicShare` is `FOLDERID_Public`. A folder the user does not have answers none, and
 a relative path the system's contract excludes is `MalformedAnswer`.
 
+## macOS (`macos`)
+
+The `macos` module provides every service but the jump list, which macOS has no form of (the
+Dock menu is the application delegate's, the host's). Each provider's rules (what a request
+becomes, what an answer means) are functions of its file over plain values, compiled and tested on
+every host (`macos::*::tests`); the AppKit, Foundation, ServiceManagement and Carbon calls are the
+file's `macos`-only `appkit` module, checked by CI's macOS type-check. The owed Mac runs are in the
+parity rows.
+
+Threads:
+
+- **AppKit runs on the main thread**, the UI runtime's owner thread in a macOS application: the
+  panels, the alert, the share picker, the Dock tile and the hot keys are acquired with a
+  `MainThreadMarker`, and a runtime whose owner thread is not the main thread (the headless host)
+  is refused them with `NotYetOnThisHost` before AppKit is touched.
+- **Work that touches the file system or waits on a daemon runs on a global dispatch queue**
+  (`macos::queue::WorkQueue`): the launcher, the share picker's file check, the login item and the
+  user's folders, at most `WorkQueue::MAX_IN_FLIGHT` per runtime; a request past that answers its
+  refusal with `Unavailable`, and a work item gives its place back on every exit. No file system
+  call runs on the main thread (ADR-0360 §2).
+
+Every block, work item, Objective-C method and Carbon handler the system calls is one call of
+`owner::panic_boundary::os_entry`, and the one class the crate declares (the open panel's name
+check) keeps its ivars in `ContainedIvars`, which `cargo xtask panic-boundary` checks here as in
+`flui-native`.
+
+A feature newer than the floor is behind a gate of `macos::version` (ADR-0244 §4): a marker with its
+`SINCE`, a `Since` proof the call takes, and a compile error for a gate at or below the floor, which
+`macos/floor.rs` states, generated from `platform-support.toml` by `cargo xtask platform-floor`. The
+floor is 10.13 on x86_64 and 11.0 on arm64, so a gate between them exists on x86_64 only. A class
+above the floor is looked up at run time, never linked: `UTType` (macOS 11, in a framework 10.15
+lacks) through `AnyClass::get`, `SMAppService` (macOS 13) through objc2's lookup behind the proof.
+
+A dialog and the alert are sheets on the acquiring widget's window (`beginSheetModalForWindow:`),
+and a window with no AppKit window answers `NoWindow`. The sheet's completion handler and the
+dialog's hold share the caller's resolver (`macos::sheet::Pending`): the first to come takes it, so
+a hold dropped while the sheet is up (the caller let go, the window closed, the runtime retired)
+ends the sheet (`endSheet:returnCode:`), and the handler that ending runs answers nobody
+(ADR-0344). A filter becomes the panel's allowed content types: an extension the `UTType` of its last
+part, a MIME type its type, a MIME family (`image/*`, `audio/*`, `video/*`, `text/*`, `font/*`) the
+family's system type; another family is refused `NotOnThisPlatform` rather than widened. An open
+panel with a several-part extension (`tar.gz`) checks names itself through its delegate
+(`panel:shouldEnableURL:`), which enables a folder to browse or a file the contract's rule admits
+(ADR-0360 §3, §4). A panel has no filter menu, so every filter's types are allowed at once and a save
+reports no selected filter. The alert adds its buttons default first, so AppKit puts it rightmost and
+gives Escape to the button titled Cancel.
+
+Launching opens no shell. A URI goes to `NSWorkspace` `openURL:` as written once
+`URLForApplicationToOpenURL:` finds a handler. A document is opened first (`open(2)`, following
+links), and its final path (`F_GETPATH`) is judged: the name floor (`runs_when_opened`), an execute
+bit on a regular file, and a folder Launch Services calls an application (`NSURLIsApplicationKey`)
+are `NotADocument`; only then is the final path handed to `openURL:`, while the file is still open.
+Reveal is `activateFileViewerSelectingURLs:` once the path exists; trash is `NSFileManager`
+`trashItemAtURL:`, a volume with no trash `NotOnThisDevice`.
+
+The share picker is a popover on the window's content view, shown at the owner turn where the file
+check settles, unless the window closed meanwhile; it shares the text as a string, the link as a URL
+and each file as a file URL, and has no title.
+
+Autostart is the application's own login item, `SMAppService.mainAppService`. The user's switch-off
+in System Settings (`requiresApproval`) is never registered over: enabling then answers `Disabled`.
+An unbundled executable has no item (`NotDeclared`).
+
+A global shortcut is a Carbon hot key (`RegisterEventHotKey`), which needs no Accessibility
+permission and reports the release. The runtime's handler on the application event target is
+installed with its first binding; a shortcut is bound to the trigger it prefers or left out of
+`Bound` (no preferred trigger, F21 to F24, which have no key code, or a chord another application
+holds); a letter is bound by its position on an ANSI keyboard; a hot key number is never handed out
+twice in a runtime's life, and the handler passes on an event whose number it does not hold.
+
+The launcher entry is the application's Dock tile: the count its badge, in full; a known extent a bar
+over the application's icon in the tile's content view. The Dock draws the tile once per change, so
+an indeterminate bar could not move and shows no progress.
+
+A user folder is `URLsForDirectory:inDomains:` in the user's domain (Movies for videos, Public for
+the public share; there is no templates folder), the home folder `NSHomeDirectory`; a folder the
+user does not have answers none. The system information is `NSProcessInfo`'s version, read once per
+runtime, and the machine's processor, Arm64 for a process Rosetta translates.
+
 ## Linux (`portal`)
 
 - One `Portal` per UI runtime (`ProviderContext::runtime_local`): a thread of its own runs a
@@ -193,12 +272,15 @@ a relative path the system's contract excludes is `MalformedAnswer`.
 - `crates/flui-system/tests/` (`system_it`, feature `testing`): the handles through the public API
   on a headless host over `testing::ScriptedSystem`, and the conformance table
   `every_provider_keeps_the_system_services_contract`, every service run against the doubles and
-  against `SystemPlugin` on the host it runs on (the Windows shell or the Linux portal), asking
-  nothing a user answers. Against the platform's providers it proves acquisition, the seam's
+  against `SystemPlugin` on the host it runs on (the Windows shell, AppKit or the Linux portal),
+  asking nothing a user answers. Against the platform's providers it proves acquisition, the seam's
   refusals and the launcher entry's shared state only (its windows are headless), and the system's
   name and home folder.
-- `win32::*::tests`: each Windows provider at its OS seam, with the stand-ins and the test owner
-  of the crate's kit (`testing::win32`, test builds on Windows only); `win32::modal::tests` and
+- `win32::*::tests`: each Windows provider at its OS seam, with the test owner
+  (`testing::owner`) and the stand-ins of the crate's kit (`testing::win32`, test builds on
+  Windows only); `win32::modal::tests` and
   `win32::dialogs::tests` run the dialog thread and its dismissal window with a stand-in dialog.
 - `tests/portal.rs` and `tests/portal_services.rs` (Linux): the portal providers against a
   stand-in portal on a private bus.
+- `macos::*::tests` (every host): each macOS provider's rules as a model, with the system's answers
+  as inputs and `testing::owner::TestOwner`'s turns; the AppKit calls compile only for macOS.

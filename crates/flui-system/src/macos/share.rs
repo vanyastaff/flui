@@ -4,7 +4,7 @@
 //! The text is shared as a string, the link as a URL and each file as a
 //! file URL, in that order; the picker offers the services that take all of
 //! them. Each file is checked to exist off the main thread first
-//! ([`WorkQueue`]), and the picker is shown at the owner turn that answer
+//! (`queue::WorkQueue`), and the picker is shown at the owner turn that answer
 //! settles at, unless the window closed meanwhile. The picker names no
 //! title, so the request's title is not shown. The share answers once the
 //! picker shows the content; which service the user picks, or whether they
@@ -59,9 +59,9 @@ mod appkit {
 
     use flui_platform::capability::{CompletionSource, Resolver, WindowRef};
     use flui_platform::{Unsupported, UnsupportedReason};
-    use objc2::{AnyThread as _, MainThreadMarker};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
+    use objc2::{AnyThread as _, MainThreadMarker};
     use objc2_app_kit::NSSharingServicePicker;
     use objc2_foundation::{NSArray, NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSURL};
 

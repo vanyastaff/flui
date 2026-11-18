@@ -7,7 +7,7 @@
 //! [`UserDir::PublicShare`] is the Public folder file sharing serves, and
 //! [`UserDir::Videos`] is Movies. A folder the system names but the user
 //! does not have (deleted, never made) is none too. Each lookup runs off the
-//! main thread ([`WorkQueue`]), since the home folder may be on a network
+//! main thread (`queue::WorkQueue`), since the home folder may be on a network
 //! volume.
 
 use crate::user_dirs::UserDir;

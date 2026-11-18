@@ -8,7 +8,7 @@
 //! again. Registering asks nobody (the system posts its own notice), so a
 //! request's reason is not shown. Below macOS 13 the service is not there
 //! and every request answers `NotOnThisDevice`. Each request runs off the
-//! main thread ([`WorkQueue`]), since the service waits on its daemon.
+//! main thread (`queue::WorkQueue`), since the service waits on its daemon.
 
 use flui_platform::{Unsupported, UnsupportedReason};
 
