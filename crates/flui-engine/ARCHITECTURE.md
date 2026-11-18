@@ -216,15 +216,27 @@ which drops every entry, as a raster panic does (ADR-0304 §10). The target
 format is not among them: no recording names a pipeline. A hit marks its glyphs
 used for the frame (`GlyphAtlas::retain`), and a glyph gone since is a miss.
 Entries over 64 MiB, or past two per chunk, are evicted least recently
-rastered first. The entries sit in a `RecencyList` (`recency.rs`) in the order
-they were last rastered, so a frame's eviction takes the oldest and looks at
-no entry it keeps, whatever the cache holds
-(`a_cache_over_its_budget_looks_only_at_what_each_frame_evicts`). A content
-version compares equal only within its lineage, so once no target draws a
-lineage (`DrawnLineages`: each slot that drew it detached or draws another
-scene owner's version, or a `Renderer` drew another) its entries are dropped
-in that frame, at the cost of the entries dropped
-(`a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings`).
+rastered first. Each entry is boxed in a `RecencyList` (`recency.rs`) in the
+order it was last rastered, and two indexes name its place: one by content
+version, one by lineage. Both are `TalliedMap`s (`tallied_map.rs`), which the
+cache reaches only through methods that count, in a test build, every entry
+they touch, as the list counts every node. A frame's eviction takes the oldest
+and touches no entry it keeps, whatever the cache holds
+(`a_cache_over_its_budget_looks_only_at_what_each_frame_evicts`,
+`an_eviction_looks_only_at_the_recordings_it_evicts`). A content version
+compares equal only within its lineage, so once no target draws a lineage
+(`DrawnLineages`: each slot that drew it detached or draws another scene
+owner's version, or a `Renderer` drew another) its entries are dropped in that
+frame through the lineage index, at the cost of the entries dropped
+(`a_lineage_no_target_draws_drops_its_recordings`,
+`a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings`,
+`a_renderer_frame_of_another_owners_version_drops_the_first_owners_recordings`).
+The slots of a `GpuContext` note their lineage in the context, which shares one
+painter; a `Renderer` and the headless capture that stands in for it note
+theirs in `FrameProtocol::plan_scene`. An entry is charged its recording's
+bytes and its node in the list and its place in both indexes; a cache an epoch, a
+reclaim, a lineage drop or an eviction empties lets go of the room of all
+three (`a_cache_emptied_lets_its_room_go`).
 A `Full(DamageOff)` frame, a window's or an offscreen slot's, does not read the
 cache; evictions are counted until a submitted frame reports them, and bytes by
 the capacity a recording holds, which a capture allocates to its length.
