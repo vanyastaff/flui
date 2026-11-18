@@ -1811,9 +1811,9 @@ available; both SDK-tools packaging and generated Gradle configuration enforce i
 The owner accepts a reply only while its window remains live and the sampled
 physical size matches the current native window; a reply taken at an older size
 is asked for once more. The window asks on every resize, configuration change,
-new native window, `Start` and inset change `FluiView` reports from
-`onApplyWindowInsets`; every 500 ms while on screen only until the view is in the
-window. From API 30 the insets are the
+new native window, the loop's first turn, `Start` and inset change `FluiView`
+reports from `onApplyWindowInsets`, which the system also calls as the view
+enters the window; nothing asks on a timer (ADR-0377). From API 30 the insets are the
 visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
 outstanding; a request while it is out asks once more after its reply settles,
@@ -2877,33 +2877,37 @@ installation that fails or stops short reaches the owner once as
 long-press timeout is read from its secure setting, since `ViewConfiguration`'s
 copy can still be old when the observer fires.
 
-The Android and AppKit sources are one model, `preferences::read::NoticedPreferences`,
-over what each system supplies (`NativePreferences`: the read, the clock, the
-activity gate and the retry timer). A notice re-arms a source whose retries ran
-out (the Android loop calls it before it reads on `ConfigChanged`, a view report
-or `Start`; each AppKit observer runs `notice_handler`, which also wakes the
-owner). A read inside the owner's turn returns what changed to that turn's
-caller, which delivers it, so it wakes nobody; a read outside a turn wakes the
-owner for a change or a recovered read. One notice is therefore one owner turn.
-A failed or panicking read is retried on `Retries` (0.5 to 16 s apart, six
-times) while the gate admits it (AppKit: the application is active; Android:
-the loop's own `Start` gate), then waits for the next notice; the AppKit retry
-is a timer on the owner queue, the Android one the loop's wait bounded by the
-source's retry deadline. A cold source has no accepted observation; an initial
-query error cannot abort platform bootstrap or publish a fabricated default.
-Successful recovery requests owner delivery even when the comparison value is
-unchanged: a prior failed consumer read must not strand the accepted
-observation. Healthy unchanged observations remain quiet. The model's tests
-drive it through `NativePreferences` with the owner signal and its turn in
-virtual time (`an_idle_source_never_wakes_the_owner`,
-`one_change_notice_is_one_owner_turn`,
+The Android and AppKit sources are one model, `preferences::read::NoticedPreferences`
+(ADR-0377), over what each system supplies (`SystemReads`: the read, the clock,
+and `Retrying`, a timer while the application is active on AppKit, the loop's
+deadline on Android). The Android loop decides which notices read in
+`poll::LoopReads::hear` (`ConfigChanged` and a view report read at once, `Start`
+at the next turn; each tells the source first, which re-arms one whose retries
+ran out); each AppKit observer runs `notice_handler`, which notices and wakes the
+owner. A value counts as accepted only when the application confirms its
+delivery (`Platform::preferences_delivered`, which `refresh_preferences_with`
+calls after `update_preferences` succeeds). A change read inside the
+application's turn (`OwnerSignal::in_application_turn`, not the owner-work part
+of a turn) is owed to that turn (`owe_delivery`): delivered, it costs nothing
+more; dropped, the turn's end wakes the owner once more, and a second drop of the
+same value waits for a notice. A change read anywhere else wakes the owner. One
+notice is therefore one owner turn. A failed or panicking read (the panic is
+contained in the source and its payload discarded) is retried on `Retries`, 0.5
+to 16 s apart six times, then waits for the next notice. A cold source has
+delivered nothing; an initial query error cannot abort platform bootstrap or
+publish a fabricated default. The model's tests drive it through `SystemReads`
+with the owner signal and its turn in virtual time
+(`an_idle_source_never_wakes_the_owner`, `one_change_notice_is_one_owner_turn`,
+`a_change_a_turn_drops_is_read_again_once`,
 `failed_reads_back_off_and_stop_until_the_next_notice`); AppKit's getters and
 observers themselves run only on a Mac.
-Failed or unwinding native reads restore a 500ms admission deadline; unrelated
-owner wakes cannot repeat the getter early. Reentrant reads return
-`PreferencesDeferred` before native work, and foreign calls do not affect that
-admission. `bounded_native_read_admission` exercises this portable production
-guard through failure, competing admission and recovery after unwind.
+A failed or panicking read leaves the admission's next retry deadline
+(`READ_RETRIES`); unrelated owner wakes cannot repeat the getter early, and a
+read before the deadline or after the retries ran out returns
+`PreferencesDeferred` before native work. A read off the owner thread is refused
+before the admission and changes nothing. `bounded_native_read_admission`
+exercises the admission through failure, competing admission and recovery after
+unwind.
 
 Android API26 public horizontal/vertical scroll factors normalize fractional
 axis values to logical pixel deltas exactly once. API21–25 resolve the public
@@ -6399,9 +6403,9 @@ the window's `frame_rate_hint` capability is `Unavailable` and the hint answers
 **Alternatives considered:**
 - `DisplayManager.DisplayListener` — it needs a Java object implementing the
   interface, which a `NativeActivity` app without Java code does not have.
-- Polling `Display.getRefreshRate` — the 500 ms preference poll is a bound on
-  configuration getters with no notification, and a display read would cost a
-  second round trip each time for a value the choreographer announces.
+- Polling `Display.getRefreshRate` — the loop polls nothing (ADR-0249, ADR-0377),
+  and a display read on a timer would cost a round trip each time for a value
+  the choreographer announces.
 - Linking `android_get_device_api_level` or the API 30 functions directly — the
   binary does not load on an older system.
 

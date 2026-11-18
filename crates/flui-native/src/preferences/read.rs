@@ -1,6 +1,5 @@
 //! How the AppKit and Android preference sources read the system and wake
-//! their owner: told, never polled
-//! ([ADR-0377](../../../../docs/adr/ADR-0377-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)).
+//! their owner: told, never polled (ADR-0377).
 //!
 //! [`NoticedPreferences`] is the one model both sources are. What differs per
 //! system sits behind [`SystemReads`]: the read itself, the clock, and how a
@@ -67,9 +66,17 @@ pub(crate) enum Retrying<'a> {
     /// The owner's loop blocks no longer than
     /// [`NoticedPreferences::retry_deadline`] and reads then; it gates its
     /// own reads on the application running (the Android loop).
+    #[cfg_attr(
+        not(any(target_os = "android", test)),
+        expect(dead_code, reason = "only the Android loop retries at its deadline")
+    )]
     AtLoopDeadline,
     /// A timer wakes the owner, armed only while the application is active
     /// (AppKit).
+    #[cfg_attr(
+        not(any(target_os = "macos", test)),
+        expect(dead_code, reason = "only AppKit retries on a timer")
+    )]
     OnTimer(&'a dyn RetryTimer),
 }
 

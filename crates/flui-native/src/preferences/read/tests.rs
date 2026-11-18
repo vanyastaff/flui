@@ -82,7 +82,8 @@ impl SystemReads for VirtualSystem {
     }
 
     fn retrying(&self) -> Retrying<'_> {
-        match self.state.lock().host {
+        let host = self.state.lock().host;
+        match host {
             Host::AppKit => Retrying::OnTimer(self),
             Host::Android => Retrying::AtLoopDeadline,
         }
