@@ -618,9 +618,9 @@ impl InputPicker {
             alive: RefCell::new(None),
         });
         let listeners = InputListeners {
-            change: shown.listener(|shown| shown.picked()),
+            change: shown.listener(Self::picked),
             cancel: shown.listener(|shown| shown.finish(Ok(None))),
-            focus: shown.listener(|shown| shown.focused()),
+            focus: shown.listener(Self::focused),
             hidden: shown.listener(|shown| shown.finish(Ok(None))),
             grace: {
                 let ended = Rc::downgrade(&shown);
@@ -649,15 +649,14 @@ impl InputPicker {
 
         // `showPicker` where the browser has it, which throws a refusal a
         // `click` would swallow.
-        let opened = match method(shown.input.as_ref(), "showPicker") {
-            Some(show_picker) => show_picker
+        let opened = if let Some(show_picker) = method(shown.input.as_ref(), "showPicker") {
+            show_picker
                 .call0(shown.input.as_ref())
                 .map(|_| ())
-                .map_err(|thrown| exception(&thrown)),
-            None => {
-                shown.input.click();
-                Ok(())
-            }
+                .map_err(|thrown| exception(&thrown))
+        } else {
+            shown.input.click();
+            Ok(())
         };
         if let Err(refused) = opened {
             let error = if rules::is_activation_refusal(refused) {
@@ -691,9 +690,8 @@ impl InputPicker {
         let Some(answer) = answer else {
             return;
         };
-        let files: Vec<File> = files
-            .map(|list| (0..list.length()).filter_map(|at| list.get(at)).collect())
-            .unwrap_or_default();
+        let files: Vec<File> =
+            files.map_or_default(|list| (0..list.length()).filter_map(|at| list.get(at)).collect());
         let filters = self.filters.clone();
         let limit = self.limit;
         let waiting = Rc::clone(&self.waiting);
