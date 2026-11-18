@@ -38,6 +38,9 @@ mod channel;
 pub(crate) use channel::SubscribedChannel;
 pub use channel::{NotificationCallback, Notifier, NotifierCallback, RecoveryCallback};
 
+mod subscription;
+pub use subscription::Subscription;
+
 /// A listener callback function.
 // Stored callbacks own their captures for the subscription's lifetime.
 pub type ListenerCallback = Rc<dyn Fn() + 'static>;
@@ -699,120 +702,6 @@ impl<T> ValueNotifier<T> {
         T: 'static,
     {
         self.notifier().listen(listener)
-    }
-}
-
-/// An owned registration on a [`Listenable`] source: hold it, and its
-/// listener fires; drop it, and it detaches.
-///
-/// The subscription remembers the channel it subscribed on, so its detach
-/// removes exactly the listener it registered: a [`ListenerId`]'s value alone
-/// can never name another channel's registration (ids are minted per channel,
-/// from one). A channel that was disposed, or is already gone, detaches
-/// quietly: its listener table is empty and its id names nothing.
-///
-/// A detach that lands inside its channel's own notify round withdraws the
-/// callback through that round's retirement: it destroys outside the channel's
-/// borrow, at the round's tail, with the round's containment (ADR-0287).
-///
-/// ```rust
-/// use std::{cell::Cell, rc::Rc};
-/// use flui_foundation::ChangeNotifier;
-///
-/// let notifier = ChangeNotifier::new();
-/// let hits = Rc::new(Cell::new(0));
-/// let subscription = notifier.listen(Rc::new({
-///     let hits = Rc::clone(&hits);
-///     move || hits.set(hits.get() + 1)
-/// }));
-/// notifier.notify_listeners();
-/// assert_eq!(hits.get(), 1);
-///
-/// drop(subscription);
-/// notifier.notify_listeners();
-/// assert_eq!(hits.get(), 1, "dropping the subscription detached the listener");
-/// ```
-#[must_use = "hold the subscription: dropping it detaches its listener"]
-pub struct Subscription {
-    /// The channel the listener registered on, weak so a subscription never
-    /// pins a channel its outside has released. `None` for an inert
-    /// subscription that never had one.
-    channel: Option<std::rc::Weak<dyn SubscribedChannel>>,
-    /// Some while the listener is still registered; `None` once detached.
-    id: Option<ListenerId>,
-    /// A removal the source itself supplies instead of a channel: the owned
-    /// twin of ADR-0180's status-guard removal function, for a custom source
-    /// whose storage is no foundation listener set.
-    remove: Option<Box<dyn Fn()>>,
-}
-
-impl Subscription {
-    /// A subscription bound to `channel`, cancelling on drop.
-    #[doc(hidden)]
-    pub(crate) fn for_channel(
-        channel: std::rc::Weak<dyn SubscribedChannel>,
-        id: ListenerId,
-    ) -> Self {
-        Self {
-            channel: Some(channel),
-            id: Some(id),
-            remove: None,
-        }
-    }
-
-    /// Detach now rather than at drop; idempotent with the drop that follows.
-    /// A custom source's withdrawal runs its `remove` once.
-    pub fn detach(mut self) {
-        self.take_listener();
-    }
-
-    /// A subscription to a custom source: `remove` runs once, on the first
-    /// detach or the drop that follows. The closure must commit the
-    /// withdrawal it promises, as ADR-0180's status guard's removal does.
-    pub fn for_removal(remove: impl Fn() + 'static) -> Self {
-        Self {
-            channel: None,
-            id: None,
-            remove: Some(Box::new(remove)),
-        }
-    }
-
-    /// An inert subscription: nothing to detach, ever. For a source that
-    /// admits no registration (a constant animation) and hands this form out
-    /// instead of a listener id that names nothing.
-    pub fn inert() -> Self {
-        Self {
-            channel: None,
-            id: None,
-            remove: None,
-        }
-    }
-
-    fn take_listener(&mut self) {
-        let Some(id) = self.id.take() else {
-            if let Some(remove) = self.remove.take() {
-                remove();
-            }
-            return;
-        };
-        if let Some(channel) = self.channel.take().and_then(|channel| channel.upgrade()) {
-            channel.detach_listener(id);
-        }
-    }
-}
-
-impl Drop for Subscription {
-    fn drop(&mut self) {
-        self.take_listener();
-    }
-}
-
-impl fmt::Debug for Subscription {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.id {
-            Some(id) => write!(f, "Subscription({id:?})"),
-            None => f.write_str("Subscription(detached)"),
-        }
     }
 }
 

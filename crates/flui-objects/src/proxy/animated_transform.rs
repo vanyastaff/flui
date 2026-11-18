@@ -829,12 +829,12 @@ mod tests {
             flui_animation::AnimationStatus::ReverseSettled
         }
 
-        fn observe_status(
+        fn listen_status_with_recovery(
             &self,
             observer: flui_animation::StatusObserver,
-        ) -> flui_animation::StatusSubscription {
+        ) -> flui_foundation::Subscription {
             drop(observer);
-            flui_animation::StatusSubscription::default()
+            flui_foundation::Subscription::inert()
         }
     }
 

@@ -110,13 +110,13 @@ struct AnimationSwitchInner {
     /// The value relays' subscriptions, for cleanup on the hops.
     current_listener: Option<flui_foundation::Subscription>,
     next_listener: Option<flui_foundation::Subscription>,
-    current_status_subscription: Option<Terminal<crate::StatusSubscription>>,
+    current_status_subscription: Option<Terminal<flui_foundation::Subscription>>,
     disposed: bool,
 }
 
 fn detach_parents(
     value_listener: Option<flui_foundation::Subscription>,
-    status_subscription: Option<Terminal<crate::StatusSubscription>>,
+    status_subscription: Option<Terminal<flui_foundation::Subscription>>,
     next_listener: Option<flui_foundation::Subscription>,
     retirement: &mut RecoveryScope<'_>,
 ) {
@@ -130,12 +130,11 @@ fn detach_parents(
 }
 
 fn cancel_status_subscription(
-    subscription: Option<Terminal<crate::StatusSubscription>>,
+    subscription: Option<Terminal<flui_foundation::Subscription>>,
     recovery: &mut RecoveryScope<'_>,
 ) {
-    if let Some(mut subscription) = subscription {
-        subscription.get_mut().cancel_with_recovery(recovery);
-        recovery.retire(subscription);
+    if let Some(subscription) = subscription {
+        subscription.into_inner().detach_with_recovery(recovery);
     }
 }
 
@@ -345,7 +344,8 @@ impl AnimationSwitch {
                     recovery.retire(old_current);
                     cancel_status_subscription(old_status_subscription, recovery);
                     let mut subscription = Some(Terminal::new(
-                        new_current.observe_status(Rc::clone(&status_callback_for_handler)),
+                        new_current
+                            .listen_status_with_recovery(Rc::clone(&status_callback_for_handler)),
                     ));
                     let admitted = {
                         let mut inner = state.borrow_mut();
@@ -385,7 +385,9 @@ impl AnimationSwitch {
             self.admit_value_subscription(next, next_listener);
         }
         let status_parent = Terminal::new(self.current());
-        let mut subscription = Some(Terminal::new(status_parent.observe_status(status_callback)));
+        let mut subscription = Some(Terminal::new(
+            status_parent.listen_status_with_recovery(status_callback),
+        ));
         let previous = {
             let mut inner = self.owner.inner.borrow_mut();
             if !inner.disposed && Rc::ptr_eq(inner.current.get(), &status_parent) {
@@ -508,13 +510,16 @@ impl Animation<f64> for AnimationSwitch {
     /// `current` changes on a train-hop, so a delegated id would later be
     /// removed against the wrong animation. The internal per-current
     /// forwarder re-emits the active animation's transitions here.
-    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+    fn listen_status_with_recovery(
+        &self,
+        observer: crate::StatusObserver,
+    ) -> flui_foundation::Subscription {
         if self.owner.inner.borrow().disposed {
             self.owner.reject_status(observer);
-            return crate::StatusSubscription::default();
+            return flui_foundation::Subscription::inert();
         }
         let id = self.owner.channels.add_status(observer);
-        crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
+        flui_foundation::Subscription::for_source(&self.owner, id, SwitchOwner::withdraw_status)
     }
 }
 

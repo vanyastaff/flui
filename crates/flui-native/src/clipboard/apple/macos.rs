@@ -23,6 +23,8 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
+use std::cell::Cell;
+
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
 };
@@ -39,26 +41,24 @@ use crate::owner::apple::MacOSLoop;
 
 /// macOS NSPasteboard-based clipboard implementation
 ///
-/// Thread-safe proxy around NSPasteboard. Every operation routes to the owner
-/// lane and resolves the pasteboard `id` there, so no raw Objective-C object
-/// is stored in the struct or shared across threads.
+/// Every pasteboard operation routes to the owner lane and resolves the
+/// pasteboard `id` there, so no raw Objective-C object is stored in the
+/// struct or crosses a thread. The clipboard itself belongs to the thread
+/// that holds it: the loop's owner thread, which hands it out in an `Rc`
+/// (it is not `Sync`).
 ///
-/// Liveness: a cross-thread call **blocks** on the owner lane until the
-/// operation completes. Do not call clipboard from a background thread before
-/// `Platform::run` has started the event loop, and never wait from the main
-/// thread on a thread that is blocked inside a clipboard call — the lane
-/// would stall.
+/// Liveness: a call from a thread other than the lane's **blocks** on the
+/// lane until the operation completes, as a test instance's calls do on the
+/// test lane.
 pub struct MacOSClipboard {
     /// `None` = general pasteboard; `Some(name)` = named pasteboard (tests).
     pasteboard: Option<String>,
     /// The last expiring entry this clipboard landed, with the pasteboard's
-    /// `changeCount` after it (ADR-0363). A lock, not an owner cell: this
-    /// type is called from any thread and runs each operation on its owner
-    /// lane, which is the main thread in production but a serial queue of its
-    /// own in tests, so no one thread owns the record. The lane serializes
-    /// every operation, so the lock never waits, and it is held across no
-    /// AppKit call.
-    expiring: parking_lot::Mutex<ExpiringRecord<isize>>,
+    /// `changeCount` after it (ADR-0363). Read and written only on the thread
+    /// that holds the clipboard, never inside a lane operation: a copy goes
+    /// into the operation and the result comes back, so the record never
+    /// crosses to the lane, which is a serial queue of its own in tests.
+    expiring: Cell<ExpiringRecord<isize>>,
     /// Owner lane every operation is routed through.
     owner: &'static dispatch2::DispatchQueue,
     /// True when `owner` is the main queue, so "on the main thread" is
@@ -108,7 +108,7 @@ impl MacOSClipboard {
         tracing::debug!("Created macOS clipboard (NSPasteboard)");
         Self {
             pasteboard: None,
-            expiring: parking_lot::Mutex::default(),
+            expiring: Cell::default(),
             owner: crate::owner::apple::macos::owner_queue(),
             owner_is_main: true,
         }
@@ -123,7 +123,7 @@ impl MacOSClipboard {
     fn for_test(owner: &'static dispatch2::DispatchQueue, name: impl Into<String>) -> Self {
         Self {
             pasteboard: Some(name.into()),
-            expiring: parking_lot::Mutex::default(),
+            expiring: Cell::default(),
             owner,
             owner_is_main: false,
         }
@@ -191,8 +191,7 @@ impl SyncClipboard for MacOSClipboard {
         let concealed = write.is_concealed();
         let entry = write.entry();
         let text = write.into_text();
-        let expiring = &self.expiring;
-        self.with_pasteboard_on_owner(|pasteboard| {
+        let landed = self.with_pasteboard_on_owner(|pasteboard| {
             // Clear existing contents; the return value is the new change
             // count, which this backend does not consume. A concealed write
             // also stays off the user's other devices' universal clipboard.
@@ -228,14 +227,17 @@ impl SyncClipboard for MacOSClipboard {
                 // The change count moves when the pasteboard changes hands
                 // (the clear above), not per type set: read after the write,
                 // it is the entry's until any process clears it again.
-                let count = pasteboard.changeCount();
-                expiring.lock().landed(entry, count);
-                Ok(())
+                Ok(pasteboard.changeCount())
             } else {
                 tracing::error!(len = text.len(), "Failed to write text to clipboard");
                 Err(ClipboardError::Unavailable)
             }
-        })
+        });
+        let count = landed?;
+        let mut record = self.expiring.get();
+        record.landed(entry, count);
+        self.expiring.set(record);
+        Ok(())
     }
 
     fn concealment(&self) -> Concealment {
@@ -253,22 +255,26 @@ impl SyncClipboard for MacOSClipboard {
     /// process makes between them (microseconds apart) is cleared with the
     /// entry. Every other later copy moves the change count first.
     fn clear_expired_now(&self, entry: ExpiredEntry) -> ExpiredClear {
-        let expiring = &self.expiring;
-        self.with_pasteboard_on_owner(|pasteboard| {
+        // The record's copy goes to the lane and comes back decided: the
+        // lane runs AppKit's code only, never the application's, so nothing
+        // writes the record while the operation runs.
+        let record = self.expiring.get();
+        let (record, cleared) = self.with_pasteboard_on_owner(move |pasteboard| {
+            let mut record = record;
             let count = pasteboard.changeCount();
-            let decision = expiring.lock().decide(entry, &count);
-            match decision {
-                ClearDecision::NotHeld => ExpiredClear::NotHeld,
+            match record.decide(entry, &count) {
+                ClearDecision::NotHeld => (record, ExpiredClear::NotHeld),
                 ClearDecision::Clear => {
-                    // The record forgets the entry before AppKit is asked,
-                    // with the lock released, so nothing the clear sets off
-                    // finds it held.
-                    expiring.lock().landed(None, count);
+                    // A clear lands as a write of nothing that does not
+                    // expire.
+                    record.landed(None, count);
                     pasteboard.clearContents();
-                    ExpiredClear::Cleared
+                    (record, ExpiredClear::Cleared)
                 }
             }
-        })
+        });
+        self.expiring.set(record);
+        cleared
     }
 }
 

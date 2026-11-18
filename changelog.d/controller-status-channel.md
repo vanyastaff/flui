@@ -7,7 +7,7 @@
   `notify_selected_with_recovery` resolves them at the turn. The per-ticket
   liveness check, the delivery-time containment and the controller's first
   failure arrive with the channel; a committed status whose turn outlives a
-  dispose silences there. Withdrawal keeps ADR-0180's guard: a take through the
+  dispose silences there. Withdrawal keeps ADR-0379's guard: a take through the
   channel inside the state borrow, a delivering round sending the capture to the
   FIFO tail, and recovery inheritance outside one.
 - Refused (disposed) status admission retires its capture through the

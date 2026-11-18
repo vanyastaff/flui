@@ -29,7 +29,7 @@ fn main() {
     let controller = owner.controller().clone();
     let observed = calls.clone();
     controller
-        .subscribe_status(Rc::new(move |status| {
+        .listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 observed.set(observed.get() + 1);
             }

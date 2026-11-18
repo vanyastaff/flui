@@ -131,7 +131,7 @@ struct FlightInner {
     ended: Cell<bool>,
 
     entry: Terminal<RefCell<Option<OverlayEntry>>>,
-    subscriptions: Terminal<RefCell<Option<flui_animation::StatusSubscription>>>,
+    subscriptions: Terminal<RefCell<Option<flui_foundation::Subscription>>>,
     /// This flight's navigator's user-gesture state.
     /// Fixed for the flight's whole life — every divert stays within the same
     /// controller, hence the same navigator.
@@ -361,11 +361,10 @@ impl Drop for FlightInner {
         // Every owner is withdrawn before listener retirement can invoke user
         // destruction; each runs under this owner's recovery (ADR-0281).
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        let mut status_subscription = Terminal::new(subscriptions.borrow_mut().take());
-        if let Some(subscription) = status_subscription.as_mut() {
-            subscription.cancel_with_recovery(&mut recovery.scope());
+        let status_subscription = subscriptions.borrow_mut().take();
+        if let Some(subscription) = status_subscription {
+            subscription.detach_with_recovery(&mut recovery.scope());
         }
-        recovery.retire(status_subscription);
         if let Some(subscription) = proxy_subscription {
             recovery.run(|| subscription.detach());
         }
@@ -502,15 +501,14 @@ impl HeroFlight {
                 Terminal::new(state.to_hero.clone()),
             )
         };
-        let mut status_subscription = Terminal::new(self.inner.subscriptions.borrow_mut().take());
+        let status_subscription = self.inner.subscriptions.borrow_mut().take();
         let proxy_subscription = self.inner.proxy_wake_subscription.take();
         let gesture_subscription = self.inner.gesture_wake_subscription.take();
         let entry = Terminal::new(self.inner.entry.borrow_mut().take());
 
-        if let Some(subscription) = status_subscription.as_mut() {
-            subscription.cancel_with_recovery(recovery);
+        if let Some(subscription) = status_subscription {
+            subscription.detach_with_recovery(recovery);
         }
-        recovery.retire(status_subscription);
         if let Some(subscription) = proxy_subscription {
             recovery.run(|| subscription.detach());
         }
@@ -1217,25 +1215,22 @@ impl FlightManager {
             // whatever it was at the moment it was skipped.
             let settled_status = Rc::clone(&inner.settled_status);
             let listener_gesture_signal = gesture_signal.clone();
-            let status_subscription =
-                inner
-                    .proxy
-                    .subscribe_status(std::rc::Rc::new(move |status| {
-                        // Only terminal statuses matter: forward/reverse is exactly the
-                        // complement of dismissed/completed.
-                        if listener_gesture_signal.in_progress() {
-                            return;
-                        }
-                        match status {
-                            AnimationStatus::ReverseSettled => {
-                                settled_status.set(Some(AnimationStatus::ReverseSettled));
-                            }
-                            AnimationStatus::ForwardSettled => {
-                                settled_status.set(Some(AnimationStatus::ForwardSettled));
-                            }
-                            _ => {}
-                        }
-                    }));
+            let status_subscription = inner.proxy.listen_status(std::rc::Rc::new(move |status| {
+                // Only terminal statuses matter: forward/reverse is exactly the
+                // complement of dismissed/completed.
+                if listener_gesture_signal.in_progress() {
+                    return;
+                }
+                match status {
+                    AnimationStatus::ReverseSettled => {
+                        settled_status.set(Some(AnimationStatus::ReverseSettled));
+                    }
+                    AnimationStatus::ForwardSettled => {
+                        settled_status.set(Some(AnimationStatus::ForwardSettled));
+                    }
+                    _ => {}
+                }
+            }));
             *inner.subscriptions.borrow_mut() = Some(status_subscription);
 
             // Gesture-end replay reads the current proxy status, then wakes the
@@ -1469,7 +1464,7 @@ mod terminal_tests {
             std::rc::Rc::new(flui_animation::ConstantAnimation::new(0.0));
         let proxy = Rc::new(ProxyAnimation::new(parent));
         let (callback, callback_drops) = bomb("subscription retirement", callback_panics);
-        let subscription = proxy.subscribe_status(std::rc::Rc::new(move |_| {
+        let subscription = proxy.listen_status(std::rc::Rc::new(move |_| {
             let _capture = &callback;
         }));
         let (rect_capture, rect_drops) = bomb("rect factory retirement", factory_panics);
@@ -1760,7 +1755,7 @@ mod terminal_tests {
                     assert!(!fail, "first placeholder cancellation failure");
                 });
             let subscription =
-                flui_animation::StatusSubscription::new(&hook, (), |hook, (), _recovery| hook());
+                flui_foundation::Subscription::for_source(&hook, (), |hook, (), _recovery| hook());
             let previous = old.inner.subscriptions.borrow_mut().replace(subscription);
             drop(previous);
             let mut competing_drops = None;
@@ -1872,11 +1867,14 @@ mod terminal_tests {
             let (_peer, peer_from, peer_to, _peer_from_tree, _peer_to_tree, peer_overlay) =
                 launch("healthy");
             let removed = Rc::new(Cell::new(0));
-            let subscription =
-                flui_animation::StatusSubscription::new(&removed, (), |removed, (), _recovery| {
+            let subscription = flui_foundation::Subscription::for_source(
+                &removed,
+                (),
+                |removed, (), _recovery| {
                     removed.set(removed.get() + 1);
                     panic!("first Hero cancellation failure");
-                });
+                },
+            );
             let previous = flight
                 .inner
                 .subscriptions

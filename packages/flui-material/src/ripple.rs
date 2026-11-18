@@ -393,14 +393,14 @@ fn start_run(
         // Weak: the run must not keep its owner alive.
         owner
             .controller()
-            .subscribe_status(Rc::new(move |status| {
+            .listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled
                     && let Some(indication) = indication.upgrade()
                 {
                     indication.sync();
                 }
             }))
-            .detach();
+            .forget();
     }
     if let Err(error) = owner.controller().forward_from(0.0) {
         tracing::debug!(?error, label, "InkWell ripple run failed to start");

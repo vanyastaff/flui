@@ -92,12 +92,12 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
     handle
         .shared
         .entry_controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status == AnimationStatus::Forward {
                 forward_handle.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }
         }))
-        .detach();
+        .forget();
     let mut fanout = Vec::new();
     for _ in 0..2 {
         let armed = Arc::clone(&armed);
@@ -273,13 +273,13 @@ fn a_second_display_timer_retires_the_first() {
     let first_run = first.forward().expect("first timer remains live");
     let retired_callbacks = Rc::new(Cell::new(0));
     first
-        .subscribe_status(Rc::new({
+        .listen_status(Rc::new({
             let capture = RetiredCapture(Rc::clone(&retired_callbacks));
             move |_| {
                 let _ = &capture;
             }
         }))
-        .detach();
+        .forget();
     let seats = registry.len();
     let mut clock = MotionClock::new();
     registry.tick_all(&clock.frame(Duration::ZERO));

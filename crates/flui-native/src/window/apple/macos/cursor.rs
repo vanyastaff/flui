@@ -16,9 +16,9 @@
 
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::{Cursor, CursorError, CursorIcon, CursorImage, PlatformFailure};
+use objc2::AnyThread;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Bool};
-use objc2::{class, msg_send};
+use objc2_app_kit::{NSBitmapFormat, NSBitmapImageRep, NSCursor, NSDeviceRGBColorSpace, NSImage};
 use objc2_foundation::{NSPoint, NSSize};
 
 /// The cursor a window shows while the pointer is over it. A clone shares the
@@ -28,7 +28,7 @@ pub(crate) enum NativeCursor {
     /// One of AppKit's cursors, fetched when shown: AppKit keeps each.
     Icon(CursorIcon),
     /// A transparent cursor of the window's own.
-    Hidden(Retained<AnyObject>),
+    Hidden(Retained<NSCursor>),
     /// The application's image, as a cursor the window made of it.
     Image {
         /// The image it was made of, to know it again.
@@ -36,7 +36,7 @@ pub(crate) enum NativeCursor {
         /// The backing scale it was measured at, in points.
         scale: DevicePixelRatio,
         /// The `NSCursor`.
-        cursor: Retained<AnyObject>,
+        cursor: Retained<NSCursor>,
     },
 }
 
@@ -94,78 +94,70 @@ impl NativeCursor {
     }
 
     /// The `NSCursor` this is. Main thread only.
-    ///
-    /// # Errors
-    /// [`CursorError::Platform`] when AppKit answers no cursor for an icon.
-    pub(crate) fn ns_cursor(&self) -> Result<Retained<AnyObject>, CursorError> {
+    pub(crate) fn ns_cursor(&self) -> Retained<NSCursor> {
         match self {
-            Self::Icon(icon) => system_cursor(*icon)
-                .ok_or_else(|| CursorError::failed("AppKit returned a null NSCursor".to_owned())),
-            Self::Hidden(cursor) | Self::Image { cursor, .. } => Ok(Retained::clone(cursor)),
+            Self::Icon(icon) => system_cursor(*icon),
+            Self::Hidden(cursor) | Self::Image { cursor, .. } => Retained::clone(cursor),
         }
-    }
-}
-
-/// Make `cursor` the current cursor (`-[NSCursor set]`). Main thread only.
-pub(crate) fn set(cursor: &AnyObject) {
-    // SAFETY: `cursor` is a live `NSCursor`; `set` takes no argument, and the
-    // caller is on the main thread, where AppKit's cursors are set.
-    unsafe {
-        let _: () = msg_send![cursor, set];
     }
 }
 
 /// AppKit's cursor for `icon`. AppKit has fewer shapes than the vocabulary,
 /// so several share one, and a shape it has no counterpart for is the arrow.
-fn system_cursor(icon: CursorIcon) -> Option<Retained<AnyObject>> {
-    let cursor = class!(NSCursor);
-    // SAFETY: every selector below is an `NSCursor` class getter available on
-    // the supported macOS baseline; each answers a cursor AppKit keeps, which
-    // the `Retained` retains.
-    unsafe {
-        match icon {
-            CursorIcon::ContextMenu => msg_send![cursor, contextualMenuCursor],
-            CursorIcon::Pointer => msg_send![cursor, pointingHandCursor],
-            CursorIcon::Cell | CursorIcon::Crosshair => msg_send![cursor, crosshairCursor],
-            CursorIcon::Text => msg_send![cursor, IBeamCursor],
-            CursorIcon::VerticalText => msg_send![cursor, IBeamCursorForVerticalLayout],
-            CursorIcon::Copy => msg_send![cursor, dragCopyCursor],
-            CursorIcon::Move | CursorIcon::Grabbing => msg_send![cursor, closedHandCursor],
-            CursorIcon::Grab => msg_send![cursor, openHandCursor],
-            CursorIcon::NoDrop | CursorIcon::NotAllowed => {
-                msg_send![cursor, operationNotAllowedCursor]
-            }
-            CursorIcon::EResize
-            | CursorIcon::WResize
-            | CursorIcon::EwResize
-            | CursorIcon::ColResize => msg_send![cursor, resizeLeftRightCursor],
-            CursorIcon::NResize
-            | CursorIcon::SResize
-            | CursorIcon::NsResize
-            | CursorIcon::RowResize => msg_send![cursor, resizeUpDownCursor],
-            CursorIcon::Default
-            | CursorIcon::Help
-            | CursorIcon::Progress
-            | CursorIcon::Wait
-            | CursorIcon::Alias
-            | CursorIcon::NeResize
-            | CursorIcon::NwResize
-            | CursorIcon::SeResize
-            | CursorIcon::SwResize
-            | CursorIcon::NeswResize
-            | CursorIcon::NwseResize
-            | CursorIcon::AllScroll
-            | CursorIcon::ZoomIn
-            | CursorIcon::ZoomOut
-            | CursorIcon::DndAsk => msg_send![cursor, arrowCursor],
-            // The icons named above are AppKit's arrow on purpose; this arm
-            // is the ones the vocabulary adds later.
-            #[expect(
-                clippy::match_same_arms,
-                reason = "the named arrow icons are listed apart from the vocabulary's later ones"
-            )]
-            _ => msg_send![cursor, arrowCursor],
-        }
+///
+/// Each class getter is declared `nonnull` in AppKit's `NSCursor.h` (inside
+/// `NS_ASSUME_NONNULL_BEGIN`), the contract objc2's non-optional return
+/// type states: every one of them is available on the supported macOS
+/// baseline and answers a cursor AppKit keeps.
+fn system_cursor(icon: CursorIcon) -> Retained<NSCursor> {
+    match icon {
+        CursorIcon::ContextMenu => NSCursor::contextualMenuCursor(),
+        CursorIcon::Pointer => NSCursor::pointingHandCursor(),
+        CursorIcon::Cell | CursorIcon::Crosshair => NSCursor::crosshairCursor(),
+        CursorIcon::Text => NSCursor::IBeamCursor(),
+        CursorIcon::VerticalText => NSCursor::IBeamCursorForVerticalLayout(),
+        CursorIcon::Copy => NSCursor::dragCopyCursor(),
+        CursorIcon::Move | CursorIcon::Grabbing => NSCursor::closedHandCursor(),
+        CursorIcon::Grab => NSCursor::openHandCursor(),
+        CursorIcon::NoDrop | CursorIcon::NotAllowed => NSCursor::operationNotAllowedCursor(),
+        #[expect(
+            deprecated,
+            reason = "its replacements (`columnResizeCursor`, `frameResizeCursorFromPosition:inDirections:`) are macOS 15, above the 11.0 deployment floor"
+        )]
+        CursorIcon::EResize
+        | CursorIcon::WResize
+        | CursorIcon::EwResize
+        | CursorIcon::ColResize => NSCursor::resizeLeftRightCursor(),
+        #[expect(
+            deprecated,
+            reason = "its replacements (`rowResizeCursor`, `frameResizeCursorFromPosition:inDirections:`) are macOS 15, above the 11.0 deployment floor"
+        )]
+        CursorIcon::NResize
+        | CursorIcon::SResize
+        | CursorIcon::NsResize
+        | CursorIcon::RowResize => NSCursor::resizeUpDownCursor(),
+        CursorIcon::Default
+        | CursorIcon::Help
+        | CursorIcon::Progress
+        | CursorIcon::Wait
+        | CursorIcon::Alias
+        | CursorIcon::NeResize
+        | CursorIcon::NwResize
+        | CursorIcon::SeResize
+        | CursorIcon::SwResize
+        | CursorIcon::NeswResize
+        | CursorIcon::NwseResize
+        | CursorIcon::AllScroll
+        | CursorIcon::ZoomIn
+        | CursorIcon::ZoomOut
+        | CursorIcon::DndAsk => NSCursor::arrowCursor(),
+        // The icons named above are AppKit's arrow on purpose; this arm
+        // is the ones the vocabulary adds later.
+        #[expect(
+            clippy::match_same_arms,
+            reason = "the named arrow icons are listed apart from the vocabulary's later ones"
+        )]
+        _ => NSCursor::arrowCursor(),
     }
 }
 
@@ -174,23 +166,24 @@ fn system_cursor(icon: CursorIcon) -> Option<Retained<AnyObject>> {
 ///
 /// # Errors
 /// [`PlatformFailure::Failed`] when AppKit makes no cursor of it.
-pub(crate) fn blank_cursor() -> Result<Retained<AnyObject>, PlatformFailure> {
+pub(crate) fn blank_cursor() -> Result<Retained<NSCursor>, PlatformFailure> {
     let blank = CursorImage::try_new(1, 1, (0, 0), vec![0; 4])
         .expect("BUG: one transparent pixel with its hotspot on it is a cursor image");
     image_cursor(&blank, DevicePixelRatio::ONE)
 }
 
-/// `NSBitmapFormatAlphaNonpremultiplied`: the alpha is straight, as a
-/// `CursorImage`'s is.
-const ALPHA_NONPREMULTIPLIED: usize = 1 << 1;
-
 /// An `NSCursor` of `image`: its pixels in a bitmap representation, in an
 /// image measured in points at the backing `scale`, with the hotspot measured
 /// likewise.
+///
+/// The bitmap representation's initializer is the one step AppKit may refuse
+/// (`nullable` in `NSBitmapImageRep.h`), and its buffer the one pointer it may
+/// leave null; both are errors. `-[NSImage initWithSize:]` and
+/// `-[NSCursor initWithImage:hotSpot:]` are declared `nonnull`.
 fn image_cursor(
     image: &CursorImage,
     scale: DevicePixelRatio,
-) -> Result<Retained<AnyObject>, PlatformFailure> {
+) -> Result<Retained<NSCursor>, PlatformFailure> {
     let failed = |what: &str| PlatformFailure::Failed {
         message: format!("AppKit made no {what} of the cursor image"),
     };
@@ -210,47 +203,46 @@ fn image_cursor(
         scale.to_logical(f64::from(x)),
         scale.to_logical(f64::from(y)),
     );
-    // SAFETY: on the main thread, every message goes to a class AppKit always
-    // has or to an object made here and checked for nil first. The bitmap
-    // representation allocates its own buffer of `row * height` bytes for the
-    // geometry it is given (one plane, four 8-bit samples, `row` bytes a row),
-    // which the copy fills exactly: a `CursorImage` holds four bytes per pixel.
-    // Each `alloc`/`init…` pair answers a +1 reference that `from_raw` takes
-    // over; the image and the cursor retain what they are given.
-    unsafe {
-        let color_space: &AnyObject = objc2_app_kit::NSDeviceRGBColorSpace;
-        let rep: *mut AnyObject = msg_send![class!(NSBitmapImageRep), alloc];
-        let rep: *mut AnyObject = msg_send![
-            rep,
-            initWithBitmapDataPlanes: std::ptr::null_mut::<*mut u8>(),
-            pixelsWide: integer(usize::from(width)),
-            pixelsHigh: integer(usize::from(height)),
-            bitsPerSample: 8isize,
-            samplesPerPixel: 4isize,
-            hasAlpha: Bool::YES,
-            isPlanar: Bool::NO,
-            colorSpaceName: color_space,
-            bitmapFormat: ALPHA_NONPREMULTIPLIED,
-            bytesPerRow: integer(row),
-            bitsPerPixel: 32isize,
-        ];
-        let rep = Retained::from_raw(rep).ok_or_else(|| failed("bitmap"))?;
-        let data: *mut u8 = msg_send![&*rep, bitmapData];
-        if data.is_null() {
-            return Err(failed("bitmap buffer"));
-        }
-        std::ptr::copy_nonoverlapping(image.rgba().as_ptr(), data, image.rgba().len());
-        let _: () = msg_send![&*rep, setSize: points];
-
-        let ns_image: *mut AnyObject = msg_send![class!(NSImage), alloc];
-        let ns_image: *mut AnyObject = msg_send![ns_image, initWithSize: points];
-        let ns_image = Retained::from_raw(ns_image).ok_or_else(|| failed("image"))?;
-        let _: () = msg_send![&*ns_image, addRepresentation: &*rep];
-
-        let cursor: *mut AnyObject = msg_send![class!(NSCursor), alloc];
-        let cursor: *mut AnyObject = msg_send![cursor, initWithImage: &*ns_image, hotSpot: hotspot];
-        Retained::from_raw(cursor).ok_or_else(|| failed("cursor"))
+    // SAFETY: the planes pointer is null, so the representation allocates its
+    // own buffer; `NSDeviceRGBColorSpace` is an AppKit constant, read on the
+    // main thread where AppKit is loaded.
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            integer(usize::from(width)),
+            integer(usize::from(height)),
+            8,
+            4,
+            true,
+            false,
+            NSDeviceRGBColorSpace,
+            // The alpha is straight, as a `CursorImage`'s is.
+            NSBitmapFormat::AlphaNonpremultiplied,
+            integer(row),
+            32,
+        )
     }
+    .ok_or_else(|| failed("bitmap"))?;
+    let data = rep.bitmapData();
+    if data.is_null() {
+        return Err(failed("bitmap buffer"));
+    }
+    // SAFETY: the representation allocated `row * height` bytes for the
+    // geometry it was given (one plane, four 8-bit samples, `row` bytes a
+    // row), which the copy fills exactly: a `CursorImage` holds four bytes per
+    // pixel. `rep` keeps the buffer alive across the copy.
+    unsafe {
+        std::ptr::copy_nonoverlapping(image.rgba().as_ptr(), data, image.rgba().len());
+    }
+    rep.setSize(points);
+    let ns_image = NSImage::initWithSize(NSImage::alloc(), points);
+    ns_image.addRepresentation(&rep);
+    Ok(NSCursor::initWithImage_hotSpot(
+        NSCursor::alloc(),
+        &ns_image,
+        hotspot,
+    ))
 }
 
 /// Move the cursor to `(x, y)`, global points from the primary screen's

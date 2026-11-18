@@ -153,6 +153,47 @@ fn an_exhausted_binding_refuses_new_sequences_permanently() {
     );
 }
 
+/// A first click no first-click box holds is refused before it takes anything: at the
+/// simultaneous-contact cap (32) it evicts no live contact, and it spends no sequence
+/// identity.
+#[test]
+fn a_refused_first_click_takes_no_contact_room_and_no_sequence() {
+    let binding = GestureBinding::new();
+    let mut last = None;
+    for id in 1..=32 {
+        last = send(&binding, &down(id));
+    }
+    let last = last.expect("every contact up to the cap is admitted");
+    assert_eq!(binding.active_pointer_count(), 32);
+
+    let PointerEvent::Down(press) =
+        make_down_event_for_id(pointer(100), Offset::ZERO, PointerKind::Mouse).expect("down")
+    else {
+        unreachable!("a down helper builds a down")
+    };
+    let first_click = PointerEvent::Down(press.with_first_click());
+    assert_eq!(
+        send(&binding, &first_click),
+        None,
+        "a hit path with no first-click box refuses the first click"
+    );
+    assert_eq!(
+        binding.active_pointer_count(),
+        32,
+        "the refused first click evicted no contact"
+    );
+    assert!(
+        send(&binding, &up(1)).is_some(),
+        "the oldest contact is still live"
+    );
+    let next = send(&binding, &down(200)).expect("room for a contact again");
+    assert_eq!(
+        next.get(),
+        last.get() + 1,
+        "the refused first click spent no sequence identity"
+    );
+}
+
 #[test]
 fn a_wheel_under_a_held_button_belongs_to_its_latch() {
     let lane = InteractionLane::try_new().expect("lane");
