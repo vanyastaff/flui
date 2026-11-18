@@ -1809,11 +1809,17 @@ fn a_cached_chunk_replays_the_command_stream_it_recorded() {
     assert_eq!(pixels_differing(&first.pixels, &second.pixels), 0);
 }
 
-/// An empty root, drawn in full between two frames of another version.
+/// An empty layer tree, drawn in full between two frames of a version: a
+/// tree draws no scene owner, so the owner drawn before keeps its
+/// recordings, where a version of another owner would drop them.
 fn empty_frame(capture: &mut RetainedCapture) {
-    let mut owner = SceneOwner::new();
-    let version = publish_root(&mut owner, &[], None);
-    full_frame(capture, &version, flui_layer::FullReason::FirstFrame);
+    apply(
+        capture,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    capture
+        .render_scene(&Scene::new(flui_layer::LayerTree::default()))
+        .expect("an empty frame renders");
 }
 
 /// A kept recording names glyph and image texels, so each event that moves
@@ -2799,5 +2805,31 @@ fn a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings() 
         Some(5),
         "a new version of one box beside the four the owner drew"
     );
+    renderer.detach_slot();
+    assert_eq!(
+        renderer.context().kept_recordings(),
+        Some(0),
+        "a detached slot's owner is drawn by no slot"
+    );
     drop(first);
+}
+
+/// The capture that stands in for a `Renderer` plans its frames as the
+/// `Renderer` does: a frame of another scene owner's version drops the
+/// recordings of the owner drawn before.
+#[test]
+fn a_renderer_frame_of_another_owners_version_drops_the_first_owners_recordings() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    for (row, colors) in [("the first owner", Color::RED), ("the second", Color::BLUE)] {
+        let owner = Row::new([colors; 4]);
+        apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+        capture
+            .render_scene(&Scene::of_version(owner.version()))
+            .expect("the frame renders");
+        assert_eq!(capture.recording_cache_work().0, 4, "{row}'s boxes alone");
+    }
 }
