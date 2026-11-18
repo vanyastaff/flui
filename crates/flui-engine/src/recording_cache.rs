@@ -385,6 +385,50 @@ fn relative(range: std::ops::Range<usize>, base: usize) -> Option<std::ops::Rang
     Some(range.start.checked_sub(base)?..range.end.checked_sub(base)?)
 }
 
+/// Each of `items` through `rebase`, after `first` when there is one, in a
+/// vector of exactly their number: a recording holds no spare room, and an
+/// arena the chunk left alone allocates nothing. `None` when one does not
+/// rebase.
+fn rebased<T, U>(
+    first: Option<U>,
+    items: &[T],
+    rebase: impl Fn(&T) -> Option<U>,
+) -> Option<Vec<U>> {
+    let mut out = Vec::with_capacity(items.len() + usize::from(first.is_some()));
+    out.extend(first);
+    for item in items {
+        out.push(rebase(item)?);
+    }
+    Some(out)
+}
+
+/// What the chunk's first draw did to the last element before the mark.
+#[derive(Clone, Copy)]
+enum Growth {
+    /// Left it as it was, or there was none.
+    None,
+    /// Added `count` elements to it, the first at `start`.
+    Grew { start: u32, count: u32 },
+}
+
+/// What the chunk did to `last`, the start and count of the last element
+/// before the mark, which held `extent` there; `None` when it shrank or the
+/// sum overflows.
+fn growth(last: Option<(u32, u32)>, extent: Option<usize>) -> Option<Growth> {
+    let (Some((start, count)), Some(extent)) = (last, extent) else {
+        return Some(Growth::None);
+    };
+    let extent = u32::try_from(extent).ok()?;
+    let grown = count.checked_sub(extent)?;
+    if grown == 0 {
+        return Some(Growth::None);
+    }
+    Some(Growth::Grew {
+        start: start.checked_add(extent)?,
+        count: grown,
+    })
+}
+
 /// A region tail's elements from the mark on, the growth of the element
 /// before it first, each `start` relative to the instance arena's `mark`.
 fn capture_regions(
@@ -394,27 +438,25 @@ fn capture_regions(
 ) -> Option<Vec<ScissorRegion>> {
     let mark = u32::try_from(mark).ok()?;
     let fresh = regions.get(tail.len..)?;
-    let mut out = Vec::with_capacity(fresh.len() + 1);
-    if let (Some(count), Some(last)) = (tail.extent, tail.len.checked_sub(1)) {
-        let last = regions.get(last)?;
-        let count = u32::try_from(count).ok()?;
-        let grown = last.count.checked_sub(count)?;
-        if grown > 0 {
-            out.push(ScissorRegion {
-                scissor: last.scissor,
-                start: last.start.checked_add(count)?.checked_sub(mark)?,
-                count: grown,
-            });
-        }
-    }
-    for region in fresh {
-        out.push(ScissorRegion {
+    let last = match tail.len.checked_sub(1) {
+        Some(last) => Some(regions.get(last)?),
+        None => None,
+    };
+    let grown = match growth(last.map(|last| (last.start, last.count)), tail.extent)? {
+        Growth::Grew { start, count } => Some(ScissorRegion {
+            scissor: last?.scissor,
+            start: start.checked_sub(mark)?,
+            count,
+        }),
+        Growth::None => None,
+    };
+    rebased(grown, fresh, |region| {
+        Some(ScissorRegion {
             scissor: region.scissor,
             start: region.start.checked_sub(mark)?,
             count: region.count,
-        });
-    }
-    Some(out)
+        })
+    })
 }
 
 /// [`capture_regions`] for gradient runs, whose mesh ranges are relative to
@@ -428,37 +470,38 @@ fn capture_gradient_runs(
     let mark = u32::try_from(mark).ok()?;
     let mesh_mark = u32::try_from(mesh_mark).ok()?;
     let fresh = runs.get(tail.len..)?;
-    let mut out = Vec::with_capacity(fresh.len() + 1);
-    if let (Some(count), Some(last)) = (tail.extent, tail.len.checked_sub(1)) {
-        let last = runs.get(last)?;
-        let count = u32::try_from(count).ok()?;
-        let grown = last.count.checked_sub(count)?;
-        if grown > 0 {
-            out.push(GradientRun {
+    let last = match tail.len.checked_sub(1) {
+        Some(last) => Some(runs.get(last)?),
+        None => None,
+    };
+    let grown = match growth(last.map(|last| (last.start, last.count)), tail.extent)? {
+        Growth::Grew { start, count } => {
+            let last = last?;
+            Some(GradientRun {
                 scissor: last.scissor,
                 blend: last.blend,
-                start: last.start.checked_add(count)?.checked_sub(mark)?,
-                count: grown,
+                start: start.checked_sub(mark)?,
+                count,
                 mesh: None,
-            });
+            })
         }
-    }
-    for run in fresh {
+        Growth::None => None,
+    };
+    rebased(grown, fresh, |run| {
         let mesh = match &run.mesh {
             Some(mesh) => {
                 Some(mesh.start.checked_sub(mesh_mark)?..mesh.end.checked_sub(mesh_mark)?)
             }
             None => None,
         };
-        out.push(GradientRun {
+        Some(GradientRun {
             scissor: run.scissor,
             blend: run.blend,
             start: run.start.checked_sub(mark)?,
             count: run.count,
             mesh,
-        });
-    }
-    Some(out)
+        })
+    })
 }
 
 fn region_tail(regions: &[ScissorRegion]) -> Tail {
@@ -612,75 +655,69 @@ impl DrawSegment {
         let mesh_vertex_mark = u32::try_from(mark.mesh_vertices).ok()?;
         let index_mark = u32::try_from(mark.indices).ok()?;
 
-        let linear_gradients = linear_gradient_batch
-            .instances
-            .get(mark.linear_gradients..)?
-            .iter()
-            .map(|&instance| {
+        let linear_gradients = rebased(
+            None,
+            linear_gradient_batch
+                .instances
+                .get(mark.linear_gradients..)?,
+            |&instance: &LinearGradientInstance| {
                 let mut instance = instance;
                 instance.stop_offset = instance.stop_offset.checked_sub(stops_mark)?;
                 Some(instance)
-            })
-            .collect::<Option<Vec<LinearGradientInstance>>>()?;
-        let radial_gradients = radial_gradient_batch
-            .instances
-            .get(mark.radial_gradients..)?
-            .iter()
-            .map(|&instance| {
+            },
+        )?;
+        let radial_gradients = rebased(
+            None,
+            radial_gradient_batch
+                .instances
+                .get(mark.radial_gradients..)?,
+            |&instance: &RadialGradientInstance| {
                 let mut instance = instance;
                 instance.stop_offset = instance.stop_offset.checked_sub(stops_mark)?;
                 Some(instance)
-            })
-            .collect::<Option<Vec<RadialGradientInstance>>>()?;
-        let sweep_gradients = sweep_gradient_batch
-            .instances
-            .get(mark.sweep_gradients..)?
-            .iter()
-            .map(|&instance| {
+            },
+        )?;
+        let sweep_gradients = rebased(
+            None,
+            sweep_gradient_batch.instances.get(mark.sweep_gradients..)?,
+            |&instance: &SweepGradientInstance| {
                 let mut instance = instance;
                 instance.stop_offset = instance.stop_offset.checked_sub(stops_mark)?;
                 Some(instance)
-            })
-            .collect::<Option<Vec<SweepGradientInstance>>>()?;
-        let mesh_indices = gradient_mesh_indices
-            .get(mark.mesh_indices..)?
-            .iter()
-            .map(|index| index.checked_sub(mesh_vertex_mark))
-            .collect::<Option<Vec<u32>>>()?;
-        let new_indices = indices
-            .get(mark.indices..)?
-            .iter()
-            .map(|index| index.checked_sub(vertex_mark))
-            .collect::<Option<Vec<u32>>>()?;
+            },
+        )?;
+        let mesh_indices = rebased(
+            None,
+            gradient_mesh_indices.get(mark.mesh_indices..)?,
+            |index: &u32| index.checked_sub(mesh_vertex_mark),
+        )?;
+        let new_indices = rebased(None, indices.get(mark.indices..)?, |index: &u32| {
+            index.checked_sub(vertex_mark)
+        })?;
 
-        let mut first_batch_grew = false;
         let fresh_batches = tess_batches.get(mark.tess_batches.len..)?;
-        let mut batches = Vec::with_capacity(fresh_batches.len() + 1);
-        if let (Some(count), Some(last)) = (
+        let last_batch = match mark.tess_batches.len.checked_sub(1) {
+            Some(last) => Some(tess_batches.get(last)?),
+            None => None,
+        };
+        let grown_batch = match growth(
+            last_batch.map(|last| (last.index_start, last.index_count)),
             mark.tess_batches.extent,
-            mark.tess_batches.len.checked_sub(1),
-        ) {
-            let last = tess_batches.get(last)?;
-            let count = u32::try_from(count).ok()?;
-            let grown = last.index_count.checked_sub(count)?;
-            if grown > 0 {
-                first_batch_grew = true;
-                batches.push(TessellatedBatch {
-                    index_start: last
-                        .index_start
-                        .checked_add(count)?
-                        .checked_sub(index_mark)?,
-                    index_count: grown,
-                    ..last.clone()
-                });
-            }
-        }
-        for batch in fresh_batches {
-            batches.push(TessellatedBatch {
+        )? {
+            Growth::Grew { start, count } => Some(TessellatedBatch {
+                index_start: start.checked_sub(index_mark)?,
+                index_count: count,
+                ..last_batch?.clone()
+            }),
+            Growth::None => None,
+        };
+        let first_batch_grew = grown_batch.is_some();
+        let batches = rebased(grown_batch, fresh_batches, |batch: &TessellatedBatch| {
+            Some(TessellatedBatch {
                 index_start: batch.index_start.checked_sub(index_mark)?,
                 ..batch.clone()
-            });
-        }
+            })
+        })?;
 
         // Ranges index the recording's own arenas. Its first tessellated
         // batch is the growth of the batch before the mark when that grew.
@@ -698,19 +735,24 @@ impl DrawSegment {
             glyphs: mark.glyphs,
         };
         let fresh_runs = runs.get(mark.runs.len..)?;
-        let mut captured_runs = Vec::with_capacity(fresh_runs.len() + 1);
-        if let (Some(end), Some(last)) = (mark.runs.extent, mark.runs.len.checked_sub(1)) {
-            let last = &runs.get(last)?.kind;
-            let now = range(last);
-            if now.end > end {
-                let base = bases.of(last);
-                captured_runs.push(with_range(last, relative(end..now.end, base)?));
+        let grown_run = match (mark.runs.extent, mark.runs.len.checked_sub(1)) {
+            (Some(end), Some(last)) => {
+                let last = &runs.get(last)?.kind;
+                let now = range(last);
+                if now.end > end {
+                    Some(with_range(last, relative(end..now.end, bases.of(last))?))
+                } else {
+                    None
+                }
             }
-        }
-        for run in fresh_runs {
-            let base = bases.of(&run.kind);
-            captured_runs.push(with_range(&run.kind, relative(range(&run.kind), base)?));
-        }
+            _ => None,
+        };
+        let captured_runs = rebased(grown_run, fresh_runs, |run: &RecordedRun| {
+            Some(with_range(
+                &run.kind,
+                relative(range(&run.kind), bases.of(&run.kind))?,
+            ))
+        })?;
 
         let mut recording = ChunkRecording {
             rects: rect_batch.instances.get(mark.rects..)?.to_vec(),
