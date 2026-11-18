@@ -65,7 +65,7 @@ the ❌ cells of the new column.
 
 ᴺ after ✅: the row passed on that environment's hosted runner and runs there every night ([`nightly-platforms.yml`](../.github/workflows/nightly-platforms.yml)); its run evidence names the test.
 
-**Overall: ~38% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
+**Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
 This document is rendered from
 [`crates/flui-native/platform-parity.toml`](../crates/flui-native/platform-parity.toml), and a hand
@@ -90,14 +90,14 @@ columns and is listed after them.
 
 | Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready | Nightly runner | Nightly ✅ |
 |:--|:--|--:|--:|--:|--:|--:|--:|:-:|:--|--:|
-| Windows | Win32 (native) | 12 | 60 | 32 | 20 | 10 | 40% | no | windows-latest | 3 |
-| macOS | AppKit (native) | 9 | 50 | 44 | 21 | 10 | 33% | no | macos-latest | 2 |
-| Wayland | Wayland (native) | 11 | 61 | 27 | 30 | 5 | 42% | no | — | 0 |
-| X11 | X11 (native) | 12 | 56 | 30 | 31 | 5 | 41% | no | — | 0 |
-| iOS | UIKit (native) | 6 | 40 | 43 | 37 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
-| Android | android-activity (native) | 18 | 43 | 36 | 31 | 6 | 41% | no | ubuntu-24.04, Android emulator | 2 |
-| Web | wasm canvas (native) | 7 | 44 | 30 | 46 | 7 | 36% | no | — | 0 |
-| Headless | test double | 60 | 3 | 47 | 22 | 2 | 56% | — | — | 0 |
+| Windows | Win32 (native) | 12 | 60 | 33 | 20 | 10 | 40% | no | windows-latest | 3 |
+| macOS | AppKit (native) | 9 | 50 | 45 | 21 | 10 | 33% | no | macos-latest | 2 |
+| Wayland | Wayland (native) | 11 | 62 | 27 | 30 | 5 | 42% | no | — | 0 |
+| X11 | X11 (native) | 12 | 57 | 30 | 31 | 5 | 41% | no | — | 0 |
+| iOS | UIKit (native) | 6 | 41 | 43 | 37 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
+| Android | android-activity (native) | 18 | 44 | 36 | 31 | 6 | 41% | no | ubuntu-24.04, Android emulator | 2 |
+| Web | wasm canvas (native) | 7 | 44 | 31 | 46 | 7 | 35% | no | — | 0 |
+| Headless | test double | 61 | 3 | 47 | 22 | 2 | 56% | — | — | 0 |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
 
@@ -301,6 +301,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Announcements and live regions | ❔ | ❔ | 🟡 | 🟡 | ❔ | ❔ | ❔ | ❔ | X11: an AT-SPI client hears announcements, live regions and a status that appears (`linux_atspi`), and a route change by name (`a_route_change_is_heard_by_its_name`). |
 | Gesture alternatives (custom actions, context menu, keys, controls) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Checked headless by `assert_gesture_alternatives` (ADR-0216); no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so assistive technology reaches them only through the controls. |
 | Assistive-technology focus (screen reader cursor) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | `Semantics::on_assistive_focus_within` hears the cursor where an adapter reports it, and no native adapter does: the published `accesskit_ios` and `accesskit_android` track it and keep it to themselves ([Accessibility bridge fidelity](gaps.md#accessibility-bridge-fidelity-properties-and-announcements)); checked headless by `the_screen_reader_entering_the_carousel_pauses_autoplay`. |
+| The tree ends when no assistive technology listens | ❌ | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ | Where the platform says the last assistive technology left, the bridge drops its tree and tells the composition root once, which stops building semantics (`each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`). UI Automation and NSAccessibility never say a client left, and the browser never says a screen reader runs, so a window there builds its tree for its life once asked. Owed on Android: a TalkBack run turning TalkBack off and on, which this build host cannot make (the pinned 1.100.0 toolchain has no Android target and adding one needs `rustup`). |
 
 <details>
 <summary>Run evidence</summary>
@@ -310,6 +311,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 - **Announcements and live regions** — Audited on X11 only. Another framework's Linux bridge produces no AT-SPI announcement for live regions, snack bars, alert dialogs or route changes, only for an explicit announcement call ([flutter/flutter#194045](https://github.com/flutter/flutter/issues/194045)); its harness registers AT-SPI listeners and matches only strings that carry a nonce, so no other source can produce a hit. On the Web an announcement is a live region of the semantics host, which enters the page empty and is given its text once the page has rendered it, since a browser reads out no region inserted with its text (headless Chrome, 2026-10-31, `a_live_region_is_given_its_text_once_rendered`: the region empty when published, its text after the page rendered, the latest text winning and a region removed meanwhile never written; no screen reader heard it). On X11 the same client (`linux_atspi`, 2026-10-31) hears `object:announcement` for each text carrying the run's nonce: a live region whose label changes, one whose child's label changes and a status that appears, at polite or assertive as declared, a timer's tick not at all (`a_live_region_is_announced_with_its_text`), and an announcement at its urgency, again when it repeats (`an_announcement_is_heard_at_its_urgency`). A route change and a modal dialog appearing are spoken by name (ADR-0204 §5): on X11 the client hears the pushed page and the page a pop uncovers, politely (`a_route_change_is_heard_by_its_name`); iOS posts `UIAccessibilityScreenChangedNotification` and Android raises `TYPE_WINDOW_STATE_CHANGED`, each with the name, type-checked, with no VoiceOver or TalkBack run.
 - **Gesture alternatives (custom actions, context menu, keys, controls)** — Behavioural widgets publish each gesture's intent as a custom action, keys and a visible control or a context menu (ADR-0216), checked headless by `assert_gesture_alternatives`; no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so on every platform assistive technology reaches them only through the controls; the Win32 and AppKit menu-key decoders pass the conformance row, no native run
 - **Assistive-technology focus (screen reader cursor)** — A subtree hears the screen reader's cursor enter and leave it through `Semantics::on_assistive_focus_within`, and `PresentationCapabilities::assistive_focus` says whether the platform reports it. The published `accesskit_ios` records VoiceOver's cursor (`Context::platform_focus`) and `accesskit_android` TalkBack's (`Adapter::accessibility_focus`) in private fields, so iOS and Android report `Unreported` until an AccessKit release hands the cursor to the application. UI Automation, NSAccessibility and AT-SPI give no signal for the cursor, and the browser gives a page none, so those report `Unreported` too (`each_native_adapter_says_whether_it_reports_the_assistive_cursor`). The headless host moves it with `move_assistive_focus`.
+- **The tree ends when no assistive technology listens** — AT-SPI and UIAccessibility end the tree through AccessKit's deactivation handler, which the AT-SPI bus's screen-reader state and UIKit's status notifications for every assistive technology `accesskit_ios` watches (VoiceOver, Switch Control and the rest) drive; the bridge's half is unit-tested on Linux, and no Orca or VoiceOver run turned one off. Android's tree starts on a service's first question through `FluiView`'s node provider and ends when `FluiView`'s `AccessibilityStateChangeListener` finds `AccessibilityManager.isEnabled()` false, asked at the notice rather than read from it: the adapter goes back to holding no tree, an update posted before the composition root heard is dropped, the root is told on the Java main thread with nothing borrowed, and the next question starts the tree again with the whole tree built once (`the_last_service_stopping_ends_the_tree_and_tells_the_root_once`, `a_service_starting_again_gets_the_whole_tree_built_for_it`, on Linux; type-checked for aarch64-linux-android, no TalkBack run). Touch exploration ending is no stop there, since other services read the tree without it; a service enabled that never reads the window (an autofill service) keeps nothing built, as the tree starts only on a question. The composition root stops building on the notice and builds no update while nobody listens (`semantics_stop_with_the_last_listener_and_restart_whole`, headless).
 
 </details>
 

@@ -614,11 +614,35 @@ trait depends on `flui-platform` instead.
   every Linux table for any window reference (it needs nothing of the window),
   so the Wayland and X11 windows announce themselves on the AT-SPI bus
   alike. Every Android Activity window builds `accesskit_android`'s low-level
-  adapter, which lives on the Java main thread: `FluiView`'s node provider
-  answers from it there, and a publish is posted there and applied in order
-  (`accessibility::android`). The view reaches it through a `BridgeSlot`
+  adapter, which lives on the Java main thread in a `ProvidedTree`
+  (`accessibility::provided_tree`), made there by the first call that reaches
+  it and held in an `OwnerSlot` of that thread: `FluiView`'s node provider
+  answers from it there, a call made from inside another is `Busy`, and a
+  publish is posted there and applied in order (`accessibility::android`).
+  The view reaches it through a `BridgeSlot`
   (`owner::android::bridge_slot`), which a closing window empties only of
   its own bridge.
+
+  A bridge builds its tree only while assistive technology listens. Every
+  adapter starts it on the first question a client asks. Where the platform
+  says the last one left (AT-SPI's screen-reader state, UIKit's
+  assistive-technology status, Android's `AccessibilityManager.isEnabled()`
+  turning false), `BridgeShared::deactivate` drops the retained tree and
+  tells the composition root once, which drops its semantics owner and
+  builds no update until a client asks again; then the whole tree is built
+  once. Android asks the manager when its `AccessibilityStateChangeListener`
+  fires instead of trusting the notice's argument, and treats touch
+  exploration ending as no stop, since other services read the tree without
+  it; `ProvidedTree::services_stopped` resets the adapter before the root is
+  told, outside its borrow, and a stop that arrives while a call is inside
+  the adapter takes effect as that call returns. UI Automation,
+  NSAccessibility and the browser never say a client left: a window there
+  builds its tree for its life once asked. Tests:
+  `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`
+  (the per-host table, held to the parity row),
+  `the_last_service_stopping_ends_the_tree_and_tells_the_root_once`,
+  `a_stop_during_a_call_into_the_adapter_ends_the_tree_as_the_call_returns`,
+  `semantics_stop_with_the_last_listener_and_restart_whole` (flui-runtime).
 
   Every adapter publishes through `BridgeShared::publish`, which retains a
   whole tree for a late activation and decides what the adapter is handed.

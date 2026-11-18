@@ -8633,6 +8633,53 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
 
+- [x] **LY140** — ветка `native/android-accessibility-activation`. Проверено на `main` @
+  `59a808aeb` чтением и тестами. Подтвердились обе находки: у `notify_activation(false)` на
+  Android не было вызова, а `FluiView` не слушал состояния доступности, так что после первого
+  вопроса любого сервиса мост оставался активным до конца процесса и каждый кадр строил и слал
+  обновление семантики; `NodeProvider` ловил повторный вход через `Mutex::try_lock`. Решение
+  (ADR его не решают; правило записано в `crates/flui-native/ARCHITECTURE.md`): дерево
+  начинается с первого вопроса сервиса через провайдер узлов (активация AccessKit, как прежде), а
+  кончается, когда `AccessibilityManager.isEnabled()` становится ложным:
+  `AccessibilityStateChangeListener` регистрируется вместе с наблюдателями настроек и спрашивает
+  менеджер в момент уведомления, а не верит его аргументу (запоздавшее уведомление не гасит
+  работающий сервис), регистрация — до первого вопроса. `TouchExplorationStateChangeListener` из
+  строки не нужен: конец исследования касанием не значит, что дерево никто не читает (Switch
+  Access, Select to Speak, сервисы автозаполнения). Flutter 3.50.0 (`AccessibilityBridge`)
+  включает семантику по `isEnabled()` сразу, читает его до регистрации слушателя и верит
+  аргументу; здесь включение ленивое, а оба края закрыты. Построено: модель
+  `accessibility::provided_tree::ProvidedTree<A>` над `ProvidedAdapter` (компилируется и
+  тестируется на всех хостах) держит адаптер в `RefCell`, вызов изнутри другого отвечает `Busy`,
+  `services_stopped` сбрасывает адаптер в начальное состояние (дерева нет, обновления
+  отбрасываются), снимает заимствование и только потом через `BridgeShared::deactivate` говорит
+  корню композиции; остановка во время вызова в адаптер ждёт его возврата.
+  `BridgeShared::deactivate` (им же теперь пользуются AT-SPI и iOS) отбрасывает удержанное дерево
+  и говорит корню один раз: повторное уведомление никому не говорит. Android-мост держит
+  `ProvidedTree<accesskit_android::Adapter>` в `OwnerSlot` главного потока Java, созданном первым
+  дошедшим вызовом, вместо `Mutex`; новый native-метод `nativeAccessibilityStopped` идёт через
+  `jni_native`; `PROTOCOL` 7 → 8, dex пересобран здесь инструментами записи (javac 21.0.12.1,
+  build-tools 35.0.0, android-35) и воспроизводится (`android-dex --rebuild`). Остановленная
+  Activity кадров не строит, слушатель остаётся зарегистрированным, пока вид в окне; пересозданная
+  получает новый вид и новый мост, неактивный до первого вопроса. Паритет: новая строка
+  `the-tree-ends-when-no-assistive-technology-listens` (Windows, macOS, Web — ❌: UIA,
+  NSAccessibility и браузер не сообщают об уходе клиента), её держит таблица по хостам
+  `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`. Тесты, в скобках
+  результат с откатом: `the_last_service_stopping_ends_the_tree_and_tells_the_root_once`,
+  `the_root_is_told_once_the_tree_ended_and_the_adapter_is_free`,
+  `a_stop_during_a_call_into_the_adapter_ends_the_tree_as_the_call_returns`,
+  `a_service_starting_again_gets_the_whole_tree_built_for_it`,
+  `a_stop_the_root_failed_to_hear_is_told_again` и таблица (без `deactivate` в остановке — шесть
+  падают; без сброса адаптера — пять; со старым `deactivate`, который только звал слушателя, —
+  таблица и три теста модели); `a_call_from_inside_the_adapter_answers_busy`;
+  `fluiview_ends_the_tree_when_the_manager_says_no_service_is_enabled` держит Java к решению;
+  `semantics_stop_with_the_last_listener_and_restart_whole` (`flui-runtime`, headless) считает
+  работу: после ухода ни одного обновления, после возврата одно — всё дерево. Прогнано: на Windows
+  clippy `--all-targets --all-features -D warnings` `flui-native` и `flui-runtime`, nextest
+  `flui-native --lib` и контракты `flui-runtime`; в WSL `cargo +nightly check --target
+  aarch64-linux-android -p flui-native` и тесты доступности на Linux. Должно на устройстве
+  (заметка строки паритета): TalkBack выключить и включить; у закреплённого toolchain 1.100.0 нет
+  цели Android, а `rustup` не запускается.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная

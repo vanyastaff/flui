@@ -28,6 +28,7 @@ import android.view.DragEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.BaseInputConnection;
@@ -106,6 +107,9 @@ public final class FluiView extends View {
     static native boolean nativePerformAction(long handle, View host, int virtualViewId,
             int action, Bundle arguments);
 
+    /** No accessibility service is enabled: the semantics tree ends until one asks again. */
+    static native void nativeAccessibilityStopped(long handle);
+
     /**
      * The secure, system and global settings behind FLUI's preferences:
      * configuration changes (locales, font scale and weight, density) reach the
@@ -158,12 +162,19 @@ public final class FluiView extends View {
     private int reportedCompositionEnd = -1;
     /** Reports a change of {@link #OBSERVED_SETTINGS}, on this thread. */
     private final ContentObserver settings;
-    /** Whether {@link #settings} and the contrast listener are registered. */
+    /** Whether {@link #settings}, the contrast listener and {@link #services} are registered. */
     private boolean observing;
     /** The contrast listener on API 34 and above, while {@link #observing}. */
     private Object contrast;
     /** The node provider, while the native side has an accessibility bridge for this view. */
     private AccessibilityNodeProvider nodes;
+    /** The system's accessibility manager; {@code null} where the context has none. */
+    private final AccessibilityManager accessibility;
+    /**
+     * Reports a change of whether any accessibility service is enabled, on this
+     * thread, while {@link #observing}.
+     */
+    private final AccessibilityManager.AccessibilityStateChangeListener services;
 
     private FluiView(Activity activity, long handle) {
         super(activity);
@@ -192,6 +203,14 @@ public final class FluiView extends View {
                 settingsChanged();
             }
         };
+        accessibility =
+                (AccessibilityManager) activity.getSystemService(Context.ACCESSIBILITY_SERVICE);
+        services = new AccessibilityManager.AccessibilityStateChangeListener() {
+            @Override
+            public void onAccessibilityStateChanged(boolean enabled) {
+                servicesChanged();
+            }
+        };
     }
 
     void settingsChanged() {
@@ -202,10 +221,26 @@ public final class FluiView extends View {
     }
 
     /**
-     * Observe the settings only while in the window: a view that never gets
-     * there, or a bridge that freed its handle after failing to keep the view,
-     * leaves nothing behind that could call it. Registration comes first, then
-     * one report, so a change made before observation began is read too.
+     * The services enabled may have changed. The manager is asked now rather
+     * than the notice believed, so a notice that arrives after the state moved
+     * on cannot end the tree of a service still running. With none enabled,
+     * nobody can read the tree, and the native side ends it; a service enabled
+     * again starts it with its first question to the node provider. Touch
+     * exploration alone is not asked: other services read the tree without it.
+     */
+    void servicesChanged() {
+        long handle = this.handle;
+        if (handle != 0 && accessibility != null && !accessibility.isEnabled()) {
+            nativeAccessibilityStopped(handle);
+        }
+    }
+
+    /**
+     * Observe the settings and the accessibility services only while in the
+     * window: a view that never gets there, or a bridge that freed its handle
+     * after failing to keep the view, leaves nothing behind that could call
+     * it. Registration comes first, then one report of each, so a change made
+     * before observation began is read too.
      */
     @Override
     protected void onAttachedToWindow() {
@@ -220,8 +255,12 @@ public final class FluiView extends View {
         if (Build.VERSION.SDK_INT >= 34) {
             contrast = Api34.observeContrast(this);
         }
+        if (accessibility != null) {
+            accessibility.addAccessibilityStateChangeListener(services);
+        }
         observing = true;
         settingsChanged();
+        servicesChanged();
     }
 
     @Override
@@ -236,6 +275,9 @@ public final class FluiView extends View {
         }
         observing = false;
         activity.getContentResolver().unregisterContentObserver(settings);
+        if (accessibility != null) {
+            accessibility.removeAccessibilityStateChangeListener(services);
+        }
         if (contrast != null) {
             Api34.forgetContrast(this, contrast);
             contrast = null;

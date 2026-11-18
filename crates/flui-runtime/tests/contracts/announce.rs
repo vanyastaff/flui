@@ -1,4 +1,5 @@
-//! A mounted widget announces through its presentation (ADR-0204 §4).
+//! A mounted widget announces through its presentation (ADR-0204 §4), and a
+//! presentation builds what assistive technology reads only while it listens.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -213,5 +214,134 @@ fn an_idle_presentation_speaks_an_announcement() {
                 "Message sent"
             ),
         ]
+    );
+}
+
+/// A bridge whose assistive technology the test attaches and detaches through
+/// the listener the presentation registers.
+#[derive(Default)]
+struct Listened {
+    updates: std::sync::Mutex<Vec<accesskit::TreeUpdate>>,
+    active: std::sync::atomic::AtomicBool,
+    listener: std::sync::Mutex<Option<flui_semantics::platform::AccessibilityActivationListener>>,
+}
+
+impl Listened {
+    /// Attach or detach, telling the presentation as a platform bridge does:
+    /// the state is stored before the listener runs.
+    fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::SeqCst);
+        let listener = self.listener.lock().expect("listener").clone();
+        if let Some(listener) = listener {
+            listener(active);
+        }
+    }
+
+    fn published(&self) -> Vec<accesskit::TreeUpdate> {
+        self.updates.lock().expect("updates").clone()
+    }
+}
+
+impl flui_semantics::platform::PlatformAccessibility for Listened {
+    fn publish(&self, update: accesskit::TreeUpdate) {
+        self.updates.lock().expect("updates").push(update);
+    }
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::SeqCst)
+    }
+    fn set_activation_listener(
+        &self,
+        listener: flui_semantics::platform::AccessibilityActivationListener,
+    ) {
+        *self.listener.lock().expect("listener") = Some(listener);
+    }
+    fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
+}
+
+/// Once the last assistive technology leaves, the presentation builds and
+/// publishes nothing more, an announcement included; when one attaches
+/// again, the next frame publishes the whole tree once, which the bridges
+/// that drop their tree on a detach (Android, AT-SPI, iOS) rely on.
+#[test]
+fn semantics_stop_with_the_last_listener_and_restart_whole() {
+    let bridge = Arc::new(Listened::default());
+    let window = flui_native::headless_platform()
+        .open_window(
+            flui_platform::WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("headless window");
+    let mut runtime = UiRuntime::try_new(
+        PresentationWindow::new(window, Some(Arc::clone(&bridge) as Arc<_>)),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let slot = Slot::default();
+    runtime
+        .attach_root_widget_with_size(
+            &Announcing {
+                slot: Arc::clone(&slot),
+            },
+            40.0,
+            40.0,
+        )
+        .expect("mount");
+    let pump = |runtime: &mut UiRuntime| {
+        let _ = runtime.pump(
+            &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+            &mut Sink,
+        );
+    };
+    pump(&mut runtime);
+    assert!(
+        bridge.published().is_empty(),
+        "nothing is built before anyone listens"
+    );
+
+    bridge.set_active(true);
+    pump(&mut runtime);
+    assert!(
+        bridge
+            .published()
+            .first()
+            .is_some_and(|update| update.tree.is_some()),
+        "the first update after the attach is the whole tree"
+    );
+
+    bridge.set_active(false);
+    pump(&mut runtime);
+    let detached_at = bridge.published().len();
+    let announcer = slot
+        .lock()
+        .clone()
+        .expect("a presentation hands its widgets an announcer");
+    announcer
+        .announce("Nobody hears this", Urgency::Polite)
+        .expect("an open presentation accepts");
+    pump(&mut runtime);
+    pump(&mut runtime);
+    assert_eq!(
+        bridge.published().len(),
+        detached_at,
+        "no update is built while nobody listens"
+    );
+
+    bridge.set_active(true);
+    pump(&mut runtime);
+    let reattached = &bridge.published()[detached_at..];
+    assert_eq!(reattached.len(), 1, "one update for the attach");
+    assert!(
+        reattached[0].tree.is_some(),
+        "the update after the reattach is the whole tree"
     );
 }

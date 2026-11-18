@@ -657,6 +657,15 @@ fn absent_claims(parity: &Parity, column: &str, absent: &[Position]) -> Vec<Stri
         .collect()
 }
 
+/// The mark the committed source gives the row `row_id` on the environment
+/// `column`, for a table test that holds a host's code to what its column
+/// says; `None` when there is no such row or column.
+pub(crate) fn source_mark(row_id: &str, column: &str) -> Option<Mark> {
+    let parity = parse_checked(SOURCE);
+    let (_, row) = parity.rows().find(|(_, row)| row.id == row_id)?;
+    row.status.get(column).copied()
+}
+
 fn parse_checked(source: &str) -> Parity {
     let parity = Parity::parse(source).expect("platform-parity.toml parses");
     if let Err(shape) = parity.check_shape() {

@@ -256,6 +256,11 @@ pub(crate) trait ViewAccessibility: Send + Sync {
         arguments: jni::sys::jobject,
     ) -> bool;
 
+    /// The accessibility manager reports no service enabled: the tree ends
+    /// and the composition root is told, with nothing borrowed, that nobody
+    /// listens. Java main thread; a repeated report tells nobody.
+    fn services_stopped(&self);
+
     /// One hover of TalkBack's explore by touch, with its `MotionEvent`
     /// action code and its position in the view's pixels, from the native
     /// input queue on the owner thread: whether the adapter takes it, and
@@ -769,6 +774,11 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 jni_str!("(JLandroid/view/View;IILandroid/os/Bundle;)Z"),
                 native_perform_action as *mut std::ffi::c_void,
             ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeAccessibilityStopped"),
+                jni_str!("(J)V"),
+                native_accessibility_stopped as *mut std::ffi::c_void,
+            ),
         ]
     };
     // SAFETY: as above; every method is static, and so receives the class.
@@ -1148,6 +1158,25 @@ extern "system" fn native_perform_action<'local>(
             }))
         },
     )
+}
+
+/// No accessibility service is enabled: the window's bridge ends its tree.
+extern "system" fn native_accessibility_stopped<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) {
+    jni_native(
+        "nativeAccessibilityStopped",
+        &mut env,
+        |()| (),
+        |_| {
+            if let Some(accessibility) = view_accessibility(handle) {
+                accessibility.services_stopped();
+            }
+            Ok(())
+        },
+    );
 }
 
 /// `start_nanos`, a `System.nanoTime()` reading (`CLOCK_MONOTONIC`), on the

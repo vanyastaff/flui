@@ -72,7 +72,7 @@ impl accesskit::DeactivationHandler for Deactivation {
             "AccessKit's deactivation",
             (),
             AfterPanic::Answer(|()| ()),
-            || self.0.notify_activation(false),
+            || self.0.deactivate(),
         );
     }
 }
@@ -196,6 +196,27 @@ impl BridgeShared {
                 reason = "disarms the restore guard once the listener returned"
             )]
             std::mem::forget(restore);
+        }
+    }
+
+    /// The last assistive technology left: the retained tree is dropped, and
+    /// the composition root, which stops building the tree, is told once.
+    ///
+    /// Both are committed before the listener runs ([`Self::notify_activation`]).
+    /// A notice that finds the bridge inactive (a repeated one, or one after an
+    /// activation whose listener panicked, which the root never heard) tells
+    /// nobody: the root hears each change of state once.
+    #[cfg(any(
+        target_os = "ios",
+        target_os = "android",
+        linux_host,
+        all(test, not(target_arch = "wasm32"))
+    ))]
+    pub(crate) fn deactivate(&self) {
+        let retained = self.latest.lock().take();
+        drop(retained);
+        if self.is_active() {
+            self.notify_activation(false);
         }
     }
 
