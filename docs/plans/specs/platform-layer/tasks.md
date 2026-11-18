@@ -5469,24 +5469,54 @@ GPU-память простаивающего или невидимого окн
   автозапуска, глобальных сочетаний, прогресса и значка, jump list, путей и сведений об ОС;
   conformance-таблица против симулятора. Плагин доходит до приложения, только если оно включит
   фичу `system` и зарегистрирует его: в репозитории регистрацию показывает лишь `flui add`.
-- [ ] **LY59** (не закрыта: четыре портала на `main`; остальных порталов, `portal_parent()` в
-  `WindowRef`, поправки ADR-0152 и прогона на рабочем столе нет) — #2158 (`bb618a7f7`), zbus на
+- [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
+  ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
-  говорит с `org.freedesktop.portal` напрямую через `zbus` (строка называла `ashpd`):
-  FileChooser (открыть, сохранить), OpenURI, OpenDirectory (reveal), Trash. Родитель диалога —
-  `x11:<XID>` из raw-handle окна; для окна Wayland строка пуста, диалог не модален
-  (`portal::parent_window`). Тесты (`tests/portal.rs`, стенд портала на своей шине):
-  `the_launcher_reaches_the_open_uri_and_trash_portals`,
-  `the_dialogs_reach_the_file_chooser_and_answer_its_picks`,
-  `without_a_portal_on_the_bus_the_services_are_unavailable`,
-  `an_installed_portal_that_is_not_running_is_started_first`,
-  `a_response_from_another_client_is_not_heard`,
-  `a_portal_that_leaves_before_answering_ends_the_dialog_and_frees_the_window`. Остаётся:
-  GlobalShortcuts, Background (автозапуск), сигнал прогресса Unity LauncherEntry, пути XDG;
-  `WindowRef::portal_parent()` (окно Wayland экспортирует ручку `xdg-foreign` и держит
-  `PortalParent` в `window/linux/wayland.rs`, но читают её только тесты:
-  `a_portal_names_a_window_by_its_export`); поправка ADR-0152; conformance-таблица; прогон на
-  рабочем столе.
+  говорит с `org.freedesktop.portal` напрямую через `zbus` (строка называла `ashpd`): FileChooser,
+  OpenURI, OpenDirectory, Trash, Background (автозапуск), GlobalShortcuts; прогресс и счётчик —
+  сигнал Unity `LauncherEntry.Update`; пути — XDG user dirs (`user-dirs.dirs`, читается на нити
+  портала). Контракты в `flui-system`: `autostart` (`Autostart`, `AutostartRequest`,
+  `AutostartState`), `shortcuts` (`GlobalShortcuts`, `ShortcutBinding`, `ShortcutFeed`,
+  `Trigger` в записи спецификации XDG shortcuts), `taskbar` (`TaskbarEntry`, `Progress`,
+  `Honoured`), `user_dirs` (`UserDirs`, `UserDir`); вне Linux — `NotYetOnThisHost`; двойники
+  `ScriptedAutostart`, `ScriptedShortcuts`, `ScriptedTaskbar`, `ScriptedUserDirs` в
+  `ScriptedSystem`. Родитель портала — межплатформенное понятие ADR-0365 (поправка ADR-0152 §2.6 и
+  ADR-0154 §9): `PortalParent` (`none`, `x11`, `wayland` с экспортом, отпускаемым при drop),
+  `PlatformWindow::portal_parent`, `WindowRef::portal_parent`; окно Wayland экспортирует себя на
+  каждый запрос (`zxdg_exporter_v2`), а не на всю жизнь, запрос держит экспорт до конца.
+  `ProviderContext::app_id` (из `HostBridge::name_application`, ADR-0351): несэндбоксное
+  приложение называется порталу через `org.freedesktop.host.portal.Registry` один раз на экземпляр
+  портала до первого вызова. Версия интерфейса читается до запроса: старее нужной —
+  `NotOnThisDevice`. Отставка runtime закрывает `Request` и `Session` (ограниченный слив нити).
+  Сессия сочетаний возобновляется на портале, пришедшем после ушедшего, преходящий отказ
+  повторяется по `Backoff` (не более пяти раз), опроса нет. Тесты (`tests/portal_services.rs`,
+  стенд портала на своей шине в WSL):
+  `a_request_names_the_window_by_its_export_and_releases_it_when_it_ends`,
+  `a_launch_names_the_window_by_its_export_until_the_portal_answers`,
+  `the_application_is_named_to_each_portal_once_before_its_first_call`,
+  `a_portal_older_than_a_request_needs_answers_not_on_this_device`,
+  `autostart_asks_the_background_portal_and_answers_what_it_granted`,
+  `global_shortcuts_bind_hear_their_presses_and_unbind_when_dropped`,
+  `a_restarted_portal_renews_the_binding_and_a_closed_session_ends_it`,
+  `a_refused_binding_ends_denied_and_closes_its_session`,
+  `the_launcher_entry_broadcasts_its_whole_state_under_the_applications_entry`,
+  `the_home_folder_is_the_one_the_process_names`,
+  `a_runtime_that_ends_closes_the_sessions_its_portal_still_holds`,
+  `a_closed_window_takes_its_exports_with_it_and_names_no_parent` (закрытие окна отпускает
+  экспорт любого запроса, закрытое окно не называется),
+  `a_binding_retried_after_its_first_attempt_failed_still_names_its_window`,
+  `a_burst_of_entry_changes_ends_on_the_last_state`; правило закрытого окна в `WindowRef` —
+  `a_closed_window_is_named_to_no_portal_whatever_its_host_answers`; ручки на двойниках
+  (`tests/services.rs`, на всех ОС); экспорт против `ScriptedCompositor` (глобал
+  `zxdg_exporter_v2` добавлен): `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends`,
+  `a_compositor_without_an_exporter_names_no_portal_parent`; под sway —
+  `a_portal_parent_names_the_window_while_its_request_holds_the_export`. Message box и share:
+  портала нет ни для того, ни для другого, контракта ещё нет; их контракт и отказ Linux
+  `NotOnThisPlatform` приходят с первым провайдером (LY57/LY60), как говорит
+  `crates/flui-system/ARCHITECTURE.md`. Общая conformance-таблица — за LY57. Прогоны против
+  порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
+  «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
+  shortcuts», «Launch at login», «User folders».
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который

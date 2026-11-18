@@ -117,6 +117,8 @@ positions = [
     { item = "impl flui_platform::capability::owner::OwnerPoster::new", at = "impl-trait", marker = "Sync", crosses = "waker" },
     { item = "impl flui_platform::capability::owner::OwnerPoster::post", at = "bound", marker = "Send", crosses = "job" },
     { item = "impl flui_platform::capability::owner::OwnerPoster::post", at = "impl-trait", marker = "Send", crosses = "job" },
+    { item = "impl flui_platform::capability::portal_parent::PortalParent::wayland", at = "bound", marker = "Send", crosses = "handle" },
+    { item = "impl flui_platform::capability::portal_parent::PortalParent::wayland", at = "impl-trait", marker = "Send", crosses = "handle" },
     { item = "impl flui_platform::capability::runtime_local::RuntimeLocals::retire", at = "dyn", marker = "Send", crosses = "panic-payload" },
     { item = "impl flui_platform::executor::RoomFuture::new", at = "bound", marker = "Send", crosses = "job" },
     { item = "impl flui_platform::executor::RoomFuture::new", at = "impl-trait", marker = "Send", crosses = "job" },

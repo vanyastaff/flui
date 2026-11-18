@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "FLUI's OS shell services: open a URI or a file, reveal it, move it to the trash, and the file dialogs"
+description = "FLUI's OS shell services: launching, file dialogs, autostart, global shortcuts, the launcher entry and the user's folders"
 repository.workspace = true
 keywords = ["ui", "flui", "dialog", "launcher"]
 categories = ["gui"]
@@ -27,7 +27,7 @@ libc = { workspace = true }
 raw-window-handle = { workspace = true }
 serde = { workspace = true }
 zbus = { workspace = true }
-zruntime = { version = "0.2", default-features = false, features = ["runtime", "event"] }
+zruntime = { version = "0.2", default-features = false, features = ["runtime", "event", "unblock"] }
 
 [dev-dependencies]
 flui-platform = { workspace = true, features = ["testing"] }

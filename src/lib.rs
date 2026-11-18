@@ -270,8 +270,9 @@ pub use flui_material as material;
 /// of its name.
 ///
 /// `system` (`flui-system`): the providers of the launcher, whose handle is
-/// [`platform::launch::Launcher`], and the file dialogs. An application
-/// registers `services::system::SystemPlugin`.
+/// [`platform::launch::Launcher`], the file dialogs, autostart, global
+/// shortcuts, the launcher entry's progress and count, and the user's
+/// folders. An application registers `services::system::SystemPlugin`.
 #[cfg(feature = "system")]
 pub mod services {
     pub use flui_system as system;
@@ -370,7 +371,7 @@ pub mod platform {
             Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityId,
             CapabilityProvider, CapabilityRegistrar, Completion, CompletionSource, DataRefused,
             HostBridge, IntentFrame, InvalidResultKey, JniFrame, OwnerJob, OwnerPoster,
-            OwnerRetired, OwnerScope, PendingCompletions, Plugin, ProviderContext,
+            OwnerRetired, OwnerScope, PendingCompletions, Plugin, PortalParent, ProviderContext,
             RegisteredProvider, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold,
             ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,
             ResultTicketHold, ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime,

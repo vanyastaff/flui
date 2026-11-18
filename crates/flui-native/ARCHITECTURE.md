@@ -1464,13 +1464,14 @@ trait depends on `flui-platform` instead.
   deadline of the loop's wait, never a poll, and the first `done` ends the
   backoff; a `done` releases the callback out only when it answers that
   callback or a later one, and an older one gives it the first grace
-  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window is
-  exported as it opens, and the export lives until the window closes. Its
-  portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
-  cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
-  capability crates through the contract's window reference, not through an
-  OS extension; until that reader exists the handle is kept and read under
-  `testing` only. The window tells its AT-SPI bridge each change of the
+  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window
+  exports itself for each portal request that names it
+  (`PlatformWindow::portal_parent`, ADR-0365) and answers `wayland:<handle>` when the
+  compositor's `handle` event comes; the answer holds the `zxdg_exported_v2`, whose drop
+  destroys it and flushes the connection on whichever thread the request ended, so no handle
+  names the window between requests. The window's close destroys every export a request still
+  holds (`Exports::close`, before the role objects go), so none outlives its toplevel. A compositor with no exporter and a closed window answer no
+  window; an X11 window answers `x11:<XID>` at once. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
   the adapter (the X11 window already called it), and where its content is
   (`WindowAccessibility::bounds_changed`): the compositor tells a client
