@@ -5741,7 +5741,7 @@ GPU-память простаивающего или невидимого окн
   «Android» в `crates/flui-system/ARCHITECTURE.md`. Классы Android зовутся из Rust через JNI
   (`jni` 0.22 по сырым указателям, которые хост одалживает на вызов; своего `static` `JavaVM`
   нет: VM, загрузчик классов и `ContentResolver` приложения первый провайдер runtime
-  читает в кадре Activity и держит в `runtime_local`). Java — только лист по ADR-0375:
+  читает в кадре Activity и держит в `runtime_local`). Java — только лист по ADR-0377:
   `FluiDocuments` — content provider, компонент, который Android создаёт по имени из манифеста;
   `FluiCallback` — единственный обработчик `java.lang.reflect.Proxy` для интерфейсов-слушателей
   (три слушателя диалога), вызов приходит в один нативный метод с именем метода, дескриптор
@@ -5810,7 +5810,7 @@ GPU-память простаивающего или невидимого окн
   доставляется приложению) — `docs/gaps.md`. Прогоны — строки parity «Open a URL», «Open a file,
   reveal it in the file manager», «Open, save and folder dialogs», «Message box», «Share», «User
   folders», «OS name, version and architecture».
-  После независимого чтения: правило о не-Rust коде — ADR-0375 (Java только для подкласса,
+  После независимого чтения: правило о не-Rust коде — ADR-0377 (Java только для подкласса,
   переопределения или компонента манифеста; checked-in dex крейта с его компонентами; одна
   проверка digest по списку из манифестов; authority от id приложения; типизированные привязки
   JNI — направление, запись в `docs/gaps.md`), заменяет ADR-0154 решение 5 п. 2–3 и ADR-0255
@@ -5849,7 +5849,7 @@ GPU-память простаивающего или невидимого окн
   `Held::Unlinked` (по уже сделанному `fstat`); `ActivityBridge::post` принимает `PostedWork`,
   который кончается ровно раз (`run`, `refuse`, отказ при сбросе); очередь работы хоста —
   модель `owner::android::posted_work` с тестами на любом хосте; поток освобождения
-  `FluiCallback` перезапускается; запись ADR — ADR-0375. Тесты:
+  `FluiCallback` перезапускается; запись ADR — ADR-0377. Тесты:
   `a_full_provider_is_its_own_failure_and_only_a_started_share_keeps_its_offers`,
   `a_refused_dismissal_is_tried_again_until_it_lands_or_the_activity_ends`,
   `a_file_unlinked_after_its_open_is_held_as_unlinked`,

@@ -1,4 +1,4 @@
-# ADR-0375: Non-Rust code on Android and Apple is a leaf, by rule
+# ADR-0377: Non-Rust code on Android and Apple is a leaf, by rule
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18

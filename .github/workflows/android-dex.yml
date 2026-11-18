@@ -1,7 +1,7 @@
 name: Android dex
 
 # Compiles the dex of each workspace crate that declares Java classes
-# (`[package.metadata.flui.declares.android]` `java` and `dex`, ADR-0375 §2;
+# (`[package.metadata.flui.declares.android]` `java` and `dex`, ADR-0377 §2;
 # `cargo xtask android-dex --list` names them) on a GitHub runner, so changing
 # the Java sources needs no local JDK or Android SDK. A pull request that
 # changes any Java source or dex (or this file) runs it in `write` mode, so

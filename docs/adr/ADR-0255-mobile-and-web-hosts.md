@@ -32,7 +32,7 @@
   application's own task instead of starting a second runtime (ADR-0366 §2)
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
-- **Superseded-by:** [ADR-0375](ADR-0375-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
+- **Superseded-by:** [ADR-0377](ADR-0377-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
   for decision 21 where it differs (every crate that declares a dex, not `flui-native`'s alone,
   has its digests checked from the list the manifests give, with a protocol constant per dex; the
   Gradle path writes a provider's authority as `${applicationId}.<suffix>`) and for decision 8's
