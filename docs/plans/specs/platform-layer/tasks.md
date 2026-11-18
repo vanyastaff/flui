@@ -5985,15 +5985,36 @@ GPU-память простаивающего или невидимого окн
   из них — запрет в `deny.toml` и списках `forbid`, пример в тесте xtask, ссылка на тикет winit,
   сравнение с другим фреймворком (prior art в ADR, `ARCHITECTURE.md` и комментариях) или история
   в ADR; ни одна не называет winit хостом или источником событий FLUI.
-- [ ] **LY89** (открыта: счётчик пробуждений) — macOS слушает `NSWorkspace` и
-  `NSNotificationCenter` (параметры отображения доступности, локаль, активация); Android —
-  `ContentObserver` в `FluiView` (`nativeSettingsChanged`) и `ConfigChanged`; пока `FluiView` не
-  в окне, лупер Android читает предпочтения раз в 500 мс
-  (`crates/flui-native/src/owner/android/looper.rs:812`). Остаётся код: тест в виртуальном
-  времени — N секунд простоя дают ноль пробуждений, смена предпочтения ровно одно, и он падает при
-  возврате таймера, на источниках macOS и Android; сегодня такую проверку держит только портал
-  Linux. Прогоны (пробуждения за минуту на Mac и за Home на Android) — строка качества parity
-  «Zero CPU when idle».
+- [x] **LY89** (закрыта: код и тесты в виртуальном времени на `main`; прогоны на Mac и Android —
+  в parity) — источники macOS и Android стали одной моделью `NoticedPreferences`
+  (`crates/flui-native/src/preferences/read.rs`) поверх `NativePreferences` (чтение, часы,
+  допуск повтора по активности, таймер повтора), поэтому модель и логика хода источников
+  компилируются и проверяются на Linux. macOS слушает `NSWorkspace` и `NSNotificationCenter`
+  (параметры отображения доступности, локаль, активация, цвета, полосы прокрутки, тема), каждый
+  наблюдатель вызывает `notice_handler`; Android — `ContentObserver` в `FluiView`
+  (`nativeSettingsChanged`, ещё раз при входе в окно после регистрации) и `ConfigChanged`, лупер
+  вызывает `notice` и читает. Чтение внутри хода владельца отдаёт смену вызывающему и не будит:
+  одно уведомление — один ход (раньше macOS и отчёт `FluiView` давали два). Кадентность 500 мс
+  лупера Android, пока `FluiView` не в окне, убрана: лупер читает сам только на первом ходу,
+  после `Start` и в срок повтора (`LoopReads`), а неудавшаяся установка вида приходит владельцу
+  один раз типом `ViewMissing` и пишется в лог. Неудачное или паникующее чтение повторяется
+  через 0,5–16 с шесть раз (на macOS только пока приложение активно), затем ждёт следующего
+  уведомления. Тесты через шов системы с сигналом владельца и его ходом:
+  `an_idle_source_never_wakes_the_owner` (час простоя — ноль ходов, ноль чтений, лупер Android
+  блокируется без таймера), `one_change_notice_is_one_owner_turn` (уведомление AppKit, отчёт
+  `FluiView`, смена конфигурации — ровно один ход), `failed_reads_back_off_and_stop_until_the_next_notice`,
+  `an_inactive_application_retries_only_on_its_next_notice`,
+  `a_recovered_read_outside_a_turn_wakes_the_owner`, у лупера
+  `the_loop_reads_on_its_own_only_at_start_and_at_a_due_retry`. С откатом: безусловное
+  пробуждение `main` в точке чтения роняет `one_change_notice_is_one_owner_turn` для AppKit и
+  для отчёта `FluiView` (2 хода вместо 1); периодический таймер после успешного чтения роняет
+  тест простоя (3600 ходов за час); кадентность 500 мс в `LoopReads` роняет тест простоя
+  (лупер не блокируется) и тест лупера; фиксированный повтор 500 мс без предела роняет тест
+  повторов; повтор без допуска по активности роняет тест неактивного приложения. Прогон Galaxy
+  S21 2026-10-21 (ни одного хода за 10 с простоя, в том числе за Home) сделан до удаления
+  кадентности. Остаётся: пробуждения за минуту простоя на Mac (vanyastaff/flui#1840), на Android
+  — за минуту за Home и пока `FluiView` входит в окно; строка качества parity «Zero CPU when
+  idle».
 - [ ] **LY93** (открыта, не начата) — `flui_system::PickedFile`
   (`crates/flui-system/src/dialog/request.rs:1242`) — свой тип с формами `Path`, `Contents`,
   `Folder` и `Download`, чтобы нести доступ песочницы без смены API; iOS читает выбранный документ

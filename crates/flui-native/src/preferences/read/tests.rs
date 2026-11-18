@@ -211,7 +211,7 @@ impl Rig {
         let host = self.system().host;
         let mut elapsed = Duration::ZERO;
         while elapsed < span {
-            let step = Duration::from_secs(1).min(span - elapsed);
+            let step = Duration::from_secs(1).min(span.saturating_sub(elapsed));
             elapsed += step;
             let (now, due) = {
                 let mut system = self.system();
@@ -291,8 +291,12 @@ impl Rig {
     }
 }
 
+/// How a change reaches the source: its name, the host that hears it so, and
+/// what the rig runs for it.
+type Notice = (&'static str, Host, fn(&Rig));
+
 /// Each way a change reaches the source, on the host that hears it so.
-const NOTICES: [(&str, Host, fn(&Rig)); 3] = [
+const NOTICES: [Notice; 3] = [
     (
         "an AppKit notification",
         Host::AppKit,

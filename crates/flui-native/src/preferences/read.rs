@@ -97,7 +97,9 @@ impl<N: NativePreferences> NoticedPreferences<N> {
     }
 
     /// When the retry a failed read owes is due; `None` for a healthy source
-    /// and for one waiting for a notice.
+    /// and for one waiting for a notice. The Android loop blocks no longer
+    /// than this.
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn retry_deadline(&self) -> Option<web_time::Instant> {
         self.admission.retry_deadline()
     }
@@ -242,7 +244,8 @@ impl ReadAdmission {
     }
 
     fn retry_deadline(&self) -> Option<web_time::Instant> {
-        match self.state.lock().stage {
+        let stage = self.state.lock().stage;
+        match stage {
             Stage::RetryAt(deadline) => Some(deadline),
             Stage::Ready | Stage::Reading | Stage::AwaitingNotice => None,
         }
