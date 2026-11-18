@@ -424,7 +424,9 @@ impl LifecycleContext for LiveBuildContext<'_> {
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.capabilities.presentation.announcer.clone()
     }
-    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
+    fn assistive_focus_support(
+        &self,
+    ) -> flui_rendering::semantics::platform::AssistiveFocusSupport {
         self.capabilities.presentation.assistive_focus
     }
     fn haptics(&self) -> Option<flui_interaction::haptics::HapticsHandle> {

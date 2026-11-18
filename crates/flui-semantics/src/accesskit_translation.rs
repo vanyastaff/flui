@@ -819,8 +819,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
     if let Some(direction) = data.attrs.text_direction {
         node.set_text_direction(match direction {
-            crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
-            crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
+            flui_foundation::TextDirection::Ltr => TextDirection::LeftToRight,
+            flui_foundation::TextDirection::Rtl => TextDirection::RightToLeft,
         });
     }
 
@@ -955,8 +955,8 @@ pub(crate) fn text_run_nodes(attrs: &SemanticsAttributes) -> Vec<(NodeId, Node)>
             node.set_character_widths(run.character_widths());
             node.set_word_starts(run.word_starts());
             node.set_text_direction(match run.direction() {
-                crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
-                crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
+                flui_foundation::TextDirection::Ltr => TextDirection::LeftToRight,
+                flui_foundation::TextDirection::Rtl => TextDirection::RightToLeft,
             });
             let rect = run.rect();
             node.set_bounds(Rect {

@@ -526,7 +526,8 @@ pub trait LifecycleContext: BuildContext {
     /// `Semantics::on_assistive_focus_within` or fall back to input focus
     /// and hover. `Unreported` on a bare owner. Acquire it in a lifecycle
     /// hook, as `announcer`.
-    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport;
+    fn assistive_focus_support(&self)
+    -> flui_rendering::semantics::platform::AssistiveFocusSupport;
 
     /// The presentation's haptics (ADR-0210 §10): semantic feedback and
     /// patterns, immediate or aligned with the next presented frame.

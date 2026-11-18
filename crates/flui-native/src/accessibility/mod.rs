@@ -48,7 +48,7 @@ pub(crate) mod windows;
 
 #[cfg(test)]
 mod tests {
-    use flui_semantics::AssistiveFocusSupport;
+    use flui_semantics::platform::AssistiveFocusSupport;
     use flui_semantics::platform::RouteChangeSupport;
 
     use crate::testing::gap::GapId;

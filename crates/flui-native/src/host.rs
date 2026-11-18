@@ -680,8 +680,8 @@ impl PlatformAccessibility for Absent<position::Accessibility> {
     }
 
     /// No adapter, no cursor to report.
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
+        flui_semantics::platform::AssistiveFocusSupport::Unreported
     }
 }
 
