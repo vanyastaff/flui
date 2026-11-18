@@ -9082,6 +9082,52 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
+- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0371 (заменяет
+  `KeyboardInset` из §1 ADR-0277, применение из §3, клетку iOS из §4 и цель `move_keyboard` из
+  §5). Проверено на `main` @ `eacf2a10d` чтением: оба правила в коде подтвердились (link только в
+  `NSDefaultRunLoopMode`; `occlusion` давала вставку от верха любой рамки, нулевой кадр читался
+  как скрытие, наблюдателя скрытия не было). Что UIKit шлёт такие кадры — по
+  `KeyboardInsetManager.swift` Flutter 3.50.0 и документации Apple; на устройстве не прогнано.
+  Построено. `CADisplayLink` добавлен в `NSRunLoopCommonModes`: кадры идут и в
+  `UITrackingRunLoopMode` (правило — в `crates/flui-native/ARCHITECTURE.md`, «UIKit scene
+  attachments»). `KeyboardInset` держит `KeyboardPlacement` (`Hidden`, `Docked { inset }`,
+  `Floating { frame }`) и движение вставки; пристыкованная без вставки — `Hidden`, плавающая рамка
+  без площади — `InvalidInsets::EmptyFrame`; `KeyboardInset::floating_frame` и
+  `MediaQueryData::floating_keyboard` несут рамку плавающей, `view_insets` — только
+  пристыкованную. Правило размещения одно для хостов с рамкой (`window::keyboard::placement`):
+  вне вида или без площади — скрытая, низ рамки выше пола (с округлением до точки) — плавающая,
+  иначе пристыкованная; пол на iOS — низ вида, на Web — низ layout viewport (меньшее из
+  `clientHeight` корня и `innerHeight`) или низ холста, если он выше. iOS наблюдает три
+  уведомления и держит одно (`keyboard::Note`); какое заменяет стоящее, решает `Note::replacing`:
+  скрытие — всегда; изменение кадра или показ без кадра, изменение с нулевым кадром (клавиатуру
+  тащат) и показ, повторяющий кадр стоящего изменения, оставляют прежнее; показ с нулевым кадром
+  (панель сокращений, брошенная плавающей, — этого края в строке не было, он взят из Flutter) —
+  без вставки. Android публикует `Docked` из `Type.ime()`, как и раньше; headless задаёт любое
+  размещение (`HeadlessHost::move_keyboard(window, placement, …)`). Протокол 0.27, аддитивно: у
+  клавиатуры записи необязательная рамка `floating`; читатель отказывает плавающей клавиатуре со
+  вставкой. Тесты, в скобках результат с откатом: в `window::keyboard` (модель, на всех хостах)
+  `a_frame_names_where_the_keyboard_rests` (без ветки плавающей — пристыкованная вставка 544,
+  падает) и `a_notice_keeps_or_replaces_the_keyboard` (нулевой кадр заменяет стоящее — `Hidden`
+  вместо вставки 336, падает; скрытие читается как изменение кадра — вставка 244, падает; показ с
+  нулевым кадром оставляет прежнее — вставка 336, падает; повторный показ запускает движение
+  заново — падает); строка `a_floating_keyboard_has_no_inset` в `window_insets` (`flui-platform`;
+  без приведения пустой пристыкованной к `Hidden` — падает);
+  `a_floating_keyboard_reaches_the_media_query_as_a_frame` (`flui-testing`; без записи
+  `floating_keyboard` при применении — падает);
+  `keyboard_placements_keep_their_wire_values_and_replay` (журнал `flui-native`; без рамки в
+  записи — падает, без отказа рамке со вставкой — падает) и вторая запись `Insets` в
+  `every_vocabulary_variant_round_trips_through_the_recording_dto` (без рамки в записи ввода —
+  падает); в wasm32 строки `web_window_has_the_virtual_keyboard_overlay_its_page` о плавающем
+  прямоугольнике (локально не запускались: в WSL нет раннера, их гонит CI). Прогнано: на Windows
+  clippy `--all-targets -D warnings` по всем крейтам, до которых доходит изменение, nextest
+  шести крейтов (1503 прошли), `xtask doc-strict`, `xtask checks`; в WSL тесты модели на Linux и
+  `cargo +nightly check --all-targets` `flui-native` для `aarch64-apple-ios`,
+  `aarch64-linux-android` и `wasm32-unknown-unknown`. Должно на
+  iOS Simulator (заметки строк «Refresh rate and frame pacing» и «Soft-keyboard insets» в
+  `platform-parity.toml`): тики link при отслеживании UIKit; пристыкованная, плавающая,
+  перетаскиваемая и скрытая клавиатура на iPad, брошенная панель сокращений, скрытие с кадром на
+  экране. Не построено и записано в `docs/gaps.md`: плавающая клавиатура, перекрывающая низ
+  короткого окна Stage Manager, читается пристыкованной (нужны границы экрана).
 
 ## Чего нет в этой серии
 

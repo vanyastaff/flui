@@ -177,25 +177,25 @@ pub(crate) struct Note {
 
 #[cfg(any(target_os = "ios", test))]
 impl Note {
-    /// The note a view keeps once this one arrives after `previous`: this
-    /// one, unless it says nothing of where the keyboard ends up, and then
-    /// the previous note stands. A hide always says. A frame change or a show
+    /// The note a view keeps once this one arrives while `standing` stands:
+    /// this one, unless it says nothing of where the keyboard ends up, and
+    /// then `standing` stays. A hide always says. A frame change or a show
     /// that names no end frame is not the keyboard's. A frame change that
     /// names UIKit's zero frame is the one it sends while the user drags a
     /// floating keyboard. A show that names the end frame of the frame
     /// change standing is the second notice of one show, and its motion is
     /// already under way.
     #[must_use]
-    pub(crate) fn after(self, previous: Option<Self>) -> Option<Self> {
+    pub(crate) fn replacing(self, standing: Option<Self>) -> Option<Self> {
         let says_nothing = match (self.notice, self.end) {
             (Notice::Hide, _) => false,
             (Notice::FrameChange | Notice::Show, None) => true,
             (Notice::FrameChange, Some(end)) => end == Frame::ZERO,
-            (Notice::Show, Some(_)) => previous.is_some_and(|standing| {
+            (Notice::Show, Some(_)) => standing.is_some_and(|standing| {
                 standing.notice != Notice::Hide && standing.end == self.end
             }),
         };
-        if says_nothing { previous } else { Some(self) }
+        if says_nothing { standing } else { Some(self) }
     }
 
     /// The keyboard this note puts over a view `view` in size, `to_view`
@@ -472,14 +472,14 @@ mod tests {
             ),
         ];
         for (case, arriving, expected) in rows {
-            let kept = arriving.after(Some(shown)).expect("a note is kept");
+            let kept = arriving.replacing(Some(shown)).expect("a note is kept");
             let keyboard = kept
                 .keyboard(VIEW, |end| end)
                 .expect("a placement the platform takes");
             assert_eq!(keyboard.placement(), expected, "{case}");
         }
         assert_eq!(
-            note(Notice::FrameChange, Some(Frame::ZERO)).after(None),
+            note(Notice::FrameChange, Some(Frame::ZERO)).replacing(None),
             None,
             "a zero frame before any other is no keyboard"
         );
@@ -495,11 +495,11 @@ mod tests {
             end: shown.end,
             change: later,
         };
-        assert_eq!(second.after(Some(shown)), Some(shown));
+        assert_eq!(second.replacing(Some(shown)), Some(shown));
         // After a hide the same frame is a keyboard that comes back.
         let hidden = note(Notice::Hide, shown.end);
-        assert_eq!(second.after(Some(hidden)), Some(second));
-        assert_eq!(second.after(None), Some(second));
+        assert_eq!(second.replacing(Some(hidden)), Some(second));
+        assert_eq!(second.replacing(None), Some(second));
     }
 
     #[test]

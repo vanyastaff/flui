@@ -964,7 +964,7 @@ impl FluiView {
 
     /// Takes the keyboard notification `note`, a `notice`, starting now from
     /// where the keyboard's inset is, and samples the metrics that publish
-    /// it when it replaces the note that stood. `keyboard::Note::after`
+    /// it when it replaces the note that stood. `keyboard::Note::replacing`
     /// decides that: a notification that says nothing of where the keyboard
     /// ends up (no end frame, UIKit's zero frame while the user drags a
     /// floating keyboard, the show that repeats its frame change) leaves the
@@ -1012,7 +1012,7 @@ impl FluiView {
             },
         };
         let standing = self.ivars().keyboard.get();
-        let kept = arriving.after(standing);
+        let kept = arriving.replacing(standing);
         if kept == standing {
             return;
         }
