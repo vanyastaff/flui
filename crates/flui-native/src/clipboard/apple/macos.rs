@@ -60,14 +60,14 @@ pub struct MacOSClipboard {
     /// AppKit call.
     expiring: parking_lot::Mutex<ExpiringRecord<isize>>,
     /// Owner lane every operation is routed through.
-    owner: &'static dispatch::Queue,
+    owner: &'static dispatch2::DispatchQueue,
     /// True when `owner` is the main queue, so "on the main thread" is
     /// equivalent to "on the owner lane" for the direct-path probe.
     owner_is_main: bool,
 }
 
 impl std::fmt::Debug for MacOSClipboard {
-    // Hand-written: `dispatch::Queue` has no `Debug` representation, and the
+    // Hand-written: `dispatch2::DispatchQueue` has no `Debug` representation, and the
     // pasteboard is identified only by an optional board name.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSClipboard").finish_non_exhaustive()
@@ -120,7 +120,7 @@ impl MacOSClipboard {
     /// false so even a call made on the OS main thread routes through the
     /// test lane rather than touching AppKit pasteboard traffic off-lane.
     #[cfg(test)]
-    fn for_test(owner: &'static dispatch::Queue, name: impl Into<String>) -> Self {
+    fn for_test(owner: &'static dispatch2::DispatchQueue, name: impl Into<String>) -> Self {
         Self {
             pasteboard: Some(name.into()),
             expiring: parking_lot::Mutex::default(),

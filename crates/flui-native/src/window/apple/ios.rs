@@ -20,7 +20,7 @@
 // crate's `unsafe` FFI islands, opted out at its module boundary.
 #![expect(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{
@@ -142,16 +142,16 @@ pub struct FluiViewIvars {
     /// The platform's display source, which measures the cadence the link's
     /// ticks show and holds the period it publishes.
     displays: Arc<dyn HostDisplays>,
-    /// The screen this window's scene is on; shared with the window, whose
-    /// `display_id` any thread may call.
-    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    /// The screen this window's scene is on; shared with the window, which
+    /// reads it on the main thread too (`display_id`).
+    screen: Rc<Cell<ScreenIdentity>>,
     /// The window this view belongs to; owns the link periods it reports.
     window_id: WindowId,
-    metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    metrics: Rc<RefCell<WindowMetrics>>,
     /// Whether the view's `userInterfaceStyle` was dark when last sampled.
     /// Apart from `metrics`: the theme is the system's, so it needs neither a
     /// laid-out size nor an attached window to be reported.
-    dark: Arc<AtomicBool>,
+    dark: Rc<Cell<bool>>,
     /// The uptime of the event UIKit last handed the Pencil hover
     /// recognizer, which stamps the hover it reports.
     gesture_stamp: std::cell::Cell<Option<f64>>,
@@ -458,7 +458,7 @@ define_class!(
 /// slot it shares with its window, and the window that owns its link periods.
 struct ViewDisplay {
     displays: Arc<dyn HostDisplays>,
-    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    screen: Rc<Cell<ScreenIdentity>>,
     window: WindowId,
 }
 
@@ -469,8 +469,8 @@ impl FluiView {
         mtm: MainThreadMarker,
         delivery: Arc<WindowDelivery>,
         touches: Box<dyn ViewTouches>,
-        metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
-        dark: Arc<AtomicBool>,
+        metrics: Rc<RefCell<WindowMetrics>>,
+        dark: Rc<Cell<bool>>,
         owner_signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
         display: ViewDisplay,
     ) -> Retained<Self> {
@@ -618,7 +618,7 @@ impl FluiView {
         // returned; `FluiView` is main-thread-only, so this runs on the main
         // thread UIKit requires.
         let dark = unsafe { traits.userInterfaceStyle() } == UIUserInterfaceStyle::Dark;
-        if self.ivars().dark.swap(dark, Ordering::Relaxed) != dark {
+        if self.ivars().dark.replace(dark) != dark {
             self.delivery().publish_state();
         }
     }
@@ -724,6 +724,7 @@ impl FluiView {
             .displays
             .identify(MainThreadMarker::from(self), screen);
         let moved = self.ivars().displays.move_window(
+            MainThreadMarker::from(self),
             self.ivars().window_id,
             &self.ivars().screen,
             identity,
@@ -744,10 +745,11 @@ impl FluiView {
 
     /// The scene is gone: this window names no screen until it is attached
     /// again. Its link's measurement on the old screen is forgotten and, if
-    /// the identity was set, the owner is told the display changed. No lock or
-    /// borrow is held across the callback.
+    /// the identity was set, the owner is told the display changed. No borrow
+    /// is held across the callback.
     fn detach_screen(&self) {
         let moved = self.ivars().displays.move_window(
+            MainThreadMarker::from(self),
             self.ivars().window_id,
             &self.ivars().screen,
             ScreenIdentity::default(),
@@ -762,11 +764,13 @@ impl FluiView {
     /// published period.
     fn observe_link_cadence(&self, link: &CADisplayLink) {
         let interval = link.targetTimestamp() - link.timestamp();
-        let number = self.ivars().screen.lock().number;
-        let published =
-            self.ivars()
-                .displays
-                .observe_link(self.ivars().window_id, number, interval);
+        let number = self.ivars().screen.get().number;
+        let published = self.ivars().displays.observe_link(
+            MainThreadMarker::from(self),
+            self.ivars().window_id,
+            number,
+            interval,
+        );
         if !published {
             return;
         }
@@ -807,10 +811,12 @@ impl FluiView {
             link.invalidate();
             // A link that is gone measures nothing: the screen's period is
             // unknown until its replacement ticks.
-            let number = self.ivars().screen.lock().number;
-            self.ivars()
-                .displays
-                .forget_link(self.ivars().window_id, number);
+            let number = self.ivars().screen.get().number;
+            self.ivars().displays.forget_link(
+                MainThreadMarker::from(self),
+                self.ivars().window_id,
+                number,
+            );
         }
     }
 
@@ -945,7 +951,7 @@ impl FluiView {
         let seconds = number(duration_key).map_or(0.0, |seconds| seconds.doubleValue());
         let curve = number(curve_key).map_or(isize::MAX, |curve| curve.integerValue());
         let start = flui_platform::EventTime::now();
-        let from = self.ivars().metrics.lock().keyboard.at(start);
+        let from = self.ivars().metrics.borrow().keyboard.at(start);
         self.ivars().keyboard.set(Some(KeyboardNote {
             end,
             change: keyboard::Change {
@@ -1046,7 +1052,7 @@ impl FluiView {
             return;
         }
         let previous = {
-            let mut metrics = self.ivars().metrics.lock();
+            let mut metrics = self.ivars().metrics.borrow_mut();
             std::mem::replace(&mut *metrics, next)
         };
         if previous != next {
@@ -1120,10 +1126,17 @@ impl Drop for NativeWindow {
     }
 }
 
+// Owner-local (ADR-0254 §5): the state the window shares with its view is
+// `Rc` and `Cell`, since no other thread can hold either.
+static_assertions::assert_not_impl_any!(IOSWindow: Send, Sync);
+
 /// One logical iOS window. Its stable view outlives scene attachments and any
 /// raw handle borrowed by a retained renderer. Native access/release is main-only.
 pub struct IOSWindow {
     native: NativeOwner<NativeWindow>,
+    /// The proof that the window is on the main thread, which made it: the
+    /// window is neither `Send` nor `Sync`.
+    main: MainThreadMarker,
     /// The status-bar style its content asks for, reported by the root
     /// controller of each attachment.
     status_bar: Arc<status_bar::StatusBar>,
@@ -1135,20 +1148,20 @@ pub struct IOSWindow {
     closed: Arc<AtomicBool>,
     /// The last read found a safe area FLUI cannot publish: a run of them is
     /// said once.
-    refusing_safe_area: AtomicBool,
+    refusing_safe_area: Cell<bool>,
     /// Shared with the window's surface targets, which hand out no handle
     /// while the window is detached from a scene.
     lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
-    metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    metrics: Rc<RefCell<WindowMetrics>>,
     /// Shared with the view, which samples it on the main thread.
-    dark: Arc<AtomicBool>,
+    dark: Rc<Cell<bool>>,
     /// The screen the scene is on, kept by the view; read by `display_id`.
-    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    screen: Rc<Cell<ScreenIdentity>>,
     id: WindowId,
     /// Why the window does not set the pointer's shape on this device.
     pointer: flui_platform::CapabilityAbsence,
     /// The input regions last projected, and the screen edges they reach.
-    input_regions: parking_lot::Mutex<(
+    input_regions: RefCell<(
         crate::input::regions::ProjectedInputRegions,
         crate::window::apple::geometry::screen_edges::DeferredEdges,
     )>,
@@ -1171,7 +1184,7 @@ impl IOSWindow {
         positions: &WindowPositions<ViewRef>,
         handler: SceneDelivery,
     ) -> Self {
-        let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
+        let screen = Rc::new(Cell::new(ScreenIdentity::default()));
         let delivery = Arc::new(
             WindowDelivery::counting_frames(
                 handler.handler,
@@ -1184,24 +1197,24 @@ impl IOSWindow {
         if let Some(signal) = signal.upgrade() {
             delivery.resume_through_signal(&signal);
         }
-        let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
+        let metrics = Rc::new(RefCell::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
             scale: flui_foundation::geometry::DevicePixelRatio::ONE,
             safe_area: EdgeInsets::ZERO,
             keyboard: flui_platform::KeyboardInset::HIDDEN,
         }));
-        let dark = Arc::new(AtomicBool::new(false));
+        let dark = Rc::new(Cell::new(false));
         let pointer = pointer_absence(displays.version(), displays.shows_a_pointer());
         let view = FluiView::new(
             mtm,
             Arc::clone(&delivery),
             touches,
-            Arc::clone(&metrics),
-            Arc::clone(&dark),
+            Rc::clone(&metrics),
+            Rc::clone(&dark),
             signal.clone(),
             ViewDisplay {
                 displays,
-                screen: Arc::clone(&screen),
+                screen: Rc::clone(&screen),
                 window: id,
             },
         );
@@ -1229,6 +1242,7 @@ impl IOSWindow {
                 },
                 mtm,
             ),
+            main: mtm,
             status_bar,
             redraw,
             delivery,
@@ -1237,13 +1251,13 @@ impl IOSWindow {
             screen,
             id,
             pointer,
-            input_regions: parking_lot::Mutex::default(),
+            input_regions: RefCell::default(),
             snapshot: WindowStateCell::new(WindowState::new(
                 WindowGeometry::EMPTY,
                 flui_platform::WindowExtent::ZERO,
             )),
             closed: Arc::new(AtomicBool::new(false)),
-            refusing_safe_area: AtomicBool::new(false),
+            refusing_safe_area: Cell::new(false),
             lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
                 focused: false,
@@ -1265,9 +1279,9 @@ impl SceneWindow for IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = self
-            .status_bar
-            .attach_controller(marker, rect_edge(self.input_regions.lock().1));
+        // Copied out first: no borrow is held across the controller's `init`.
+        let edges = self.input_regions.borrow().1;
+        let controller = self.status_bar.attach_controller(marker, rect_edge(edges));
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -1467,7 +1481,7 @@ impl IOSWindow {
     /// A closed scene is hidden, unfocused and detached. A view whose bounds
     /// are no extent costs the sample its geometry and nothing else.
     fn sample_state(&self) -> Sample {
-        let metrics = *self.metrics.lock();
+        let metrics = *self.metrics.borrow();
         let closed = self.closed.load(Ordering::SeqCst);
         let (focused, foreground) = {
             let lifecycle = self.lifecycle.lock();
@@ -1485,12 +1499,12 @@ impl IOSWindow {
         let (safe_area, refused_safe_area) =
             match flui_platform::WindowInsets::ZERO.try_with_safe_area(metrics.safe_area) {
                 Ok(insets) => {
-                    self.refusing_safe_area.store(false, Ordering::Relaxed);
+                    self.refusing_safe_area.set(false);
                     (insets, None)
                 }
                 Err(error) => (
                     flui_platform::WindowInsets::ZERO,
-                    (!self.refusing_safe_area.swap(true, Ordering::Relaxed)).then_some(error),
+                    (!self.refusing_safe_area.replace(true)).then_some(error),
                 ),
             };
         let sample = Sample::read(geometry, |state| {
@@ -1500,14 +1514,14 @@ impl IOSWindow {
                 .with_visible(!closed)
                 .with_resizable(false)
                 .with_frame(flui_platform::WindowFrame::None)
-                .with_display(self.screen.lock().id);
+                .with_display(self.screen.get().id);
             ReportedFacts {
                 metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                     metrics.size,
                     metrics.scale.get(),
                 )
                 .ok(),
-                brightness: if self.dark.load(Ordering::Relaxed) {
+                brightness: if self.dark.get() {
                     Brightness::Dark
                 } else {
                     Brightness::Light
@@ -1897,10 +1911,10 @@ impl PlatformWindow for IOSWindow {
     /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
     /// clear of every edge has no UIKit equivalent and defers nothing.
     ///
-    /// Taken from any thread, as the capability says: off the main thread the
-    /// edges reach the root controller through the main queue
-    /// (`StatusBar::defer_edges`). A window not yet in a scene keeps them for
-    /// the controller it attaches. Only a closed window refuses, with `NoWindow`.
+    /// Taken on the owner thread, as the window is neither `Send` nor `Sync`:
+    /// the edges reach the root controller through `StatusBar::defer_edges`. A
+    /// window not yet in a scene keeps them for the controller it attaches.
+    /// Only a closed window refuses, with `NoWindow`.
     fn set_input_regions(
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
@@ -1911,23 +1925,34 @@ impl PlatformWindow for IOSWindow {
             ));
         }
         let (size, scale) = {
-            let metrics = *self.metrics.lock();
+            let metrics = *self.metrics.borrow();
             let size = Size::new(
                 metrics.scale.to_device(metrics.size.width).round() as i32,
                 metrics.scale.to_device(metrics.size.height).round() as i32,
             );
             (size, metrics.scale)
         };
-        let edges = {
-            let mut state = self.input_regions.lock();
+        // Projected with the cell not borrowed while `tracing` reports a
+        // dropped region (`update_in`).
+        let changed = crate::input::regions::ProjectedInputRegions::update_in(
+            &self.input_regions,
+            |state| &mut state.0,
+            regions,
+            scale,
+            None,
+        )
+        .then(|| {
+            let mut state = self.input_regions.borrow_mut();
             let (projection, edges) = &mut *state;
-            let Some(sent) = projection.update(regions, scale, None) else {
-                return Ok(());
-            };
-            *edges = crate::window::apple::geometry::screen_edges::DeferredEdges::of(sent, size);
+            *edges = crate::window::apple::geometry::screen_edges::DeferredEdges::of(
+                projection.sent(),
+                size,
+            );
             *edges
-        };
-        self.status_bar.defer_edges(rect_edge(edges));
+        });
+        if let Some(edges) = changed {
+            self.status_bar.defer_edges(self.main, rect_edge(edges));
+        }
         Ok(())
     }
 
@@ -2346,7 +2371,7 @@ pub(crate) mod status_bar {
     use std::cell::{Cell, RefCell};
     use std::sync::{
         Arc,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicU8, Ordering},
     };
 
     use dispatch2::DispatchQueue;
@@ -2466,9 +2491,6 @@ pub(crate) mod status_bar {
     /// the controller reporting both.
     pub(super) struct StatusBar {
         style: Arc<AtomicU8>,
-        /// The `UIRectEdge` bits the window last asked to defer; the
-        /// controller reads the newest whenever it is refreshed.
-        deferred_edges: AtomicUsize,
         controller: NativeOwner<RefCell<Option<Retained<FluiViewController>>>>,
     }
 
@@ -2476,38 +2498,14 @@ pub(crate) mod status_bar {
         pub(super) fn new(mtm: MainThreadMarker) -> Arc<Self> {
             Arc::new(Self {
                 style: Arc::new(AtomicU8::new(UNSET)),
-                deferred_edges: AtomicUsize::new(UIRectEdge::empty().bits()),
                 controller: NativeOwner::new(RefCell::new(None), mtm),
             })
         }
 
-        /// Defer `edges` from now on. On the main thread the controller hears
-        /// it at once; from any other thread the main queue refreshes it, and
-        /// reads the newest edges then, so a refresh queued earlier never
-        /// brings back edges a later call replaced.
-        pub(super) fn defer_edges(self: &Arc<Self>, edges: UIRectEdge) {
-            self.deferred_edges.store(edges.bits(), Ordering::Release);
-            if let Some(mtm) = MainThreadMarker::new() {
-                self.refresh_edges(mtm);
-                return;
-            }
-            let status_bar = Arc::clone(self);
-            DispatchQueue::main().exec_async(move || {
-                os_entry(
-                    "the deferred screen edges' refresh",
-                    (),
-                    AfterPanic::Answer(|()| ()),
-                    move || {
-                        let mtm = MainThreadMarker::new()
-                            .expect("BUG: the main queue runs on the main thread");
-                        status_bar.refresh_edges(mtm);
-                    },
-                );
-            });
-        }
-
-        fn refresh_edges(&self, mtm: MainThreadMarker) {
-            let edges = UIRectEdge::from_bits_retain(self.deferred_edges.load(Ordering::Acquire));
+        /// Defer `edges` from now on, on the main thread `mtm` proves, where
+        /// the window that asks lives: the attached controller hears it at
+        /// once, and the window hands the next one it attaches the same edges.
+        pub(super) fn defer_edges(&self, mtm: MainThreadMarker, edges: UIRectEdge) {
             let controller = self.controller.get(mtm).borrow().clone();
             if let Some(controller) = controller {
                 controller.defer_edges(edges);

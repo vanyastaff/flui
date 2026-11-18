@@ -222,6 +222,13 @@ objc2-app-kit = { workspace = true, features = [
     "NSGraphics",
     "NSCursor",
     "NSVisualEffectView",
+    # Liquid Glass behind a window's content (`MacOSBackdrop::Glass`), looked
+    # up by name before it is used: the class exists from macOS 26.
+    "NSGlassEffectView",
+    # The traffic lights a window lays out (`standardWindowButton:`) and the
+    # direction it lays them out in.
+    "NSButton",
+    "NSUserInterfaceLayout",
     "NSWindowScripting",
     "NSAppearance",
     # The accent colour and the preferred scroller style (ADR-0359).
@@ -231,15 +238,20 @@ objc2-app-kit = { workspace = true, features = [
     "NSScroller",
     # `NSHapticFeedbackManager`, the window's haptic actuator (ADR-0210).
     "NSHapticFeedback",
+    # The content view's input method conformance and its pointer tracking.
+    "NSTextInputClient",
+    "NSTrackingArea",
 ] }
+# Grand Central Dispatch: the AppKit main queue every deferred owner-lane
+# task and every off-thread AppKit call is routed through.
 dispatch2.workspace = true
-# CoreGraphics, for the one display property Cocoa does not expose: the
-# refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
-# which is what `PlatformWindow::refresh_period` needs. NSScreen has no
-# current-mode rate — its `maximumFramesPerSecond` is the hardware *maximum*
-# (it over-reports on a ProMotion panel running a 60 Hz mode) and is macOS 12+,
-# above this crate's 11.0 deployment floor. Pinned to the version `cocoa` 0.27 already
-# pulls in, so no second copy of the crate enters the tree.
+# CoreGraphics, for the display properties Cocoa does not expose: the refresh
+# rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`), which
+# is what `PlatformWindow::refresh_period` needs, and the cursor warp and mouse
+# association of a locked pointer. NSScreen has no current-mode rate — its
+# `maximumFramesPerSecond` is the hardware *maximum* (it over-reports on a
+# ProMotion panel running a 60 Hz mode) and is macOS 12+, above this crate's
+# 11.0 deployment floor.
 core-graphics = { workspace = true }
 # The view's backing layer (`owner::apple::metal_layer`): a `CAMetalLayer`
 # whose drawables report when they reached the screen. Both the versions
@@ -257,10 +269,6 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
     "block2",
     "objc2-core-foundation",
 ] }
-# Grand Central Dispatch: the owner lane (AppKit main queue, or a test serial
-# queue) every NSPasteboard operation is routed through. Zero-dep crate;
-# 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.
-dispatch = "0.2"
 
 # Apple platforms: CoreText's answer to which faces fall back
 # (`fonts::apple`, ADR-0271 §3). Both are in the tree already, through
@@ -953,12 +961,8 @@ globals = [
     { item = "owner::web::PAGE_LOOPS", grant = "ADR-0097", class = "trampoline", reason = "the owner signal's Send + Sync wake hook reaches the page's loops through it; the hook may not hold a loop, which is neither Send nor Sync" },
     { item = "owner::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's display pass (the view's `updateLayer`) on the main thread, which the process has once" },
     { item = "owner::apple::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
-    { item = "owner::apple::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
-    { item = "owner::apple::macos::content_view::view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
     { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
     { item = "clipboard::windows::ClipboardThread::get::THREAD", grant = "ADR-0097", class = "process", reason = "the thread, with its message-only window, that opens the system clipboard for every read and write of the process (ADR-0337), started once per process" },
-    { item = "window::apple::macos::delegate::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
-    { item = "window::apple::macos::window_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window class, which the runtime holds once per process" },
     { item = "owner::windows::control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
     { item = "owner::windows::WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "Windows' registration of FLUI's window class with the host whose hooks its procedure dispatches to: Windows holds the class, and the procedure it was registered with, once per process, so a second host is refused" },
     { item = "owner::windows::CLASS_ON_THREAD", grant = "ADR-0097", class = "trampoline", reason = "the Win32 window procedure is called with a window's handle and no pointer of FLUI's: it reads here the hooks of FLUI's window class on its thread, each of which keeps its own state of a window, keyed by the window's identity" },

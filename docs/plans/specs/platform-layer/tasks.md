@@ -3253,9 +3253,9 @@ GPU-память простаивающего или невидимого окн
   которой нет у этого устройства, допуск отказывает с `NotOnThisDevice` (Win32 ниже 22621), прочие
   — `NotOnThisPlatform`; `WindowHandle::set_material` (`flui-view`) — путь виджета через очередь
   окна. (2) В документации `WindowCapabilities`: `Unavailable` ровно тогда, когда допуск
-  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` с любого
-  потока: края доходят до корневого контроллера через главную очередь (`StatusBar::defer_edges`,
-  контроллер читает последние края при обновлении, так что ранний блок не возвращает старые).
+  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` на потоке
+  владельца: края сразу доходят до корневого контроллера (`StatusBar::defer_edges`), а следующий
+  присоединённый контроллер получает те же края.
   (3) Тест отказа DWM: инъекция исхода DWM (`material_applied`) — отказ даёт `ApplyError::Platform`;
   закрытое окно — `ApplyError::Closed` (команда, допущенная до закрытия). (4) Android: чистая
   модель `display::android::sample::FrameRateRequests` (разрешение `ANativeWindow_setFrameRate`
@@ -8787,6 +8787,56 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `HostPlatform::try_new` называют `SecondActivity`; из снимка манифеста убран `assertion_line`.
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
+
+- [ ] **LY139** — ветка `native/apple-owner-thread-forms`, решение — ADR-0369 (заменяет §2
+  ADR-0071). Проверено на `main` @ `94f26e2f3` чтением и перекрёстной проверкой типов. Подтвердились
+  все три находки. `MacOSWindow` (`!Send + !Sync`) держал `parking_lot::Mutex<MacOSWindowState>`,
+  `LoopControl` — `Mutex<State>` и `Mutex<TerminateGate>`, а ответ `applicationShouldTerminate:`
+  после паники брал `try_lock`; окно iOS делило с видом `Arc<Mutex<…>>` и атомики. Три класса
+  macOS строились `ClassBuilder` с нетипизированными ivars, окно слало сырой `msg_send!` на
+  `*mut AnyObject` под `#![expect(deprecated)]`, рядом жили `dispatch` 0.2 и `dispatch2`, а
+  комментарий `Cargo.toml` ссылался на удалённый `cocoa`. Попутно найдено: делегат окна
+  создавался +1 и не отпускался никогда (AppKit держит делегата слабо), `NSTrackingArea` тоже
+  утекала. Построено: состояние окна macOS — `RefCell`, `assert_not_impl_any!(MacOSWindow: Send,
+  Sync)`; управление циклом пересекает потоки (его слабо держат пробуждение сигнала и наблюдатели
+  уведомлений), поэтому то, что оно хранит кроме сигнала, — одна главно-поточная часть за
+  `MainThreadBound`: `Copy`-состояния (`LoopState`, `TerminateGate`) в `Cell`, переходы чистые
+  (`owner::apple::loop_state`) и записываются до того, как приложению что-то сообщают, так что
+  повторный вход читает оставленное состояние и «занято» не бывает вовсе; `MacOSLoop` держит
+  `MainThreadMarker` вместо `OwnerAffinity`. Окно iOS: метрики, экран, тема, отказ безопасной
+  области и проекция регионов — `Rc`/`RefCell`/`Cell`, `assert_not_impl_any!(IOSWindow: Send,
+  Sync)`; измерения источников дисплеев iOS и macOS — в главно-поточных ячейках, методы трейта
+  берут маркер. `FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView` — `define_class!` с
+  `ContainedIvars`; вид соответствует `NSTextInputClient` через трейт протокола; окно держит
+  `Retained<NSWindow>`, вид и делегата (делегат отсоединяется в drop окна и уходит в пул
+  авторелиза); полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят. Первый
+  клик: `acceptsFirstMouse:` спрашивает ввод; нажатие на области перемещения заголовка,
+  нарисованного приложением, активирует окно и сразу двигает его, нажатие на содержимое только
+  активирует (конвенция AppKit). Решение отличается от строки («`YES` и пометка нажатия, виджет
+  решает»): помеченное нажатие требует, чтобы каждый распознаватель жестов игнорировал его по
+  умолчанию, а включение по элементу — регион нового вида в обходе регионов `flui-rendering`,
+  `InputRegionKind` и проекции каждого хоста; это и осталось, записано в `docs/gaps.md`
+  («Pointer and keyboard gaps»), поэтому строка не отмечена. Тесты, в скобках результат с
+  откатом: столбец первого клика в `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`
+  (с `first_mouse`, всегда отвечающим `Activates`, падают строки области перемещения);
+  `an_explicit_quit_fences_a_reopen_already_accepted` (без проверки флага выхода в `begin_drain` —
+  падает); `an_explicit_quit_fences_the_signal_and_the_application_hears_no_reopen` (прежний тест
+  `LoopControl` на `LoopRequests`: без `signal.fence()` — падает); строки другой кнопки в той же
+  таблице держат проводку `press_of` (без проверки левой кнопки — падают);
+  `an_update_made_while_a_dropped_region_is_reported_finds_what_was_sent` (регионы, с прежним
+  изъятием всей проекции — падает); `a_reopen_during_a_drain_is_told_by_that_drain`,
+  `a_drain_tells_each_owed_reopen_then_queues_the_rest`, `a_reopen_during_a_drain_waits_for_it_to_end`, `evaluations_coalesce_and_stop_with_the_loop`,
+  `a_quit_before_the_loop_runs_keeps_it_from_starting`, `the_launch_ends_when_appkit_says_it_finished`
+  держат переходы модели. Прогнано: на Windows clippy `-p flui-native --all-targets --all-features
+  -D warnings`, `cargo heli nextest` по моделям, `xtask doc-strict`, `xtask checks`; в WSL
+  `cargo +nightly check -p flui-native --lib` для `aarch64-apple-darwin` и для `aarch64-apple-ios`
+  (C-компилятор подменён на `/bin/true`, `SDKROOT=/tmp`, чтобы прошёл сборочный скрипт
+  `objc2-exception-helper`). Не собрано: тесты под macOS (dev-зависимостям нужен `clang`). Остаётся
+  заблокированным: запись истечения буфера обмена macOS (её модульные тесты зовут его с потоков
+  тестовой полосы) и жизненный цикл окна iOS (делится с `Send + Sync` целью поверхности); курсор
+  macOS шлёт сырой `msg_send!` — всё в `docs/gaps.md`. Должно на Mac (строка
+  `platform-parity.toml` «Frameless windows, custom title bar»): первый клик по неактивному окну и
+  набор `appkit_window` после переноса привязок.
 
 - [x] **LY140** — ветка `native/android-accessibility-activation`. Проверено на `main` @
   `59a808aeb` чтением и тестами. Подтвердились обе находки: у `notify_activation(false)` на
