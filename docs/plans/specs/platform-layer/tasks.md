@@ -9356,7 +9356,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
-- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0372 (заменяет
+- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0373 (заменяет
   `KeyboardInset` из §1 ADR-0277, применение из §3, клетку iOS из §4 и цель `move_keyboard` из
   §5). Проверено на `main` @ `eacf2a10d` чтением: оба правила в коде подтвердились (link только в
   `NSDefaultRunLoopMode`; `occlusion` давала вставку от верха любой рамки, нулевой кадр читался
