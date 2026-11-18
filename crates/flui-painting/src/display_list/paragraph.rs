@@ -267,33 +267,60 @@ impl<'a> ShapedRun<'a> {
     ///
     /// `key` is what the raster side's registry returned for this run
     /// ([`FontRegistry::prepare_run`](crate::glyphs::FontRegistry::prepare_run)).
-    /// `origin` is the paragraph's top-left in device pixels and `scale` the
-    /// device-pixel ratio. A glyph's pen position goes to
-    /// `origin.x + x × scale`, split into a whole column and a quarter-pixel
-    /// bin; its baseline row is `round(baseline × scale)` plus the truncated
-    /// `origin.y + dy × scale`; its bitmap is rasterized at
-    /// `font_size × scale`. These are the rules cosmic-text placed glyphs
-    /// with, so a glyph lands on the device pixel it landed on there.
+    /// The paragraph's top-left in device pixels is `whole + offset`: `whole`
+    /// is whole pixels (a fraction of it is moved into `offset`), which only
+    /// move the glyphs, and `offset` the rest, which places them. `scale` is
+    /// the device-pixel ratio. `offset` is split in `f64` into whole pixels
+    /// and a fraction, narrowed to `f32`. A glyph's pen position, that
+    /// fraction plus `x × scale`, is split into a whole column and a
+    /// quarter-pixel bin ([`SubpixelBin::split`]); its baseline row is
+    /// `round(baseline × scale)` plus the floor of the fraction plus
+    /// `dy × scale`; both then add the whole pixels of `whole` and `offset`.
+    /// Its bitmap is rasterized at `font_size × scale`.
     ///
-    /// Glyphs with non-finite or unrepresentable device coordinates are omitted.
-    /// The rounded baseline and truncated vertical offset are added in `f64`
-    /// before checking the final row, preserving cancellation between them.
+    /// A glyph's column, row and bin thus depend on the bits of `offset`
+    /// alone: two calls with the same `offset` and `whole`s that differ by
+    /// whole pixels place every glyph that many pixels apart with the same
+    /// key, on either side of 0 and at any magnitude. Folding a translation's
+    /// whole pixels into `offset` instead rounds its fraction at the
+    /// translation's magnitude, which can pick another row or bin. For a
+    /// non-negative position these are cosmic-text's rules.
+    ///
+    /// Glyphs with non-finite or unrepresentable device coordinates are
+    /// omitted, as is a glyph whose pen position alone is outside the `i32`
+    /// range, which the split would saturate. The rounded baseline, the
+    /// whole rows and the floored vertical offset are added in `f64` before
+    /// checking the final row, preserving cancellation between them.
     pub fn placed_glyphs(
         &self,
         key: RunKey,
-        origin: (f32, f32),
+        whole: (f64, f64),
+        offset: (f64, f64),
         scale: f32,
     ) -> impl Iterator<Item = PlacedGlyph> + 'a {
         let size = self.data.font_size * scale;
         let synthesis = self.data.synthesis;
         let color = self.data.color;
         let baseline = (self.data.baseline * scale).round();
+        let lead = (whole.0.floor(), whole.1.floor());
+        let offset = (offset.0 + (whole.0 - lead.0), offset.1 + (whole.1 - lead.1));
+        let inner = (offset.0.floor(), offset.1.floor());
+        let base = (lead.0 + inner.0, lead.1 + inner.1);
+        // In [0, 1) before narrowing, which can round it up to 1.0; the pen
+        // then starts a pixel on, as the same bits do in every call.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a fraction narrows to f32; every caller with the same offset bits gets the same f32"
+        )]
+        let fraction = ((offset.0 - inner.0) as f32, (offset.1 - inner.1) as f32);
         self.glyphs().iter().filter_map(move |glyph| {
-            let horizontal = glyph.x.mul_add(scale, origin.0);
+            let horizontal = glyph.x.mul_add(scale, fraction.0);
             device_coordinate(f64::from(horizontal))?;
-            let (x, bin) = SubpixelBin::split(horizontal);
-            let dy = glyph.dy.mul_add(scale, origin.1).trunc();
-            let y = device_coordinate(f64::from(baseline) + f64::from(dy))?;
+            device_coordinate(base.0 + f64::from(horizontal))?;
+            let (column, bin) = SubpixelBin::split(horizontal);
+            let x = device_coordinate(base.0 + f64::from(column))?;
+            let dy = glyph.dy.mul_add(scale, fraction.1).floor();
+            let y = device_coordinate(f64::from(baseline) + base.1 + f64::from(dy))?;
             Some(PlacedGlyph {
                 key: GlyphKey::new(key.face, glyph.id, size, bin)
                     .with_variation(key.variation)

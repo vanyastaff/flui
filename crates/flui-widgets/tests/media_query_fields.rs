@@ -299,7 +299,7 @@ pub(crate) fn a_text_scale_change_relayouts_a_preserved_text_subtree() {
                 assert_eq!(paragraph.text(), "retained paragraph");
                 for run in paragraph.runs() {
                     let key = registry.prepare_run(&run).expect("real text face");
-                    for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                    for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
                         assert_eq!(
                             f64::from(glyph.key.size()),
                             expected,
