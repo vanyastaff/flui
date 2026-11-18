@@ -28,7 +28,8 @@ use flui_platform::{SystemFailure, Unsupported, UnsupportedReason, WindowId};
 use rustc_hash::FxHashMap;
 
 pub use request::{
-    FileFilter, MalformedRequest, OpenRequest, PickedFile, Picks, SaveLocation, SaveRequest,
+    FileFilter, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks, SaveLocation,
+    SaveRequest,
 };
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
@@ -70,6 +71,12 @@ pub enum DialogError {
     /// handle cannot hand out.
     #[error("the pick is not a local file")]
     NotAFile,
+    /// A pick matches none of the request's filters, on a system whose
+    /// dialog only suggests them (a browser's file input, which offers every
+    /// file beside them). The whole answer is refused, since it is not what
+    /// the request asked the user for; nothing was read.
+    #[error("a pick matches none of the request's filters")]
+    NotInFilter,
     /// The picks hold more than the request's
     /// [`max_bytes`](OpenRequest::max_bytes), on a system that hands over a
     /// pick's contents (a browser). Nothing was read past the check.
@@ -97,6 +104,7 @@ impl DialogError {
             | Self::InvalidRequest(_)
             | Self::WindowClosed
             | Self::NotAFile
+            | Self::NotInFilter
             | Self::TooLarge { .. }
             | Self::Failed(_) => None,
         }
@@ -298,7 +306,7 @@ impl FileDialogs {
     pub fn save(&self, request: SaveRequest) -> Dialog<SaveResult> {
         let checked = request.check();
         let filters = request.filters.len();
-        let contents = request.contents_to_write().cloned();
+        let contents = request.contents.clone();
         let chosen = self.show(
             checked,
             |backend, window, answer| backend.save(window, request, answer),
@@ -495,7 +503,7 @@ fn write_file(
     let started = std::thread::Builder::new()
         .name("flui-system-save".to_owned())
         .spawn(move || {
-            let written = std::fs::write(&path, &contents).map_err(|error| write_failure(&error));
+            let written = write_replacing(&path, &contents).map_err(|error| write_failure(&error));
             let answer = writer
                 .lock()
                 .expect("BUG: the save slot's holders run no code under its lock")
@@ -532,6 +540,49 @@ fn write_file(
     >(
         UnsupportedReason::NotOnThisPlatform,
     ))));
+}
+
+/// How many names beside the chosen file a save tries for its new file
+/// before it gives up: each is taken only by one this process is writing.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TEMPORARY_NAMES: u32 = 16;
+
+/// Write `contents` to `path` whole or not at all: into a new file beside
+/// it, synced, then renamed over it, so a write that fails leaves the file
+/// the user chose as it was, and a reader never sees it half written.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_replacing(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::{ErrorKind, Write as _};
+
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(ErrorKind::InvalidInput.into());
+    };
+    let mut taken = None;
+    for attempt in 0..MAX_TEMPORARY_NAMES {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(name);
+        temporary_name.push(format!(".{}-{attempt}.flui-save", std::process::id()));
+        let temporary = folder.join(temporary_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(mut file) => {
+                let written = file.write_all(contents).and_then(|()| file.sync_all());
+                drop(file);
+                let replaced = written.and_then(|()| std::fs::rename(&temporary, path));
+                if replaced.is_err() {
+                    // The write's failure is the answer; the clean-up's is not.
+                    let _ = std::fs::remove_file(&temporary);
+                }
+                return replaced;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => taken = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(taken.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
 }
 
 /// The failure a write reports: the system's code, or a write that took no

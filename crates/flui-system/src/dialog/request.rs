@@ -109,6 +109,40 @@ impl FileFilter {
         &self.mime_types
     }
 
+    /// Whether a file named `name`, of the MIME type `mime_type` where the
+    /// system says, is one this filter means: its name is longer than and
+    /// ends in `.` and one of the extensions, ignoring ASCII case, or its
+    /// type (without parameters, ignoring ASCII case) is one of the MIME
+    /// types, `image/*` meaning every image type.
+    ///
+    /// What a host checks a pick against when its dialog only suggests the
+    /// filters (ADR-0360 §4): a browser's file input offers every file
+    /// beside them.
+    #[must_use]
+    pub fn matches(&self, name: &str, mime_type: Option<&str>) -> bool {
+        let by_name = self.extensions.iter().any(|extension| {
+            name.len() > extension.len() + 1
+                && name.is_char_boundary(name.len() - extension.len() - 1)
+                && name[name.len() - extension.len() - 1..]
+                    .strip_prefix('.')
+                    .is_some_and(|tail| tail.eq_ignore_ascii_case(extension))
+        });
+        let by_type = mime_type
+            .map(|mime_type| mime_type.split(';').next().unwrap_or_default().trim())
+            .filter(|mime_type| !mime_type.is_empty())
+            .is_some_and(|mime_type| {
+                self.mime_types
+                    .iter()
+                    .any(|accepted| match accepted.strip_suffix("/*") {
+                        Some(kind) => mime_type
+                            .split_once('/')
+                            .is_some_and(|(given, _)| given.eq_ignore_ascii_case(kind)),
+                        None => mime_type.eq_ignore_ascii_case(accepted),
+                    })
+            });
+        by_name || by_type
+    }
+
     /// The first thing wrong with the filter: its name, matching nothing, or
     /// an extension or MIME type that is not one.
     fn check(&self) -> Result<(), MalformedRequest> {
@@ -251,7 +285,10 @@ enum Pick {
 pub struct OpenRequest {
     pick: Pick,
     multiple: bool,
-    max_bytes: u64,
+    /// The most bytes the picks may hold together where the system hands
+    /// over a pick's contents rather than its path (a browser), as
+    /// [`max_bytes`](Self::max_bytes) sets it.
+    pub max_bytes: u64,
     /// The dialog's title, if set.
     pub title: Option<String>,
     /// The folder the dialog opens in, if set; it must be absolute.
@@ -337,13 +374,6 @@ impl OpenRequest {
         self
     }
 
-    /// The most bytes the picks may hold together where the dialog reads
-    /// them ([`max_bytes`](Self::max_bytes)).
-    #[must_use]
-    pub fn byte_limit(&self) -> u64 {
-        self.max_bytes
-    }
-
     /// Whether it picks folders rather than files.
     #[must_use]
     pub fn picks_folders(&self) -> bool {
@@ -382,7 +412,8 @@ fn check_directory(directory: Option<&Path>) -> Result<(), MalformedRequest> {
 #[derive(Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SaveRequest {
-    contents: Option<Arc<[u8]>>,
+    /// What the save writes, if set ([`contents`](Self::contents)).
+    pub contents: Option<Arc<[u8]>>,
     /// The dialog's title, if set.
     pub title: Option<String>,
     /// The folder the dialog opens in, if set; it must be absolute.
@@ -447,13 +478,6 @@ impl SaveRequest {
     pub fn contents(mut self, contents: impl Into<Arc<[u8]>>) -> Self {
         self.contents = Some(contents.into());
         self
-    }
-
-    /// What the save writes, when the request carries it
-    /// ([`contents`](Self::contents)).
-    #[must_use]
-    pub fn contents_to_write(&self) -> Option<&Arc<[u8]>> {
-        self.contents.as_ref()
     }
 
     /// The first thing wrong with the request, which no dialog is shown
@@ -625,6 +649,34 @@ enum Place {
     /// A file the browser handed over: its name, and what it holds, read
     /// when the dialog answered (an open) or written before it did (a save).
     Contents { name: String, contents: Arc<[u8]> },
+    /// Contents handed to the browser as a download under this name.
+    Download { name: String },
+}
+
+/// What a [`PickedFile`] is, as the system answered it: the form a caller
+/// branches on when it handles more than one system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PickedForm<'a> {
+    /// A file at a path, which the application reads or writes itself.
+    Path(&'a Path),
+    /// A file a browser handed over without a path: its name, and what it
+    /// holds, read when an open dialog answered or written before a save
+    /// answered.
+    Contents {
+        /// The name the browser gave it.
+        name: &'a str,
+        /// What it holds.
+        contents: &'a [u8],
+    },
+    /// A save's contents handed to the browser as a download under `name`.
+    /// Where it was written, under which name, and whether it was written
+    /// at all, the browser does not say: the user may cancel it, a setting
+    /// may block it, and the browser renames it beside a file of that name.
+    Download {
+        /// The name the download was offered under.
+        name: &'a str,
+    },
 }
 
 impl PickedFile {
@@ -652,25 +704,48 @@ impl PickedFile {
         })
     }
 
-    /// Where it is; `None` for a file the system handed over without a
-    /// path (a browser's), whose [`contents`](Self::contents) the pick
-    /// holds instead.
+    /// A save's contents handed to the browser as a download offered as
+    /// `name` ([`PickedForm::Download`]); `None` when `name` is not a file
+    /// name, as [`try_from_contents`](Self::try_from_contents) judges it.
     #[must_use]
-    pub fn path(&self) -> Option<&Path> {
+    pub fn try_download(name: impl Into<String>) -> Option<Self> {
+        let name: String = name.into();
+        is_file_name(&name).then_some(Self {
+            place: Place::Download { name },
+        })
+    }
+
+    /// What it is, as the system answered it.
+    #[must_use]
+    pub fn form(&self) -> PickedForm<'_> {
         match &self.place {
-            Place::Path(path) => Some(path),
-            Place::Contents { .. } => None,
+            Place::Path(path) => PickedForm::Path(path),
+            Place::Contents { name, contents } => PickedForm::Contents { name, contents },
+            Place::Download { name } => PickedForm::Download { name },
         }
     }
 
-    /// Its name: the last component of its [`path`](Self::path), or the
-    /// name the system handed it over with. `None` for a path that ends in
-    /// `..` or is a root.
+    /// Where it is; `None` for a file the system handed over without a
+    /// path (a browser's), whose [`contents`](Self::contents) the pick
+    /// holds instead, and for a download.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        match self.form() {
+            PickedForm::Path(path) => Some(path),
+            PickedForm::Contents { .. } | PickedForm::Download { .. } => None,
+        }
+    }
+
+    /// Its name: the last component of its [`path`](Self::path), the name
+    /// the system handed it over with, or the name a download was offered
+    /// under. `None` for a path that ends in `..` or is a root.
     #[must_use]
     pub fn file_name(&self) -> Option<&OsStr> {
-        match &self.place {
-            Place::Path(path) => path.file_name(),
-            Place::Contents { name, .. } => Some(OsStr::new(name)),
+        match self.form() {
+            PickedForm::Path(path) => path.file_name(),
+            PickedForm::Contents { name, .. } | PickedForm::Download { name } => {
+                Some(OsStr::new(name))
+            }
         }
     }
 
@@ -678,12 +753,12 @@ impl PickedFile {
     /// path: read when an open dialog answered, within the request's
     /// [`max_bytes`](OpenRequest::max_bytes), or written before a save
     /// answered. `None` for a pick at a path, which the application reads
-    /// itself.
+    /// itself, and for a download, which nobody saw written.
     #[must_use]
     pub fn contents(&self) -> Option<&[u8]> {
-        match &self.place {
-            Place::Path(_) => None,
-            Place::Contents { contents, .. } => Some(contents),
+        match self.form() {
+            PickedForm::Contents { contents, .. } => Some(contents),
+            PickedForm::Path(_) | PickedForm::Download { .. } => None,
         }
     }
 }
@@ -698,6 +773,10 @@ impl fmt::Debug for PickedFile {
                 .debug_struct("PickedFile")
                 .field("name", name)
                 .field("len", &contents.len())
+                .finish(),
+            Place::Download { name } => f
+                .debug_struct("PickedFile")
+                .field("download", name)
                 .finish(),
         }
     }

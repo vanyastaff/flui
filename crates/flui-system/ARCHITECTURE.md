@@ -58,19 +58,28 @@ and a backend trait in this crate, a provider per platform, and a scripted backe
 
 ## Picks and saves without a path
 
-- A pick is a `PickedFile`, not a path, because not every system answers one. A desktop dialog
-  answers where the file is (`PickedFile::path`); a browser answers a file a page may read but
-  never a path, which the pick carries as its name and contents (`PickedFile::contents`), read
-  when the dialog answers. Reading is bounded by the request (`OpenRequest::max_bytes`, by
-  default `TransferLimits`' default, a drop's bound): the picks' declared sizes are checked
-  before a byte is read and the bytes read are counted again, and more is
-  `DialogError::TooLarge`.
+- A pick is a `PickedFile`, not a path, because not every system answers one; `PickedFile::form`
+  says which it is (`PickedForm`). A desktop dialog answers where the file is (`Path`); a browser
+  answers a file a page may read but never a path, which the pick carries as its name and
+  contents (`Contents`), read when the dialog answers; a save handed to the browser as a download
+  is `Download`, whose place and fate the browser does not report (it may be cancelled, blocked or
+  renamed), so it carries the name it was offered under and no contents. Reading is bounded by the
+  request (`OpenRequest::max_bytes`, by default `TransferLimits`' default, a drop's bound): the
+  picks' declared sizes are checked before a byte is read and the bytes read are counted again,
+  and more is `DialogError::TooLarge`. Each file is copied once, from the browser's buffer into the
+  pick's own.
+- A host whose dialog only suggests the filters checks every pick against them
+  (`FileFilter::matches`, ADR-0360 §4) and refuses the whole answer with
+  `DialogError::NotInFilter` when one matches none: the answer is what the user chose, and it is
+  not what the request asked for.
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
   the system gives a page no file to write later. The handle writes them to a path the user
-  chose on a thread of its own and answers once they are written (a failed write answers the
-  system's code); a backend that hands over no path writes them itself and answers the file it
-  wrote. A save without contents answers where to save, and on the web, which has no path to
-  answer, is refused with `NotOnThisPlatform`.
+  chose on a thread of its own, into a new file beside it that is synced and renamed over it, so a
+  failed write leaves the chosen file as it was, and answers once they are written (a failed write
+  answers the system's code); a backend that hands over no path writes them itself and answers the
+  file it wrote. Once the user has chosen, the write completes even if the caller let the dialog
+  go, on every host. A save without contents answers where to save, and on the web, which has no
+  path to answer, is refused with `NotOnThisPlatform`.
 
 ## The web providers (`web`)
 
@@ -78,37 +87,48 @@ and a backend trait in this crate, a provider per platform, and a scripted backe
   handle names (`web::page::Page`), never through the browser's globals; a widget in no window,
   or in one that is not a canvas, is refused with `NoWindow`. `ProviderContext::app_id` and
   `WindowRef::portal_parent` mean nothing to a page and are not read.
-- What the providers decide without the DOM (the filters' mapping, a save's name, a launch's
-  target, what an exception means) is `web::rules`, tested on every host; the DOM side is
+- What the providers decide without the DOM (the filters' mapping and checks, a save's name, a
+  launch's route, what an exception means) is `web::rules`, tested on every host; the DOM side is
   `web::tests`, the lib test on wasm32 in headless Chrome (CI's `wasm-check` job), with user
-  activation stated by the test and `window.open` and the Badging API replaced, so no picker or
-  window opens.
-- **User activation.** A browser shows a picker or a new window only while the page handles a
-  user's gesture. A call outside one is refused with `Unavailable` before the browser is asked
-  (the browser would refuse it, or a file input and a popup blocker would drop it silently), as
-  `flui-native`'s web vibration is; a browser without `navigator.userActivation` is asked and
-  refuses itself. A save outside a gesture downloads, which needs none.
+  activation stated by the test and `window.open`, the save picker and the Badging API replaced,
+  so no picker or window opens.
+- **User activation, one answer.** A browser shows a picker or a new window only while the page
+  handles a user's gesture. A call outside one is refused with `Unavailable` before the browser is
+  asked (the browser would refuse it, or a file input and a popup blocker would drop it
+  silently), as `flui-native`'s web vibration is, and the browser's own refusal of such a call
+  (`NotAllowedError`, `SecurityError`, a blocked window) is answered with the same `Unavailable`;
+  a browser without `navigator.userActivation` is asked and refuses itself.
 - **Open.** The File System Access picker where the browser has it (Chromium, in a secure
   context) and can express the filters (each extension of ASCII letters, digits, `+` and `.`, at
   most 16 characters with its dot, Chromium's `VerifyIsValidExtension`); `<input type=file>`
-  otherwise, its `accept` the filters' union. A dismissed picker answers `AbortError`, a dismissed
-  input its `cancel` event (Chromium 113, Firefox 91, Safari 16.4). No focus-return heuristic
-  stands in for an engine without the event: a pick whose `change` arrives after the window
-  regains focus would be answered as a cancel. A folder dialog answers `NotYetOnThisHost`.
+  otherwise, its `accept` the filters' union. A picker the document may not show (`SecurityError`:
+  a cross-origin frame, which may show an input) hands over to the input while the page still
+  handles the gesture, and answers `Unavailable` once the gesture is spent. A dismissed picker
+  answers `AbortError`. An input ends on its `change`, its `cancel` (Chromium 113, Firefox 91,
+  Safari 16.4), `pagehide`, or, where an engine has no `cancel`, the window regaining focus with
+  no `change` within `web::dialogs::FOCUS_GRACE_MS`, which answers a cancel: a pick reported later than
+  that (a large file a phone copies first) is lost, the price of an end on every engine. A folder
+  dialog answers `NotYetOnThisHost`.
 - **Save.** The save picker writes the request's contents through a writable stream, aborted on
-  a failure; without a picker (or a gesture) the contents are downloaded under the suggested
-  name, given the first filter's extension when it has none, from an object URL revoked a minute
-  later. The answer reports no filter: the browser says none was selected, and a download
-  cannot say where it went.
+  a failure, after the user chose even if the dialog was dropped: the browser has made or emptied
+  the chosen file by then. Without a picker, outside a gesture (which the picker needs and a
+  download does not), or when the browser refuses the picker for want of either, the contents are
+  handed to the browser as a download under the suggested name, given the first filter's
+  extension when it has none, from an object URL revoked a minute later, and answered as
+  `PickedForm::Download`. The answer reports no filter: the browser says none was selected.
 - **One picker per page.** A page cannot close a browser's picker, and the browser shows one at
-  a time; the runtime's `PagePicker` refuses a second with `Busy` until the browser answers the
-  first, whichever window asked. Dropping a dialog stops its answer and takes an input down.
-- **Launching.** `http` and `https` open in a new browsing context with `noopener,noreferrer`;
-  any other allowed scheme is handed to the system's handler from the page's own context, which
-  the HTML standard does without unloading the page. With `noopener` the browser reports nothing
-  back, so a launch answers `Ok` once the browser has the URI. A page has no paths to open,
-  reveal or trash.
+  a time; the runtime's `PagePicker` refuses a second with `Busy` while one is up, whichever
+  window asked, and after its dialog was dropped: a picker of the API until its promise settles,
+  an input until it ends as above, keeping itself alive until then.
+- **Launching.** `http` and `https` open in a new browsing context: a blank one first, so a
+  blocked window is seen (`window.open` answers `null`, answered `Unavailable`), its `opener` cut,
+  then the page followed from a link of that blank document with `rel=noreferrer`, so the page
+  cannot reach the application and is not told where it came from. Any other allowed scheme is
+  handed to the system's handler by a link the application's page follows, which the HTML
+  standard does without unloading the page; `ftp`, `ws` and `wss` are nothing a browser opens for
+  the user (`NoHandler`). A page has no paths to open, reveal or trash.
 - **The launcher entry** is the Badging API's count (`setAppBadge`, `clearAppBadge`), honouring
   the count alone and never confirmed: a browser badges only an installed application and does
   not say whether it did. A browser without the API answers `NotOnThisDevice`.
-- Autostart, global shortcuts and the user folders answer `NotOnThisPlatform`.
+- Autostart, global shortcuts and the user folders answer `NotOnThisPlatform`. Message box,
+  share and the jump list come with their contracts.

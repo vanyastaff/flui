@@ -10,13 +10,14 @@ use wasm_bindgen::{JsCast as _, JsValue};
 use web_sys::{Document, HtmlCanvasElement, Navigator, Node, Window};
 
 /// Where the page's word on user activation comes from.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Activation {
     /// `navigator.userActivation.isActive`.
     Browser,
-    /// A test's answer, standing in for a gesture no test can make.
+    /// A test's answer, standing in for a gesture no test can make; the
+    /// test may change it while a call waits on the browser.
     #[cfg(test)]
-    Stated(bool),
+    Stated(std::rc::Rc<std::cell::Cell<bool>>),
 }
 
 /// A window's page: its canvas, the canvas's document and that document's
@@ -66,13 +67,13 @@ impl Page {
     /// engines): the call is made, and the browser refuses it itself if it
     /// must.
     pub(crate) fn is_activated(&self) -> bool {
-        match self.activation {
+        match &self.activation {
             Activation::Browser => property(&self.navigator(), "userActivation")
                 .and_then(|activation| property(&activation, "isActive"))
                 .and_then(|active| active.as_bool())
                 .unwrap_or(true),
             #[cfg(test)]
-            Activation::Stated(active) => active,
+            Activation::Stated(active) => active.get(),
         }
     }
 

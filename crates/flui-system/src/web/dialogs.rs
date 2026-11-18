@@ -2,34 +2,39 @@
 //!
 //! - **Open**: the File System Access picker (`showOpenFilePicker`) where
 //!   the browser has it (Chromium, in a secure context) and it can express
-//!   the request's filters; `<input type=file>` otherwise. Either way the
-//!   picks' declared sizes are checked against the request's
-//!   [`max_bytes`](crate::dialog::OpenRequest::max_bytes) before a byte is
-//!   read, and the bytes read are counted against it again, since a file may
-//!   change between the two.
+//!   the request's filters; `<input type=file>` otherwise, and in its place
+//!   when the document may not show the API's picker (a cross-origin frame)
+//!   while the page still handles the gesture. Every pick is checked against
+//!   the filters, which an input only suggests, and the picks' declared sizes
+//!   against the request's
+//!   [`max_bytes`](crate::dialog::OpenRequest::max_bytes), before a byte is
+//!   read; the bytes read are counted again, since a file may change between
+//!   the two.
 //! - **Save**: a request carries the contents it saves. The save picker
-//!   (`showSaveFilePicker`) writes them where the user chose; where the
-//!   browser has none, or the page is not handling a gesture (which the
-//!   picker requires and a download does not), they are downloaded under the
-//!   suggested name, and the answer is the file the page asked for, since a
-//!   download cannot report where it was saved.
+//!   (`showSaveFilePicker`) writes them where the user chose, even when the
+//!   dialog was dropped after the user chose (the browser has made or
+//!   emptied the file by then). Where the browser has no picker, refuses it,
+//!   or the page is not handling a gesture (which the picker requires and a
+//!   download does not), they are handed to the browser as a download
+//!   ([`PickedForm::Download`](crate::dialog::PickedForm::Download)): where
+//!   and whether that was written, the browser does not say.
 //!
-//! A browser gives a page no way to close its picker. Dropping a dialog's
-//! hold stops its answer and frees the window; a picker still up keeps the
-//! page busy until the browser answers it, since a page shows one picker at
-//! a time. `<input type=file>` answers a dismissal with its `cancel` event
-//! (Chromium 113, Firefox 91, Safari 16.4); an engine without the event
-//! answers nothing for a dismissed input, and its dialog ends only when its
-//! caller drops it or its window closes. No focus-return heuristic stands
-//! in: a pick whose `change` comes after the window regains focus (a large
-//! file a phone copies first) would be answered as a cancel.
+//! A browser gives a page no way to close its picker, and shows one at a
+//! time: the page stays busy while one is up, after its dialog was dropped
+//! too. A picker of the API ends when its promise settles. An input ends on
+//! its `change`, its `cancel` (Chromium 113, Firefox 91, Safari 16.4), the
+//! page being hidden for good (`pagehide`), or, for an engine without
+//! `cancel`, the window regaining focus with no `change` within
+//! [`FOCUS_GRACE_MS`], which answers a cancel: a pick whose `change` comes
+//! later than that (a large file a phone copies first) is lost, the price of
+//! an end on every engine.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_platform::capability::{Resolver, WindowRef};
-use flui_platform::{BrowserException, SystemFailure, Unsupported, UnsupportedReason};
+use flui_platform::{BrowserException, SystemFailure, UnsupportedReason};
 use js_sys::{Array, Object, Uint8Array};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -37,7 +42,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, BlobPropertyBag, Event, File, HtmlAnchorElement, HtmlInputElement, Url};
 
 use super::page::{Page, call_promise, exception, method, property, set};
-use super::rules;
+use super::rules::{self, PickerEnd};
 use crate::dialog::{
     DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileFilter, OpenRequest,
     OpenResult, PickedFile, Picks, SaveLocation, SaveRequest, SaveResult,
@@ -47,6 +52,12 @@ use crate::dialog::{
 /// revoked: the browser starts the download asynchronously, and revoking the
 /// URL first cancels it in some engines (`FileSaver.js` waits 40 s).
 const DOWNLOAD_URL_LIFETIME_MS: i32 = 60_000;
+
+/// How long an input waits for its `change` after the window regains focus
+/// before it answers a cancel: the end of an input on an engine without its
+/// `cancel` event, where the browser may report the pick a moment after the
+/// focus.
+pub(crate) const FOCUS_GRACE_MS: i32 = 3_000;
 
 /// Whether a browser picker is up on the page: the browser shows one at a
 /// time and refuses a second, and a page cannot close one. Kept per UI
@@ -60,17 +71,32 @@ pub(crate) struct PagePicker {
 pub(crate) struct WebDialogs {
     page: Rc<Page>,
     picker: Rc<PagePicker>,
+    focus_grace_ms: i32,
 }
 
 impl WebDialogs {
     pub(crate) fn new(page: Rc<Page>, picker: Rc<PagePicker>) -> Self {
-        Self { page, picker }
+        Self {
+            page,
+            picker,
+            focus_grace_ms: FOCUS_GRACE_MS,
+        }
+    }
+
+    /// These dialogs, an input waiting `focus_grace_ms` after the window
+    /// regains focus: a test's bound, shorter than the page's.
+    #[cfg(test)]
+    pub(crate) fn with_focus_grace(mut self, focus_grace_ms: i32) -> Self {
+        self.focus_grace_ms = focus_grace_ms;
+        self
     }
 }
 
 /// The refusal of a dialog for `reason`.
 fn unsupported(reason: UnsupportedReason) -> DialogError {
-    DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(reason))
+    DialogError::Unsupported(flui_platform::Unsupported::of::<FileDialogCapability>(
+        reason,
+    ))
 }
 
 /// Answer `answer` with `error` and hold nothing: the dialog ended before
@@ -84,16 +110,26 @@ fn answered<T: 'static>(
     DialogHold::new(())
 }
 
-/// Set while the dialog's caller waits for its answer; cleared when the
-/// handle drops the hold.
-struct Waiting(Rc<Cell<bool>>);
+/// What the handle holds for an open dialog: whether its caller waits, and
+/// the input shown for it, at once or in place of a refused picker.
+struct OpenHold {
+    waiting: Rc<Cell<bool>>,
+    input: Rc<RefCell<Option<Rc<InputPicker>>>>,
+}
 
-impl Waiting {
-    fn new() -> (Self, Rc<Cell<bool>>) {
-        let waiting = Rc::new(Cell::new(true));
-        (Self(Rc::clone(&waiting)), waiting)
+impl Drop for OpenHold {
+    fn drop(&mut self) {
+        self.waiting.set(false);
+        let input = self.input.borrow_mut().take();
+        if let Some(input) = input {
+            input.let_go();
+        }
     }
 }
+
+/// Set while a save's caller waits for its answer; cleared when the handle
+/// drops the hold.
+struct Waiting(Rc<Cell<bool>>);
 
 impl Drop for Waiting {
     fn drop(&mut self) {
@@ -115,11 +151,15 @@ impl FileDialogBackend for WebDialogs {
             return answered(answer, unsupported(UnsupportedReason::NotYetOnThisHost));
         }
         if !self.page.is_activated() {
-            return answered(answer, unsupported(UnsupportedReason::Unavailable));
+            return answered(answer, rules::unavailable());
         }
         if self.picker.showing.get() {
             return answered(answer, DialogError::Busy);
         }
+        let hold = OpenHold {
+            waiting: Rc::new(Cell::new(true)),
+            input: Rc::default(),
+        };
         let picker = self.page.window_method("showOpenFilePicker");
         match (picker, rules::picker_types(&request.filters)) {
             (Some(picker), Some(types)) => {
@@ -132,12 +172,13 @@ impl FileDialogBackend for WebDialogs {
                     &(!request.filters.is_empty()).into(),
                 );
                 match call_promise(&picker, self.page.view(), &options) {
-                    Ok(promise) => self.open_with_picker(promise, request.byte_limit(), answer),
-                    Err(thrown) => answered(answer, DialogError::Failed(thrown.into())),
+                    Ok(promise) => self.open_with_picker(promise, request, answer, &hold),
+                    Err(thrown) => self.end_picker(thrown, &request, answer, &hold),
                 }
             }
-            _ => InputPicker::show(&self.page, &self.picker, &request, answer),
+            _ => self.show_input(&request, answer, &hold),
         }
+        DialogHold::new(hold)
     }
 
     fn save(
@@ -146,7 +187,7 @@ impl FileDialogBackend for WebDialogs {
         request: SaveRequest,
         answer: Resolver<SaveResult>,
     ) -> DialogHold {
-        let Some(contents) = request.contents_to_write().cloned() else {
+        let Some(contents) = request.contents.clone() else {
             // A save without contents answers a path to write later, which
             // a page is never given.
             return answered(answer, unsupported(UnsupportedReason::NotOnThisPlatform));
@@ -156,49 +197,76 @@ impl FileDialogBackend for WebDialogs {
             .page
             .window_method("showSaveFilePicker")
             .filter(|_| self.page.is_activated());
-        match (picker, rules::picker_types(&request.filters)) {
-            (Some(picker), Some(types)) => {
-                if self.picker.showing.get() {
-                    return answered(answer, DialogError::Busy);
-                }
-                let options = Object::new();
-                set(&options, "suggestedName", &JsValue::from_str(&name));
-                set(&options, "types", &picker_types(&types));
-                set(
-                    &options,
-                    "excludeAcceptAllOption",
-                    &(!request.filters.is_empty()).into(),
-                );
-                match call_promise(&picker, self.page.view(), &options) {
-                    Ok(promise) => self.save_with_picker(promise, contents, answer),
-                    Err(thrown) => answered(answer, DialogError::Failed(thrown.into())),
-                }
-            }
-            _ => {
-                let saved = download(&self.page, &name, &contents, &request.filters);
-                // A retired owner has nobody left to answer.
-                let _ = answer.resolve(saved.and_then(|()| {
-                    let file = PickedFile::try_from_contents(name, contents)
-                        .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
-                    Ok(Some(SaveLocation::new(file, None)))
-                }));
+        let (Some(picker), Some(types)) = (picker, rules::picker_types(&request.filters)) else {
+            // A retired owner has nobody left to answer.
+            let _ = answer.resolve(downloaded(&self.page, name, &contents, &request.filters));
+            return DialogHold::new(());
+        };
+        if self.picker.showing.get() {
+            return answered(answer, DialogError::Busy);
+        }
+        let options = Object::new();
+        set(&options, "suggestedName", &JsValue::from_str(&name));
+        set(&options, "types", &picker_types(&types));
+        set(
+            &options,
+            "excludeAcceptAllOption",
+            &(!request.filters.is_empty()).into(),
+        );
+        match call_promise(&picker, self.page.view(), &options) {
+            Ok(promise) => self.save_with_picker(promise, name, contents, request.filters, answer),
+            Err(thrown) if rules::is_activation_refusal(thrown) => {
+                let _ = answer.resolve(downloaded(&self.page, name, &contents, &request.filters));
                 DialogHold::new(())
             }
+            Err(thrown) => answered(answer, failed(thrown)),
         }
     }
 }
 
 impl WebDialogs {
+    /// Show an input for `request` in the place `hold` keeps for it.
+    fn show_input(&self, request: &OpenRequest, answer: Resolver<OpenResult>, hold: &OpenHold) {
+        let shown = InputPicker::show(
+            &self.page,
+            &self.picker,
+            request,
+            answer,
+            self.focus_grace_ms,
+        );
+        *hold.input.borrow_mut() = shown;
+    }
+
+    /// End an open picker the browser refused with `thrown` at once: as a
+    /// cancel, with the input in its place, or with the refusal.
+    fn end_picker(
+        &self,
+        thrown: BrowserException,
+        request: &OpenRequest,
+        answer: Resolver<OpenResult>,
+        hold: &OpenHold,
+    ) {
+        match rules::picker_rejection(thrown, self.page.is_activated()) {
+            PickerEnd::Cancelled => drop(answer.resolve(Ok(None))),
+            PickerEnd::FallBack => self.show_input(request, answer, hold),
+            PickerEnd::Refused(error) => drop(answer.resolve(Err(error))),
+        }
+    }
+
     /// Answer `answer` when the open picker's `promise` settles, with the
-    /// picked files read within `limit`.
+    /// picked files checked and read, or with the input in its place.
     fn open_with_picker(
         &self,
         promise: js_sys::Promise,
-        limit: u64,
+        request: OpenRequest,
         answer: Resolver<OpenResult>,
-    ) -> DialogHold {
-        let (hold, waiting) = Waiting::new();
+        hold: &OpenHold,
+    ) {
+        let waiting = Rc::clone(&hold.waiting);
+        let input = Rc::clone(&hold.input);
+        let page = Rc::clone(&self.page);
         let picker = Rc::clone(&self.picker);
+        let focus_grace_ms = self.focus_grace_ms;
         picker.showing.set(true);
         wasm_bindgen_futures::spawn_local(async move {
             let settled = JsFuture::from(promise).await;
@@ -207,61 +275,78 @@ impl WebDialogs {
                 // The caller let the dialog go: nobody reads the files.
                 return;
             }
-            let result = match settled {
-                Ok(handles) => match files_of_handles(&handles).await {
-                    Ok(files) => read_picks(files, limit, &waiting).await,
-                    Err(failure) => Err(failure),
-                },
-                Err(rejection) => {
-                    rules::picker_rejection(exception(&rejection)).map_or(Ok(None), Err)
+            let rejection = match settled {
+                Ok(handles) => {
+                    let result = match files_of_handles(&handles).await {
+                        Ok(files) => {
+                            read_picks(files, &request.filters, request.max_bytes, &waiting).await
+                        }
+                        Err(failure) => Err(failure),
+                    };
+                    // A retired owner has nobody left to answer.
+                    let _ = answer.resolve(result);
+                    return;
                 }
+                Err(rejection) => exception(&rejection),
             };
-            // A retired owner has nobody left to answer.
-            let _ = answer.resolve(result);
+            match rules::picker_rejection(rejection, page.is_activated()) {
+                PickerEnd::Cancelled => drop(answer.resolve(Ok(None))),
+                PickerEnd::FallBack => {
+                    let shown = InputPicker::show(&page, &picker, &request, answer, focus_grace_ms);
+                    *input.borrow_mut() = shown;
+                }
+                PickerEnd::Refused(error) => drop(answer.resolve(Err(error))),
+            }
         });
-        DialogHold::new(hold)
     }
 
-    /// Answer `answer` when the save picker's `promise` settles, after
-    /// `contents` are written to the file the user chose.
+    /// Answer `answer` when the save picker's `promise` settles: after
+    /// `contents` are written to the file the user chose, which the browser
+    /// has made or emptied by then, so the write completes even when the
+    /// caller let the dialog go; as a download when the browser refused the
+    /// picker for want of a gesture or of an allowed document.
     fn save_with_picker(
         &self,
         promise: js_sys::Promise,
+        name: String,
         contents: Arc<[u8]>,
+        filters: Vec<FileFilter>,
         answer: Resolver<SaveResult>,
     ) -> DialogHold {
-        let (hold, waiting) = Waiting::new();
+        let waiting = Rc::new(Cell::new(true));
+        let still_waiting = Rc::clone(&waiting);
+        let page = Rc::clone(&self.page);
         let picker = Rc::clone(&self.picker);
         picker.showing.set(true);
         wasm_bindgen_futures::spawn_local(async move {
             let settled = JsFuture::from(promise).await;
             picker.showing.set(false);
-            let handle = match settled {
-                Ok(handle) => handle,
-                Err(rejection) => {
-                    let result =
-                        rules::picker_rejection(exception(&rejection)).map_or(Ok(None), Err);
-                    let _ = answer.resolve(result);
-                    return;
-                }
+            let result = match settled {
+                Ok(handle) => write_through(&handle, &contents).await.and_then(|()| {
+                    let written = property(&handle, "name")
+                        .and_then(|name| name.as_string())
+                        .unwrap_or_default();
+                    let file = PickedFile::try_from_contents(written, contents)
+                        .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
+                    Ok(Some(SaveLocation::new(file, None)))
+                }),
+                Err(rejection) => match exception(&rejection) {
+                    BrowserException::Abort => Ok(None),
+                    refusal if rules::is_activation_refusal(refusal) => {
+                        if !still_waiting.get() {
+                            // The caller let the dialog go before anything
+                            // was chosen: nothing is downloaded.
+                            return;
+                        }
+                        downloaded(&page, name, &contents, &filters)
+                    }
+                    other => Err(failed(other)),
+                },
             };
-            if !waiting.get() {
-                // The caller let the dialog go before the user chose: the
-                // contents are not written.
-                return;
-            }
-            let result = write_through(&handle, &contents).await.and_then(|()| {
-                let name = property(&handle, "name")
-                    .and_then(|name| name.as_string())
-                    .unwrap_or_default();
-                let file = PickedFile::try_from_contents(name, contents)
-                    .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
-                Ok(Some(SaveLocation::new(file, None)))
-            });
             // A retired owner has nobody left to answer.
             let _ = answer.resolve(result);
         });
-        DialogHold::new(hold)
+        DialogHold::new(Waiting(waiting))
     }
 }
 
@@ -322,15 +407,32 @@ async fn files_of_handles(handles: &JsValue) -> Result<Vec<File>, DialogError> {
     Ok(files)
 }
 
-/// The picks `files` stand for, read within `limit` together: their
-/// declared sizes are checked before anything is read, and the bytes read
-/// again as they arrive. Reading stops once `waiting` clears. No file is an
-/// empty answer, which a browser gives for a dismissed picker.
-async fn read_picks(files: Vec<File>, limit: u64, waiting: &Cell<bool>) -> OpenResult {
+/// The picks `files` stand for, read within `limit` together: each is
+/// checked against `filters` and their declared sizes against `limit`
+/// before anything is read, and the bytes read are counted again as they
+/// arrive, each file copied once, into the pick's own buffer. Reading stops
+/// once `waiting` clears. No file is an empty answer, which a browser gives
+/// for a dismissed picker.
+async fn read_picks(
+    files: Vec<File>,
+    filters: &[FileFilter],
+    limit: u64,
+    waiting: &Cell<bool>,
+) -> OpenResult {
+    let described: Vec<(String, String)> = files
+        .iter()
+        .map(|file| (file.name(), file.type_()))
+        .collect();
+    rules::admit_picks(
+        described
+            .iter()
+            .map(|(name, mime_type)| (name.as_str(), Some(mime_type.as_str()))),
+        filters,
+    )?;
     rules::admit_sizes(files.iter().map(|file| file.size()), limit)?;
     let mut read: u64 = 0;
     let mut picks = Vec::with_capacity(files.len());
-    for file in files {
+    for (file, (name, _)) in files.into_iter().zip(described) {
         if !waiting.get() {
             return Ok(None);
         }
@@ -338,9 +440,16 @@ async fn read_picks(files: Vec<File>, limit: u64, waiting: &Cell<bool>) -> OpenR
         let bytes = Uint8Array::new(&buffer);
         read = read.saturating_add(u64::from(bytes.length()));
         rules::admit_read(read, limit)?;
-        let contents: Arc<[u8]> = Arc::from(bytes.to_vec());
+        let length = usize::try_from(bytes.length()).map_err(|_| DialogError::TooLarge {
+            actual: read,
+            limit,
+        })?;
+        let mut contents: Arc<[u8]> = std::iter::repeat_n(0, length).collect();
+        bytes.copy_to(
+            Arc::get_mut(&mut contents).expect("BUG: a buffer just made has no other owner"),
+        );
         picks.push(
-            PickedFile::try_from_contents(file.name(), contents)
+            PickedFile::try_from_contents(name, contents)
                 .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?,
         );
     }
@@ -373,6 +482,15 @@ async fn write_through(handle: &JsValue, contents: &[u8]) -> Result<(), DialogEr
     written.map(|_| ())
 }
 
+/// `contents` handed to the browser as a download offered as `name`, and
+/// the answer that says so.
+fn downloaded(page: &Page, name: String, contents: &[u8], filters: &[FileFilter]) -> SaveResult {
+    download(page, &name, contents, filters)?;
+    let file = PickedFile::try_download(name)
+        .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
+    Ok(Some(SaveLocation::new(file, None)))
+}
+
 /// Download `contents` as `name`: a blob's object URL, clicked as a link's
 /// download, and revoked [`DOWNLOAD_URL_LIFETIME_MS`] later.
 fn download(
@@ -381,9 +499,7 @@ fn download(
     contents: &[u8],
     filters: &[FileFilter],
 ) -> Result<(), DialogError> {
-    let host = page
-        .host()
-        .ok_or(unsupported(UnsupportedReason::Unavailable))?;
+    let host = page.host().ok_or(rules::unavailable())?;
     let options = BlobPropertyBag::new();
     options.set_type(rules::download_type(filters));
     let parts = Array::of1(&Uint8Array::from(contents));
@@ -424,30 +540,55 @@ fn download(
     Ok(())
 }
 
+/// The listeners an input keeps while it is up: its `change` and `cancel`,
+/// the window's `focus` and `pagehide`, and the timer the focus starts.
+struct InputListeners {
+    change: Closure<dyn FnMut(Event)>,
+    cancel: Closure<dyn FnMut(Event)>,
+    focus: Closure<dyn FnMut(Event)>,
+    hidden: Closure<dyn FnMut(Event)>,
+    grace: Closure<dyn FnMut()>,
+}
+
 /// An `<input type=file>` shown for one open dialog, until the browser
-/// answers or the dialog's caller lets it go.
+/// answers it. It outlives its dialog's hold: while the browser's chooser
+/// is up the page is busy, whether anyone waits for the answer or not.
 struct InputPicker {
     input: HtmlInputElement,
+    view: web_sys::Window,
     picker: Rc<PagePicker>,
     answer: Cell<Option<Resolver<OpenResult>>>,
+    filters: Vec<FileFilter>,
     limit: u64,
+    /// Cleared when the dialog's caller lets it go.
     waiting: Rc<Cell<bool>>,
-    /// The `change` and `cancel` listeners, kept while the input is up.
-    listeners: RefCell<Option<[Closure<dyn FnMut(Event)>; 2]>>,
+    ended: Cell<bool>,
+    focus_grace_ms: i32,
+    grace_timer: Cell<Option<i32>>,
+    /// Alive until the input itself drops, since one may be running.
+    listeners: RefCell<Option<InputListeners>>,
+    /// The input's own hold on itself after its dialog's hold dropped,
+    /// released once it ends.
+    alive: RefCell<Option<Rc<InputPicker>>>,
 }
 
 impl InputPicker {
     /// Show an input for `request` in `page`, answering `answer` with what
-    /// the user picks.
+    /// the user picks; `None` when it ended before it was shown, `answer`
+    /// answered.
     fn show(
         page: &Page,
         picker: &Rc<PagePicker>,
         request: &OpenRequest,
         answer: Resolver<OpenResult>,
-    ) -> DialogHold {
+        focus_grace_ms: i32,
+    ) -> Option<Rc<Self>> {
         let input = match page.document().create_element("input") {
             Ok(element) => element.unchecked_into::<HtmlInputElement>(),
-            Err(thrown) => return answered(answer, failed(exception(&thrown))),
+            Err(thrown) => {
+                let _ = answer.resolve(Err(failed(exception(&thrown))));
+                return None;
+            }
         };
         input.set_type("file");
         input.set_multiple(request.is_multiple());
@@ -455,38 +596,55 @@ impl InputPicker {
         input.set_hidden(true);
         // In the document, or Safari on iOS may not fire `change`.
         let Some(host) = page.host() else {
-            return answered(answer, unsupported(UnsupportedReason::Unavailable));
+            let _ = answer.resolve(Err(rules::unavailable()));
+            return None;
         };
         if let Err(thrown) = host.append_child(&input) {
-            return answered(answer, failed(exception(&thrown)));
+            let _ = answer.resolve(Err(failed(exception(&thrown))));
+            return None;
         }
         let shown = Rc::new(Self {
             input,
+            view: page.view().clone(),
             picker: Rc::clone(picker),
             answer: Cell::new(Some(answer)),
-            limit: request.byte_limit(),
+            filters: request.filters.clone(),
+            limit: request.max_bytes,
             waiting: Rc::new(Cell::new(true)),
+            ended: Cell::new(false),
+            focus_grace_ms,
+            grace_timer: Cell::new(None),
             listeners: RefCell::new(None),
+            alive: RefCell::new(None),
         });
-        let changed = Rc::downgrade(&shown);
-        let change = Closure::<dyn FnMut(Event)>::new(move |_: Event| {
-            if let Some(shown) = changed.upgrade() {
-                shown.picked();
-            }
-        });
-        let cancelled = Rc::downgrade(&shown);
-        let cancel = Closure::<dyn FnMut(Event)>::new(move |_: Event| {
-            if let Some(shown) = cancelled.upgrade() {
-                shown.finish(Ok(None));
-            }
-        });
+        let listeners = InputListeners {
+            change: shown.listener(|shown| shown.picked()),
+            cancel: shown.listener(|shown| shown.finish(Ok(None))),
+            focus: shown.listener(|shown| shown.focused()),
+            hidden: shown.listener(|shown| shown.finish(Ok(None))),
+            grace: {
+                let ended = Rc::downgrade(&shown);
+                Closure::new(move || {
+                    if let Some(shown) = ended.upgrade() {
+                        shown.finish(Ok(None));
+                    }
+                })
+            },
+        };
         let _ = shown
             .input
-            .add_event_listener_with_callback("change", change.as_ref().unchecked_ref());
+            .add_event_listener_with_callback("change", listeners.change.as_ref().unchecked_ref());
         let _ = shown
             .input
-            .add_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref());
-        *shown.listeners.borrow_mut() = Some([change, cancel]);
+            .add_event_listener_with_callback("cancel", listeners.cancel.as_ref().unchecked_ref());
+        let _ = shown
+            .view
+            .add_event_listener_with_callback("focus", listeners.focus.as_ref().unchecked_ref());
+        let _ = shown.view.add_event_listener_with_callback(
+            "pagehide",
+            listeners.hidden.as_ref().unchecked_ref(),
+        );
+        *shown.listeners.borrow_mut() = Some(listeners);
         shown.picker.showing.set(true);
 
         // `showPicker` where the browser has it, which throws a refusal a
@@ -502,25 +660,45 @@ impl InputPicker {
             }
         };
         if let Err(refused) = opened {
-            shown.finish(Err(failed(refused)));
+            let error = if rules::is_activation_refusal(refused) {
+                rules::unavailable()
+            } else {
+                failed(refused)
+            };
+            shown.finish(Err(error));
         }
-        DialogHold::new(InputHold(shown))
+        Some(shown)
     }
 
-    /// The input's `change`: read what it holds and answer.
-    fn picked(self: Rc<Self>) {
+    /// A listener that runs `on` with the input while it lives.
+    fn listener(self: &Rc<Self>, on: fn(&Rc<Self>)) -> Closure<dyn FnMut(Event)> {
+        let input = Rc::downgrade(self);
+        Closure::new(move |_: Event| {
+            if let Some(input) = input.upgrade() {
+                on(&input);
+            }
+        })
+    }
+
+    /// The input's `change`: check and read what it holds, and answer.
+    fn picked(self: &Rc<Self>) {
         let files = self.input.files();
-        let Some(answer) = self.answer.take() else {
+        if self.ended.replace(true) {
+            return;
+        }
+        let answer = self.answer.take();
+        self.detach();
+        let Some(answer) = answer else {
             return;
         };
-        self.detach();
         let files: Vec<File> = files
             .map(|list| (0..list.length()).filter_map(|at| list.get(at)).collect())
             .unwrap_or_default();
+        let filters = self.filters.clone();
         let limit = self.limit;
         let waiting = Rc::clone(&self.waiting);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = read_picks(files, limit, &waiting).await;
+            let result = read_picks(files, &filters, limit, &waiting).await;
             if waiting.get() {
                 // A retired owner has nobody left to answer.
                 let _ = answer.resolve(result);
@@ -528,41 +706,86 @@ impl InputPicker {
         });
     }
 
-    /// Answer `result`, once, and take the input down.
+    /// The window regained focus: the chooser has closed, and an engine
+    /// without `cancel` says nothing more if nothing was picked.
+    fn focused(self: &Rc<Self>) {
+        if self.ended.get() {
+            return;
+        }
+        if let Some(timer) = self.grace_timer.take() {
+            self.view.clear_timeout_with_handle(timer);
+        }
+        let listeners = self.listeners.borrow();
+        let Some(listeners) = listeners.as_ref() else {
+            return;
+        };
+        if let Ok(timer) = self
+            .view
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                listeners.grace.as_ref().unchecked_ref(),
+                self.focus_grace_ms,
+            )
+        {
+            self.grace_timer.set(Some(timer));
+        }
+    }
+
+    /// End with `result`, once, answering it if the caller still waits.
     fn finish(&self, result: OpenResult) {
-        if let Some(answer) = self.answer.take() {
-            self.detach();
+        if self.ended.replace(true) {
+            return;
+        }
+        let answer = self.answer.take();
+        self.detach();
+        if let Some(answer) = answer
+            && self.waiting.get()
+        {
             // A retired owner has nobody left to answer.
             let _ = answer.resolve(result);
         }
     }
 
-    /// Take the input out of the page and stop listening to it. The
-    /// listeners stay alive until the picker drops, since one may be
-    /// running.
+    /// The caller let the dialog go: nobody waits for the answer, and the
+    /// input keeps itself, and the page busy, until the browser ends it.
+    fn let_go(self: &Rc<Self>) {
+        self.waiting.set(false);
+        drop(self.answer.take());
+        if !self.ended.get() {
+            *self.alive.borrow_mut() = Some(Rc::clone(self));
+        }
+    }
+
+    /// Take the input out of the page, stop listening and free the page.
+    /// The listeners stay alive until the input drops, since one may be
+    /// running; the input's hold on itself is released after the current
+    /// task, for the same reason.
     fn detach(&self) {
         self.picker.showing.set(false);
-        if let Some([change, cancel]) = self.listeners.borrow().as_ref() {
-            let _ = self
-                .input
-                .remove_event_listener_with_callback("change", change.as_ref().unchecked_ref());
-            let _ = self
-                .input
-                .remove_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref());
+        if let Some(timer) = self.grace_timer.take() {
+            self.view.clear_timeout_with_handle(timer);
+        }
+        if let Some(listeners) = self.listeners.borrow().as_ref() {
+            let _ = self.input.remove_event_listener_with_callback(
+                "change",
+                listeners.change.as_ref().unchecked_ref(),
+            );
+            let _ = self.input.remove_event_listener_with_callback(
+                "cancel",
+                listeners.cancel.as_ref().unchecked_ref(),
+            );
+            let _ = self.view.remove_event_listener_with_callback(
+                "focus",
+                listeners.focus.as_ref().unchecked_ref(),
+            );
+            let _ = self.view.remove_event_listener_with_callback(
+                "pagehide",
+                listeners.hidden.as_ref().unchecked_ref(),
+            );
         }
         self.input.remove();
-    }
-}
-
-/// What the handle holds for an input: dropping it ends the dialog, takes
-/// the input down and drops the answer.
-struct InputHold(Rc<InputPicker>);
-
-impl Drop for InputHold {
-    fn drop(&mut self) {
-        self.0.waiting.set(false);
-        if self.0.answer.take().is_some() {
-            self.0.detach();
+        let alive = self.alive.borrow_mut().take();
+        if let Some(alive) = alive {
+            wasm_bindgen_futures::spawn_local(async move { drop(alive) });
         }
     }
 }

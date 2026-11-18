@@ -7,7 +7,7 @@
 //! window: a picker is refused by the browser without a real gesture, which
 //! the tests of that path read as its answer.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -20,10 +20,10 @@ use flui_platform::drag::PlatformDragSource;
 use flui_platform::haptics::PlatformHaptics;
 use flui_platform::launch::{ExternalUri, LaunchError, Launcher, LauncherCapability, Scheme};
 use flui_platform::{
-    AdmittedCommand, ApplyError, BrowserException, Cursor, CursorError, GestureGeometry,
-    PlatformSystemChrome, PlatformTextInput, PlatformWindow, PreferenceQueryError, RedrawRequester,
-    SurfaceTarget, SwapChainStatistics, SystemFailure, Unsupported, UnsupportedReason, WindowAt,
-    WindowExtent, WindowGeometry, WindowId, WindowIdMint, WindowState,
+    AdmittedCommand, ApplyError, Cursor, CursorError, GestureGeometry, PlatformSystemChrome,
+    PlatformTextInput, PlatformWindow, PreferenceQueryError, RedrawRequester, SurfaceTarget,
+    SwapChainStatistics, Unsupported, UnsupportedReason, WindowAt, WindowExtent, WindowGeometry,
+    WindowId, WindowIdMint, WindowState,
 };
 use js_sys::{Array, Promise, Reflect};
 use raw_window_handle::{
@@ -41,7 +41,8 @@ use super::dialogs::{PagePicker, WebDialogs};
 use super::launcher::WebLauncher;
 use super::page::{Activation, Page};
 use crate::dialog::{
-    Dialog, DialogError, FileDialogCapability, FileDialogs, FileFilter, OpenRequest, SaveRequest,
+    Dialog, DialogError, FileDialogCapability, FileDialogs, FileFilter, OpenRequest, PickedForm,
+    SaveRequest,
 };
 use crate::taskbar::{EntryState, Honoured, Progress, TaskbarEntry};
 
@@ -288,8 +289,14 @@ impl CanvasWindow {
 
     /// The window's page, with user activation as `active` says.
     fn page(&self, active: bool) -> Rc<Page> {
+        self.page_with(&Rc::new(Cell::new(active)))
+    }
+
+    /// The window's page, with user activation as `active` says when asked:
+    /// a test changes it while a call waits on the browser.
+    fn page_with(&self, active: &Rc<Cell<bool>>) -> Rc<Page> {
         Rc::new(
-            Page::for_canvas(self.canvas.clone(), Activation::Stated(active))
+            Page::for_canvas(self.canvas.clone(), Activation::Stated(Rc::clone(active)))
                 .expect("the canvas is in the page"),
         )
     }
@@ -307,15 +314,26 @@ impl Drop for CanvasWindow {
     }
 }
 
-/// A test page's file dialogs for `window`, the page's picker shared
-/// through `owner`.
-fn dialogs(owner: &TestOwner, window: &CanvasWindow, active: bool) -> FileDialogs {
+/// How long a test's input waits for its `change` after the window regains
+/// focus.
+const TEST_FOCUS_GRACE_MS: i32 = 20;
+
+/// A test page's file dialogs for `window` over `page`, the page's picker
+/// shared through `owner`.
+fn dialogs_on(owner: &TestOwner, window: &CanvasWindow, page: Rc<Page>) -> FileDialogs {
     let ctx = owner.ctx(&window.window);
     FileDialogs::try_new(
-        WebDialogs::new(window.page(active), ctx.runtime_local::<PagePicker>()),
+        WebDialogs::new(page, ctx.runtime_local::<PagePicker>())
+            .with_focus_grace(TEST_FOCUS_GRACE_MS),
         &ctx,
     )
     .expect("a window has dialogs")
+}
+
+/// A test page's file dialogs for `window`, user activation as `active`
+/// says.
+fn dialogs(owner: &TestOwner, window: &CanvasWindow, active: bool) -> FileDialogs {
+    dialogs_on(owner, window, window.page(active))
 }
 
 /// A filter whose extension the File System Access picker refuses, which
@@ -358,6 +376,41 @@ fn the_input(window: &CanvasWindow) -> HtmlInputElement {
         .unchecked_into::<HtmlInputElement>()
 }
 
+fn the_view() -> web_sys::Window {
+    web_sys::window().expect("the test runs in a page")
+}
+
+/// The links the window's part of the page follows, caught before the
+/// browser follows them: each one's `download` and `href`.
+struct CaughtLinks {
+    links: Rc<RefCell<Vec<(String, String)>>>,
+    _catch: Closure<dyn FnMut(Event)>,
+}
+
+impl CaughtLinks {
+    fn on(window: &CanvasWindow) -> Self {
+        let links: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
+        let seen = Rc::clone(&links);
+        let catch = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            if let Some(link) = event
+                .target()
+                .and_then(|target| target.dyn_into::<web_sys::HtmlAnchorElement>().ok())
+            {
+                event.prevent_default();
+                seen.borrow_mut().push((link.download(), link.href()));
+            }
+        });
+        window
+            .root
+            .add_event_listener_with_callback("click", catch.as_ref().unchecked_ref())
+            .expect("the test listens for the click");
+        Self {
+            links,
+            _catch: catch,
+        }
+    }
+}
+
 #[wasm_bindgen_test]
 fn a_window_reaches_its_page_through_the_canvas_its_handle_names() {
     let owner = TestOwner::new();
@@ -386,7 +439,7 @@ async fn an_input_answers_the_files_the_user_picked_with_their_contents() {
     assert_eq!(input.accept(), ".my-notes,text/plain");
     assert!(input.multiple());
 
-    pick(&input, &[("a.txt", "first"), ("b.txt", "second")]);
+    pick(&input, &[("a.my-notes", "first"), ("B.MY-NOTES", "second")]);
     owner.until_landed(&answered).await;
 
     let picks = match answered.borrow_mut().take() {
@@ -407,14 +460,37 @@ async fn an_input_answers_the_files_the_user_picked_with_their_contents() {
     assert_eq!(
         read,
         [
-            (Some("a.txt".to_owned()), Some(b"first".to_vec()), None),
-            (Some("b.txt".to_owned()), Some(b"second".to_vec()), None),
+            (Some("a.my-notes".to_owned()), Some(b"first".to_vec()), None),
+            (
+                Some("B.MY-NOTES".to_owned()),
+                Some(b"second".to_vec()),
+                None
+            ),
         ]
     );
     assert!(
         window.find("input").is_none(),
         "the input leaves the page once it answered"
     );
+}
+
+#[wasm_bindgen_test]
+async fn a_pick_the_filters_do_not_mean_refuses_the_answer() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let answered = land(
+        dialogs(&owner, &window, true)
+            .open(OpenRequest::files().allow_multiple().filter(input_only())),
+    );
+
+    // The browser's "All files" lets the user pick past the filter.
+    pick(
+        &the_input(&window),
+        &[("a.my-notes", "first"), ("run.exe", "second")],
+    );
+    owner.until_landed(&answered).await;
+
+    assert_eq!(*answered.borrow(), Some(Ok(Err(DialogError::NotInFilter))));
 }
 
 #[wasm_bindgen_test]
@@ -429,6 +505,46 @@ async fn a_dismissed_input_answers_a_cancel() {
 
     assert_eq!(*answered.borrow(), Some(Ok(Ok(None))));
     assert!(window.find("input").is_none());
+}
+
+#[wasm_bindgen_test]
+async fn an_input_with_no_change_after_the_window_regains_focus_answers_a_cancel() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let dialogs = dialogs(&owner, &window, true);
+    let answered = land(dialogs.open(OpenRequest::files().filter(input_only())));
+
+    // An engine without `cancel`: the chooser closes and the window has the
+    // focus again, and nothing more comes.
+    dispatch(&the_view(), "focus", false);
+    owner.until_landed(&answered).await;
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(None))));
+    assert!(window.find("input").is_none());
+
+    // A `change` that comes within the bound after the focus still answers.
+    let picked = land(dialogs.open(OpenRequest::files().filter(input_only())));
+    let input = the_input(&window);
+    dispatch(&the_view(), "focus", false);
+    pick(&input, &[("a.my-notes", "late")]);
+    owner.until_landed(&picked).await;
+    assert!(
+        matches!(&*picked.borrow(), Some(Ok(Ok(Some(picks)))) if picks.len() == 1),
+        "the pick: {:?}",
+        picked.borrow()
+    );
+}
+
+#[wasm_bindgen_test]
+async fn an_input_whose_page_is_hidden_for_good_answers_a_cancel() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let answered =
+        land(dialogs(&owner, &window, true).open(OpenRequest::files().filter(input_only())));
+
+    dispatch(&the_view(), "pagehide", false);
+    owner.until_landed(&answered).await;
+
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(None))));
 }
 
 #[wasm_bindgen_test]
@@ -447,7 +563,7 @@ async fn picks_past_the_requests_bound_are_refused_before_they_are_read() {
 
     pick(
         &the_input(&window),
-        &[("a.txt", "12345"), ("b.txt", "6789")],
+        &[("a.my-notes", "12345"), ("b.my-notes", "6789")],
     );
     owner.until_landed(&answered).await;
 
@@ -461,18 +577,22 @@ async fn picks_past_the_requests_bound_are_refused_before_they_are_read() {
 }
 
 #[wasm_bindgen_test]
-async fn a_dropped_dialog_takes_its_input_down_and_frees_the_page() {
+async fn a_dropped_dialog_keeps_the_page_busy_until_its_input_answers() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let dialogs = dialogs(&owner, &window, true);
     let shown = dialogs.open(OpenRequest::files().filter(input_only()));
     let input = the_input(&window);
     drop(shown);
-    assert!(window.find("input").is_none(), "the input left the page");
 
-    // A pick that arrives after the drop answers nobody, and the page shows
-    // the next dialog.
-    pick(&input, &[("late.txt", "late")]);
+    // The browser's chooser is still up: the page shows no second one.
+    let refused = land(dialogs.open(OpenRequest::files().filter(input_only())));
+    owner.until_landed(&refused).await;
+    assert_eq!(*refused.borrow(), Some(Ok(Err(DialogError::Busy))));
+
+    // The pick that ends it answers nobody, and frees the page.
+    pick(&input, &[("late.my-notes", "late")]);
+    assert!(window.find("input").is_none(), "the input left the page");
     let next = land(dialogs.open(OpenRequest::files().filter(input_only())));
     dispatch(&the_input(&window), "cancel", false);
     owner.until_landed(&next).await;
@@ -484,13 +604,14 @@ async fn a_page_shows_one_picker_whichever_window_asks() {
     let owner = TestOwner::new();
     let first = CanvasWindow::new(&owner);
     let second = CanvasWindow::new(&owner);
-    let shown = dialogs(&owner, &first, true).open(OpenRequest::files().filter(input_only()));
+    let shown = land(dialogs(&owner, &first, true).open(OpenRequest::files().filter(input_only())));
     let refused =
         land(dialogs(&owner, &second, true).open(OpenRequest::files().filter(input_only())));
     owner.until_landed(&refused).await;
     assert_eq!(*refused.borrow(), Some(Ok(Err(DialogError::Busy))));
     assert!(second.find("input").is_none());
-    drop(shown);
+    dispatch(&the_input(&first), "cancel", false);
+    owner.until_landed(&shown).await;
 }
 
 #[wasm_bindgen_test]
@@ -529,64 +650,92 @@ async fn a_folder_dialog_is_not_yet_on_the_web() {
 
 /// Whether the test's browser has the File System Access pickers.
 fn has_pickers() -> bool {
-    let view: JsValue = web_sys::window().expect("the test runs in a page").into();
+    let view: JsValue = the_view().into();
     Reflect::get(&view, &JsValue::from_str("showOpenFilePicker"))
         .is_ok_and(|picker| picker.is_function())
 }
 
+/// Run turns and browser tasks until `window` shows an input; panic after
+/// two hundred rounds.
+async fn until_an_input(owner: &TestOwner, window: &CanvasWindow) -> HtmlInputElement {
+    for _ in 0..200 {
+        owner.turn();
+        if window.find("input[type=file]").is_some() {
+            return the_input(window);
+        }
+        browser_task().await;
+    }
+    panic!("no input was shown");
+}
+
 #[wasm_bindgen_test]
-async fn the_browsers_refusal_of_its_picker_is_the_dialogs_answer() {
-    // Headless Chrome has the pickers and refuses them with no real gesture:
-    // the path the page takes where the API exists.
+async fn a_refused_picker_hands_over_to_the_input_while_the_gesture_lasts() {
+    // Headless Chrome has the pickers and refuses them without a real
+    // gesture, with the `SecurityError` a cross-origin frame gets.
     assert!(
         has_pickers(),
         "the browser the suite runs in has the pickers"
     );
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    let dialogs = dialogs(&owner, &window, true);
-    let opened = land(
-        dialogs.open(OpenRequest::files().filter(FileFilter::new("Text").with_extension("txt"))),
-    );
+    let text = || OpenRequest::files().filter(FileFilter::new("Text").with_extension("txt"));
+    let opened = land(dialogs(&owner, &window, true).open(text()));
+    let input = until_an_input(&owner, &window).await;
+    assert_eq!(input.accept(), ".txt");
+    dispatch(&input, "cancel", false);
     owner.until_landed(&opened).await;
+    assert_eq!(*opened.borrow(), Some(Ok(Ok(None))));
+
+    // The gesture spent before the browser refused: one answer, the same
+    // as the provider's own check.
+    let active = Rc::new(Cell::new(true));
+    let spent = land(dialogs_on(&owner, &window, window.page_with(&active)).open(text()));
+    active.set(false);
+    owner.until_landed(&spent).await;
     assert_eq!(
-        *opened.borrow(),
-        Some(Ok(Err(DialogError::Failed(SystemFailure::Browser(
-            BrowserException::Security
+        *spent.borrow(),
+        Some(Ok(Err(DialogError::Unsupported(Unsupported::of::<
+            FileDialogCapability,
+        >(
+            UnsupportedReason::Unavailable
         )))))
     );
     assert!(window.find("input").is_none(), "no input stood in");
-
-    let saved = land(dialogs.save(SaveRequest::new().contents(b"x".to_vec())));
-    owner.until_landed(&saved).await;
-    assert_eq!(
-        *saved.borrow(),
-        Some(Ok(Err(DialogError::Failed(SystemFailure::Browser(
-            BrowserException::Security
-        )))))
-    );
 }
 
 #[wasm_bindgen_test]
-async fn a_save_outside_a_gesture_downloads_its_contents_under_the_suggested_name() {
+async fn a_refused_save_picker_hands_the_contents_over_as_a_download() {
+    assert!(
+        has_pickers(),
+        "the browser the suite runs in has the pickers"
+    );
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    // The download's click is caught before the browser follows it.
-    let clicks: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
-    let seen = Rc::clone(&clicks);
-    let catch = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
-        if let Some(link) = event
-            .target()
-            .and_then(|target| target.dyn_into::<web_sys::HtmlAnchorElement>().ok())
-        {
-            event.prevent_default();
-            seen.borrow_mut().push((link.download(), link.href()));
-        }
-    });
-    window
-        .root
-        .add_event_listener_with_callback("click", catch.as_ref().unchecked_ref())
-        .expect("the test listens for the click");
+    let caught = CaughtLinks::on(&window);
+    let saved = land(
+        dialogs(&owner, &window, true).save(
+            SaveRequest::new()
+                .suggested_name("notes.txt")
+                .contents(b"x".to_vec()),
+        ),
+    );
+    owner.until_landed(&saved).await;
+    let location = match saved.borrow_mut().take() {
+        Some(Ok(Ok(Some(location)))) => location,
+        other => panic!("a download: {other:?}"),
+    };
+    assert_eq!(
+        location.file().form(),
+        PickedForm::Download { name: "notes.txt" }
+    );
+    assert_eq!(caught.links.borrow().len(), 1);
+}
+
+#[wasm_bindgen_test]
+async fn a_save_outside_a_gesture_is_a_download_whose_fate_is_not_known() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let caught = CaughtLinks::on(&window);
 
     let saved = land(
         dialogs(&owner, &window, false).save(
@@ -604,19 +753,16 @@ async fn a_save_outside_a_gesture_downloads_its_contents_under_the_suggested_nam
 
     let location = match saved.borrow_mut().take() {
         Some(Ok(Ok(Some(location)))) => location,
-        other => panic!("a saved file: {other:?}"),
+        other => panic!("a download: {other:?}"),
     };
     assert_eq!(location.filter(), None, "a download reports no filter");
-    assert_eq!(location.file().path(), None);
-    assert_eq!(location.file().contents(), Some(&b"written"[..]));
     assert_eq!(
-        location
-            .file()
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned()),
-        Some("notes.txt".to_owned())
+        location.file().form(),
+        PickedForm::Download { name: "notes.txt" },
+        "where and whether it was written is not known"
     );
-    let clicked = clicks.borrow();
+    assert_eq!(location.file().contents(), None);
+    let clicked = caught.links.borrow();
     let [(name, href)] = clicked.as_slice() else {
         panic!("one download was clicked: {clicked:?}");
     };
@@ -626,6 +772,84 @@ async fn a_save_outside_a_gesture_downloads_its_contents_under_the_suggested_nam
         "the download is the blob: {href}"
     );
     assert!(window.find("a").is_none(), "the link left the page");
+}
+
+/// A stand-in for the save picker: `showSaveFilePicker` answers when the
+/// test resolves it, with a handle whose stream records what it is given.
+struct SavePickerStandIn {
+    resolve: Rc<RefCell<Option<js_sys::Function>>>,
+    written: Rc<RefCell<Vec<String>>>,
+    _picker: Closure<dyn FnMut(JsValue) -> JsValue>,
+    _replaced: Replaced,
+}
+
+impl SavePickerStandIn {
+    fn install() -> Self {
+        let resolve: Rc<RefCell<Option<js_sys::Function>>> = Rc::default();
+        let written: Rc<RefCell<Vec<String>>> = Rc::default();
+        let pending = Rc::clone(&resolve);
+        let picker = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |_: JsValue| {
+            let pending = Rc::clone(&pending);
+            Promise::new(&mut |answer, _| *pending.borrow_mut() = Some(answer)).into()
+        });
+        let view: JsValue = the_view().into();
+        let replaced = Replaced::new(&view, "showSaveFilePicker", picker.as_ref());
+        Self {
+            resolve,
+            written,
+            _picker: picker,
+            _replaced: replaced,
+        }
+    }
+
+    /// Answer the picker with a handle named `name`.
+    fn choose(&self, name: &str) {
+        let record = |step: &'static str, written: &Rc<RefCell<Vec<String>>>| {
+            let written = Rc::clone(written);
+            Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |_: JsValue| {
+                written.borrow_mut().push(step.to_owned());
+                Promise::resolve(&JsValue::UNDEFINED).into()
+            })
+            .into_js_value()
+        };
+        let stream = js_sys::Object::new();
+        let _ = Reflect::set(&stream, &"write".into(), &record("write", &self.written));
+        let _ = Reflect::set(&stream, &"close".into(), &record("close", &self.written));
+        let _ = Reflect::set(&stream, &"abort".into(), &record("abort", &self.written));
+        let handle = js_sys::Object::new();
+        let _ = Reflect::set(&handle, &"name".into(), &JsValue::from_str(name));
+        let create =
+            Closure::<dyn FnMut() -> JsValue>::new(move || Promise::resolve(&stream).into())
+                .into_js_value();
+        let _ = Reflect::set(&handle, &"createWritable".into(), &create);
+        let resolve = self
+            .resolve
+            .borrow_mut()
+            .take()
+            .expect("the picker was asked for");
+        resolve
+            .call1(&JsValue::UNDEFINED, &handle)
+            .expect("the picker answers");
+    }
+}
+
+#[wasm_bindgen_test]
+async fn a_save_the_user_chose_is_written_after_its_dialog_was_dropped() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let picker = SavePickerStandIn::install();
+    let shown = dialogs(&owner, &window, true).save(
+        SaveRequest::new()
+            .filter(FileFilter::new("Text").with_extension("txt"))
+            .contents(b"kept".to_vec()),
+    );
+    owner.settle().await;
+    drop(shown);
+
+    // The browser has made or emptied the chosen file by now.
+    picker.choose("notes.txt");
+    owner.settle().await;
+    assert_eq!(*picker.written.borrow(), ["write", "close"]);
 }
 
 #[wasm_bindgen_test]
@@ -645,8 +869,8 @@ async fn a_save_without_contents_has_no_path_to_answer_on_the_web() {
 }
 
 /// The page's `target[name]` shadowed by an own property holding
-/// `replacement` until the guard drops, so a test reaches no real window or
-/// badge; an own property it hid is put back.
+/// `replacement` until the guard drops, so a test reaches no real window,
+/// picker or badge; an own property it hid is put back.
 struct Replaced {
     target: js_sys::Object,
     name: JsValue,
@@ -687,48 +911,107 @@ fn launcher(owner: &TestOwner, window: &CanvasWindow, active: bool) -> Launcher 
     )
 }
 
+/// A stand-in for `window.open`: records its arguments and answers
+/// `context` (a blank context's stand-in, or `null` for a blocked one).
+fn open_stand_in(
+    calls: &Rc<RefCell<Vec<Vec<String>>>>,
+    context: JsValue,
+) -> Closure<dyn FnMut(JsValue, JsValue) -> JsValue> {
+    let seen = Rc::clone(calls);
+    Closure::new(move |url: JsValue, target: JsValue| {
+        seen.borrow_mut().push(
+            [url, target]
+                .iter()
+                .filter_map(JsValue::as_string)
+                .collect(),
+        );
+        context.clone()
+    })
+}
+
 #[wasm_bindgen_test]
-async fn a_page_opens_apart_without_its_opener_and_a_mail_link_is_handed_off() {
+async fn a_page_opens_apart_without_its_opener_or_its_referrer() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
+    let blank = the_view()
+        .document()
+        .expect("the page's document")
+        .implementation()
+        .expect("its implementation")
+        .create_html_document()
+        .expect("a blank document");
+    let context = js_sys::Object::new();
+    let _ = Reflect::set(&context, &"opener".into(), &JsValue::from_str("the app"));
+    let _ = Reflect::set(&context, &"document".into(), &blank);
     let calls: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
-    let seen = Rc::clone(&calls);
-    let open = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> JsValue>::new(
-        move |url: JsValue, target: JsValue, features: JsValue| {
-            seen.borrow_mut().push(
-                [url, target, features]
-                    .iter()
-                    .filter_map(JsValue::as_string)
-                    .collect(),
-            );
-            JsValue::NULL
-        },
-    );
-    let view: JsValue = web_sys::window().expect("the test runs in a page").into();
+    let open = open_stand_in(&calls, context.clone().into());
+    let view: JsValue = the_view().into();
     let _replaced = Replaced::new(&view, "open", open.as_ref());
-    let launcher = launcher(&owner, &window, true);
 
     let page =
         ExternalUri::try_new("https://example.org/a?b=c", &[Scheme::HTTPS]).expect("an https link");
-    let mail =
-        ExternalUri::try_new("mailto:someone@example.org", &[Scheme::MAILTO]).expect("a mail link");
-    let opened = landed(launcher.open_uri(&page));
-    let mailed = landed(launcher.open_uri(&mail));
-    owner.until_landed(&mailed).await;
+    let opened = landed(launcher(&owner, &window, true).open_uri(&page));
+    owner.until_landed(&opened).await;
 
     assert_eq!(*opened.borrow(), Some(Ok(Ok(()))));
-    assert_eq!(*mailed.borrow(), Some(Ok(Ok(()))));
     assert_eq!(
         *calls.borrow(),
-        [
-            vec![
-                "https://example.org/a?b=c".to_owned(),
-                "_blank".to_owned(),
-                "noopener,noreferrer".to_owned()
-            ],
-            vec!["mailto:someone@example.org".to_owned(), "_self".to_owned()],
-        ]
+        [vec!["about:blank".to_owned(), "_blank".to_owned()]]
     );
+    assert!(
+        Reflect::get(&context, &"opener".into()).is_ok_and(|opener| opener.is_null()),
+        "the new context cannot reach the application"
+    );
+    let link = blank
+        .query_selector("a")
+        .ok()
+        .flatten()
+        .expect("the blank document follows a link")
+        .unchecked_into::<web_sys::HtmlAnchorElement>();
+    assert_eq!(link.href(), "https://example.org/a?b=c");
+    assert_eq!(link.rel(), "noreferrer");
+}
+
+#[wasm_bindgen_test]
+async fn a_blocked_page_is_refused_and_a_mail_link_is_handed_off_by_the_page() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let caught = CaughtLinks::on(&window);
+    let calls: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
+    let open = open_stand_in(&calls, JsValue::NULL);
+    let view: JsValue = the_view().into();
+    let _replaced = Replaced::new(&view, "open", open.as_ref());
+    let launcher = launcher(&owner, &window, true);
+
+    let page = ExternalUri::try_new("https://example.org/", &[Scheme::HTTPS]).expect("a link");
+    let mail =
+        ExternalUri::try_new("mailto:someone@example.org", &[Scheme::MAILTO]).expect("a mail link");
+    let socket = ExternalUri::try_new(
+        "wss://example.org/feed",
+        &[Scheme::try_new("wss").expect("a scheme")],
+    )
+    .expect("a socket");
+    let blocked = landed(launcher.open_uri(&page));
+    let mailed = landed(launcher.open_uri(&mail));
+    let connected = landed(launcher.open_uri(&socket));
+    owner.until_landed(&connected).await;
+
+    assert_eq!(
+        *blocked.borrow(),
+        Some(Ok(Err(LaunchError::Unsupported(Unsupported::of::<
+            LauncherCapability,
+        >(
+            UnsupportedReason::Unavailable
+        )))))
+    );
+    assert_eq!(*mailed.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(
+        *caught.links.borrow(),
+        [(String::new(), "mailto:someone@example.org".to_owned())],
+        "the mail link is followed from the page, not by a navigation of it"
+    );
+    assert_eq!(*connected.borrow(), Some(Ok(Err(LaunchError::NoHandler))));
+    assert_eq!(calls.borrow().len(), 1, "only the page asked for a context");
 }
 
 #[wasm_bindgen_test]

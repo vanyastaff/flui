@@ -15,8 +15,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, MalformedRequest, OpenRequest, OpenResult, PickedFile, Picks, SaveLocation,
-    SaveRequest, SaveResult,
+    FileFilter, MalformedRequest, OpenRequest, OpenResult, PickedFile, PickedForm, Picks,
+    SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -847,4 +847,98 @@ fn a_file_handed_over_without_a_path_carries_its_name_and_contents() {
         request.contains("13") && !request.contains("112"),
         "a request shows its contents' length, never its bytes: {request}"
     );
+}
+
+#[test]
+fn a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate() {
+    let contents: Arc<[u8]> = Arc::from(&b"words"[..]);
+    let handed =
+        PickedFile::try_from_contents("notes.txt", Arc::clone(&contents)).expect("a file name");
+    let downloaded = PickedFile::try_download("notes.txt").expect("a file name");
+    let at_path = file("notes.txt");
+
+    assert_eq!(
+        handed.form(),
+        PickedForm::Contents {
+            name: "notes.txt",
+            contents: b"words"
+        }
+    );
+    assert_eq!(
+        downloaded.form(),
+        PickedForm::Download { name: "notes.txt" }
+    );
+    assert_eq!(downloaded.contents(), None, "nobody saw a download written");
+    assert_eq!(downloaded.path(), None);
+    assert_eq!(downloaded.file_name(), Some(OsStr::new("notes.txt")));
+    assert_eq!(
+        at_path.form(),
+        PickedForm::Path(at_path.path().expect("a path"))
+    );
+    assert_eq!(PickedFile::try_download("a/b"), None);
+}
+
+#[test]
+fn a_filter_means_a_files_name_or_its_type_ignoring_ascii_case() {
+    let images = FileFilter::new("Images")
+        .with_extension("png")
+        .with_extension("tar.gz")
+        .with_mime_type("image/*")
+        .with_mime_type("application/pdf");
+    let cases: [(&str, Option<&str>, bool); 11] = [
+        ("photo.png", None, true),
+        ("PHOTO.PNG", None, true),
+        ("a.TAR.GZ", None, true),
+        ("png", None, false),
+        (".png", None, false),
+        ("photo.png.zip", None, false),
+        ("scan", Some("image/jpeg"), true),
+        ("scan", Some("IMAGE/HEIC"), true),
+        ("doc", Some("application/pdf; charset=binary"), true),
+        ("doc", Some("application/zip"), false),
+        ("doc", Some(""), false),
+    ];
+    for (name, mime_type, matches) in cases {
+        assert_eq!(
+            images.matches(name, mime_type),
+            matches,
+            "{name:?} of {mime_type:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_replaces_the_chosen_file_whole_and_leaves_nothing_beside_it() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("notes.txt");
+    std::fs::write(&target, b"the old, longer contents").expect("a file to replace");
+    // A second name for the old file: a file written in place would change
+    // under it, a replaced one does not.
+    let old = folder.path().join("old");
+    std::fs::hard_link(&target, &old).expect("a hard link");
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(
+        PickedFile::try_new(&target).expect("an absolute path"),
+        None,
+    ))));
+
+    let answered = land(handle.save(SaveRequest::new().contents(b"new".to_vec())));
+    turn_until_landed(&mut host, &answered);
+
+    assert!(matches!(&*answered.borrow(), Some(Ok(Ok(Some(_))))));
+    assert_eq!(std::fs::read(&target).expect("the file"), b"new");
+    assert_eq!(
+        std::fs::read(&old).expect("the old file"),
+        b"the old, longer contents",
+        "the chosen name now names a new file; the old one was never truncated"
+    );
+    let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(folder.path())
+        .expect("the folder")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["notes.txt", "old"], "no temporary file is left");
 }

@@ -3,9 +3,9 @@
 //! goes, and what a browser's exception means. Kept apart from the DOM so
 //! the rules are tested on every host.
 
-use flui_platform::BrowserException;
+use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
 
-use crate::dialog::{DialogError, FileFilter};
+use crate::dialog::{DialogError, FileDialogCapability, FileFilter};
 
 /// The longest extension, with its leading `.`, the File System Access API
 /// takes: Chromium refuses a longer one with a `TypeError`
@@ -176,37 +176,97 @@ pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), DialogError> {
     }
 }
 
-/// What a picker's rejection means: `None` when the user dismissed the
-/// picker (`AbortError`, which the API also answers for a picker the
-/// browser closed), the failure the browser named otherwise.
-pub(crate) fn picker_rejection(exception: BrowserException) -> Option<DialogError> {
+/// How a picker of the File System Access API ended without picks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerEnd {
+    /// The user dismissed it (`AbortError`, which the API also answers for a
+    /// picker the browser closed).
+    Cancelled,
+    /// The document may not show the API's picker (`SecurityError`: a
+    /// cross-origin frame) while the page still handles the gesture: the
+    /// file input, which such a frame may show, takes over.
+    FallBack,
+    /// The answer: a refusal of the gesture is
+    /// [`Unavailable`](UnsupportedReason::Unavailable), as the provider's
+    /// own check answers it, and anything else the failure the browser
+    /// named.
+    Refused(DialogError),
+}
+
+/// Whether the browser refused a call for want of a user's gesture, or of a
+/// document allowed to make it: `NotAllowedError`, `SecurityError`.
+pub(crate) fn is_activation_refusal(exception: BrowserException) -> bool {
+    matches!(
+        exception,
+        BrowserException::NotAllowed | BrowserException::Security
+    )
+}
+
+/// How an open picker ended on `exception`, the page still handling the
+/// gesture when `activated`.
+pub(crate) fn picker_rejection(exception: BrowserException, activated: bool) -> PickerEnd {
     match exception {
-        BrowserException::Abort => None,
-        other => Some(DialogError::Failed(other.into())),
+        BrowserException::Abort => PickerEnd::Cancelled,
+        BrowserException::Security if activated => PickerEnd::FallBack,
+        refusal if is_activation_refusal(refusal) => PickerEnd::Refused(unavailable()),
+        other => PickerEnd::Refused(DialogError::Failed(other.into())),
+    }
+}
+
+/// The dialog's answer to a call made, or refused, outside a gesture.
+pub(crate) fn unavailable() -> DialogError {
+    DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
+        UnsupportedReason::Unavailable,
+    ))
+}
+
+/// Admit picks, each a name and the MIME type the browser gives it, against
+/// the request's `filters`: every pick must match one where there are any
+/// ([`FileFilter::matches`]), since a file input only suggests them
+/// (ADR-0360 §4); [`DialogError::NotInFilter`] otherwise.
+pub(crate) fn admit_picks<'a>(
+    picks: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    filters: &[FileFilter],
+) -> Result<(), DialogError> {
+    if filters.is_empty() {
+        return Ok(());
+    }
+    let admitted = picks
+        .into_iter()
+        .all(|(name, mime_type)| filters.iter().any(|filter| filter.matches(name, mime_type)));
+    if admitted {
+        Ok(())
+    } else {
+        Err(DialogError::NotInFilter)
     }
 }
 
 /// Where a launched URI goes in the browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LinkTarget {
+pub(crate) enum LaunchRoute {
     /// A new browsing context with no opener and no referrer: a page of
     /// `http` or `https`, which would otherwise replace the application.
     NewContext,
-    /// The application's own browsing context: a scheme a browser does not
-    /// fetch (`mailto`, `tel`, an application's own), which the HTML
-    /// standard hands to the system's handler without unloading the page,
-    /// and which Safari opens nowhere else.
+    /// Handed to the system's handler by a link the page follows: a scheme
+    /// a browser does not fetch (`mailto`, `tel`, an application's own),
+    /// which the HTML standard hands off without unloading the page.
     HandOff,
+    /// Nothing a browser opens for the user: `ftp`, which browsers no longer
+    /// fetch, and `ws` and `wss`, which only a page's script connects to.
+    NoHandler,
 }
 
 /// Where a URI of `scheme` goes. The seam admits no other fetch scheme
 /// (`about`, `blob`, `data` and `file` are refused there), so `http` and
 /// `https` are the only pages.
-pub(crate) fn link_target(scheme: &str) -> LinkTarget {
-    if scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http") {
-        LinkTarget::NewContext
+pub(crate) fn launch_route(scheme: &str) -> LaunchRoute {
+    let is = |name: &str| scheme.eq_ignore_ascii_case(name);
+    if is("https") || is("http") {
+        LaunchRoute::NewContext
+    } else if is("ftp") || is("ws") || is("wss") {
+        LaunchRoute::NoHandler
     } else {
-        LinkTarget::HandOff
+        LaunchRoute::HandOff
     }
 }
 
@@ -336,20 +396,85 @@ mod tests {
     }
 
     #[test]
-    fn a_dismissed_picker_is_a_cancel_and_other_rejections_are_failures() {
-        assert_eq!(picker_rejection(BrowserException::Abort), None);
+    fn a_picker_ends_cancelled_handed_to_the_input_or_with_one_refusal_of_the_gesture() {
+        let cases = [
+            (BrowserException::Abort, true, PickerEnd::Cancelled),
+            (BrowserException::Abort, false, PickerEnd::Cancelled),
+            (BrowserException::Security, true, PickerEnd::FallBack),
+            (
+                BrowserException::Security,
+                false,
+                PickerEnd::Refused(unavailable()),
+            ),
+            (
+                BrowserException::NotAllowed,
+                true,
+                PickerEnd::Refused(unavailable()),
+            ),
+            (
+                BrowserException::NotFound,
+                true,
+                PickerEnd::Refused(DialogError::Failed(BrowserException::NotFound.into())),
+            ),
+        ];
+        for (exception, activated, end) in cases {
+            assert_eq!(
+                picker_rejection(exception, activated),
+                end,
+                "{exception} activated: {activated}"
+            );
+        }
+    }
+
+    /// A pick as the browser describes it: its name and its MIME type.
+    type Described<'a> = (&'a str, Option<&'a str>);
+
+    #[test]
+    fn a_pick_the_filters_do_not_mean_refuses_the_whole_answer() {
+        let filters = [images(), FileFilter::new("Text").with_mime_type("text/*")];
+        let cases: [(&[Described<'_>], Result<(), DialogError>); 7] = [
+            (&[("photo.PNG", None)], Ok(())),
+            (&[("photo.jpg", Some(""))], Ok(())),
+            (&[("anything", Some("image/webp"))], Ok(())),
+            (&[("notes", Some("TEXT/plain; charset=utf-8"))], Ok(())),
+            (
+                &[("photo.png", None), ("run.exe", None)],
+                Err(DialogError::NotInFilter),
+            ),
+            (&[(".png", None)], Err(DialogError::NotInFilter)),
+            (
+                &[("archive.png.zip", Some("application/zip"))],
+                Err(DialogError::NotInFilter),
+            ),
+        ];
+        for (picks, admitted) in cases {
+            assert_eq!(
+                admit_picks(picks.iter().copied(), &filters),
+                admitted,
+                "{picks:?}"
+            );
+        }
         assert_eq!(
-            picker_rejection(BrowserException::Security),
-            Some(DialogError::Failed(BrowserException::Security.into()))
+            admit_picks([("run.exe", None)], &[]),
+            Ok(()),
+            "no filter means every file"
         );
     }
 
     #[test]
-    fn a_page_opens_apart_and_any_other_scheme_is_handed_off() {
-        assert_eq!(link_target("https"), LinkTarget::NewContext);
-        assert_eq!(link_target("HTTP"), LinkTarget::NewContext);
-        for scheme in ["mailto", "tel", "sms", "myapp"] {
-            assert_eq!(link_target(scheme), LinkTarget::HandOff, "{scheme}");
+    fn a_page_opens_apart_a_handler_takes_its_scheme_and_a_socket_has_none() {
+        let cases = [
+            ("https", LaunchRoute::NewContext),
+            ("HTTP", LaunchRoute::NewContext),
+            ("mailto", LaunchRoute::HandOff),
+            ("tel", LaunchRoute::HandOff),
+            ("myapp", LaunchRoute::HandOff),
+            ("ftp", LaunchRoute::NoHandler),
+            ("ws", LaunchRoute::NoHandler),
+            ("WSS", LaunchRoute::NoHandler),
+        ];
+        for (scheme, route) in cases {
+            assert_eq!(launch_route(scheme), route, "{scheme}");
         }
     }
 }

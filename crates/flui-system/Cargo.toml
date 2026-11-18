@@ -29,9 +29,9 @@ serde = { workspace = true }
 zbus = { workspace = true }
 zruntime = { version = "0.2", default-features = false, features = ["runtime", "event", "unblock"] }
 
-# The web providers: the browser's pickers, `<dialog>`, `window.open` and the
-# Web Share API, reached through the canvas of the acquiring widget's window.
-# Newer APIs (the File System Access pickers, `navigator.share`,
+# The web providers: the browser's pickers, `window.open` and the Badging
+# API, reached through the canvas of the acquiring widget's window. Newer
+# APIs (the File System Access pickers, the Badging API,
 # `navigator.userActivation`) are read through `Reflect`, which also detects
 # a browser without them.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -50,7 +50,6 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "HtmlAnchorElement",
     "HtmlCanvasElement",
-    "HtmlDialogElement",
     "HtmlElement",
     "HtmlInputElement",
     "Navigator",
@@ -78,6 +77,7 @@ web-sys = { version = "0.3", features = [
     "DataTransfer",
     "DataTransferItem",
     "DataTransferItemList",
+    "DomImplementation",
     "EventInit",
     "NodeList",
 ] }

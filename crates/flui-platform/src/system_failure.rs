@@ -41,8 +41,8 @@ pub enum BrowserException {
     /// `DataError`: the data given is not one the call takes.
     #[error("DataError")]
     Data,
-    /// `InvalidStateError`: the object is not in a state for the call (an
-    /// earlier share still showing).
+    /// `InvalidStateError`: the object is not in a state for the call (a
+    /// file input taken out of the document).
     #[error("InvalidStateError")]
     InvalidState,
     /// `NotAllowedError`: the user, a permission or a permissions policy
