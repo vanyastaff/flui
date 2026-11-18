@@ -8,7 +8,7 @@
 //! the projection changed.
 
 use flui_foundation::geometry::{
-    DevicePixelRatio, DevicePoint, DeviceRect, Rect, device_rect_covering,
+    DevicePixelRatio, DevicePoint, DeviceRect, Point, Rect, device_rect_covering,
 };
 
 /// What the OS should do with an input region.
@@ -34,6 +34,14 @@ pub enum InputRegionKind {
     /// [`WindowResize`](Self::WindowResize) region below it: a press here reaches the
     /// application.
     WindowContent,
+    /// The click that brings an inactive window forward also acts here: a toolbar button,
+    /// a drag source. Where the system lets the application decide (AppKit's
+    /// `acceptsFirstMouse:`), the host delivers such a press marked
+    /// ([`PointerButtonEvent::is_first_click`](crate::pointer::PointerButtonEvent::is_first_click)),
+    /// and the framework hands a marked press only to what lies inside a region of this
+    /// kind; anywhere else that click only activates the window. Where the system decides
+    /// alone, it marks no press and the region changes nothing.
+    FirstClick,
 }
 
 /// The edge or corner a [`InputRegionKind::WindowResize`] region resizes the window from.
@@ -96,6 +104,17 @@ impl InputRegion {
     #[must_use]
     pub const fn rect(&self) -> Rect {
         self.rect
+    }
+
+    /// Whether the region holds `point`, in window-logical pixels: from its minimum edges
+    /// up to, not including, its maximum ones, as [`DeviceInputRegion::contains`] counts.
+    #[must_use]
+    pub fn contains(&self, point: Point) -> bool {
+        let rect = self.rect;
+        rect.min.x <= point.x
+            && point.x < rect.max.x
+            && rect.min.y <= point.y
+            && point.y < rect.max.y
     }
 }
 
@@ -170,6 +189,18 @@ impl DeviceInputRegion {
     pub const fn rect(&self) -> DeviceRect {
         self.rect
     }
+
+    /// Whether the region holds `point`, in window device pixels: from its minimum edges
+    /// up to, not including, its maximum ones, so two regions that share an edge never
+    /// both hold a pixel.
+    #[must_use]
+    pub fn contains(&self, point: DevicePoint) -> bool {
+        let rect = self.rect;
+        rect.min.x <= point.x
+            && point.x < rect.max.x
+            && rect.min.y <= point.y
+            && point.y < rect.max.y
+    }
 }
 
 /// What a window's chrome regions say is under a point: the answer a backend gives the
@@ -197,23 +228,18 @@ pub enum ChromeHit {
 /// region painted later lies over one painted earlier: the last chrome region whose
 /// rectangle holds the point decides, and a [`InputRegionKind::WindowContent`] region over a
 /// move area gives the point back to the application. A rectangle holds the points from its
-/// minimum edges up to, not including, its maximum ones. Regions of other kinds
-/// ([`InputRegionKind::SystemGestureExclusion`]) are not chrome and are passed over; a point
-/// no chrome region holds is [`ChromeHit::Content`].
+/// minimum edges up to, not including, its maximum ones ([`DeviceInputRegion::contains`]).
+/// Regions of other kinds ([`InputRegionKind::SystemGestureExclusion`],
+/// [`InputRegionKind::FirstClick`]) are not chrome and are passed over; a point no chrome
+/// region holds is [`ChromeHit::Content`].
 #[must_use]
 pub fn chrome_hit(regions: &[DeviceInputRegion], point: DevicePoint) -> ChromeHit {
-    let holds = |rect: DeviceRect| {
-        rect.min.x <= point.x
-            && point.x < rect.max.x
-            && rect.min.y <= point.y
-            && point.y < rect.max.y
-    };
     regions
         .iter()
         .rev()
-        .filter(|region| holds(region.rect))
+        .filter(|region| region.contains(point))
         .find_map(|region| match region.kind {
-            InputRegionKind::SystemGestureExclusion => None,
+            InputRegionKind::SystemGestureExclusion | InputRegionKind::FirstClick => None,
             InputRegionKind::WindowMove => Some(ChromeHit::Move),
             InputRegionKind::WindowResize(edge) => Some(ChromeHit::Resize(edge)),
             InputRegionKind::CaptionButton(button) => Some(ChromeHit::CaptionButton(button)),
@@ -239,6 +265,7 @@ impl flui_foundation::inspect::ToValue for InputRegionKind {
             Self::CaptionButton(CaptionButton::Maximize) => "CaptionButton(Maximize)",
             Self::CaptionButton(CaptionButton::Close) => "CaptionButton(Close)",
             Self::WindowContent => "WindowContent",
+            Self::FirstClick => "FirstClick",
         };
         flui_foundation::inspect::Value::Variant {
             ty: "InputRegionKind",

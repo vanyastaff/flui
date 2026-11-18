@@ -440,6 +440,10 @@ pub struct PointerButtonEvent<D: ButtonDirection> {
     /// Where and when it happened.
     pub sample: PointerSample,
     press: Option<PressId>,
+    /// The press landed while its window was not the active one
+    /// ([`PointerPress::is_first_click`](PointerButtonEvent::is_first_click)); always
+    /// `false` on a release.
+    first_click: bool,
     direction: PhantomData<D>,
 }
 
@@ -489,6 +493,7 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
             click_count: None,
             sample,
             press: None,
+            first_click: false,
             direction: PhantomData,
         }
     }
@@ -514,6 +519,28 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
     pub const fn with_click_count(self, click_count: NonZeroU8) -> Self {
         Self {
             click_count: Some(click_count),
+            ..self
+        }
+    }
+}
+
+impl PointerButtonEvent<Press> {
+    /// Whether this press is the click that brought its window forward: it landed while
+    /// the window was not the active one, and the host delivered it because it lies in an
+    /// [`InputRegionKind::FirstClick`](crate::input_regions::InputRegionKind::FirstClick)
+    /// region. The framework hands such a press only to what lies inside one of those
+    /// regions; a host whose system decides alone what that click does never marks one.
+    #[must_use]
+    pub const fn is_first_click(&self) -> bool {
+        self.first_click
+    }
+
+    /// This press as the click that brought its window forward
+    /// ([`is_first_click`](Self::is_first_click)).
+    #[must_use]
+    pub const fn with_first_click(self) -> Self {
+        Self {
+            first_click: true,
             ..self
         }
     }

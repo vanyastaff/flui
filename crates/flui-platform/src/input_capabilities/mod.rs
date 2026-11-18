@@ -145,10 +145,14 @@ impl InputCapabilities {
     /// Whether the OS honours `kind` regions: [`PlatformWindow::set_input_regions`](crate::PlatformWindow::set_input_regions)
     /// hands it the regions of the kinds available here and drops the rest. A
     /// [`WindowContent`](InputRegionKind::WindowContent) region takes its availability from
-    /// the move and resize regions it is cut out of: it is honoured where either is.
+    /// the move and resize regions it is cut out of: it is honoured where either is. A
+    /// [`FirstClick`](InputRegionKind::FirstClick) region is the framework's to honour, on
+    /// every host: it hands a press marked first click only to what lies inside one, and a
+    /// host whose system decides alone what the activating click does marks none.
     #[must_use]
     pub const fn input_region(&self, kind: InputRegionKind) -> Availability {
         match kind {
+            InputRegionKind::FirstClick => Availability::Native,
             InputRegionKind::SystemGestureExclusion => self.system_gesture_exclusion,
             InputRegionKind::WindowMove => self.window_move,
             InputRegionKind::WindowResize(_) => self.window_resize,
