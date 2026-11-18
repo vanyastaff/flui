@@ -411,8 +411,7 @@ impl MissLedger {
 /// The table of the refresh period, which every display source is held to:
 /// one display's cadence, as each platform reports it and read by that
 /// platform's own source, is the row's period, and a value that describes no
-/// cadence is no period anywhere. The macOS source hands CoreGraphics' rate
-/// to `RefreshPeriod::from_hz` from its FFI half and has no column here.
+/// cadence is no period anywhere.
 #[cfg(test)]
 mod mapping {
     use std::time::Duration;
@@ -423,6 +422,7 @@ mod mapping {
     use super::{MeasuredPeriod, outside_band};
     use crate::display::android::sample::RawDisplay;
     use crate::display::apple::link_rate::LinkPeriod;
+    use crate::display::apple::screen_cadence::{self, Panel, PowerMode};
     use crate::display::linux::wayland_model::{OutputEvent, WaylandOutputs};
     use crate::display::linux::x11_model::{
         RandrCrtc, RandrMode, RandrMonitor, RandrOutput, RandrState,
@@ -433,7 +433,7 @@ mod mapping {
     /// One display's cadence as each platform reports it.
     struct Cadence {
         case: &'static str,
-        /// Hertz: Android's `Display.Mode`.
+        /// Hertz: Android's `Display.Mode`, a CoreGraphics display mode.
         hertz: f64,
         /// Windows' `DISPLAYCONFIG_RATIONAL`; `None` where no `u32` pair says it.
         ratio: Option<(u32, u32)>,
@@ -622,6 +622,12 @@ mod mapping {
         views[0].refresh_period
     }
 
+    /// The period of a macOS screen whose current mode reports `hertz`, on a
+    /// display no link names a period for.
+    fn macos(hertz: f64) -> Option<RefreshPeriod> {
+        screen_cadence::refresh_period(Some(hertz), || None, Panel::External, PowerMode::Normal)
+    }
+
     /// The period a display link measuring ticks `interval` apart publishes.
     fn display_link(interval: f64) -> Option<RefreshPeriod> {
         LinkPeriod::default().observe(interval)
@@ -644,6 +650,7 @@ mod mapping {
             let case = cadence.case;
             let periods = [
                 ("Android", Some(android(cadence.hertz))),
+                ("macOS", Some(macos(cadence.hertz))),
                 (
                     "Windows",
                     cadence.ratio.map(|ratio| display_period(Some(ratio), || 0)),
@@ -679,9 +686,8 @@ mod mapping {
     }
 
     /// The period of every common panel rate CoreGraphics reports, through
-    /// the constructor the macOS source hands it to, stays the one the AppKit
-    /// backend reported before the display snapshot (`1 / hz`), to the
-    /// nanosecond.
+    /// the macOS source's rule, stays the one the AppKit backend reported
+    /// before the display snapshot (`1 / hz`), to the nanosecond.
     #[test]
     fn macos_shim_keeps_the_period_it_reports_today() {
         for millihertz in [
@@ -689,7 +695,7 @@ mod mapping {
             120_000, 144_000, 165_000, 240_000, 360_000,
         ] {
             let hz = f64::from(millihertz) / 1000.0;
-            let period = RefreshPeriod::from_hz(hz).ok().map(RefreshPeriod::get);
+            let period = macos(hz).map(RefreshPeriod::get);
             let before = Duration::from_secs_f64(1.0 / hz);
             assert!(
                 period.is_some_and(|period| period.abs_diff(before) <= Duration::from_nanos(1)),

@@ -2093,8 +2093,9 @@ GPU-память простаивающего или невидимого окн
   (`outside_band`, доля опубликованного; первое — всегда), `departs` спрашивает без публикации,
   `forget`; публиковать в обход полосы нечем. Ушли `display::android::sample::refresh_period` (вызов
   на месте), модуль `display::apple::period` (`core_graphics_refresh_period`),
-  `refresh_period_for_screen` (macOS читает `refresh_rate_of_screen -> Option<f64>` и отдаёт её
-  `from_hz`), `refresh_period` Wayland (вызов на месте) и
+  `refresh_period_for_screen` (macOS читает частоту режима, `mode_hertz -> Option<f64>`, и правило
+  `display::apple::screen_cadence::refresh_period` отдаёт её `from_hz`), `refresh_period` Wayland
+  (вызов на месте) и
   `display::windows::sample::{rational_refresh_period, frequency_period}` — их место заняло одно
   правило Windows, `display_period(target_rate, mode_frequency)` (рациональная частота пути, иначе
   `dmDisplayFrequency`, читаемая только тогда; её 0 и 1 — «по умолчанию оборудования»). Ссылка
@@ -2179,7 +2180,7 @@ GPU-память простаивающего или невидимого окн
   `module-dag`: исключений 33, новых нет (`window::apple::ios` → `display::apple` остаётся: окно iOS
   называет `LinkPeriod` и `change_screen`); `globals` — 56, без изменений. Документы: ARCHITECTURE.md
   ядра называет одно правило каждой пары, конструкторы контракта и что читает каждая таблица; раздел
-  периода macOS — `refresh_rate_of_screen` и `RefreshPeriod::from_hz`.
+  периода macOS — `display::apple::screen_cadence::refresh_period` и `RefreshPeriod::from_hz`.
   Проверки после ревью и слияния (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-native -p
   flui-app --all-targets` с `winit-backend` и без, `-p flui-platform --all-targets`; nextest
   `-p flui-native -p flui-app -p flui-platform` — 349 (2 пропущены), `-p flui-native -p flui-app` с
@@ -9232,6 +9233,79 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
+
+- [x] **LY149** — ветка `native/macos-pacing-and-notch`. Проверено на `main` @ `88ea4d03a`
+  чтением и тестами модели; на Mac не запускалось ничего, и это сказано у каждой находки.
+  Подтверждено кодом: период экрана был частотой текущего режима и больше ничем
+  (`refresh_rate_of_screen`), 0 Гц `RefreshPeriod::from_hz` отвергал, так что у такого дисплея
+  периода не было; `sample_state` окна публиковал `WindowInsets::ZERO`; ни слою, ни виду не
+  задавалось, как лежит несовпавшее содержимое. Не подтверждено и не опровергнуто (нужен Mac):
+  что панель ProMotion в Low Power Mode обновляется на 60 Гц при режиме и display link на 120
+  (взято из исходника Rune, `crates/rune/src/platform/display_link.rs`, ветка `dev`); что
+  несовпавший drawable при живом resize был виден растянутым. Решения (ADR их не решают; правила
+  записаны в `crates/flui-native/ARCHITECTURE.md`, таблица §4 ADR-0277 говорит, что публикует
+  macOS). Период: чистое правило `display::apple::screen_cadence::refresh_period` — частота
+  режима, где она называет темп; иначе номинальный период `CVDisplayLink` этого дисплея
+  (`CVTime` идёт в `RefreshPeriod::from_ratio`, link создаётся ради одного вопроса и
+  освобождается незапущенным, три функции CoreVideo объявлены рядом с ColorSync, без нового
+  крейта); встроенная панель (`CGDisplayIsBuiltin`) при Low Power Mode — не короче периода
+  60 Гц, внешний монитор не трогается. `isLowPowerModeEnabled` и уведомление — macOS 12, за
+  гейтом `ProcessPowerState`; имя уведомления ищется через `dlsym`, а не линкуется: бинарник со
+  ссылкой на константу macOS 12 не загрузился бы на 11. Наблюдатели дисплеев —
+  `DisplayObservers` из двух `Observation` (параметры экранов и состояние питания), своя копия
+  наблюдателя с блоком удалена; смена режима питания помечает снимок устаревшим и будит
+  владельца, новая ревизия выходит, когда период изменился. Вырез: чистое правило
+  `window::apple::geometry::frame::safe_area_on_screen` пересекает полосу
+  `NSScreen.safeAreaInsets` (macOS 12, гейт `ScreenSafeArea`) с прямоугольником содержимого:
+  вставка — длина, общая у содержимого и полосы, не больше самой полосы; публикуется та же
+  величина снимка, что у iOS (`WindowInsets::safe_area`), новой формы нет. Режим окна не
+  спрашивается: окно, закрывающее весь экран, получает верхнюю вставку экрана; окно, которое
+  система держит ниже выреза (так, по описаниям, AppKit ставит свой полноэкранный режим), и окно
+  под строкой меню — ноль. Строка требовала «у полноэкранного окна верхняя вставка из
+  `safeAreaInsets.top`»; вставка по режиму удвоила бы отступ там, где система уже опустила окно,
+  поэтому публикуется перекрытие. Экран читается при каждом чтении окна (resize, перемещение,
+  смена экрана и масштаба, конец полноэкранного перехода), а не кэшируется: вставка — функция
+  прямоугольника, который читается тем же чтением. Gravity: `layerContentsPlacement = TopLeft` у
+  вида, а не `contentsGravity` у слоя: у layer-backed вида гравитацией слоя владеет AppKit и
+  выставляет её из placement (так же делает `QNSView` в Qt; Rune задаёт gravity подслою, который
+  wgpu создаёт под видом winit). Глазами не оценено. Тесты, в скобках результат с откатом:
+  `a_macos_screen_paces_at_its_mode_its_link_or_the_low_power_rate` (без `max` с периодом 60 Гц —
+  строка «ProMotion под Low Power» даёт 8,33 мс вместо 16,67; без запасного пути — строка «0 Гц»
+  даёт `None` вместо 16,683 мс), `a_mode_with_a_rate_asks_no_display_link`,
+  `process_power_state_gate_table`, `screen_safe_area_gate_table`,
+  `a_window_under_the_camera_housing_has_its_band_as_a_safe_area` (с отсчётом от нижнего края
+  экрана вместо верхнего — окно ниже выреза получает 32 вместо 0); у
+  `every_display_source_reads_a_cadence_alike` появилась колонка macOS, и
+  `macos_shim_keeps_the_period_it_reports_today` идёт через то же правило. Прогнано: тесты
+  модели в WSL (Linux) и на Windows через nextest; в WSL `cargo +nightly check -p flui-native
+  --target aarch64-apple-darwin --all-targets --locked` и `build --lib` той же цели (проверка
+  порогов гейтов) без предупреждений; clippy `--all-targets -D warnings` `flui-native` на
+  Windows. Должно на Mac (заметки строк «Refresh rate and frame pacing», «Safe area», «Live resize
+  without jitter» и «Power-aware pacing» в `platform-parity.toml`, записи `docs/gaps.md`):
+  ProMotion с включением и выключением Low Power Mode (период в снимке и очередь drawable),
+  панель с режимом 0 Гц, Mac с вырезом в полноэкранном режиме и с окном без рамки на весь экран,
+  живой resize глазами. Не построено и записано в `docs/gaps.md`: `auxiliaryTopLeftArea` и
+  `auxiliaryTopRightArea` (полосы рядом с вырезом), тепловое состояние и пауза фоновой работы.
+  После независимого чтения: вставка шла через правило Web (`window::safe_area::within`), и окно,
+  верх которого выше верха экрана (монитор над панелью, окно ещё называет панель своим экраном),
+  получало полосу плюс всё, что выше экрана (332 при полосе 32); у macOS теперь своё правило —
+  общая длина, не больше полосы, часть за краем экрана не считается, а правило Web осталось как
+  было (холст за краем viewport прокручен и не виден); строки таблицы «выше», «через» и «ниже»
+  верха экрана (с прежним правилом строка «через» даёт 332 вместо 32).
+  Содержимое, которое не растягивается, раскладывается по `contentsScale` слоя, а его никто не
+  задавал (wgpu не трогает масштаб корневого слоя вида): окно задаёт его масштабом, которым
+  меряет свои метрики, при создании и при каждой смене backing scale
+  (`content_view::set_layer_contents_scale`); gravity оставлен, потому что с этим масштабом кадр
+  по построению занимает вид, а откат вернул бы растяжение, ради которого строка и написана;
+  прогон на Retina записан в строке «Live resize without jitter». Имя уведомления о питании,
+  не найденное на macOS 12 и новее, теперь типизированная ошибка и одно предупреждение, а не
+  молчание; что тогда происходит, сказано в `docs/gaps.md`. `try_with_safe_area` в окне —
+  `expect("BUG: …")`: правило отдаёт конечные неотрицательные длины. Новый тест модели
+  `a_power_mode_change_is_a_new_display_revision_only_where_the_period_changed` ведёт то, что
+  делает наблюдатель (пометить источник устаревшим), до ревизии снимка: у встроенной панели
+  новая ревизия с периодом 60 Гц, у внешнего монитора ревизия прежняя, без пометки источник не
+  перечитывается. Без теста остались регистрация наблюдателей, `insets` в `sample_state` и
+  `contentsScale`: им нужен `NSWindow`, которого в тестах крейта нет.
 
 ## Чего нет в этой серии
 
