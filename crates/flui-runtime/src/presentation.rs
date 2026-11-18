@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
+use flui_animation::__runtime::{VsyncDriver, VsyncRetirement};
 use flui_animation::{FrameTick, MotionClock, Vsync};
 use flui_foundation::{PresentationId, panic::FirstPanic};
 use flui_interaction::{
@@ -640,13 +641,13 @@ pub struct PresentationState {
     /// Set by the first platform redraw request this presentation makes for
     /// the next frame; reopened when a pump samples the presentation.
     redraw_poked: Arc<AtomicBool>,
-    /// This presentation's controller registry. Handles share owner-local state;
-    /// the presentation keeps its driver binding for its whole lifetime.
-    vsync: Vsync,
+    /// The driver of this presentation's controller registry; its tree holds
+    /// only handles, and the presentation keeps the binding for its whole lifetime.
+    vsync_driver: VsyncDriver,
     /// Kernels close before any teardown callout; delivery outlives opaque trees.
-    animation_retirement: RefCell<Option<flui_animation::VsyncRetirement>>,
+    animation_retirement: RefCell<Option<VsyncRetirement>>,
     /// This presentation's animation clock: maps the UI runtime's raw frame time
-    /// to the monotonic animation time [`Self::vsync`] is ticked with.
+    /// to the monotonic animation time [`Self::vsync_driver`] ticks with.
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
     motion_clock: RefCell<MotionClock>,
     /// This presentation's own physical-time produce-gate state machine
@@ -1050,14 +1051,14 @@ impl PresentationState {
                 redraw_window.request_redraw();
             }
         });
-        let vsync = Vsync::new();
+        let vsync_driver = VsyncDriver::new();
         // Controllers ticked here refuse mutation while this runtime builds.
-        vsync.set_build_phase(Some(
+        vsync_driver.set_build_phase(Some(
             widgets.with_build_owner(flui_view::BuildOwner::build_phase),
         ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);
-        vsync.set_frame_requester(Some(Rc::new(move || {
+        vsync_driver.set_frame_requester(Some(Rc::new(move || {
             if animation_owner.upgrade().is_some() {
                 request_animation_frame();
             }
@@ -1205,7 +1206,7 @@ impl PresentationState {
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
             redraw_requests_watched: Cell::new(0),
-            vsync,
+            vsync_driver,
             animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
@@ -1360,7 +1361,7 @@ impl PresentationState {
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
             redraw_requests_watched: Cell::new(0),
-            vsync: Vsync::new(),
+            vsync_driver: VsyncDriver::new(),
             animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
@@ -1500,14 +1501,19 @@ impl PresentationState {
         &self.held_pointer_input
     }
 
-    /// A clone of this presentation's own implicit-animation controller
-    /// registry. `Vsync` is owner-local `Rc`-backed state, so this is cheap and every clone
-    /// observes the same registry — the same handle shape
-    /// `UiRuntime::vsync()` used to hand out from its own UI runtime-level slot
-    /// (issue #556: the registry moved here, one per presentation).
+    /// A handle on this presentation's controller registry, for its tree's
+    /// `VsyncScope`. Every clone observes the same registry; only
+    /// [`Self::vsync_driver`] ticks or closes it (ADR-0382).
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
-        self.vsync.clone()
+        self.vsync_driver.vsync().clone()
+    }
+
+    /// The driver of this presentation's controller registry: the frame path
+    /// ticks it, and retirement closes it.
+    #[must_use]
+    pub(crate) fn vsync_driver(&self) -> &VsyncDriver {
+        &self.vsync_driver
     }
 
     /// This frame's animation tick for the UI runtime's raw frame time `raw`
@@ -1515,7 +1521,7 @@ impl PresentationState {
     /// or repeated `raw` repeats the previous tick.
     ///
     /// The clock's borrow ends inside this call, before the caller hands the
-    /// tick to [`Vsync::tick_all`], which runs controller and listener code.
+    /// tick to [`VsyncDriver::tick_all`], which runs controller and listener code.
     ///
     /// The borrow ends before registry delivery invokes user code.
     pub(crate) fn motion_tick(&self, raw: Duration) -> FrameTick {
@@ -1532,7 +1538,7 @@ impl PresentationState {
     pub(crate) fn animation_running(&self, frames_enabled: bool) -> bool {
         frames_enabled
             && !self.clock.is_hidden()
-            && self.vsync.has_running()
+            && self.vsync_driver.vsync().has_running()
             && !self.motion_is_paused()
     }
 
@@ -2798,7 +2804,7 @@ impl PresentationState {
 
     fn withdraw_animation(&self) {
         if self.animation_retirement.borrow().is_none() {
-            let retirement = self.vsync.prepare_close();
+            let retirement = self.vsync_driver.prepare_close();
             self.animation_retirement.replace(Some(retirement));
         }
     }

@@ -3,9 +3,10 @@
 
 use std::time::Duration;
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{
     AnimatedValue as DrivenValue, AnimationError, MotionClock, MotionSpec, SpringDescription,
-    TwoWayConverter, Vsync,
+    TwoWayConverter,
 };
 
 #[derive(Clone)]
@@ -18,7 +19,7 @@ enum Command<T> {
 
 pub(crate) struct AnimatedValue<T: TwoWayConverter + 'static> {
     value: DrivenValue<T>,
-    registry: Vsync,
+    driver: VsyncDriver,
     clock: MotionClock,
     now: Duration,
     initial: T,
@@ -32,11 +33,11 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     }
 
     pub(crate) fn with_motion(initial: T, motion: MotionSpec) -> Result<Self, AnimationError> {
-        let registry = Vsync::new();
-        let value = DrivenValue::try_new(initial.clone(), motion.clone(), Some(&registry))?;
+        let driver = VsyncDriver::new();
+        let value = DrivenValue::try_new(initial.clone(), motion.clone(), Some(driver.vsync()))?;
         Ok(Self {
             value,
-            registry,
+            driver,
             clock: MotionClock::new(),
             now: Duration::ZERO,
             initial,
@@ -50,14 +51,14 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         self.commands.push(Command::Target(target));
         // Admit the fresh run's first frame at the explicit trace timestamp.
         // Mounted tests separately prove that interruptions need no extra anchor.
-        self.registry.tick_all(&self.clock.frame(self.now));
+        self.driver.tick_all(&self.clock.frame(self.now));
         Ok(())
     }
 
     pub(crate) fn set_motion(&mut self, motion: MotionSpec) -> Result<(), AnimationError> {
         let _run = self.value.set_motion(motion.clone())?;
         self.commands.push(Command::Motion(motion));
-        self.registry.tick_all(&self.clock.frame(self.now));
+        self.driver.tick_all(&self.clock.frame(self.now));
         Ok(())
     }
 
@@ -69,7 +70,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
 
     pub(crate) fn advance(&mut self, dt: Duration) {
         self.now = self.now.saturating_add(dt);
-        self.registry.tick_all(&self.clock.frame(self.now));
+        self.driver.tick_all(&self.clock.frame(self.now));
         // Coalesce only the replay log. The original trace still samples every
         // requested frame; forked probes independently replay its elapsed time.
         if let Some(Command::Advance(elapsed)) = self.commands.last_mut() {

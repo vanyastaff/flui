@@ -4,6 +4,7 @@
 //! four 90° steps of 300 ms every 1.5 s), the controller's registration over
 //! the indicator's life, and the static frame without ticks.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_view::LifecycleContext;
 use std::f64::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
@@ -134,19 +135,20 @@ fn registry_migration_preserves_the_painted_phase() {
     let mut laid = indicator(&vsync);
     laid.pump_for(ms(1500));
     let before = only_arc(&laid);
-    let next = Vsync::new();
+    let driver = VsyncDriver::new();
+    let next = driver.vsync().clone();
     laid.pump_widget(VsyncScope::new(
-        next.clone(),
+        next,
         Center::new().child(ActivityIndicator::new()),
     ));
     assert!(vsync.is_empty());
     assert_eq!(only_arc(&laid), before);
-    next.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.0)),
     );
     laid.pump_for(Duration::ZERO);
     assert_eq!(only_arc(&laid), before);
-    next.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.3)),
     );
     laid.pump_for(Duration::ZERO);

@@ -1172,14 +1172,19 @@ mod tests {
     fn mounted_handle() -> (
         flui_testing::widgets::harness::Harness,
         ScaffoldMessengerHandle,
+        Rc<flui_animation::__runtime::VsyncDriver>,
     ) {
         let captured = Rc::new(RefCell::new(None));
+        let driver = Rc::new(flui_animation::__runtime::VsyncDriver::new());
         let harness =
-            flui_testing::widgets::harness::mount(ScaffoldMessenger::new(CaptureMessenger {
-                captured: Rc::clone(&captured),
-            }));
+            flui_testing::widgets::harness::mount(flui_sdk::view::environment::VsyncScope::new(
+                driver.vsync().clone(),
+                ScaffoldMessenger::new(CaptureMessenger {
+                    captured: Rc::clone(&captured),
+                }),
+            ));
         let handle = captured.borrow().clone().expect("messenger mounted");
-        (harness, handle)
+        (harness, handle, driver)
     }
 
     mod failure_cases;

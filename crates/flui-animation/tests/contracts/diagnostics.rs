@@ -1,5 +1,6 @@
 //! Observation is optional and cannot become an animation failure boundary.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -340,7 +341,8 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
             tracing::subscriber::with_default(
                 tracing_subscriber::registry().with(observer),
                 || {
-                    let registry = Vsync::new();
+                    let driver = VsyncDriver::new();
+                    let registry = driver.vsync().clone();
                     let owner = AnimationController::builder(Duration::from_millis(100))
                         .build_on(Some(&registry));
                     let controller = owner.controller();
@@ -368,8 +370,8 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
                         armed.store(true, Ordering::Relaxed);
                     }
                     let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        registry.tick_all(&clock.frame(Duration::ZERO));
-                        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                        driver.tick_all(&clock.frame(Duration::ZERO));
+                        driver.tick_all(&clock.frame(Duration::from_millis(100)));
                     }));
                     if callback_fails {
                         let failure =
@@ -382,11 +384,11 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
                     } else {
                         sampled.expect("subscriber failure cannot fail animation");
                     }
-                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(100)));
                     assert!(original.is_complete(), "{fault:?}");
                     let next = controller.reverse().expect("healthy next run");
-                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
-                    registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(100)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(200)));
                     assert!(next.is_complete(), "{fault:?}");
                     assert_eq!(controller.value(), 0.0);
                     assert!(
@@ -502,7 +504,8 @@ fn playback_and_motion_policy_changes_are_observable() {
             }),
             "the first playback change before a run must be observable"
         );
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let owner =
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
@@ -510,15 +513,15 @@ fn playback_and_motion_policy_changes_are_observable() {
             .repeat(RepeatMode::Restart)
             .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         controller.set_playback_rate(flui_animation::PlaybackRate::try_new(2.0).expect("rate"));
-        registry.tick_all(&clock.frame(Duration::from_millis(20)));
+        driver.tick_all(&clock.frame(Duration::from_millis(20)));
         clock.set_system_motion(flui_platform::MotionPreference::Reduce);
-        registry.tick_all(&clock.frame(Duration::from_millis(40)));
+        driver.tick_all(&clock.frame(Duration::from_millis(40)));
         assert!(!registry.has_running());
         assert!(!run.is_complete() && !run.is_canceled());
         clock.set_system_motion(flui_platform::MotionPreference::NoPreference);
-        registry.tick_all(&clock.frame(Duration::from_millis(60)));
+        driver.tick_all(&clock.frame(Duration::from_millis(60)));
         assert!(registry.has_running());
         controller.stop().expect("cancel repeat");
         assert!(run.is_canceled());
@@ -629,7 +632,8 @@ fn source_failure_survives_failed_observation_and_keeps_peers_deliverable() {
         }),
     };
     tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), || {
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let owner =
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
@@ -640,10 +644,10 @@ fn source_failure_survives_failed_observation_and_keeps_peers_deliverable() {
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let peer_run = peer.controller().forward().expect("healthy peer");
         let mut clock = flui_animation::MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         armed.store(true, Ordering::Relaxed);
         let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.tick_all(&clock.frame(Duration::from_millis(50)));
+            driver.tick_all(&clock.frame(Duration::from_millis(50)));
         }));
         let payload = sampled.expect_err("the source failure remains authoritative");
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"real source failure"));
@@ -660,12 +664,12 @@ fn source_failure_survives_failed_observation_and_keeps_peers_deliverable() {
             (peer.controller().value() - 0.5).abs() < 1e-9,
             "healthy peers still sample this frame"
         );
-        registry.tick_all(&clock.frame(Duration::from_millis(50)));
+        driver.tick_all(&clock.frame(Duration::from_millis(50)));
         assert!(
             (controller.value() - 0.5).abs() < 1e-9,
             "the interrupted position remains deliverable"
         );
-        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        driver.tick_all(&clock.frame(Duration::from_millis(100)));
         assert!(original.is_complete() && peer_run.is_complete());
     });
 }
@@ -843,7 +847,8 @@ fn observer_admission_round(admissions: &[Admission]) {
                 tracing::subscriber::with_default(
                     tracing_subscriber::registry().with(observer),
                     || {
-                        let registry = Vsync::new();
+                        let driver = VsyncDriver::new();
+                        let registry = driver.vsync().clone();
                         OBSERVED_VSYNC.with(|slot| *slot.borrow_mut() = Some(registry.clone()));
                         let owner = AnimationController::builder(Duration::from_millis(100))
                             .build_on(Some(&registry));
@@ -856,7 +861,7 @@ fn observer_admission_round(admissions: &[Admission]) {
                             controller.tick_at(Duration::from_millis(50));
                             assert!((controller.value() - 0.5).abs() < 1e-9);
                         } else {
-                            registry.tick_all(&clock.frame(Duration::ZERO));
+                            driver.tick_all(&clock.frame(Duration::ZERO));
                         }
                         assert!(!armed.load(Ordering::Relaxed), "subscriber admission ran");
                         assert_eq!(
@@ -867,13 +872,13 @@ fn observer_admission_round(admissions: &[Admission]) {
                         if matches!(admission, Admission::Listener) {
                             controller.tick_at(Duration::from_millis(100));
                         } else {
-                            registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                            driver.tick_all(&clock.frame(Duration::from_millis(100)));
                             assert_eq!(
                                 calls.load(Ordering::Relaxed),
                                 1,
                                 "next tick admits the new controller"
                             );
-                            registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                            driver.tick_all(&clock.frame(Duration::from_millis(200)));
                             ADMITTED.with(|slot| {
                                 for (owner, admitted_run) in slot.borrow().iter() {
                                     assert_eq!(owner.controller().value(), 1.0);
@@ -1022,7 +1027,8 @@ fn subscriber_disposal_silences_value_delivery() {
             tracing::subscriber::with_default(
                 tracing_subscriber::registry().with(observer),
                 || {
-                    let registry = Vsync::new();
+                    let driver = VsyncDriver::new();
+                    let registry = driver.vsync().clone();
                     let owner = AnimationController::builder(Duration::from_millis(100))
                         .build_on(Some(&registry));
                     let controller = owner.controller().clone();
@@ -1036,10 +1042,10 @@ fn subscriber_disposal_silences_value_delivery() {
                         .build_on(Some(&registry));
                     let peer_run = peer.controller().forward().expect("peer run");
                     let mut clock = flui_animation::MotionClock::new();
-                    registry.tick_all(&clock.frame(Duration::ZERO));
+                    driver.tick_all(&clock.frame(Duration::ZERO));
                     let before_disposal = notifications.get();
                     armed.store(true, Ordering::Relaxed);
-                    registry.tick_all(&clock.frame(Duration::from_millis(50)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(50)));
                     assert!(!armed.load(Ordering::Relaxed), "{hook:?} disposal ran");
                     assert!(original.is_canceled());
                     assert_eq!(
@@ -1052,13 +1058,13 @@ fn subscriber_disposal_silences_value_delivery() {
                         flui_animation::AnimationError::Disposed
                     );
                     assert!((peer.controller().value() - 0.5).abs() < 1e-9);
-                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(100)));
                     assert!(peer_run.is_complete());
                     let fresh = AnimationController::builder(Duration::from_millis(100))
                         .build_on(Some(&registry));
                     let next = fresh.controller().forward().expect("fresh owner");
-                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
-                    registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(100)));
+                    driver.tick_all(&clock.frame(Duration::from_millis(200)));
                     assert!(next.is_complete());
                 },
             );
@@ -1167,7 +1173,8 @@ fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
     tracing::subscriber::with_default(
         tracing_subscriber::registry().with(CancelSampling(Arc::clone(&armed))),
         || {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let owner =
                 AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
             let controller = owner.controller();
@@ -1182,10 +1189,10 @@ fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
                 AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
             let peer_run = peer.controller().forward().expect("peer run");
             let mut clock = flui_animation::MotionClock::new();
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
             armed.store(true, Ordering::Relaxed);
             let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                registry.tick_all(&clock.frame(Duration::from_millis(50)));
+                driver.tick_all(&clock.frame(Duration::from_millis(50)));
             }));
             OBSERVED.with(|observed| *observed.borrow_mut() = None);
             assert!(
@@ -1200,8 +1207,8 @@ fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
             let next = controller
                 .forward()
                 .expect("fresh run without the displaced curve");
-            registry.tick_all(&clock.frame(Duration::from_millis(50)));
-            registry.tick_all(&clock.frame(Duration::from_millis(150)));
+            driver.tick_all(&clock.frame(Duration::from_millis(50)));
+            driver.tick_all(&clock.frame(Duration::from_millis(150)));
             assert!(next.is_complete() && peer_run.is_complete());
         },
     );
@@ -1260,9 +1267,10 @@ fn a_disposed_controller_refuses_a_run() {
 }
 
 fn a_mutation_during_build_is_refused() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let phase = flui_foundation::BuildPhase::new();
-    vsync.set_build_phase(Some(phase.clone()));
+    driver.set_build_phase(Some(phase.clone()));
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let controller = owner.controller().clone();
     let _build = phase.enter();
@@ -1465,11 +1473,12 @@ fn an_invalid_rest_distance_is_refused() {
 /// A later member's conversion ticks the frame and moves an earlier
 /// member's published seam.
 fn a_group_invalidated_while_preparing_is_refused() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = flui_animation::MotionClock::new();
     let mut left = AnimatedValue::try_new(0.0, linear(), Some(&registry)).expect("left");
     let _left = left.animate_to(1.0).expect("left run");
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     let tick = clock.frame(Duration::from_millis(250));
     let mut moved = AnimatedValue::try_new(
         Hooked {
@@ -1482,7 +1491,7 @@ fn a_group_invalidated_while_preparing_is_refused() {
     .expect("moved");
     let target = Hooked {
         position: 4.0,
-        hook: Rc::new(move || registry.tick_all(&tick)),
+        hook: Rc::new(move || driver.tick_all(&tick)),
     };
     refuses("MotionUpdate::run", "reentrant_motion", || {
         let result = MotionUpdate::run(|update| {
@@ -1779,23 +1788,24 @@ fn settle_reasons(scenario: impl FnOnce()) -> Vec<String> {
 /// A forward run on a registry, after its first frame.
 #[cfg(feature = "diagnostics")]
 fn bound_run() -> (
-    Vsync,
+    VsyncDriver,
     flui_animation::MotionClock,
     flui_animation::DrivenController,
 ) {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
     let mut clock = flui_animation::MotionClock::new();
-    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+    let owner =
+        AnimationController::builder(Duration::from_millis(100)).build_on(Some(driver.vsync()));
     let _run = owner.controller().forward().expect("forward run");
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    (registry, clock, owner)
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    (driver, clock, owner)
 }
 
 #[cfg(feature = "diagnostics")]
 fn a_run_ticked_to_its_end_settles_on_its_clock() {
     let reasons = settle_reasons(|| {
-        let (registry, mut clock, _owner) = bound_run();
-        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        let (driver, mut clock, _owner) = bound_run();
+        driver.tick_all(&clock.frame(Duration::from_millis(100)));
     });
     assert_eq!(reasons, ["clock"]);
 }
@@ -1803,9 +1813,9 @@ fn a_run_ticked_to_its_end_settles_on_its_clock() {
 #[cfg(feature = "diagnostics")]
 fn a_run_settled_by_reduced_motion_says_so() {
     let reasons = settle_reasons(|| {
-        let (registry, mut clock, _owner) = bound_run();
+        let (driver, mut clock, _owner) = bound_run();
         clock.set_system_motion(flui_platform::MotionPreference::Reduce);
-        registry.tick_all(&clock.frame(Duration::from_millis(20)));
+        driver.tick_all(&clock.frame(Duration::from_millis(20)));
     });
     assert_eq!(reasons, ["reduced_motion"]);
 }
@@ -1813,8 +1823,8 @@ fn a_run_settled_by_reduced_motion_says_so() {
 #[cfg(feature = "diagnostics")]
 fn a_run_settled_by_an_exhausted_clock_says_so() {
     let reasons = settle_reasons(|| {
-        let (registry, mut clock, _owner) = bound_run();
-        registry.tick_all(&clock.frame(Duration::MAX));
+        let (driver, mut clock, _owner) = bound_run();
+        driver.tick_all(&clock.frame(Duration::MAX));
     });
     assert_eq!(reasons, ["exhausted_clock"]);
 }
@@ -1878,7 +1888,8 @@ fn competing_status_panics(fails: bool) -> (String, Vec<(String, String, String)
     };
     let escaped =
         tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let owner = AnimationController::builder(Duration::from_millis(100))
                 .debug_label("pair")
                 .build_on(Some(&registry));
@@ -1895,8 +1906,8 @@ fn competing_status_panics(fails: bool) -> (String, Vec<(String, String, String)
                     .expect_err("the first listener's failure escapes");
             // The next frame still runs the admitted run to its end.
             let mut clock = flui_animation::MotionClock::new();
-            registry.tick_all(&clock.frame(Duration::ZERO));
-            registry.tick_all(&clock.frame(Duration::from_millis(100)));
+            driver.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::from_millis(100)));
             assert_eq!(controller.value(), 1.0);
             flui_foundation::panic::payload_text(payload.as_ref())
                 .unwrap_or_default()

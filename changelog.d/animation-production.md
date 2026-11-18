@@ -18,7 +18,7 @@
 
 - Animation listeners, run continuations and scheduler callbacks accept owner-local captures. UI state stays on its owning thread; frame and task wakers retain their cross-thread role.
 - Animation controllers use a builder with validated bounds. `build_on` returns a `DrivenController` that owns registration and cancellation; controller clones observe its kernel.
-- `Vsync::tick_all` accepts a `FrameTick` from `MotionClock`, and manual controller ticks accept `Duration`. Per-controller playback rates preserve sampled local time across changes and restarts.
+- `VsyncDriver::tick_all` accepts a `FrameTick` from `MotionClock`, and manual controller ticks accept `Duration`. Per-controller playback rates preserve sampled local time across changes and restarts.
 - Run completion and cancellation use `AnimationRunFuture` from the animation crate.
 
 ### Removed

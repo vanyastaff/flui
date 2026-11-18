@@ -3,6 +3,7 @@
 //! Reference values are analytic: animation time is the integral of the rate
 //! over raw time, computed here in integer nanoseconds with rational rates.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::time::Duration;
 
 use flui_animation::{
@@ -45,7 +46,8 @@ fn normal_and_preserve_use_distinct_duration_timelines() {
             (2.0, 0.5, 1.0, 0.1, 0.2),
             (4.0, 2.0, 0.5, 0.1, 0.4),
         ] {
-            let registry = flui_animation::Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let child = flui_animation::Vsync::new();
             let _seat = nested.then(|| registry.attach_child(&child).expect("nested registry"));
             let target = if nested { &child } else { &registry };
@@ -64,8 +66,8 @@ fn normal_and_preserve_use_distinct_duration_timelines() {
             clock.set_system_motion(
                 MotionPreference::from_duration_scale(scale).expect("positive scale"),
             );
-            registry.tick_all(&clock.frame(Duration::ZERO));
-            registry.tick_all(&clock.frame(ms(400)));
+            driver.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(ms(400)));
             let case = format!(
                 "nested {nested}, scale {scale}, clock rate {clock_rate}, controller rate {controller_rate}"
             );
@@ -95,7 +97,8 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
         task::{Context, Poll, Waker},
     };
     for nested in [false, true] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let child = flui_animation::Vsync::new();
         let _seat = nested.then(|| registry.attach_child(&child).expect("nested registry"));
         let target = if nested { &child } else { &registry };
@@ -117,7 +120,7 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
             0.0,
             "policy change defers completion to the frame"
         );
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         assert_eq!(normal.controller().value(), 1.0);
         assert_eq!(
             *statuses.borrow(),
@@ -127,7 +130,7 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
             Pin::new(&mut completed).poll(&mut Context::from_waker(Waker::noop())),
             Poll::Ready(Ok(()))
         );
-        registry.tick_all(&clock.frame(ms(400)));
+        driver.tick_all(&clock.frame(ms(400)));
         assert!((preserve.controller().value() - 0.4).abs() < 1e-9);
         assert_eq!(
             Pin::new(&mut continuing).poll(&mut Context::from_waker(Waker::noop())),
@@ -149,7 +152,8 @@ fn parked_repeat_resumes_from_zero_under_full() {
         pin::Pin,
         task::{Context, Poll, Waker},
     };
-    let registry = flui_animation::Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let owner = AnimationController::builder(ms(1000))
         .initial_value(0.5)
         .build_on(Some(&registry));
@@ -159,7 +163,7 @@ fn parked_repeat_resumes_from_zero_under_full() {
         .expect("infinite repeat");
     let mut clock = MotionClock::new();
     clock.set_system_motion(MotionPreference::Reduce);
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     assert_eq!(
         owner.controller().value(),
         0.0,
@@ -173,15 +177,15 @@ fn parked_repeat_resumes_from_zero_under_full() {
         Pin::new(&mut future).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Pending
     );
-    registry.tick_all(&clock.frame(ms(5000)));
+    driver.tick_all(&clock.frame(ms(5000)));
     clock.set_system_motion(MotionPreference::NoPreference);
-    registry.tick_all(&clock.frame(ms(6000)));
+    driver.tick_all(&clock.frame(ms(6000)));
     assert_eq!(
         owner.controller().value(),
         0.0,
         "resume anchors at this frame"
     );
-    registry.tick_all(&clock.frame(ms(6250)));
+    driver.tick_all(&clock.frame(ms(6250)));
     assert!((owner.controller().value() - 0.25).abs() < 1e-9);
     assert!(registry.has_running());
     assert_eq!(
@@ -194,7 +198,8 @@ fn parked_repeat_resumes_from_zero_under_full() {
 fn policy_flips_mid_run() {
     use flui_animation::{AnimationBehavior, MotionOverride};
     for nested in [false, true] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let child = flui_animation::Vsync::new();
         let _seat = nested.then(|| registry.attach_child(&child).expect("nested registry"));
         let target = if nested { &child } else { &registry };
@@ -205,12 +210,12 @@ fn policy_flips_mid_run() {
         let finite = normal.controller().forward().expect("normal run");
         let continuing = preserve.controller().forward().expect("preserved run");
         let mut clock = MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(ms(200)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(ms(200)));
         clock.set_override(MotionOverride::Reduce);
         clock.set_override(MotionOverride::Full);
         assert_eq!(normal.controller().value(), 0.2);
-        registry.tick_all(&clock.frame(ms(400)));
+        driver.tick_all(&clock.frame(ms(400)));
         assert_eq!(normal.controller().value(), 0.4);
         assert!(!finite.is_complete(), "a superseded policy does not settle");
         clock.set_override(MotionOverride::Reduce);
@@ -219,7 +224,7 @@ fn policy_flips_mid_run() {
             0.4,
             "settlement waits for a frame"
         );
-        registry.tick_all(&clock.frame(ms(500)));
+        driver.tick_all(&clock.frame(ms(500)));
         assert_eq!(normal.controller().value(), 1.0);
         assert!(finite.is_complete());
         assert_eq!(preserve.controller().value(), 0.5);
@@ -228,16 +233,16 @@ fn policy_flips_mid_run() {
             .controller()
             .repeat(RepeatMode::Restart)
             .expect("repeat under Reduce");
-        registry.tick_all(&clock.frame(ms(600)));
+        driver.tick_all(&clock.frame(ms(600)));
         assert_eq!(normal.controller().value(), 0.0);
         clock.set_override(MotionOverride::Full);
-        registry.tick_all(&clock.frame(ms(800)));
+        driver.tick_all(&clock.frame(ms(800)));
         assert_eq!(
             normal.controller().value(),
             0.0,
             "resume has a fresh anchor"
         );
-        registry.tick_all(&clock.frame(ms(900)));
+        driver.tick_all(&clock.frame(ms(900)));
         assert!((normal.controller().value() - 0.1).abs() < 1e-9);
         assert_eq!(preserve.controller().value(), 0.9);
         assert!(!repeated.is_complete());
@@ -273,7 +278,8 @@ impl flui_animation::Simulation for GridSimulation {
 fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected: f64) {
     use flui_animation::{AnimationStatus, MotionOverride};
     use std::{cell::Cell, rc::Rc};
-    let registry = flui_animation::Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let owner = AnimationController::builder(ms(1000))
         .unbounded()
         .initial_value(7.0)
@@ -294,10 +300,10 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
         initial,
         "policy does not sample user code"
     );
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     assert!((controller.value() - expected).abs() < 1e-12);
     assert!(run.is_complete());
-    registry.tick_all(&clock.frame(ms(1000)));
+    driver.tick_all(&clock.frame(ms(1000)));
     assert_eq!(delivered.get(), 1);
     assert!(!registry.has_running());
 }
@@ -364,7 +370,7 @@ fn reduced_non_finite_simulation_keeps_the_published_value() {
 
 fn fling_settlement_reaches_its_declared_bound() {
     use flui_animation::SpringDescription;
-    use flui_animation::{AnimationStatus, MotionOverride, Vsync};
+    use flui_animation::{AnimationStatus, MotionOverride};
     use std::{cell::Cell, rc::Rc};
 
     for mode in ["missing clock", "reduced motion", "exhausted clock"] {
@@ -372,7 +378,8 @@ fn fling_settlement_reaches_its_declared_bound() {
             (1e-6, 1.0, AnimationStatus::ForwardSettled),
             (-1e-6, 0.0, AnimationStatus::ReverseSettled),
         ] {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let owner = AnimationController::builder(ms(1000))
                 .initial_value(0.4)
                 .build_on((mode != "missing clock").then_some(&registry));
@@ -395,9 +402,9 @@ fn fling_settlement_reaches_its_declared_bound() {
             let mut clock = MotionClock::new();
             if mode == "reduced motion" {
                 clock.set_override(MotionOverride::Reduce);
-                registry.tick_all(&clock.frame(Duration::ZERO));
+                driver.tick_all(&clock.frame(Duration::ZERO));
             } else if mode == "exhausted clock" {
-                registry.tick_all(&clock.frame(Duration::MAX));
+                driver.tick_all(&clock.frame(Duration::MAX));
             }
             assert!(run.is_complete(), "{mode}: the original future completes");
             assert_eq!(
@@ -409,14 +416,14 @@ fn fling_settlement_reaches_its_declared_bound() {
             assert!(!controller.is_animating());
             assert!(!registry.has_running());
             assert_eq!(completions.get(), 1, "one completion transition");
-            registry.tick_all(&clock.frame(Duration::MAX));
+            driver.tick_all(&clock.frame(Duration::MAX));
             assert_eq!(controller.value(), endpoint, "no post-completion sample");
             assert_eq!(completions.get(), 1);
             drop(subscription);
             let next = controller
                 .animate_to(0.25, Some(ms(1000)))
                 .expect("a healthy subsequent run");
-            registry.tick_all(&clock.frame(Duration::MAX));
+            driver.tick_all(&clock.frame(Duration::MAX));
             assert!(next.is_complete());
             assert_eq!(controller.value(), 0.25);
             assert!(!registry.has_running());
@@ -498,7 +505,8 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
 
     for (panic_listener, panic_drop) in [(false, false), (true, false), (false, true), (true, true)]
     {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let child = flui_animation::Vsync::new();
         let _seat = registry.attach_child(&child).expect("nested registry");
         let owner = AnimationController::builder(ms(1000)).build_on(Some(&child));
@@ -529,7 +537,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
         let mut clock = MotionClock::new();
         clock.set_override(MotionOverride::Reduce);
         let settled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
         }));
         assert_eq!(settled.is_err(), panic_listener || panic_drop);
         if let Err(payload) = settled {
@@ -553,7 +561,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
         assert_eq!(drops.get(), 1);
         assert_eq!(owner.controller().value(), 0.0);
         assert!(!restarted.borrow().as_ref().expect("new run").is_complete());
-        registry.tick_all(&clock.frame(ms(16)));
+        driver.tick_all(&clock.frame(ms(16)));
         assert_eq!(completions.get(), 2);
         assert_eq!(drops.get(), 1);
         assert!(restarted.borrow().as_ref().expect("new run").is_complete());
@@ -613,7 +621,8 @@ fn motion_policy_resolves_preference_against_the_system() {
         ),
         (MotionOverride::Full, scaled, MotionPolicy::Full, 0.3),
     ] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let normal = AnimationController::builder(ms(1000)).build_on(Some(&registry));
         let preserve = AnimationController::builder(ms(1000))
             .behavior(AnimationBehavior::Preserve)
@@ -624,8 +633,8 @@ fn motion_policy_resolves_preference_against_the_system() {
         clock.set_override(preference);
         clock.set_system_motion(system);
         assert_eq!(clock.policy(), policy);
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(ms(300)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(ms(300)));
         assert!(
             (normal.controller().value() - expected).abs() < 1e-9,
             "{preference:?}, {system:?}: expected {expected}, got {}",
@@ -639,7 +648,8 @@ fn motion_policy_resolves_preference_against_the_system() {
 fn duration_scale_changes_keep_the_published_motion_seam() {
     use flui_animation::{AnimationBehavior, MotionOverride};
     use flui_platform::MotionPreference as SystemMotion;
-    let registry = flui_animation::Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let normal = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let preserve = AnimationController::builder(ms(1000))
         .behavior(AnimationBehavior::Preserve)
@@ -647,7 +657,7 @@ fn duration_scale_changes_keep_the_published_motion_seam() {
     normal.controller().forward().expect("normal run");
     preserve.controller().forward().expect("preserved run");
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     for (raw, system, preference, expected) in [
         (200, None, None, 0.2),
         (
@@ -678,7 +688,7 @@ fn duration_scale_changes_keep_the_published_motion_seam() {
             seam,
             "configuration does not sample a new position"
         );
-        registry.tick_all(&clock.frame(ms(raw)));
+        driver.tick_all(&clock.frame(ms(raw)));
         assert!(
             (normal.controller().value() - expected).abs() < 1e-9,
             "frame {raw}: expected {expected}, got {}",
@@ -703,7 +713,8 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         task::{Context, Poll, Waker},
     };
     for (panic_first, panic_peer) in [(false, false), (true, false), (false, true), (true, true)] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let child = flui_animation::Vsync::new();
         let _seat = registry.attach_child(&child).expect("nested registry");
         let first = AnimationController::builder(ms(1000)).build_on(Some(&child));
@@ -732,7 +743,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let mut clock = MotionClock::new();
         clock.set_system_motion(MotionPreference::Reduce);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
         }));
         assert_eq!(result.is_err(), panic_first || panic_peer);
         if let Err(payload) = &result {
@@ -771,7 +782,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
                 Poll::Pending
             );
         }
-        registry.tick_all(&clock.frame(ms(16)));
+        driver.tick_all(&clock.frame(ms(16)));
         assert_eq!(calls.get(), 2);
         assert_eq!(first.controller().value(), 1.0);
         assert_eq!(
@@ -804,7 +815,8 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
         (true, Some(3), 1.0, AnimationStatus::ForwardSettled),
     ] {
         for paused in [false, true] {
-            let registry = flui_animation::Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let owner = AnimationController::builder(ms(1000))
                 .initial_value(if reverse && repeat_count.is_none() {
                     1.0
@@ -840,7 +852,7 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
             let mut clock = MotionClock::new();
             clock.set_rate(PlaybackRate::PAUSED);
             clock.set_override(flui_animation::MotionOverride::Reduce);
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
             assert_eq!(
                 controller.value(),
                 expected,
@@ -851,7 +863,7 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
                 Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
                 Poll::Ready(Ok(()))
             );
-            registry.tick_all(&clock.frame(ms(10_000)));
+            driver.tick_all(&clock.frame(ms(10_000)));
             assert_eq!(
                 delivered.get(),
                 1,
@@ -866,12 +878,13 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
 fn reduced_motion_admission_wakes_a_paused_run() {
     use std::{cell::Cell, rc::Rc};
     for nested in [false, true] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let child = flui_animation::Vsync::new();
         let _seat = nested.then(|| registry.attach_child(&child).expect("child"));
         let wakes = Rc::new(Cell::new(0));
         let received = Rc::clone(&wakes);
-        registry.set_frame_requester(Some(Rc::new(move || received.set(received.get() + 1))));
+        driver.set_frame_requester(Some(Rc::new(move || received.set(received.get() + 1))));
         let mut clock = MotionClock::new();
         let owner = AnimationController::builder(ms(1000)).build_on(Some(if nested {
             &child
@@ -883,17 +896,17 @@ fn reduced_motion_admission_wakes_a_paused_run() {
             .controller()
             .forward()
             .expect("install paused playback");
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::ZERO));
         owner.controller().stop().expect("stop installed run");
         clock.set_override(flui_animation::MotionOverride::Reduce);
-        registry.tick_all(&clock.frame(ms(1)));
+        driver.tick_all(&clock.frame(ms(1)));
         wakes.set(0);
         owner.controller().forward().expect("paused run");
         assert!(
             wakes.get() > 0,
             "paused normal work still needs a policy settlement frame, nested={nested}"
         );
-        registry.tick_all(&clock.frame(ms(16)));
+        driver.tick_all(&clock.frame(ms(16)));
         assert_eq!(owner.controller().value(), 1.0);
         assert!(!registry.has_running());
     }
@@ -905,7 +918,8 @@ fn muted_registry_settles_on_unmute() {
     use std::{cell::Cell, rc::Rc};
     for mute_parent in [false, true] {
         for paused in [false, true] {
-            let registry = flui_animation::Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let child = flui_animation::Vsync::new();
             let _seat = registry.attach_child(&child).expect("nested registry");
             let owner = AnimationController::builder(ms(1000)).build_on(Some(&child));
@@ -914,16 +928,16 @@ fn muted_registry_settles_on_unmute() {
                 owner.controller().set_playback_rate(PlaybackRate::PAUSED);
             }
             let mut clock = MotionClock::new();
-            registry.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::ZERO));
             let gate = if mute_parent { &registry } else { &child };
             gate.set_muted(true);
             clock.set_override(MotionOverride::Reduce);
-            registry.tick_all(&clock.frame(ms(16)));
+            driver.tick_all(&clock.frame(ms(16)));
             assert_eq!(owner.controller().value(), 0.0);
             assert!(!run.is_complete(), "muting defers settlement");
             let wakes = Rc::new(Cell::new(0));
             let count = Rc::clone(&wakes);
-            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            driver.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
             wakes.set(0);
             gate.set_muted(false);
             assert!(
@@ -932,19 +946,19 @@ fn muted_registry_settles_on_unmute() {
             );
             wakes.set(0);
             let count = Rc::clone(&wakes);
-            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            driver.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
             assert!(
                 wakes.get() > 0,
                 "replacement hook inherits undelivered settlement"
             );
-            registry.tick_all(&clock.frame(ms(16)));
+            driver.tick_all(&clock.frame(ms(16)));
             assert_eq!(owner.controller().value(), 1.0);
             assert!(run.is_complete());
             assert!(!registry.has_running());
             wakes.set(0);
-            registry.set_frame_requester(None);
+            driver.set_frame_requester(None);
             let count = Rc::clone(&wakes);
-            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            driver.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
             assert_eq!(
                 wakes.get(),
                 0,
@@ -954,15 +968,15 @@ fn muted_registry_settles_on_unmute() {
                 .controller()
                 .repeat(RepeatMode::Restart)
                 .expect("parked repeat");
-            registry.tick_all(&clock.frame(ms(32)));
+            driver.tick_all(&clock.frame(ms(32)));
             assert!(!registry.has_running());
             gate.set_muted(true);
             clock.set_override(MotionOverride::Full);
-            registry.tick_all(&clock.frame(ms(64)));
+            driver.tick_all(&clock.frame(ms(64)));
             wakes.set(0);
             gate.set_muted(false);
             assert!(wakes.get() > 0, "unmute requests a parked resumption");
-            registry.tick_all(&clock.frame(ms(64)));
+            driver.tick_all(&clock.frame(ms(64)));
             assert_eq!(
                 owner.controller().value(),
                 0.0,
@@ -979,7 +993,8 @@ fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
     use std::{cell::Cell, rc::Rc};
     for nested in [false, true] {
         for sampled_destination in [false, true] {
-            let old = flui_animation::Vsync::new();
+            let old_driver = VsyncDriver::new();
+            let old = old_driver.vsync().clone();
             let mut owner = AnimationController::builder(ms(1000)).build_on(Some(&old));
             let run = owner
                 .controller()
@@ -987,28 +1002,29 @@ fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
                 .expect("infinite repeat");
             let mut reduced = MotionClock::new();
             reduced.set_override(MotionOverride::Reduce);
-            old.tick_all(&reduced.frame(Duration::ZERO));
+            old_driver.tick_all(&reduced.frame(Duration::ZERO));
             assert!(!old.has_running());
-            let registry = flui_animation::Vsync::new();
+            let registry_driver = VsyncDriver::new();
+            let registry = registry_driver.vsync().clone();
             let child = flui_animation::Vsync::new();
             let _seat = nested.then(|| registry.attach_child(&child).expect("nested registry"));
             let target = if nested { &child } else { &registry };
             let mut full = MotionClock::new();
             if sampled_destination {
-                registry.tick_all(&full.frame(ms(100)));
+                registry_driver.tick_all(&full.frame(ms(100)));
             }
             let wakes = Rc::new(Cell::new(0));
             let count = Rc::clone(&wakes);
-            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            registry_driver.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
             owner.rebind(Some(target)).expect("move parked repeat");
             assert!(
                 wakes.get() > 0,
                 "the new clock must observe its run, nested={nested}, sampled={sampled_destination}"
             );
             assert!(old.is_empty());
-            registry.tick_all(&full.frame(ms(200)));
+            registry_driver.tick_all(&full.frame(ms(200)));
             assert_eq!(owner.controller().value(), 0.0);
-            registry.tick_all(&full.frame(ms(450)));
+            registry_driver.tick_all(&full.frame(ms(450)));
             assert_eq!(owner.controller().value(), 0.25);
             assert!(!run.is_complete());
             assert!(registry.has_running());
@@ -1024,7 +1040,8 @@ fn preserve_repeat_resumes_after_rebinding_under_reduce() {
     for exhausted_origin in [false, true] {
         for nested in [false, true] {
             for sampled_destination in [false, true] {
-                let old = Vsync::new();
+                let old_driver = VsyncDriver::new();
+                let old = old_driver.vsync().clone();
                 let mut owner = AnimationController::builder(ms(1000))
                     .behavior(AnimationBehavior::Preserve)
                     .build_on(exhausted_origin.then_some(&old));
@@ -1033,29 +1050,31 @@ fn preserve_repeat_resumes_after_rebinding_under_reduce() {
                     .repeat(RepeatMode::Restart)
                     .expect("preserved repeat");
                 if exhausted_origin {
-                    old.tick_all(&MotionClock::new().frame(Duration::MAX));
+                    old_driver.tick_all(&MotionClock::new().frame(Duration::MAX));
                 }
                 assert!(!old.has_running());
                 assert!(!run.is_complete());
 
-                let registry = Vsync::new();
+                let registry_driver = VsyncDriver::new();
+                let registry = registry_driver.vsync().clone();
                 let child = Vsync::new();
                 let _seat = nested.then(|| registry.attach_child(&child).expect("nested"));
                 let mut reduced = MotionClock::new();
                 reduced.set_override(MotionOverride::Reduce);
                 if sampled_destination {
-                    registry.tick_all(&reduced.frame(ms(100)));
+                    registry_driver.tick_all(&reduced.frame(ms(100)));
                 }
                 let wakes = Rc::new(Cell::new(0));
                 let count = Rc::clone(&wakes);
-                registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+                registry_driver
+                    .set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
                 owner
                     .rebind(Some(if nested { &child } else { &registry }))
                     .expect("rebind");
                 assert!(wakes.get() > 0, "Preserve requests resumption under Reduce");
-                registry.tick_all(&reduced.frame(ms(200)));
+                registry_driver.tick_all(&reduced.frame(ms(200)));
                 assert_eq!(owner.controller().value(), 0.0, "fresh resumption anchor");
-                registry.tick_all(&reduced.frame(ms(450)));
+                registry_driver.tick_all(&reduced.frame(ms(450)));
                 assert_eq!(
                     owner.controller().value(),
                     0.25,
@@ -1079,7 +1098,8 @@ fn tiny_scale_saturates_and_completes_once() {
         task::{Context, Poll, Waker},
     };
     for scale in [1e-300, f64::from_bits(1)] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let owner = AnimationController::builder(ms(1000)).build_on(Some(&registry));
         let preserve = AnimationController::builder(ms(1000))
             .behavior(flui_animation::AnimationBehavior::Preserve)
@@ -1097,16 +1117,16 @@ fn tiny_scale_saturates_and_completes_once() {
         clock.set_system_motion(
             flui_platform::MotionPreference::from_duration_scale(scale).expect("positive scale"),
         );
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(ms(1)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(ms(1)));
         assert_eq!(owner.controller().value(), 1.0);
-        registry.tick_all(&clock.frame(ms(2)));
+        driver.tick_all(&clock.frame(ms(2)));
         assert_eq!(delivered.get(), 1);
         owner
             .controller()
             .forward_from(0.0)
             .expect("next finite run after saturation");
-        registry.tick_all(&clock.frame(ms(3)));
+        driver.tick_all(&clock.frame(ms(3)));
         assert_eq!(
             owner.controller().value(),
             1.0,
@@ -1122,13 +1142,13 @@ fn tiny_scale_saturates_and_completes_once() {
             .controller()
             .repeat(RepeatMode::Restart)
             .expect("infinite work at exhausted time");
-        registry.tick_all(&clock.frame(ms(4)));
+        driver.tick_all(&clock.frame(ms(4)));
         assert_eq!(owner.controller().value(), 0.0);
         assert!(
             !registry.has_running(),
             "an exhausted timeline parks infinite work"
         );
-        registry.tick_all(&clock.frame(ms(5)));
+        driver.tick_all(&clock.frame(ms(5)));
         assert!(
             !registry.has_running(),
             "Full alone does not resume an exhausted clock"
@@ -1143,9 +1163,10 @@ fn tiny_scale_saturates_and_completes_once() {
 #[test]
 fn a_registry_ticked_by_two_clocks_never_regresses() {
     for nested in [false, true] {
-        let registry = flui_animation::Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut primary = MotionClock::new();
-        registry.tick_all(&primary.frame(ms(1000)));
+        driver.tick_all(&primary.frame(ms(1000)));
         let child = flui_animation::Vsync::new();
         let _child_seat = nested.then(|| registry.attach_child(&child).expect("child admitted"));
         let owner = AnimationController::builder(Duration::from_secs(1))
@@ -1153,9 +1174,9 @@ fn a_registry_ticked_by_two_clocks_never_regresses() {
         owner.controller().forward().expect("new run");
 
         let mut stale = MotionClock::new();
-        registry.tick_all(&stale.frame(ms(100)));
+        driver.tick_all(&stale.frame(ms(100)));
         assert_eq!(owner.controller().value(), 0.0);
-        registry.tick_all(&primary.frame(ms(1100)));
+        driver.tick_all(&primary.frame(ms(1100)));
         assert_eq!(
             owner.controller().value(),
             0.1,
@@ -1491,7 +1512,7 @@ fn an_enormous_rate() {
 }
 
 fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
-    use flui_animation::{AnimationStatus, Vsync};
+    use flui_animation::AnimationStatus;
     use std::{
         cell::RefCell,
         future::Future,
@@ -1500,7 +1521,8 @@ fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
         task::{Context, Poll, Waker},
     };
 
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let owner = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let statuses = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&statuses);
@@ -1515,8 +1537,8 @@ fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
     });
     let mut clock = MotionClock::new();
     clock.set_rate(playback);
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(gap));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(gap));
     assert_eq!(owner.controller().value(), 1.0);
     assert!(!owner.controller().is_animating());
     assert!(!registry.has_running(), "the settled run requests no frame");
@@ -1524,8 +1546,8 @@ fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
         Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(()))
     );
-    registry.tick_all(&clock.frame(gap));
-    registry.tick_all(&clock.frame(Duration::MAX));
+    driver.tick_all(&clock.frame(gap));
+    driver.tick_all(&clock.frame(Duration::MAX));
     assert_eq!(
         *completions.borrow(),
         [Ok(())],
@@ -1539,7 +1561,6 @@ fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
 }
 
 fn panic_in_listener_keeps_the_clock_monotone() {
-    use flui_animation::Vsync;
     use flui_foundation::Listenable;
     use std::{
         cell::Cell,
@@ -1547,7 +1568,8 @@ fn panic_in_listener_keeps_the_clock_monotone() {
         rc::Rc,
     };
 
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let first = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let competing = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let healthy = AnimationController::builder(ms(1000)).build_on(Some(&registry));
@@ -1555,7 +1577,7 @@ fn panic_in_listener_keeps_the_clock_monotone() {
     competing.controller().forward().expect("competing run");
     let healthy_run = healthy.controller().forward().expect("healthy run");
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     let first_listener = first
         .controller()
         .listen(Rc::new(|| panic!("first clock listener")));
@@ -1568,7 +1590,7 @@ fn panic_in_listener_keeps_the_clock_monotone() {
         recorded.set(recorded.get() + 1);
     }));
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        registry.tick_all(&clock.frame(ms(250)));
+        driver.tick_all(&clock.frame(ms(250)));
     }))
     .expect_err("listener failure crosses the frame boundary");
     assert_eq!(
@@ -1590,10 +1612,10 @@ fn panic_in_listener_keeps_the_clock_monotone() {
     // Remove the failing observers before verifying the next operation.
     first_listener.detach();
     competing_listener.detach();
-    registry.tick_all(&clock.frame(ms(100)));
+    driver.tick_all(&clock.frame(ms(100)));
     assert_eq!(healthy.controller().value(), 0.25);
     let held_deliveries = deliveries.get();
-    registry.tick_all(&clock.frame(ms(500)));
+    driver.tick_all(&clock.frame(ms(500)));
     assert_eq!(healthy.controller().value(), 0.5);
     assert_eq!(deliveries.get(), held_deliveries + 1);
     assert!(healthy_run.is_pending());
@@ -1661,8 +1683,10 @@ proptest! {
     ) {
         use flui_animation::{AnimationBehavior, MotionOverride};
         use flui_platform::MotionPreference as SystemMotion;
-        let registry = flui_animation::Vsync::new();
-        let reference = flui_animation::Vsync::new();
+        let registry_driver = VsyncDriver::new();
+        let registry = registry_driver.vsync().clone();
+        let reference_driver = VsyncDriver::new();
+        let reference = reference_driver.vsync().clone();
         let owner = AnimationController::builder(Duration::from_secs(100))
             .behavior(AnimationBehavior::Preserve).build_on(Some(&registry));
         let baseline = AnimationController::builder(Duration::from_secs(100))
@@ -1672,8 +1696,8 @@ proptest! {
         let mut clock = MotionClock::new();
         let mut full = MotionClock::new();
         full.set_override(MotionOverride::Full);
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        reference.tick_all(&full.frame(Duration::ZERO));
+        registry_driver.tick_all(&clock.frame(Duration::ZERO));
+        reference_driver.tick_all(&full.frame(Duration::ZERO));
         let mut raw = Duration::ZERO;
         for (delta, system, preference, rate_index) in changes {
             clock.set_system_motion(match system {
@@ -1688,8 +1712,8 @@ proptest! {
             clock.set_rate(chosen);
             full.set_rate(chosen);
             raw += Duration::from_micros(delta);
-            registry.tick_all(&clock.frame(raw));
-            reference.tick_all(&full.frame(raw));
+            registry_driver.tick_all(&clock.frame(raw));
+            reference_driver.tick_all(&full.frame(raw));
             prop_assert_eq!(owner.controller().value(), baseline.controller().value());
             prop_assert_eq!(owner.controller().status(), baseline.controller().status());
         }
@@ -1703,11 +1727,12 @@ proptest! {
         use flui_platform::MotionPreference as SystemMotion;
         // Power-of-two scales permit an independent exact integer integral.
         const INVERSE_SCALES: [(u64, u64); 5] = [(4, 1), (2, 1), (1, 1), (1, 2), (1, 4)];
-        let registry = flui_animation::Vsync::new();
+        let registry_driver = VsyncDriver::new();
+        let registry = registry_driver.vsync().clone();
         let owner = AnimationController::builder(Duration::from_secs(100)).build_on(Some(&registry));
         owner.controller().forward().expect("normal run");
         let mut clock = MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry_driver.tick_all(&clock.frame(Duration::ZERO));
         let mut raw = Duration::ZERO;
         let mut integral_ns = 0u64;
         for (delta_us, index, authored) in changes {
@@ -1716,7 +1741,7 @@ proptest! {
             let (numerator, denominator) = if authored { (1, 1) } else { INVERSE_SCALES[index] };
             integral_ns += delta_us * 1000 * numerator / denominator;
             raw += Duration::from_micros(delta_us);
-            registry.tick_all(&clock.frame(raw));
+            registry_driver.tick_all(&clock.frame(raw));
             #[expect(clippy::cast_precision_loss, reason = "bounded nanosecond reference")]
             let expected = integral_ns as f64 / 100_000_000_000.0;
             prop_assert!((owner.controller().value() - expected).abs() < 1e-10);

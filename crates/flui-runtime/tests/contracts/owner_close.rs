@@ -70,8 +70,8 @@ impl flui_view::ViewState<MotionProbe> for MotionProbeState {
                     "every closing kernel refuses work before cancellation callouts"
                 );
             }
-            reentrant
-                .tick_all(&flui_animation::MotionClock::new().frame(std::time::Duration::ZERO));
+            // A new owner bound to the closing registry from inside its own
+            // cancellation delivery leaves the close intact.
             let peer =
                 flui_animation::AnimationController::builder(std::time::Duration::from_secs(1))
                     .build_on(Some(&reentrant));
@@ -93,8 +93,26 @@ impl flui_view::ViewState<MotionProbe> for MotionProbeState {
     }
 }
 
+/// A sink that presents every frame it is given.
+struct DiscardSink;
+
+impl flui_runtime::sink::FrameSink for DiscardSink {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (100, 100)
+    }
+
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        _scene: flui_layer::ScenePublication,
+    ) -> flui_runtime::sink::SubmitVerdict {
+        flui_runtime::sink::SubmitVerdict::Presented
+    }
+}
+
 fn stopping_the_realm_mid_animation_cancels_every_run() {
-    use flui_animation::{Animation, MotionClock};
+    use flui_animation::Animation;
+    use flui_runtime::pump::SampledClock;
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
@@ -155,11 +173,11 @@ fn stopping_the_realm_mid_animation_cancels_every_run() {
         if !addressed {
             closing_peers.borrow_mut().push(next.controller.clone());
         }
-        let mut clock = MotionClock::new();
-        for time in [Duration::ZERO, Duration::from_millis(20)] {
-            let tick = clock.frame(time);
-            first.registry.tick_all(&tick);
-            next.registry.tick_all(&tick);
+        // Two frames of the runtime's own pump, 20 ms apart, advance both
+        // presentations' runs off their anchor.
+        let start = web_time::Instant::now();
+        for elapsed in [Duration::ZERO, Duration::from_millis(20)] {
+            let _ = runtime.pump(&mut SampledClock(start + elapsed), &mut DiscardSink);
         }
         assert!(first.controller.value() > 0.0 && first.controller.is_animating());
         assert!(next.controller.value() > 0.0 && next.controller.is_animating());
@@ -200,8 +218,10 @@ fn stopping_the_realm_mid_animation_cancels_every_run() {
                 Poll::Pending
             ));
             let before = next.controller.value();
-            next.registry
-                .tick_all(&clock.frame(Duration::from_millis(40)));
+            let _ = runtime.as_mut().expect("resident runtime").pump(
+                &mut SampledClock(start + Duration::from_millis(40)),
+                &mut DiscardSink,
+            );
             assert!(next.controller.value() > before, "surviving run advances");
             closing_peers.borrow_mut().push(next.controller.clone());
             drop(runtime.take());

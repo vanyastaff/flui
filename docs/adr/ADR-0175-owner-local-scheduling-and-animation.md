@@ -60,7 +60,7 @@ runs; an earlier cancellation failure retains that opaque registry instead of
 invoking its destructors. Healthy cancellation continuations still finish.
 
 A presentation also withdraws animation authority independently of widget tree
-destruction. `Vsync::prepare_close` permanently closes the registry and attached
+destruction. `VsyncDriver::prepare_close` (ADR-0382) permanently closes the registry and attached
 descendant identities, withdraws seats and frame routes, and closes their kernels
 before returning `VsyncRetirement`. Descendants have one parent by ADR-0191;
 unrelated presentation controllers remain live. Saved handles refuse new
