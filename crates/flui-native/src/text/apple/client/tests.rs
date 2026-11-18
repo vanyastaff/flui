@@ -4,7 +4,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_foundation::geometry::Point;
+use flui_foundation::TextDirection;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, Selection, TextStore, TextStoreHost,
@@ -13,6 +14,7 @@ use flui_platform::text_store::{
 use flui_testing::text_store_kit::InMemoryTextStore;
 
 use super::super::secure_input::SecureHold;
+use super::super::selection_rects::SelectionRect;
 use super::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 
 /// The input method's context as the client reaches it: the calls it got,
@@ -765,8 +767,32 @@ fn uikit_replaces_selects_and_measures_the_field() {
             active: Utf16Offset::new(7),
         }
     );
+    let advance = InMemoryTextStore::ADVANCE;
+    let line = InMemoryTextStore::LINE_HEIGHT;
+    assert_eq!(
+        client.selection_rects(span(4, 99)),
+        vec![SelectionRect {
+            bounds: Bounds::new(
+                Point::new(4.0 * advance, 0.0),
+                Size::new(3.0 * advance, line)
+            ),
+            direction: TextDirection::Ltr,
+            contains_start: true,
+            contains_end: true,
+        }],
+        "the selection's one line, clamped to the document"
+    );
+    assert_eq!(
+        client.document_bounds(),
+        Some(Bounds::new(
+            Point::new(0.0, 0.0),
+            Size::new(7.0 * advance, line)
+        ))
+    );
     client.focus_store(None);
     assert_eq!(client.document_len(), None, "no field has focus");
+    assert_eq!(client.selection_rects(span(0, 3)), Vec::new());
+    assert_eq!(client.document_bounds(), None);
 }
 
 #[test]

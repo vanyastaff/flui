@@ -8,7 +8,12 @@
 //!
 //! UIKit asks a `UITextInput` for positions and ranges as objects of its own
 //! making: [`TextPosition`] and [`TextRange`] carry an offset into the
-//! field's document, in UTF-16 units, as the store counts.
+//! field's document, in UTF-16 units, as the store counts, and
+//! [`TextSelectionRect`] one line of a range's selection.
+//!
+//! While a field is served, a `UITextInteraction` in editable mode on the
+//! window's view gives it UIKit's selection gestures, handles, loupe and edit
+//! menu, beginning only over the field (ADR-0255 decision 11).
 //!
 //! The view sits at the window view's origin, so the store's logical window
 //! coordinates are its own.
@@ -17,6 +22,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::Weak;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
@@ -31,21 +37,29 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSSize as CGSize, NSString,
 };
 use objc2_ui_kit::{
-    NSWritingDirection, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
+    NSWritingDirection, UIInteraction, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
     UITextAutocapitalizationType, UITextAutocorrectionType, UITextContentTypeNewPassword,
     UITextContentTypeOneTimeCode, UITextContentTypePassword, UITextContentTypeUsername,
     UITextInput, UITextInputDelegate, UITextInputStringTokenizer, UITextInputTokenizer,
-    UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
+    UITextInputTraits, UITextInteraction, UITextInteractionDelegate, UITextInteractionMode,
+    UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
     UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
 use super::super::client::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
+use super::super::selection_rects::SelectionRect;
 use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
 
 /// What the target of the keyboard's log lines is.
 const LOG: &str = "flui.text.ios";
+
+/// How far around the focused field, in points, UIKit's selection gestures
+/// still begin: half of the 44-point touch target Apple's Human Interface
+/// Guidelines ask for, so a touch on a selection handle's knob, which UIKit
+/// draws just outside the line it ends, still reaches the handle.
+const HANDLE_REACH: f64 = 22.0;
 
 define_class!(
     /// An offset into a [`TextInputView`]'s document.
@@ -122,6 +136,68 @@ impl TextRange {
     }
 }
 
+define_class!(
+    /// One line of a range of a [`TextInputView`]'s document: UIKit draws
+    /// the selection's highlight from these and puts its handles at the
+    /// leading edge of the one that holds the start and the trailing edge of
+    /// the one that holds the end.
+    #[unsafe(super(UITextSelectionRect, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FluiTextSelectionRect"]
+    #[ivars = ContainedIvars<SelectionRect>]
+    pub(super) struct TextSelectionRect;
+
+    impl TextSelectionRect {
+        #[unsafe(method(rect))]
+        fn rect(&self) -> CGRect {
+            os_entry("FluiTextSelectionRect rect", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
+                cg_rect(self.ivars().bounds)
+            })
+        }
+
+        #[unsafe(method(writingDirection))]
+        fn writing_direction(&self) -> NSWritingDirection {
+            os_entry(
+                "FluiTextSelectionRect writingDirection",
+                (),
+                AfterPanic::Answer(|()| NSWritingDirection::Natural),
+                || match self.ivars().direction {
+                    TextDirection::Ltr => NSWritingDirection::LeftToRight,
+                    TextDirection::Rtl => NSWritingDirection::RightToLeft,
+                },
+            )
+        }
+
+        #[unsafe(method(containsStart))]
+        fn contains_start(&self) -> bool {
+            os_entry("FluiTextSelectionRect containsStart", (), AfterPanic::Answer(|()| false), || {
+                self.ivars().contains_start
+            })
+        }
+
+        #[unsafe(method(containsEnd))]
+        fn contains_end(&self) -> bool {
+            os_entry("FluiTextSelectionRect containsEnd", (), AfterPanic::Answer(|()| false), || {
+                self.ivars().contains_end
+            })
+        }
+
+        /// Fields lay text out horizontally.
+        #[unsafe(method(isVertical))]
+        fn is_vertical(&self) -> bool {
+            false
+        }
+    }
+);
+
+impl TextSelectionRect {
+    fn new(mtm: MainThreadMarker, rect: SelectionRect) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(rect));
+        // SAFETY: NSObject's designated initializer, on a fresh allocation.
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
 /// What a [`TextInputView`] keeps.
 pub(super) struct ResponderIvars {
     /// The window's store host, which serves the focused field.
@@ -135,6 +211,10 @@ pub(super) struct ResponderIvars {
     reload_owed: Cell<bool>,
     tokenizer: OnceCell<Retained<UITextInputStringTokenizer>>,
     input_delegate: RefCell<Option<ObjcWeak<ProtocolObject<dyn UITextInputDelegate>>>>,
+    /// UIKit's selection gestures, handles, loupe and edit menu over the
+    /// focused field: set once the view exists, and on the window's view
+    /// exactly while a field is served ([`TextInputView::serve`]).
+    interaction: OnceCell<Retained<UITextInteraction>>,
 }
 
 define_class!(
@@ -496,9 +576,23 @@ define_class!(
             })
         }
 
+        /// One rectangle per line of the range, from the field's layout; none
+        /// for a range UIKit made (a keyboard switching to Japanese asks
+        /// with positions of its own) or a field with no layout.
         #[unsafe(method_id(selectionRectsForRange:))]
-        fn selection_rects_for_range(&self, _range: &UITextRange) -> Retained<NSArray<UITextSelectionRect>> {
-            os_entry("FluiTextInputView selectionRectsForRange:", (), AfterPanic::Abort, NSArray::new)
+        fn selection_rects_for_range(&self, range: &UITextRange) -> Retained<NSArray<UITextSelectionRect>> {
+            os_entry("FluiTextInputView selectionRectsForRange:", (), AfterPanic::Answer(|()| NSArray::new()), || {
+                let Some(range) = ours(range) else {
+                    return NSArray::new();
+                };
+                let rects: Vec<Retained<UITextSelectionRect>> = self
+                    .client()
+                    .selection_rects(range)
+                    .into_iter()
+                    .map(|rect| Retained::into_super(TextSelectionRect::new(self.mtm(), rect)))
+                    .collect();
+                NSArray::from_retained_slice(&rects)
+            })
         }
 
         #[unsafe(method_id(closestPositionToPoint:))]
@@ -530,6 +624,23 @@ define_class!(
             })
         }
     }
+
+    // SAFETY: the method below carries UIKit's selector and signature for
+    // this protocol and runs on the main thread, where UIKit calls it.
+    unsafe impl UITextInteractionDelegate for TextInputView {
+        /// The interaction sits on the window's view, so its gestures begin
+        /// only over the focused field, and as far around it as a selection
+        /// handle reaches: anywhere else the touch is the application's.
+        /// `point` is in the window's view, whose coordinates the store's are.
+        #[unsafe(method(interactionShouldBegin:atPoint:))]
+        fn interaction_should_begin(&self, _interaction: &UITextInteraction, point: CGPoint) -> bool {
+            os_entry("FluiTextInputView interactionShouldBegin:atPoint:", (), AfterPanic::Answer(|()| false), || {
+                self.client().document_bounds().is_some_and(|field| {
+                    field.dilate(HANDLE_REACH).contains(&Point::new(point.x, point.y))
+                })
+            })
+        }
+    }
 );
 
 impl TextInputView {
@@ -544,9 +655,23 @@ impl TextInputView {
             reload_owed: Cell::new(false),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
+            interaction: OnceCell::new(),
         }));
         // SAFETY: UIView's designated initializer, on a fresh allocation.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] };
+        let interaction =
+            UITextInteraction::textInteractionForMode(UITextInteractionMode::Editable, mtm);
+        let responder: &UIResponder = &this;
+        // SAFETY: `setTextInput:` requires a responder that implements
+        // `UITextInput`, which a `FluiTextInputView` does (`unsafe impl
+        // UITextInput` above). The interaction holds it weakly, as it holds
+        // its delegate, so the interaction in the view's ivar makes no cycle.
+        unsafe { interaction.setTextInput(Some(responder)) };
+        interaction.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        this.ivars()
+            .interaction
+            .set(interaction)
+            .expect("BUG: a new view's interaction is set once, here");
         // The context holds the view weakly: the view holds the client.
         client.bind(Rc::new(ResponderContext {
             view: ObjcWeak::from_retained(&this),
@@ -594,15 +719,9 @@ impl TextInputView {
     /// The rectangle of `range`'s first line in this view's points, from the
     /// field's layout; empty where no field has focus or its layout has none.
     fn rect(&self, range: Option<Utf16Range>) -> CGRect {
-        let Some((bounds, _)) = range.and_then(|range| self.client().first_rect(Some(range)))
-        else {
-            return CGRect::ZERO;
-        };
-        let Bounds { origin, size } = bounds;
-        CGRect::new(
-            CGPoint::new(origin.x, origin.y),
-            CGSize::new(size.width, size.height),
-        )
+        range
+            .and_then(|range| self.client().first_rect(Some(range)))
+            .map_or(CGRect::ZERO, |(bounds, _)| cg_rect(bounds))
     }
 
     /// A press and release of `key`, told to the window as a hardware key
@@ -631,10 +750,15 @@ impl TextInputView {
             if self.isFirstResponder() {
                 self.resignFirstResponder();
             }
+            self.remove_interaction();
             return;
         };
         let traits = keyboard_traits(status);
         let changed = self.ivars().traits.replace(traits) != traits;
+        // Before the view becomes first responder: installing an interaction
+        // may clear the text input's `inputDelegate`, which becoming first
+        // responder then sets to the keyboard's.
+        self.install_interaction();
         if !self.isFirstResponder() {
             self.becomeFirstResponder();
         } else if changed {
@@ -646,6 +770,31 @@ impl TextInputView {
                 self.ivars().reload_owed.set(false);
                 self.reloadInputViews();
             }
+        }
+    }
+
+    /// Put UIKit's text interaction on the window's view, the view the
+    /// touches land on, unless it is there already: the view's own frame is
+    /// empty, so no touch would reach a gesture on it.
+    fn install_interaction(&self) {
+        let Some(interaction) = self.ivars().interaction.get() else {
+            return;
+        };
+        if interaction.view().is_some() {
+            return;
+        }
+        if let Some(window_view) = self.superview() {
+            window_view.addInteraction(ProtocolObject::from_ref(&**interaction));
+        }
+    }
+
+    /// Take UIKit's text interaction off the view it is on, if any.
+    fn remove_interaction(&self) {
+        let Some(interaction) = self.ivars().interaction.get() else {
+            return;
+        };
+        if let Some(view) = interaction.view() {
+            view.removeInteraction(ProtocolObject::from_ref(&**interaction));
         }
     }
 
@@ -733,6 +882,16 @@ impl InputContext for ResponderContext {
             view.document_will_change(change);
         }
     }
+}
+
+/// `bounds`, in the window's logical coordinates, in the responder's points,
+/// which are the same.
+fn cg_rect(bounds: Bounds<f64>) -> CGRect {
+    let Bounds { origin, size } = bounds;
+    CGRect::new(
+        CGPoint::new(origin.x, origin.y),
+        CGSize::new(size.width, size.height),
+    )
 }
 
 /// The range of one of this view's ranges; `None` for one UIKit made.

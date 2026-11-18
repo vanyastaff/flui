@@ -1,13 +1,12 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 118 закрыты и 16 открыты (сверено с `main` @ `5b4e3202b`); записи — в разделе
+  Из 134 задач серии 119 закрыты и 15 открыты (сверено с `main` @ `5b4e3202b`); записи — в разделе
   «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
     провайдеры Android;
   - LY67 — провайдеры `flui-system` на Android (в работе);
-  - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
@@ -5907,15 +5906,26 @@ GPU-память простаивающего или невидимого окн
   Режим клавиатуры — `adjustResize` с окном от края до края на всех уровнях (ADR-0340 §3,
   `the_window_resizes_its_insets_not_its_surface_on_every_level`); счёт `WindowResized` во время
   анимации клавиатуры и прогон клавиатуры — на устройстве, в parity «Soft-keyboard insets».
-- [ ] **LY69** (открыта: прямоугольники выделения и `UITextInteraction`) — невидимый responder
+- [x] **LY69** (закрыта веткой `native/ios-text-interaction`: код собран, прогоны Simulator — в
+  parity) — невидимый responder
   (`crates/flui-native/src/text/apple/ios/responder.rs`) отвечает `UITextInput` из хранилища поля
   через общий store host (`text::apple::client::TextClient`): `firstRectForRange:` и
   `caretRectForPosition:` по диапазону, `replaceRange:withText:` вдали от каретки, клавиатура по
   назначению поля (`text/apple/traits.rs`). Тесты: `a_fields_purpose_picks_its_keyboard`,
   `the_candidate_window_follows_the_composition`, `uikit_replaces_selects_and_measures_the_field`,
-  `uikit_ranges_keep_supplementary_scalars_whole`. Остаётся код: `selectionRectsForRange:` отвечает
-  пустым массивом (`responder.rs:499`) вместо прямоугольников выделения из геометрии поля;
-  `UITextInteraction` (выделение, лупа, меню правки) на responder. Резервные шрифты iOS спрашивают
+  `uikit_ranges_keep_supplementary_scalars_whole`. `selectionRectsForRange:` отвечает
+  `FluiTextSelectionRect` на каждую строку диапазона: чистая модель
+  `text/apple/selection_rects.rs` находит строки по кареткам хранилища (двоичный поиск, не больше
+  `MAX_LINES` прямоугольников), прямоугольник строки — `rect_for_range` её части, направление — по
+  каретке у первого скаляра, `containsStart`/`containsEnd` у первой и последней; таблица
+  `a_range_gets_a_rectangle_for_each_line_it_crosses` (одна строка, три строки, конец на начале
+  строки, RTL после LTR, пустой диапазон — каретка, концы внутри суррогатной пары) красная, когда
+  модель отвечает пустым массивом. `UITextInteraction` (editable) ставится на view окна, пока поле
+  обслуживается, и снимается без поля; жесты начинаются только над полем
+  (`interactionShouldBegin:atPoint:`). Открыто (gaps «No text input on mobile and the Web»):
+  собственные каретка, выделение, ручки, лупа и панель `EditableText` рисуются рядом с системными;
+  Cut/Copy/Paste/Select All меню правки — нет канала команды правки к полю; клаузы составления
+  CJK — хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
   CoreText по языку (`crates/flui-native/src/fonts/apple.rs`); квадраты вместо кана и кандзи
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,
   и решит прогон Simulator. Прогон на пути через store host — заметка строки parity «IME

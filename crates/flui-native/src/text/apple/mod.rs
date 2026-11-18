@@ -2,8 +2,8 @@
 //! store to the input method (`client`), through AppKit's
 //! `NSTextInputClient` verbs (`macos`) or UIKit's invisible `UITextInput`
 //! responder (`ios`, with Dynamic Type sizing), the keyboard traits that
-//! responder reports (`traits`), and macOS's secure event input
-//! (`secure_input`).
+//! responder reports (`traits`) and the selection rectangles it answers
+//! (`selection_rects`), and macOS's secure event input (`secure_input`).
 //!
 //! Both input methods speak UTF-16, as `NSString` counts, and so does the
 //! store.
@@ -25,5 +25,7 @@ pub(crate) mod ios;
 pub(crate) mod macos;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod secure_input;
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod selection_rects;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod traits;

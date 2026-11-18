@@ -556,10 +556,13 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UISelectionFeedbackGenerator",
     # The invisible responder the system keyboard types into (ADR-0255
     # decision 11): the protocol, its traits, and the writing direction its
-    # positions answer.
+    # positions answer, and the text interaction that gives the focused
+    # field UIKit's selection gestures, handles, loupe and edit menu.
     "UITextInput",
     "UITextInputTraits",
     "NSText",
+    "UIInteraction",
+    "UITextInteraction",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     # `CACurrentMediaTime`, the clock the link stamps its ticks on.

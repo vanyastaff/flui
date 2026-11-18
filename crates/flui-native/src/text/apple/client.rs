@@ -770,6 +770,29 @@ impl TextClient {
             .flatten()
     }
 
+    /// `selectionRectsForRange:` — one rectangle per line `range` crosses,
+    /// clamped to the document, in the window's logical coordinates; none
+    /// when no field has focus or its layout has none.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn selection_rects(
+        &self,
+        range: Utf16Range,
+    ) -> Vec<super::selection_rects::SelectionRect> {
+        self.read(move |session| {
+            super::selection_rects::selection_rects(session, clamped(range, session.document_len()))
+        })
+        .unwrap_or_default()
+    }
+
+    /// The focused field's box in the window's logical coordinates, the
+    /// area UIKit's selection gestures begin in; `None` when no field has
+    /// focus or it is not laid out.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn document_bounds(&self) -> Option<Bounds<f64>> {
+        self.read(|session| session.document_bounds().ok())
+            .flatten()
+    }
+
     /// The scalar under a point in the focused field.
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn character_range_at_point(&self, point: Point<f64>) -> Option<Utf16Range> {
