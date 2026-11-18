@@ -87,8 +87,12 @@ publishes `CursorGrab::None` for a window without the keyboard focus; every host
 grab go on focus loss, hide and close. A host commits what it holds and publishes on every exit of
 a grab or level command, a refusal included, so the snapshot says what is held, never what was
 asked. A lock keeps its point relative to the content: when the window moves, resizes or changes
-scale, the host holds the pointer at that point of the content (inside it, if the content shrank),
-never at an old screen point over another window. `SetCursorGrab(None)` has no slot, as the normal mode has
+scale, the host holds the pointer at that point of the content (inside it, if the content shrank;
+on the part a display shows, if the content went partly off its displays), never at an old screen
+point over another window or at a point no display shows. A window none of whose content a display
+shows holds no grab on Windows, where the grab is the desktop's cursor clip: the host lets it go
+and publishes `CursorGrab::None`.
+`SetCursorGrab(None)` has no slot, as the normal mode has
 none. A locked pointer is not shown, and its motion is a `RawMotion` built by the one registry
 function every host calls (`ContactRegistry::raw_motion`), carrying a checked `MotionDelta` and
 whether it is before or after the system's acceleration (`MotionAcceleration`).

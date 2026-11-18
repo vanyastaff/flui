@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::num::NonZeroU64;
 
 use flui_foundation::{
-    AtomicIdMint, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId, TaskId,
+    AtomicIdMint, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId, PressId,
 };
 
 #[test]
@@ -132,9 +132,9 @@ fn listener_and_scheduler_ids_span_the_full_64_bit_space() {
         u64::MAX
     );
     assert_eq!(callback_mint.next(), Err(IdExhausted));
-    let task_mint = AtomicIdMint::<TaskId>::starting_after(u64::MAX - 1);
-    assert_eq!(task_mint.next().expect("one id remains").get(), u64::MAX);
-    assert_eq!(task_mint.next(), Err(IdExhausted));
+    let press_mint = AtomicIdMint::<PressId>::starting_after(u64::MAX - 1);
+    assert_eq!(press_mint.next().expect("one id remains").get(), u64::MAX);
+    assert_eq!(press_mint.next(), Err(IdExhausted));
 }
 
 #[test]
@@ -153,9 +153,9 @@ fn scheduler_and_listener_ids_are_minted_by_the_family() {
     assert_eq!(second.get(), 2);
     assert!(first < second);
 
-    let tasks = AtomicIdMint::<TaskId>::new();
-    let first = tasks.next().expect("a fresh mint has ids to issue");
-    let second = tasks.next().expect("a fresh mint has ids to issue");
+    let presses = AtomicIdMint::<PressId>::new();
+    let first = presses.next().expect("a fresh mint has ids to issue");
+    let second = presses.next().expect("a fresh mint has ids to issue");
     assert_eq!(first.get(), 1);
     assert_eq!(second.get(), 2);
     assert!(first < second);

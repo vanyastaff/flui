@@ -12,6 +12,7 @@
   [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
   for §4's Android sentence in particular: `onStart`/`onStop` give the execution state and
   `onResume`/`onPause` the foreground, which refines the focus.
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §1 the `should_schedule_frame()` alias only: the lifecycle alone writes `frames_enabled`, with no public setter or alias.
 
 ## Context
 

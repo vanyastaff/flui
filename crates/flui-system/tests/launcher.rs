@@ -562,48 +562,81 @@ fn a_held_request_answers_when_released() {
 }
 
 #[test]
-fn the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere() {
+fn the_system_plugin_provides_the_shell_on_windows_the_portal_on_linux_and_refuses_elsewhere() {
     /// How the plugin answers an acquisition of `C`.
     fn provided<C: flui_platform::capability::Capability>() -> Result<(), UnsupportedReason> {
         let (_host, handle) = acquire::<C>(&SystemPlugin::new());
         handle.map(drop).map_err(|refusal| refusal.reason)
     }
-    let linux = cfg!(target_os = "linux");
-    let elsewhere = Err(UnsupportedReason::NotYetOnThisHost);
-    let cases = [
-        ("launcher", provided::<LauncherCapability>(), Ok(())),
+    type Expected = Result<(), UnsupportedReason>;
+    let not_yet = Err(UnsupportedReason::NotYetOnThisHost);
+    let for_good = Err(UnsupportedReason::NotOnThisPlatform);
+    // The headless host names no application, and the Linux launcher entry
+    // is named by the application's id.
+    let unnamed = Err(UnsupportedReason::NotDeclared {
+        what: "the application id ([app] id in flui.toml)",
+    });
+    // Each service: how Windows, Linux and any other host answer.
+    let cases: [(&str, Expected, [Expected; 3]); 10] = [
+        (
+            "launcher",
+            provided::<LauncherCapability>(),
+            [Ok(()), Ok(()), not_yet],
+        ),
         (
             "file dialogs",
             provided::<flui_system::dialog::FileDialogCapability>(),
-            Ok(()),
+            [Ok(()), Ok(()), not_yet],
+        ),
+        (
+            "message box",
+            provided::<flui_system::dialog::MessageBoxCapability>(),
+            [Ok(()), for_good, not_yet],
+        ),
+        (
+            "share",
+            provided::<flui_system::share::ShareCapability>(),
+            [Ok(()), for_good, not_yet],
         ),
         (
             "autostart",
             provided::<flui_system::autostart::AutostartCapability>(),
-            Ok(()),
+            [Ok(()), Ok(()), not_yet],
         ),
         (
             "global shortcuts",
             provided::<flui_system::shortcuts::GlobalShortcutCapability>(),
-            Ok(()),
+            [Ok(()), Ok(()), not_yet],
+        ),
+        (
+            "launcher entry",
+            provided::<flui_system::taskbar::TaskbarCapability>(),
+            [Ok(()), unnamed, not_yet],
         ),
         (
             "user folders",
             provided::<flui_system::user_dirs::UserDirCapability>(),
-            Ok(()),
+            [Ok(()), Ok(()), not_yet],
         ),
-        // The headless host names no application, and the launcher entry
-        // is named by the application's id.
         (
-            "launcher entry",
-            provided::<flui_system::taskbar::TaskbarCapability>(),
-            Err(UnsupportedReason::NotDeclared {
-                what: "the application id ([app] id in flui.toml)",
-            }),
+            "jump list",
+            provided::<flui_system::jump_list::JumpListCapability>(),
+            [Ok(()), for_good, for_good],
+        ),
+        (
+            "system information",
+            provided::<flui_system::os::OsCapability>(),
+            [Ok(()), not_yet, not_yet],
         ),
     ];
-    for (service, answered, on_linux) in cases {
-        let expected = if linux { on_linux } else { elsewhere };
+    for (service, answered, [on_windows, on_linux, elsewhere]) in cases {
+        let expected = if cfg!(windows) {
+            on_windows
+        } else if cfg!(target_os = "linux") {
+            on_linux
+        } else {
+            elsewhere
+        };
         assert_eq!(answered, expected, "{service}");
     }
 }

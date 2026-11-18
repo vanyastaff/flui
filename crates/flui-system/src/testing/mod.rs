@@ -1,9 +1,23 @@
 //! The scripted system services a scenario registers instead of the OS's
 //! (ADR-0154 §10, ADR-0243): [`ScriptedSystem`], over a
-//! [`ScriptedLauncher`], [`ScriptedFileDialogs`], [`ScriptedAutostart`] and
-//! [`ScriptedUserDirs`] on the scenario primitive
-//! ([`flui_platform::capability::scripted`]), and a [`ScriptedShortcuts`]
-//! and a [`ScriptedTaskbar`] the test speaks for directly.
+//! [`ScriptedLauncher`], [`ScriptedFileDialogs`], [`ScriptedMessageBoxes`],
+//! [`ScriptedShare`], [`ScriptedAutostart`], [`ScriptedUserDirs`] and
+//! [`ScriptedJumpList`] on the scenario primitive
+//! ([`flui_platform::capability::scripted`]), and a [`ScriptedShortcuts`],
+//! a [`ScriptedTaskbar`] and a [`ScriptedOs`] the test speaks for directly.
+//!
+//! A double answers what its script says and nothing else: a request no
+//! step answers is the scenario's
+//! [`Unexpected`](flui_platform::capability::scripted::ScenarioFailure::Unexpected)
+//! failure, and its completion ends `ProviderDropped`, never with a success
+//! nobody wrote.
+
+#[cfg(all(test, windows))]
+#[expect(
+    unsafe_code,
+    reason = "a raw window handle naming a window no test reaches, a message pump"
+)]
+pub(crate) mod win32;
 
 use std::{cell::Cell, cell::RefCell, fmt, rc::Rc};
 
@@ -20,9 +34,15 @@ use crate::autostart::{
     Autostart, AutostartBackend, AutostartCapability, AutostartRequest, AutostartResult,
 };
 use crate::dialog::{
-    DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs, OpenRequest, OpenResult,
-    SaveRequest, SaveResult,
+    DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs, MessageBoxBackend,
+    MessageBoxCapability, MessageBoxRequest, MessageBoxResult, MessageBoxes, OpenRequest,
+    OpenResult, SaveRequest, SaveResult,
 };
+use crate::jump_list::{
+    JumpList, JumpListBackend, JumpListCapability, JumpListResult, JumpListTask,
+};
+use crate::os::{Architecture, Os, OsBackend, OsCapability, OsInfo, OsVersion};
+use crate::share::{Share, ShareBackend, ShareCapability, ShareRequest, ShareResult};
 use crate::shortcuts::{
     GlobalShortcutCapability, GlobalShortcuts, Shortcut, ShortcutBackend, ShortcutEvent,
     ShortcutFeed, ShortcutHold,
@@ -358,16 +378,173 @@ impl ShortcutBackend for ScriptedShortcuts {
     }
 }
 
+/// A request a scripted window-bound service received: the window it was
+/// for, and what it asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InWindow<R> {
+    /// The window the request was for.
+    pub window: WindowId,
+    /// What it asked.
+    pub request: R,
+}
+
+/// Message boxes whose user is a [`Script`] of [`InWindow`] requests. A box
+/// waits by a ticket, so a dismissed one is withdrawn.
+#[derive(Clone, Debug)]
+pub struct ScriptedMessageBoxes {
+    script: Script<InWindow<MessageBoxRequest>, MessageBoxResult>,
+}
+
+impl ScriptedMessageBoxes {
+    /// Message boxes whose script is on `scenario`, with nothing scripted.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        Self {
+            script: scenario.script("message box"),
+        }
+    }
+
+    /// The script.
+    #[must_use]
+    pub fn script(&self) -> &Script<InWindow<MessageBoxRequest>, MessageBoxResult> {
+        &self.script
+    }
+}
+
+impl MessageBoxBackend for ScriptedMessageBoxes {
+    fn show(
+        &self,
+        window: &WindowRef,
+        request: MessageBoxRequest,
+        answer: Resolver<MessageBoxResult>,
+    ) -> DialogHold {
+        let request = InWindow {
+            window: window.id(),
+            request,
+        };
+        DialogHold::new(self.script.receive_with_ticket(request, answer))
+    }
+}
+
+/// A share sheet whose user is a [`Script`] of [`InWindow`] requests.
+#[derive(Clone, Debug)]
+pub struct ScriptedShare {
+    script: Script<InWindow<ShareRequest>, ShareResult>,
+}
+
+impl ScriptedShare {
+    /// A share sheet whose script is on `scenario`, with nothing scripted.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        Self {
+            script: scenario.script("share"),
+        }
+    }
+
+    /// The script.
+    #[must_use]
+    pub fn script(&self) -> &Script<InWindow<ShareRequest>, ShareResult> {
+        &self.script
+    }
+}
+
+impl ShareBackend for ScriptedShare {
+    fn share(&self, window: &WindowRef, request: ShareRequest, answer: Resolver<ShareResult>) {
+        let request = InWindow {
+            window: window.id(),
+            request,
+        };
+        self.script.receive(request, answer);
+    }
+}
+
+/// A jump list whose system is a [`Script`] of task lists.
+#[derive(Clone, Debug)]
+pub struct ScriptedJumpList {
+    script: Script<Vec<JumpListTask>, JumpListResult>,
+}
+
+impl ScriptedJumpList {
+    /// A jump list whose script is on `scenario`, with nothing scripted.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        Self {
+            script: scenario.script("jump list"),
+        }
+    }
+
+    /// The script.
+    #[must_use]
+    pub fn script(&self) -> &Script<Vec<JumpListTask>, JumpListResult> {
+        &self.script
+    }
+}
+
+impl JumpListBackend for ScriptedJumpList {
+    fn set_tasks(&self, tasks: Vec<JumpListTask>, answer: Resolver<JumpListResult>) {
+        self.script.receive(tasks, answer);
+    }
+}
+
+/// A system that says it is the [`OsInfo`] the test set: "Scripted OS"
+/// 1.0.0 on x86-64 until [`set_info`](Self::set_info). Cheap to clone;
+/// clones share the answer.
+#[derive(Clone, Debug)]
+pub struct ScriptedOs {
+    info: Rc<RefCell<OsInfo>>,
+}
+
+impl Default for ScriptedOs {
+    fn default() -> Self {
+        let version = OsVersion {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        };
+        Self {
+            info: Rc::new(RefCell::new(OsInfo::new(
+                "Scripted OS",
+                version,
+                Architecture::X86_64,
+            ))),
+        }
+    }
+}
+
+impl ScriptedOs {
+    /// Say the system is `info` from now on.
+    pub fn set_info(&self, info: OsInfo) {
+        *self.info.borrow_mut() = info;
+    }
+}
+
+impl OsBackend for ScriptedOs {
+    fn info(&self) -> OsInfo {
+        self.info.borrow().clone()
+    }
+}
+
 /// The system services' plugin over a script: registers each handle over
 /// the scripted system the test keeps clones of.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ScriptedSystem {
     launcher: ScriptedLauncher,
     dialogs: ScriptedFileDialogs,
+    message_boxes: ScriptedMessageBoxes,
+    share: ScriptedShare,
     autostart: ScriptedAutostart,
     shortcuts: ScriptedShortcuts,
     taskbar: ScriptedTaskbar,
     user_dirs: ScriptedUserDirs,
+    jump_list: ScriptedJumpList,
+    os: ScriptedOs,
+}
+
+impl Default for ScriptedSystem {
+    fn default() -> Self {
+        Self::on(&Scenario::new())
+    }
 }
 
 impl ScriptedSystem {
@@ -389,10 +566,14 @@ impl ScriptedSystem {
         Self {
             launcher: ScriptedLauncher::on(scenario),
             dialogs: ScriptedFileDialogs::on(scenario),
+            message_boxes: ScriptedMessageBoxes::on(scenario),
+            share: ScriptedShare::on(scenario),
             autostart: ScriptedAutostart::on(scenario),
             shortcuts: ScriptedShortcuts::default(),
             taskbar: ScriptedTaskbar::default(),
             user_dirs: ScriptedUserDirs::on(scenario),
+            jump_list: ScriptedJumpList::on(scenario),
+            os: ScriptedOs::default(),
         }
     }
 
@@ -406,6 +587,18 @@ impl ScriptedSystem {
     #[must_use]
     pub fn dialogs(&self) -> &ScriptedFileDialogs {
         &self.dialogs
+    }
+
+    /// The message boxes the plugin provides over.
+    #[must_use]
+    pub fn message_boxes(&self) -> &ScriptedMessageBoxes {
+        &self.message_boxes
+    }
+
+    /// The share sheet the plugin provides over.
+    #[must_use]
+    pub fn share(&self) -> &ScriptedShare {
+        &self.share
     }
 
     /// The autostart the plugin provides over.
@@ -431,6 +624,18 @@ impl ScriptedSystem {
     pub fn user_dirs(&self) -> &ScriptedUserDirs {
         &self.user_dirs
     }
+
+    /// The jump list the plugin provides over.
+    #[must_use]
+    pub fn jump_list(&self) -> &ScriptedJumpList {
+        &self.jump_list
+    }
+
+    /// The operating system the plugin provides over.
+    #[must_use]
+    pub fn os(&self) -> &ScriptedOs {
+        &self.os
+    }
 }
 
 impl Plugin for ScriptedSystem {
@@ -442,6 +647,14 @@ impl Plugin for ScriptedSystem {
         let dialogs = self.dialogs.clone();
         registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
             FileDialogs::try_new(dialogs.clone(), ctx)
+        });
+        let message_boxes = self.message_boxes.clone();
+        registrar.provide::<MessageBoxCapability>(move |ctx: &ProviderContext<'_>| {
+            MessageBoxes::try_new(message_boxes.clone(), ctx)
+        });
+        let share = self.share.clone();
+        registrar.provide::<ShareCapability>(move |ctx: &ProviderContext<'_>| {
+            Share::try_new(share.clone(), ctx)
         });
         let autostart = self.autostart.clone();
         registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
@@ -458,6 +671,14 @@ impl Plugin for ScriptedSystem {
         let user_dirs = self.user_dirs.clone();
         registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
             Ok::<_, Unsupported>(UserDirs::new(user_dirs.clone(), ctx))
+        });
+        let jump_list = self.jump_list.clone();
+        registrar.provide::<JumpListCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(JumpList::new(jump_list.clone(), ctx))
+        });
+        let os = self.os.clone();
+        registrar.provide::<OsCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Os::new(os.clone(), ctx))
         });
     }
 }

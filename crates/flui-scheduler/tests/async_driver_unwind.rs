@@ -438,12 +438,7 @@ fn independent_owner_turn_preserves_pending_demand() {
         } else {
             let now = flui_scheduler::Instant::now();
             foreign
-                .drive_frame(
-                    now,
-                    flui_scheduler::IdleDeadline::far_future(now),
-                    || {},
-                    || {},
-                )
+                .drive_frame(now, || {}, || {})
                 .expect("foreign owner frame");
         }
         assert!(
@@ -453,12 +448,7 @@ fn independent_owner_turn_preserves_pending_demand() {
         assert!(!ran.get());
         assert_eq!(scheduler.frame_count(), 0);
         owner
-            .drive_frame(
-                flui_scheduler::Instant::now(),
-                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                || {},
-                || {},
-            )
+            .drive_frame(flui_scheduler::Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert!(ran.get());
         assert!(!token.is_cancelled());

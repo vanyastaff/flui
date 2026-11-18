@@ -614,11 +614,52 @@ trait depends on `flui-platform` instead.
   every Linux table for any window reference (it needs nothing of the window),
   so the Wayland and X11 windows announce themselves on the AT-SPI bus
   alike. Every Android Activity window builds `accesskit_android`'s low-level
-  adapter, which lives on the Java main thread: `FluiView`'s node provider
-  answers from it there, and a publish is posted there and applied in order
-  (`accessibility::android`). The view reaches it through a `BridgeSlot`
+  adapter, which lives on the Java main thread in a `ProvidedTree`
+  (`accessibility::provided_tree`), made there by the first call that reaches
+  it and held in an `OwnerSlot` of that thread: `FluiView`'s node provider
+  answers from it there, a call made from inside another is `Busy`, and a
+  publish is posted there and applied in order (`accessibility::android`).
+  The view reaches it through a `BridgeSlot`
   (`owner::android::bridge_slot`), which a closing window empties only of
   its own bridge.
+
+  A bridge builds its tree only while assistive technology listens. Every
+  adapter starts it on the first question a client asks. Where the platform
+  says the last one left (AT-SPI's screen-reader state, UIKit's
+  assistive-technology status, Android's `AccessibilityManager.isEnabled()`
+  turning false), `BridgeShared::deactivate` marks the bridge ended, drops
+  the retained tree under the same lock (a whole tree published after the
+  end is not kept) and tells the composition root, whatever the bridge's
+  state: a root whose listener panicked part way through an activation
+  holds what it committed, and only a `false` takes it back. The root drops
+  its semantics owner and builds no update until a client asks again; then
+  the whole tree is built once.
+
+  On Android the fact that a service is enabled has one writer:
+  `ProvidedTree::services_changed`, which `FluiView` calls with the
+  manager's present answer when its `AccessibilityStateChangeListener`
+  fires, as it enters the window and as the bridge arrives (the notice's
+  argument is not trusted). Touch exploration ending is no stop, since
+  Switch Access and Select to Speak read the tree without it. While no
+  service is enabled, the adapter's activation handler (`ServiceActivation`)
+  answers no tree and tells nobody, so a question from anything else
+  (Assist structure, the autofill framework's compatibility mode, a hover
+  posted before the report) is answered from a placeholder, which is dropped
+  before the call returns. The adapter is reset before the root is told,
+  outside its borrow, and a stop that arrives while a call is inside the
+  adapter takes effect as that call returns. A placeholder takes only a
+  whole tree: a fragment reaching one is dropped and the root asked for the
+  whole tree again (`BridgeShared::request_whole_tree`). UI Automation,
+  NSAccessibility and the browser are not read for a departure: a window
+  there builds its tree for its life once asked
+  ([gaps](../../docs/gaps.md#a-windows-or-macos-window-builds-its-accessibility-tree-for-its-life)).
+  Tests: `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`
+  (the per-host table, held to the parity row),
+  `the_last_service_stopping_ends_the_tree_and_tells_the_root_once`,
+  `a_hover_posted_before_the_last_service_stopped_starts_nothing`,
+  `a_fragment_never_reaches_a_placeholder`,
+  `a_deactivation_reaches_a_root_that_half_took_the_activation`,
+  `semantics_stop_with_the_last_listener_and_restart_whole` (flui-runtime).
 
   Every adapter publishes through `BridgeShared::publish`, which retains a
   whole tree for a late activation and decides what the adapter is handed.
@@ -1085,7 +1126,7 @@ trait depends on `flui-platform` instead.
 - **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
   code the operating system calls, or a library from inside its own entry: a
   function with a foreign ABI (a window procedure, an enumeration callback, a
-  JNI native, an Objective-C method a `ClassBuilder` adds, an NDK callback), a
+  JNI native, an NDK callback), a
   `define_class!` method, a method of a windows-rs `I…_Impl` (a COM vtable
   entry), an AccessKit handler, and a closure handed to the OS (an `RcBlock` or
   `StackBlock`, a WinRT delegate, a GCD work item: any closure literal given to
@@ -3742,9 +3783,10 @@ the platform binds its display registry to the new window, which is safe there
 because the window is created at the origin — a point on a screen — so
 `-[NSWindow screen]` answers rather than returning nil. Caching is the one place
 this diverges from the winit implementation it otherwise mirrors: winit queries
-the monitor per call, but this backend's AppKit traffic belongs to the owner lane
-while `display_id` is a plain `&self` accessor any thread may call, so the query
-happens on the lane and the accessor reads the lock. The screen key is the
+the monitor per call, but here every snapshot reads the display, so it is read
+from AppKit only where it can change, and a change invalidates the snapshot. The
+window binds the registry before it is shown (`UnshownWindow::show`), so its
+first snapshot, published from `windowDidBecomeKey:`, names its display. The screen key is the
 `CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
 the display-UUID source replaces.
 
@@ -3955,14 +3997,34 @@ UIKit bindings at all. Every shipping Rust Apple stack is on `objc2` (winit sinc
 0.30, `wgpu-hal`, egui, slint, gpui). Carrying both stacks was a two-generation
 wart with a `build.rs` to feed.
 
-**The raw `msg_send!` shape is kept on purpose, not left un-migrated.** objc2's
-macro accepts a raw `*mut AnyObject` receiver, `Bool` arguments and a manual
-`release`, so `window.rs`'s already-reviewed safety shape survives. The concrete
-reason: `NSWindow`/`NSView` are `MainThreadOnly` in objc2's typed API, while the
-backend constructs test windows on a caller-supplied off-main serial lane
-(`MacOSWindow::for_test`), which a `MainThreadMarker`-gated method would refuse.
-`ClassBuilder` replaces `objc` 0.2's `ClassDecl` for the two runtime classes
-(`FLUIContentView`, `FLUIWindowDelegate`).
+**One binding generation: typed classes and messages (ADR-0369).** Every class
+an Apple host registers is a `define_class!` class whose Rust state is its
+`ContainedIvars` (`FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView`, the
+loop delegate, the Metal layer, every iOS class), and the macOS window holds
+what it messages as typed, retained objects (`Retained<NSWindow>`,
+`Retained<FluiContentView>`, its delegate) with its `MainThreadMarker`. A raw
+`*mut AnyObject` is left only where another API takes one (`ContentViewRef`,
+the raw window handle). AppKit holds a window's delegate weakly, so the window
+keeps it and, in its drop, detaches it and hands it to the autorelease pool,
+since the drop may run inside one of the delegate's methods.
+
+**Owner-thread state.** What only the AppKit main thread touches is a `Cell` or
+`RefCell` (ADR-0323 §1): the window's state, the iOS window's metrics, screen
+and theme. The loop control crosses threads (the owner signal's wake and the
+notice observers hold it weakly and post to the main queue), so what it keeps
+beyond the signal is one main-thread part behind a `MainThreadBound`: `Copy`
+states (`LoopState`, `TerminateGate`) in `Cell`s, changed by pure transitions
+and stored before the application is told anything, so a callback that
+re-enters the control reads the state it left and nothing is found busy. The
+loop holds its `MainThreadMarker` instead of a thread check. What stays atomic
+crosses a thread and says so at its declaration (the window's `closed` flag,
+which `Send + Sync` surface targets and text inputs hold).
+
+**A click into an inactive window (`acceptsFirstMouse:`).** The content view
+asks its input, which answers by the press model (`input::apple::title_bar`):
+a press on the move area of a title bar the application draws activates the
+window and moves it at once, as the system's title bar does; a press on the
+content only activates it, AppKit's convention.
 
 **Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
 types against the selector encoding at run time and found `makeFirstResponder:`
@@ -5814,7 +5876,8 @@ OLE's calls on a window's registered target (answers, drop, fetches of every
 format, a refusal, a provider fetching from inside itself, a window its drag
 callback closes), the deferred start through a real `DoDragDrop`, a second
 window's frames while the loop rests, a drop into a FLUI window through the
-real loop, woken by posted mouse moves rather than the system pointer, and
+real loop, woken by posted mouse moves rather than the system pointer (on the
+desktop that takes input, ADR-0355 §4), and
 `window_at` across two placed real windows.
 `ole_drag_drop_contracts` pins the pure half everywhere, and
 `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else` the pace. Not run: a drag to

@@ -1,19 +1,25 @@
-//! The system's open and save dialogs.
+//! The system's modal dialogs: open and save dialogs, and the message box.
 //!
 //! A widget acquires [`FileDialogs`] through
-//! `ctx.capability::<FileDialogCapability>()` in a lifecycle hook of a
-//! widget in a window. The handle is bound to that window: the dialog is
-//! modal to it, the window holds at most one dialog at a time, and the
-//! dialog ends with the window.
+//! `ctx.capability::<FileDialogCapability>()`, or [`MessageBoxes`] through
+//! `ctx.capability::<MessageBoxCapability>()`, in a lifecycle hook of a
+//! widget in a window. Each handle is bound to that window: its dialogs are
+//! modal to it, the window holds at most one dialog at a time, whichever
+//! handle asked for it, and a dialog ends with the window.
 //!
-//! A dialog lasts while someone waits for its answer. [`FileDialogs::open`]
-//! and [`FileDialogs::save`] hand out a [`Dialog`]; dropping it, or the
-//! window closing, dismisses the system's dialog through the
-//! [`DialogHold`] its backend gave for it, and frees the window for the next
-//! one.
+//! A dialog lasts while someone waits for its answer. [`FileDialogs::open`],
+//! [`FileDialogs::save`] and [`MessageBoxes::show`] hand out a [`Dialog`];
+//! dropping it, or the window closing, dismisses the system's dialog through
+//! the [`DialogHold`] its backend gave for it, and frees the window for the
+//! next one.
 
+mod message;
 mod request;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 use std::{any::Any, cell::Cell, cell::RefCell, fmt, future::Future, rc::Rc, rc::Weak};
 
 use flui_platform::capability::{
@@ -23,8 +29,13 @@ use flui_platform::capability::{
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason, WindowId};
 use rustc_hash::FxHashMap;
 
+pub use message::{
+    MessageAnswer, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
+    MessageBoxes, MessageButtons, MessageLevel,
+};
 pub use request::{
-    FileFilter, MalformedRequest, OpenRequest, PickedFile, Picks, SaveLocation, SaveRequest,
+    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
+    SaveLocation, SaveRequest,
 };
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
@@ -41,8 +52,8 @@ impl Capability for FileDialogCapability {
     const NAME: &'static str = "file-dialog";
 }
 
-/// Why a dialog gave no answer. The user cancelling is not an error: it
-/// answers `Ok(None)`.
+/// Why a dialog gave no answer. The user cancelling a file dialog is not an
+/// error: it answers `Ok(None)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DialogError {
@@ -54,8 +65,9 @@ pub enum DialogError {
     #[error("the dialog request is malformed: {0}")]
     InvalidRequest(#[from] MalformedRequest),
     /// The service the backend shows dialogs through is not here (no file
-    /// chooser portal); the [`Unsupported`] says why and whether trying later
-    /// may help.
+    /// chooser portal), or cannot show this request (a MIME type filter
+    /// where the system's dialog filters by name only); the [`Unsupported`]
+    /// says why and whether trying later may help.
     #[error("the dialog service cannot do this: {0}")]
     Unsupported(#[from] Unsupported),
     /// The window the dialog was modal to closed: before it answered, or
@@ -66,6 +78,23 @@ pub enum DialogError {
     /// handle cannot hand out.
     #[error("the pick is not a local file")]
     NotAFile,
+    /// A pick matches none of the request's filters, on a system whose
+    /// dialog only suggests them (a browser's file input, which offers every
+    /// file beside them). The whole answer is refused, since it is not what
+    /// the request asked the user for; nothing was read.
+    #[error("a pick matches none of the request's filters")]
+    NotInFilter,
+    /// The picks hold more than the request's
+    /// [`max_bytes`](OpenRequest::max_bytes), on a system that hands over a
+    /// pick's contents (a browser). Nothing was read past the check.
+    #[error("the picks hold {actual} bytes, more than the {limit} the request reads")]
+    TooLarge {
+        /// The picks' size, as the system declared it or as far as it was
+        /// read.
+        actual: u64,
+        /// The request's [`max_bytes`](OpenRequest::max_bytes).
+        limit: u64,
+    },
     /// The system failed in a way the handle does not name; the
     /// [`SystemFailure`] says where the failure came from, for diagnostics.
     #[error("the system failed: {0}")]
@@ -82,6 +111,8 @@ impl DialogError {
             | Self::InvalidRequest(_)
             | Self::WindowClosed
             | Self::NotAFile
+            | Self::NotInFilter
+            | Self::TooLarge { .. }
             | Self::Failed(_) => None,
         }
     }
@@ -96,15 +127,16 @@ pub type OpenResult = Result<Option<Picks>, DialogError>;
 /// user cancelled.
 pub type SaveResult = Result<Option<SaveLocation>, DialogError>;
 
-/// What a [`FileDialogBackend`] gives the handle for each dialog it shows:
-/// the system's dialog stays up while the handle holds it.
+/// What a backend gives the handle for each dialog it shows: the system's
+/// dialog stays up while the handle holds it.
 ///
 /// The handle drops it when the dialog ends, whatever ended it: the answer,
 /// the caller dropping its [`Dialog`], the window closing, the UI runtime
 /// retiring. A backend whose system dialog is still up when its hold drops
 /// dismisses it there (the portal's `Request.Close`, the ticket of a started
-/// activity), and one that has answered does nothing. The handle drops it on
-/// the owner thread, with none of its own state borrowed.
+/// activity, the close a Windows dialog's thread is asked for), and one that
+/// has answered does nothing. The handle drops it on the owner thread, with
+/// none of its own state borrowed.
 #[must_use = "dropping the hold dismisses the dialog it holds"]
 pub struct DialogHold(#[expect(dead_code, reason = "held for its drop")] Box<dyn Any>);
 
@@ -123,7 +155,7 @@ impl fmt::Debug for DialogHold {
     }
 }
 
-/// The system's dialogs as [`FileDialogs`] reach them.
+/// The system's file dialogs as [`FileDialogs`] reach them.
 ///
 /// Owner-local. A backend answers each dialog through its [`Resolver`] when
 /// the user does; it never calls back into the handle. A request it
@@ -161,7 +193,7 @@ struct Shown {
     watch: Cell<Option<WindowCloseWatch>>,
 }
 
-/// How a dialog ended, when the handle ends it.
+/// How a dialog ended, when the table ends it.
 #[derive(Clone, Copy)]
 enum Ending {
     /// The backend answered; the caller hears the answer.
@@ -172,8 +204,9 @@ enum Ending {
     WindowClosed,
 }
 
-/// The dialogs a UI runtime's windows show, one per window, so two handles
-/// in one window share the one-dialog rule.
+/// The dialogs a UI runtime's windows show, one per window, so every handle
+/// in one window (file dialogs and message boxes alike) shares the
+/// one-dialog rule.
 #[derive(Default)]
 struct OpenDialogs(RefCell<FxHashMap<WindowId, Rc<Shown>>>);
 
@@ -207,86 +240,11 @@ impl OpenDialogs {
         drop(hold);
         true
     }
-}
 
-/// Widget-facing file dialogs for one window.
-///
-/// Owner-thread (`!Send`), cheap to clone. A dialog answers through its
-/// [`Dialog`], which settles at an owner turn after the user answers, never
-/// inside the call that asked.
-#[derive(Clone)]
-pub struct FileDialogs {
-    backend: Rc<dyn FileDialogBackend>,
-    completions: CompletionSource,
-    window: WindowRef,
-    open: Rc<OpenDialogs>,
-}
-
-impl FileDialogs {
-    /// A handle over `backend` for the acquisition `ctx`, bound to the
-    /// acquiring widget's window.
-    ///
-    /// # Errors
-    ///
-    /// [`Unsupported`] with [`UnsupportedReason::NoWindow`] when the widget
-    /// is in no window: a dialog is modal to one.
-    pub fn try_new(
-        backend: impl FileDialogBackend,
-        ctx: &ProviderContext<'_>,
-    ) -> Result<Self, Unsupported> {
-        let window = ctx.window().ok_or(Unsupported::of::<FileDialogCapability>(
-            UnsupportedReason::NoWindow,
-        ))?;
-        Ok(Self {
-            backend: Rc::new(backend),
-            completions: ctx.completions().clone(),
-            window,
-            open: ctx.runtime_local::<OpenDialogs>(),
-        })
-    }
-
-    /// Show an open dialog.
-    ///
-    /// A backend that answers several picks to a request that allowed one
-    /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
-    /// request can have.
-    pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
-        let checked = request.check();
-        let multiple = request.is_multiple();
-        self.show(
-            checked,
-            |backend, window, answer| backend.open(window, request, answer),
-            move |result| match result {
-                Ok(Some(picks)) if !multiple && picks.len() > 1 => {
-                    Err(SystemFailure::MalformedAnswer.into())
-                }
-                result => result,
-            },
-        )
-    }
-
-    /// Show a save dialog.
-    ///
-    /// A backend that names a selected filter the request does not have
-    /// answers [`SystemFailure::MalformedAnswer`].
-    pub fn save(&self, request: SaveRequest) -> Dialog<SaveResult> {
-        let checked = request.check();
-        let filters = request.filters.len();
-        self.show(
-            checked,
-            |backend, window, answer| backend.save(window, request, answer),
-            move |result| match result {
-                Ok(Some(location)) if location.filter().is_some_and(|index| index >= filters) => {
-                    Err(SystemFailure::MalformedAnswer.into())
-                }
-                result => result,
-            },
-        )
-    }
-
-    /// Ask `backend` through `ask` when the request `checked` well formed,
-    /// the window is open and shows no dialog; answer the error at once
-    /// otherwise. The backend's answer reaches the caller through `check`.
+    /// Show a dialog modal to `window` through `ask` when the request
+    /// `checked` well formed, the window is open and shows no dialog; answer
+    /// the error at once otherwise. The backend's answer reaches the caller
+    /// through `check`, which refuses an answer the request cannot have.
     ///
     /// The window is marked busy until the dialog ends: the backend's answer
     /// settles (a backend that drops its resolver unanswered ends it too,
@@ -294,22 +252,20 @@ impl FileDialogs {
     /// panics while it shows the dialog, the caller drops its [`Dialog`], or
     /// the window closes.
     fn show<T: 'static>(
-        &self,
+        self: &Rc<Self>,
+        completions: &CompletionSource,
+        window: &WindowRef,
         checked: Result<(), MalformedRequest>,
-        ask: impl FnOnce(
-            &dyn FileDialogBackend,
-            &WindowRef,
-            Resolver<Result<T, DialogError>>,
-        ) -> DialogHold,
+        ask: impl FnOnce(&WindowRef, Resolver<Result<T, DialogError>>) -> DialogHold,
         check: impl FnOnce(Result<T, DialogError>) -> Result<T, DialogError> + 'static,
     ) -> Dialog<Result<T, DialogError>> {
-        let (completion, answer) = self.completions.pending();
-        let window = self.window.id();
+        let (completion, answer) = completions.pending();
+        let id = window.id();
         let refusal = if let Err(malformed) = checked {
             Some(DialogError::InvalidRequest(malformed))
-        } else if self.window.lifetime().is_closed() {
+        } else if window.lifetime().is_closed() {
             Some(DialogError::WindowClosed)
-        } else if self.open.0.borrow().contains_key(&window) {
+        } else if self.0.borrow().contains_key(&id) {
             Some(DialogError::Busy)
         } else {
             None
@@ -327,7 +283,7 @@ impl FileDialogs {
         let answer = Rc::new(Cell::new(Some(answer)));
         let refused = Rc::clone(&answer);
         let shown = Rc::new(Shown {
-            window,
+            window: id,
             hold: Cell::new(None),
             refuse: Cell::new(Some(Box::new(move |error| {
                 if let Some(answer) = refused.take() {
@@ -336,19 +292,17 @@ impl FileDialogs {
             }))),
             watch: Cell::new(None),
         });
-        self.open.0.borrow_mut().insert(window, Rc::clone(&shown));
-        let open = Rc::downgrade(&self.open);
+        self.0.borrow_mut().insert(id, Rc::clone(&shown));
+        let open = Rc::downgrade(self);
         let closing = Rc::downgrade(&shown);
-        shown
-            .watch
-            .set(Some(self.window.lifetime().on_close(move || {
-                if let (Some(open), Some(shown)) = (open.upgrade(), closing.upgrade()) {
-                    open.end(&shown, Ending::WindowClosed);
-                }
-            })));
+        shown.watch.set(Some(window.lifetime().on_close(move || {
+            if let (Some(open), Some(shown)) = (open.upgrade(), closing.upgrade()) {
+                open.end(&shown, Ending::WindowClosed);
+            }
+        })));
 
-        let (backend_answered, backend_answer) = self.completions.pending();
-        let open = Rc::downgrade(&self.open);
+        let (backend_answered, backend_answer) = completions.pending();
+        let open = Rc::downgrade(self);
         let answered = Rc::clone(&shown);
         let mut check = Some(check);
         backend_answered.on_complete(move |outcome| {
@@ -372,15 +326,14 @@ impl FileDialogs {
         // the dialog leaves no handle, so the guard ends the dialog on the way
         // out and the window is not left busy.
         let guard = DialogGuard {
-            open: Rc::downgrade(&self.open),
+            open: Rc::downgrade(self),
             shown: Rc::downgrade(&shown),
         };
-        let hold = ask(&*self.backend, &self.window, backend_answer);
+        let hold = ask(window, backend_answer);
         if self
-            .open
             .0
             .borrow()
-            .get(&window)
+            .get(&id)
             .is_some_and(|entry| Rc::ptr_eq(entry, &shown))
         {
             shown.hold.set(Some(hold));
@@ -392,10 +345,297 @@ impl FileDialogs {
     }
 }
 
+/// The window a dialog handle is bound to, and where its dialogs are kept:
+/// what every dialog handle of the crate is made of.
+#[derive(Clone)]
+struct DialogScope {
+    completions: CompletionSource,
+    window: WindowRef,
+    open: Rc<OpenDialogs>,
+}
+
+impl DialogScope {
+    /// The scope of the acquisition `ctx`, refused for a widget in no window
+    /// as `C`: a dialog is modal to one.
+    fn try_new<C: Capability>(ctx: &ProviderContext<'_>) -> Result<Self, Unsupported> {
+        let window = ctx
+            .window()
+            .ok_or(Unsupported::of::<C>(UnsupportedReason::NoWindow))?;
+        Ok(Self {
+            completions: ctx.completions().clone(),
+            window,
+            open: ctx.runtime_local::<OpenDialogs>(),
+        })
+    }
+
+    fn show<T: 'static>(
+        &self,
+        checked: Result<(), MalformedRequest>,
+        ask: impl FnOnce(&WindowRef, Resolver<Result<T, DialogError>>) -> DialogHold,
+        check: impl FnOnce(Result<T, DialogError>) -> Result<T, DialogError> + 'static,
+    ) -> Dialog<Result<T, DialogError>> {
+        self.open
+            .show(&self.completions, &self.window, checked, ask, check)
+    }
+}
+
+/// Widget-facing file dialogs for one window.
+///
+/// Owner-thread (`!Send`), cheap to clone. A dialog answers through its
+/// [`Dialog`], which settles at an owner turn after the user answers, never
+/// inside the call that asked.
+#[derive(Clone)]
+pub struct FileDialogs {
+    backend: Rc<dyn FileDialogBackend>,
+    scope: DialogScope,
+}
+
+impl FileDialogs {
+    /// A handle over `backend` for the acquisition `ctx`, bound to the
+    /// acquiring widget's window.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsupported`] with [`UnsupportedReason::NoWindow`] when the widget
+    /// is in no window: a dialog is modal to one.
+    pub fn try_new(
+        backend: impl FileDialogBackend,
+        ctx: &ProviderContext<'_>,
+    ) -> Result<Self, Unsupported> {
+        Ok(Self {
+            backend: Rc::new(backend),
+            scope: DialogScope::try_new::<FileDialogCapability>(ctx)?,
+        })
+    }
+
+    /// Show an open dialog.
+    ///
+    /// A backend that answers several picks to a request that allowed one
+    /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
+    /// request can have.
+    pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
+        let checked = request.check();
+        let multiple = request.is_multiple();
+        self.scope.show(
+            checked,
+            |window, answer| self.backend.open(window, request, answer),
+            move |result| match result {
+                Ok(Some(picks)) if !multiple && picks.len() > 1 => {
+                    Err(SystemFailure::MalformedAnswer.into())
+                }
+                result => result,
+            },
+        )
+    }
+
+    /// Show a save dialog.
+    ///
+    /// A backend that names a selected filter the request does not have
+    /// answers [`SystemFailure::MalformedAnswer`].
+    ///
+    /// A request that carries [`contents`](SaveRequest::contents) answers
+    /// once they are written: a backend that hands over no path (a browser)
+    /// writes them itself and answers the file it wrote; to a path the user
+    /// chose, the handle writes them on a thread of its own, since no file
+    /// system call runs on the owner thread (ADR-0360 §2), and a failed
+    /// write answers [`DialogError::Failed`] with the system's code. The
+    /// window is free for the next dialog once the user has chosen; the
+    /// write itself cannot be called back, so dropping the [`Dialog`] while
+    /// it runs drops only the answer.
+    pub fn save(&self, request: SaveRequest) -> Dialog<SaveResult> {
+        let checked = request.check();
+        let filters = request.filters.len();
+        let contents = request.contents.clone();
+        let chosen = self.scope.show(
+            checked,
+            |window, answer| self.backend.save(window, request, answer),
+            move |result| match result {
+                Ok(Some(location)) if location.filter().is_some_and(|index| index >= filters) => {
+                    Err(SystemFailure::MalformedAnswer.into())
+                }
+                result => result,
+            },
+        );
+        match contents {
+            Some(contents) => self.write_where_chosen(chosen, contents),
+            None => chosen,
+        }
+    }
+
+    /// `chosen`'s answer, after `contents` are written to the path it chose;
+    /// a location without a path was written by the backend.
+    fn write_where_chosen(
+        &self,
+        chosen: Dialog<SaveResult>,
+        contents: Arc<[u8]>,
+    ) -> Dialog<SaveResult> {
+        let Dialog {
+            completion: chosen,
+            guard,
+        } = chosen;
+        let completions = self.scope.completions.clone();
+        let (completion, caller) = completions.pending();
+        let mut waiting = Some((caller, contents));
+        chosen.on_complete(move |outcome| {
+            let Some((caller, contents)) = waiting.take() else {
+                return;
+            };
+            match outcome {
+                Ok(Ok(Some(location))) => match location.file().path() {
+                    Some(path) => {
+                        write_file(&completions, path.to_path_buf(), contents, location, caller);
+                    }
+                    // The backend wrote the contents itself (a browser).
+                    None => {
+                        // A retired owner has nobody left to answer.
+                        let _ = caller.resolve(Ok(Some(location)));
+                    }
+                },
+                // A retired owner has nobody left to answer.
+                Ok(unwritten) => {
+                    // A retired owner has nobody left to answer.
+                    let _ = caller.resolve(unwritten);
+                }
+                // The backend dropped its answer: so does the handle.
+                Err(_) => drop(caller),
+            }
+        });
+        Dialog { completion, guard }
+    }
+}
+
+/// Write `contents` to `path` on a thread of its own, then answer `caller`
+/// with `location`, or with the failure of the write.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_file(
+    completions: &CompletionSource,
+    path: PathBuf,
+    contents: Arc<[u8]>,
+    location: SaveLocation,
+    caller: Resolver<SaveResult>,
+) {
+    let (written, answer) = completions.pending::<Result<(), DialogError>>();
+    let mut waiting = Some((caller, location));
+    written.on_complete(move |outcome| {
+        let Some((caller, location)) = waiting.take() else {
+            return;
+        };
+        match outcome {
+            Ok(Ok(())) => {
+                // A retired owner has nobody left to answer.
+                let _ = caller.resolve(Ok(Some(location)));
+            }
+            Ok(Err(error)) => {
+                // A retired owner has nobody left to answer.
+                let _ = caller.resolve(Err(error));
+            }
+            Err(_) => drop(caller),
+        }
+    });
+    // The thread answers through the slot; a thread that cannot start leaves
+    // the resolver there, and the failure is answered here.
+    let slot = Arc::new(Mutex::new(Some(answer)));
+    let writer = Arc::clone(&slot);
+    let started = std::thread::Builder::new()
+        .name("flui-system-save".to_owned())
+        .spawn(move || {
+            let written = write_replacing(&path, &contents).map_err(|error| write_failure(&error));
+            let answer = writer
+                .lock()
+                .expect("BUG: the save slot's holders run no code under its lock")
+                .take();
+            if let Some(answer) = answer {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(written);
+            }
+        });
+    if let Err(error) = started {
+        let answer = slot
+            .lock()
+            .expect("BUG: the save slot's holders run no code under its lock")
+            .take();
+        if let Some(answer) = answer {
+            let _ = answer.resolve(Err(write_failure(&error)));
+        }
+    }
+}
+
+/// A save to a path on a system with no file system of its own: a backend
+/// of this platform hands over no path, so only a stand-in answers one.
+#[cfg(target_arch = "wasm32")]
+fn write_file(
+    _: &CompletionSource,
+    _: PathBuf,
+    _: Arc<[u8]>,
+    _: SaveLocation,
+    caller: Resolver<SaveResult>,
+) {
+    // A retired owner has nobody left to answer.
+    let _ = caller.resolve(Err(DialogError::Unsupported(Unsupported::of::<
+        FileDialogCapability,
+    >(
+        UnsupportedReason::NotOnThisPlatform,
+    ))));
+}
+
+/// How many names beside the chosen file a save tries for its new file
+/// before it gives up: each is taken only by one this process is writing.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TEMPORARY_NAMES: u32 = 16;
+
+/// Write `contents` to `path` whole or not at all: into a new file beside
+/// it, synced, then renamed over it, so a write that fails leaves the file
+/// the user chose as it was, and a reader never sees it half written.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_replacing(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::{ErrorKind, Write as _};
+
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(ErrorKind::InvalidInput.into());
+    };
+    let mut taken = None;
+    for attempt in 0..MAX_TEMPORARY_NAMES {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(name);
+        temporary_name.push(format!(".{}-{attempt}.flui-save", std::process::id()));
+        let temporary = folder.join(temporary_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(mut file) => {
+                let written = file.write_all(contents).and_then(|()| file.sync_all());
+                drop(file);
+                let replaced = written.and_then(|()| std::fs::rename(&temporary, path));
+                if replaced.is_err() {
+                    // The write's failure is the answer; the clean-up's is not.
+                    let _ = std::fs::remove_file(&temporary);
+                }
+                return replaced;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => taken = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(taken.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
+}
+
+/// The failure a write reports: the system's code, or a write that took no
+/// bytes without one ([`SystemFailure::MalformedAnswer`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn write_failure(error: &std::io::Error) -> DialogError {
+    DialogError::Failed(
+        error
+            .raw_os_error()
+            .map_or(SystemFailure::MalformedAnswer, SystemFailure::Os),
+    )
+}
+
 impl fmt::Debug for FileDialogs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileDialogs")
-            .field("window", &self.window.id())
+            .field("window", &self.scope.window.id())
             .finish_non_exhaustive()
     }
 }

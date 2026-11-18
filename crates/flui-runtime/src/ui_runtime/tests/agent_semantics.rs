@@ -94,14 +94,8 @@ pub(super) fn counter(ui_runtime: &UiRuntime, hide_at: Option<u32>) -> Arc<Atomi
 /// pump runs it.
 pub(super) fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
     let now = flui_scheduler::Instant::now();
-    let _presented = ui_runtime.enter(|ui_runtime| {
-        ui_runtime.drive_frame(
-            now,
-            flui_scheduler::IdleDeadline::far_future(now),
-            || {},
-            || ui_runtime.render_frame(sink),
-        )
-    });
+    let _presented = ui_runtime
+        .enter(|ui_runtime| ui_runtime.drive_frame(now, || {}, || ui_runtime.render_frame(sink)));
 }
 
 /// Serves the inbox through the public drain, deliberately without entering

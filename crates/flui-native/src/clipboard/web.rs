@@ -187,16 +187,20 @@ fn degraded_once(degraded: &AtomicBool) {
 /// Why the browser refused a read: a `NotAllowedError` is the user's or the
 /// page's permission (no gesture, a denied prompt, a document without focus).
 fn refusal_error(refusal: &wasm_bindgen::JsValue) -> ClipboardError {
-    let name = js_sys::Reflect::get(refusal, &wasm_bindgen::JsValue::from_str("name"))
+    let exception = js_sys::Reflect::get(refusal, &wasm_bindgen::JsValue::from_str("name"))
         .ok()
-        .and_then(|name| name.as_string());
-    refusal_from_name(name.as_deref())
+        .and_then(|name| name.as_string())
+        .map_or(flui_platform::BrowserException::Other, |name| {
+            flui_platform::BrowserException::from_name(&name)
+        });
+    refusal_from_exception(exception)
 }
 
-/// The error a `DOMException` name stands for.
-fn refusal_from_name(name: Option<&str>) -> ClipboardError {
-    match name {
-        Some("NotAllowedError" | "SecurityError") => ClipboardError::Denied,
+/// The error the browser's exception stands for.
+fn refusal_from_exception(exception: flui_platform::BrowserException) -> ClipboardError {
+    use flui_platform::BrowserException;
+    match exception {
+        BrowserException::NotAllowed | BrowserException::Security => ClipboardError::Denied,
         _ => ClipboardError::Unavailable,
     }
 }

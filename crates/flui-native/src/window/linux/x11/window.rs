@@ -94,6 +94,7 @@
 //! destroyed; everything else names the window by its identity.
 
 mod manager_hints;
+mod sync;
 
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
@@ -128,6 +129,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
+use self::sync::{SyncCounters, initialize_sync};
 use super::hints::WM_HINTS;
 use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_mode,
@@ -395,56 +397,6 @@ struct Chrome {
     presses: ChromePresses,
     /// The button of the press the window took, whose release it takes too.
     held: Option<u32>,
-}
-
-/// The two XSync counters a window names in `_NET_WM_SYNC_REQUEST_COUNTER`,
-/// in that order: the one a window manager without frame synchronisation
-/// waits on, and the extended one (`protocols`).
-#[derive(Debug, Clone, Copy)]
-struct SyncCounters {
-    basic: xsync::Counter,
-    extended: xsync::Counter,
-}
-
-impl SyncCounters {
-    /// Two counters made on `xcb` at 0, or `None` when the connection has no
-    /// ids left or failed. Both ids are taken before either counter is made,
-    /// and the first is destroyed again when the second cannot be: none is
-    /// left on the server for nobody.
-    fn create(xcb: &x11rb::xcb_ffi::XCBConnection) -> Option<Self> {
-        let zero = xsync::Int64 { hi: 0, lo: 0 };
-        let basic = xcb.generate_id().ok()?;
-        let extended = xcb.generate_id().ok()?;
-        xcb.sync_create_counter(basic, zero).ok()?;
-        if xcb.sync_create_counter(extended, zero).is_err() {
-            let _: Result<(), _> = xcb
-                .sync_destroy_counter(basic)
-                .map(x11rb::cookie::VoidCookie::ignore_error);
-            return None;
-        }
-        Some(Self { basic, extended })
-    }
-}
-
-/// The SYNC version a connection asks for: 3.1, what libXext asks for GDK and
-/// Qt. The counters a window makes are in every version.
-const SYNC_VERSION: (u8, u8) = (3, 1);
-
-/// Initialise the SYNC extension on `xcb`, as the extension asks before any
-/// other of its requests: whether the server has it and answered.
-fn initialize_sync(xcb: &x11rb::xcb_ffi::XCBConnection) -> bool {
-    use x11rb::connection::RequestConnection as _;
-
-    let present = matches!(
-        xcb.extension_information(xsync::X11_EXTENSION_NAME),
-        Ok(Some(_))
-    );
-    present
-        && xcb
-            .sync_initialize(SYNC_VERSION.0, SYNC_VERSION.1)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .is_some()
 }
 
 /// The `_NET_WM_MOVERESIZE` direction that moves a window.

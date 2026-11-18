@@ -15,7 +15,7 @@
 
 /// The turn deadline of one loop: the instant armed, and the time of the
 /// last turn delivered for it.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TurnDeadline {
     armed: Option<web_time::Instant>,
     /// The time of the last turn delivered for the deadline: that turn served

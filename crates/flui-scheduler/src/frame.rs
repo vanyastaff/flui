@@ -11,8 +11,6 @@ use std::{fmt, num::NonZeroU64, rc::Rc};
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::duration::{BudgetPercentage, FrameDuration, Milliseconds};
-
 /// A frame's number within the sequence that minted it: one scheduler's
 /// frames, or one presentation's produced frames.
 ///
@@ -58,20 +56,18 @@ impl fmt::Display for FrameId {
     }
 }
 
-/// UpdateScheduler phase - which part of the frame lifecycle is executing
+/// Which part of the frame lifecycle the scheduler is in.
 ///
-/// The phases execute in order:
+/// The phases run in order:
 ///
 /// ```text
-/// Idle → TransientCallbacks → MidFrameMicrotasks → PersistentCallbacks → PostFrameCallbacks → Idle
+/// Idle → Frame → PostFrame → Idle
 /// ```
 ///
-/// - **TransientCallbacks**: Animation tickers fire here (one-time frame
-///   callbacks)
-/// - **MidFrameMicrotasks**: Microtask queue flushes between animations and
-///   rendering
-/// - **PersistentCallbacks**: Rendering pipeline runs here (build/layout/paint)
-/// - **PostFrameCallbacks**: Cleanup and post-frame work
+/// - **Frame**: the frame's async tasks are polled once, then the driver's
+///   pipeline (build, layout, paint) runs.
+/// - **PostFrame**: post-frame callbacks observe the committed frame and
+///   `end_of_frame` waiters resolve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
@@ -81,101 +77,48 @@ pub enum SchedulerPhase {
     #[default]
     Idle = 0,
 
-    /// Transient callbacks are being executed.
-    /// Animation tickers fire during this phase.
-    TransientCallbacks = 1,
+    /// A frame is open: its async tasks are polled, then the pipeline runs.
+    Frame = 1,
 
-    /// Microtasks scheduled during TransientCallbacks are being executed.
-    /// Allows async work triggered by animations to complete.
-    MidFrameMicrotasks = 2,
-
-    /// Persistent callbacks are being executed.
-    /// The rendering pipeline (build/layout/paint) runs during this phase.
-    PersistentCallbacks = 3,
-
-    /// Post-frame callbacks are being executed.
-    /// Cleanup and one-time post-frame work happens here.
-    PostFrameCallbacks = 4,
+    /// The frame's pipeline has run; post-frame callbacks are being executed.
+    PostFrame = 2,
 }
 
 impl SchedulerPhase {
-    /// Try to convert from u8 representation
-    ///
-    /// Returns `None` if the value is not a valid discriminant.
+    /// The state behind a discriminant the scheduler stored in an atomic;
+    /// `None` for a byte no variant has.
     #[inline]
-    pub const fn try_from_u8(value: u8) -> Option<Self> {
+    pub(crate) const fn try_from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Idle),
-            1 => Some(Self::TransientCallbacks),
-            2 => Some(Self::MidFrameMicrotasks),
-            3 => Some(Self::PersistentCallbacks),
-            4 => Some(Self::PostFrameCallbacks),
+            1 => Some(Self::Frame),
+            2 => Some(Self::PostFrame),
             _ => None,
         }
     }
 
     /// All phases in execution order
-    pub const ALL: [SchedulerPhase; 5] = [
+    pub const ALL: [SchedulerPhase; 3] = [
         SchedulerPhase::Idle,
-        SchedulerPhase::TransientCallbacks,
-        SchedulerPhase::MidFrameMicrotasks,
-        SchedulerPhase::PersistentCallbacks,
-        SchedulerPhase::PostFrameCallbacks,
+        SchedulerPhase::Frame,
+        SchedulerPhase::PostFrame,
     ];
 
-    /// Check if valid transition from current phase to next phase
-    #[inline]
-    pub const fn can_transition_to(self, next: Self) -> bool {
+    /// Whether the phase machine may step from `self` to `next`: the order a
+    /// frame runs its phases in.
+    pub(crate) const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Idle, Self::TransientCallbacks)
-                | (
-                    Self::TransientCallbacks,
-                    Self::MidFrameMicrotasks | Self::PersistentCallbacks
-                )
-                | (Self::MidFrameMicrotasks, Self::PersistentCallbacks)
-                | (Self::PersistentCallbacks, Self::PostFrameCallbacks)
-                | (Self::PostFrameCallbacks, Self::Idle)
+            (Self::Idle, Self::Frame)
+                | (Self::Frame, Self::PostFrame)
+                | (Self::PostFrame, Self::Idle)
         )
     }
 
-    /// Get the next phase in normal execution order
-    #[inline]
-    pub const fn next(self) -> Option<Self> {
-        match self {
-            Self::Idle => Some(Self::TransientCallbacks),
-            Self::TransientCallbacks => Some(Self::MidFrameMicrotasks),
-            Self::MidFrameMicrotasks => Some(Self::PersistentCallbacks),
-            Self::PersistentCallbacks => Some(Self::PostFrameCallbacks),
-            Self::PostFrameCallbacks => None,
-        }
-    }
-
-    /// Check if currently in a frame (not idle)
+    /// Whether a frame is open (not idle).
     #[inline]
     pub const fn is_in_frame(self) -> bool {
         !matches!(self, Self::Idle)
-    }
-
-    /// Check if currently in animation phase
-    #[inline]
-    pub const fn is_animating(self) -> bool {
-        matches!(self, Self::TransientCallbacks)
-    }
-
-    /// Check if currently in rendering phase
-    #[inline]
-    pub const fn is_rendering(self) -> bool {
-        matches!(self, Self::PersistentCallbacks)
-    }
-}
-
-impl TryFrom<u8> for SchedulerPhase {
-    type Error = u8;
-
-    #[inline]
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::try_from_u8(value).ok_or(value)
     }
 }
 
@@ -183,10 +126,8 @@ impl fmt::Display for SchedulerPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Idle => write!(f, "Idle"),
-            Self::TransientCallbacks => write!(f, "TransientCallbacks"),
-            Self::MidFrameMicrotasks => write!(f, "MidFrameMicrotasks"),
-            Self::PersistentCallbacks => write!(f, "PersistentCallbacks"),
-            Self::PostFrameCallbacks => write!(f, "PostFrameCallbacks"),
+            Self::Frame => write!(f, "Frame"),
+            Self::PostFrame => write!(f, "PostFrame"),
         }
     }
 }
@@ -230,12 +171,8 @@ impl fmt::Display for SchedulerPhase {
 ///
 /// let state = AppLifecycleState::Resumed;
 ///
-/// if state.should_animate() {
-///     // Run animations
-/// }
-///
-/// if state.should_render() {
-///     // Render frames
+/// if state.is_visible() {
+///     // Keep the window's content current
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -311,11 +248,10 @@ impl AppLifecycleState {
         }
     }
 
-    /// Try to convert from u8 representation
-    ///
-    /// Returns `None` if the value is not a valid discriminant.
+    /// The state behind a discriminant the scheduler stored in an atomic;
+    /// `None` for a byte no variant has.
     #[inline]
-    pub const fn try_from_u8(value: u8) -> Option<Self> {
+    pub(crate) const fn try_from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Resumed),
             1 => Some(Self::Inactive),
@@ -346,100 +282,6 @@ impl AppLifecycleState {
     pub const fn is_focused(self) -> bool {
         matches!(self, Self::Resumed)
     }
-
-    /// Check if animations should run at full speed
-    ///
-    /// Returns true only when resumed (visible and focused).
-    #[inline]
-    pub const fn should_animate(self) -> bool {
-        matches!(self, Self::Resumed)
-    }
-
-    /// Check if animations can run (possibly at reduced rate)
-    ///
-    /// Returns true when resumed or inactive (visible).
-    #[inline]
-    pub const fn can_animate(self) -> bool {
-        matches!(self, Self::Resumed | Self::Inactive)
-    }
-
-    /// Check if frames should be rendered
-    ///
-    /// Returns true only when the app is visible.
-    #[inline]
-    pub const fn should_render(self) -> bool {
-        matches!(self, Self::Resumed | Self::Inactive)
-    }
-
-    /// Check if the app should save state
-    ///
-    /// Returns true when transitioning away from resumed/inactive.
-    #[inline]
-    pub const fn should_save_state(self) -> bool {
-        matches!(self, Self::Paused | Self::Detached)
-    }
-
-    /// Check if the app should release heavy resources
-    ///
-    /// Returns true when hidden or paused.
-    #[inline]
-    pub const fn should_release_resources(self) -> bool {
-        matches!(self, Self::Hidden | Self::Paused | Self::Detached)
-    }
-
-    /// Check if the state transition is valid
-    ///
-    /// Most transitions are valid, but some are logically unusual.
-    #[expect(
-        clippy::match_same_arms,
-        reason = "deliberate transition table: each state pair is listed explicitly \
-                  so a future tightening edits one arm instead of reconstructing \
-                  the table"
-    )]
-    pub const fn can_transition_to(self, next: Self) -> bool {
-        match (self, next) {
-            // Same state is always valid (no-op)
-            (a, b) if a as u8 == b as u8 => true,
-
-            // Resumed can go to any state
-            (Self::Resumed, _) => true,
-
-            // Inactive can go to resumed, hidden, or paused
-            (Self::Inactive, Self::Resumed | Self::Hidden | Self::Paused) => true,
-
-            // Hidden can go to inactive, paused, or resumed (when coming back)
-            (Self::Hidden, Self::Inactive | Self::Paused | Self::Resumed) => true,
-
-            // Paused can resume through hidden/inactive or go to detached
-            (Self::Paused, Self::Hidden | Self::Inactive | Self::Resumed | Self::Detached) => true,
-
-            // Detached can transition to any state (app starting up)
-            (Self::Detached, _) => true,
-
-            // Other transitions are unusual but not forbidden
-            _ => true,
-        }
-    }
-
-    /// Get human-readable description
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::Resumed => "Application is visible and focused",
-            Self::Inactive => "Application is visible but not focused",
-            Self::Hidden => "Application is not visible",
-            Self::Paused => "Application is paused and may be suspended",
-            Self::Detached => "Application is detached from views",
-        }
-    }
-}
-
-impl TryFrom<u8> for AppLifecycleState {
-    type Error = u8;
-
-    #[inline]
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::try_from_u8(value).ok_or(value)
-    }
 }
 
 impl fmt::Display for AppLifecycleState {
@@ -459,7 +301,7 @@ pub type LifecycleStateCallback = Rc<dyn Fn(AppLifecycleState)>;
 
 /// Frame phase - which part of the render pipeline is executing
 ///
-/// This is used within the PersistentCallbacks scheduler phase to track
+/// This is used within the [`SchedulerPhase::Frame`] scheduler phase to track
 /// rendering pipeline progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -488,61 +330,6 @@ impl FramePhase {
         FramePhase::Paint,
         FramePhase::Composite,
     ];
-
-    /// Get the next phase in the pipeline
-    #[inline]
-    pub const fn next(self) -> Option<Self> {
-        match self {
-            Self::Idle => Some(Self::Build),
-            Self::Build => Some(Self::Layout),
-            Self::Layout => Some(Self::Paint),
-            Self::Paint => Some(Self::Composite),
-            Self::Composite => None,
-        }
-    }
-
-    /// Get the previous phase in the pipeline
-    #[inline]
-    pub const fn prev(self) -> Option<Self> {
-        match self {
-            Self::Idle => None,
-            Self::Build => Some(Self::Idle),
-            Self::Layout => Some(Self::Build),
-            Self::Paint => Some(Self::Layout),
-            Self::Composite => Some(Self::Paint),
-        }
-    }
-
-    /// Check if this is an active rendering phase
-    #[inline]
-    pub const fn is_rendering(self) -> bool {
-        matches!(
-            self,
-            Self::Build | Self::Layout | Self::Paint | Self::Composite
-        )
-    }
-
-    /// Get phase as numeric index
-    #[inline]
-    pub const fn as_index(self) -> usize {
-        self as usize
-    }
-}
-
-impl TryFrom<u8> for FramePhase {
-    type Error = u8;
-
-    #[inline]
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Idle),
-            1 => Ok(Self::Build),
-            2 => Ok(Self::Layout),
-            3 => Ok(Self::Paint),
-            4 => Ok(Self::Composite),
-            v => Err(v),
-        }
-    }
 }
 
 impl fmt::Display for FramePhase {
@@ -557,14 +344,13 @@ impl fmt::Display for FramePhase {
     }
 }
 
-/// One frame's timing as its scheduler sees it: which frame, when it began,
-/// and the target it is judged against.
+/// One frame's timing as its scheduler sees it: which frame and when it began.
 ///
 /// Issued by the scheduler and handed to persistent and post-frame callbacks.
-/// Elapsed time is measured against an instant the caller supplies, read from
-/// the clock that stamped [`Self::start_time`] — the scheduler's own clock
-/// source, which a headless driver replaces with a virtual one. Measuring
-/// against the wall clock instead would mix two timelines.
+/// [`Self::start_time`] is read from the scheduler's own clock source, which a
+/// headless driver replaces with a virtual one; a duration measured against it
+/// is measured on that clock, not on the wall clock. What a frame cost is
+/// recorded in its [`FrameSnapshot`](crate::frame_telemetry::FrameSnapshot).
 ///
 /// # Examples
 ///
@@ -582,87 +368,17 @@ pub struct FrameTiming {
 
     /// When the frame started (its vsync or frame time).
     pub start_time: Instant,
-
-    /// The target the frame is judged against.
-    pub frame_duration: FrameDuration,
 }
 
 impl FrameTiming {
     /// The timing of frame `id`, begun at `start_time`.
-    pub(crate) fn begun(id: FrameId, start_time: Instant, frame_duration: FrameDuration) -> Self {
-        Self {
-            id,
-            start_time,
-            frame_duration,
-        }
-    }
-
-    /// Get target frame duration in milliseconds
-    #[inline]
-    pub fn target_duration_ms(&self) -> f64 {
-        self.frame_duration.as_ms().value()
-    }
-
-    /// Time from the frame's start to `now`, zero when `now` precedes it.
-    #[inline]
-    pub fn elapsed_at(&self, now: Instant) -> Milliseconds {
-        Milliseconds::new(now.saturating_duration_since(self.start_time).as_secs_f64() * 1000.0)
-    }
-
-    /// Whether the frame has used its whole budget by `now`.
-    #[inline]
-    pub fn is_over_budget_at(&self, now: Instant) -> bool {
-        self.frame_duration.is_over_budget(self.elapsed_at(now))
-    }
-
-    /// Budget left at `now`.
-    #[inline]
-    pub fn remaining_at(&self, now: Instant) -> Milliseconds {
-        self.frame_duration.remaining(self.elapsed_at(now))
-    }
-
-    /// Budget used by `now`, as a percentage.
-    #[inline]
-    pub fn utilization_at(&self, now: Instant) -> BudgetPercentage {
-        BudgetPercentage::from_ratio(self.elapsed_at(now).value() / self.target_duration_ms())
-    }
-
-    /// Whether more than 80% of the budget is used by `now`.
-    #[inline]
-    pub fn is_deadline_near_at(&self, now: Instant) -> bool {
-        self.frame_duration.is_deadline_near(self.elapsed_at(now))
-    }
-
-    /// Whether more than 150% of the budget is used by `now`.
-    #[inline]
-    pub fn is_janky_at(&self, now: Instant) -> bool {
-        self.frame_duration.is_janky(self.elapsed_at(now))
-    }
-
-    /// Get target FPS
-    #[inline]
-    pub fn target_fps(&self) -> u32 {
-        self.frame_duration.fps() as u32
+    pub(crate) fn begun(id: FrameId, start_time: Instant) -> Self {
+        Self { id, start_time }
     }
 }
 
-/// Transient frame callback - executed during TransientCallbacks phase.
-///
-/// These are one-time callbacks that fire during the animation phase.
-/// Animation tickers use this to receive the vsync timestamp.
-/// Receives the vsync timestamp for synchronized timing.
-pub type OneShotFrameCallback = Box<dyn FnOnce(Instant)>;
-
-/// Recurring frame callback (runs every frame)
-///
-/// These run during the PersistentCallbacks phase every frame.
-/// The rendering pipeline (build/layout/paint) registers here.
-/// Uses Arc for cheap cloning - recurring callbacks are cloned before execution
-/// to avoid holding locks during callback invocation.
-pub type RecurringFrameCallback = Rc<dyn Fn(&FrameTiming)>;
-
 /// Post-frame callback - executed after frame completes
 ///
-/// These run during the PostFrameCallbacks phase, after rendering is complete.
+/// These run during the [`SchedulerPhase::PostFrame`] phase, after rendering is complete.
 /// Use for cleanup, analytics, or scheduling the next frame.
 pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming)>;

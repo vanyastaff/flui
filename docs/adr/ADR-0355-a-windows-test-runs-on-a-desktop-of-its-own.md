@@ -20,7 +20,7 @@ Windows had nothing of the kind.
 A Win32 desktop is a kernel object in a window station. Only one desktop of the interactive
 window station takes input and is displayed (the input desktop); a window on any other is never
 shown and receives no mouse or keyboard input, while activation, focus, messages, hooks, DPI,
-monitors, DXGI presentation, DWM attributes, OLE drag and drop and the text services work there.
+monitors, DXGI presentation, DWM attributes, OLE's drop targets and the text services work there.
 A process started with `STARTUPINFOW::lpDesktop` naming a desktop has every thread on it, and its
 children inherit it. Measured on Windows 11 (build 26300) with the suites of `origin/main` at
 `b1c36805f`:
@@ -109,7 +109,16 @@ the input desktop. A case that needs them reads whether its desktop takes input
 and, where it does not, prints `CANNOT_VERIFY` with the reason and returns, or fails under
 `FLUI_REQUIRE_INPUT_DESKTOP=1`, as `FLUI_REQUIRE_GPU` and `FLUI_REQUIRE_WAYLAND` turn their
 skips into failures. A test that reads the cursor for a position the case does not depend on is
-given one instead (the touchpad tests' `TestCursor`). `FLUI_TEST_VISIBLE_DESKTOP=1` makes
+given one instead (the touchpad tests' `TestCursor`). OLE's drop targets, called as OLE calls
+them, work on the test desktop; OLE's `DoDragDrop` loop needs the input desktop. Woken by a
+mouse move posted to its capture window, the loop enters the window under the move's position on
+Windows 11 build 26300 on either desktop. On Windows Server 2025 (build 26100) the case dropped
+through the loop on the input desktop, the system pointer left where it was; whether that loop
+reads the posted position or the pointer is not separated. On the test desktop there the loop
+entered only a window covering the whole screen, whichever position, button state or coordinate
+space the move carried. So the case that drops
+through the loop runs on the input desktop
+(`a_drag_into_a_window_of_this_process_drops_through_the_loop`). `FLUI_TEST_VISIBLE_DESKTOP=1` makes
 `test-desktop` start the test on the caller's desktop, where those cases run; the nightly Windows
 run sets both variables for them, since its runner has no user. `docs/testing.md` ("The Windows
 test desktop") lists them.

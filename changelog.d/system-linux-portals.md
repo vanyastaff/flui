@@ -1,6 +1,6 @@
 ### Added
 
-- `flui::services::system` gains autostart (`Autostart`), global shortcuts (`GlobalShortcuts`, a `ShortcutBinding` that hears the triggers the system chose and each press and release), progress and a count on the application's launcher entry (`TaskbarEntry`) and the user's folders (`UserDirs`). Linux provides them through the `Background` and `GlobalShortcuts` portals, the Unity launcher entry signal and the XDG user directories; other hosts answer `Unsupported(NotYetOnThisHost)`. `ScriptedSystem` scripts each of them.
+- `flui::services::system` gains autostart (`Autostart`), global shortcuts (`GlobalShortcuts`, a `ShortcutBinding` that hears the triggers the system chose and each press and release), progress and a count on the application's launcher entry (`TaskbarEntry`) and the user's folders (`UserDirs`). Linux provides them through the `Background` and `GlobalShortcuts` portals, the Unity launcher entry signal and the XDG user directories; Windows provides them too, and the other hosts answer `Unsupported(NotYetOnThisHost)`. `ScriptedSystem` scripts each of them.
 - A provider can ask how a desktop portal names the acquiring widget's window (`WindowRef::portal_parent`, `PortalParent`), and which id the application has (`ProviderContext::app_id`).
 
 ### Changed

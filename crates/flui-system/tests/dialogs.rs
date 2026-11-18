@@ -4,7 +4,9 @@
 //! seam.
 
 use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_platform::capability::{
     Abandoned, CapabilityRegistrar, Plugin, ProviderContext, Resolver, WindowRef,
@@ -13,8 +15,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, MalformedRequest, OpenRequest, OpenResult, PickedFile, Picks, SaveLocation,
-    SaveRequest, SaveResult,
+    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult, PickedFile, PickedForm,
+    Picks, SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -465,6 +467,19 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
             OpenRequest::files().directory("relative/dir"),
             MalformedRequest::RelativeDirectory,
         ),
+        // Windows would show a title up to its NUL; D-Bus refuses one.
+        (
+            OpenRequest::files().title("Open\0 secretly"),
+            MalformedRequest::Text,
+        ),
+        (
+            OpenRequest::files().accept_label("Two\nlines"),
+            MalformedRequest::Text,
+        ),
+        (
+            OpenRequest::files().title("t".repeat(MAX_TEXT_LEN + 1)),
+            MalformedRequest::Text,
+        ),
     ];
     let saves = [
         (
@@ -490,6 +505,10 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         (
             SaveRequest::new().directory("relative"),
             MalformedRequest::RelativeDirectory,
+        ),
+        (
+            SaveRequest::new().title("Save\u{7}"),
+            MalformedRequest::Text,
         ),
     ];
     let open_answers = opens.map(|(request, malformed)| (land(handle.open(request)), malformed));
@@ -721,4 +740,222 @@ fn a_dialog_error_carries_its_unsupported() {
         failed.to_string(),
         "the system failed: the desktop portal ended the request with response 2"
     );
+}
+
+/// Turn until `slot` holds an outcome, or panic after ten seconds: a save's
+/// write answers from a thread of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn turn_until_landed<T>(host: &mut HeadlessHost, slot: &Slot<T>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while slot.borrow().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the save did not answer in ten seconds"
+        );
+        turn(host);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_with_contents_answers_once_they_are_written_where_the_user_chose() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let chosen = SaveLocation::new(
+        PickedFile::try_new(folder.path().join("notes.txt")).expect("an absolute path"),
+        Some(0),
+    );
+    dialogs.answer_next_save(Ok(Some(chosen.clone())));
+
+    let answered = land(
+        handle.save(
+            SaveRequest::new()
+                .filter(FileFilter::new("Text").with_extension("txt"))
+                .contents(b"written".to_vec()),
+        ),
+    );
+    turn_until_landed(&mut host, &answered);
+
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(chosen)))));
+    assert_eq!(
+        std::fs::read(folder.path().join("notes.txt")).expect("the file was written"),
+        b"written"
+    );
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_whose_write_fails_answers_the_systems_failure() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let unwritable = folder.path().join("missing").join("notes.txt");
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(
+        PickedFile::try_new(&unwritable).expect("an absolute path"),
+        None,
+    ))));
+
+    let answered = land(handle.save(SaveRequest::new().contents(b"lost".to_vec())));
+    turn_until_landed(&mut host, &answered);
+
+    let failure = match answered.borrow_mut().take() {
+        Some(Ok(Err(DialogError::Failed(failure)))) => failure,
+        other => panic!("the write's failure: {other:?}"),
+    };
+    assert!(
+        matches!(failure, SystemFailure::Os(code) if code != 0),
+        "the system's code: {failure:?}"
+    );
+    assert!(!unwritable.exists());
+}
+
+#[test]
+fn a_save_the_system_wrote_itself_answers_the_file_it_wrote() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let written = SaveLocation::new(
+        PickedFile::try_from_contents("notes.txt", Arc::from(&b"written"[..]))
+            .expect("a file name"),
+        None,
+    );
+    dialogs.answer_next_save(Ok(Some(written.clone())));
+
+    let answered = land(handle.save(SaveRequest::new().contents(b"written".to_vec())));
+    turn(&mut host);
+    turn(&mut host);
+
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(written)))));
+}
+
+#[test]
+fn a_file_handed_over_without_a_path_carries_its_name_and_contents() {
+    let contents: Arc<[u8]> = Arc::from(&b"private words"[..]);
+    let handed =
+        PickedFile::try_from_contents("notes.txt", Arc::clone(&contents)).expect("a file name");
+    assert_eq!(handed.path(), None);
+    assert_eq!(handed.contents(), Some(&b"private words"[..]));
+    assert_eq!(handed.file_name(), Some(OsStr::new("notes.txt")));
+    let shown = format!("{handed:?}");
+    assert!(
+        shown.contains("notes.txt") && shown.contains("13") && !shown.contains("private"),
+        "a pick shows its name and length, never its contents: {shown}"
+    );
+    for name in ["", " ", ".", "..", "a/b", "a\\b", "a\nb"] {
+        assert_eq!(
+            PickedFile::try_from_contents(name, Arc::clone(&contents)),
+            None,
+            "{name:?} is not a file name"
+        );
+    }
+
+    let at_path = file("notes.txt");
+    assert_eq!(at_path.contents(), None);
+    assert_eq!(at_path.file_name(), Some(OsStr::new("notes.txt")));
+    let request = format!(
+        "{:?}",
+        SaveRequest::new().contents(b"private words".to_vec())
+    );
+    assert!(
+        request.contains("13") && !request.contains("112"),
+        "a request shows its contents' length, never its bytes: {request}"
+    );
+}
+
+#[test]
+fn a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate() {
+    let contents: Arc<[u8]> = Arc::from(&b"words"[..]);
+    let handed =
+        PickedFile::try_from_contents("notes.txt", Arc::clone(&contents)).expect("a file name");
+    let downloaded = PickedFile::try_download("notes.txt").expect("a file name");
+    let at_path = file("notes.txt");
+
+    assert_eq!(
+        handed.form(),
+        PickedForm::Contents {
+            name: "notes.txt",
+            contents: b"words"
+        }
+    );
+    assert_eq!(
+        downloaded.form(),
+        PickedForm::Download { name: "notes.txt" }
+    );
+    assert_eq!(downloaded.contents(), None, "nobody saw a download written");
+    assert_eq!(downloaded.path(), None);
+    assert_eq!(downloaded.file_name(), Some(OsStr::new("notes.txt")));
+    assert_eq!(
+        at_path.form(),
+        PickedForm::Path(at_path.path().expect("a path"))
+    );
+    assert_eq!(PickedFile::try_download("a/b"), None);
+}
+
+#[test]
+fn a_filter_means_a_files_name_or_its_type_ignoring_ascii_case() {
+    let images = FileFilter::new("Images")
+        .with_extension("png")
+        .with_extension("tar.gz")
+        .with_mime_type("image/*")
+        .with_mime_type("application/pdf");
+    let cases: [(&str, Option<&str>, bool); 11] = [
+        ("photo.png", None, true),
+        ("PHOTO.PNG", None, true),
+        ("a.TAR.GZ", None, true),
+        ("png", None, false),
+        (".png", None, false),
+        ("photo.png.zip", None, false),
+        ("scan", Some("image/jpeg"), true),
+        ("scan", Some("IMAGE/HEIC"), true),
+        ("doc", Some("application/pdf; charset=binary"), true),
+        ("doc", Some("application/zip"), false),
+        ("doc", Some(""), false),
+    ];
+    for (name, mime_type, matches) in cases {
+        assert_eq!(
+            images.matches(name, mime_type),
+            matches,
+            "{name:?} of {mime_type:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_replaces_the_chosen_file_whole_and_leaves_nothing_beside_it() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("notes.txt");
+    std::fs::write(&target, b"the old, longer contents").expect("a file to replace");
+    // A second name for the old file: a file written in place would change
+    // under it, a replaced one does not.
+    let old = folder.path().join("old");
+    std::fs::hard_link(&target, &old).expect("a hard link");
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(
+        PickedFile::try_new(&target).expect("an absolute path"),
+        None,
+    ))));
+
+    let answered = land(handle.save(SaveRequest::new().contents(b"new".to_vec())));
+    turn_until_landed(&mut host, &answered);
+
+    assert!(matches!(&*answered.borrow(), Some(Ok(Ok(Some(_))))));
+    assert_eq!(std::fs::read(&target).expect("the file"), b"new");
+    assert_eq!(
+        std::fs::read(&old).expect("the old file"),
+        b"the old, longer contents",
+        "the chosen name now names a new file; the old one was never truncated"
+    );
+    let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(folder.path())
+        .expect("the folder")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["notes.txt", "old"], "no temporary file is left");
 }

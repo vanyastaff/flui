@@ -12,8 +12,8 @@
 //!
 //! This scan therefore proves exactly one thing, and it is a real thing: **no
 //! frame site assembles a frame out of scheduler phases itself.** A site that
-//! reintroduced `handle_draw_frame()` would drain post-frame callbacks before
-//! its pipeline, and one that called `drive_frame` directly would bypass the
+//! called `handle_begin_frame` would open a frame outside the pump, and one
+//! that called `drive_frame` directly would bypass the
 //! pump's command drain and frame clock; either turns this test red. It is a
 //! regression guard, not a proof of the mobile bodies' runtime behavior.
 
@@ -117,7 +117,7 @@ fn production_lines(source: &str) -> Vec<&str> {
 /// The `app/runner/` module reaches a frame only through `UiRuntime::pump`.
 ///
 /// Red-check: change any site back to `scheduler.drive_frame(...)`
-/// around `render_frame`, or to `handle_begin_frame` + `handle_draw_frame`.
+/// around `render_frame`, or to `handle_begin_frame`.
 fn every_runner_frame_site_drives_the_ui_runtime_pump() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
@@ -126,7 +126,6 @@ fn every_runner_frame_site_drives_the_ui_runtime_pump() {
 
     for banned in [
         "handle_begin_frame",
-        "handle_draw_frame",
         "end_frame(",
         "drive_frame(",
         "finish_async_pump(",

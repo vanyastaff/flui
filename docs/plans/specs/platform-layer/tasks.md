@@ -3253,9 +3253,9 @@ GPU-память простаивающего или невидимого окн
   которой нет у этого устройства, допуск отказывает с `NotOnThisDevice` (Win32 ниже 22621), прочие
   — `NotOnThisPlatform`; `WindowHandle::set_material` (`flui-view`) — путь виджета через очередь
   окна. (2) В документации `WindowCapabilities`: `Unavailable` ровно тогда, когда допуск
-  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` с любого
-  потока: края доходят до корневого контроллера через главную очередь (`StatusBar::defer_edges`,
-  контроллер читает последние края при обновлении, так что ранний блок не возвращает старые).
+  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` на потоке
+  владельца: края сразу доходят до корневого контроллера (`StatusBar::defer_edges`), а следующий
+  присоединённый контроллер получает те же края.
   (3) Тест отказа DWM: инъекция исхода DWM (`material_applied`) — отказ даёт `ApplyError::Platform`;
   закрытое окно — `ApplyError::Closed` (команда, допущенная до закрытия). (4) Android: чистая
   модель `display::android::sample::FrameRateRequests` (разрешение `ANativeWindow_setFrameRate`
@@ -5381,8 +5381,8 @@ GPU-память простаивающего или невидимого окн
   `an_intent_opens_its_link_or_documents` и trybuild-снимок `owner_platform_is_not_send`. Не
   собирались здесь macOS, iOS, Android и wasm32 (CI `cross-typecheck`); тесты X11 и Wayland не
   запускались.
-- [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
-  #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
+- [x] **LY53** — #2150 (`9450db8e1`), #2325 (`75872fc6e`), ветка `xtask/capability-build-script`
+  от `main` @ `7b596b26b`. kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
   (`CapabilityTier`), зависит только от `flui-sdk`, `flui-platform` и `flui-protocol`
   (`CapabilityOffContract`), его не называет ни другой крейт возможности, ни член workspace, кроме
@@ -5391,8 +5391,34 @@ GPU-память простаивающего или невидимого окн
   `[workspace.metadata.flui.reach.kind.capability]` запрещает `flui-native`, `flui-app`,
   `flui-engine`, `winit`, `wgpu` и `tokio`. `workspace --self-test` сажает нарушение на каждое
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
-  kind нет. Остаётся правило про `build.rs` с посаженным нарушением: `rg 'javac|swiftc|d8'
-  tools/xtask/src/workspace` пуст.
+  kind нет. Сборочный скрипт крейта возможности (ADR-0154 решение 6: `links` и `build.rs` —
+  только у крейта, экспортирующего глобальный нативный символ): kind-правило
+  (`CapabilityBuildScript`) отказывает крейту возможности без `links` или с пустым `links`
+  (Cargo принимает `links = ""`), для которого Cargo
+  сообщает `custom-build`-цель (корневой `build.rs`, не выключенный `build = false`, или любой
+  `build = "<путь>"`); исходники не разбираются. Держится ровно собственный скрипт крейта без
+  `links`. Не проверяются: что запускает скрипт крейта с `links` (держит ревью),
+  сборочные скрипты сторонних зависимостей крейта возможности (kind-правило их допускает:
+  `robius-location`, чей `build.rs` запускает `javac`, проходит и `workspace`, и `deps`) и
+  скрипты крейтов фреймворка — всё это пункт ADR-0255 решения 21 и ADR-0154 решения 5 в
+  `docs/gaps.md` («Accepted ADR sections not built yet»); пять скриптов на `main` запускают
+  только `rustc`. `deny.toml` запрещает `android-build` и `swift-rs`, которые запускают эти
+  инструменты из сборочного скрипта. Строки подтверждения ADR-0154 и ADR-0255, называвшие
+  `android-dex`, теперь называют то, что держит правило; столбец проверки R5.11 — гейт вместо
+  `rg`. `workspace --self-test` сажает `cap-build` (корневой `build.rs`), `cap-build-path`
+  (`build = "gen.rs"`) и `cap-links-empty` (`links` из пробела); молчат `cap-links` (крейт возможности с `links` и скриптом), узел
+  `flui-foundation` (скрипт при `links` поезда) и `k1` (скрипт крейта kind `internal`). Без
+  проверки самотест печатает `MISSED` на все посадки, без условия kind — `FALSE POSITIVE` на
+  `k1`, без исключения `links` — `FALSE POSITIVE` на `cap-links`, с проверкой только
+  `is_none()` — `MISSED` на `cap-links-empty`. `build = false` держит тест на `cargo metadata`:
+  `a_capability_crates_build_script_is_reported` (корневой `build.rs`, `build = "gen.rs"` и
+  `build.rs` при `links = ""` найдены; `build.rs` при `build = false`, при `links` и скрипт
+  крейта kind `internal` — нет; без проверки падает, со старым `is_none()` падает строка
+  `links = ""`). `a_build_script_outside_the_repository_is_read`:
+  `build = "<путь вне репозитория>"` у крейта другого kind больше не обрывает `workspace` (с
+  прежним `?` падает с «is outside the repository»). Единственный крейт возможности,
+  `flui-system`, скрипта не имеет. Проверки на Windows: `workspace`, `workspace --self-test`,
+  `deps`, clippy `-D warnings` и nextest `xtask`, `checks`.
 - [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
   дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
   Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:
@@ -5447,28 +5473,91 @@ GPU-память простаивающего или невидимого окн
   лаунчера — тест `flui-system`. Тесты `flui-system` теперь берут абсолютные пути через
   `temp_dir`: `/srv/…` и `/home` относительны на Windows, и два теста там падали. Примитив вне
   фичи недоступен (модуль за `cfg(feature = "scripted")`). Запуски на устройствах не нужны.
-- [ ] **LY57** (не закрыта: крейт, плагин и две возможности на `main`; провайдеров Windows,
-  остальных служб и общей conformance-таблицы нет) — #2150 (`9450db8e1`), портал Linux #2158,
-  `Unsupported` в ошибках запуска и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт —
-  `crates/flui-system`, ярус `pkg`, kind `capability`.
-  `SystemPlugin` объявлен в `[package.metadata.flui.capability]`; фасад публикует крейт как
-  `flui::services::system` за фичей `system`, выключенной по умолчанию. Возможности: файловые
-  диалоги (`FileDialogCapability`, `FileDialogs`, модальны окну виджета, один на окно) и запуск
-  (`LauncherCapability`, `Launcher` в контракте, `flui_platform::launch`: URI, открыть путь,
-  reveal, trash). Двойники `ScriptedLauncher` и `ScriptedFileDialogs` (их плагин `ScriptedSystem`,
-  `ScriptedSystem::on`) построены на сценарном примитиве LY54. Вне Linux плагин
-  регистрирует отказ `NotYetOnThisHost`. Тесты (`crates/flui-system/tests/`):
-  `the_declared_plugin_is_the_crates_default_plugin`;
-  `a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn`,
-  `each_path_request_reaches_the_system_and_carries_its_answer`,
-  `the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere` (`launcher.rs`);
-  `an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks`,
-  `a_window_shows_one_dialog_at_a_time`, `a_dialog_error_carries_its_unsupported`
-  (`dialogs.rs`). Остаётся: провайдеры Windows и прогон против реальной ОС (`prompt_for_*` и OLE
-  по-прежнему в `crates/flui-native/src/owner/windows.rs`); возможности share, message box,
-  автозапуска, глобальных сочетаний, прогресса и значка, jump list, путей и сведений об ОС;
-  conformance-таблица против симулятора. Плагин доходит до приложения, только если оно включит
-  фичу `system` и зарегистрирует его: в репозитории регистрацию показывает лишь `flui add`.
+- [x] **LY57** (закрыта веткой `system/windows-providers`: провайдеры Windows всех служб, message
+  box, share, jump list и сведения об ОС, общая conformance-таблица; прогоны на рабочем столе —
+  заметки строк parity) — #2150 (`9450db8e1`), портал Linux #2158, `Unsupported` в ошибках запуска
+  и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт — `crates/flui-system`, ярус `pkg`,
+  kind `capability`; `SystemPlugin` объявлен в `[package.metadata.flui.capability]`, фасад
+  публикует крейт как `flui::services::system` за фичей `system`. Правила крейта — его
+  `ARCHITECTURE.md`. Службы: запуск (`Launcher` контракта), файловые диалоги и message box
+  (`FileDialogs`, `MessageBoxes`: общая таблица «один диалог на окно», `Dialog` живёт, пока его
+  держат, ADR-0344), `Share`, `JumpList`, `Os` (сведения об ОС) — контракты этой ветки;
+  автозапуск, глобальные сочетания, запись лаунчера и папки пользователя — контракты LY59
+  (`Autostart`, `GlobalShortcuts`, `TaskbarEntry`, `UserDirs`), к которым ветка добавила
+  `ShortcutError::Exhausted`; свои дубли (`LaunchAtLogin`, `Shortcut`/`ShortcutRegistration`,
+  `Taskbar` окна, папки в `Os`) удалены при слиянии с LY59. Правила — в handle: искажённый запрос
+  отказывается до бэкенда (`MalformedRequest::Text`/`EmptyMessage`, `MalformedShare`,
+  `MalformedTask`), закрытое окно — `WindowClosed` без обращения к системе, ответ вне запроса —
+  `MalformedAnswer`. Заголовок и подпись кнопки файлового диалога длиннее `MAX_TEXT_LEN` или с
+  управляющим символом отказываются на всех хостах. `flui_platform::launch::is_local_path` — общее
+  правило локальности запуска и share. Двойники всех служб — `testing::ScriptedSystem::on`.
+  Windows (`win32`): модальный диалог — на своём потоке в STA, владелец — окно виджета (главный
+  цикл владельца продолжает кадры), закрытие — через окно отмены потока (`IFileDialog::Close`,
+  `EndDialog`); фильтры — `*.ext`, MIME отказывается `NotOnThisPlatform`, `SetDefaultExtension` и
+  `GetFileTypeIndex`; запуск, автозапуск (`Run`, выбор пользователя в `StartupApproved\Run` не
+  перезаписывается: включение выключенной им записи отвечает `Disabled`), jump list и папки
+  (`SHGetKnownFolderPath`) — поток на запрос в STA, не больше `threads::MAX_IN_FLIGHT` на runtime;
+  URI — `ShellExecuteExW` с `open` без класса схемы (выбор пользователя), однобуквенная схема
+  отказывается; документ — `CreateFileW`, `GetFinalPathNameByHandleW`, пол `runs_when_opened` и
+  `AssocIsDangerous`, затем открытие по итоговому имени; reveal — `SHOpenFolderAndSelectItems`;
+  trash — `IFileOperation` с `FOFX_RECYCLEONDELETE` и `FOF_WANTNUKEWARNING`; share, горячие
+  клавиши (`RegisterHotKey` на своём message-only окне; сочетание связывается с предпочтённым
+  триггером или выпадает из `Bound`; только нажатия — `WM_HOTKEY` не сообщает отпускание) и запись
+  лаунчера (`ITaskbarList3` на кнопках окон, где её получили; сабклассинг ради
+  `TaskbarButtonCreated`, `SetWindowSubclass` по ординалу: `comctl32.dll` 5.82 экспортирует его
+  только по ординалу) — на потоке владельца. Linux: message box, share и jump list —
+  `NotOnThisPlatform` в регистрации портала; сведения об ОС — `NotYetOnThisHost`.
+  Тесты (`crates/flui-system/tests/`): таблица `every_provider_keeps_the_system_services_contract`
+  (`conformance.rs`; каждая служба против двойников и против `SystemPlugin` хоста; на Windows
+  прочитала сведения об ОС и домашнюю папку с реальной системы); `shell_services.rs`:
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`,
+  `a_message_box_ends_with_its_window`,
+  `a_share_reaches_its_windows_sheet_and_a_malformed_one_is_refused_without_asking`,
+  `a_jump_list_is_refused_without_asking_when_its_tasks_are_malformed`,
+  `the_os_is_what_its_system_says`; строки текста в
+  `a_malformed_request_is_refused_without_showing_a_dialog`;
+  `the_system_plugin_provides_the_shell_on_windows_the_portal_on_linux_and_refuses_elsewhere`
+  (строка на каждую службу и ОС). Модули Windows (`win32::*::tests`):
+  `a_dialog_answers_from_its_thread_at_an_owner_turn`,
+  `a_dropped_dialog_is_closed_on_its_thread_and_frees_the_window`,
+  `a_dialog_ends_with_its_window_and_is_closed_on_its_thread`,
+  `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`,
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`,
+  `enabling_writes_the_quoted_executable_and_the_users_choice_stands`,
+  `an_autostart_request_is_answered_from_a_shell_thread_through_the_handle`,
+  `a_binding_hears_what_was_bound_then_each_press_until_it_drops`,
+  `a_chord_another_application_holds_is_left_out`,
+  `a_button_made_late_or_again_shows_the_entry_last_set`,
+  `the_entry_is_shown_on_every_window_it_was_acquired_in`,
+  `a_folder_is_found_on_a_shell_thread_and_answered_as_the_system_said`,
+  `an_argument_is_quoted_as_the_command_line_splitter_reads_it_back`,
+  `a_runtime_runs_a_bounded_number_of_shell_requests_and_frees_each_place` и таблицы
+  отображений. С откатами: без проверки заголовка и подписи падает
+  `a_malformed_request_is_refused_without_showing_a_dialog`; без `MessageButtons::admits` —
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`; с ответом
+  отменённого диалога — `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`;
+  с судом по данному пути вместо итогового —
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`. После независимого
+  чтения: удержание файла читает данные и не разделяет удаление
+  (`a_held_file_cannot_be_renamed_until_it_is_let_go`, красный при открытии только атрибутов);
+  итоговое имя вне локального диска — `NotLocal`
+  (`a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led`); стадия диалога уходит из
+  `Showing` на любом выходе, паника включена
+  (`a_dialog_whose_code_panics_ends_before_its_window_goes_and_a_later_drop_posts_nothing`); окно
+  держит один поток диалога, пока тот не вышел
+  (`a_window_takes_no_new_dialog_until_the_dismissed_one_has_left_its_thread`); id горячих клавиш
+  не переиспользуются, `ShortcutError::Exhausted`
+  (`a_press_queued_for_a_dropped_binding_never_reaches_the_binding_after_it`,
+  `a_runtime_that_numbered_every_hot_key_ends_the_next_binding_for_good`); каждая точка входа ОС —
+  через `owner::panic_boundary::os_entry`, `xtask panic-boundary` читает и `flui-system`; запрос
+  дольше `ShellThreads::ABANDON_AFTER` бросается со своим отказом
+  (`a_request_past_its_deadline_is_abandoned_its_caller_refused_and_its_place_reclaimed`). Каждый
+  из этих тестов красный с откатом своей правки. Не запускалось: ни один настоящий диалог,
+  запуск, горячая клавиша, запись автозапуска, изменение панели задач, jump list или share на
+  рабочем столе — owed в заметках строк parity (System services, Dock menu/jump list); macOS,
+  iOS, Android, wasm не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`,
+  `reveal_path`, `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в
+  `docs/gaps.md`.
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
@@ -5511,12 +5600,86 @@ GPU-память простаивающего или невидимого окн
   `zxdg_exporter_v2` добавлен): `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends`,
   `a_compositor_without_an_exporter_names_no_portal_parent`; под sway —
   `a_portal_parent_names_the_window_while_its_request_holds_the_export`. Message box и share:
-  портала нет ни для того, ни для другого, контракта ещё нет; их контракт и отказ Linux
-  `NotOnThisPlatform` приходят с первым провайдером (LY57/LY60), как говорит
-  `crates/flui-system/ARCHITECTURE.md`. Общая conformance-таблица — за LY57. Прогоны против
+  портала нет ни для того, ни для другого; их контракт пришёл с провайдером Windows (LY57), и
+  регистрация портала отказывает в них `NotOnThisPlatform`. Общая conformance-таблица — LY57.
+  Прогоны против
   порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
   «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
   shortcuts», «Launch at login», «User folders».
+- [ ] **LY60** (не закрыта: все службы сделаны веткой `system/web-providers` (#2765), остаётся
+  диалог папок; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
+  `crates/flui-system/src/web/`, правила — раздел «The web providers» в
+  `crates/flui-system/ARCHITECTURE.md`. Страница достаётся через окно виджета: канвас, на который
+  указывает `WebCanvasWindowHandle` его `WindowRef` (`web::page::Page`), не через глобальные
+  объекты браузера; виджет без окна или в окне не-канвасе — `NoWindow`; `ProviderContext::app_id`
+  и `WindowRef::portal_parent` странице ничего не значат. Пикер и новое окно вне жеста
+  пользователя отказываются `Unavailable` до обращения к браузеру, и тот же `Unavailable` отвечает
+  отказ самого браузера (`NotAllowedError`, `SecurityError`, заблокированное окно): один ответ.
+  Открытие — `showOpenFilePicker`, где он есть и выражает фильтры, иначе `<input type=file>`, и
+  ввод же — на месте пикера, которого документ показать не может (`SecurityError`,
+  cross-origin-фрейм), пока жест длится. Каждый выбор сверяется с фильтрами
+  (`FileFilter::matches`, ADR-0360 §4; иначе весь ответ — `DialogError::NotInFilter`), объявленные
+  размеры — с `OpenRequest::max_bytes` до чтения, прочитанное — снова (`TooLarge`); файл копируется
+  один раз, в буфер выбора. Ввод кончается на `change`, `cancel`, `pagehide` или, где `cancel` нет,
+  на возврате фокуса окну без `change` в пределах `FOCUS_GRACE_MS` (поздний выбор тогда — отмена).
+  Сохранение несёт содержимое (`SaveRequest::contents`): `showSaveFilePicker` пишет его после
+  выбора пользователя и после сброса диалога; без пикера, без жеста или при отказе браузера —
+  загрузка, ответ `PickedForm::Download` (где и записана ли, браузер не говорит). Страница не
+  закрывает пикер браузера: `PagePicker` держит её занятой (`Busy`), пока пикер не кончится, и
+  после сброса диалога. Запуск `http(s)`: пустой новый контекст (`null` — заблокирован,
+  `Unavailable`), `opener` обрезан, страница открыта ссылкой этого контекста с `rel=noreferrer`;
+  прочие разрешённые схемы — ссылкой самой страницы (без выгрузки), `ftp`/`ws`/`wss` —
+  `NoHandler`; пути — `NotOnThisPlatform`. Значок (`TaskbarEntry`) — счёт Badging API, без
+  прогресса и без подтверждения; без API — `NotOnThisDevice`. Message box — модальный `<dialog>`
+  рядом с канвасом, кнопки по-английски, не `alert`/`confirm` (те держат единственный поток
+  страницы, страница не может их закрыть при сбросе диалога или закрытии окна, ADR-0344, и в них
+  нет «да/нет/отмена»); Escape закрывает с ответом закрытия, «да/нет» его не пропускает и
+  показывается снова. Share — `navigator.share` (заголовок, текст, ссылка) под жестом; без API —
+  `NotOnThisDevice`, файлы — `NotOnThisPlatform`, отказ жеста браузером — `Unavailable`, закрытый
+  лист не сообщается. Автозапуск, глобальные сочетания, папки, jump list и сведения об ОС —
+  `NotOnThisPlatform`. На всех хостах: `PickedFile::path` — `Option<&Path>`,
+  `PickedFile::form`/`PickedForm`, `try_from_contents`, `try_download`, `contents`, `file_name`;
+  сохранение с содержимым пишет новый файл рядом с выбранным, синхронизирует и переименовывает
+  поверх, на своём потоке, и отвечает после записи (сбой — код системы);
+  `SystemFailure::Browser(BrowserException)` в контракте, веб-буфер обмена `flui-native` читает
+  исключение через него же. Тесты: `web::rules::tests` на каждом хосте
+  (`the_accept_attribute_is_the_union_of_the_filters`,
+  `a_picker_type_keeps_each_filter_and_puts_extensions_under_a_type`,
+  `an_extension_the_picker_refuses_sends_the_request_to_the_input`,
+  `a_save_is_named_after_the_first_filter_when_its_name_has_no_extension`,
+  `a_download_is_typed_after_the_first_concrete_type_of_the_first_filter`,
+  `the_picks_are_refused_past_the_limit_before_they_are_read`,
+  `a_picker_ends_cancelled_handed_to_the_input_or_with_one_refusal_of_the_gesture`,
+  `a_pick_the_filters_do_not_mean_refuses_the_whole_answer`,
+  `a_page_opens_apart_a_handler_takes_its_scheme_and_a_socket_has_none`,
+  `a_dismissed_share_sheet_is_not_reported_and_a_refused_gesture_is_one_answer`,
+  `a_closed_box_answers_what_closing_means_for_its_buttons`);
+  `a_browser_exception_is_read_from_its_name_and_shown_by_it` во `flui-platform`; через публичный
+  API (`tests/dialogs.rs`): `a_save_with_contents_answers_once_they_are_written_where_the_user_chose`,
+  `a_save_whose_write_fails_answers_the_systems_failure` (обе красные без записи в handle),
+  `a_save_replaces_the_chosen_file_whole_and_leaves_nothing_beside_it` (красный при записи на
+  месте: жёсткая ссылка на старый файл видит новое содержимое),
+  `a_save_the_system_wrote_itself_answers_the_file_it_wrote`,
+  `a_file_handed_over_without_a_path_carries_its_name_and_contents`,
+  `a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate`,
+  `a_filter_means_a_files_name_or_its_type_ignoring_ascii_case`; DOM — `web::tests`, lib-тест на
+  wasm32 в headless Chrome, новый шаг задания `wasm-check` CI (здесь только проверка типов
+  `cargo +nightly check -p flui-system --lib --tests --target wasm32-unknown-unknown` в WSL:
+  раннера wasm-bindgen-test нет): выбор с содержимым, сверка с фильтрами, отмена, конец по фокусу
+  и по `pagehide`, `TooLarge`, страница занята после сброса диалога, один пикер на страницу,
+  отказ вне жеста и для папок, передача ввода на место отказанного пикера и `Unavailable` при
+  истёкшем жесте, загрузка на месте отказанного пикера сохранения, запись выбранного файла после
+  сброса, загрузка вне жеста (`PickedForm::Download`), сохранение без содержимого, запуск через
+  пустой контекст без `opener` и с `rel=noreferrer`, заблокированное окно, ссылка `mailto:`
+  страницы, `wss` — `NoHandler`, значок в замещённый Badging API и браузер без него, message box
+  по кнопкам, Escape и «да/нет», сброшенный box, share в замещённый `navigator.share` и браузер
+  без него; строки conformance-таблицы для страницы —
+  `the_web_providers_keep_the_system_services_contract` (через регистрацию `SystemPlugin`: каждая
+  служба выдана или отказана по долгой причине, окно не-канвас — `NoWindow`, отказ шва на ходу
+  владельца, искажённый запрос без браузера, закрытое окно); сама таблица `tests/conformance.rs`
+  идёт на headless-хосте, чьи окна — не канвасы, а обвязка ждёт потоки, поэтому на wasm32 не
+  запускается. Остаётся: диалог папок (`NotYetOnThisHost`: браузер может отдать папку, но выбор не
+  несёт её дерево), записан в `docs/gaps.md`.
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который
@@ -8724,6 +8887,118 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `HostPlatform::try_new` называют `SecondActivity`; из снимка манифеста убран `assertion_line`.
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
+
+- [ ] **LY139** — ветка `native/apple-owner-thread-forms`, решение — ADR-0369 (заменяет §2
+  ADR-0071). Проверено на `main` @ `94f26e2f3` чтением и перекрёстной проверкой типов. Подтвердились
+  все три находки. `MacOSWindow` (`!Send + !Sync`) держал `parking_lot::Mutex<MacOSWindowState>`,
+  `LoopControl` — `Mutex<State>` и `Mutex<TerminateGate>`, а ответ `applicationShouldTerminate:`
+  после паники брал `try_lock`; окно iOS делило с видом `Arc<Mutex<…>>` и атомики. Три класса
+  macOS строились `ClassBuilder` с нетипизированными ivars, окно слало сырой `msg_send!` на
+  `*mut AnyObject` под `#![expect(deprecated)]`, рядом жили `dispatch` 0.2 и `dispatch2`, а
+  комментарий `Cargo.toml` ссылался на удалённый `cocoa`. Попутно найдено: делегат окна
+  создавался +1 и не отпускался никогда (AppKit держит делегата слабо), `NSTrackingArea` тоже
+  утекала. Построено: состояние окна macOS — `RefCell`, `assert_not_impl_any!(MacOSWindow: Send,
+  Sync)`; управление циклом пересекает потоки (его слабо держат пробуждение сигнала и наблюдатели
+  уведомлений), поэтому то, что оно хранит кроме сигнала, — одна главно-поточная часть за
+  `MainThreadBound`: `Copy`-состояния (`LoopState`, `TerminateGate`) в `Cell`, переходы чистые
+  (`owner::apple::loop_state`) и записываются до того, как приложению что-то сообщают, так что
+  повторный вход читает оставленное состояние и «занято» не бывает вовсе; `MacOSLoop` держит
+  `MainThreadMarker` вместо `OwnerAffinity`. Окно iOS: метрики, экран, тема, отказ безопасной
+  области и проекция регионов — `Rc`/`RefCell`/`Cell`, `assert_not_impl_any!(IOSWindow: Send,
+  Sync)`; измерения источников дисплеев iOS и macOS — в главно-поточных ячейках, методы трейта
+  берут маркер. `FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView` — `define_class!` с
+  `ContainedIvars`; вид соответствует `NSTextInputClient` через трейт протокола; окно держит
+  `Retained<NSWindow>`, вид и делегата (делегат отсоединяется в drop окна и уходит в пул
+  авторелиза); полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят. Первый
+  клик: `acceptsFirstMouse:` спрашивает ввод; нажатие на области перемещения заголовка,
+  нарисованного приложением, активирует окно и сразу двигает его, нажатие на содержимое только
+  активирует (конвенция AppKit). Решение отличается от строки («`YES` и пометка нажатия, виджет
+  решает»): помеченное нажатие требует, чтобы каждый распознаватель жестов игнорировал его по
+  умолчанию, а включение по элементу — регион нового вида в обходе регионов `flui-rendering`,
+  `InputRegionKind` и проекции каждого хоста; это и осталось, записано в `docs/gaps.md`
+  («Pointer and keyboard gaps»), поэтому строка не отмечена. Тесты, в скобках результат с
+  откатом: столбец первого клика в `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`
+  (с `first_mouse`, всегда отвечающим `Activates`, падают строки области перемещения);
+  `an_explicit_quit_fences_a_reopen_already_accepted` (без проверки флага выхода в `begin_drain` —
+  падает); `an_explicit_quit_fences_the_signal_and_the_application_hears_no_reopen` (прежний тест
+  `LoopControl` на `LoopRequests`: без `signal.fence()` — падает); строки другой кнопки в той же
+  таблице держат проводку `press_of` (без проверки левой кнопки — падают);
+  `an_update_made_while_a_dropped_region_is_reported_finds_what_was_sent` (регионы, с прежним
+  изъятием всей проекции — падает); `a_reopen_during_a_drain_is_told_by_that_drain`,
+  `a_drain_tells_each_owed_reopen_then_queues_the_rest`, `a_reopen_during_a_drain_waits_for_it_to_end`, `evaluations_coalesce_and_stop_with_the_loop`,
+  `a_quit_before_the_loop_runs_keeps_it_from_starting`, `the_launch_ends_when_appkit_says_it_finished`
+  держат переходы модели. Прогнано: на Windows clippy `-p flui-native --all-targets --all-features
+  -D warnings`, `cargo heli nextest` по моделям, `xtask doc-strict`, `xtask checks`; в WSL
+  `cargo +nightly check -p flui-native --lib` для `aarch64-apple-darwin` и для `aarch64-apple-ios`
+  (C-компилятор подменён на `/bin/true`, `SDKROOT=/tmp`, чтобы прошёл сборочный скрипт
+  `objc2-exception-helper`). Не собрано: тесты под macOS (dev-зависимостям нужен `clang`). Остаётся
+  заблокированным: запись истечения буфера обмена macOS (её модульные тесты зовут его с потоков
+  тестовой полосы) и жизненный цикл окна iOS (делится с `Send + Sync` целью поверхности); курсор
+  macOS шлёт сырой `msg_send!` — всё в `docs/gaps.md`. Должно на Mac (строка
+  `platform-parity.toml` «Frameless windows, custom title bar»): первый клик по неактивному окну и
+  набор `appkit_window` после переноса привязок.
+
+- [x] **LY140** — ветка `native/android-accessibility-activation`. Проверено на `main` @
+  `59a808aeb` чтением и тестами. Подтвердились обе находки: у `notify_activation(false)` на
+  Android не было вызова, а `FluiView` не слушал состояния доступности, так что после первого
+  вопроса любого сервиса мост оставался активным до конца процесса и каждый кадр строил и слал
+  обновление семантики; `NodeProvider` ловил повторный вход через `Mutex::try_lock`. Решение
+  (ADR его не решают; правило записано в `crates/flui-native/ARCHITECTURE.md`): дерево
+  начинается с первого вопроса сервиса через провайдер узлов (активация AccessKit, как прежде), а
+  кончается, когда `AccessibilityManager.isEnabled()` становится ложным:
+  `AccessibilityStateChangeListener` регистрируется вместе с наблюдателями настроек и спрашивает
+  менеджер в момент уведомления, а не верит его аргументу (запоздавшее уведомление не гасит
+  работающий сервис), регистрация — до первого вопроса. `TouchExplorationStateChangeListener` из
+  строки не нужен: конец исследования касанием не значит, что дерево никто не читает (Switch
+  Access, Select to Speak, сервисы автозаполнения). Flutter 3.50.0 (`AccessibilityBridge`)
+  включает семантику по `isEnabled()` сразу, читает его до регистрации слушателя и верит
+  аргументу; здесь включение ленивое, а оба края закрыты. Построено: модель
+  `accessibility::provided_tree::ProvidedTree<A>` над `ProvidedAdapter` (компилируется и
+  тестируется на всех хостах) держит адаптер в `RefCell`, вызов изнутри другого отвечает `Busy`.
+  Факт «сервис включён» пишет только `services_changed`: `FluiView` сообщает ответ менеджера
+  (`nativeAccessibilityServices(long, boolean)` через `jni_native`) при уведомлении, при входе в
+  окно и при появлении моста. Пока сервиса нет, обработчик активации адаптера
+  (`ServiceActivation`) отвечает без дерева и никому не говорит, так что вопрос не от сервиса
+  (Assist structure, режим совместимости автозаполнения, наведение, отправленное до
+  уведомления) получает заглушку, которая сбрасывается до возврата вызова. Без сервиса адаптер
+  сбрасывается в начальное состояние (дерева нет, обновления отбрасываются), заимствование
+  снимается, и только потом `BridgeShared::deactivate` говорит корню композиции; остановка во
+  время вызова в адаптер ждёт его возврата. Заглушка принимает только целое дерево: фрагмент
+  отбрасывается, и у корня снова просят всё дерево (`request_whole_tree`). `BridgeShared` держит
+  типизированное присоединение (ещё нет, присоединено, закончено); `deactivate` (им же пользуются
+  AT-SPI и iOS) под одним замком помечает конец и отбрасывает удержанное дерево, так что
+  публикация после конца ничего не оставляет, и говорит слушателю всегда: корень, чей слушатель
+  упал посреди активации, держит то, что успел записать. Android-мост держит
+  `ProvidedTree<accesskit_android::Adapter>` в `OwnerSlot` главного потока Java, созданном первым
+  дошедшим вызовом, вместо `Mutex`; `PROTOCOL` 7 → 8, dex пересобран здесь инструментами записи
+  (javac 21.0.12.1, build-tools 35.0.0, android-35) и воспроизводится (`android-dex --rebuild`).
+  Остановленная Activity кадров не строит, слушатель остаётся зарегистрированным, пока вид в окне;
+  пересозданная получает новый вид и новый мост, неактивный до первого вопроса. Паритет: новая
+  строка `the-tree-ends-when-no-assistive-technology-listens` (Windows, macOS, Web — ❌), её держит
+  таблица по хостам `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`;
+  сигналы Windows (`UiaClientsAreListening`, `SPI_GETSCREENREADER`) и macOS
+  (`isVoiceOverEnabled`, `isSwitchControlEnabled`) неполны и не читаются — запись `docs/gaps.md`
+  «A Windows or macOS window builds its accessibility tree for its life». Тесты, в скобках
+  результат с откатом: `the_last_service_stopping_ends_the_tree_and_tells_the_root_once`,
+  `the_root_is_told_once_the_tree_ended_and_the_adapter_is_free`,
+  `a_stop_during_a_call_into_the_adapter_ends_the_tree_as_the_call_returns`,
+  `a_service_starting_again_gets_the_whole_tree_built_for_it` и таблица (без `deactivate` в
+  остановке — падают; без сброса адаптера — падают); `a_hover_posted_before_the_last_service_stopped_starts_nothing`,
+  `a_question_with_no_service_enabled_tells_nobody_and_keeps_nothing` (активация, говорящая корню
+  без сервиса, — оба и `a_fragment_never_reaches_a_placeholder` падают);
+  `a_fragment_never_reaches_a_placeholder` (фрагмент в заглушку — двойник паникует, как
+  `accesskit_consumer`); `a_deactivation_reaches_a_root_that_half_took_the_activation`,
+  `a_stop_reaches_a_root_that_failed_to_take_a_change_whole` (сообщение только активному мосту —
+  оба падают); `nothing_is_retained_after_the_last_assistive_technology_left` (удержание при любом
+  присоединении — падает); `a_call_from_inside_the_adapter_answers_busy`;
+  `fluiview_reports_what_the_manager_says_now` держит Java к решению;
+  `semantics_stop_with_the_last_listener_and_restart_whole` (`flui-runtime`, headless, через
+  `FakeAccessibility`, который теперь считает всё отправленное) считает работу корня: после ухода
+  ни одного обновления, после возврата одно — всё дерево. Прогнано: на Windows clippy
+  `--all-targets --all-features -D warnings` `flui-native` и `flui-runtime`, nextest; в WSL
+  `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
+  clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
+  TalkBack выключить и включить, считая работу семантики в кадрах.
 
 ## Чего нет в этой серии
 

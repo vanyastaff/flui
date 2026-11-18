@@ -4,9 +4,8 @@
 //!
 //! A single-threaded executor with no runtime, no thread pool, and no
 //! dependency beyond [`std::future`] / [`std::task`]. Futures are polled on the
-//! **owner thread**, in the gap between a frame's transient callbacks
-//! (animation ticks) and its persistent callbacks (build → layout → paint) —
-//! [`SchedulerPhase::MidFrameMicrotasks`](crate::SchedulerPhase::MidFrameMicrotasks) —
+//! **owner thread**, once per frame before the pipeline (build → layout →
+//! paint) runs, in [`SchedulerPhase::Frame`](crate::SchedulerPhase::Frame),
 //! or by a background pump that runs no frame.
 //!
 //! # Ownership
@@ -131,8 +130,7 @@ type RequestFrame = Arc<dyn Fn() + Send + Sync>;
 
 /// One spawned future's identity within the [`TaskStore`] that minted it.
 /// Minted only by the store's own [`IdMint`] and never reused, so a stale
-/// [`Waker`] cannot resurrect or mis-target a later task. Not the priority
-/// queue's `TaskId`: the two domains are different types.
+/// [`Waker`] cannot resurrect or mis-target a later task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct AsyncTaskId(NonZeroU64);
 
@@ -795,10 +793,11 @@ fn recycle(spare: &mut Vec<AsyncTaskId>, mut buf: Vec<AsyncTaskId>) {
 ///
 /// If a poll panics, this guard's `Drop` removes the slot whose future was
 /// taken for that poll and restores every id the pump has not yet reached
-/// (`remaining[cursor..]`) into `ready`, so the next pump still indexes them.
-/// The slot it removes holds `future: None` (taken before the poll), so the
-/// removal runs no user code: only framework-owned waker and flag
-/// reference-count decrements.
+/// (`remaining[cursor..]`) into `ready` and requests a frame for them, so the
+/// next frame polls them. The slot it removes holds `future: None` (taken
+/// before the poll), so the removal runs no user code: only framework-owned
+/// waker and flag reference-count decrements. The frame request runs the
+/// platform's wake hook under containment.
 struct PumpGuard<'a> {
     store: &'a TaskStore,
     /// This pump's whole ready batch, sorted and deduplicated, consumed
@@ -826,7 +825,17 @@ impl Drop for PumpGuard<'_> {
             &mut self.store.spare.borrow_mut(),
             mem::take(&mut self.remaining),
         );
+        let stranded = !tail.is_empty();
         self.store.shared.ready.lock().append(&mut tail);
+        // The drain consumed the frame demand that woke these ids, and the
+        // panic aborts the frame that would have polled them: without a fresh
+        // request they wait for a frame someone else asks for. Only the
+        // siblings ask; the panicking task is gone, so a deterministic panic
+        // does not loop. The hook runs while this thread unwinds, so its own
+        // panic is contained.
+        if stranded {
+            self.store.shared.request_frame_from_waker(true);
+        }
     }
 }
 
@@ -1549,12 +1558,7 @@ mod tests {
             counter.fetch_add(1, Ordering::Relaxed);
         }));
         first
-            .drive_frame(
-                crate::Instant::now(),
-                crate::IdleDeadline::far_future(crate::Instant::now()),
-                || {},
-                || {},
-            )
+            .drive_frame(crate::Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert_eq!(polled.load(Ordering::Relaxed), 1, "the one owner is polled");
 
@@ -1569,12 +1573,7 @@ mod tests {
         let _token = second.async_driver().spawn_local(Box::pin(async {}));
         assert!(scheduler.is_frame_scheduled());
         second
-            .drive_frame(
-                crate::Instant::now(),
-                crate::IdleDeadline::far_future(crate::Instant::now()),
-                || {},
-                || {},
-            )
+            .drive_frame(crate::Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert_eq!(second.async_driver().pending_task_count(), 0);
     }

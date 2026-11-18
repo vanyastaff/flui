@@ -7,10 +7,9 @@
 //! period reads it from here, as one value:
 //!
 //! - the desktop pacing fallback re-arms from [`UiRuntime::refresh_interval`];
-//! - the scheduler's frame budget is set to the shortest period among the
-//!   runtime's presentations before each frame begins, so jank is judged
-//!   against the display being produced for (and the `frame` span carries it
-//!   to the profiler);
+//! - the scheduler labels its frames with the shortest period among the
+//!   runtime's shown presentations before each frame begins, and the `frame`
+//!   span carries it to the profiler, which judges a frame late against it;
 //! - the pointer resampler's interpolation window is the presentation's period
 //!   when [`PointerResampling::FrameAligned`](crate::presentation::PointerResampling)
 //!   is on;
@@ -76,16 +75,12 @@ impl UiRuntime {
             .unwrap_or(DEFAULT_REFRESH_PERIOD)
     }
 
-    /// Point the scheduler's frame budget at the display being produced for.
-    /// Runs before the frame begins: the frame copies the budget's target when
-    /// it starts, so setting it afterwards would judge this frame by the last.
-    pub(crate) fn publish_frame_budget(&self) {
-        match flui_scheduler::FrameDuration::try_from_period(self.shortest_refresh_interval()) {
-            Ok(duration) => self.scheduler.set_budget_frame_duration(duration),
-            Err(error) => {
-                tracing::warn!(%error, "no usable refresh interval; keeping the frame budget");
-            }
-        }
+    /// Label the scheduler's frames with the period of the display being
+    /// produced for. Runs before the frame begins, so the frame's span carries
+    /// this frame's period and not the last one's.
+    pub(crate) fn publish_display_period(&self) {
+        self.scheduler
+            .set_display_period(self.shortest_refresh_interval());
     }
 
     /// Apply the display the host derived for presentation `id`'s window.

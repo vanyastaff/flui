@@ -162,7 +162,7 @@ pub(crate) struct Publication(NonZeroU64);
 /// the process's ([`PublicationMint::process`]), which every host publishes
 /// from: two issuers handing out the same number would make two publications
 /// one, so no other issuing mint exists. Behind the `testing` feature,
-/// [`PublicationMint::exhausted`] is one that issues nothing, so a test can
+/// `PublicationMint::exhausted` is one that issues nothing, so a test can
 /// drive what a window does once the process has no publication left.
 #[derive(Debug, Clone, Copy)]
 pub struct PublicationMint(Option<&'static AtomicIdMint<NonZeroU64>>);
