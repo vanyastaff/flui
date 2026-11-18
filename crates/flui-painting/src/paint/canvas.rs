@@ -186,38 +186,3 @@ pub enum PointMode {
     /// connected back to the first point to close the polygon.
     Polygon,
 }
-
-impl PointMode {
-    /// Returns `true` if this is `PointMode::Points`.
-    #[must_use]
-    #[inline]
-    pub const fn is_points(&self) -> bool {
-        matches!(self, PointMode::Points)
-    }
-
-    /// Returns `true` if this is `PointMode::Lines`.
-    #[must_use]
-    #[inline]
-    pub const fn is_lines(&self) -> bool {
-        matches!(self, PointMode::Lines)
-    }
-
-    /// Returns `true` if this is `PointMode::Polygon`.
-    #[must_use]
-    #[inline]
-    pub const fn is_polygon(&self) -> bool {
-        matches!(self, PointMode::Polygon)
-    }
-
-    /// Returns the minimum number of points needed to draw anything in this
-    /// mode (1 for points, 2 for lines, 3 for a polygon).
-    #[must_use]
-    #[inline]
-    pub const fn min_points(&self) -> usize {
-        match self {
-            PointMode::Points => 1,
-            PointMode::Lines => 2,
-            PointMode::Polygon => 3,
-        }
-    }
-}

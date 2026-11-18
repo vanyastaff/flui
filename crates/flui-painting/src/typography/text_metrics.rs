@@ -451,13 +451,6 @@ impl LineMetrics {
         self.left + self.width
     }
 
-    /// Returns true if the line ends with a hard break.
-    #[must_use]
-    #[inline]
-    pub const fn has_hard_break(&self) -> bool {
-        self.hard_break
-    }
-
     /// Returns the ascent value.
     #[must_use]
     #[inline]
@@ -470,13 +463,6 @@ impl LineMetrics {
     #[inline]
     pub const fn descent(&self) -> f64 {
         self.descent
-    }
-
-    /// Returns the total height (ascent + descent).
-    #[must_use]
-    #[inline]
-    pub fn total_height(&self) -> f64 {
-        self.ascent + self.descent
     }
 }
 

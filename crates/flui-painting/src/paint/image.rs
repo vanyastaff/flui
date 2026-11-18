@@ -188,13 +188,6 @@ impl Image {
         &self.data[..]
     }
 
-    /// Returns the number of bytes used by this image.
-    #[inline]
-    #[must_use]
-    pub fn byte_count(&self) -> usize {
-        self.data.len()
-    }
-
     /// Returns a stable pointer-based identity for this image.
     ///
     /// Images that share the same underlying `Arc<Vec<u8>>` (i.e., cloned

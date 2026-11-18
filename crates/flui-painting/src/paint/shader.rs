@@ -251,18 +251,6 @@ impl Shader {
             Shader::Image(_) => 0,
         }
     }
-
-    /// Returns true if this shader uses color stops.
-    #[inline]
-    #[must_use]
-    pub fn has_stops(&self) -> bool {
-        match self {
-            Shader::LinearGradient { stops, .. }
-            | Shader::RadialGradient { stops, .. }
-            | Shader::SweepGradient { stops, .. } => stops.is_some(),
-            Shader::Solid { .. } | Shader::Image(_) => false,
-        }
-    }
 }
 
 /// A shader that tiles an image.
@@ -324,15 +312,5 @@ impl ImageShader {
     #[must_use]
     pub const fn has_transform(&self) -> bool {
         self.transform.is_some()
-    }
-
-    /// Returns the effective filter quality (defaults to Low).
-    #[inline]
-    #[must_use]
-    pub const fn effective_filter_quality(&self) -> crate::paint::FilterQuality {
-        match self.filter_quality {
-            Some(quality) => quality,
-            None => crate::paint::FilterQuality::Low,
-        }
     }
 }

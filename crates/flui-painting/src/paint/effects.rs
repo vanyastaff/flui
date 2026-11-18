@@ -610,28 +610,6 @@ impl ImageFilter {
     pub fn color_adjust(adjustment: ColorAdjustment) -> Self {
         Self::ColorAdjust(adjustment)
     }
-
-    /// Create an overflow indicator filter (debug mode only).
-    ///
-    /// # Arguments
-    ///
-    /// * `overflow_h` - Horizontal overflow in pixels (0.0 if none)
-    /// * `overflow_v` - Vertical overflow in pixels (0.0 if none)
-    /// * `container_size` - Size of the container
-    #[cfg(debug_assertions)]
-    #[inline]
-    #[must_use]
-    pub fn overflow_indicator(
-        overflow_h: f64,
-        overflow_v: f64,
-        container_size: flui_foundation::geometry::Size<f64>,
-    ) -> Self {
-        Self::OverflowIndicator {
-            overflow_h,
-            overflow_v,
-            container_size,
-        }
-    }
 }
 
 /// An invertible 2D affine transform with finite coefficients, as

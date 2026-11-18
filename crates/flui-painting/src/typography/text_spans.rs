@@ -6,41 +6,6 @@ use cursor_icon::CursorIcon;
 
 use super::{TextBaseline, TextStyle};
 
-/// Trait for inline spans that can be embedded in text.
-///
-/// Implementors include `TextSpan` (styled text) and `PlaceholderSpan`
-/// (inline objects like images).
-pub trait InlineSpanTrait: std::fmt::Debug {
-    /// Returns the style for this span, if any.
-    #[inline]
-    fn style(&self) -> Option<&TextStyle> {
-        None
-    }
-
-    /// Visits this span and its children.
-    ///
-    /// The visitor returns false to stop traversal.
-    #[inline]
-    fn visit(&self, visitor: &mut dyn FnMut(&dyn InlineSpanTrait) -> bool)
-    where
-        Self: Sized,
-    {
-        visitor(self);
-    }
-
-    /// Returns the text content of this span, if any.
-    #[inline]
-    fn to_plain_text(&self) -> String {
-        String::new()
-    }
-
-    /// Returns true if this span contains semantic labels.
-    #[inline]
-    fn has_semantics(&self) -> bool {
-        false
-    }
-}
-
 /// Type-erased inline span wrapper.
 ///
 /// Allows storing different types of inline spans (text, placeholders)
@@ -73,28 +38,25 @@ impl InlineSpan {
         span.into()
     }
 
-    /// Returns this span as its [`InlineSpanTrait`] object for shared behavior.
-    #[must_use]
-    #[inline]
-    pub fn as_trait(&self) -> &(dyn InlineSpanTrait + Send + Sync) {
-        match self {
-            Self::Text(span) => span.as_ref(),
-            Self::Placeholder(span) => span,
-        }
-    }
-
     /// Returns the style for this span, if any.
     #[must_use]
     #[inline]
     pub fn style(&self) -> Option<&TextStyle> {
-        self.as_trait().style()
+        match self {
+            Self::Text(span) => span.style(),
+            Self::Placeholder(_) => None,
+        }
     }
 
     /// Returns the plain text content.
     #[must_use]
     #[inline]
     pub fn to_plain_text(&self) -> String {
-        self.as_trait().to_plain_text()
+        match self {
+            Self::Text(span) => span.to_plain_text(),
+            // The object replacement character stands for the placeholder.
+            Self::Placeholder(_) => "\u{FFFC}".to_owned(),
+        }
     }
 
     /// Returns spoken text, replacing each span's own text with its authored
@@ -120,7 +82,10 @@ impl InlineSpan {
     #[must_use]
     #[inline]
     pub fn has_semantics(&self) -> bool {
-        self.as_trait().has_semantics()
+        match self {
+            Self::Text(span) => span.has_semantics(),
+            Self::Placeholder(_) => false,
+        }
     }
 
     /// Compares only the parts that affect SHAPING/LAYOUT: text
@@ -423,24 +388,6 @@ impl TextSpan {
         self.children.is_empty()
     }
 
-    /// Returns the total number of spans (this span + all descendants).
-    #[must_use]
-    #[inline]
-    pub fn total_span_count(&self) -> usize {
-        1 + self
-            .children
-            .iter()
-            .map(TextSpan::total_span_count)
-            .sum::<usize>()
-    }
-
-    /// Returns the total text length including children.
-    #[must_use]
-    #[inline]
-    pub fn text_length(&self) -> usize {
-        self.to_plain_text().len()
-    }
-
     /// Returns true if this span has semantic labels.
     #[must_use]
     #[inline]
@@ -460,23 +407,6 @@ impl TextSpan {
     #[inline]
     pub fn style(&self) -> Option<&TextStyle> {
         self.style.as_ref()
-    }
-}
-
-impl InlineSpanTrait for TextSpan {
-    #[inline]
-    fn style(&self) -> Option<&TextStyle> {
-        self.style.as_ref()
-    }
-
-    #[inline]
-    fn to_plain_text(&self) -> String {
-        self.to_plain_text()
-    }
-
-    #[inline]
-    fn has_semantics(&self) -> bool {
-        self.semantics_label.is_some()
     }
 }
 
@@ -559,13 +489,6 @@ impl PlaceholderSpan {
         } else {
             self.width / self.height
         }
-    }
-}
-
-impl InlineSpanTrait for PlaceholderSpan {
-    #[inline]
-    fn to_plain_text(&self) -> String {
-        "\u{FFFC}".to_string() // Object replacement character
     }
 }
 

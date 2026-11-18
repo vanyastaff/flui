@@ -19,11 +19,11 @@ use flui_foundation::geometry::{Matrix4, Rect};
 
 use crate::display_list::{DisplayList, DrawOp, Paint, Payload, PayloadId, paint_finite};
 
-pub mod clipping;
-pub mod drawing;
-pub mod scoped;
-pub mod state;
-pub mod transform;
+mod clipping;
+mod drawing;
+mod scoped;
+mod state;
+mod transform;
 
 pub(crate) use state::CanvasState;
 
