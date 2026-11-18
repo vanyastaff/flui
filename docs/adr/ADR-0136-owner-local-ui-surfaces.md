@@ -23,9 +23,6 @@
 - **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §2 the task-poll site only: a frame polls its tasks in `SchedulerPhase::Frame`, before its pipeline.
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask send-impls` gate only (Validation): the rule stands and its reader confirms it.
-  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
-  for the `xtask send-positions` gate only (§3, Validation): the rule stands and its reader
-  confirms it.
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md),
   [ADR-0047](ADR-0047-unified-execution-services.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),

@@ -6,8 +6,8 @@
   §9 only, for the five jobs §2 moves to main: they run there with no narrow form on a pull
   request. Unchanged: the `ON_DEMAND` rows and how `plan` decides them.
 - **Superseded-by:** [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
-  for §1 only for `public-api` and the on-demand jobs, and for §3 whole: the pull-request gate is
-  `clippy` and `test`, and no job runs on demand.
+  for §1 only for `public-api` and the on-demand jobs, for §2's list of `FULL_JOBS`, and for §3
+  whole: the pull-request gate is `clippy` and `test`, and no job runs on demand.
 - **Related:** [ADR-0324](ADR-0324-the-facade-api-is-a-committed-snapshot.md) (`public-api` stays
   in the pull-request gate under its §3, which also says when it leaves).
 

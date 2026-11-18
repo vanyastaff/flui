@@ -8,8 +8,8 @@
   [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md) §1
   only for `public-api` and the on-demand jobs, and §3 whole. For the gate each names, in the
   section its own `Superseded-by` line cites, where the rule stands and its reader confirms it:
-  ADR-0089, ADR-0098, ADR-0136, ADR-0151, ADR-0266, ADR-0280, ADR-0305, ADR-0311, ADR-0312,
-  ADR-0323, ADR-0329, ADR-0330, ADR-0331, ADR-0368.
+  ADR-0082, ADR-0089, ADR-0098, ADR-0151, ADR-0266, ADR-0280, ADR-0304, ADR-0305, ADR-0311,
+  ADR-0312, ADR-0322, ADR-0323, ADR-0327, ADR-0329, ADR-0330, ADR-0331, ADR-0368.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   (the source gates, removed by the same reasoning).
 
@@ -25,7 +25,7 @@ Main ran two more API contract gates, `api-closure` and `send-positions`, in `ap
 | `public-api` on a pull request | 9 to 15 minutes, the gate's longest job after `test` |
 | Pull-request runs of 2026-11-18 in which an on-demand job or `public-api` failed alone | 0 of 61 |
 | `api-closure` on main | the failing job of 7 of the 8 red runs on main from 2026-11-17 22:37 to 2026-11-18 06:31 |
-| Code that decides and checks the on-demand jobs, and the three API gates | 5,638 lines of `tools/xtask`, and the 36,852-line snapshot `api/flui.txt` |
+| Code that decides and checks the on-demand jobs, and the three API gates | 6,469 lines of `tools/xtask`, and the 36,852-line snapshot `api/flui.txt` |
 | Toolchains a pull request installs for `public-api` | a nightly beside the pinned stable |
 
 No published release has users whose code an API change breaks. Which checks does a pull request
@@ -65,7 +65,7 @@ a crate's features locally.
 `public-api` or `api-contracts` job, and the repository no `api/flui.txt`, no
 `[package.metadata.flui.api-closure]` table and no `tools/xtask/allowlists/`. `cargo xtask
 expectations` no longer counts an API snapshot or an allowlist. The rules those gates held stay
-written where they were decided (ADR-0089 §2 and §6, ADR-0136 §3, ADR-0151 §8, ADR-0323 §3); the
+written where they were decided (ADR-0089 §2 and §6, ADR-0151 §8, ADR-0323 §2 and §3); the
 reader of "Before a merge" checks a change against them.
 
 ### Consequences

@@ -807,7 +807,6 @@ jobs:
           tool: cargo-nextest@0.9
 
       - name: Install valgrind
-        if: needs.plan.outputs.lane == 'full'
         uses: ./.github/actions/apt-install
         with:
           packages: valgrind
@@ -816,7 +815,6 @@ jobs:
         run: cargo xtask perf --check
 
       - name: cargo xtask perf --instructions --check
-        if: needs.plan.outputs.lane == 'full'
         run: cargo xtask perf --instructions --check
 
   # ─────────────────────────────────────────────────────────────────────────

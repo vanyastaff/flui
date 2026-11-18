@@ -124,9 +124,11 @@ trait depends on `flui-platform` instead.
   (the contract's cursor), `parking_lot` (the lock the window's callback
   setters hand out), `raw_window_handle`, `smallvec` (the pointer assembly's
   inline buffers, hidden, for `tests/`) and `web_time` (the web's `Instant`),
-  on every target it builds a host for. Three items name one crate more each:
-  the windows' accessibility bridges implement `flui-semantics`'
-  `PlatformAccessibility`, whose methods take AccessKit's tree;
+  on every target it builds a host for: Linux, Windows and macOS with every
+  feature, iOS, Android and wasm32 with their defaults. Beyond those crates:
+  every implementor of `flui-semantics`'
+  `PlatformAccessibility` (the windows' accessibility bridges) names AccessKit,
+  whose tree its methods take;
   `android_platform` takes the system's `android_activity` Activity; and
   `NativeExecutor::from_tokio` borrows the application's `tokio` runtime
   (ADR-0327 §3). No program checks the list before the first release

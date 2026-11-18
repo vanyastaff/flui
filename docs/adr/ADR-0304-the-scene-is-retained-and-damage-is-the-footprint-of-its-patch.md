@@ -15,6 +15,8 @@
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask globals` and `xtask send-impls` gates only (Confirmation): the rule stands and its
   reader confirms it.
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Amends:** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §1 and §6 (a chunk's IR outlives the
   frame under a recording key; replay determinism becomes load-bearing and gains its test);
   [ADR-0276](ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)

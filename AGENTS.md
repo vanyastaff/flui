@@ -146,7 +146,8 @@ conversation:
   backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`). So a change to a native backend, a shader, a trybuild case or a
-  size is run locally before the PR. A red `main` is fixed forward within the hour or reverted.
+  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's. A red `main`
+  is fixed forward within the hour or reverted.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -189,7 +190,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | `xtask unmounted-tests` (in `xtask checks`; ADR-0371 §3) |
 | No two records in `docs/adr/` share a number | `xtask adr-numbers` (in `xtask checks`; ADR-0371 §3) |
-| A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned | `deny.toml` (ADR-0136) |
+| A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned | `deny.toml` (ADR-0323 §3) |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 
 ### Rules a reader holds
@@ -208,7 +209,7 @@ and the reader of "Before a merge" looks for a change that breaks one:
 - Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit
   handler, a closure handed to the OS) is a constant or one call of
   `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16).
-- No new `unsafe impl Send` or `Sync` (ADR-0136 §3), and a `Send` or `Sync` position in the
+- No new `unsafe impl Send` or `Sync` (ADR-0323 §3), and a `Send` or `Sync` position in the
   facade's API is one of the seven kinds of value ADR-0323 §2 lets cross a thread.
 - A Stable crate's public API names an upstream type only as ADR-0089 §2 allows, and the core
   host's public paths name no OS binding, on any target it builds a host for (ADR-0151 §8). A

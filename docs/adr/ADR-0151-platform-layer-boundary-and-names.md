@@ -10,8 +10,8 @@
   `xtask panic-boundary` gates only (§10, §16, Confirmation): the rule stands and its reader
   confirms it.
   [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
-  for the `xtask api-closure` gate only (§8, Confirmation): the rule stands and its reader confirms
-  it.
+  for the `xtask api-closure` gate only (§5, §8, Confirmation): the rule stands and its reader
+  confirms it.
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
   `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
   a host for.
