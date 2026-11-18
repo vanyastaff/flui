@@ -23,7 +23,7 @@
 //! growth inside it prints and passes, and `--bless` on `main` moves the
 //! baseline. A count or size that fell prints as an improvement and passes.
 //!
-//! On `main` each push also compares its byte counters with the push before
+//! On `main` each push also compares its byte counters with the commit before
 //! it ([`step`]), so growth that stays inside the cumulative tolerance is
 //! still answered at the merge that brings it.
 //!
@@ -88,7 +88,7 @@ pub(crate) fn changed_input(files: &[String]) -> Option<&str> {
             || *f == "rust-toolchain.toml"
             || f.starts_with(".cargo/")
             || *f == BASELINE
-            || *f == "tools/xtask/src/perf/size.rs"
+            || f.starts_with("tools/xtask/src/perf/size")
             || f.starts_with("crates/flui-cli/src/templates/")
     })
 }
@@ -113,6 +113,9 @@ pub(super) fn run(
     measure: Measure,
     step: StepFiles<'_>,
 ) -> anyhow::Result<ExitCode> {
+    // Read before this run records: CI hands one file to both options, so
+    // the previous commit's measurement is replaced by this one's.
+    let previous = step.previous.and_then(read_previous);
     let mut counters = BTreeMap::new();
     for (name, triple) in GRAPH_TARGETS {
         counters.insert(format!("crates_{name}"), graph_packages(root, triple)?);
@@ -134,17 +137,6 @@ pub(super) fn run(
             reload.release_size(root, &host, None)?,
         );
     }
-    let measured = (measure == Measure::All).then(|| step::Measurement {
-        commit: measured_commit(root),
-        bytes: counters
-            .iter()
-            .filter(|(counter, _)| is_bytes(counter))
-            .map(|(counter, &value)| (counter.clone(), value))
-            .collect(),
-    });
-    if let (Some(record), Some(measured)) = (step.record, &measured) {
-        measured.write(record)?;
-    }
     let current: Counts = [(SCENARIO.to_owned(), counters)].into_iter().collect();
 
     let path = root.join(BASELINE);
@@ -158,6 +150,14 @@ pub(super) fn run(
         return Ok(ExitCode::SUCCESS);
     }
     let mut baseline = load(&path)?;
+    let measured = (measure == Measure::All).then(|| step::Measurement {
+        commit: measured_commit(root),
+        bytes: byte_counters(current.get(SCENARIO)),
+        baseline: byte_counters(baseline.get(SCENARIO)),
+    });
+    if let (Some(record), Some(measured)) = (step.record, &measured) {
+        measured.write(record)?;
+    }
     if measure == Measure::Graph {
         // The byte counters are not measured; leaving them in would report
         // each one missing.
@@ -166,32 +166,28 @@ pub(super) fn run(
         }
     }
     super::print_table(&baseline, &current);
-    let findings = compare(&baseline, &current);
-    for finding in &findings {
+    let verdict = judge(&baseline, &current, previous.as_ref(), measured.as_ref());
+    for finding in &verdict.findings {
         println!("{finding}");
     }
-    let mut failing = findings.iter().filter(|finding| finding.fails()).count();
+    for growth in &verdict.grown {
+        println!("{growth}");
+    }
     if let Some(measured) = &measured {
-        let previous = match step.previous {
-            Some(path) => step::Measurement::read(path)?,
-            None => None,
-        };
         if step.previous.is_some() && previous.is_none() {
-            println!("perf --size: no previous push recorded; the step is not compared");
+            println!(
+                "perf --size: no measurement of the previous commit; the step is not compared"
+            );
         }
-        if let Some(previous) = &previous {
-            let grown = step::grown(previous, measured);
-            for growth in &grown {
-                println!("{growth}");
-            }
-            failing += grown.len();
-        }
-        let base_bytes = baseline.get(SCENARIO).cloned().unwrap_or_default();
+        let base_bytes = byte_counters(baseline.get(SCENARIO));
         write_job_summary(&step::summary(&base_bytes, previous.as_ref(), measured))?;
     }
+    let failing = verdict.failing();
     Ok(match mode {
         Mode::Check if failing > 0 => {
-            println!("perf --size: {failing} failing findings against {BASELINE}");
+            println!(
+                "perf --size: {failing} failing findings against {BASELINE} or the previous commit"
+            );
             ExitCode::FAILURE
         }
         Mode::Check => {
@@ -203,6 +199,66 @@ pub(super) fn run(
             ExitCode::SUCCESS
         }
     })
+}
+
+/// What a run found: the differences from the baseline and the byte counters
+/// that grew past the step over the previous commit.
+#[derive(Debug, Default)]
+struct Verdict {
+    findings: Vec<Finding>,
+    grown: Vec<step::StepGrowth>,
+}
+
+impl Verdict {
+    /// How many findings `--check` fails on.
+    fn failing(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.fails())
+            .count()
+            + self.grown.len()
+    }
+}
+
+/// Compares `current` with the baseline and, when both measurements are
+/// there, this commit's byte sizes with the previous commit's.
+fn judge(
+    baseline: &Counts,
+    current: &Counts,
+    previous: Option<&step::Measurement>,
+    measured: Option<&step::Measurement>,
+) -> Verdict {
+    let grown = match (previous, measured) {
+        (Some(previous), Some(measured)) => step::grown(previous, measured),
+        _ => Vec::new(),
+    };
+    Verdict {
+        findings: compare(baseline, current),
+        grown,
+    }
+}
+
+/// The byte counters of a `[size]` table, or none when there is no table.
+fn byte_counters(counters: Option<&BTreeMap<String, u64>>) -> BTreeMap<String, u64> {
+    counters
+        .into_iter()
+        .flatten()
+        .filter(|(counter, _)| is_bytes(counter))
+        .map(|(counter, &value)| (counter.clone(), value))
+        .collect()
+}
+
+/// The previous commit's measurement, or `None` when there is none or it
+/// does not parse (a file an older `xtask` wrote): either way the step is not
+/// compared, and the baseline still is.
+fn read_previous(path: &Path) -> Option<step::Measurement> {
+    match step::Measurement::read(path) {
+        Ok(previous) => previous,
+        Err(error) => {
+            println!("perf --size: {error:#}; the step is not compared");
+            None
+        }
+    }
 }
 
 /// The files of the step comparison: the previous push's measurement to
@@ -597,7 +653,7 @@ mod tests {
 
     #[test]
     fn size_inputs_table() {
-        let cases: [(&[&str], Option<&str>); 10] = [
+        let cases: [(&[&str], Option<&str>); 11] = [
             (&["Cargo.lock"], Some("Cargo.lock")),
             (&["Cargo.toml"], Some("Cargo.toml")),
             (
@@ -609,6 +665,10 @@ mod tests {
             (&["perf/size.toml"], Some("perf/size.toml")),
             (&["examples/counter.rs"], None),
             (
+                &["tools/xtask/src/perf/size/step.rs"],
+                Some("tools/xtask/src/perf/size/step.rs"),
+            ),
+            (
                 &["crates/flui-cli/src/templates/hot_reload.rs"],
                 Some("crates/flui-cli/src/templates/hot_reload.rs"),
             ),
@@ -619,6 +679,42 @@ mod tests {
             let files: Vec<String> = files.iter().map(|f| (*f).to_owned()).collect();
             assert_eq!(changed_input(&files), expected, "{files:?}");
         }
+    }
+
+    fn measured(commit: &str, bytes: u64, baseline: u64) -> step::Measurement {
+        step::Measurement {
+            commit: commit.to_owned(),
+            bytes: [("counter_release_bytes".to_owned(), bytes)].into(),
+            baseline: [("counter_release_bytes".to_owned(), baseline)].into(),
+        }
+    }
+
+    #[test]
+    fn a_push_past_the_step_fails_although_the_baseline_holds() {
+        let baseline = size(&[("counter_release_bytes", 1000)]);
+        let current = size(&[("counter_release_bytes", 1015)]);
+        let previous = measured("aaa", 1000, 1000);
+        let this = measured("bbb", 1015, 1000);
+        for (case, previous, this, failing) in [
+            ("past the step", Some(&previous), Some(&this), 1),
+            ("no previous commit measured", None, Some(&this), 0),
+            ("nothing measured (graph only)", Some(&previous), None, 0),
+        ] {
+            let verdict = judge(&baseline, &current, previous, this);
+            assert_eq!(verdict.findings, Vec::new(), "{case}: the baseline holds");
+            assert_eq!(verdict.failing(), failing, "{case}");
+        }
+    }
+
+    #[test]
+    fn an_unreadable_previous_measurement_compares_nothing() {
+        let dir = std::env::temp_dir().join(format!("xtask-size-previous-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("created");
+        let path = dir.join("measurement.toml");
+        std::fs::write(&path, "commit = \"aaa\"\nsizes = 3\n").expect("written");
+        let previous = read_previous(&path);
+        std::fs::remove_dir_all(&dir).expect("removed");
+        assert_eq!(previous, None);
     }
 
     #[test]

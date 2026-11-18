@@ -790,12 +790,16 @@ and `--bless` on a fresh `main` moves it. The baseline is Linux x86_64's. The
 `size` job runs the builds on `main` and on a pull request whose diff reaches a
 manifest, `Cargo.lock`, the toolchain, `.cargo/`, the `flui create` templates
 or the baseline. That 2% is cumulative, so on `main` each push also compares its
-sizes with the push before it (`--previous`, from a cache entry each push
-saves with `--record`): one merge may grow a binary by 0.5%, and a push past
-that fails with both commits and the delta, for its author to make the binary
-smaller or justify the growth in a follow-up pull request. The job summary
-lists each size at the baseline, the previous push and this commit, which a
-later `--bless` cites to say whose merges it restates.
+sizes with the commit before it (`--previous`, from a cache entry each push
+saves under its commit with `--record`): one push may grow a binary by 0.5%,
+and a push past that fails with both commits and the delta, for its author to
+make the binary smaller or justify the growth in a follow-up pull request. A
+push that restates the baseline has justified it already, so a blessed counter
+is not compared; a push whose parent has no measurement (its run was cancelled
+or skipped) is compared with the baseline alone, and a push that lands several
+merges at once compares them as one. The job summary lists each size at the
+baseline, the previous commit and this one, which a later `--bless` cites to
+say whose merges it restates.
 
 ```bash
 cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)

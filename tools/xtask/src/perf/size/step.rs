@@ -1,12 +1,15 @@
-//! The growth one merge brings: a `main` push's binary sizes against the push
-//! before it.
+//! The growth one merge brings: a `main` push's binary sizes against the
+//! commit before it.
 //!
 //! The baseline's tolerance is cumulative: merges that each add a little pass
-//! until the change that crosses it, which is usually someone else's. So
-//! `main` keeps the previous push's [`Measurement`] (CI caches the file
-//! `--record` writes and hands it back through `--previous`) and fails a push
-//! whose binary grew by more than [`STEP_TOLERANCE_PER_MILLE`] over it, naming
-//! both commits and the delta, so the growth is answered at its own merge.
+//! until the change that crosses it, which is usually someone else's. So each
+//! `main` push records a [`Measurement`] of its commit (CI caches it under
+//! the commit's SHA and hands the parent's back through `--previous`), and a
+//! push whose binary grew by more than [`STEP_TOLERANCE_PER_MILLE`] over its
+//! parent fails, naming both commits and the delta, so the growth is answered
+//! at its own merge. A push that restates the baseline between the two
+//! measurements has answered it already: the counter it blessed is not
+//! compared.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,6 +31,9 @@ pub(super) struct Measurement {
     pub(super) commit: String,
     /// Each byte counter, by its baseline name.
     pub(super) bytes: BTreeMap<String, u64>,
+    /// The baseline's byte counters at that commit: a counter whose baseline
+    /// differs between two measurements was blessed in between.
+    pub(super) baseline: BTreeMap<String, u64>,
 }
 
 impl Measurement {
@@ -83,14 +89,18 @@ impl fmt::Display for StepGrowth {
 }
 
 /// Every byte counter of `current` that grew past the step tolerance over
-/// `previous`. A counter on one side only is not compared: the baseline
-/// comparison reports it.
+/// `previous`. A counter on one side only is not compared (the baseline
+/// comparison reports it), and neither is one whose baseline was restated
+/// between the two: that bless named the growth under `## Expectations`.
 pub(super) fn grown(previous: &Measurement, current: &Measurement) -> Vec<StepGrowth> {
     current
         .bytes
         .iter()
         .filter_map(|(counter, &value)| {
             let &before = previous.bytes.get(counter)?;
+            if previous.baseline.get(counter) != current.baseline.get(counter) {
+                return None;
+            }
             past_step(before, value).then(|| StepGrowth {
                 counter: counter.clone(),
                 previous_commit: previous.commit.clone(),
@@ -194,7 +204,23 @@ mod tests {
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), *value))
                 .collect(),
+            baseline: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn a_counter_blessed_between_two_pushes_is_not_a_step() {
+        let previous = at("aaa", &[("counter_release_bytes", 1000)]);
+        let mut current = at("bbb", &[("counter_release_bytes", 1100)]);
+        assert_eq!(
+            grown(&previous, &current).len(),
+            1,
+            "unblessed growth fails"
+        );
+        current
+            .baseline
+            .insert("counter_release_bytes".to_owned(), 1100);
+        assert_eq!(grown(&previous, &current), Vec::new(), "a bless answers it");
     }
 
     #[test]
@@ -247,6 +273,12 @@ mod tests {
             &[("counter_release_bytes", 7), ("counter_wasm_bytes", 9)],
         );
         measurement.write(&path).expect("written");
+        // CI saves the file only when it holds this line for its own commit.
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            text.lines().any(|line| line == "commit = \"abc\""),
+            "{text}"
+        );
         let read = Measurement::read(&path).expect("read");
         std::fs::remove_dir_all(&dir).expect("removed");
         assert_eq!(read, Some(measurement));
