@@ -58,7 +58,7 @@ pub(crate) enum Lifecycle {
         slot: SlotId,
         inbox: Arc<SlotInbox>,
     },
-    RetryDevice,
+    RetryDevice(crate::ProbedDevice),
 }
 
 impl Lifecycle {
@@ -79,9 +79,22 @@ impl Lifecycle {
             Self::Release { slot } => RasterCommand::Release { slot },
             Self::Restore { slot, surface, .. } => RasterCommand::Restore { slot, surface },
             Self::Detach { slot, .. } => RasterCommand::Detach { slot },
-            Self::RetryDevice => RasterCommand::RetryDevice,
+            Self::RetryDevice(device) => RasterCommand::RetryDevice { device },
         }
     }
+}
+
+/// The `RetryDevice` commands an executor served (ADR-0305 §8), as its owner
+/// reads them in one read: a retry the owner sent past `served` is still on
+/// its way, and one served without the device it carried being adopted
+/// (its adoption panicked) left the device given up.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DeviceRetries {
+    /// Every retry served, adopted or not.
+    pub served: u64,
+    /// The retries served whose device was not adopted.
+    pub unadopted: u64,
 }
 
 /// The context's device as the executor last published it.
@@ -92,6 +105,10 @@ pub(crate) struct DeviceRecord {
     pub(crate) next_attempt_at: Option<Instant>,
     /// Why the last rebuild failed, until the owner takes it.
     pub(crate) failure: Option<EngineError>,
+    /// The `RetryDevice` commands the executor served, counted after the
+    /// health their adoption left is published: an owner that reads these
+    /// before the health never reads a served retry with the health before it.
+    pub(crate) retries: DeviceRetries,
 }
 
 /// What the owner and the executor share: the lifecycle queue, the coalesced
@@ -562,9 +579,9 @@ impl RasterSender {
                 self.shared.ask_trim(level);
                 Ok(SendReceipt::Accepted)
             }
-            RasterCommand::RetryDevice => self
+            RasterCommand::RetryDevice { device } => self
                 .shared
-                .send_lifecycle(Lifecycle::RetryDevice)
+                .send_lifecycle(Lifecycle::RetryDevice(device))
                 .map(|()| SendReceipt::Accepted),
         };
         if sent.is_ok() {
@@ -592,6 +609,14 @@ impl RasterSender {
     #[must_use]
     pub fn take_device_failure(&self) -> Option<EngineError> {
         self.shared.device().failure.take()
+    }
+
+    /// The `RetryDevice` commands the executor has served (ADR-0305 §8). Read
+    /// it before [`Self::device_health`]: a retry it counts as served has
+    /// published the health its adoption left.
+    #[must_use]
+    pub fn device_retries(&self) -> DeviceRetries {
+        self.shared.device().retries
     }
 
     /// Why the raster thread stopped serving, or a turn of it failed, once:
@@ -1239,7 +1264,7 @@ mod speculation {
                 config: SlotConfig::new(),
             })
             .expect("the attach is accepted");
-        while shared.send_lifecycle(Lifecycle::RetryDevice).is_ok() {}
+        while shared.send_lifecycle(Lifecycle::Release { slot }).is_ok() {}
         let inbox = sender.inbox(slot).expect("the slot is held");
         let (landed_tx, landed) = std::sync::mpsc::channel();
         let raster = Arc::new(parking_lot::Mutex::new(None));
