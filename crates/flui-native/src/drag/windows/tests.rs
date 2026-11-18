@@ -212,6 +212,29 @@ fn scripted(decide: impl Fn() -> HRESULT + 'static) -> IDropSource {
     scripted::Scripted(Box::new(decide)).into()
 }
 
+/// A drop source for a case that measures `DoDragDrop`'s loop at rest: the
+/// drag goes on until `release` is set, then `measure` runs and the drag is
+/// cancelled. OLE asks its drop source on any input the loop takes, the
+/// desktop's own included (a cursor clip's synthetic move), so an ask before
+/// the release continues the drag; the count of those asks comes back too.
+fn until_released(
+    release: &Arc<AtomicBool>,
+    measure: impl Fn() + 'static,
+) -> (impl Fn() -> HRESULT + 'static, Rc<Cell<u32>>) {
+    let release = Arc::clone(release);
+    let early = Rc::new(Cell::new(0_u32));
+    let counted = Rc::clone(&early);
+    let decide = move || {
+        if !release.load(Ordering::Acquire) {
+            counted.set(counted.get() + 1);
+            return S_OK;
+        }
+        measure();
+        DRAGDROP_S_CANCEL
+    };
+    (decide, early)
+}
+
 /// Wakes `DoDragDrop`'s loop on this thread every few milliseconds while
 /// `armed`, so it asks its drop source again, as if the pointer were at the
 /// screen point `at`.
@@ -1175,10 +1198,9 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
     let in_loop = Arc::clone(&frames);
     let during = Rc::new(Cell::new(0));
     let measured = Rc::clone(&during);
-    let decide = move || {
+    let (decide, _) = until_released(&release, move || {
         measured.set(in_loop.load(Ordering::Relaxed) - before);
-        DRAGDROP_S_CANCEL
-    };
+    });
     let ended = Rc::new(Cell::new(None));
     let owner = transport.owner().expect("owner state");
     OleTransfer::run_session(
@@ -1204,7 +1226,9 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
 /// turn: work accepted from another thread reaches the drag loop's pacing,
 /// which otherwise sleeps. Red-check: leave the cross-thread requests without
 /// waking the pacing, and the window draws nothing and the turn never runs
-/// while the loop rests.
+/// while the loop rests. It proves this where no input reaches the loop (the
+/// run's own test desktop); where input reached it early (a desktop that takes
+/// input) it says it cannot verify, whatever `FLUI_REQUIRE_INPUT_DESKTOP` says.
 fn work_from_another_thread_reaches_a_resting_drag_loop() {
     let transport = OleTransfer::new();
     let platform = platform_over(&transport);
@@ -1266,13 +1290,12 @@ fn work_from_another_thread_reaches_a_resting_drag_loop() {
     let turns_before = turns.get();
     let during = Rc::new(Cell::new((0, 0)));
     let measured = Rc::clone(&during);
-    let decide = move || {
+    let (decide, early) = until_released(&release, move || {
         measured.set((
             in_loop.load(Ordering::Relaxed) - before,
             turns_in_loop.get() - turns_before,
         ));
-        DRAGDROP_S_CANCEL
-    };
+    });
     let ended = Rc::new(Cell::new(None));
     let owner = transport.owner().expect("owner state");
     OleTransfer::run_session(
@@ -1285,6 +1308,19 @@ fn work_from_another_thread_reaches_a_resting_drag_loop() {
     asking.store(false, Ordering::Release);
     asker.join().expect("the asking thread");
     assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+    // Input that reached the loop before the release ran FLUI's drop target,
+    // whose COM entry asks the pacing again: frames and turns it brought are
+    // no proof that work from another thread reached the resting loop. Two
+    // such asks bring at most two turns and about two frames each, short of
+    // the 3 turns and 10 frames asserted below.
+    if early.get() > 2 {
+        eprintln!(
+            "CANNOT_VERIFY a resting drag loop: input reached it {} times before the case \
+             released it",
+            early.get()
+        );
+        return;
+    }
     let (drawn, turned) = during.get();
     assert!(
         drawn >= 10,

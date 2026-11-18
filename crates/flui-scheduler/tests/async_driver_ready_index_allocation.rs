@@ -1,4 +1,4 @@
-//! The actual complexity proof for issue #1056's ready-index rewrite:
+//! The complexity proof for the async driver's ready index:
 //! [`OwnerFrame::pump_background`] must cost allocations proportional to *ready*
 //! work, not resident tasks. `cargo xtask ci` has no bench step, so this test — not
 //! `benches/async_driver_pump.rs` — is the merge-blocking gate.
@@ -130,7 +130,7 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         assert_eq!(
             allocations, 0,
             "N={dormant} dormant tasks: {allocations} allocations across {EMPTY_PUMPS} empty \
-             pumps -- poll_ready must scale with ready work, not resident tasks (issue #1056)"
+             pumps -- poll_ready must scale with ready work, not resident tasks"
         );
 
         drop(tokens);

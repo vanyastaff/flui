@@ -536,6 +536,10 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
         .post_frame_handle()
         .schedule(move |_| completion.push("coherent completion"))
         .expect("accepted completion");
+    presentation
+        .post_frame_handle()
+        .schedule_frame()
+        .expect("a frame for the completion");
     clock.mark_demand(DemandKind::Completion);
     clock.mark_demand(DemandKind::Completion);
     clock.mark_demand(DemandKind::Dirty);
@@ -583,7 +587,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
     assert_eq!(log.get(), ["coherent completion"]);
 }
 
-fn successor_completion_demand_survives_wake_failure_and_host_clearing() {
+fn a_requested_completion_survives_wake_failure_and_host_clearing() {
     for failing_wake in [false, true] {
         let scheduler = UpdateScheduler::new();
         let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
@@ -605,17 +609,33 @@ fn successor_completion_demand_survives_wake_failure_and_host_clearing() {
 
         let first = log.clone();
         let successor = presentation.post_frame_handle();
+        presentation
+            .post_frame_handle()
+            .schedule(move |_| {
+                first.push("first completion");
+                let second = first.clone();
+                successor
+                    .schedule(move |_| second.push("successor completion"))
+                    .expect("completion registers successor");
+                successor
+                    .schedule_frame()
+                    .expect("completion asks for the successor's frame");
+            })
+            .expect("scoped admission");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "registering asks for no frame"
+        );
+        assert!(
+            !presentation.has_completion_demand(),
+            "registering leaves no completion demand"
+        );
         let admission = catch_unwind(AssertUnwindSafe(|| {
             presentation
                 .post_frame_handle()
-                .schedule(move |_| {
-                    first.push("first completion");
-                    let second = first.clone();
-                    successor
-                        .schedule(move |_| second.push("successor completion"))
-                        .expect("completion registers successor");
-                })
-                .expect("scoped admission");
+                .schedule_frame()
+                .expect("scoped frame request");
         }));
         assert_eq!(admission.is_err(), failing_wake);
         if let Err(failure) = admission {
@@ -1129,8 +1149,12 @@ fn post_frame_ordering_matrix() {
                 completion_demand_coalesces_and_survives_hidden_presentation_gating as fn(),
             ),
             (
-                "successor_completion_demand_survives_wake_failure_and_host_clearing",
-                successor_completion_demand_survives_wake_failure_and_host_clearing as fn(),
+                "a_registration_while_a_segment_is_retained_asks_for_its_successor",
+                a_registration_while_a_segment_is_retained_asks_for_its_successor as fn(),
+            ),
+            (
+                "a_requested_completion_survives_wake_failure_and_host_clearing",
+                a_requested_completion_survives_wake_failure_and_host_clearing as fn(),
             ),
             (
                 "reentrant_partial_geometry_blocks_an_already_selected_tail",
@@ -1182,4 +1206,67 @@ fn post_frame_ordering_matrix() {
             ),
         ],
     );
+}
+
+/// A callback registered while a retained segment waits to resume (suspended or
+/// servicing) joins the successor segment, which resuming does not complete: the
+/// registration asks for that successor itself.
+///
+/// Fails when such a registration, in either retained phase, asks for nothing,
+/// so the callback waits past the resumed segment for a frame nothing asks for.
+fn a_registration_while_a_segment_is_retained_asks_for_its_successor() {
+    /// Puts a running segment into one of the phases that retain it.
+    type Retain = fn(
+        &flui_scheduler::PresentationFrameScope,
+    ) -> Result<(), flui_scheduler::PresentationFrameError>;
+    let retains: [(&str, Retain); 2] = [
+        ("suspended", |presentation| presentation.suspend_segment()),
+        ("servicing", |presentation| presentation.service_segment()),
+    ];
+    for (phase, retain) in retains {
+        let scheduler = UpdateScheduler::new();
+        let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
+        let presentation = owner.presentation_scope();
+        let log = Log::default();
+        presentation.enter_segment().expect("segment");
+        retain(&presentation).expect("retained segment");
+        let ran = log.clone();
+        presentation
+            .post_frame_handle()
+            .schedule(move |_| ran.push("successor"))
+            .expect("registration while retained");
+        assert!(
+            presentation.has_completion_demand(),
+            "{phase}: the successor segment is owed"
+        );
+        assert!(scheduler.is_frame_scheduled(), "{phase}: and asked for");
+
+        owner
+            .drive_frame(
+                Instant::now(),
+                || {},
+                || {
+                    presentation.resume_segment().expect("resume");
+                    presentation.complete_segment().expect("coherent geometry");
+                },
+            )
+            .expect("live owner frame");
+        assert!(
+            log.get().is_empty(),
+            "{phase}: resuming completes only the retained segment"
+        );
+        owner
+            .drive_frame(
+                Instant::now(),
+                || {},
+                || {
+                    if presentation.has_completion_demand() {
+                        presentation.enter_segment().expect("the owed successor");
+                        presentation.complete_segment().expect("coherent geometry");
+                    }
+                },
+            )
+            .expect("live owner frame");
+        assert_eq!(log.get(), ["successor"], "{phase}");
+    }
 }

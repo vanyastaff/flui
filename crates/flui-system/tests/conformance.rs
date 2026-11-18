@@ -1,6 +1,6 @@
 //! The crate's conformance table (ADR-0154 §10): what every provider of the
 //! system services keeps, run against the scripted doubles and against the
-//! platform's own providers (the Windows shell, the Linux portal).
+//! platform's own providers (the Windows shell, AppKit, the Linux portal).
 //!
 //! A row asks only what no user has to answer and nothing on the machine
 //! changes for: a refusal the seam owes, a window that closed, an entry's
@@ -16,7 +16,8 @@
 //! exceptions read the system's name and the user's home folder, which
 //! changes nothing. Each provider's own behaviour is tested beside it,
 //! behind its OS seam, with the system's answers as inputs (`win32::*::tests`
-//! on Windows, the portal's tests on a private bus on Linux).
+//! on Windows, the portal's tests on a private bus on Linux, `macos::*::tests`
+//! as a model on every host).
 //!
 //! The web providers reach their page through a canvas window, which the
 //! headless host does not make, and this harness waits on threads a page

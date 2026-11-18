@@ -1,5 +1,7 @@
 ### Added
 
+- `PostFrameHandle::schedule_frame`, Flutter's `scheduleFrame` for a presentation: it asks
+  for the frame a post-frame callback waits for, without rebuilding a clean tree.
 - The book has a tutorial: a first window with `run_app`, `Application` and `#[flui::main]`, a
   screen laid out with `Column`, `Row`, `Padding` and `Expanded`, state in a `StatefulView`, a
   text field and its `TextEditingController`, a lazily built `ListView` whose keyed rows keep
@@ -25,6 +27,9 @@
 
 ### Changed
 
+- `PostFrameHandle::schedule` asks for no frame, as Flutter's `addPostFrameCallback`: the
+  callback runs after the next frame that completes its presentation's segment. Code that
+  needs that frame asks for it with `PostFrameHandle::schedule_frame` (ADR-0367).
 - Every Rust sample in the book compiles against the `flui` facade: each chapter is a doctest of
   the facade (`src/book.rs`), the docs workflow runs them on every pull request that touches the
   book, and the concept, catalog and testing chapters show complete samples instead of excerpts.
@@ -50,6 +55,9 @@
 
 ### Fixed
 
+- A text field that holds the focus no longer makes its window draw a frame on every vsync:
+  its IME cursor-area loop rides the frames that run for other reasons, so an idle focused
+  field costs nothing and `Tester::pump_and_settle` settles after typing.
 - `HeadlessHost::pump` fails a frame whose semantics publication found an author error in any open
   window, as the widget harness's frames already did, so `Tester` and a bare host report it too.
 - A window hidden from `Resumed` passes through `Inactive` before `Hidden`, for its lifecycle

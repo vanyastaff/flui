@@ -12882,6 +12882,7 @@ impl core::fmt::Display for flui::platform::SystemFailure
 impl core::hash::Hash for flui::platform::SystemFailure
 impl core::marker::StructuralPartialEq for flui::platform::SystemFailure
 variant flui::platform::SystemFailure::Bus // at 2
+variant flui::platform::SystemFailure::Framework(i64) // at 5
 variant flui::platform::SystemFailure::MalformedAnswer // at 3
 variant flui::platform::SystemFailure::Os(i32) // at 0
 variant flui::platform::SystemFailure::PortalResponse(u32) // at 1
@@ -24580,6 +24581,7 @@ impl Clone for flui::view::PostFrameHandle
 impl core::fmt::Debug for flui::view::PostFrameHandle
 pub fn flui::view::PostFrameHandle::new(scheduler: &flui::view::UpdateScheduler) -> Self
 pub fn flui::view::PostFrameHandle::schedule(&self, callback: impl FnOnce(&flui::view::FrameTiming) + 'static) -> Result<(), flui::view::PostFrameScheduleError>
+pub fn flui::view::PostFrameHandle::schedule_frame(&self) -> Result<(), flui::view::PostFrameScheduleError>
 pub fn flui::view::PostFrameHandle::schedule_or_return<T: 'static>(&self, value: T, run: fn(_: T, _: &flui::view::FrameTiming)) -> Result<(), flui_scheduler::post_frame::PostFrameRejection<T>>
 pub fn flui::view::PostFrameHandle::targets_same_scheduler(&self, other: &flui::view::UpdateScheduler) -> bool
 #[non_exhaustive] pub enum flui::view::PostFrameScheduleError
@@ -24821,7 +24823,7 @@ pub struct flui::view::UpdateScheduler { .. }
 impl Clone for flui::view::UpdateScheduler
 impl Default for flui::view::UpdateScheduler
 impl core::fmt::Debug for flui::view::UpdateScheduler
-pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui_scheduler::id::CallbackId
+pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui::foundation::FrameCallbackId
 pub fn flui::view::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
 pub fn flui::view::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
 pub fn flui::view::UpdateScheduler::display_period(&self) -> core::time::Duration
@@ -24837,7 +24839,7 @@ pub fn flui::view::UpdateScheduler::is_same_instance(&self, other: &Self) -> boo
 pub fn flui::view::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
 pub fn flui::view::UpdateScheduler::new() -> Self
 pub fn flui::view::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
-pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui_scheduler::id::CallbackId) -> bool
+pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui::foundation::FrameCallbackId) -> bool
 pub fn flui::view::UpdateScheduler::request_frame(&self)
 pub fn flui::view::UpdateScheduler::set_display_period(&self, period: core::time::Duration)
 pub fn flui::view::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
@@ -36504,7 +36506,6 @@ impl core::fmt::Debug for flui_scheduler::frame_telemetry::PresentOutcome
 impl core::marker::StructuralPartialEq for flui_scheduler::frame_telemetry::PresentOutcome
 variant flui_scheduler::frame_telemetry::PresentOutcome::Errored // at 1
 variant flui_scheduler::frame_telemetry::PresentOutcome::Presented // at 0
-pub type flui_scheduler::id::CallbackId = flui::foundation::FrameCallbackId
 pub struct flui_scheduler::post_frame::OwnerFrame { .. }
 impl Drop for flui_scheduler::post_frame::OwnerFrame
 impl core::fmt::Debug for flui_scheduler::post_frame::OwnerFrame

@@ -147,7 +147,12 @@ and the window must still track it.
 
 **A per-attach post-frame loop.** `CursorAreaLoop` starts on attach, fires once
 per completed frame, sends the rect only when it changed, and reschedules
-itself. It stops only when its attach ends:
+itself. It asks for one frame, when it starts, so a new session gets its first
+rect though focusing changed nothing on screen; after that it rides the frames
+that run for other reasons (an edit, a scroll, a moved ancestor) and asks for
+none, so a focused field that nothing changes leaves its presentation idle
+([ADR-0367](ADR-0367-a-post-frame-callback-asks-for-no-frame.md)), as Flutter's
+`_schedulePeriodicPostFrameCallbacks` does. It stops only when its attach ends:
 
 - **Every attach is a fresh session.** The alive flag and the last-sent cache
   are created per attach. A shared alive flag lets a blur+refocus inside one

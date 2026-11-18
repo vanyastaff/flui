@@ -12,6 +12,8 @@
 //! failure, and its completion ends `ProviderDropped`, never with a success
 //! nobody wrote.
 
+#[cfg(test)]
+pub(crate) mod owner;
 #[cfg(all(test, windows))]
 #[expect(
     unsafe_code,

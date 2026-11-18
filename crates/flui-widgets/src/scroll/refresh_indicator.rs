@@ -577,11 +577,14 @@ impl Refresher {
             return;
         };
         let refresher = self.this.clone();
-        if let Err(error) = post_frame.schedule(move |_| {
-            if let Some(refresher) = refresher.upgrade() {
-                refresher.perform_command();
-            }
-        }) {
+        let scheduled = post_frame
+            .schedule(move |_| {
+                if let Some(refresher) = refresher.upgrade() {
+                    refresher.perform_command();
+                }
+            })
+            .and_then(|()| post_frame.schedule_frame());
+        if let Err(error) = scheduled {
             tracing::warn!(?error, "RefreshIndicator: the post-frame lane is closed");
         }
     }
