@@ -20,8 +20,8 @@ use flui_rendering::{
     context::BoxLayoutContext,
     parent_data::BoxParentData,
     semantics::{
-        AccessibilityNodeId, AttributedString, SemanticsAction, SemanticsConfiguration,
-        SemanticsNode, SemanticsRole, States,
+        AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole,
+        States,
     },
     testing::{FrameRun, Probe, RenderTester, SceneHost, box_node},
     traits::RenderBox,
@@ -521,7 +521,7 @@ struct PublishedNode {
     id: AccessibilityNodeId,
     parent: Option<AccessibilityNodeId>,
     children: Vec<AccessibilityNodeId>,
-    label: Option<AttributedString>,
+    label: Option<String>,
     role: SemanticsRole,
     states: States,
     actions: u64,
@@ -538,8 +538,8 @@ impl PublishedNode {
     fn children(&self) -> &[AccessibilityNodeId] {
         &self.children
     }
-    fn label(&self) -> Option<&AttributedString> {
-        self.label.as_ref()
+    fn label(&self) -> Option<&str> {
+        self.label.as_deref()
     }
     fn role(&self) -> SemanticsRole {
         self.role
@@ -581,7 +581,7 @@ fn snapshot(run: &FrameRun) -> Published {
                 .iter()
                 .map(|&child| identity(child))
                 .collect(),
-            label: node.config().label().cloned(),
+            label: node.config().label().map(str::to_owned),
             role: node.config().role(),
             states: *node.config().states(),
             actions: node.config().effective_actions_as_bits(),
@@ -645,11 +645,7 @@ fn assert_snapshot_node(
         .expect("every expected accessibility identity must resolve");
     assert_eq!(node.parent(), parent, "wrong parent for {id}");
     assert_eq!(node.children(), children, "wrong children for {id}");
-    assert_eq!(
-        node.label().map(AttributedString::as_str),
-        label,
-        "wrong label payload for {id}",
-    );
+    assert_eq!(node.label(), label, "wrong label payload for {id}");
     assert_eq!(node.role(), role, "wrong role payload for {id}");
     assert_eq!(node.states(), states, "wrong state payload for {id}");
     assert_eq!(node.actions(), actions, "wrong action payload for {id}");

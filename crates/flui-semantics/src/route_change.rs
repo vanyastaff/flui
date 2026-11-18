@@ -166,7 +166,7 @@ fn route_name(tree: &SemanticsTree, route: SemanticsId) -> Option<String> {
         config
             .label()
             .filter(|label| !label.is_empty())
-            .map(|label| label.as_str().to_owned())
+            .map(str::to_owned)
     };
     // The first naming node in reading order. Each node is visited once: a
     // shared child, an assembly defect, is not walked twice.

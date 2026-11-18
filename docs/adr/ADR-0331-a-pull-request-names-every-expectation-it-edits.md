@@ -1,10 +1,13 @@
 # ADR-0331: A pull request names every expectation it edits
 
-- **Status:** Accepted (2026-11-13)
+- **Status:** Superseded (2026-11-18)
 - **Date:** 2026-11-13
 - **Superseded-by:** [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `api/flui.txt` row of §1's table only: the facade's API has no committed snapshot before
   the first release.
+  [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
+  whole: no check reads a pull request's body; AGENTS.md "Before each push" item 14 keeps the
+  question.
 - **Related:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
   (the ladder this gate is admitted under); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   §4 (a gate reads structured data and its allowlist only shrinks);

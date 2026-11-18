@@ -349,7 +349,7 @@ fn menu_buttons(request: &MenuRequest, menu: &SharedSignal<Option<MenuRequest>>)
             let (item, menu) = (item.clone(), menu.clone());
             RawButton::new(
                 Semantics::new()
-                    .label(item.label().to_owned())
+                    .label(item.label())
                     .child(SizedBox::new(120.0, 30.0)),
             )
             .on_pressed(move |ctx| {
@@ -1469,7 +1469,7 @@ impl ViewState<PageButtons> for PageButtonsState {
             let pager = view.pager.clone();
             RawButton::new(
                 Semantics::new()
-                    .label(label.to_owned())
+                    .label(label)
                     .anchor(anchor.clone())
                     .child(SizedBox::new(48.0, 48.0)),
             )
