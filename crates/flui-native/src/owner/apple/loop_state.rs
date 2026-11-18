@@ -237,6 +237,19 @@ impl LoopState {
     }
 }
 
+/// Store what `body` makes of `cell`'s value and answer what it answers.
+/// `body` runs on a copy and must run no code of anyone else's, so no write to
+/// the cell can happen while it runs and none is lost.
+pub(crate) fn transition<T: Copy, R>(
+    cell: &std::cell::Cell<T>,
+    body: impl FnOnce(&mut T) -> R,
+) -> R {
+    let mut value = cell.get();
+    let answer = body(&mut value);
+    cell.set(value);
+    answer
+}
+
 /// The loop's state with the owner signal and the application around it: an
 /// explicit quit fences the signal before the state takes it, and a drain
 /// tells the application each reopen it owes, its state stored first.
@@ -262,14 +275,10 @@ impl LoopRequests {
         self.state.get()
     }
 
-    /// Store what `transition` makes of the state and answer what it
-    /// answers. The transition runs on a copy and runs no code of anyone
-    /// else's, so no write to the state can happen while it runs.
-    pub(crate) fn update<R>(&self, transition: impl FnOnce(&mut LoopState) -> R) -> R {
-        let mut state = self.state.get();
-        let answer = transition(&mut state);
-        self.state.set(state);
-        answer
+    /// Store what `body` makes of the state and answer what it answers
+    /// ([`transition`]).
+    pub(crate) fn update<R>(&self, body: impl FnOnce(&mut LoopState) -> R) -> R {
+        transition(&self.state, body)
     }
 
     /// Whether a window may open now.
@@ -408,6 +417,104 @@ mod tests {
         );
         assert!(!after, "a drain that does not begin queues nothing");
         assert_eq!(requests.get().pending_reopens(), 0);
+    }
+
+    /// A reopen AppKit reports while the application hears one, from inside
+    /// its handler, queues no second drain: the running one tells it, and
+    /// leaves nothing owed.
+    #[test]
+    fn a_reopen_during_a_drain_is_told_by_that_drain() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        use crate::QuitAnswer;
+        use crate::error::BootstrapError;
+        use crate::owner::OwnerPlatform;
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bound};
+        use crate::platform::{AppHandler, ExitAnswer};
+        use flui_platform::{Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
+
+        /// The log, and on its first reopen AppKit reporting another.
+        struct Reporting {
+            log: Rc<AppLog>,
+            requests: Rc<LoopRequests>,
+            signal: Arc<OwnerSignal>,
+            queued_inside: Cell<Option<bool>>,
+        }
+        impl AppHandler for Reporting {
+            fn ready(&self, owner: OwnerPlatform) -> Result<(), BootstrapError> {
+                self.log.ready(owner)
+            }
+            fn quit_requested(&self, owner: &OwnerPlatform) {
+                self.log.quit_requested(owner);
+            }
+            fn quit_asked(&self, owner: &OwnerPlatform) -> QuitAnswer {
+                self.log.quit_asked(owner)
+            }
+            fn reopen(&self, owner: &OwnerPlatform) {
+                self.log.reopen(owner);
+                if self.queued_inside.get().is_none() {
+                    let queued = self.requests.accept_reopen(&self.signal);
+                    self.queued_inside.set(Some(queued));
+                }
+            }
+            fn opened(&self, owner: &OwnerPlatform, opened: Opened) {
+                self.log.opened(owner, opened);
+            }
+            fn session_end(
+                &self,
+                owner: &OwnerPlatform,
+                phase: SessionEndPhase,
+            ) -> SessionEndAnswer {
+                self.log.session_end(owner, phase)
+            }
+            fn host_notice(&self, owner: &OwnerPlatform, notice: SystemNotice) {
+                self.log.host_notice(owner, notice);
+            }
+            fn exit_policy(&self, owner: &OwnerPlatform) -> ExitAnswer {
+                self.log.exit_policy(owner)
+            }
+            fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
+                self.log.wake_deadline(owner)
+            }
+            fn turn_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
+                self.log.turn_deadline(owner)
+            }
+        }
+
+        let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+        let requests = Rc::new(LoopRequests::new());
+        requests.update(LoopState::install);
+        assert_eq!(requests.update(LoopState::start), Some(false));
+        let log = AppLog::new();
+        let handler = Rc::new(Reporting {
+            log: Rc::clone(&log),
+            requests: Rc::clone(&requests),
+            signal: Arc::clone(&signal),
+            queued_inside: Cell::new(None),
+        });
+        let run = bound(handler.clone());
+        let reopens = || {
+            log.calls()
+                .iter()
+                .filter(|call| **call == AppCall::Reopen)
+                .count()
+        };
+
+        assert!(requests.accept_reopen(&signal));
+        let queued_after = Cell::new(true);
+        requests.drain_reopens(&signal, &run.delivery, || {
+            queued_after.set(requests.queue_reopens(&signal));
+        });
+        assert_eq!(
+            handler.queued_inside.get(),
+            Some(false),
+            "a reopen reported during the drain queues no second drain"
+        );
+        assert_eq!(reopens(), 2, "the running drain tells it");
+        assert!(!queued_after.get(), "nothing is left for another drain");
+        assert!(requests.accept_reopen(&signal), "the drain has ended");
     }
 
     /// A drain tells the application each reopen it owes, then runs what

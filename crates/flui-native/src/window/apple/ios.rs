@@ -1932,23 +1932,24 @@ impl PlatformWindow for IOSWindow {
             );
             (size, metrics.scale)
         };
-        // Projected with nothing borrowed: a dropped region is reported
-        // through `tracing`, whose subscriber is the application's code. The
-        // set last sent stays in place meanwhile, so a call made from there
-        // projects against it, and the commit below is the last word.
-        let mut projected = self.input_regions.borrow_mut().0.take_buffer();
-        crate::input::regions::ProjectedInputRegions::project_into(&mut projected, regions, scale);
-        let changed = {
+        // Projected with the cell not borrowed while `tracing` reports a
+        // dropped region (`update_in`).
+        let changed = crate::input::regions::ProjectedInputRegions::update_in(
+            &self.input_regions,
+            |state| &mut state.0,
+            regions,
+            scale,
+            None,
+        )
+        .then(|| {
             let mut state = self.input_regions.borrow_mut();
             let (projection, edges) = &mut *state;
-            let changed = projection.commit(projected, scale, None).map(|sent| {
-                crate::window::apple::geometry::screen_edges::DeferredEdges::of(sent, size)
-            });
-            if let Some(changed) = changed {
-                *edges = changed;
-            }
-            changed
-        };
+            *edges = crate::window::apple::geometry::screen_edges::DeferredEdges::of(
+                projection.sent(),
+                size,
+            );
+            *edges
+        });
         if let Some(edges) = changed {
             self.status_bar.defer_edges(self.main, rect_edge(edges));
         }

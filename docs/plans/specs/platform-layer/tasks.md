@@ -3253,9 +3253,9 @@ GPU-память простаивающего или невидимого окн
   которой нет у этого устройства, допуск отказывает с `NotOnThisDevice` (Win32 ниже 22621), прочие
   — `NotOnThisPlatform`; `WindowHandle::set_material` (`flui-view`) — путь виджета через очередь
   окна. (2) В документации `WindowCapabilities`: `Unavailable` ровно тогда, когда допуск
-  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` с любого
-  потока: края доходят до корневого контроллера через главную очередь (`StatusBar::defer_edges`,
-  контроллер читает последние края при обновлении, так что ранний блок не возвращает старые).
+  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` на потоке
+  владельца: края сразу доходят до корневого контроллера (`StatusBar::defer_edges`), а следующий
+  присоединённый контроллер получает те же края.
   (3) Тест отказа DWM: инъекция исхода DWM (`material_applied`) — отказ даёт `ApplyError::Platform`;
   закрытое окно — `ApplyError::Closed` (команда, допущенная до закрытия). (4) Android: чистая
   модель `display::android::sample::FrameRateRequests` (разрешение `ANativeWindow_setFrameRate`
@@ -8823,6 +8823,8 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   падает); `an_explicit_quit_fences_the_signal_and_the_application_hears_no_reopen` (прежний тест
   `LoopControl` на `LoopRequests`: без `signal.fence()` — падает); строки другой кнопки в той же
   таблице держат проводку `press_of` (без проверки левой кнопки — падают);
+  `an_update_made_while_a_dropped_region_is_reported_finds_what_was_sent` (регионы, с прежним
+  изъятием всей проекции — падает); `a_reopen_during_a_drain_is_told_by_that_drain`,
   `a_drain_tells_each_owed_reopen_then_queues_the_rest`, `a_reopen_during_a_drain_waits_for_it_to_end`, `evaluations_coalesce_and_stop_with_the_loop`,
   `a_quit_before_the_loop_runs_keeps_it_from_starting`, `the_launch_ends_when_appkit_says_it_finished`
   держат переходы модели. Прогнано: на Windows clippy `-p flui-native --all-targets --all-features

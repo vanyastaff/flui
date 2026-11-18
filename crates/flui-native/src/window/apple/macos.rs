@@ -185,9 +185,9 @@ pub struct MacOSWindow {
     redraw: OnceCell<Arc<MacOSRedraw>>,
 
     /// The platform's display registry, by which this window turns its
-    /// screen into a [`DisplayId`]. A `OnceLock` filled once by
-    /// the window position's `open` right after construction, like the wake
-    /// pump; a window built without a platform names no display.
+    /// screen into a [`DisplayId`], bound once by [`UnshownWindow::show`]
+    /// before the window is shown, like the wake pump; a window built
+    /// without a platform names no display.
     displays: OnceCell<Arc<dyn HostDisplays>>,
 
     /// The published window state (ADR-0237). Seeded from the creation
@@ -403,20 +403,19 @@ impl MacOSWindow {
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
-    ) -> Result<Rc<Self>, OpenWindowError> {
+    ) -> Result<UnshownWindow, OpenWindowError> {
         Self::new_inner(mtm, id, opening, handler, windows_map, windows, view_hooks)
     }
 
     /// Hand this window the platform's display registry, and read which display
     /// it is on.
     ///
-    /// Called once by the window position's `open`, right after construction
-    /// and before the window is handed to anyone. A setter, like
-    /// [`Self::install_wake_pump`]: the window is built before the platform
-    /// hands it what it shares with the other windows.
+    /// Called once, by [`UnshownWindow::show`], before the window is shown or
+    /// handed to anyone: the window is built before the platform hands it
+    /// what it shares with the other windows.
     fn bind_displays(&self, displays: Arc<dyn HostDisplays>) {
-        // First writer wins, like the wake pump: the slot is read on every
-        // screen change and must not flip between registries.
+        // The slot is read on every screen change and must not change
+        // registries: a second bind is ignored.
         if self.displays.set(displays).is_ok() {
             self.refresh_display();
             self.sync_layer_refresh();
@@ -436,9 +435,16 @@ impl MacOSWindow {
             return false;
         };
         let id = display_of_screen(displays.as_ref(), self.ns_window.screen().as_deref());
-        let mut state = self.state.borrow_mut();
-        let changed = state.display != id;
-        state.display = id;
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            let changed = state.display != id;
+            state.display = id;
+            changed
+        };
+        if changed {
+            // The display is a field of the snapshot: the next read samples.
+            self.snapshot.invalidate();
+        }
         changed
     }
 
@@ -466,13 +472,11 @@ impl MacOSWindow {
 
     /// Hand this window the platform's wake pump.
     ///
-    /// Called once by the window position's `open`, immediately after
-    /// construction and before the window is handed to anyone who could
-    /// redraw it.
+    /// Called once, by [`UnshownWindow::show`], before the window is shown or
+    /// handed to anyone who could redraw it.
     fn install_wake_pump(&self, pump: WeakWakePump) {
-        // A second install is silently ignored rather than racing the first:
-        // the slot is read on every redraw, so "first writer wins" is the
-        // only outcome that cannot leave a window flipping between pumps.
+        // The slot is read on every redraw, from any thread, so a window never
+        // changes pumps: a second install is ignored.
         let _ = self.redraw().wake_pump.set(pump);
     }
 
@@ -491,7 +495,7 @@ impl MacOSWindow {
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
-    ) -> Result<Rc<Self>, OpenWindowError> {
+    ) -> Result<UnshownWindow, OpenWindowError> {
         let flui_platform::OpeningGeometry {
             content,
             constraints,
@@ -786,48 +790,19 @@ impl MacOSWindow {
             .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         let _ = window.delegate.set(delegate);
 
-        // Ordered front only now, its delegate set: the key status it takes
-        // reaches the delegate (`windowDidBecomeKey:`).
-        if options.visible {
-            window.ns_window.makeKeyAndOrderFront(None);
-        }
-
-        // Store in windows map, which the owner thread alone reaches: the
-        // window is made there.
-        let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
-        let inserted = windows_map.insert(window.native_key(), tracked);
-        assert!(
-            inserted.is_ok(),
-            "BUG: a window is made on the main thread, which reaches the window map"
-        );
-
-        // The rectangle the window returns to is what it has now, placed
-        // as asked; then it enters the mode it opens in. A hidden window
-        // enters it when it is first shown.
-        window.state.borrow_mut().normal = window.outer_geometry();
-        if options.mode != WindowMode::Normal {
-            if options.visible {
-                // A window that cannot take the mode opens normal, as the
-                // options document; its first snapshot says so.
-                let _ = window.change_mode(options.mode);
-            } else {
-                window
-                    .state
-                    .borrow_mut()
-                    .sequence
-                    .enter_when_shown(options.mode);
-            }
-        }
-
         tracing::info!(
             handle = ?window.ns_window(),
             width = content.width(),
             height = content.height(),
             scale = scale.get(),
-            "a window opened"
+            "a window was made"
         );
 
-        Ok(window)
+        Ok(UnshownWindow {
+            window,
+            visible: options.visible,
+            mode: options.mode,
+        })
     }
 
     /// Get the NSWindow handle
@@ -841,6 +816,65 @@ impl MacOSWindow {
         control: std::sync::Weak<crate::owner::apple::macos::LoopControl>,
     ) {
         let _ = self.loop_control.set(control);
+    }
+}
+
+/// A window made, its delegate set, and not yet shown or tracked: the only
+/// way to the window is [`show`](Self::show), which hands it what the loop
+/// shares with every window before the window can tell anyone anything.
+#[must_use = "a window is shown and tracked by `show`"]
+pub(crate) struct UnshownWindow {
+    window: Rc<MacOSWindow>,
+    visible: bool,
+    mode: WindowMode,
+}
+
+impl UnshownWindow {
+    /// Bind the window to `owner`, track it, then show it as its options
+    /// asked. The order is the point: ordering a window front makes it key,
+    /// and the delegate's `windowDidBecomeKey:` publishes its first snapshot
+    /// and runs the application's handler, which by then reaches a window
+    /// that names its display, wakes its loop and is in the window map.
+    fn show(self, owner: &MacOSLoop) -> Rc<MacOSWindow> {
+        let Self {
+            window,
+            visible,
+            mode,
+        } = self;
+        owner.notices.mark_stale_on_wake(window.state_cell());
+        // What another thread raises for the window waits for an owner turn.
+        window
+            .delivery
+            .resume_through_signal(&owner.loop_control.owner_signal);
+        window.install_loop_control(Arc::downgrade(&owner.loop_control));
+        window.install_wake_pump(Arc::downgrade(&owner.wake_pump));
+        window.bind_displays(Arc::clone(&owner.displays));
+
+        // The map is the owner thread's, where the window is made.
+        let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
+        let inserted = window.windows_map.insert(window.native_key(), tracked);
+        assert!(
+            matches!(inserted, Ok(None)),
+            "BUG: a new window's key is held by no open window (a window leaves the map before \
+             AppKit can reuse its address), and the window map, made on this thread, has an \
+             owner slot (none are left once owner slots are exhausted)"
+        );
+
+        // The rectangle the window returns to is what it has now, placed as
+        // asked; then it is shown and enters the mode it opens in. A hidden
+        // window enters it when it is first shown.
+        window.state.borrow_mut().normal = window.outer_geometry();
+        if visible {
+            window.ns_window.makeKeyAndOrderFront(None);
+            if mode != WindowMode::Normal {
+                // A window that cannot take the mode opens normal, as the
+                // options document; its first snapshot says so.
+                let _ = window.change_mode(mode);
+            }
+        } else if mode != WindowMode::Normal {
+            window.state.borrow_mut().sequence.enter_when_shown(mode);
+        }
+        window
     }
 }
 
@@ -1316,15 +1350,6 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         // turned into a point of the desktop.
         let opening = options.geometry()?;
         let (at, returns_to) = desktop_placement(owner.displays.as_ref(), &options);
-        // The loop still crosses threads until its owner-local step (ADR-0327 §5), so
-        // only asking AppKit proves this is the main thread the window's
-        // calls need; a release build keeps the check the assertion above
-        // compiles out.
-        let Some(main) = MainThreadMarker::new() else {
-            return Err(OpenWindowError::Backend {
-                message: "a macOS window opens on the main thread only".to_owned(),
-            });
-        };
         let Some(id) = windows.ids.with(|ids| ids.next()) else {
             return Err(OpenWindowError::Backend {
                 message: "a macOS window opens on the main thread that built its platform"
@@ -1332,7 +1357,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         };
         let window = MacOSWindow::try_new(
-            main,
+            owner.main,
             id?,
             Opening {
                 options,
@@ -1345,19 +1370,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             windows,
             owner.view_hooks,
         )?;
-        owner.notices.mark_stale_on_wake(window.state_cell());
-        // What another thread raises for the window waits for an owner turn.
-        window
-            .delivery
-            .resume_through_signal(&owner.loop_control.owner_signal);
-        // Installed immediately after construction, before the window can be
-        // handed to anyone who might redraw it — the slot is a `OnceLock`, so
-        // a later install would be silently ignored rather than racing.
-        window.install_loop_control(Arc::downgrade(&owner.loop_control));
-        window.install_wake_pump(Arc::downgrade(&owner.wake_pump));
-        window.bind_displays(Arc::clone(&owner.displays));
-
-        Ok(window)
+        Ok(window.show(owner))
     }
 
     fn capabilities(_: &MacOSLoop, windows: &MacOSWindows) -> WindowCapabilities {
@@ -2415,15 +2428,12 @@ impl MacOSWindow {
         });
         let (system, frame) = {
             let mut state = self.state.borrow_mut();
-            let system = match read {
-                // The first read the window had stays: AppKit's layout before
-                // anything moved the traffic lights.
-                Some(read) => *state.system_controls.get_or_insert(read),
-                None => match state.system_controls {
-                    Some(system) => system,
-                    None => return,
-                },
-            };
+            // The first read the window had stays: AppKit's layout before
+            // anything moved the traffic lights. Only this keeps one, and it
+            // read one above whenever none was kept.
+            let system = *state.system_controls.get_or_insert_with(|| {
+                read.expect("BUG: the traffic lights' layout is read whenever none is kept")
+            });
             (system, state.frame)
         };
         let direction = self.ns_window.windowTitlebarLayoutDirection();

@@ -1359,7 +1359,7 @@ pub(crate) mod macos {
     }
 
     impl ViewInputs {
-        /// What the left press `event` does: a press on a move area of a title
+        /// What the press `event` does: a left press on a move area of a title
         /// bar the application draws moves the window, and reaches nobody.
         fn title_bar_press(&self, view: &ContentView<'_>, event: &NSEvent) -> Press {
             // Read from AppKit before the regions are borrowed: no borrow is
@@ -1415,15 +1415,15 @@ pub(crate) mod macos {
             regions: &[InputRegion],
             scale: flui_foundation::geometry::DevicePixelRatio,
         ) {
-            // Projected with nothing borrowed: a dropped region is reported
-            // through `tracing`, whose subscriber is the application's code.
-            // The regions last sent stay in place meanwhile, so a press or a
-            // call made from there reads them, and the commit is the last word.
-            let mut projected = self.chrome.borrow_mut().projected.take_buffer();
-            ProjectedInputRegions::project_into(&mut projected, regions, scale);
-            let mut chrome = self.chrome.borrow_mut();
-            let _changed = chrome.projected.commit(projected, scale, None);
-            chrome.scale = scale;
+            // A press reads the projection; nothing is handed to AppKit.
+            let _changed = ProjectedInputRegions::update_in(
+                &self.chrome,
+                |chrome| &mut chrome.projected,
+                regions,
+                scale,
+                None,
+            );
+            self.chrome.borrow_mut().scale = scale;
         }
 
         fn set_pointer_locked(&self, locked: bool) {

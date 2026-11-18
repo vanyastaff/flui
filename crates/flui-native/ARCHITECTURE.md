@@ -3783,9 +3783,10 @@ the platform binds its display registry to the new window, which is safe there
 because the window is created at the origin — a point on a screen — so
 `-[NSWindow screen]` answers rather than returning nil. Caching is the one place
 this diverges from the winit implementation it otherwise mirrors: winit queries
-the monitor per call, but this backend's AppKit traffic belongs to the owner lane
-while `display_id` is a plain `&self` accessor any thread may call, so the query
-happens on the lane and the accessor reads the lock. The screen key is the
+the monitor per call, but here every snapshot reads the display, so it is read
+from AppKit only where it can change, and a change invalidates the snapshot. The
+window binds the registry before it is shown (`UnshownWindow::show`), so its
+first snapshot, published from `windowDidBecomeKey:`, names its display. The screen key is the
 `CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
 the display-UUID source replaces.
 

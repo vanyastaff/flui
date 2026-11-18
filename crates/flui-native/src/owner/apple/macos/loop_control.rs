@@ -28,7 +28,7 @@ use crate::{
     error::PlatformError,
     owner::app_delivery::AppDelivery,
     owner::apple::NativeOwner,
-    owner::apple::loop_state::{LoopRequests, LoopState},
+    owner::apple::loop_state::{LoopRequests, LoopState, transition},
     owner::apple::terminate_gate::ANNOUNCEMENT_LIFETIME,
     owner::apple::terminate_gate::DEFERRAL_LIMIT,
     owner::apple::terminate_gate::TerminateGate,
@@ -83,16 +83,6 @@ struct OwnerPart {
     /// so each answer schedules a timer on the main queue and supersedes the
     /// last ([`LoopControl::schedule_turn_deadline`]).
     turn_timer: Cell<(TurnDeadline, u64)>,
-}
-
-/// Store what `transition` makes of `cell`'s value and answer what it
-/// answers. The transition runs on a copy and must run no code of anyone
-/// else's, so no write to the cell can happen while it runs.
-fn transition<T: Copy, R>(cell: &Cell<T>, transition: impl FnOnce(&mut T) -> R) -> R {
-    let mut value = cell.get();
-    let answer = transition(&mut value);
-    cell.set(value);
-    answer
 }
 
 impl LoopControl {

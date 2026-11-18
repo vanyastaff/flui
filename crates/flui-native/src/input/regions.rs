@@ -53,18 +53,40 @@ impl ProjectedInputRegions {
         self.commit(projected, ratio, display)
     }
 
+    /// [`update`](Self::update) the projection that `projection` picks out of
+    /// `cell`, with `cell` not borrowed while a dropped region is reported
+    /// through `tracing` (a subscriber is the application's code, and may
+    /// reach the same cell): what was last sent stays in place meanwhile, so
+    /// a call made from there projects against it, and the commit after is
+    /// one step, the last word. `true` when the OS is to be handed the set
+    /// now ([`sent`](Self::sent)).
+    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    pub(crate) fn update_in<S>(
+        cell: &std::cell::RefCell<S>,
+        projection: impl Fn(&mut S) -> &mut Self,
+        regions: &[InputRegion],
+        ratio: DevicePixelRatio,
+        display: Option<DisplayId>,
+    ) -> bool {
+        let mut projected = projection(&mut cell.borrow_mut()).take_buffer();
+        Self::project_into(&mut projected, regions, ratio);
+        projection(&mut cell.borrow_mut())
+            .commit(projected, ratio, display)
+            .is_some()
+    }
+
     /// The buffer a projection is made in, taken out so that
     /// [`project_into`](Self::project_into), which reports a dropped region
     /// through `tracing` (the application's code), runs with the projection
     /// not borrowed; [`commit`](Self::commit) gives it back. A projection made
     /// meanwhile finds what was last sent, and an empty buffer.
-    pub(crate) fn take_buffer(&mut self) -> Vec<DeviceInputRegion> {
+    fn take_buffer(&mut self) -> Vec<DeviceInputRegion> {
         std::mem::take(&mut self.scratch)
     }
 
     /// `regions` (window-logical) projected to device pixels at `ratio` into
     /// `buffer`, as [`update`](Self::update) describes.
-    pub(crate) fn project_into(
+    fn project_into(
         buffer: &mut Vec<DeviceInputRegion>,
         regions: &[InputRegion],
         ratio: DevicePixelRatio,
@@ -76,7 +98,7 @@ impl ProjectedInputRegions {
     /// Take `projected`, made at `ratio` for a window on `display`, as the
     /// set the OS holds: the set to hand it when it differs from the last
     /// one, `None` when the OS already holds it. Runs no code but its own.
-    pub(crate) fn commit(
+    fn commit(
         &mut self,
         projected: Vec<DeviceInputRegion>,
         ratio: DevicePixelRatio,
@@ -100,7 +122,14 @@ impl ProjectedInputRegions {
     /// The device-pixel regions the OS was last handed: what the Win32 window
     /// answers its hit test from, and the AppKit, X11 and Wayland windows a
     /// press.
-    #[cfg(any(test, windows, target_os = "macos", x11_host, wayland_host))]
+    #[cfg(any(
+        test,
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        x11_host,
+        wayland_host
+    ))]
     #[must_use]
     pub(crate) fn sent(&self) -> &[DeviceInputRegion] {
         &self.sent
