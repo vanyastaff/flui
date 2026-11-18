@@ -382,8 +382,8 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
     use flui_foundation::geometry::Offset;
     use flui_painting::styling::{Color, Shadow};
     use flui_painting::typography::{
-        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, TextDecoration, TextLink,
-        TextStyle,
+        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, OpenTypeTag, TextDecoration,
+        TextLink, TextStyle,
     };
     use flui_painting::{Canvas, DrawOp, Invalidation, TextContext};
 
@@ -467,8 +467,8 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         height: Some(2.0),
         font_family: Some("monospace".to_owned()),
         font_family_fallback: vec!["serif".to_owned()],
-        font_features: vec![FontFeature::enable("smcp")],
-        font_variations: vec![FontVariation::new("wght", 700.0)],
+        font_features: vec![FontFeature::enable(OpenTypeTag::new(*b"smcp"))],
+        font_variations: vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 700.0)],
         shadows: Some(vec![Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0)]),
         decoration: Some(TextDecoration::UNDERLINE),
     };

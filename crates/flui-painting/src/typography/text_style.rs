@@ -1,82 +1,90 @@
 //! Text styling types.
 
 use crate::styling::{Color, Shadow};
-use crate::typography::TextDecoration;
+use crate::typography::{FontFeature, FontVariation, TextDecoration};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// The thickness of glyphs used to draw text, on the standard 100–900 scale.
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "the standard scale names nine weights, 100 to 900"
+/// The thickness of glyphs, on the CSS Fonts 4 scale of 1 to 1000.
+///
+/// A static font answers with its nearest face, as CSS font matching picks
+/// it; a variable font draws the weight itself, so 350 or 550 reach its
+/// `wght` axis. [`FontWeight::W100`] through [`FontWeight::W900`] name the
+/// standard steps.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(try_from = "u16", into = "u16")
 )]
-pub enum FontWeight {
-    /// Thin (100)
-    W100,
-    /// Extra-light (200)
-    W200,
-    /// Light (300)
-    W300,
-    /// Normal (400)
-    W400,
-    /// Medium (500)
-    W500,
-    /// Semi-bold (600)
-    W600,
-    /// Bold (700)
-    W700,
-    /// Extra-bold (800)
-    W800,
-    /// Black (900)
-    W900,
-}
+pub struct FontWeight(u16);
+
+/// A font weight outside the CSS range of 1 to 1000.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("font weight {0} is outside 1..=1000")]
+pub struct InvalidFontWeight(pub u16);
 
 impl FontWeight {
+    /// Thin (100).
+    pub const W100: Self = Self(100);
+    /// Extra-light (200).
+    pub const W200: Self = Self(200);
+    /// Light (300).
+    pub const W300: Self = Self(300);
+    /// Normal (400).
+    pub const W400: Self = Self(400);
+    /// Medium (500).
+    pub const W500: Self = Self(500);
+    /// Semi-bold (600).
+    pub const W600: Self = Self(600);
+    /// Bold (700).
+    pub const W700: Self = Self(700);
+    /// Extra-bold (800).
+    pub const W800: Self = Self(800);
+    /// Black (900).
+    pub const W900: Self = Self(900);
+
     /// Normal font weight (400).
     pub const NORMAL: Self = Self::W400;
 
     /// Bold font weight (700).
     pub const BOLD: Self = Self::W700;
 
-    /// Returns the numeric weight value (100 for `W100` through 900 for `W900`).
-    #[must_use]
-    #[inline]
-    pub const fn value(&self) -> u16 {
-        match self {
-            Self::W100 => 100,
-            Self::W200 => 200,
-            Self::W300 => 300,
-            Self::W400 => 400,
-            Self::W500 => 500,
-            Self::W600 => 600,
-            Self::W700 => 700,
-            Self::W800 => 800,
-            Self::W900 => 900,
+    /// The lightest weight CSS admits.
+    pub const MIN: Self = Self(1);
+
+    /// The heaviest weight CSS admits.
+    pub const MAX: Self = Self(1000);
+
+    /// The weight `value`, which CSS admits from 1 to 1000.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidFontWeight`] when `value` is 0 or above 1000.
+    pub const fn try_new(value: u16) -> Result<Self, InvalidFontWeight> {
+        if value >= Self::MIN.0 && value <= Self::MAX.0 {
+            Ok(Self(value))
+        } else {
+            Err(InvalidFontWeight(value))
         }
     }
 
-    /// Converts a CSS numeric weight to the nearest `FontWeight` variant.
-    ///
-    /// Values round to the closest hundred and clamp to `W100`..=`W900`.
-    /// An exact half goes the way CSS Fonts 4's font matching algorithm
-    /// searches when a weight is missing: lighter below 400, heavier from
-    /// 400 up, so 350 is `W300` and 450 is `W500`. A plain `round()` would
-    /// send 350 to `W400`, away from the direction a browser would pick for
-    /// a CSS weight.
+    /// The numeric weight, 1 to 1000.
     #[must_use]
     #[inline]
-    pub const fn from_css(value: i32) -> Self {
-        match value {
-            i32::MIN..=150 => Self::W100,
-            151..=250 => Self::W200,
-            251..=350 => Self::W300,
-            351..=449 => Self::W400,
-            450..=549 => Self::W500,
-            550..=649 => Self::W600,
-            650..=749 => Self::W700,
-            750..=849 => Self::W800,
-            _ => Self::W900,
-        }
+    pub const fn value(self) -> u16 {
+        self.0
+    }
+
+    /// The weight nearest `value`, held inside 1..=1000: what an
+    /// interpolation that overshoots its ends draws.
+    #[must_use]
+    pub(crate) fn saturating(value: f64) -> Self {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped into 1..=1000 first, so the cast is exact"
+        )]
+        let weight = value.round().clamp(1.0, 1000.0) as u16;
+        Self(weight)
     }
 }
 
@@ -84,6 +92,20 @@ impl Default for FontWeight {
     #[inline]
     fn default() -> Self {
         Self::NORMAL
+    }
+}
+
+impl TryFrom<u16> for FontWeight {
+    type Error = InvalidFontWeight;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+impl From<FontWeight> for u16 {
+    fn from(weight: FontWeight) -> Self {
+        weight.0
     }
 }
 
@@ -97,69 +119,6 @@ pub enum FontStyle {
     Normal,
     /// Italic font style.
     Italic,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// An OpenType feature setting (e.g. `"smcp"` for small caps) applied
-/// during text shaping.
-///
-/// Shaping ignores settings whose tag is not four printable ASCII bytes or
-/// whose value is outside `0..=65535`. Other valid settings still apply.
-pub struct FontFeature {
-    /// OpenType feature tag (4 characters).
-    pub feature: String,
-    /// Feature value (typically 0 or 1).
-    pub value: i32,
-}
-
-impl FontFeature {
-    /// Creates a new font feature.
-    #[inline]
-    pub fn new(feature: impl Into<String>, value: i32) -> Self {
-        Self {
-            feature: feature.into(),
-            value,
-        }
-    }
-
-    /// Creates an enabled font feature.
-    #[inline]
-    pub fn enable(feature: impl Into<String>) -> Self {
-        Self::new(feature, 1)
-    }
-
-    /// Creates a disabled font feature.
-    #[inline]
-    pub fn disable(feature: impl Into<String>) -> Self {
-        Self::new(feature, 0)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// A variable-font axis setting (e.g. `"wght"` for weight) applied
-/// during text shaping.
-///
-/// Shaping ignores settings whose tag is not four printable ASCII bytes or
-/// whose value is not finite in the shaper's `f32` coordinate space. Unknown
-/// valid axis tags are left to the font's shaping implementation.
-pub struct FontVariation {
-    /// Variation axis tag (4 characters).
-    pub axis: String,
-    /// Variation axis value.
-    pub value: f64,
-}
-
-impl FontVariation {
-    /// Creates a new font variation.
-    #[inline]
-    pub fn new(axis: impl Into<String>, value: f64) -> Self {
-        Self {
-            axis: axis.into(),
-            value,
-        }
-    }
 }
 
 /// Defines a strut: a minimum line-height scaffold that vertical text

@@ -141,12 +141,10 @@ impl Lerp for crate::typography::TextStyle {
                 other.font_weight.as_ref(),
                 t,
                 |a, b| {
-                    let weight = scalar(&f64::from(a.value()), &f64::from(b.value()));
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "a weight between two CSS weights fits an i32"
-                    )]
-                    crate::typography::FontWeight::from_css(weight.round() as i32)
+                    crate::typography::FontWeight::saturating(scalar(
+                        &f64::from(a.value()),
+                        &f64::from(b.value()),
+                    ))
                 },
             ),
             shadows,

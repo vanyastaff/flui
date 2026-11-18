@@ -1066,7 +1066,7 @@ fn owner_metrics_contract() {
 
 fn bold_text_changes_the_painted_glyphs() {
     use flui_foundation::TextDirection;
-    use flui_painting::typography::{FontVariation, FontWeight, TextSpan, TextStyle};
+    use flui_painting::typography::{FontVariation, FontWeight, OpenTypeTag, TextSpan, TextStyle};
     use flui_platform::{SystemPreferences, TextWeightPreference};
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::{Arc, atomic::AtomicBool};
@@ -1232,7 +1232,7 @@ fn bold_text_changes_the_painted_glyphs() {
                 .with_text(TextSpan::styled(
                     "AA",
                     TextStyle {
-                        font_variations: vec![FontVariation::new("wght", expected)],
+                        font_variations: vec![FontVariation::new(OpenTypeTag::WEIGHT, expected)],
                         ..style.clone()
                     },
                 ))

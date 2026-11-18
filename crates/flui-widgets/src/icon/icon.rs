@@ -3,7 +3,7 @@
 use flui_foundation::TextDirection;
 use flui_objects::RenderIcon;
 use flui_painting::styling::Color;
-use flui_painting::typography::{FontVariation, TextStyle};
+use flui_painting::typography::{FontVariation, OpenTypeTag, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, CreationSite, IntoView, RenderView, ViewExt, impl_render_view};
@@ -131,14 +131,18 @@ impl Icon {
     /// the resolved theme's `fill`/`weight`/`grade`/`optical_size`.
     fn font_variations(theme: &IconThemeData) -> Vec<FontVariation> {
         [
-            theme.fill.map(|fill| FontVariation::new("FILL", fill)),
+            theme
+                .fill
+                .map(|fill| FontVariation::new(OpenTypeTag::new(*b"FILL"), fill)),
             theme
                 .weight
-                .map(|weight| FontVariation::new("wght", weight)),
-            theme.grade.map(|grade| FontVariation::new("GRAD", grade)),
+                .map(|weight| FontVariation::new(OpenTypeTag::new(*b"wght"), weight)),
+            theme
+                .grade
+                .map(|grade| FontVariation::new(OpenTypeTag::new(*b"GRAD"), grade)),
             theme
                 .optical_size
-                .map(|optical_size| FontVariation::new("opsz", optical_size)),
+                .map(|optical_size| FontVariation::new(OpenTypeTag::new(*b"opsz"), optical_size)),
         ]
         .into_iter()
         .flatten()

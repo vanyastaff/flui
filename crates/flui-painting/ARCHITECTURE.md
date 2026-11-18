@@ -1264,9 +1264,9 @@ glyphs and their measured advances.
 `font_variations_select_the_painted_run_instance` selects opposite sides of the
 generated `wght` axis and reads the painted run's normalized coordinates; that
 fixture has no outline deltas, so the test makes no width or rasterization claim.
-`invalid_font_features_do_not_replace_valid_settings` and
-`invalid_font_variations_do_not_replace_valid_settings` cover admission alongside
-valid settings.
+`an_invalid_open_type_tag_is_refused_when_built` pins that a tag the shaper would refuse is
+refused when the author builds it, and `invalid_font_variations_do_not_replace_valid_settings`
+that a non-finite axis value leaves the valid settings in place.
 
 ## Open items
 

@@ -1160,22 +1160,30 @@ pub(crate) fn sweep_interpolation_keeps_hard_transitions() {
     keeps_hard_gradient_transition(Gradient::Sweep(gradient));
 }
 
-/// A CSS weight snaps to the closest hundred, and an exact half goes the way
-/// CSS font matching searches: lighter below 400, heavier from 400 up.
-pub(crate) fn font_weight_from_css_breaks_ties_like_css() {
-    for (css, expected) in [
-        (150, FontWeight::W100),
-        (250, FontWeight::W200),
-        (350, FontWeight::W300),
-        (351, FontWeight::W400),
-        (449, FontWeight::W400),
-        (450, FontWeight::W500),
-        (650, FontWeight::W700),
-        (750, FontWeight::W800),
-        (-5, FontWeight::W100),
-        (1000, FontWeight::W900),
-    ] {
-        assert_eq!(FontWeight::from_css(css), expected, "css weight {css}");
+/// A weight is any CSS weight from 1 to 1000, and an animated weight passes
+/// through the weights between its ends instead of snapping to hundreds, so a
+/// variable font draws each frame's own weight.
+pub(crate) fn a_font_weight_is_any_css_weight() {
+    use flui_foundation::geometry::Lerp;
+    use flui_painting::typography::{InvalidFontWeight, TextStyle};
+
+    assert_eq!(FontWeight::try_new(0), Err(InvalidFontWeight(0)));
+    assert_eq!(FontWeight::try_new(1001), Err(InvalidFontWeight(1001)));
+    for weight in [1, 350, 550, 1000] {
+        let parsed = FontWeight::try_new(weight).expect("a CSS weight");
+        assert_eq!(parsed.value(), weight);
+    }
+    let weighted = |weight: FontWeight| TextStyle {
+        font_weight: Some(weight),
+        ..TextStyle::default()
+    };
+    let (normal, black) = (weighted(FontWeight::NORMAL), weighted(FontWeight::W900));
+    for (t, expected) in [(0.3, 550), (0.5, 650), (2.0, 1000), (-1.0, 1)] {
+        let weight = normal
+            .lerp_to(&black, t)
+            .font_weight
+            .expect("both ends weigh");
+        assert_eq!(weight.value(), expected, "weight at t = {t}");
     }
 }
 
@@ -1393,18 +1401,14 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
     let half = start.lerp_to(&end, 0.5);
     assert_eq!(half.font_size, Some(15.0));
     assert_eq!(half.letter_spacing, Some(1.0));
-    // 550 is a CSS half from 400 up: the heavier weight.
-    assert_eq!(half.font_weight, Some(FontWeight::W600));
+    // The weight between the ends, not the nearest hundred.
+    assert_eq!(half.font_weight.map(FontWeight::value), Some(550));
     assert_eq!(half.font_family.as_deref(), Some("End"));
     assert_eq!(half.height, Some(1.5), "one-sided switches at 0.5");
     let early = start.lerp_to(&end, 0.25);
     assert_eq!(early.font_family.as_deref(), Some("Start"));
     assert_eq!(early.height, None);
-    assert_eq!(
-        early.font_weight,
-        Some(FontWeight::W500),
-        "475 rounds to 500"
-    );
+    assert_eq!(early.font_weight.map(FontWeight::value), Some(475));
     let overshoot = start.lerp_to(&end, -2.0);
     let large = |size: f64| TextStyle {
         font_size: Some(size),

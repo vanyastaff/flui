@@ -9,7 +9,8 @@ font faces in [`fonts`](../fonts.rs).
 
 | Module | Types |
 |--------|-------|
-| `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle`, `FontFeature`, `FontVariation` |
+| `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle` |
+| `font_settings` | `FontFeature`, `FontVariation`, `OpenTypeTag` |
 | `text_spans` | `InlineSpan`, `TextSpan`, `TextLink`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment` |
 | `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextAffinity` |
 | `text_baseline` | `TextBaseline` |
@@ -44,9 +45,17 @@ a field shaping does not read (background, shadows, decoration) differs.
 
 ## Font weights
 
-`FontWeight::W100` through `FontWeight::W900`, with `FontWeight::NORMAL` (`W400`) and
-`FontWeight::BOLD` (`W700`). `FontWeight::from_css` maps a numeric CSS weight to the nearest
-variant; `value()` returns it back.
+`FontWeight` is any CSS weight from 1 to 1000 (`FontWeight::try_new`), with `FontWeight::W100`
+through `FontWeight::W900`, `NORMAL` (`W400`) and `BOLD` (`W700`) naming the standard steps. A
+static font answers with its nearest face; a variable font draws the weight itself, so an
+animated weight passes through every weight between its ends.
+
+## OpenType settings
+
+`FontFeature` switches a feature and `FontVariation` places a variable-font axis, each named by
+an `OpenTypeTag`: four printable ASCII bytes, checked when the tag is built
+(`OpenTypeTag::new(*b"smcp")`, or `OpenTypeTag::try_new` for text), so a setting the shaper
+would refuse never reaches it.
 
 ## Registering fonts
 
