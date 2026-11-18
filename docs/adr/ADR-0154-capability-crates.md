@@ -383,14 +383,16 @@ first capability crate that needs them.
   otherwise "type-checked" (decision 10).
 - The aggregation rule for Apple's per-SDK privacy bundle, which is read from the references and
   not from Apple's text, is the one ADR-0307 §4 settled (decision 7).
-- The `capability` kind rule of `cargo xtask workspace` refuses a capability crate with a build
-  script, a root `build.rs` that `build = false` does not switch off or a `build = "<path>"`, so
-  none can run `javac`, `d8` or `swiftc`; its `--self-test` plants both forms (decisions 5 and 6).
-  `deny.toml` bans `android-build` and `swift-rs`, the crates that run those tools from a build
-  script, in every member (decision 5). The `capability` kind rule
-  of `cargo xtask workspace` refuses a declaration that claims a menu or incoming activation (decision 4). A crate
-  outside the repository is not gated: its conformance table (decision 10) is the only check it
-  runs (decision 1).
+- The `capability` kind rule of `cargo xtask workspace` refuses a build script in a capability
+  crate that declares no `links` (a root `build.rs` that `build = false` does not switch off, or a
+  `build = "<path>"`), with both forms planted in its `--self-test` (decision 6). It checks the
+  crate's own script only: what a `links` crate's script runs, and the build scripts of a
+  capability crate's third-party dependencies, are not checked ([gaps](../gaps.md#accepted-adr-sections-not-built-yet)).
+  `deny.toml` bans `android-build` and `swift-rs`, which run `javac`, `d8` or `swift build` from a
+  build script (decision 5). The `capability` kind rule of `cargo xtask workspace` refuses a
+  declaration that claims a menu or incoming activation (decision 4). A crate outside the
+  repository is not gated: its conformance table (decision 10) is the only check it runs
+  (decision 1).
 
 ## Pros and cons of the options
 

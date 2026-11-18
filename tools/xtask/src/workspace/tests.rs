@@ -575,9 +575,10 @@ fn a_test_file_no_target_reaches_is_reported() {
     assert_one(&fixture.findings(), "crates/a/tests/orphan.rs never runs");
 }
 
-/// A capability crate has no build script (ADR-0154 §6): the one Cargo
-/// compiles, a root `build.rs` unless `build = false`, or `build = "<path>"`.
-/// Another kind keeps its build script.
+/// A capability crate without `links` has no build script (ADR-0154 §6): the
+/// one Cargo compiles, a root `build.rs` unless `build = false`, or
+/// `build = "<path>"`. A crate that declares `links` keeps its script, and so
+/// does a crate of another kind.
 fn a_capability_crates_build_script_is_reported() {
     // (build key added to crate `a`'s `[package]`, file written, the build
     // script finding expected, if any)
@@ -593,6 +594,7 @@ fn a_capability_crates_build_script_is_reported() {
             Some("build script crates/a/gen.rs"),
         ),
         ("build = false\n", "crates/a/build.rs", None),
+        ("links = \"a_native\"\n", "crates/a/build.rs", None),
     ];
     for (key, script, expected) in cases {
         let fixture = Fixture::new();
@@ -619,6 +621,23 @@ fn a_capability_crates_build_script_is_reported() {
             None => assert!(findings.is_empty(), "{key:?}: {findings:#?}"),
         }
     }
+}
+
+/// A member whose `build = "<path>"` lies outside the repository is read, not
+/// refused: the gate runs and names nothing.
+fn a_build_script_outside_the_repository_is_read() {
+    let fixture = Fixture::new();
+    let outside = tempfile::tempdir().expect("create a directory outside the fixture");
+    let script = outside.path().join("build.rs");
+    std::fs::write(&script, "fn main() {}\n").expect("write the outside build script");
+    let script_path = script.to_string_lossy().replace('\\', "/");
+    fixture.edit(
+        "crates/b/Cargo.toml",
+        "repository.workspace = true\n",
+        &format!("repository.workspace = true\nbuild = \"{script_path}\"\n"),
+    );
+    let findings = fixture.findings();
+    assert!(findings.is_empty(), "{findings:#?}");
 }
 
 /// `workspace --self-test` reports exactly what its graph plants.
@@ -1127,6 +1146,10 @@ fn workspace_gate_contract() {
             (
                 "a_capability_crates_build_script_is_reported",
                 a_capability_crates_build_script_is_reported as fn(),
+            ),
+            (
+                "a_build_script_outside_the_repository_is_read",
+                a_build_script_outside_the_repository_is_read as fn(),
             ),
             (
                 "the_self_test_reports_exactly_its_planted_findings",

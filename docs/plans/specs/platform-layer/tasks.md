@@ -5391,25 +5391,31 @@ GPU-память простаивающего или невидимого окн
   `[workspace.metadata.flui.reach.kind.capability]` запрещает `flui-native`, `flui-app`,
   `flui-engine`, `winit`, `wgpu` и `tokio`. `workspace --self-test` сажает нарушение на каждое
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
-  kind нет. Запрет `javac`, `d8` и `swiftc` в сборочном скрипте (ADR-0154 решение 5) держится
-  правилом решения 6: у крейта возможности нет сборочного скрипта. kind-правило
-  (`CapabilityBuildScript`) отказывает крейту возможности, для которого Cargo сообщает
-  `custom-build`-цель: корневой `build.rs`, не выключенный `build = false`, или любой
-  `build = "<путь>"`; исходники не разбираются, так что запуск инструмента любым способом
-  (параметр функции, псевдоним `Command`, `duct`, строка оболочки) невозможен по построению, а
-  `cc` с `.m` тоже. `deny.toml` запрещает `android-build` и `swift-rs`, которые запускают эти
-  инструменты из сборочного скрипта, во всём графе. Сборочные скрипты крейтов фреймворка гейт
-  не читает: это пункт ADR-0255 решения 21 в `docs/gaps.md` («Accepted ADR sections not built
-  yet»); пять скриптов на `main` запускают только `rustc`. Строки подтверждения ADR-0154 и
-  ADR-0255, называвшие `android-dex`, переписаны на `workspace` и `deny.toml`.
-  `workspace --self-test` сажает `cap-build` (корневой `build.rs`) и `cap-build-path`
-  (`build = "gen.rs"`), `cap-build-off` (`build.rs` при `build = false`) молчит; без проверки
-  самотест печатает `MISSED` на обе. Тесты таблицы `workspace_gate_contract`:
-  `a_capability_crates_build_script_is_reported` (корневой `build.rs` и `build = "gen.rs"`
-  найдены, `build.rs` при `build = false` и скрипт крейта kind `internal` — нет; без проверки
-  падает) и `the_self_test_reports_exactly_its_planted_findings`. Единственный крейт
-  возможности, `flui-system`, скрипта не имеет. Проверки на Windows: `workspace`,
-  `workspace --self-test`, `deps`, clippy `-D warnings` и nextest `xtask`, `checks`.
+  kind нет. Сборочный скрипт крейта возможности (ADR-0154 решение 6: `links` и `build.rs` —
+  только у крейта, экспортирующего глобальный нативный символ): kind-правило
+  (`CapabilityBuildScript`) отказывает крейту возможности без `links`, для которого Cargo
+  сообщает `custom-build`-цель (корневой `build.rs`, не выключенный `build = false`, или любой
+  `build = "<путь>"`); исходники не разбираются. Держится ровно собственный скрипт крейта без
+  `links`. Не проверяются: что запускает скрипт крейта с `links` (держат `deny.toml` и ревью),
+  сборочные скрипты сторонних зависимостей крейта возможности (kind-правило их допускает:
+  `robius-location`, чей `build.rs` запускает `javac`, проходит и `workspace`, и `deps`) и
+  скрипты крейтов фреймворка — всё это пункт ADR-0255 решения 21 и ADR-0154 решения 5 в
+  `docs/gaps.md` («Accepted ADR sections not built yet»); пять скриптов на `main` запускают
+  только `rustc`. `deny.toml` запрещает `android-build` и `swift-rs`, которые запускают эти
+  инструменты из сборочного скрипта. Строки подтверждения ADR-0154 и ADR-0255, называвшие
+  `android-dex`, теперь называют то, что держит правило; столбец проверки R5.11 — гейт вместо
+  `rg`. `workspace --self-test` сажает `cap-build` (корневой `build.rs`) и `cap-build-path`
+  (`build = "gen.rs"`); молчат `cap-links` (крейт возможности с `links` и скриптом), узел
+  `flui-foundation` (скрипт при `links` поезда) и `k1` (скрипт крейта kind `internal`). Без
+  проверки самотест печатает `MISSED` на обе посадки, без условия kind — `FALSE POSITIVE` на
+  `k1`, без исключения `links` — `FALSE POSITIVE` на `cap-links`. `build = false` держит тест
+  на `cargo metadata`: `a_capability_crates_build_script_is_reported` (корневой `build.rs` и
+  `build = "gen.rs"` найдены; `build.rs` при `build = false`, при `links` и скрипт крейта kind
+  `internal` — нет; без проверки падает). `a_build_script_outside_the_repository_is_read`:
+  `build = "<путь вне репозитория>"` у крейта другого kind больше не обрывает `workspace` (с
+  прежним `?` падает с «is outside the repository»). Единственный крейт возможности,
+  `flui-system`, скрипта не имеет. Проверки на Windows: `workspace`, `workspace --self-test`,
+  `deps`, clippy `-D warnings` и nextest `xtask`, `checks`.
 - [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
   дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
   Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:

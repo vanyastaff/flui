@@ -508,10 +508,9 @@ The tests that do so: `android_manifest::tests::the_base_names_flui_activity_wit
 and `android_lifecycle_mapping_delivers_every_memory_call` (`flui-native`).
 
 - `deny.toml` bans `android-build` and `swift-rs`, the crates that run `javac`, `d8` or
-  `swift build` from a build script, and `cargo xtask workspace` refuses any build script in a
-  capability crate (ADR-0154 decisions 5 and 6); no gate reads a framework crate's own build
-  script for a spawn of the tools ([gaps](../gaps.md#accepted-adr-sections-not-built-yet))
-  (decision 21); a generated project file that differs from the
+  `swift build` from a build script, and `cargo xtask workspace` refuses a build script in a
+  capability crate that declares no `links` (ADR-0154 decision 6); what any other build script
+  runs is not checked ([gaps](../gaps.md#accepted-adr-sections-not-built-yet)) (decision 21); a generated project file that differs from the
   output of its generator fails the golden check of that generator (decisions 6 and 21).
 
 ## Pros and cons of the options

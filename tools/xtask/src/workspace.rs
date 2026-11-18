@@ -19,9 +19,10 @@
 //!   `edge-exceptions`. A refused edge needs the dependent's `edge-exceptions`
 //!   entry, as for the tiers. A capability crate is the facade's optional
 //!   normal dependency; its facade feature (the crate name without `flui-`)
-//!   enables exactly that dependency (ADR-0154 §8). A capability crate has no
-//!   build script: no root `build.rs` that `build = false` does not switch
-//!   off, and no `build = "<path>"` (ADR-0154 §6).
+//!   enables exactly that dependency (ADR-0154 §8). A capability crate without
+//!   `links` has no build script: no root `build.rs` that `build = false` does
+//!   not switch off, and no `build = "<path>"`; only one that exports a global
+//!   native symbol, which `links` declares, has one (ADR-0154 §6).
 //! - **Reach declarations** (ADR-0081 §2). `reach-forbid` and
 //!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
@@ -170,8 +171,9 @@ struct Node {
     flui: Json,
     /// `[package] links`, when declared.
     links: Option<String>,
-    /// The build script Cargo compiles, relative to the repository root: a
-    /// root `build.rs` unless `build = false`, or `build = "<path>"`.
+    /// The build script Cargo compiles, relative to the repository root (as
+    /// Cargo reports it when it lies outside): a root `build.rs` unless
+    /// `build = false`, or `build = "<path>"`.
     build_script: Option<String>,
     deps: Vec<Dep>,
     /// `[features]`: each feature and the features or dependencies it enables.
@@ -299,8 +301,13 @@ impl Members {
                         .targets
                         .iter()
                         .find(|target| target.is_custom_build())
-                        .map(|target| relative(root, target.src_path.as_std_path()))
-                        .transpose()?,
+                        .map(|target| {
+                            // A script outside the repository keeps its own
+                            // path: it names the file, and no rule refuses a
+                            // script for where it lives.
+                            relative(root, target.src_path.as_std_path())
+                                .unwrap_or_else(|_| target.src_path.to_string())
+                        }),
                     deps: package
                         .dependencies
                         .iter()

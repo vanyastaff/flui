@@ -9,7 +9,8 @@
 //! the dependent's `edge-exceptions`, as for the tier rule, and an entry that
 //! admits nothing either rule refuses is stale. A capability crate is the
 //! facade's optional normal dependency, enabled alone by its service feature
-//! (ADR-0154 §8), and has no build script (ADR-0154 §6).
+//! (ADR-0154 §8), and has no build script unless it declares `links`
+//! (ADR-0154 §6).
 //!
 //! The rule itself is pure over [`Members`], so `--self-test` runs it on a
 //! built-in graph without cargo or a disk; only the exit citations of
@@ -173,8 +174,10 @@ pub(super) enum Finding {
         rel: String,
         tier: String,
     },
-    /// A capability crate has a build script (ADR-0154 §6): a root `build.rs`
-    /// that `build = false` does not switch off, or `build = "<path>"`.
+    /// A capability crate without `links` has a build script (ADR-0154 §6): a
+    /// root `build.rs` that `build = false` does not switch off, or
+    /// `build = "<path>"`. Only a crate that exports a global native symbol,
+    /// which `links` declares, needs one.
     CapabilityBuildScript { name: String, script: String },
     /// A capability crate has a normal or build dependency outside
     /// [`SDK_SURFACE`] (ADR-0154 §1).
@@ -244,9 +247,6 @@ impl Identity {
     }
 }
 
-/// The kind of [`Finding::CapabilityBuildScript`].
-const CAPABILITY_BUILD_SCRIPT: &str = "capability build script";
-
 impl Finding {
     fn identity(&self) -> Identity {
         match self {
@@ -275,7 +275,7 @@ impl Finding {
             }
             Self::CapabilityTier { name, tier, .. } => Identity::new(name, tier, "capability tier"),
             Self::CapabilityBuildScript { name, script } => {
-                Identity::new(name, script, CAPABILITY_BUILD_SCRIPT)
+                Identity::new(name, script, "capability build script")
             }
             Self::CapabilityOffContract { from, to } => {
                 Identity::new(from, to, "capability off contract")
@@ -376,11 +376,11 @@ impl fmt::Display for Finding {
             ),
             Self::CapabilityBuildScript { name, script } => write!(
                 f,
-                "{name} is a capability crate with the build script {script}: a capability crate \
-                 has no build script (ADR-0154 §6); its Java, Kotlin, Swift and Objective-C \
-                 sources and its dex are built by `flui build` from the sources it declares \
-                 (ADR-0154 §5). Remove the script, or set `build = false` beside a `build.rs` \
-                 that is not one"
+                "{name} is a capability crate with the build script {script} and no `links`: a \
+                 capability crate that exports no global native symbol has no build script \
+                 (ADR-0154 §6); its Java, Kotlin, Swift and Objective-C sources and its dex are \
+                 built by `flui build` from the sources it declares (ADR-0154 §5). Remove the \
+                 script, or set `build = false` beside a `build.rs` that is not one"
             ),
             Self::CapabilityOffContract { from, to } => write!(
                 f,
@@ -518,7 +518,10 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
                 tier: tier.clone(),
             });
         }
+        // `links` marks the crate that exports a global native symbol, whose
+        // build script ADR-0154 §6 admits (Cargo requires one for `links`).
         if member.tier_kind.as_deref() == Some(CAPABILITY)
+            && member.links.is_none()
             && let Some(script) = &member.build_script
         {
             findings.push(Finding::CapabilityBuildScript {
@@ -909,7 +912,7 @@ fn self_test_members() -> Members {
     let (cap_service_rel, cap_service) = krate("flui-system", "pkg", 15, CAPABILITY);
     let (cap_build_rel, cap_build) = krate("cap-build", "pkg", 16, CAPABILITY);
     let (cap_build_path_rel, cap_build_path) = krate("cap-build-path", "pkg", 17, CAPABILITY);
-    let (cap_build_off_rel, cap_build_off) = krate("cap-build-off", "pkg", 18, CAPABILITY);
+    let (cap_links_rel, cap_links) = krate("cap-links", "pkg", 18, CAPABILITY);
     let with_build_script = |mut node: Node, script: &str| {
         node.build_script = Some(script.to_owned());
         node
@@ -944,7 +947,7 @@ fn self_test_members() -> Members {
         true,
         Some("dep:cap1"),
     );
-    for capability in ["cap-build", "cap-build-path", "cap-build-off"] {
+    for capability in ["cap-build", "cap-build-path", "cap-links"] {
         expose(
             &mut facade_node,
             capability,
@@ -962,8 +965,12 @@ fn self_test_members() -> Members {
     };
 
     let nodes = vec![
-        // silent: the train guard where it belongs
-        guard(crate_node(TRAIN_GUARD, "V", 4, &[])),
+        // silent: the train guard where it belongs, with the build script its
+        // `links` requires
+        with_build_script(
+            guard(crate_node(TRAIN_GUARD, "V", 4, &[])),
+            "crates/flui-foundation/build.rs",
+        ),
         // planted: a second crate with the guard's `links`
         guard(crate_node("v-guard", "V", 5, &[])),
         crate_node("v1", "V", 1, &[]),
@@ -981,8 +988,12 @@ fn self_test_members() -> Members {
         // planted: order 1 depends on order 2 in one tier
         crate_node("k-low", "K", 1, &[("k-high", Normal)]),
         crate_node("k-high", "K", 2, &[("s1", Normal)]),
-        // silent: a dev edge may point up
-        crate_node("k1", "K", 3, &[("h1", Dev), ("k-high", Normal)]),
+        // silent: a dev edge may point up, and a crate of another kind keeps
+        // its build script without `links`
+        with_build_script(
+            crate_node("k1", "K", 3, &[("h1", Dev), ("k-high", Normal)]),
+            "crates/k1/build.rs",
+        ),
         crate_node("h1", "H", 1, &[("k-high", Normal), ("k-high", Normal)]),
         // silent: H -> pkg with an exception; planted: its second H -> pkg
         // edge, which the exception does not name (upward, and names an
@@ -1045,9 +1056,16 @@ fn self_test_members() -> Members {
             node(&cap_build_path_rel, &cap_build_path, &[]),
             "crates/cap-build-path/gen.rs",
         ),
-        // silent: a `build.rs` beside `build = false`, which Cargo does not
-        // compile and so reports no build script for
-        node(&cap_build_off_rel, &cap_build_off, &[]),
+        // silent: a capability crate that exports a global native symbol
+        // (`links`) keeps its build script
+        with_build_script(
+            {
+                let mut native = node(&cap_links_rel, &cap_links, &[]);
+                native.links = Some("cap_links_native".to_owned());
+                native
+            },
+            "crates/cap-links/build.rs",
+        ),
         // planted: a core crate names a capability crate (upward, and not
         // the facade)
         crate_node("k-cap", "K", 7, &[("cap1", Normal)]),
@@ -1062,12 +1080,12 @@ const EXPECTED: [(&str, &str, &str); 27] = [
     (
         "cap-build",
         "crates/cap-build/build.rs",
-        CAPABILITY_BUILD_SCRIPT,
+        "capability build script",
     ),
     (
         "cap-build-path",
         "crates/cap-build-path/gen.rs",
-        CAPABILITY_BUILD_SCRIPT,
+        "capability build script",
     ),
     (FACADE, "cap-mandatory", "capability not optional"),
     ("cap-no-feature", "cap-no-feature", "capability feature"),
