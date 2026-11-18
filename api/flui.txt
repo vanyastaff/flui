@@ -22716,11 +22716,15 @@ pub const flui::services::system::dialog::FileFilter::MAX_NAME_LEN: usize = 255
 pub const flui::services::system::dialog::FileFilter::MAX_PATTERNS: usize = 64
 pub const flui::services::system::dialog::FileFilter::MAX_PATTERN_LEN: usize = 255
 pub const flui::services::system::dialog::FileFilter::MAX_PER_REQUEST: usize = 64
+pub fn flui::services::system::dialog::FileFilter::all_files(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::extensions(&self) -> &[String]
+pub fn flui::services::system::dialog::FileFilter::file_names(&self) -> &[String]
+pub fn flui::services::system::dialog::FileFilter::is_all_files(&self) -> bool
 pub fn flui::services::system::dialog::FileFilter::mime_types(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
 pub fn flui::services::system::dialog::FileFilter::new(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_extension(self, extension: impl Into<String>) -> Self
+pub fn flui::services::system::dialog::FileFilter::with_file_name(self, file_name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_mime_type(self, mime_type: impl Into<String>) -> Self
 pub const flui::services::system::dialog::MAX_TEXT_LEN: usize = 4096
 #[non_exhaustive] pub enum flui::services::system::dialog::MalformedRequest
@@ -22735,16 +22739,19 @@ impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
 variant flui::services::system::dialog::DialogError::NotInFilter // at 5
 variant flui::services::system::dialog::DialogError::TooLarge { actual: u64, limit: u64 } // at 6
-variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
+variant flui::services::system::dialog::MalformedRequest::ButtonLabel // at 14
+variant flui::services::system::dialog::MalformedRequest::DefaultButton // at 13
+variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 7
 variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
-variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 11
+variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 12
 variant flui::services::system::dialog::MalformedRequest::Extension // at 4
+variant flui::services::system::dialog::MalformedRequest::FileName // at 5
 variant flui::services::system::dialog::MalformedRequest::FilterName // at 0
-variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 7
-variant flui::services::system::dialog::MalformedRequest::MimeType // at 5
-variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 9
-variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 8
-variant flui::services::system::dialog::MalformedRequest::Text // at 10
+variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 8
+variant flui::services::system::dialog::MalformedRequest::MimeType // at 6
+variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 10
+variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 9
+variant flui::services::system::dialog::MalformedRequest::Text // at 11
 variant flui::services::system::dialog::MalformedRequest::TooManyFilters // at 3
 variant flui::services::system::dialog::MalformedRequest::TooManyPatterns // at 2
 #[non_exhaustive] pub enum flui::services::system::dialog::MessageAnswer
@@ -22765,9 +22772,11 @@ pub enum flui::services::system::dialog::MessageBoxCapability
 impl core::fmt::Debug for flui::services::system::dialog::MessageBoxCapability
 pub fn flui::services::system::dialog::FileFilter::matches(&self, name: &str, mime_type: Option<&str>) -> bool
 impl flui::platform::capability::Capability for flui::services::system::dialog::MessageBoxCapability { type Handle = flui::services::system::dialog::MessageBoxes; }
-#[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest
-field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 3
-field flui::services::system::dialog::MessageBoxRequest::level: flui::services::system::dialog::MessageLevel // at 2
+#[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest { .. }
+field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 4
+field flui::services::system::dialog::MessageBoxRequest::default_button: Option<flui::services::system::dialog::MessageAnswer> // at 5
+field flui::services::system::dialog::MessageBoxRequest::detail: Option<String> // at 2
+field flui::services::system::dialog::MessageBoxRequest::level: flui::services::system::dialog::MessageLevel // at 3
 field flui::services::system::dialog::MessageBoxRequest::message: String // at 1
 field flui::services::system::dialog::MessageBoxRequest::title: Option<String> // at 0
 impl Clone for flui::services::system::dialog::MessageBoxRequest
@@ -22775,7 +22784,12 @@ impl Eq for flui::services::system::dialog::MessageBoxRequest
 impl PartialEq for flui::services::system::dialog::MessageBoxRequest
 impl core::fmt::Debug for flui::services::system::dialog::MessageBoxRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageBoxRequest
+pub fn flui::services::system::dialog::MessageBoxRequest::button_label(self, answer: flui::services::system::dialog::MessageAnswer, label: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::MessageBoxRequest::buttons(self, buttons: flui::services::system::dialog::MessageButtons) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::default_answer(&self) -> flui::services::system::dialog::MessageAnswer
+pub fn flui::services::system::dialog::MessageBoxRequest::default_button(self, answer: flui::services::system::dialog::MessageAnswer) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::detail(self, detail: impl Into<String>) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::label(&self, answer: flui::services::system::dialog::MessageAnswer) -> Option<&str>
 pub fn flui::services::system::dialog::MessageBoxRequest::level(self, level: flui::services::system::dialog::MessageLevel) -> Self
 pub fn flui::services::system::dialog::MessageBoxRequest::new(message: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::MessageBoxRequest::title(self, title: impl Into<String>) -> Self
@@ -22795,6 +22809,7 @@ impl core::fmt::Debug for flui::services::system::dialog::MessageButtons
 impl core::hash::Hash for flui::services::system::dialog::MessageButtons
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageButtons
 pub const fn flui::services::system::dialog::MessageButtons::admits(self, answer: flui::services::system::dialog::MessageAnswer) -> bool
+pub const fn flui::services::system::dialog::MessageButtons::answers(self) -> &'static [flui::services::system::dialog::MessageAnswer]
 variant flui::services::system::dialog::MessageButtons::Ok // at 0
 variant flui::services::system::dialog::MessageButtons::OkCancel // at 1
 variant flui::services::system::dialog::MessageButtons::YesNo // at 2
@@ -22816,6 +22831,7 @@ field flui::services::system::dialog::OpenRequest::accept_label: Option<String> 
 field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 4
 field flui::services::system::dialog::OpenRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 5
 field flui::services::system::dialog::OpenRequest::max_bytes: u64 // at 2
+field flui::services::system::dialog::OpenRequest::show_hidden: bool // at 7
 field flui::services::system::dialog::OpenRequest::title: Option<String> // at 3
 impl Clone for flui::services::system::dialog::OpenRequest
 impl Eq for flui::services::system::dialog::OpenRequest
@@ -22830,6 +22846,7 @@ pub fn flui::services::system::dialog::OpenRequest::filter(self, filter: flui::s
 pub fn flui::services::system::dialog::OpenRequest::folders() -> Self
 pub fn flui::services::system::dialog::OpenRequest::is_multiple(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::picks_folders(&self) -> bool
+pub fn flui::services::system::dialog::OpenRequest::show_hidden(self) -> Self
 pub fn flui::services::system::dialog::OpenRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::OpenResult = Result<Option<flui::services::system::dialog::Picks>, flui::services::system::dialog::DialogError>
 #[non_exhaustive] pub struct flui::services::system::dialog::PickedFile { .. }
@@ -22873,6 +22890,7 @@ field flui::services::system::dialog::SaveRequest::accept_label: Option<String> 
 field flui::services::system::dialog::SaveRequest::contents: Option<alloc::rcs::arc::Arc<[u8]>> // at 0
 field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 2
 field flui::services::system::dialog::SaveRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 4
+field flui::services::system::dialog::SaveRequest::show_hidden: bool // at 6
 field flui::services::system::dialog::SaveRequest::suggested_name: Option<String> // at 3
 field flui::services::system::dialog::SaveRequest::title: Option<String> // at 1
 impl Clone for flui::services::system::dialog::SaveRequest
@@ -22886,6 +22904,7 @@ pub fn flui::services::system::dialog::SaveRequest::accept_label(self, label: im
 pub fn flui::services::system::dialog::SaveRequest::directory(self, directory: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::filter(self, filter: flui::services::system::dialog::FileFilter) -> Self
 pub fn flui::services::system::dialog::SaveRequest::new() -> Self
+pub fn flui::services::system::dialog::SaveRequest::show_hidden(self) -> Self
 pub fn flui::services::system::dialog::SaveRequest::suggested_name(self, name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::SaveLocation>, flui::services::system::dialog::DialogError>
