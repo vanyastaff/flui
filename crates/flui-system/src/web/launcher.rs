@@ -55,7 +55,8 @@ impl WebLauncher {
                 flui_platform::SystemFailure::MalformedAnswer,
             ));
         };
-        follow(&document, document.body().map(Node::from), uri, true).inspect_err(|_| {
+        let body = document.body().map(Node::from);
+        follow(&document, body, uri, LinkFrom::BlankContext).inspect_err(|_| {
             context.close().ok();
         })
     }
@@ -63,26 +64,35 @@ impl WebLauncher {
     /// Hand `uri` to the system's handler by a link of the application's
     /// page.
     fn hand_off(&self, uri: &str) -> LaunchResult {
-        follow(self.page.document(), self.page.host(), uri, false)
+        follow(self.page.document(), self.page.host(), uri, LinkFrom::Page)
     }
 }
 
+/// Whose link a launch follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkFrom {
+    /// The blank context opened for the page: the link sends no referrer,
+    /// and stays in the document the context navigates away from.
+    BlankContext,
+    /// The application's page: the link is taken out once followed.
+    Page,
+}
+
 /// Follow a link to `uri` from `document`, placed in `host` (some engines
-/// follow only a link in the document); with no referrer when
-/// `no_referrer`.
-fn follow(document: &Document, host: Option<Node>, uri: &str, no_referrer: bool) -> LaunchResult {
+/// follow only a link in the document), as `from` says.
+fn follow(document: &Document, host: Option<Node>, uri: &str, from: LinkFrom) -> LaunchResult {
     let link = document
         .create_element("a")
         .map_err(|thrown| browser_failure(&thrown))?
         .unchecked_into::<HtmlAnchorElement>();
     link.set_href(uri);
-    if no_referrer {
+    if from == LinkFrom::BlankContext {
         link.set_rel("noreferrer");
     }
     link.set_hidden(true);
     let attached = host.as_ref().map(|host| host.append_child(&link));
     link.click();
-    if let (Some(host), Some(Ok(_))) = (host, attached) {
+    if let (LinkFrom::Page, Some(host), Some(Ok(_))) = (from, host, attached) {
         let _ = host.remove_child(&link);
     }
     Ok(())

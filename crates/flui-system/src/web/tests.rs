@@ -8,7 +8,7 @@
 //! the tests of that path read as its answer.
 
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -18,7 +18,9 @@ use flui_platform::capability::{
 };
 use flui_platform::drag::PlatformDragSource;
 use flui_platform::haptics::PlatformHaptics;
-use flui_platform::launch::{ExternalUri, LaunchError, Launcher, LauncherCapability, Scheme};
+use flui_platform::launch::{
+    ExternalUri, LaunchError, Launcher, LauncherBackend as _, LauncherCapability, Scheme,
+};
 use flui_platform::{
     AdmittedCommand, ApplyError, Cursor, CursorError, GestureGeometry, PlatformSystemChrome,
     PlatformTextInput, PlatformWindow, PreferenceQueryError, RedrawRequester, SurfaceTarget,
@@ -321,6 +323,7 @@ const TEST_FOCUS_GRACE_MS: i32 = 20;
 /// A test page's file dialogs for `window` over `page`, the page's picker
 /// shared through `owner`.
 fn dialogs_on(owner: &TestOwner, window: &CanvasWindow, page: Rc<Page>) -> FileDialogs {
+    quiet_input_pickers();
     let ctx = owner.ctx(&window.window);
     FileDialogs::try_new(
         WebDialogs::new(page, ctx.runtime_local::<PagePicker>())
@@ -328,6 +331,24 @@ fn dialogs_on(owner: &TestOwner, window: &CanvasWindow, page: Rc<Page>) -> FileD
         &ctx,
     )
     .expect("a window has dialogs")
+}
+
+/// Make an input's `showPicker` a no-op for the rest of the run: the
+/// browser shows no chooser a test could answer, and without a real gesture
+/// it throws. The tests answer an input through its events instead.
+fn quiet_input_pickers() {
+    thread_local! {
+        static QUIET: Cell<bool> = const { Cell::new(false) };
+    }
+    if QUIET.with(|quiet| quiet.replace(true)) {
+        return;
+    }
+    let view: JsValue = the_view().into();
+    let prototype = Reflect::get(&view, &"HTMLInputElement".into())
+        .and_then(|input| Reflect::get(&input, &"prototype".into()))
+        .expect("the page has inputs");
+    let quiet = js_sys::Function::new_no_args("");
+    Reflect::set(&prototype, &"showPicker".into(), &quiet).expect("the method is replaced");
 }
 
 /// A test page's file dialogs for `window`, user activation as `active`
@@ -648,11 +669,19 @@ async fn a_folder_dialog_is_not_yet_on_the_web() {
     );
 }
 
-/// Whether the test's browser has the File System Access pickers.
-fn has_pickers() -> bool {
+/// A File System Access picker `name` that refuses as one in a
+/// cross-origin frame does, until the guard drops: the API is not on every
+/// test browser, and a real one would ask for a real gesture.
+fn refusing_picker(name: &str) -> (Closure<dyn FnMut(JsValue) -> JsValue>, Replaced) {
+    let picker = Closure::<dyn FnMut(JsValue) -> JsValue>::new(|_: JsValue| {
+        let refusal =
+            js_sys::Error::new("Cross origin sub frames aren't allowed to show a file picker.");
+        refusal.set_name("SecurityError");
+        Promise::reject(&refusal).into()
+    });
     let view: JsValue = the_view().into();
-    Reflect::get(&view, &JsValue::from_str("showOpenFilePicker"))
-        .is_ok_and(|picker| picker.is_function())
+    let replaced = Replaced::new(&view, name, picker.as_ref());
+    (picker, replaced)
 }
 
 /// Run turns and browser tasks until `window` shows an input; panic after
@@ -670,12 +699,8 @@ async fn until_an_input(owner: &TestOwner, window: &CanvasWindow) -> HtmlInputEl
 
 #[wasm_bindgen_test]
 async fn a_refused_picker_hands_over_to_the_input_while_the_gesture_lasts() {
-    // Headless Chrome has the pickers and refuses them without a real
-    // gesture, with the `SecurityError` a cross-origin frame gets.
-    assert!(
-        has_pickers(),
-        "the browser the suite runs in has the pickers"
-    );
+    // The picker a cross-origin frame gets: refused with `SecurityError`.
+    let _picker = refusing_picker("showOpenFilePicker");
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let text = || OpenRequest::files().filter(FileFilter::new("Text").with_extension("txt"));
@@ -705,10 +730,7 @@ async fn a_refused_picker_hands_over_to_the_input_while_the_gesture_lasts() {
 
 #[wasm_bindgen_test]
 async fn a_refused_save_picker_hands_the_contents_over_as_a_download() {
-    assert!(
-        has_pickers(),
-        "the browser the suite runs in has the pickers"
-    );
+    let _picker = refusing_picker("showSaveFilePicker");
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let caught = CaughtLinks::on(&window);
@@ -1020,7 +1042,11 @@ async fn a_launch_outside_a_gesture_and_a_path_are_refused_on_the_web() {
     let window = CanvasWindow::new(&owner);
     let page = ExternalUri::try_new("https://example.org/", &[Scheme::HTTPS]).expect("a link");
     let outside = landed(launcher(&owner, &window, false).open_uri(&page));
-    let path = landed(launcher(&owner, &window, true).reveal_path(Path::new("/home/me/a.txt")));
+    // The contract refuses a path wasm32's `Path` calls relative before a
+    // backend hears it; the backend's own answer is asked for directly.
+    let (asked, answer) = owner.completions.pending();
+    WebLauncher::new(window.page(true)).reveal_path(PathBuf::from("/home/me/a.txt"), answer);
+    let path = landed(asked);
     owner.until_landed(&path).await;
     let refused = |reason| {
         Some(Ok(Err(LaunchError::Unsupported(Unsupported::of::<
