@@ -1,7 +1,7 @@
 //! Canonical stops for a normalized piecewise-linear easing.
 
 use flui_foundation::geometry::Lerp;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use super::{Builtin, BuiltinCurve, Curve};
 
@@ -111,7 +111,7 @@ struct Knot {
     serde(try_from = "Vec<LinearStop>", into = "Vec<LinearStop>")
 )]
 pub struct PiecewiseLinear {
-    knots: Arc<[Knot]>,
+    knots: Rc<[Knot]>,
 }
 
 impl PiecewiseLinear {

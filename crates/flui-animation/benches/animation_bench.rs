@@ -20,7 +20,6 @@
 // public API surface, so they are exempt from the crate's missing-docs lint.
 
 use std::hint::black_box;
-use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -217,7 +216,7 @@ fn controller_tick(c: &mut Criterion) {
     // The same run eased through a cubic Bézier.
     let eased = AnimationController::builder(NEVER_ENDING).build();
     eased
-        .animate_to_curved(1.0, None, Arc::new(curves::EASE_IN_OUT))
+        .animate_to_curved(1.0, None, curves::EASE_IN_OUT)
         .unwrap();
     bench_live_tick(&mut group, "ease_in_out", &eased);
     drop(eased);

@@ -51,8 +51,8 @@
 //!   preferences
 //! - **Data transfer**: the clipboard, the primary selection where the system
 //!   has one, drag and drop
-//! - **Services**: opening a URL or a path, file prompts, the executable's
-//!   path, the launch values and the application's data store
+//! - **Launch and storage**: the launch values, the page origin on the web
+//!   and the application's data store
 //!
 //! ## Platform Selection
 //!
@@ -251,7 +251,6 @@ mod process;
 pub mod storage;
 #[cfg(test)]
 mod table_test;
-pub mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 #[cfg(wayland_host)]
@@ -321,13 +320,11 @@ pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub use window::apple::ios::IOSSceneEvent;
 // The frame request a host stamps on the event clock (`owner/frame_timing.rs`).
 pub use owner::frame_timing::{frame_request_aged, frame_request_now, frame_request_timed};
-// Re-export task types
-pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from
 // `flui_platform`, the accessibility capability from `flui_semantics::platform`.
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
-pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, QuitAnswer};
+pub use platform::{AppHandler, ExitAnswer, Platform, QuitAnswer};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use process::current_user_id;
 #[cfg(windows)]

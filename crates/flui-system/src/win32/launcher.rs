@@ -270,6 +270,14 @@ fn held_name(answered: &Path) -> PathBuf {
     without_verbatim(answered)
 }
 
+/// The process the foreground right goes to after `ShellExecuteExW`: the
+/// handler the shell started, by the id it reported, and only when the call
+/// succeeded. A failed call, or a handler the shell did not start (one
+/// already running reports no process, so its id is 0), is handed nothing.
+fn foreground_recipient(executed: bool, process_id: u32) -> Option<u32> {
+    (executed && process_id != 0).then_some(process_id)
+}
+
 /// The real shell.
 struct Shell;
 
@@ -377,10 +385,7 @@ impl ShellSystem for Shell {
             // SAFETY: `process` is the handle the shell returned for the
             // handler it started, owned here and closed once.
             unsafe {
-                let id = GetProcessId(process);
-                // The handler the shell started may come to the foreground;
-                // nothing is handed to a process the shell did not start.
-                if executed.is_ok() && id != 0 {
+                if let Some(id) = foreground_recipient(executed.is_ok(), GetProcessId(process)) {
                     let _ = AllowSetForegroundWindow(id);
                 }
                 let _ = CloseHandle(process);
@@ -452,11 +457,30 @@ mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
     use super::{
-        Shell, ShellSystem, Trashed, WindowsLauncher, held_name, launch_error, open_document,
-        open_uri, trash,
+        Shell, ShellSystem, Trashed, WindowsLauncher, foreground_recipient, held_name,
+        launch_error, open_document, open_uri, trash,
     };
     use crate::testing::win32::{FakeShell, TestOwner};
     use crate::win32::ShellThreads;
+
+    /// The foreground right goes to the handler the shell started, by its
+    /// id; to no process when the shell started none or failed.
+    #[test]
+    fn the_foreground_goes_only_to_the_handler_the_shell_started() {
+        let cases: [(&str, bool, u32, Option<u32>); 4] = [
+            ("a handler the shell started", true, 4242, Some(4242)),
+            ("a handler already running", true, 0, None),
+            ("the shell failed", false, 4242, None),
+            ("the shell failed and started none", false, 0, None),
+        ];
+        for (case, executed, process_id, expected) in cases {
+            assert_eq!(
+                foreground_recipient(executed, process_id),
+                expected,
+                "{case}"
+            );
+        }
+    }
 
     #[test]
     fn an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given() {

@@ -1,12 +1,10 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 120 закрыты и 14 открыты (сверено с `main` @ `5b4e3202b` и закрытием
-  LY139 и LY148); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут
-  закрытые задачи, — строки
+  Из 134 задач серии 121 закрыта и 13 открыты (сверено с `main` @ `5b4e3202b` и закрытием
+  LY139, LY61 и LY148); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых
+  ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
-    провайдеры Android;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
@@ -282,7 +280,7 @@ graph LR
 | **LY58** [P] | **`flui-system`: macOS** (D18). Провайдеры на objc2: `NSOpenPanel`/`NSSavePanel`, `NSWorkspace` (URL, открыть путь, reveal), trash через `NSFileManager`, `NSAlert`, `NSSharingServicePicker`, `SMAppService`, глобальные сочетания, прогресс и значок Dock, пути | LY57 | `crates/flui-system/src/macos/*` | `workspace`, `cross-typecheck` | таблица против симулятора; macOS — T | L + T; Dev: macOS |
 | **LY59** [P] | **`flui-system`: Linux** (D18, D19). Порталы через `ashpd`/`zbus`: FileChooser, OpenURI, OpenDirectory (reveal), Trash, GlobalShortcuts, Background (автозапуск); прогресс — сигнал Unity LauncherEntry; message box и share — `Unsupported` с причиной, где портала нет; пути — XDG. Родитель портала из `WindowRef`: `WindowRef` получает `portal_parent()`, его заполняют хосты (Wayland — ручка экспорта `xdg-foreign`, которую окно держит с LY81 как `PortalParent`; X11 — `x11:<XID>`); поправка к ADR-0152 (что несёт `WindowRef`) — в том же PR (решение владельца 2026-10-28: родитель портала — межплатформенное понятие, не OS-расширение) | LY57 | `crates/flui-system/src/linux/*`, `crates/flui-platform/src/capability/*` (`WindowRef`), `crates/flui-native/src/window/linux/*`, `docs/adr/ADR-0152-*` | `workspace`, `reach`, `deps` | таблица против симулятора; портал-заглушка на сессионной шине в CI | L; Dev: Linux |
 | **LY60** [P] | **`flui-system`: Web** (D18). Файловые диалоги (`showOpenFilePicker`, где есть, иначе `<input type=file>` и загрузка), `window.open`, share через `navigator.share`, message box через `<dialog>`; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported(NotOnThisPlatform)`; пути — `Unsupported` | LY57 | `crates/flui-system/src/web/*` | `workspace`, `wasm-check` | таблица против симулятора; `wasm-test`; браузерные тесты | L (wasm32); Dev: Web |
-| **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (живут в `flui-system`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
+| **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (первые пять живут в `flui-system`, `app_path` — `std::env::current_exe`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
 
 ### Хосты
 
@@ -5744,17 +5742,24 @@ GPU-память простаивающего или невидимого окн
   ленивого доступа к большой папке и записи в неё нет (папка читается целиком); на движке без
   `cancel` (Chromium до 113, Safari до 16.4), а также в Firefox до 112 и Safari до 17, которые от
   него не отличить, поздний выбор ввода остаётся отменой.
-- [ ] **LY61** (открыта: ждёт LY67) — исполнителя на `Platform` нет: хост ведёт IO на runtime,
-  который одалживает создатель (`NativeExecutor`, ADR-0327 §3; нить `flui-native-bg` — его
-  собственные рабочие). Провайдеры `flui-system` есть на Windows, macOS, Linux, Web и iOS
-  (LY57–LY60, LY73); у сервисов `Platform` нет production-вызовов. Остаётся код, когда LY67 даст
-  провайдеры Android: удалить `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`,
-  `prompt_for_new_path`, `app_path` из `Platform` (`crates/flui-native/src/platform.rs:412–442`,
-  `:496`, реализация `:718–773`) и из таблицы хоста (`crates/flui-native/src/host.rs:184–208`) с
-  реализациями в каждом `owner/*`; типы `PathPromptOptions`, `Task`, `TaskLabel`
-  (`crates/flui-native/src/task.rs`); фикстуры trybuild
-  `tests/ui/{platform_and_host_window_are_sealed,host_table_names_every_position}.rs` и чтение
-  `app_path` в `tests/launch_values.rs`.
+- [x] **LY61** (закрыта веткой `platform/services-leave-platform`) — исполнителя на `Platform`
+  нет: хост ведёт IO на runtime, который одалживает создатель (`NativeExecutor`, ADR-0327 §3).
+  `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path` и `app_path`
+  удалены из `Platform`, из таблицы хоста и из каждого `owner/*` (Windows, X11, Wayland, macOS,
+  iOS, Android, Web, headless); удалены `task.rs` (`Task`, `TaskLabel`), `PathPromptOptions`,
+  варианты `PlatformError::{AppPath, Dialog}`, оболочка Windows (`shell_open`,
+  `foreground_recipient`, STA-нить диалогов), `xdg_open` Linux и список открытых URL headless.
+  Production-вызовов не было ни в `crates/`, ни в `packages/`, `examples/`, фасаде, книге и
+  шаблонах CLI; замена — `flui_platform::launch` и провайдеры `flui-system` (передача переднего
+  плана запущенному обработчику на Windows уже в `flui-system`), `app_path` — `std::env::current_exe`
+  (у FLUI своей формы нет: вызывал её только тест; путь бандла Apple — `NSBundle`). Трейт таблицы
+  `host::Services` стал `host::Launch` (`launch_value`, `page_origin`). Фикстуры trybuild
+  `host_table_names_every_position` и `platform_and_host_window_are_sealed` переписаны без
+  удалённых методов (ожидания — те же ошибки, сдвиг строк), тест `app_path` в
+  `tests/launch_values.rs` и `ready_tasks_return_results_without_executor_bounds` удалены вместе с
+  API. ADR-0039 §2 (`app_path`, оболочка, диалоги) — `Superseded-by` ADR-0151 §9, §9 переписан
+  (`Revised`), ADR-0327 §3 без диалогов Windows; `docs/gaps.md`, строка parity «App folders and
+  storage», ARCHITECTURE ядра.
 - [x] **LY67** (закрыта веткой `system/android-providers-2`: провайдеры Android лаунчера, файловых
   диалогов, message box, share, папок пользователя и сведений о системе; прогоны на Galaxy S21 и
   эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел
