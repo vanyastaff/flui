@@ -125,31 +125,11 @@ impl LifecycleDelivery {
                 // The frame request runs a wake hook; delivery goes on.
                 contain_observer(&custody, &mut first, || scheduler.request_frame());
             }
-            let listeners: Vec<_> = scheduler
-                .inner
-                .callbacks
-                .lifecycle_listeners
-                .borrow()
-                .iter()
-                .map(|listener| (listener.id, listener.callback.clone()))
-                .collect();
-            for (id, callback) in listeners {
-                let live = scheduler
-                    .inner
-                    .callbacks
-                    .lifecycle_listeners
-                    .borrow()
-                    .iter()
-                    .any(|listener| listener.id == id);
-                if live {
-                    // A listener's panic does not stop the remaining listeners.
-                    contain_observer(&custody, &mut first, || callback(state));
-                }
-                // A callback may remove its last registered owner while running.
-                // Its captures retire contained; an earlier failure stays first
-                // (ADR-0281).
-                contain_observer(&custody, &mut first, move || drop(callback));
-            }
+            // The channel runs every listener, contains each one's panic and
+            // raises the first after the round; caught here, it stays first
+            // across the transitions still queued.
+            let listeners = &scheduler.inner.callbacks.lifecycle_listeners;
+            contain_observer(&custody, &mut first, || listeners.notify(&state));
         }
         first.resume();
     }

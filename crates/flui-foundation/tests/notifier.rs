@@ -858,6 +858,28 @@ fn a_subscription_detaches_only_its_own_channel() {
     );
 }
 
+/// A subscription to an argument-taking channel hands each round's value to
+/// its listener while it is held, and detaches when it drops.
+#[test]
+fn a_value_subscription_reads_each_round_until_it_drops() {
+    let notifier = Notifier::<u32>::new();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let subscription = notifier.subscribe(Rc::new({
+        let seen = Rc::clone(&seen);
+        move |value: &u32| seen.borrow_mut().push(*value)
+    }));
+    notifier.notify(&1);
+    notifier.notify(&2);
+    drop(subscription);
+    notifier.notify(&3);
+    assert_eq!(
+        *seen.borrow(),
+        vec![1, 2],
+        "the dropped subscription hears nothing"
+    );
+    assert!(notifier.is_empty(), "the drop removed the registration");
+}
+
 /// The subscription detaches idempotently: an explicit `detach` and the drop
 /// that follows remove one registration, once.
 #[test]

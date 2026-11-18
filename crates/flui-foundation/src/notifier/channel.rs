@@ -392,6 +392,21 @@ impl<Arg> Notifier<Arg> {
         let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
+
+    /// Subscribe a listener that reads the notified value, under an owned
+    /// [`Subscription`](crate::notifier::Subscription): the argument-taking
+    /// form of [`listen`](Self::listen). Hold it, and the listener fires on
+    /// every [`notify`](Self::notify) with that round's `&Arg`; drop it, and
+    /// the listener detaches from this channel.
+    pub fn subscribe(&self, listener: NotifierCallback<Arg>) -> crate::notifier::Subscription
+    where
+        Arg: 'static,
+    {
+        let id = self.add(listener);
+        let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
+        crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
+    }
+
     /// Subscribe a [`RecoveryCallback`] under an owned
     /// [`Subscription`](crate::notifier::Subscription): hold it, and the
     /// relay fires on every [`notify`](Self::notify), borrowing each

@@ -48,7 +48,8 @@ A listener paired by hand — an id held apart from its source, removed later
 through a remove call — is wrong-channel by construction:
 ids are per-channel counters that start at one, so the channel they name is
 not in the value. The owned form is the channel's `listen`
-(`ChangeNotifier::listen`, `ValueNotifier::listen`, `Notifier::listen`),
+(`ChangeNotifier::listen`, `ValueNotifier::listen`, `Notifier::listen`, and
+`Notifier::subscribe` for a listener that takes the argument),
 which hands back a `Subscription`: cancel-on-drop, `detach` for an early
 exit, and a detach that knows its channel, so it removes exactly its own
 registration (`a_subscription_detaches_only_its_own_channel`,
