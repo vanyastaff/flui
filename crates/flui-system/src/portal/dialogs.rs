@@ -224,14 +224,18 @@ fn portal_filter(filter: &FileFilter) -> PortalFilter {
 ///
 /// The portal's dialog asked the user about replacing the name as typed. A
 /// file that already has the completed name was never asked about, so the
-/// name then stands as typed rather than name that file: the one case
-/// where the extension is not added. The portal reports no filter where its
-/// backend does not say which was selected, and the name stands there too.
+/// name then stands as typed rather than name that file. The portal reports
+/// no filter where its backend does not say which was selected, and the
+/// name stands there too. So does a path in the document portal's folder
+/// (a sandboxed application's), where the portal granted the file it
+/// answered, by that name, and no other.
 async fn named_after_its_filter(location: SaveLocation, filters: Vec<FileFilter>) -> SaveLocation {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
     let completed = location
         .filter()
         .and_then(|selected| filters.get(selected))
         .zip(location.file().path())
+        .filter(|(_, path)| !in_document_portal(path, runtime_dir.as_deref().map(Path::new)))
         .and_then(|(filter, path)| {
             let completed = filter.completes(path.file_name()?.as_bytes())?;
             Some(path.with_file_name(OsStr::from_bytes(&completed)))
@@ -251,6 +255,19 @@ async fn named_after_its_filter(location: SaveLocation, filters: Vec<FileFilter>
         Some(file) if free => SaveLocation::new(file, location.filter()),
         _ => location,
     }
+}
+
+/// Where Flatpak mounts the document portal for every sandbox, beside the
+/// user's own runtime folder's `doc`.
+const FLATPAK_DOCUMENTS: &str = "/run/flatpak/doc";
+
+/// Whether `path` is in the document portal's folder: `doc` in the user's
+/// runtime folder (`runtime_dir`, `$XDG_RUNTIME_DIR`) or Flatpak's own
+/// mount of it, where a sandboxed application reaches only the files the
+/// portal granted, each by its name.
+fn in_document_portal(path: &Path, runtime_dir: Option<&Path>) -> bool {
+    path.starts_with(FLATPAK_DOCUMENTS)
+        || runtime_dir.is_some_and(|runtime_dir| path.starts_with(runtime_dir.join("doc")))
 }
 
 /// A path as the portal's `ay` options take it: its bytes and a NUL.
@@ -355,8 +372,31 @@ impl FileDialogBackend for PortalDialogs {
 
 #[cfg(test)]
 mod tests {
-    use super::portal_filter;
+    use std::path::Path;
+
+    use super::{in_document_portal, portal_filter};
     use crate::dialog::FileFilter;
+
+    #[test]
+    fn a_path_in_the_document_portals_folder_is_known_by_its_mounts() {
+        let runtime = Some(Path::new("/run/user/1000"));
+        for (path, inside) in [
+            ("/run/user/1000/doc/2f1a/report", true),
+            ("/run/flatpak/doc/2f1a/report", true),
+            ("/run/user/1000/documents/report", false),
+            ("/home/user/report", false),
+        ] {
+            assert_eq!(
+                in_document_portal(Path::new(path), runtime),
+                inside,
+                "{path}"
+            );
+        }
+        assert!(
+            !in_document_portal(Path::new("/run/user/1000/doc/2f1a/report"), None),
+            "without a runtime folder only Flatpak's mount is known"
+        );
+    }
 
     #[test]
     fn a_filter_becomes_globs_then_mime_types() {

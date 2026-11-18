@@ -152,18 +152,17 @@ impl ButtonLabels {
 ///
 /// What each host shows of it:
 ///
-/// | | Windows (`MessageBoxW`) | macOS (`NSAlert` sheet) |
-/// |---|---|---|
-/// | no title | an empty caption, never the system's "Error" | no heading: the message is the alert's message text |
-/// | detail | below the message, after an empty line | the informative text, below the title and message |
-/// | default button | `MB_DEFBUTTON` of its position | the button Return presses |
-/// | button label | not shown: the system's own, in the user's language | the button's title |
+/// | | Windows (`MessageBoxW`) | macOS (`NSAlert` sheet) | iOS (`UIAlertController`) | Web (`<dialog>`) |
+/// |---|---|---|---|---|
+/// | no title | an empty caption, never the system's "Error" | no heading: the message is the alert's message text | no title | no heading |
+/// | detail | below the message, after an empty line | the informative text, below the title and message | below the message, after an empty line | a paragraph below the message |
+/// | default button | `MB_DEFBUTTON` of its position | the button Return presses | the preferred action | the button that takes focus |
+/// | button label | refused: [`Unsupported`](flui_platform::Unsupported) with `NotYetOnThisHost` | the button's title | the action's title | the button's text |
 ///
-/// The web's box shows no heading without a title and, until its provider
-/// follows, no detail, the first button as its default and its own English
-/// labels (`docs/gaps.md`). A host that cannot show a label shows its
-/// standard one for that button, which still means the button's
-/// [`MessageAnswer`]: word the message so that it reads with either.
+/// `MessageBoxW` cannot label a button, so a Windows box whose request
+/// labels one is refused before anything is shown rather than shown with
+/// words other than its author wrote; [`MessageBoxRequest::is_labelled`]
+/// says whether a request does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MessageBoxRequest {
@@ -247,6 +246,9 @@ impl MessageBoxRequest {
     /// line, not blank, on a button the box's [`buttons`](Self::buttons)
     /// offer, and no two buttons alike. The button still answers `answer`.
     /// Labelling a button again replaces its label.
+    ///
+    /// Windows' box cannot show a label, and refuses a labelled request with
+    /// [`DialogError::Unsupported`] and `NotYetOnThisHost`.
     #[must_use]
     pub fn button_label(mut self, answer: MessageAnswer, label: impl Into<String>) -> Self {
         self.labels.set(answer, label.into());
@@ -258,6 +260,14 @@ impl MessageBoxRequest {
     #[must_use]
     pub fn label(&self, answer: MessageAnswer) -> Option<&str> {
         self.labels.of(answer)
+    }
+
+    /// Whether the request labels any of its buttons
+    /// ([`button_label`](Self::button_label)): what a host that cannot show
+    /// a label refuses it for.
+    #[must_use]
+    pub fn is_labelled(&self) -> bool {
+        self.labels.iter().next().is_some()
     }
 
     /// The answer of the button Return presses: the one the request named,

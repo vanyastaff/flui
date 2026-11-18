@@ -10,9 +10,10 @@
 //! it after an empty line, since the box has one text; its title as the
 //! caption, an empty one for a request without a title, since a null
 //! caption shows the system's "Error" whatever the level; its default
-//! button, by its place among the buttons. It has no way to label a button:
-//! the box shows the system's own labels, in the user's language, for the
-//! request's button set. The box is owned by a window, which is what makes
+//! button, by its place among the buttons. It has no way to label a button,
+//! so a request that labels one is refused with `NotYetOnThisHost` before
+//! anything is shown, rather than shown with the system's own words where
+//! its author wrote others. The box is owned by a window, which is what makes
 //! it modal to it: a window whose handle names no Win32 window answers
 //! `NoWindow`, and nothing is shown.
 
@@ -134,14 +135,17 @@ impl MessageBoxBackend for WindowsMessageBoxes {
         request: MessageBoxRequest,
         answer_to: Resolver<MessageBoxResult>,
     ) -> DialogHold {
+        let refusal =
+            |reason| DialogError::Unsupported(Unsupported::of::<MessageBoxCapability>(reason));
+        if request.is_labelled() {
+            // `MessageBoxW` would show other words than the request's. The
+            // owner retiring first leaves nothing waiting.
+            let _ = answer_to.resolve(Err(refusal(UnsupportedReason::NotYetOnThisHost)));
+            return DialogHold::new(());
+        }
         let Some(owner) = Owner::of(window) else {
-            // A box with no owner would be modal to nothing. The owner
-            // retiring first leaves nothing waiting.
-            let _ = answer_to.resolve(Err(DialogError::Unsupported(Unsupported::of::<
-                MessageBoxCapability,
-            >(
-                UnsupportedReason::NoWindow
-            ))));
+            // A box with no owner would be modal to nothing.
+            let _ = answer_to.resolve(Err(refusal(UnsupportedReason::NoWindow)));
             return DialogHold::new(());
         };
         let style = style(&request);
@@ -455,12 +459,10 @@ mod tests {
             .detail("It cannot be brought back.")
             .level(MessageLevel::Warning)
             .buttons(MessageButtons::YesNo)
-            .default_button(MessageAnswer::No)
-            .button_label(MessageAnswer::Yes, "Delete");
+            .default_button(MessageAnswer::No);
         assert_eq!(
             ask(&owner, &system, window, untitled),
-            Ok(MessageAnswer::No),
-            "a labelled button still answers its answer"
+            Ok(MessageAnswer::No)
         );
         let (window, _closer) = win32_window(OWNER);
         let titled = MessageBoxRequest::new("Saved").title("Notes");
@@ -506,5 +508,25 @@ mod tests {
             "a box is modal to a window"
         );
         assert_eq!(system.shown(), [], "no box was shown without an owner");
+    }
+
+    #[test]
+    fn a_box_whose_request_labels_a_button_is_refused_and_shows_nothing() {
+        let owner = TestOwner::new();
+        let system = AnsweringBox::answering(IDYES);
+        let (window, _closer) = win32_window(OWNER);
+        let labelled = MessageBoxRequest::new("Delete the note?")
+            .buttons(MessageButtons::YesNo)
+            .button_label(MessageAnswer::Yes, "Delete");
+        assert_eq!(
+            ask(&owner, &system, window, labelled),
+            Err(DialogError::Unsupported(Unsupported::of::<
+                MessageBoxCapability,
+            >(
+                UnsupportedReason::NotYetOnThisHost
+            ))),
+            "MessageBoxW cannot show the label the request gives"
+        );
+        assert_eq!(system.shown(), [], "no box was shown with other words");
     }
 }

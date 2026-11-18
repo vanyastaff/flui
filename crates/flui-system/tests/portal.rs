@@ -1072,9 +1072,12 @@ fn a_portal_save_without_an_extension_is_named_after_the_selected_filter() {
     let all_files = Some(("All files", "*"));
     std::fs::write(at("taken.png"), b"another picture").expect("a file of the completed name");
 
-    let cases: [CompletedSave<'_>; 10] = [
+    let cases: [CompletedSave<'_>; 11] = [
         ("picture", png, ("picture.png", Some(0))),
         ("picture.", png, ("picture.png", Some(0))),
+        // A hidden file's leading dot starts its name, not an extension, and
+        // the name stands, as Windows' dialog leaves it.
+        (".env", png, (".env", Some(0))),
         // The selected filter's first extension, whole.
         ("picture", archive, ("picture.tar.gz", Some(1))),
         // Named by the filter already, in any case or as a whole name.
@@ -1103,6 +1106,19 @@ fn a_portal_save_without_an_extension_is_named_after_the_selected_filter() {
     assert_eq!(
         std::fs::read(at("taken.png")).expect("the file"),
         b"another picture"
+    );
+
+    // In the document portal's folder a sandboxed application may reach the
+    // file the portal granted, by the name it answered, and no other.
+    let granted = "/run/flatpak/doc/2f1a/report";
+    portal.answer(0, saved_as(&format!("file://{granted}"), png));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(
+            PickedFile::try_new(granted).expect("an absolute path"),
+            Some(0)
+        )))),
+        "the granted name stands"
     );
 
     // With contents, the completed name is the file that is written.

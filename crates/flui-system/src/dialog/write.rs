@@ -9,21 +9,28 @@
 //! - **A link is written through.** A save to a symbolic link replaces the
 //!   file the link leads to and leaves the link a link: the new file is made
 //!   beside that file and takes its name.
-//! - **The replaced file's mode is kept** (Unix): the new file is given the
-//!   permission bits of the one it replaces, where a file made afresh would
-//!   get the process's defaults. Its owner, its access control list and its
-//!   extended attributes are the new file's own.
+//! - **The replaced file's mode is kept** (Unix): the new file is made with
+//!   the permission bits of the one it replaces, before anything is written
+//!   to it, so the contents are never readable by more users than the old
+//!   file's were; a file made where none stood gets the process's defaults.
+//!   Its owner, its access control list and its extended attributes are the
+//!   new file's own.
 //! - **Only a regular file is replaced.** A device or a pipe is written
 //!   into.
-//! - **Where no new file can be made beside it, the contents are written
-//!   into the chosen file itself**: a folder that takes no other name (a
-//!   sandbox's document folder, a read-only folder holding a writable
-//!   file), a name too long to make a sibling's from, or a file that cannot
-//!   be renamed over (a mount point, another user's file in a sticky
-//!   folder). That write is not whole or nothing: one that fails midway
-//!   leaves the file cut short, which is the price of saving there at all.
-//!   A volume out of room is not such a case, since writing into the file
-//!   would empty it first: the save fails and the file stands.
+//! - **Where no new file can be made beside it, or none can take its name by
+//!   the file system's design, the contents are written into the chosen file
+//!   itself**: a folder that takes no other name (a sandbox's document
+//!   folder, a read-only folder holding a writable file), a name too long to
+//!   make a sibling's from, a file on another device than its folder (a
+//!   mount point), or another user's file in a sticky folder. That write is
+//!   not whole or nothing: it empties the file first, so one that fails
+//!   midway, or a process killed during it, leaves the file cut short, which
+//!   is the price of saving there at all.
+//! - **Any other failure leaves the chosen file as it was** and answers the
+//!   system's code: a volume out of room, a file another process holds open
+//!   without letting it be replaced (on Windows, open without
+//!   `FILE_SHARE_DELETE`), a read-only file. The new file beside it is
+//!   removed.
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Write as _};
@@ -145,17 +152,19 @@ fn linked_file(path: &Path) -> io::Result<PathBuf> {
 
 /// Why contents did not reach a file through a new file beside it.
 enum NotReplaced {
-    /// No new file can be made beside it, be given its mode, or take its
-    /// name; nothing of the chosen file changed, and writing into it may
-    /// still work.
+    /// No new file can be made beside it, or take its name, by the file
+    /// system's design; nothing of the chosen file changed, and writing
+    /// into it may still work.
     NoSibling,
-    /// The contents could not be written, or the folder could not be
-    /// reached at all: writing into the chosen file would fare no better.
+    /// The contents could not be written, the folder could not be reached,
+    /// or the new file could not take the chosen one's name for another
+    /// reason (the chosen file held open, a read-only file): nothing of the
+    /// chosen file changed, and writing into it would destroy it.
     Failed(io::Error),
 }
 
-/// Write `contents` into a new file beside `target`, synced and given the
-/// mode of the file it `replaces`, then rename it over `target`.
+/// Write `contents` into a new file beside `target`, made with the mode of
+/// the file it `replaces` and synced, then rename it over `target`.
 fn write_beside(
     target: &Path,
     contents: &[u8],
@@ -169,11 +178,7 @@ fn write_beside(
         temporary_name.push(name);
         temporary_name.push(format!(".{}-{attempt}.flui-save", std::process::id()));
         let temporary = folder.join(temporary_name);
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        let mut file = match new_file(&temporary, replaces) {
             Ok(file) => file,
             Err(error) => match error.kind() {
                 ErrorKind::AlreadyExists => continue,
@@ -184,18 +189,11 @@ fn write_beside(
                 _ => return Err(NotReplaced::Failed(error)),
             },
         };
-        let written = file.write_all(contents);
-        // Before the sync, so the mode is as durable as the contents.
-        let stands_in = written.is_ok() && keeps_mode(&file, replaces);
-        let synced = written.and_then(|()| file.sync_all());
+        let synced = file.write_all(contents).and_then(|()| file.sync_all());
         drop(file);
-        let replaced = match synced {
-            Ok(()) if stands_in => {
-                std::fs::rename(&temporary, target).map_err(|_| NotReplaced::NoSibling)
-            }
-            Ok(()) => Err(NotReplaced::NoSibling),
-            Err(error) => Err(NotReplaced::Failed(error)),
-        };
+        let replaced = synced
+            .map_err(NotReplaced::Failed)
+            .and_then(|()| std::fs::rename(&temporary, target).map_err(not_renamed));
         if replaced.is_err() {
             // The write's failure is the answer; the clean-up's is not.
             let _ = std::fs::remove_file(&temporary);
@@ -206,20 +204,71 @@ fn write_beside(
     Err(NotReplaced::NoSibling)
 }
 
-/// Give `file` the permission bits of the file it `replaces`; `false` when
-/// the file system refuses, so the new file would not stand in for the old
-/// one.
+/// Make the file `path` names, which must not exist yet, for writing: on
+/// Unix with the permission bits of the file it `replaces` from the start
+/// (the process's umask may only narrow them, and they are set exactly
+/// before anything is written), so its contents are never readable by more
+/// users than the replaced file's. A file the system will not give those
+/// bits keeps the narrower ones it was made with.
 #[cfg(unix)]
-fn keeps_mode(file: &File, replaces: Option<&Metadata>) -> bool {
-    replaces.is_none_or(|replaced| file.set_permissions(replaced.permissions()).is_ok())
+fn new_file(path: &Path, replaces: Option<&Metadata>) -> io::Result<File> {
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+    // What `File::create` gives a file where none stood.
+    const DEFAULT_MODE: u32 = 0o666;
+    let mode = replaces.map_or(DEFAULT_MODE, |replaced| {
+        replaced.permissions().mode() & 0o777
+    });
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)?;
+    if let Some(replaced) = replaces {
+        // The bits the umask took, and the set-id and sticky bits, which
+        // `open` does not set; refused by some file systems, which then
+        // keep the narrower mode.
+        let _ = file.set_permissions(replaced.permissions());
+    }
+    Ok(file)
 }
 
-/// A Windows file has no mode: its read-only attribute would keep the new
-/// file from taking the old one's name, and its access control list is not
-/// copied.
+/// Make the file `path` names, which must not exist yet, for writing. A
+/// Windows file has no mode: its read-only attribute would keep the new
+/// file from taking the old one's name, and its access control list is the
+/// folder's to give.
 #[cfg(not(unix))]
-fn keeps_mode(_: &File, _: Option<&Metadata>) -> bool {
-    true
+fn new_file(path: &Path, _: Option<&Metadata>) -> io::Result<File> {
+    OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+/// `EPERM`, the same on every Unix FLUI builds for: a rename the folder's
+/// sticky bit refuses, since the chosen file is another user's.
+#[cfg(unix)]
+const EPERM: i32 = 1;
+
+/// Why a new file could not take the chosen one's name. Only what the file
+/// system refuses by its design lets the contents go into the chosen file
+/// instead: another device than its folder (`EXDEV`, Windows'
+/// `ERROR_NOT_SAME_DEVICE`), a mount point (`EBUSY`), another user's file in
+/// a sticky folder (`EPERM`). Anything else, a file held open without
+/// letting it be replaced or a read-only file among it, fails the save with
+/// the chosen file as it was: writing into it would empty a file someone
+/// else is using, or one its owner keeps from changing.
+fn not_renamed(error: io::Error) -> NotReplaced {
+    let by_design = match error.kind() {
+        ErrorKind::CrossesDevices => true,
+        #[cfg(unix)]
+        ErrorKind::ResourceBusy => true,
+        #[cfg(unix)]
+        ErrorKind::PermissionDenied => error.raw_os_error() == Some(EPERM),
+        _ => false,
+    };
+    if by_design {
+        NotReplaced::NoSibling
+    } else {
+        NotReplaced::Failed(error)
+    }
 }
 
 /// Write `contents` into `target` itself, emptied first, and sync it when

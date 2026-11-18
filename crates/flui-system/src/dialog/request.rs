@@ -64,11 +64,23 @@ fn check_lines<'a>(
 #[non_exhaustive]
 pub struct FileFilter {
     name: String,
-    /// Whether it matches every file; such a filter holds no pattern.
-    every_file: bool,
-    extensions: Vec<String>,
-    file_names: Vec<String>,
-    mime_types: Vec<String>,
+    kind: Kind,
+}
+
+/// What a filter matches by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Kind {
+    /// Every file ([`FileFilter::all_files`]), by no pattern. A pattern
+    /// added to it is not kept: that it was added is, and the request is
+    /// refused for it ([`MalformedRequest::PatternOnAllFiles`]), since the
+    /// filter would mean something other than what its author wrote.
+    EveryFile { given_pattern: bool },
+    /// The files these patterns name.
+    Patterns {
+        extensions: Vec<String>,
+        file_names: Vec<String>,
+        mime_types: Vec<String>,
+    },
 }
 
 impl FileFilter {
@@ -93,10 +105,11 @@ impl FileFilter {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            every_file: false,
-            extensions: Vec::new(),
-            file_names: Vec::new(),
-            mime_types: Vec::new(),
+            kind: Kind::Patterns {
+                extensions: Vec::new(),
+                file_names: Vec::new(),
+                mime_types: Vec::new(),
+            },
         }
     }
 
@@ -104,15 +117,43 @@ impl FileFilter {
     /// matches every file: what a request offers beside its specific
     /// filters so the user can reach a file none of them names.
     ///
-    /// It holds no pattern, and adding one leaves it as it is: it matches
-    /// that file already. A request with such a filter admits every pick,
-    /// whichever filter was selected when the user accepted.
+    /// It takes no pattern: a request whose filter of every file was given
+    /// an extension, a file name or a MIME type is refused with
+    /// [`MalformedRequest::PatternOnAllFiles`]. A request with such a filter
+    /// admits every pick, whichever filter was selected when the user
+    /// accepted.
     #[must_use]
     pub fn all_files(name: impl Into<String>) -> Self {
         Self {
-            every_file: true,
-            ..Self::new(name)
+            name: name.into(),
+            kind: Kind::EveryFile {
+                given_pattern: false,
+            },
         }
+    }
+
+    /// Add `pattern` to the list `list` picks out of the patterns, unless
+    /// one that is the `same` is there already; a filter of every file
+    /// records that it was given one.
+    fn add(
+        mut self,
+        pattern: String,
+        list: fn(&mut Kind) -> Option<&mut Vec<String>>,
+        same: fn(&str, &str) -> bool,
+    ) -> Self {
+        match list(&mut self.kind) {
+            Some(list) => {
+                if !list.iter().any(|kept| same(kept, &pattern)) {
+                    list.push(pattern);
+                }
+            }
+            None => {
+                self.kind = Kind::EveryFile {
+                    given_pattern: true,
+                };
+            }
+        }
+        self
     }
 
     /// Also match files whose name ends in `.extension`, ignoring ASCII
@@ -120,16 +161,20 @@ impl FileFilter {
     /// (`tar.gz`), each of ASCII letters, digits, `-`, `_` and `+`, so no
     /// host reads one of its characters as a wildcard or a separator.
     #[must_use]
-    pub fn with_extension(mut self, extension: impl Into<String>) -> Self {
+    pub fn with_extension(self, extension: impl Into<String>) -> Self {
         let mut extension: String = extension.into();
         if extension.starts_with('.') {
             extension.remove(0);
         }
         extension.make_ascii_lowercase();
-        if !self.every_file && !self.extensions.contains(&extension) {
-            self.extensions.push(extension);
-        }
-        self
+        self.add(
+            extension,
+            |kind| match kind {
+                Kind::Patterns { extensions, .. } => Some(extensions),
+                Kind::EveryFile { .. } => None,
+            },
+            |kept, added| kept == added,
+        )
     }
 
     /// Also match the file named exactly `file_name`, ignoring ASCII case:
@@ -142,29 +187,32 @@ impl FileFilter {
     /// Kept as written, since a host that compares names case-sensitively is
     /// sent that spelling; one added twice, in whatever case, is kept once.
     #[must_use]
-    pub fn with_file_name(mut self, file_name: impl Into<String>) -> Self {
-        let file_name: String = file_name.into();
-        let kept = self
-            .file_names
-            .iter()
-            .any(|kept| kept.eq_ignore_ascii_case(&file_name));
-        if !self.every_file && !kept {
-            self.file_names.push(file_name);
-        }
-        self
+    pub fn with_file_name(self, file_name: impl Into<String>) -> Self {
+        self.add(
+            file_name.into(),
+            |kind| match kind {
+                Kind::Patterns { file_names, .. } => Some(file_names),
+                Kind::EveryFile { .. } => None,
+            },
+            str::eq_ignore_ascii_case,
+        )
     }
 
     /// Also match files of the MIME type `mime_type`, such as `image/png`,
     /// or of every subtype of a type, such as `image/*`. Compared ignoring
     /// ASCII case, as RFC 2045 §5.1 compares them; no parameters.
     #[must_use]
-    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+    pub fn with_mime_type(self, mime_type: impl Into<String>) -> Self {
         let mut mime_type: String = mime_type.into();
         mime_type.make_ascii_lowercase();
-        if !self.every_file && !self.mime_types.contains(&mime_type) {
-            self.mime_types.push(mime_type);
-        }
-        self
+        self.add(
+            mime_type,
+            |kind| match kind {
+                Kind::Patterns { mime_types, .. } => Some(mime_types),
+                Kind::EveryFile { .. } => None,
+            },
+            |kept, added| kept == added,
+        )
     }
 
     /// The name the dialog shows.
@@ -178,25 +226,37 @@ impl FileFilter {
     /// the portal) or to no restriction at all.
     #[must_use]
     pub fn is_all_files(&self) -> bool {
-        self.every_file
+        matches!(self.kind, Kind::EveryFile { .. })
     }
 
-    /// The extensions it matches, without their `.`, in ASCII lower case.
+    /// The extensions it matches, without their `.`, in ASCII lower case;
+    /// none for a filter of every file.
     #[must_use]
     pub fn extensions(&self) -> &[String] {
-        &self.extensions
+        match &self.kind {
+            Kind::Patterns { extensions, .. } => extensions,
+            Kind::EveryFile { .. } => &[],
+        }
     }
 
-    /// The file names it matches exactly, as they were written.
+    /// The file names it matches exactly, as they were written; none for a
+    /// filter of every file.
     #[must_use]
     pub fn file_names(&self) -> &[String] {
-        &self.file_names
+        match &self.kind {
+            Kind::Patterns { file_names, .. } => file_names,
+            Kind::EveryFile { .. } => &[],
+        }
     }
 
-    /// The MIME types it matches, in ASCII lower case.
+    /// The MIME types it matches, in ASCII lower case; none for a filter of
+    /// every file.
     #[must_use]
     pub fn mime_types(&self) -> &[String] {
-        &self.mime_types
+        match &self.kind {
+            Kind::Patterns { mime_types, .. } => mime_types,
+            Kind::EveryFile { .. } => &[],
+        }
     }
 
     /// Whether a file named `name`, of the MIME type `mime_type` where the
@@ -216,7 +276,7 @@ impl FileFilter {
             .map(|mime_type| mime_type.split(';').next().unwrap_or_default().trim())
             .filter(|mime_type| !mime_type.is_empty())
             .is_some_and(|mime_type| {
-                self.mime_types
+                self.mime_types()
                     .iter()
                     .any(|accepted| match accepted.strip_suffix("/*") {
                         Some(kind) => mime_type
@@ -232,50 +292,67 @@ impl FileFilter {
     /// is one this filter means by its name: the name half of
     /// [`matches`](Self::matches), for a name that need not be UTF-8.
     pub(crate) fn names(&self, name: &[u8]) -> bool {
-        self.every_file
-            || self
-                .extensions
-                .iter()
-                .any(|extension| name_ends_in(name, extension))
-            || self
-                .file_names
-                .iter()
-                .any(|file_name| name.eq_ignore_ascii_case(file_name.as_bytes()))
+        match &self.kind {
+            Kind::EveryFile { .. } => true,
+            Kind::Patterns {
+                extensions,
+                file_names,
+                ..
+            } => {
+                extensions
+                    .iter()
+                    .any(|extension| name_ends_in(name, extension))
+                    || file_names
+                        .iter()
+                        .any(|file_name| name.eq_ignore_ascii_case(file_name.as_bytes()))
+            }
+        }
+    }
+
+    /// How a save completes a typed `name` with this filter selected and the
+    /// dialog left it as typed: the length of the stem the filter's first
+    /// extension follows, and that extension. `None` when the name stands:
+    /// the filter has no extension, or names `name` already, or `name` has a
+    /// dot of its own past any trailing ones, an extension (`report.v2`) or
+    /// the leading dot of a hidden file's name (`.env`, as Windows' dialog
+    /// leaves it). Trailing dots are dropped (`report.` is `report.txt`), and
+    /// a name of dots alone has no stem.
+    #[cfg(any(target_os = "linux", target_os = "ios", target_arch = "wasm32", test))]
+    fn completion(&self, name: &[u8]) -> Option<(usize, &str)> {
+        let extension = self.extensions().first()?;
+        if self.names(name) {
+            return None;
+        }
+        let trailing_dots = name.iter().rev().take_while(|byte| **byte == b'.').count();
+        let stem = &name[..name.len() - trailing_dots];
+        if stem.is_empty() || stem.contains(&b'.') {
+            return None;
+        }
+        Some((stem.len(), extension))
     }
 
     /// The name a save writes when the user typed `name` with this filter
-    /// selected and the dialog left it as typed: `name` with `.` and the
-    /// filter's first extension, when the filter does not name it already
-    /// and it has no extension of its own (`report` and `report.` become
-    /// `report.txt`, `.profile` becomes `.profile.txt`; `report.v2` and a
-    /// name the filter matches stay). `None` when the name stands, as it
-    /// always does for a filter with no extension.
+    /// selected and the dialog left it as typed: `name`'s stem with `.` and
+    /// the filter's first extension, as `completion`
+    /// says (`report` and `report.` become `report.txt`; `.env`, `report.v2`
+    /// and a name the filter matches stay). `None` when the name stands.
     ///
     /// The rule a host applies itself when its dialog does not (the portal):
     /// Windows' and macOS's dialogs complete the name before they ask about
     /// replacing a file, which a rule applied after the answer cannot do.
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn completes(&self, name: &[u8]) -> Option<Vec<u8>> {
-        let extension = self.extensions.first()?;
-        if self.names(name) {
-            return None;
-        }
-        let trailing_dots = name.iter().rev().take_while(|byte| **byte == b'.').count();
-        let stem = &name[..name.len() - trailing_dots];
-        // Past its first byte: a leading dot starts a hidden file's name,
-        // not an extension. A name of dots alone has no stem to complete.
-        if stem.get(1..)?.contains(&b'.') {
-            return None;
-        }
-        let mut completed = Vec::with_capacity(stem.len() + 1 + extension.len());
-        completed.extend_from_slice(stem);
+        let (stem, extension) = self.completion(name)?;
+        let mut completed = Vec::with_capacity(stem + 1 + extension.len());
+        completed.extend_from_slice(&name[..stem]);
         completed.push(b'.');
         completed.extend_from_slice(extension.as_bytes());
         Some(completed)
     }
 
-    /// The first thing wrong with the filter: its name, matching nothing, or
-    /// an extension, file name or MIME type that is not one.
+    /// The first thing wrong with the filter: its name, a pattern given to a
+    /// filter of every file, matching nothing, or an extension, file name or
+    /// MIME type that is not one.
     fn check(&self) -> Result<(), MalformedRequest> {
         if self.name.len() > Self::MAX_NAME_LEN
             || self.name.trim().is_empty()
@@ -283,32 +360,36 @@ impl FileFilter {
         {
             return Err(MalformedRequest::FilterName);
         }
-        let patterns = self.extensions.len() + self.file_names.len() + self.mime_types.len();
-        if patterns == 0 && !self.every_file {
+        let (extensions, file_names, mime_types) = match &self.kind {
+            Kind::EveryFile {
+                given_pattern: false,
+            } => return Ok(()),
+            Kind::EveryFile {
+                given_pattern: true,
+            } => return Err(MalformedRequest::PatternOnAllFiles),
+            Kind::Patterns {
+                extensions,
+                file_names,
+                mime_types,
+            } => (extensions, file_names, mime_types),
+        };
+        let patterns = extensions.len() + file_names.len() + mime_types.len();
+        if patterns == 0 {
             return Err(MalformedRequest::EmptyFilter);
         }
         if patterns > Self::MAX_PATTERNS {
             return Err(MalformedRequest::TooManyPatterns);
         }
-        if !self
-            .extensions
-            .iter()
-            .all(|extension| is_extension(extension))
-        {
+        if !extensions.iter().all(|extension| is_extension(extension)) {
             return Err(MalformedRequest::Extension);
         }
-        if !self
-            .file_names
+        if !file_names
             .iter()
             .all(|file_name| is_file_name_pattern(file_name))
         {
             return Err(MalformedRequest::FileName);
         }
-        if !self
-            .mime_types
-            .iter()
-            .all(|mime_type| is_mime_type(mime_type))
-        {
+        if !mime_types.iter().all(|mime_type| is_mime_type(mime_type)) {
             return Err(MalformedRequest::MimeType);
         }
         Ok(())
@@ -338,7 +419,8 @@ fn name_ends_in(name: &[u8], extension: &str) -> bool {
 /// must be one a filter [names](FileFilter::names), and a pick with no name
 /// (a root) is one none does.
 pub(super) fn names_admit(filters: &[FileFilter], picks: &Picks) -> bool {
-    let unjudged_by_name = |filter: &FileFilter| filter.every_file || !filter.mime_types.is_empty();
+    let unjudged_by_name =
+        |filter: &FileFilter| filter.is_all_files() || !filter.mime_types().is_empty();
     if filters.is_empty() || filters.iter().any(unjudged_by_name) {
         return true;
     }
@@ -353,9 +435,9 @@ pub(super) fn names_admit(filters: &[FileFilter], picks: &Picks) -> bool {
 /// The name a save's file is given where the provider names it from the
 /// request rather than from what the user typed into a dialog (a browser's
 /// save picker or download, an export to iOS's Files): `suggested`, or
-/// `unnamed` when there is none, with the first filter's first extension
-/// added when the name has none, as a desktop save dialog names a typed file
-/// after the selected filter.
+/// `unnamed` when there is none, completed by the first filter as a desktop
+/// save dialog completes a typed name by the selected one
+/// (the rule of `FileFilter::completes`).
 #[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
 pub(crate) fn save_file_name(
     suggested: Option<&str>,
@@ -363,23 +445,13 @@ pub(crate) fn save_file_name(
     unnamed: &str,
 ) -> String {
     let name = suggested.unwrap_or(unnamed);
-    let has_extension = name
-        .rsplit_once('.')
-        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
     match filters
         .first()
-        .and_then(|filter| filter.extensions().first())
+        .and_then(|filter| filter.completion(name.as_bytes()))
     {
-        Some(extension) if !has_extension => {
-            // `notes.` is `notes` with an empty extension: the filter's
-            // replaces it rather than following a second dot.
-            let stem = match name.trim_end_matches('.') {
-                "" => name,
-                stem => stem,
-            };
-            format!("{stem}.{extension}")
-        }
-        _ => name.to_owned(),
+        // The stem ends before ASCII dots, on a character boundary.
+        Some((stem, extension)) => format!("{}.{extension}", &name[..stem]),
+        None => name.to_owned(),
     }
 }
 
@@ -479,6 +551,10 @@ pub enum MalformedRequest {
     /// [every file](FileFilter::all_files).
     #[error("a filter matches nothing")]
     EmptyFilter,
+    /// A filter of [every file](FileFilter::all_files) was given an
+    /// extension, a file name or a MIME type, which it would not keep.
+    #[error("a filter of every file takes no pattern")]
+    PatternOnAllFiles,
     /// A filter holds more than [`FileFilter::MAX_PATTERNS`] extensions,
     /// file names and MIME types.
     #[error("a filter holds too many patterns")]
@@ -608,13 +684,16 @@ impl OpenRequest {
     /// from the user's last dialog; a request that sets none opens where the
     /// system would.
     ///
-    /// Windows names the folder to its dialog, so one that is gone or cannot
-    /// be reached answers [`DialogError::Failed`](super::DialogError::Failed)
-    /// with the system's code and no dialog is shown; a verbatim path
-    /// (`\\?\C:\…`, `\\?\UNC\server\share\…`, what `std::fs::canonicalize`
-    /// answers) is named in the form the shell reads. The portal and macOS
-    /// take the folder as a hint and open where the system would when they
-    /// cannot use it.
+    /// A folder that is not there (a remembered folder deleted since, a
+    /// drive unplugged, a share that does not answer) is left out on every
+    /// host, and the dialog opens where the system would. Windows names the
+    /// folder to its dialog, so one its shell cannot name for another reason
+    /// answers [`DialogError::Failed`](super::DialogError::Failed) with the
+    /// system's code and no dialog is shown; a verbatim path (`\\?\C:\…`,
+    /// `\\?\UNC\server\share\…`, what `std::fs::canonicalize` answers) is
+    /// named in the form the shell reads. The portal and the Apple pickers
+    /// take the folder as a hint and open where the system would whenever
+    /// they cannot use it.
     #[must_use]
     pub fn directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.directory = Some(directory.into());
@@ -752,11 +831,26 @@ impl SaveRequest {
 
     /// Offer `filter`; the first filter added is selected.
     ///
-    /// A name the user types without an extension is given the selected
-    /// filter's first, where that filter has one: by the system's dialog on
-    /// Windows and macOS, before it asks about replacing a file, and by the
-    /// portal's provider after the dialog answered, unless a file of the
-    /// completed name is already there, which the user was not asked about.
+    /// A name the user types without an extension is given one, by a rule
+    /// each host has its own form of:
+    ///
+    /// - Windows: the dialog gives it the first filter's first extension
+    ///   (its default extension), before it asks about replacing a file;
+    ///   whether it follows a filter the user selected instead has not been
+    ///   run.
+    /// - macOS: the panel has no filter menu, so no filter is selected; it
+    ///   gives the name the first allowed type's extension, the last part of
+    ///   a several-part one (`gz` of `tar.gz`), and none when a filter names
+    ///   a file exactly or admits every file, since the panel is then given
+    ///   no types.
+    /// - The portal: its provider gives it the first extension of the filter
+    ///   the portal reports as selected, after the dialog answered
+    ///   (the rule of `FileFilter::completes`), unless a file of the completed
+    ///   name is already there, which the user was not asked about, or the
+    ///   path is in the document portal's folder, where the portal granted
+    ///   the name it answered.
+    /// - A browser and iOS name the file from the request, the suggested
+    ///   name completed by the first filter by the same rule.
     #[must_use]
     pub fn filter(mut self, filter: FileFilter) -> Self {
         self.filters.push(filter);
@@ -1107,13 +1201,15 @@ mod tests {
             .with_extension("txt")
             .with_extension("tar.gz")
             .with_file_name("README");
-        let cases: [(&[u8], Option<&[u8]>); 12] = [
+        let cases: [(&[u8], Option<&[u8]>); 13] = [
             (b"report", Some(b"report.txt")),
             // An empty extension is replaced, not followed by a second dot.
             (b"report.", Some(b"report.txt")),
             (b"report..", Some(b"report.txt")),
-            // A leading dot starts a hidden file's name, not an extension.
-            (b".profile", Some(b".profile.txt")),
+            // A leading dot starts a hidden file's name, not an extension,
+            // and the name stands, as Windows' dialog leaves it.
+            (b".profile", None),
+            (b".profile.", None),
             // A name that is not UTF-8 is completed by its bytes.
             (b"\xff\xfe", Some(b"\xff\xfe.txt")),
             // Named by the filter already: by an extension, in any case, or

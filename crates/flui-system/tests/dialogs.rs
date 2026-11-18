@@ -449,12 +449,16 @@ fn a_filter_keeps_each_pattern_once_as_the_dialog_compares_it() {
         .with_file_name("Makefile")
         .with_mime_type("image/*");
     assert!(every.is_all_files());
-    assert_eq!(every, FileFilter::all_files("All files"));
     assert!(
         every.extensions().is_empty()
             && every.file_names().is_empty()
             && every.mime_types().is_empty(),
-        "a filter of every file matches each pattern's files already and holds none"
+        "a filter of every file holds no pattern"
+    );
+    assert_ne!(
+        every,
+        FileFilter::all_files("All files"),
+        "that it was given patterns is kept, and a request offering it is refused for them"
     );
     assert_ne!(
         FileFilter::all_files("Files"),
@@ -519,6 +523,22 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         (
             OpenRequest::files().filter(FileFilter::new("Nothing")),
             MalformedRequest::EmptyFilter,
+        ),
+        // A pattern given to a filter of every file would be dropped
+        // unseen: the filter would not mean what its author wrote.
+        (
+            OpenRequest::files().filter(FileFilter::all_files("All files").with_extension("png")),
+            MalformedRequest::PatternOnAllFiles,
+        ),
+        (
+            OpenRequest::files()
+                .filter(FileFilter::all_files("All files").with_file_name("Makefile")),
+            MalformedRequest::PatternOnAllFiles,
+        ),
+        (
+            OpenRequest::files()
+                .filter(FileFilter::all_files("All files").with_mime_type("image/*")),
+            MalformedRequest::PatternOnAllFiles,
         ),
         (
             OpenRequest::files().filter(
@@ -1203,7 +1223,7 @@ fn a_save_replaces_the_chosen_file_whole_and_leaves_nothing_beside_it() {
 
 /// Save `contents` through a scripted dialog whose user chose `chosen`, and
 /// answer what the save answered once the write ended.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn save_to(chosen: &std::path::Path, contents: &[u8]) -> SaveResult {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
@@ -1221,7 +1241,7 @@ fn save_to(chosen: &std::path::Path, contents: &[u8]) -> SaveResult {
 }
 
 /// The names in `folder`, sorted.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn names_in(folder: &std::path::Path) -> Vec<std::ffi::OsString> {
     let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(folder)
         .expect("the folder")
@@ -1333,4 +1353,101 @@ fn a_save_where_no_file_can_be_made_beside_the_chosen_one_writes_into_it() {
         "the chosen file itself was written, cut to the new length"
     );
     assert_eq!(names_in(folder.path()).len(), 2, "nothing else was made");
+}
+
+/// A file another process holds open without letting it be deleted (what a
+/// program keeping a document open does on Windows) cannot be replaced: the
+/// save answers the system's failure and the file keeps every byte, where
+/// writing into it would empty it first.
+#[test]
+#[cfg(windows)]
+fn a_save_over_a_file_held_open_fails_and_leaves_it_whole() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: no `FILE_SHARE_DELETE`.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("notes.txt");
+    std::fs::write(&target, b"the old, longer contents").expect("a file to replace");
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .open(&target)
+        .expect("the file held open");
+
+    let saved = save_to(&target, b"new");
+
+    assert!(
+        matches!(saved, Err(DialogError::Failed(SystemFailure::Os(_)))),
+        "{saved:?}"
+    );
+    drop(held);
+    assert_eq!(
+        std::fs::read(&target).expect("the file"),
+        b"the old, longer contents",
+        "the file was neither replaced nor written into"
+    );
+    assert_eq!(
+        names_in(folder.path()),
+        ["notes.txt"],
+        "the new file beside it was removed"
+    );
+}
+
+/// The new file a save writes beside the chosen one is never readable by
+/// more users than the file it replaces, at any moment of the write: it is
+/// made with that file's mode, not given it once the contents are in.
+#[test]
+#[cfg(unix)]
+fn a_saves_new_file_is_never_more_readable_than_the_file_it_replaces() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("secret.txt");
+    std::fs::write(&target, b"old").expect("a file to replace");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).expect("its mode");
+
+    // Large enough that the write and its sync outlast many reads of the
+    // folder.
+    let contents = vec![b'x'; 256 << 20];
+    let done = Arc::new(AtomicBool::new(false));
+    let watching = Arc::clone(&done);
+    let watched = folder.path().to_path_buf();
+    let watcher = std::thread::spawn(move || {
+        let mut modes = Vec::new();
+        while !watching.load(Ordering::Acquire) {
+            let Ok(entries) = std::fs::read_dir(&watched) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().ends_with(".flui-save")
+                    && let Ok(metadata) = entry.metadata()
+                {
+                    modes.push(metadata.permissions().mode() & 0o7777);
+                }
+            }
+        }
+        modes
+    });
+
+    let saved = save_to(&target, &contents);
+    done.store(true, Ordering::Release);
+    let modes = watcher.join().expect("the watcher ran to its end");
+
+    assert!(matches!(saved, Ok(Some(_))), "{saved:?}");
+    assert!(
+        !modes.is_empty(),
+        "the new file was seen while the contents were written"
+    );
+    assert!(
+        modes.iter().all(|mode| mode & !0o600 == 0),
+        "the new file was readable beyond its owner: {:?}",
+        modes
+            .iter()
+            .map(|mode| format!("{mode:o}"))
+            .collect::<Vec<String>>()
+    );
 }

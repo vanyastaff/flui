@@ -15,9 +15,11 @@
 //! The dialog is owned by a window, which is what makes it modal to it: a
 //! window whose handle names no Win32 window answers `NoWindow`, and nothing
 //! is shown. The folder a request opens in is named to the dialog as a shell
-//! item, in the form the shell reads ([`super::verbatim`]); a folder the
-//! shell cannot name (gone, unreachable) fails the request with the shell's
-//! code before anything is shown.
+//! item, in the form the shell reads ([`super::verbatim`]); one that is not
+//! there (gone, on a drive unplugged or a share that does not answer) is
+//! left out, and the dialog opens where the system would, as the portal's
+//! and the Apple panels do; one the shell cannot name for another reason
+//! fails the request with the shell's code before anything is shown.
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt as _;
@@ -27,7 +29,10 @@ use std::sync::Arc;
 
 use flui_platform::capability::{Resolver, WindowRef};
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
-use windows::Win32::Foundation::ERROR_CANCELLED;
+use windows::Win32::Foundation::{
+    ERROR_BAD_NET_NAME, ERROR_BAD_NETPATH, ERROR_CANCELLED, ERROR_FILE_NOT_FOUND,
+    ERROR_INVALID_DRIVE, ERROR_NOT_READY, ERROR_PATH_NOT_FOUND, WIN32_ERROR,
+};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
@@ -382,9 +387,31 @@ fn code(error: &windows::core::Error) -> i32 {
     os_code(error.code())
 }
 
-/// Tell `dialog` what `spec` asks of both dialogs. A folder the shell cannot
-/// name (gone, unreachable) fails with the shell's code: the dialog is not
-/// shown somewhere else as if the folder had been honoured.
+/// The Win32 codes the shell names a folder that is not there by: gone
+/// (`ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND`), on a drive letter
+/// nothing is mapped to (`ERROR_INVALID_DRIVE`) or a drive with no medium
+/// (`ERROR_NOT_READY`), on a share that does not answer
+/// (`ERROR_BAD_NETPATH`, `ERROR_BAD_NET_NAME`).
+const FOLDER_NOT_THERE: [WIN32_ERROR; 6] = [
+    ERROR_FILE_NOT_FOUND,
+    ERROR_PATH_NOT_FOUND,
+    ERROR_INVALID_DRIVE,
+    ERROR_NOT_READY,
+    ERROR_BAD_NETPATH,
+    ERROR_BAD_NET_NAME,
+];
+
+/// Whether the shell's `code` for a folder says it is not there.
+fn is_folder_not_there(code: i32) -> bool {
+    FOLDER_NOT_THERE
+        .iter()
+        .any(|not_there| i32::try_from(not_there.0) == Ok(code))
+}
+
+/// Tell `dialog` what `spec` asks of both dialogs. A folder that is not
+/// there (a remembered folder deleted since, a drive unplugged) is left out,
+/// and the dialog opens where the system would, as on every host; a folder
+/// the shell cannot name for another reason fails with its code.
 fn apply_common(dialog: &IFileDialog, spec: &CommonSpec) -> Result<(), i32> {
     // SAFETY: every call below is a checked method of a live dialog on its
     // own apartment thread; each string argument is an `HSTRING` or a
@@ -401,8 +428,11 @@ fn apply_common(dialog: &IFileDialog, spec: &CommonSpec) -> Result<(), i32> {
                 .map_err(|error| code(&error))?;
         }
         if let Some(directory) = &spec.directory {
-            let folder = shell_item(directory).map_err(|error| code(&error))?;
-            dialog.SetFolder(&folder).map_err(|error| code(&error))?;
+            match shell_item(directory).map_err(|error| code(&error)) {
+                Ok(folder) => dialog.SetFolder(&folder).map_err(|error| code(&error))?,
+                Err(code) if is_folder_not_there(code) => {}
+                Err(code) => return Err(code),
+            }
         }
         if !spec.filters.is_empty() {
             let names = spec
@@ -568,7 +598,7 @@ mod tests {
 
     use super::{
         CommonSpec, DialogSystem, FilterSpec, OpenSpec, OsAnswer, OsPick, SaveSpec, WindowsDialogs,
-        apply_common, open_answer, open_spec, save_answer, save_spec,
+        apply_common, is_folder_not_there, open_answer, open_spec, save_answer, save_spec,
     };
     use crate::dialog::{
         Dialog, DialogError, FileDialogCapability, FileDialogs, FileFilter, OpenRequest,
@@ -697,11 +727,12 @@ mod tests {
         assert!(save(&SaveRequest::new().show_hidden()).contains(FOS_OVERWRITEPROMPT));
     }
 
-    /// The shell's own answer for a folder it cannot name, through the
-    /// dialog object it would be shown by. The dialog is made and never
+    /// The shell's own answers for a folder, through the dialog object it
+    /// would be shown by: one that is not there is left out, one it cannot
+    /// name otherwise fails the request. The dialog is made and never
     /// shown.
     #[test]
-    fn a_folder_the_shell_cannot_name_fails_the_request_before_anything_is_shown() {
+    fn a_folder_that_is_gone_is_left_out_and_one_the_shell_cannot_name_fails() {
         let _apartment = crate::win32::threads::Apartment::enter();
         // SAFETY: the dialog is created, used and released on this thread,
         // inside the apartment entered above; it is never shown.
@@ -720,15 +751,25 @@ mod tests {
             "flui-system-no-such-folder-{}",
             std::process::id()
         ));
-        let refused = apply_common(&dialog, &in_folder(gone));
-        assert!(
-            matches!(refused, Err(2 | 3)),
-            "the shell's file or path not found, not a dialog somewhere else: {refused:?}"
+        assert_eq!(
+            apply_common(&dialog, &in_folder(gone.clone())),
+            Ok(()),
+            "a remembered folder deleted since opens the dialog where the system would"
         );
         assert_eq!(
-            open_answer(refused.map(|()| None)),
+            apply_common(&dialog, &in_folder(gone.join("deeper"))),
+            Ok(()),
+            "and so does one whose parent is gone"
+        );
+        let unnamed = apply_common(&dialog, &in_folder(PathBuf::from(r"C:\no<such>folder")));
+        assert!(
+            unnamed.is_err_and(|code| !is_folder_not_there(code)),
+            "a folder the shell cannot name is not one that is merely gone: {unnamed:?}"
+        );
+        assert_eq!(
+            open_answer(unnamed.map(|()| None)),
             Err(DialogError::Failed(SystemFailure::Os(
-                refused.expect_err("checked above")
+                unnamed.expect_err("checked above")
             ))),
             "which the caller hears as the system's failure"
         );

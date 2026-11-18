@@ -35,8 +35,14 @@ const ANY_TYPE: &str = "*/*";
 ///
 /// One input offers one filter, so the request's filters become their
 /// union: the attribute matches exactly the files one of them matches, and
-/// the filters' names are not shown.
+/// the filters' names are not shown. A filter of every file or one that
+/// names a file exactly makes it empty, every file: no attribute value
+/// names a file by its whole name, and the handle holds each pick to the
+/// filters (ADR-0372 §4).
 pub(crate) fn accept_attribute(filters: &[FileFilter]) -> String {
+    if filters.iter().any(shows_every_file) {
+        return String::new();
+    }
     let mut patterns: Vec<String> = Vec::new();
     for filter in filters {
         for extension in filter.extensions() {
@@ -54,6 +60,12 @@ pub(crate) fn accept_attribute(filters: &[FileFilter]) -> String {
     patterns.join(",")
 }
 
+/// Whether `filter` is one a browser can only meet by showing every file:
+/// a filter of every file, or one that names a file exactly.
+fn shows_every_file(filter: &FileFilter) -> bool {
+    filter.is_all_files() || !filter.file_names().is_empty()
+}
+
 /// One entry of a File System Access picker's `types`: a filter's name, and
 /// its `accept` record of MIME types to the extensions under each.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,18 +74,35 @@ pub(crate) struct PickerType<'a> {
     pub(crate) accept: Vec<(&'a str, Vec<String>)>,
 }
 
+/// What a File System Access picker is given for a request's filters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PickerTypes<'a> {
+    /// Its `types`, one per filter that has an extension or a MIME type.
+    pub(crate) types: Vec<PickerType<'a>>,
+    /// Whether it keeps its own entry of every file (its
+    /// `excludeAcceptAllOption` is the opposite): where the request has no
+    /// filter, or one of every file, or one that names a file exactly, which
+    /// no type expresses and which the picker reaches through that entry.
+    pub(crate) accepts_all: bool,
+}
+
 /// The `types` of a File System Access picker for `filters`, one per
-/// filter in order; `None` when an extension is one the API refuses (a `-`
-/// or `_`, or longer than [`MAX_PICKER_EXTENSION_LEN`] with its `.`), so the
-/// request goes to `<input type=file>`, whose `accept` takes any.
+/// filter in order, and whether it keeps its entry of every file; `None`
+/// when an extension is one the API refuses (a `-` or `_`, or longer than
+/// [`MAX_PICKER_EXTENSION_LEN`] with its `.`), so the request goes to
+/// `<input type=file>`, whose `accept` takes any.
 ///
 /// A filter's extensions go under its first MIME type, or under `*/*` when
 /// it has none; its other MIME types carry none. The picker matches the
 /// union of what each key and extension names, which is the filter's
-/// meaning (ADR-0360).
-pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<Vec<PickerType<'_>>> {
-    filters
+/// meaning (ADR-0360). A filter of every file is the picker's own entry of
+/// every file rather than a type; one that names a file is a type of its
+/// extensions and MIME types, when it has any, and its file names are
+/// reached through that entry (ADR-0372 §4).
+pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<PickerTypes<'_>> {
+    let types = filters
         .iter()
+        .filter(|filter| !filter.extensions().is_empty() || !filter.mime_types().is_empty())
         .map(|filter| {
             let extensions = filter
                 .extensions()
@@ -96,7 +125,11 @@ pub(crate) fn picker_types(filters: &[FileFilter]) -> Option<Vec<PickerType<'_>>
                 accept,
             })
         })
-        .collect::<Option<Vec<PickerType<'_>>>>()
+        .collect::<Option<Vec<PickerType<'_>>>>()?;
+    Some(PickerTypes {
+        types,
+        accepts_all: filters.is_empty() || filters.iter().any(shows_every_file),
+    })
 }
 
 /// Whether the File System Access API takes `dotted` (an extension with its
@@ -470,11 +503,10 @@ mod tests {
     fn a_picker_type_keeps_each_filter_and_puts_extensions_under_a_type() {
         let images = images();
         let text = FileFilter::new("Text").with_extension("txt");
-        let types = picker_types(std::slice::from_ref(&images))
-            .into_iter()
-            .chain(picker_types(std::slice::from_ref(&text)))
-            .flatten()
-            .collect::<Vec<PickerType<'_>>>();
+        let filters = [images, text];
+        let types = picker_types(&filters)
+            .expect("every extension is taken")
+            .types;
         assert_eq!(
             types,
             [
@@ -492,8 +524,47 @@ mod tests {
             .with_mime_type("image/png")
             .with_mime_type("image/*");
         assert_eq!(
-            picker_types(std::slice::from_ref(&two_types)).expect("mime types are taken")[0].accept,
+            picker_types(std::slice::from_ref(&two_types))
+                .expect("mime types are taken")
+                .types[0]
+                .accept,
             vec![("image/png", Vec::new()), ("image/*", Vec::new())]
+        );
+    }
+
+    #[test]
+    fn every_file_and_a_named_file_keep_the_browsers_entry_of_every_file() {
+        let every = FileFilter::all_files("All files");
+        let build = FileFilter::new("Build files")
+            .with_file_name("Makefile")
+            .with_extension("mk");
+        let make_only = FileFilter::new("Makefiles").with_file_name("Makefile");
+        // The filters, the descriptions of the picker's types, whether it
+        // keeps its entry of every file, and the input's `accept`.
+        let cases: [(Vec<FileFilter>, &[&str], bool, &str); 5] = [
+            (vec![images()], &["Images"], false, ".png,.jpg,image/webp"),
+            (vec![images(), every.clone()], &["Images"], true, ""),
+            (vec![every], &[], true, ""),
+            (vec![images(), build], &["Images", "Build files"], true, ""),
+            (vec![make_only], &[], true, ""),
+        ];
+        for (filters, descriptions, accepts_all, accept) in cases {
+            let picker = picker_types(&filters).expect("every extension is taken");
+            assert_eq!(
+                picker
+                    .types
+                    .iter()
+                    .map(|picker_type| picker_type.description)
+                    .collect::<Vec<&str>>(),
+                descriptions,
+                "{filters:?}"
+            );
+            assert_eq!(picker.accepts_all, accepts_all, "{filters:?}");
+            assert_eq!(accept_attribute(&filters), accept, "{filters:?}");
+        }
+        assert!(
+            picker_types(&[]).expect("no filter").accepts_all,
+            "no filter shows every file"
         );
     }
 
@@ -523,7 +594,11 @@ mod tests {
         let filters = [images()];
         assert_eq!(save_name(Some("photo"), &filters), "photo.png");
         assert_eq!(save_name(Some("photo.jpeg"), &filters), "photo.jpeg");
-        assert_eq!(save_name(Some(".profile"), &filters), ".profile.png");
+        assert_eq!(
+            save_name(Some(".profile"), &filters),
+            ".profile",
+            "a hidden file's name keeps its leading dot and gets no extension, as on Windows"
+        );
         assert_eq!(save_name(Some("notes."), &filters), "notes.png");
         assert_eq!(save_name(None, &filters), "download.png");
         assert_eq!(save_name(None, &[]), "download");

@@ -261,6 +261,15 @@ impl LauncherBackend for WindowsLauncher {
     }
 }
 
+/// The name a held file is judged and handed on by, from the final name the
+/// system answered for its handle: without the verbatim prefix, which the
+/// shell does not read. A share stays a share without it
+/// (`\\?\UNC\server\share\…` is `\\server\share\…`), so the locality judge
+/// still refuses it.
+fn held_name(answered: &Path) -> PathBuf {
+    without_verbatim(answered)
+}
+
 /// The real shell.
 struct Shell;
 
@@ -306,10 +315,7 @@ impl ShellSystem for Shell {
             }
             if written < buffer.len() {
                 buffer.truncate(written);
-                // The final name carries the verbatim prefix, which the
-                // shell does not read; a share stays a share without it, so
-                // the locality judge still refuses it.
-                break without_verbatim(Path::new(&OsString::from_wide(&buffer)));
+                break held_name(Path::new(&OsString::from_wide(&buffer)));
             }
             // Too small: `written` is the length needed, NUL included. A
             // path longer than the system's own limit is not one.
@@ -446,7 +452,8 @@ mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
     use super::{
-        Shell, ShellSystem, Trashed, WindowsLauncher, launch_error, open_document, open_uri, trash,
+        Shell, ShellSystem, Trashed, WindowsLauncher, held_name, launch_error, open_document,
+        open_uri, trash,
     };
     use crate::testing::win32::{FakeShell, TestOwner};
     use crate::win32::ShellThreads;
@@ -500,24 +507,46 @@ mod tests {
         );
     }
 
+    /// Each final name `GetFinalPathNameByHandleW` answers is judged as the
+    /// held file's name ([`held_name`]): a share, with or without the
+    /// verbatim prefix it is answered with, is still a share.
     #[test]
     fn a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led() {
         let asked = Path::new(r"C:\docs\report.pdf");
-        for led_to in [
-            r"\\?\UNC\server\share\report.pdf",
-            r"\\server\share\report.pdf",
-            r"\\?\GLOBALROOT\Device\Mup\server\share\report.pdf",
+        for (answered, held) in [
+            (
+                r"\\?\UNC\server\share\report.pdf",
+                r"\\server\share\report.pdf",
+            ),
+            (
+                r"\\?\GLOBALROOT\Device\Mup\server\share\report.pdf",
+                r"\\?\GLOBALROOT\Device\Mup\server\share\report.pdf",
+            ),
         ] {
-            let shell = FakeShell::holding(led_to);
+            assert_eq!(
+                held_name(Path::new(answered)),
+                Path::new(held),
+                "a share keeps its server and share"
+            );
+            let shell = FakeShell::holding(held);
             assert_eq!(
                 open_document(&shell, asked, None),
                 Err(LaunchError::NotLocal),
-                "{led_to}"
+                "{answered}"
             );
-            assert_eq!(shell.executed(), Vec::<String>::new(), "{led_to}");
+            assert_eq!(shell.executed(), Vec::<String>::new(), "{answered}");
         }
-        let verbatim_drive = FakeShell::holding(r"\\?\D:\docs\report.pdf");
-        assert_eq!(open_document(&verbatim_drive, asked, None), Ok(()));
+        assert_eq!(
+            held_name(Path::new(r"\\?\D:\docs\report.pdf")),
+            Path::new(r"D:\docs\report.pdf")
+        );
+        let drive = FakeShell::holding(r"D:\docs\report.pdf");
+        assert_eq!(open_document(&drive, asked, None), Ok(()));
+        assert_eq!(
+            drive.executed(),
+            [r"D:\docs\report.pdf".to_owned()],
+            "a local drive is handed on in the form the shell reads"
+        );
     }
 
     #[test]

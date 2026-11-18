@@ -165,11 +165,11 @@ impl FileDialogBackend for WebDialogs {
             (Some(picker), Some(types)) => {
                 let options = Object::new();
                 set(&options, "multiple", &request.is_multiple().into());
-                set(&options, "types", &picker_types(&types));
+                set(&options, "types", &picker_types(&types.types));
                 set(
                     &options,
                     "excludeAcceptAllOption",
-                    &(!request.filters.is_empty()).into(),
+                    &(!types.accepts_all).into(),
                 );
                 match call_promise(&picker, self.page.view(), &options) {
                     Ok(promise) => self.open_with_picker(promise, request, answer, &hold),
@@ -207,11 +207,11 @@ impl FileDialogBackend for WebDialogs {
         }
         let options = Object::new();
         set(&options, "suggestedName", &JsValue::from_str(&name));
-        set(&options, "types", &picker_types(&types));
+        set(&options, "types", &picker_types(&types.types));
         set(
             &options,
             "excludeAcceptAllOption",
-            &(!request.filters.is_empty()).into(),
+            &(!types.accepts_all).into(),
         );
         match call_promise(&picker, self.page.view(), &options) {
             Ok(promise) => self.save_with_picker(promise, name, contents, request.filters, answer),
