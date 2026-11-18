@@ -920,7 +920,7 @@ recording cache replays it.
 
 **Where the lists live.** A record keeps its chunks' sources (entry, owner,
 ordinal, inputs) as `RecordedChunks`: zero or one inline, more in a shared
-`Arc<Vec<_>>`. The pass reads them through that handle, seals the new list
+`Rc<Vec<_>>` (the owner is `!Send`). The pass reads them through that handle, seals the new list
 into the staged patch and lets go of the old one when the content ends;
 `scene_applied` writes the new list into the room of the replaced one, or of
 one a removed record left (`SpareChunkLists`). Lookups scan forward from a

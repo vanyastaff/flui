@@ -26,6 +26,7 @@
 //! ([`SpareChunkLists`]).
 
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
@@ -97,7 +98,7 @@ pub(super) enum RecordedChunks {
     Inline(Option<ChunkSource>),
     /// Two or more, in the record's own list, shared with the pass that
     /// repaints the content while it builds over them.
-    Shared(Arc<Vec<ChunkSource>>),
+    Shared(Rc<Vec<ChunkSource>>),
 }
 
 impl RecordedChunks {
@@ -140,11 +141,11 @@ impl RecordedChunks {
             Some(Self::Shared(list)) => list,
             _ => spares.take(staged.len()),
         };
-        if let Some(room) = Arc::get_mut(&mut list) {
+        if let Some(room) = Rc::get_mut(&mut list) {
             room.clear();
             room.extend_from_slice(staged);
         } else {
-            list = Arc::new(staged.to_vec());
+            list = Rc::new(staged.to_vec());
         }
         *self = Self::Shared(list);
     }
@@ -157,7 +158,7 @@ const SPARE_LISTS: usize = 64;
 /// into: a list scrolled out of view serves one scrolled in. Bounded by
 /// count and by each list's room.
 #[derive(Debug, Default)]
-pub(super) struct SpareChunkLists(SmallVec<[Arc<Vec<ChunkSource>>; SPARE_LISTS]>);
+pub(super) struct SpareChunkLists(SmallVec<[Rc<Vec<ChunkSource>>; SPARE_LISTS]>);
 
 impl SpareChunkLists {
     /// Keeps the list of a record that left, if it is the record's alone
@@ -166,7 +167,7 @@ impl SpareChunkLists {
         let RecordedChunks::Shared(mut list) = chunks else {
             return;
         };
-        let Some(room) = Arc::get_mut(&mut list) else {
+        let Some(room) = Rc::get_mut(&mut list) else {
             return;
         };
         if room.capacity() == 0 || room.capacity() > kept_capacity || self.0.len() >= SPARE_LISTS {
@@ -177,11 +178,11 @@ impl SpareChunkLists {
     }
 
     /// A spare list with room for `len` sources, or a new one.
-    fn take(&mut self, len: usize) -> Arc<Vec<ChunkSource>> {
+    fn take(&mut self, len: usize) -> Rc<Vec<ChunkSource>> {
         self.0
             .iter()
             .position(|list| list.capacity() >= len)
-            .map_or_else(Arc::default, |at| self.0.swap_remove(at))
+            .map_or_else(Rc::default, |at| self.0.swap_remove(at))
     }
 }
 
@@ -349,7 +350,7 @@ mod tests {
             chunks.push(chunk);
         }
         let content = Arc::new(builder.finish());
-        let recorded = RecordedChunks::Shared(Arc::new(sources));
+        let recorded = RecordedChunks::Shared(Rc::new(sources));
         let previous = PreviousChunks::new(1, &content, &recorded).expect("four chunks");
         (previous, chunks, lineage)
     }
@@ -408,7 +409,7 @@ mod tests {
             inputs: None,
         };
         let staged = [source(1), source(2), source(3)];
-        let commit = |replaced: Arc<Vec<ChunkSource>>| {
+        let commit = |replaced: Rc<Vec<ChunkSource>>| {
             let mut chunks = RecordedChunks::Staged(1..3);
             chunks.commit(
                 &staged,
@@ -425,19 +426,19 @@ mod tests {
         };
         let mut alone = Vec::with_capacity(8);
         alone.push(source(9));
-        let alone = Arc::new(alone);
-        let room = Arc::as_ptr(&alone);
+        let alone = Rc::new(alone);
+        let room = Rc::as_ptr(&alone);
         let written = commit(alone);
         assert_eq!(
-            Arc::as_ptr(&written),
+            Rc::as_ptr(&written),
             room,
             "written in the replaced list's room"
         );
 
-        let shared = Arc::new(vec![source(9)]);
-        let written = commit(Arc::clone(&shared));
+        let shared = Rc::new(vec![source(9)]);
+        let written = commit(Rc::clone(&shared));
         assert!(
-            !Arc::ptr_eq(&written, &shared),
+            !Rc::ptr_eq(&written, &shared),
             "a shared list is not written"
         );
         assert_eq!(shared[0].owner, RenderId::new(9), "nor changed");
