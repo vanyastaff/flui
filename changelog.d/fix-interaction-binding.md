@@ -20,5 +20,4 @@
 
 - **`flui-interaction`**: the crate root no longer re-exports `ScrollSignal`, `ScrollDispatch` and
   `ScrollSequenceEnd`, which are gone; `ScrollCause`, `ScrollDevice` and `ScrollEndReason` are
-  named from `flui_widgets`. `RoutePanic`, which `InteractionDispatchHandle::invoke_pointer_route`
-  returns, is named `flui_interaction::pointer::RoutePanic`.
+  named from `flui_widgets`.

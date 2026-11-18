@@ -1,5 +1,6 @@
 //! Admission and identity of one owner-local pointer sequence.
 
+use crate::containment::keep_first;
 use std::{
     cell::{Cell, RefCell},
     num::NonZeroU64,
@@ -15,7 +16,7 @@ use flui_foundation::{
 use flui_platform::EventTime;
 
 use crate::{
-    containment::RoutePanic,
+    containment::caught,
     events::{PointerEvent, PointerEventExt, PointerKind, TouchpadSwipePhase},
     gesture::arena::{
         AdmissionContext, ContactRole, GestureArena, GestureArenaEntry, GestureArenaMember,
@@ -453,14 +454,14 @@ impl PrimaryContact {
             let entry = self.entry();
             // The withdrawal commits before it runs user code (other members,
             // diagnostics); a failure there is held until the contest ended.
-            let mut first = RoutePanic::capture(|| {
+            let mut first = caught(|| {
                 let _ = self.withdraw();
             });
             // No binding sweeps a self-driven arena on Up: the contest this
             // member left still ends here, among the members that remain.
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| {
+                caught(|| {
                     if self.membership.arena.sweep_model() == SweepModel::SelfDriven
                         && let Some(entry) = entry
                     {
@@ -480,7 +481,7 @@ impl PrimaryContact {
             contact.deadline_registration.withdraw();
         }
         let entry = self.entry();
-        let failure = RoutePanic::capture(|| {
+        let failure = caught(|| {
             if self.membership.arena.sweep_model() == SweepModel::SelfDriven
                 && let Some(entry) = entry
             {
@@ -499,9 +500,7 @@ impl PrimaryContact {
             }
         };
         drop(outgoing);
-        if let Some(failure) = failure {
-            failure.resume();
-        }
+        failure.resume();
         tracing::debug!(name: "recognizer.stop_tracking", target: "flui.input", pointer = ?snapshot.pointer,
             event = %crate::gesture::observability::GestureEvent::StoppedTracking,
             "recognizer stopped tracking");

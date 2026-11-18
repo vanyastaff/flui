@@ -12,6 +12,7 @@
 //! buffered; the verdict either drops them (a feed won) or replays them to the
 //! scroll route (a scroll target won).
 
+use crate::containment::keep_first;
 use std::{
     cell::{Cell, RefCell},
     num::NonZeroU64,
@@ -32,7 +33,7 @@ use super::{
 };
 use crate::{
     DragAxis, DragGestureRecognizer, GestureRecognizer,
-    containment::RoutePanic,
+    containment::{FirstPanic, caught, try_run},
     events::{CancelReason, PointerCancel, PointerEvent, PointerKind, PointerSource},
     ids::InputSurface,
     pointer::{HitTestEntry, HitTestResult, PointerTarget, active_dispatch_handle},
@@ -84,7 +85,7 @@ impl GestureBinding {
         event: &ScrollEvent,
         admission: &ScrollAdmission,
         fresh: &HitTestResult,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) -> ContactOutcome {
         match admission {
             ScrollAdmission::Active(latch) => {
@@ -144,10 +145,10 @@ impl GestureBinding {
                 if last.arbitration.is_some() {
                     // A move still waiting for its frame may be the one that
                     // crosses slop.
-                    let flushed = RoutePanic::capture(|| {
+                    let flushed = caught(|| {
                         self.flush_pending_moves();
                     });
-                    RoutePanic::preserve_first(first, flushed, "scroll-fed contact flush");
+                    keep_first(first, flushed, "scroll-fed contact flush");
                 }
                 let before_release = last
                     .arbitration
@@ -175,7 +176,7 @@ impl GestureBinding {
         &self,
         contacts: Vec<ScrollContact>,
         time: flui_platform::EventTime,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) {
         for contact in contacts {
             self.cancel_scroll_contact(contact.surface, &contact, time, first);
@@ -190,7 +191,7 @@ impl GestureBinding {
         latch: &ScrollSequence,
         contact: ScrollContact,
         event: &ScrollEvent,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) -> ContactOutcome {
         let Some(moved) = step_scroll_contact(&contact, event) else {
             latch.contact.take();
@@ -224,7 +225,7 @@ impl GestureBinding {
         surface: InputSurface,
         contact: &ScrollContact,
         time: flui_platform::EventTime,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) {
         let cancel = PointerEvent::Cancel(PointerCancel::new(
             contact.pointer,
@@ -244,21 +245,19 @@ impl GestureBinding {
         surface: InputSurface,
         event: PointerEvent,
         route: Option<HitTestResult>,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) {
-        let delivered = RoutePanic::capture(|| {
-            let mut incoming = None;
+        let delivered = caught(|| {
+            let mut incoming = FirstPanic::new();
             self.handle_pointer_event_after_signal_withdrawal(
                 surface,
                 &event,
                 |_| route.unwrap_or_default(),
                 &mut incoming,
             );
-            if let Some(panic) = incoming {
-                panic.resume();
-            }
+            incoming.resume();
         });
-        RoutePanic::preserve_first(first, delivered, "scroll-fed contact dispatch");
+        keep_first(first, delivered, "scroll-fed contact dispatch");
     }
 
     /// The entries of `fresh` that take part in a scroll-fed contact, and the
@@ -271,7 +270,7 @@ impl GestureBinding {
     fn scroll_contact_path(
         &self,
         fresh: &HitTestResult,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) -> (HitTestResult, Option<Rc<Arbitration>>) {
         let mut path = HitTestResult::new();
         let Ok(handle) = active_dispatch_handle() else {
@@ -300,10 +299,10 @@ impl GestureBinding {
                 continue;
             };
             // A scroll target with nowhere to go sits the contest out.
-            let eligible = match RoutePanic::try_run(|| can_scroll()) {
+            let eligible = match try_run(|| can_scroll()) {
                 Ok(eligible) => eligible,
                 Err(failure) => {
-                    RoutePanic::preserve_first(first, Some(failure), "scroll target eligibility");
+                    keep_first(first, failure, "scroll target eligibility");
                     false
                 }
             };

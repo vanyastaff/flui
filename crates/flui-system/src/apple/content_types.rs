@@ -21,7 +21,7 @@
 //! offered beside others allows every file. A filter that names a file
 //! exactly (`Makefile`) has no content type, so a request with one leaves
 //! the dialog allowing every type ([`ContentFilter::restricts_by_type`]) and
-//! each item to the contract's rule (ADR-0372).
+//! each item to the contract's rule (ADR-0374).
 //!
 //! `UTType` is macOS 11 and iOS 14, in a framework the floors lack, so the
 //! class is looked up at run time behind `HasContentTypes`, never linked.
@@ -68,7 +68,7 @@ impl ContentFilter {
 
     /// Whether the dialog itself can be told what to allow: not when a
     /// filter names a file exactly, which no content type and no file type
-    /// expresses (ADR-0372). The dialog then allows every file, and what the
+    /// expresses (ADR-0374). The dialog then allows every file, and what the
     /// request means is left to the rule each item is judged by.
     pub(crate) fn restricts_by_type(&self) -> bool {
         self.filters
