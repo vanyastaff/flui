@@ -834,7 +834,7 @@ pub(crate) fn assistive_technology_reads_a_menu_of_menu_items() {
     let (items, archive) = {
         let tree = mounted.tree();
         let menu = tree.find(Role::Menu).expect("the menu is published");
-        let min_target = flui_interaction::GestureSettings::default().min_target();
+        let min_target = flui_interaction::gesture::GestureSettings::default().min_target();
         let (mut items, mut widths) = (Vec::new(), Vec::new());
         let mut pending: Vec<_> = menu.child_ids().iter().rev().copied().collect();
         while let Some(id) = pending.pop() {

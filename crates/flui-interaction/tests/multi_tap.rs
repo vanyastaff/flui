@@ -8,7 +8,10 @@ use flui_interaction::events::{
 };
 use flui_interaction::gesture::GestureArena;
 use flui_interaction::pointer::PointerDispatch;
-use flui_interaction::{GestureRecognizer, MultiTapGestureRecognizer, PointerId};
+use flui_interaction::{
+    gesture::{GestureRecognizer, MultiTapGestureRecognizer},
+    ids::PointerId,
+};
 
 fn contact(id: u64) -> PointerId {
     PointerId::new(std::num::NonZeroU64::new(id).expect("nonzero contact"))
@@ -34,7 +37,7 @@ fn released_contacts_complete_once_in_either_order() {
         let captured = Rc::clone(&taps);
         let recognizer = MultiTapGestureRecognizer::builder(
             GestureArena::new(),
-            flui_interaction::MultiTapCount::TWO,
+            flui_interaction::gesture::MultiTapCount::TWO,
         )
         .on_multi_tap(move |details| captured.borrow_mut().push(details))
         .build();
@@ -69,7 +72,7 @@ fn secondary_motion_uses_its_own_slop_origin() {
     let captured = Rc::clone(&taps);
     let recognizer = MultiTapGestureRecognizer::builder(
         GestureArena::new(),
-        flui_interaction::MultiTapCount::TWO,
+        flui_interaction::gesture::MultiTapCount::TWO,
     )
     .on_multi_tap(move |_| *captured.borrow_mut() += 1)
     .build();
@@ -91,7 +94,7 @@ fn unrelated_cancel_does_not_erase_the_pair() {
     let captured = Rc::clone(&taps);
     let recognizer = MultiTapGestureRecognizer::builder(
         GestureArena::new(),
-        flui_interaction::MultiTapCount::TWO,
+        flui_interaction::gesture::MultiTapCount::TWO,
     )
     .on_multi_tap(move |_| *captured.borrow_mut() += 1)
     .build();
@@ -112,7 +115,7 @@ fn tracked_cancel_allows_a_new_pair() {
     let captured = Rc::clone(&taps);
     let recognizer = MultiTapGestureRecognizer::builder(
         GestureArena::new(),
-        flui_interaction::MultiTapCount::TWO,
+        flui_interaction::gesture::MultiTapCount::TWO,
     )
     .on_multi_tap(move |_| *captured.borrow_mut() += 1)
     .build();

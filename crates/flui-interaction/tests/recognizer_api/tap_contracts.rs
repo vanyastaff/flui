@@ -5,13 +5,16 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer, GestureSettings,
-    GestureSettingsSource, PointerId, TapDownDetails, TapGestureRecognizer, TapUpDetails,
     events::{
         PointerButton, PointerEventExt, PointerKind, make_down_event,
         make_down_event_for_id_with_button, make_move_event, make_up_event,
         make_up_event_for_id_with_button,
     },
+    gesture::{
+        CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer,
+        GestureSettings, GestureSettingsSource, TapDownDetails, TapGestureRecognizer, TapUpDetails,
+    },
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 
@@ -81,7 +84,7 @@ fn an_undecided_press_shows_before_its_release() {
         (50, Then::Released, &["down", "up", "tap"]),
     ];
     for (wait, then, heard) in rows {
-        let clock = flui_interaction::ManualClock::new();
+        let clock = flui_foundation::ManualClock::new();
         let arena = GestureArena::binding_driven(std::sync::Arc::new(clock.clone()));
         let log = Rc::new(RefCell::new(Vec::new()));
         let entry = |name: &'static str| {
@@ -485,7 +488,7 @@ fn cancel_during_up_suppresses_tap() {
 }
 
 fn cancel_reuses_double_tap() {
-    let clock = flui_interaction::ManualClock::new();
+    let clock = flui_foundation::ManualClock::new();
     let arena = GestureArena::with_clock(std::sync::Arc::new(clock.clone()));
     let doubles = Rc::new(Cell::new(0));
     let recognizer = DoubleTapGestureRecognizer::builder(arena.clone())

@@ -16,14 +16,9 @@
 
 mod aggregator;
 mod classify;
-mod diagnostics;
 mod expectations;
 mod guards;
 mod lane_args;
-mod miri_scope;
-mod perf_scope;
-mod thread_positions;
-mod without_agent_scope;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -80,11 +75,7 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
     } else {
         match &args.files {
             Some(files) => classify::classify(&repo, files)?,
-            None => classify::classify_change(
-                &repo,
-                &repo.changed_files(&args.base, args.worktree)?,
-                Some(&repo.changed_lines(&args.base, args.worktree)?),
-            )?,
+            None => classify::classify(&repo, &repo.changed_files(&args.base, args.worktree)?)?,
         }
     };
     let values = lane_args::lane_args(&repo, &scope, event)?;
@@ -134,34 +125,9 @@ fn render(values: &LaneArgs, package_count: usize, format: Format) -> String {
             } else {
                 ""
             };
-            let trybuild = if values.trybuild_required {
-                "  [trybuild suites required]"
-            } else {
-                ""
-            };
-            let positions = if values.send_positions_required {
-                "  [send-positions required]"
-            } else {
-                ""
-            };
-            let perf = if values.perf_required {
-                "  [perf-gates required]"
-            } else {
-                ""
-            };
-            let miri = if values.miri_required {
-                "  [miri required]"
-            } else {
-                ""
-            };
-            let without_agent = if values.without_agent_required {
-                "  [test-without-agent required]"
-            } else {
-                ""
-            };
             let _ = writeln!(
                 out,
-                "lane: {}, mode: {}{heavy}{trybuild}{positions}{miri}{perf}{without_agent}  ({})",
+                "lane: {}, mode: {}{heavy}  ({})",
                 values.lane.as_str(),
                 values.mode,
                 values.reason
@@ -234,16 +200,9 @@ pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
         full: list("FULL_JOBS")?,
     };
     let (lane, event) = (env("LANE")?, env("EVENT")?);
-    let mut asked = BTreeSet::new();
-    for on_demand in aggregator::ON_DEMAND {
-        if env(&on_demand.env())? == "true" {
-            asked.insert(on_demand.output);
-        }
-    }
     let plan = aggregator::Plan {
         result: needs.get("plan").map(String::as_str),
         lane: &lane,
-        asked,
     };
     let ci_yml = classify::read_normalised(&repo_root().join(".github/workflows/ci.yml"))
         .context("reading .github/workflows/ci.yml")?;
@@ -266,12 +225,6 @@ mod tests {
             lane: lane_args::Lane::Wide,
             mode: "packages".to_owned(),
             heavy_required: false,
-            trybuild_required: false,
-            size_required: false,
-            send_positions_required: false,
-            miri_required: false,
-            perf_required: false,
-            without_agent_required: false,
             reason: "changed: flui-material; plus 2 dependents".to_owned(),
             packages: "flui flui-material flui-web-demo".to_owned(),
             pkg_args: "-p flui -p flui-material -p flui-web-demo".to_owned(),
@@ -285,7 +238,6 @@ mod tests {
             cross_ios: true,
             wasm_args: "-p flui -p flui-material -p flui-web-demo".to_owned(),
             wasm_facade: true,
-            hack_args: String::new(),
             doc_args: "-p flui -p flui-material -p flui-web-demo --features flui/testing"
                 .to_owned(),
             doctest_args: "-p flui -p flui-material".to_owned(),
@@ -294,11 +246,11 @@ mod tests {
 
     fn github_format_is_one_line_per_key() {
         let out = render(&sample(), 3, Format::Github);
-        let expected = "lane=wide\nmode=packages\nheavy_required=false\ntrybuild_required=false\nsize_required=false\nsend_positions_required=false\nmiri_required=false\nperf_required=false\nwithout_agent_required=false\nreason=changed: flui-material; plus 2 dependents\n\
+        let expected = "lane=wide\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
              packages=flui flui-material flui-web-demo\npkg_args=-p flui -p flui-material -p flui-web-demo\n\
              test_args=-p flui -p flui-material -p flui-web-demo\nfeatures=--features flui/cupertino\n\
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
-             wasm_args=-p flui -p flui-material -p flui-web-demo\nwasm_facade=true\nhack_args=\nfeatures_required=false\n\
+             wasm_args=-p flui -p flui-material -p flui-web-demo\nwasm_facade=true\n\
              doc_args=-p flui -p flui-material -p flui-web-demo --features flui/testing\n\
              doctest_args=-p flui -p flui-material\n";
         assert_eq!(out, expected);
@@ -310,14 +262,13 @@ mod tests {
     fn shell_format_quotes_like_shlex() {
         let out = render(&sample(), 3, Format::Shell);
         assert!(
-            out.starts_with("LANE=wide\nMODE=packages\nHEAVY_REQUIRED=false\nTRYBUILD_REQUIRED=false\nSIZE_REQUIRED=false\nSEND_POSITIONS_REQUIRED=false\nMIRI_REQUIRED=false\nPERF_REQUIRED=false\nWITHOUT_AGENT_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
+            out.starts_with("LANE=wide\nMODE=packages\nHEAVY_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
             "{out}"
         );
         assert!(
             out.ends_with("\nDOCTEST_ARGS='-p flui -p flui-material'\n"),
             "{out}"
         );
-        assert!(out.contains("\nHACK_ARGS=''\n"), "{out}");
         assert!(
             out.contains("\nFEATURES='--features flui/cupertino'\n"),
             "{out}"

@@ -54,7 +54,7 @@ use flui_interaction::events::{
     PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
-use flui_interaction::{PointerEvent, PointerId};
+use flui_interaction::{events::PointerEvent, ids::PointerId};
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerMove, PointerPosition, PointerPress, PointerRelease,

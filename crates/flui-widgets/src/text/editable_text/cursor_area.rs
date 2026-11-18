@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_foundation::geometry::Bounds;
-use flui_interaction::TextInputHandle;
+use flui_interaction::text_input::TextInputHandle;
 use flui_platform::text_store::OwnerCalls;
 use flui_rendering::pipeline::PipelineCell;
 

@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::ManualClock;
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{
     PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
@@ -16,8 +17,13 @@ use flui_interaction::events::{
 use flui_interaction::gesture::GestureSettings;
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureBinding, GestureRecognizer, HitTestResult,
-    LongPressGestureRecognizer, ManualClock, PointerId, PointerRouteHandler, TapGestureRecognizer,
+    binding::GestureBinding,
+    gesture::{
+        DragAxis, DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer,
+        TapGestureRecognizer,
+    },
+    ids::PointerId,
+    pointer::{HitTestResult, PointerRouteHandler},
 };
 use flui_platform::EventTime;
 
@@ -187,7 +193,7 @@ fn replay(recording: &[(Duration, Recorded)], unmount_drag_at: Option<Duration>)
         match input {
             Recorded::Pointer(event) => {
                 let _ = binding.dispatch_pointer_on(
-                    flui_interaction::InputSurface::Window,
+                    flui_interaction::ids::InputSurface::Window,
                     event,
                     |_| HitTestResult::new(),
                 );

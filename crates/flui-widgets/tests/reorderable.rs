@@ -321,7 +321,7 @@ fn mouse_drag(laid: &LaidOut, from: (f64, f64), to: (f64, f64)) {
 }
 
 fn touch(laid: &LaidOut, id: u64, (x, y): (f64, f64), phase: u8) {
-    let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero contact");
+    let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero contact");
     let position = Offset::new(x, y);
     let event = match phase {
         0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
@@ -483,7 +483,7 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
     settle(&mut laid);
     assert_eq!(shelf.moves(), [], "Escape cancels the drag");
 
-    let pointer = flui_interaction::PointerId::try_from(9).expect("nonzero contact");
+    let pointer = flui_interaction::ids::PointerId::try_from(9).expect("nonzero contact");
     let at = |index: usize| {
         let (x, y) = row_at(index, HANDLE_X);
         Offset::new(x, y)

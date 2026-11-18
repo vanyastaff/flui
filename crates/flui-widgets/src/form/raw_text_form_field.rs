@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use flui_interaction::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextStyle;
 use flui_platform::text_store::TextInputOptions;

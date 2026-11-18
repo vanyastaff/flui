@@ -11,9 +11,14 @@ use flui_foundation::geometry::Point;
 use flui_interaction::__runtime::{CloseMode, close_gestures};
 use flui_interaction::gesture::GestureContest;
 use flui_interaction::{
-    ArenaMembership, CancelOutcome, GestureArenaEntry, GestureArenaMember, GestureBinding,
-    GestureRecognizer, HitTestEntry, HitTestResult, InteractionLane, PointerDispatch,
-    PointerTarget, RecognizerSet, RenderId,
+    binding::GestureBinding,
+    gesture::{
+        ArenaMembership, CancelOutcome, GestureArenaEntry, GestureArenaMember, GestureRecognizer,
+        RecognizerSet,
+    },
+    pointer::{
+        HitTestEntry, HitTestResult, InteractionLane, PointerDispatch, PointerTarget, RenderId,
+    },
 };
 use flui_platform::EventTime;
 use flui_platform::pointer::{

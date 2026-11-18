@@ -520,9 +520,9 @@ struct BackgroundDeadline {
 }
 
 impl flui_interaction::gesture::GestureArenaMember for BackgroundDeadline {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.due.get()

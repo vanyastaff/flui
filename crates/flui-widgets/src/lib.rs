@@ -392,10 +392,11 @@ pub use flui_rendering::hit_testing::{
 // this type without reaching past `flui-widgets` into `flui-rendering`.
 pub use flui_rendering::view::ScrollPosition;
 // Details a `GestureDetector` drag slot hands its callbacks.
-pub use flui_interaction::{
+pub use flui_interaction::gesture::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-    PanZoomEvent, TapDetails,
+    TapDetails,
 };
+pub use flui_platform::pointer::PanZoomEvent;
 pub use flui_rendering::semantics::{
     ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
     HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal,
@@ -472,9 +473,9 @@ pub mod prelude {
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
-    pub use flui_interaction::{
+    pub use flui_interaction::gesture::{
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-        PanZoomEvent, TapDetails,
+        TapDetails,
     };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
@@ -483,6 +484,7 @@ pub mod prelude {
     pub use flui_painting::paint::Clip;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::TextBaseline;
+    pub use flui_platform::pointer::PanZoomEvent;
     pub use flui_platform::{InvalidLocale, Locale};
     pub use flui_rendering::constraints::AxisDirection;
     pub use flui_rendering::constraints::BoxConstraints;

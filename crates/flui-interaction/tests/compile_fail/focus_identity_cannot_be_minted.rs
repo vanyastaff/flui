@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use flui_interaction::FocusNodeId;
+use flui_interaction::ids::FocusNodeId;
 
 fn main() {
     let raw = NonZeroU64::MIN;

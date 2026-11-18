@@ -10,7 +10,7 @@ use flui_foundation::Listenable;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::{GestureEndReason, HapticsHandle};
+use flui_interaction::{gesture::GestureEndReason, haptics::HapticsHandle};
 use flui_objects::RenderFollowerLayer;
 use flui_painting::Alignment;
 use flui_painting::BoxShape;

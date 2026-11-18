@@ -40,12 +40,12 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::{Offset, RRect, Rect, Size};
-use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
     make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
     make_up_event_for_id_with_button,
 };
+use flui_interaction::ids::PointerId;
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
     RenderConstraintsTransformBox, RenderContainer, RenderFittedBox, RenderImage, RenderOpacity,
@@ -523,7 +523,7 @@ pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsy
 
 impl LaidOut {
     /// Focus manager that owns this mounted widget tree.
-    pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
+    pub fn focus_manager(&self) -> Rc<flui_interaction::focus::FocusManager> {
         self.host
             .ui_runtime()
             .ui_runtime()

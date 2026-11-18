@@ -1,4 +1,4 @@
-use flui_interaction::RecognizerSet;
+use flui_interaction::gesture::RecognizerSet;
 
 fn main() {
     let recognizers = RecognizerSet::default();

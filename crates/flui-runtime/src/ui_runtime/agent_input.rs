@@ -18,7 +18,7 @@ use std::time::Duration;
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::InputSurface;
+use flui_interaction::ids::InputSurface;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
     ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons, PointerCancel,

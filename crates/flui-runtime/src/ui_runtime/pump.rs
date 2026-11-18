@@ -43,7 +43,7 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     let erased: Rc<dyn TextStore> = store.clone();
     let _client = runtime
         .text_input_handle()
-        .attach(flui_interaction::TextInputClient::new(erased))
+        .attach(flui_interaction::text_input::TextInputClient::new(erased))
         .expect("text store attaches");
     let owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));

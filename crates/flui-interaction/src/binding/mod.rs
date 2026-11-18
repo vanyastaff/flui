@@ -94,7 +94,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::{GestureBinding, HitTestResult};
+//! use flui_interaction::{binding::GestureBinding, pointer::HitTestResult};
 //! use flui_foundation::geometry::Point;
 //! use flui_platform::{EventTime, pointer::{PointerButton, PointerButtons,
 //!     PointerEvent, PointerId, PointerSource, PointerKind, PointerPosition,
@@ -901,7 +901,8 @@ impl GestureBinding {
         };
         self.dispatch_pointer_kernel(surface, event, hit_test_fn);
         let outcome = DispatchOutcome {
-            sequence: crate::PointerEventExt::pointer_id(event).and(arena.dispatched_sequence()),
+            sequence: crate::events::PointerEventExt::pointer_id(event)
+                .and(arena.dispatched_sequence()),
         };
         drop(restore);
         outcome
@@ -922,13 +923,13 @@ impl GestureBinding {
             return;
         }
         self.dispatch(|| {
-            let _in_flight = crate::PointerEventExt::pointer_id(event)
+            let _in_flight = crate::events::PointerEventExt::pointer_id(event)
                 .map(|pointer| self.deliver_packet_of(pointer));
             let ending = matches!(
                 event,
                 PointerEvent::Down(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
             )
-            .then(|| crate::PointerEventExt::pointer_id(event))
+            .then(|| crate::events::PointerEventExt::pointer_id(event))
             .flatten();
             let mut first = self.drain_capture_losses(ending);
             let delivered = caught(|| {
@@ -959,7 +960,7 @@ impl GestureBinding {
     /// # Example
     ///
     /// ```rust
-    /// use flui_interaction::GestureBinding;
+    /// use flui_interaction::binding::GestureBinding;
     /// let binding = GestureBinding::new();
     /// // The presentation calls this before layout and paint each frame.
     /// assert_eq!(binding.flush_pending_moves(), 0); // no input queued yet
@@ -1531,7 +1532,7 @@ impl GestureBinding {
         if self.contacts.is_retiring_all() {
             return;
         }
-        let Some(pointer_id) = crate::PointerEventExt::pointer_id(event) else {
+        let Some(pointer_id) = crate::events::PointerEventExt::pointer_id(event) else {
             // Device lifecycle has no contact identity. It still reaches
             // global observers without fabricating a per-pointer route.
             let mut first_panic = std::mem::take(incoming);
@@ -2129,7 +2130,7 @@ impl GestureBinding {
         if let PanZoomAdmission::Active(session) | PanZoomAdmission::Terminal(Some(session)) =
             &admission
         {
-            match crate::PointerEventExt::pointer_id(event) {
+            match crate::events::PointerEventExt::pointer_id(event) {
                 Some(pointer) => self.publish_contact_sequence(pointer, session.id),
                 None => self.publish_dispatched(DispatchedInput::Contactless(session.id)),
             }
@@ -2769,7 +2770,7 @@ impl GestureBinding {
         event: &PointerEvent,
         token: Option<ResolvedRouteToken>,
     ) -> FirstPanic {
-        let capture = crate::PointerEventExt::pointer_id(event)
+        let capture = crate::events::PointerEventExt::pointer_id(event)
             .and_then(|pointer| self.contacts.capture_for(pointer, token));
         self.dispatch_event_with_capture(event, token, capture.as_ref())
     }

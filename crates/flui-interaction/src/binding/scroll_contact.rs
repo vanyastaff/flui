@@ -32,9 +32,9 @@ use super::{
     scroll_sequences::{ScrollAdmission, ScrollContact, ScrollSequence},
 };
 use crate::{
-    DragAxis, DragGestureRecognizer, GestureRecognizer,
     containment::{FirstPanic, caught, try_run},
     events::{CancelReason, PointerCancel, PointerEvent, PointerKind, PointerSource},
+    gesture::{DragAxis, DragGestureRecognizer, GestureRecognizer},
     ids::InputSurface,
     pointer::{HitTestEntry, HitTestResult, PointerTarget, active_dispatch_handle},
 };

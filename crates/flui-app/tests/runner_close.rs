@@ -945,7 +945,8 @@ pub(crate) fn a_lost_device_waits_out_its_rebuild_backoff() {
 
 /// R22: a rebuild that keeps failing at the backoff's ceiling is given up,
 /// reported once, and tried no more; the application's
-/// `AppHandle::retry_render_device` starts it over, and the window renders
+/// `AppHandle::retry_render_device` replaces it with a device probed in
+/// fresh instances (ADR-0305 §8), and the window renders
 /// again.
 pub(crate) fn a_given_up_device_renders_again_when_the_application_asks() {
     let observed = Observed::default();
@@ -1002,7 +1003,12 @@ pub(crate) fn a_given_up_device_renders_again_when_the_application_asks() {
         .retry_render_device()
         .expect("the loop accepts the request");
     started.run.run_owner_turn();
-    assert_eq!(started.renderer.recovery_attempts(), attempts + 1);
+    assert_eq!(
+        started.renderer.recovery_attempts(),
+        attempts,
+        "the retry adopts a probed device instead of rebuilding in place"
+    );
+    assert_eq!(started.renderer.device_adoptions(), 1);
     assert!(
         started.renderer.frames_presented() > presented,
         "the rebuilt device shows the window again"

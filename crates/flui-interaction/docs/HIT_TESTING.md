@@ -114,7 +114,7 @@ INVERSE of its own forward (paint-direction) offset/matrix — prefer the
 scope helpers, which invert and pop for you:
 
 ```rust
-use flui_interaction::{HitTestEntry, HitTestResult};
+use flui_interaction::pointer::{HitTestEntry, HitTestResult};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 

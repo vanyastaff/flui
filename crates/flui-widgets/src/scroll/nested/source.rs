@@ -6,8 +6,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use flui_foundation::InputSequenceId;
 use flui_foundation::panic::PanicRecovery;
-use flui_interaction::{GestureArena, InputSequenceId};
+use flui_interaction::gesture::GestureArena;
 
 use super::ScrollSequence;
 use super::idle_end::follow_latch;
