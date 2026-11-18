@@ -1,7 +1,7 @@
 //! Logical geometry on the wire: a point and a rectangle in a window's surface coordinates.
 //!
 //! Logical pixels from the top-left of the window's drawing surface, the space input is
-//! injected in and the render tree lays out in. [`Rect`](crate::Rect) stays the physical-pixel
+//! injected in and the render tree lays out in. [`Rect`](crate::tree::Rect) stays the physical-pixel
 //! rectangle of ADR-0080's `rect` and `surface_rect`.
 
 /// A point in logical pixels from the top-left of a window's surface.

@@ -6,7 +6,8 @@
 //! every frame without a borrow outliving the call.
 
 use flui_protocol::{
-    Condition, EventKind, Expectation, LocateParams, Locator, Matches, Node, Observation,
+    events::EventKind, locator::LocateParams, locator::Locator, locator::Matches, tree::Node,
+    wait::Condition, wait::Expectation, wait::Observation,
 };
 
 use super::Placement;

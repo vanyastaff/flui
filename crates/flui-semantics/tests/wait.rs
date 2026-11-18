@@ -1,8 +1,11 @@
 //! Wait conditions over the published tree (ADR-0238 §7, R18), through the public API: what
 //! holds, what does not, and what the evaluation saw while deciding.
 
-use flui_protocol::{Condition, Expectation, Locator, Role, StateFilter, TextMatch};
-use flui_protocol::{EventFilter, EventKind};
+use flui_protocol::{events::EventFilter, events::EventKind};
+use flui_protocol::{
+    locator::Locator, locator::StateFilter, locator::TextMatch, wait::Condition, wait::Expectation,
+    wire::Role,
+};
 use flui_semantics::{EventSet, SemanticsRole, Toggled, WaitFacts, counts_frames};
 
 use crate::fixture::{Fixture, placement};
@@ -52,7 +55,7 @@ fn button(name: &str) -> Locator {
 #[test]
 fn a_condition_holds_or_not_against_the_published_tree() {
     let f = shown();
-    let notify_on = states(|state| state.checked = Some(flui_protocol::Checked::True));
+    let notify_on = states(|state| state.checked = Some(flui_protocol::wire::Checked::True));
     let table = [
         (
             "appears: present",
@@ -317,7 +320,7 @@ fn a_composite_reports_what_it_needs_from_the_runtime() {
 /// A filter for frames of window `window`.
 fn on_window(window: u64) -> EventFilter {
     let mut filter = EventFilter::new(EventKind::Frame);
-    filter.window = Some(flui_protocol::WindowId::from_u64(window).expect("a window number"));
+    filter.window = Some(flui_protocol::tree::WindowId::from_u64(window).expect("a window number"));
     filter
 }
 

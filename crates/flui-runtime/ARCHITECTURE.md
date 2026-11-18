@@ -897,7 +897,7 @@ Runtime and scheduling topology, including background execution
 
 **Rule.** `UiRuntime::dev_agent_window` vends a `flui_view::dev_agent::AgentWindow`
 (`Clone + Send + Sync`) for one presentation. `AgentWindow::call::<M>` takes any window method of
-the protocol's one method table (`flui_protocol::WindowMethod`, the rows marked `Agent(window)`),
+the protocol's one method table (`flui_protocol::method::WindowMethod`, the rows marked `Agent(window)`),
 enqueues it as one `UiCommand::Agent` on the UI runtime's bounded inbox and returns an
 `AgentAnswer` the owner fills at its next drain, a frame boundary. The owner opens the call by its
 method's type (`serve_window_call`, generated from the same table) and serves it through that

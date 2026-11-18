@@ -1,7 +1,7 @@
 //! How a locator's text criterion compares (ADR-0238 §4): exact, contains and
 //! prefix, case-sensitive unless told otherwise, folded by Unicode when it is.
 
-use flui_protocol::TextMatch;
+use flui_protocol::locator::TextMatch;
 
 #[test]
 fn a_text_match_compares_the_way_it_says() {

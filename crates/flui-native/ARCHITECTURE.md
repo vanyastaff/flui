@@ -1773,8 +1773,8 @@ available; both SDK-tools packaging and generated Gradle configuration enforce i
 The owner accepts a reply only while its window remains live and the sampled
 physical size matches the current native window; a reply taken at an older size
 is asked for once more. The window asks on every resize, configuration change,
-new native window, `Resume` and inset change `FluiView` reports from
-`onApplyWindowInsets`; every 500 ms while resumed only until the view is in the
+new native window, `Start` and inset change `FluiView` reports from
+`onApplyWindowInsets`; every 500 ms while on screen only until the view is in the
 window. From API 30 the insets are the
 visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
@@ -2833,7 +2833,7 @@ observation began is read too, and unregisters when detached and in `detach`,
 which clears its handle first. A view that never reaches the window, or that the
 native side detaches because it could not keep it, leaves nothing that could call
 a freed handle. Until the view is in the window, or if it never gets there, the
-host reads every 500ms while resumed, so no change is lost. The long-press
+host reads every 500ms while the Activity is on screen, so no change is lost. The long-press
 timeout is read from its secure setting, since `ViewConfiguration`'s copy can
 still be old when the observer fires. A failed read owes a retry at its deadline,
 which bounds the loop's wait like the cadence does, so errors preserve the
@@ -3446,9 +3446,10 @@ can be lost and an "already present, do nothing" rule would then keep a surface
 built from a dead window for the rest of the process's life. `SurfaceChange` has
 these two directions and no third: a third state of the *surface* belongs in its
 own method, per ADR-0035's split of this family by signal rather than by arity.
-Android and the Web emit it. Android's `Pause` and `TerminateWindow` send `Release`,
-`Resume` and `InitWindow` send `Rebuild` — `owner/android/looper.rs`'s module doc
-carries why that pair, and not `Pause` alone, is the correct mapping. The Web sends
+Android and the Web emit it. Android's `Stop` and `TerminateWindow` send `Release`,
+`Start` and `InitWindow` send `Rebuild` — `owner/android/looper.rs`'s module doc
+carries why that pair, and not `Stop` alone, is the correct mapping; `Pause` keeps the
+surface, since a paused Activity that stays on screen keeps drawing (ADR-0366). The Web sends
 `Release` on `webglcontextlost` and `Rebuild` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
 whatever was built on it must be rebuilt once the browser gives one back. The loss is
 cancelled with `preventDefault` — without that the browser never restores the context —
@@ -3493,19 +3494,19 @@ winit and bevy is deliberate: winit 0.30.13 keys on the window events alone —
 `src/platform_impl/android/mod.rs` maps `MainEvent::InitWindow` to `Resumed`
 and `MainEvent::TerminateWindow` to `Suspended`, while its `Start` and `Stop`
 arms are `warn!("TODO: forward …")` stubs that forward nothing — and bevy
-consumes those same two events. This backend keys on `Pause`/`Resume` *as
+consumes those same two events. This backend keys on `Stop`/`Start` *as
 well as* `TerminateWindow`/`InitWindow`: the window pair is where the handle
 actually dies and returns, and the lifecycle pair is where the framework is
 told the app is going away, so emitting on both is the more conservative
 choice, at the cost the trade-off below books.
 
-**Trade-off:** releasing on `Pause` unconditionally makes the cost per-edge rather
-than per-defect. Android maps `false` to both `Pause` and `TerminateWindow` and
-`true` to both `Resume` and `InitWindow`, and the seam attempts a recreation on
-every `true`, so every `Pause`/`Resume` pair pays a release, a create/configure,
-a lane generation mint and a full repaint — including the pauses where the native
-window was never destroyed, such as a dialog over the activity or a multi-window
-deactivation. A second `true` over a surface still held on the same window is not
+**Trade-off:** releasing on `Stop` unconditionally makes the cost per-edge rather
+than per-defect. Android maps `false` to both `Stop` and `TerminateWindow` and
+`true` to both `Start` and `InitWindow`, and the seam attempts a recreation on
+every `true`, so every `Stop`/`Start` pair pays a release, a create/configure,
+a lane generation mint and a full repaint — including the stops where the native
+window was never destroyed. A dialog over the activity or a multi-window
+deactivation only pauses it, and pays nothing. A second `true` over a surface still held on the same window is not
 paid twice but refused: Vulkan allows one `VkSurfaceKHR` per `ANativeWindow`, so
 the second create fails, the held surface stays, and no second mint or repaint
 follows (ADR-0063 decision 6 books what that refusal costs under the vendored
@@ -3514,7 +3515,7 @@ a configured `wgpu::Surface` is
 not cheap either: it reaches `vkDeviceWaitIdle` before destroying anything, which is
 an unbounded wait on whichever thread runs the callback. That is why the release is
 a synchronous, surface-only operation that performs no lane handoff, no probe and no
-submit, and why the `TerminateWindow` release that follows `Pause` in the ordinary
+submit, and why the `TerminateWindow` release that follows `Stop` in the ordinary
 cycle is an idempotent no-op — while its caller holds the raster lane's guard across
 it by design, so the wait does happen with the lane held.
 
@@ -4131,13 +4132,14 @@ true background suspension pauses the display link and releases it. Foreground
 restores execution while unfocused; duplicate foreground preserves established
 focus. Headless simulation exercises the same observation contract.
 
-Android publishes `Resume`/`Pause` as a shared execution snapshot before invoking
-embedder callbacks. Its window reports `Running` only while resumed and otherwise
-reports `Suspended`; focus and native-window availability remain separate facts.
+Android records `Start`/`Stop` in the standing it shares with its window before
+invoking embedder callbacks. Its window reports `Running` while the Activity is on
+screen, paused or not, and otherwise `Suspended` (ADR-0366); the foreground refines
+the focus, and native-window availability remains a separate fact.
 This makes redraw-backed owner continuations honest: the loop consumes redraw
-flags only after polling confirms execution is still running. A queued `Pause`
+flags only after polling confirms execution is still running. A queued `Stop`
 therefore preserves the flag rather than acknowledging a continuation whose frame
-will be refused; `Resume` makes the callback deliverable again. The app also retains
+will be refused; `Start` makes the callback deliverable again. The app also retains
 a logical continuation when the initial actuator refuses it and retries from the
 next fresh native root.
 
@@ -5827,9 +5829,10 @@ android-dex`, and declared in this crate's `[package.metadata.flui.declares.andr
 links into its APK, and a Gradle build compiles the sources. The generated manifest names
 `FluiActivity`, a `NativeActivity` subclass, with `hasCode="true"` (ADR-0255 decisions 1 and 4).
 Before the platform starts, `owner::android::java_host` reads through the Activity's class loader
-whether the APK has `FluiHost`, whether its `PROTOCOL` is the library's and whether the Activity is
-a `FluiActivity`; anything else refuses the start with `PlatformError::HostProtocol` or `Init`,
-naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
+whether the APK has `FluiHost`, whether its `PROTOCOL` is the library's, whether the Activity is
+a `FluiActivity` and whether it owns `FluiHost`'s queues; anything else refuses the start with
+`PlatformError::HostProtocol`, `Init` or `SecondActivity`, naming what it found, before any
+native method is bound (decision 5, ADR-0366). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
 lays one full-window view over the Activity's content (ADR-0348). Every owner-to-view call is posted
@@ -5843,10 +5846,20 @@ then frees it, both on the Java main thread, the only thread that calls the view
 2): `onTrimMemory`, at most one entry per trim level; each intent `onCreate` and `onNewIntent`
 receive, at most `MAX_OPENED_ITEMS`; and each answer `onActivityResult` brings to a request for a
 result (below). The queues are Java statics: they buffer what arrives before `android_main` runs
-or between two platforms of one process. `java_host::HostQueue` registers `nativeWake` and binds its wake handle (a
-`Box<Arc<Inbox>>`) on the Java main thread when the platform starts, and an entry queued before
-wakes it at once; each later entry wakes the owner, which takes the inbox's flag and only then
-drains the queue through JNI, each loop turn, resumed or not. At the loop's exit `FluiHost`
+or between two platforms of one process. A process runs one platform, in a task of its own
+application (ADR-0366 §2): `FluiHost.admit` decides in `onCreate`, before the library starts, which
+instance owns the queues, and any other one starts the Activity again in the application's own task
+with what it received, granting it the shared URIs, or, already forwarded beside a live owner,
+queues it for the owner, and finishes. `owner::android::admission` is that decision as data, held
+to the Java side by its test. Such an instance runs none of the application: `android_hands_over`
+tells the entry first, and `java_host::check` refuses it with `PlatformError::SecondActivity`.
+`java_host::HostQueue`
+registers `nativeWake` and binds its wake handle (a `Box<Arc<Inbox>>`) on the Java main thread
+when the platform starts, and an entry queued before wakes it at once; each later entry wakes the
+owner, which takes the inbox's flag and only then drains the queue through JNI, each loop turn,
+running or not. `bind` and the reads take the Activity and answer a non-owner nothing, so a
+finishing platform takes nothing that arrived for its successor, and a new owner forgets the old
+handle. At the loop's exit `FluiHost`
 forgets the handle, unless a later platform bound its own since, and the handle is freed, both
 on the Java main thread, the only thread that passes it to `nativeWake`. The Java side queues
 and wakes and never waits for the owner; the lock guards the deques alone.
@@ -6155,9 +6168,10 @@ other thread leaks that data instead of freeing what a late call could reach.
 The loop has no timer of its own (ADR-0249): every producer wakes the looper
 (`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
 view's queue, the inset reply, this callback), and `poll_timeout` blocks until
-the next wake deadline or 500 ms preference sample while resumed, and while
-paused until a deadline still ahead or a wake. A deadline already behind while
-paused waits for a frame, so it does not cut the wait to zero.
+the next wake deadline or 500 ms preference sample while the Activity is on
+screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
+deadline already behind while stopped waits for a frame, so it does not cut the
+wait to zero.
 
 `owner/android/ndk.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
@@ -6199,7 +6213,7 @@ change goes unnoticed until the next one or a resume. The JNI path, the
 choreographer registration and the frame-rate request run only on a device; the
 host tests cover the level lookup (`os_capability_table`), the value
 classification (`android_display_table`) and the poll timeout
-(`a_paused_loop_blocks_until_it_is_woken`), and CI type-checks the rest for
+(`a_stopped_loop_blocks_until_it_is_woken`), and CI type-checks the rest for
 `aarch64-linux-android`.
 
 ### A Win32 window opens hidden, in its mode, and is shown by its first frame
@@ -6337,8 +6351,11 @@ Remote Desktop Services at logon), lock and unlock stay unreported for the proce
 `AndroidLoop` implements; nothing in the event loop decides what a callback
 means. The window's published state is refreshed before its observer is told.
 
-**Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution
-state, `onWindowFocusChanged` focus; none implies another. `onLowMemory` is `Critical`, and
+**Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the foreground,
+`onWindowFocusChanged` focus; none implies another. The window reports from the three together
+(`activity_callbacks::ActivityStanding`, ADR-0366): running while visible, so a paused Activity that stays on
+screen keeps drawing, taking input and serving its owner; focused while focused and in the
+foreground. `onLowMemory` is `Critical`, and
 each `onTrimMemory`, which `FluiActivity` forwards through `FluiHost`'s queue, is the level its
 value asks for, delivered as it arrives, a repeated level included: every call asks for memory
 back again. The session ends once per start-to-stop
@@ -6348,6 +6365,8 @@ so the notice repeats on every trip to the background and asks for saving. The
 application's handler is asked through the call point, and stays bound when it
 panics.
 
-**Verified by:** `android_lifecycle_mapping*` and `app_delivery_contracts` on
-the host, and `the_host_queue_is_read_as_the_java_classes_lay_it_out`; the `MainEvent` match
+**Verified by:** `android_lifecycle_mapping*`, `a_paused_activity_that_stays_visible_keeps_running`
+and `app_delivery_contracts` on the host, and `the_host_queue_is_read_as_the_java_classes_lay_it_out`
+and `only_the_activity_that_owns_the_queues_binds_and_reads_them`, and `owner::android::admission`'s
+tests; the `MainEvent` match
 and the queue's JNI run only on a device.

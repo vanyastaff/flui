@@ -214,7 +214,7 @@ impl Addressed for crate::wait::WaitParams {
 /// A method as data: one row of [`METHODS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub struct MethodInfo {
+pub struct MethodRow {
     /// The wire name, `group.verb`.
     pub name: &'static str,
     /// Which side answers it.
@@ -225,7 +225,7 @@ pub struct MethodInfo {
     pub tier: Tier,
 }
 
-impl MethodInfo {
+impl MethodRow {
     /// `M`'s row.
     #[must_use]
     pub const fn of<M: Method>() -> Self {
@@ -260,7 +260,7 @@ impl MethodInfo {
 
 /// The method named `name` on the wire.
 #[must_use]
-pub fn find(name: &str) -> Option<&'static MethodInfo> {
+pub fn find(name: &str) -> Option<&'static MethodRow> {
     METHODS.iter().find(|method| method.name == name)
 }
 
@@ -348,10 +348,10 @@ macro_rules! __method_table {
                 $crate::audit::AuditParams => $crate::audit::AuditReport;
             /// The pixels the window last put on screen.
             CapturePresented = "capture.presented", Agent(window), ReadOnly, Core,
-                $crate::capture::CaptureParams => $crate::capture::CaptureMeta;
+                $crate::capture::CaptureParams => $crate::capture::Screenshot;
             /// The committed layer tree rendered again offscreen.
             CaptureRendered = "capture.rendered", Agent(window), ReadOnly, Pixels,
-                $crate::capture::CaptureParams => $crate::capture::CaptureMeta;
+                $crate::capture::CaptureParams => $crate::capture::Screenshot;
             /// Attached, visible, stable, enabled and receives, from one frame.
             ElementActionability = "element.actionability", Agent(window), ReadOnly, Input,
                 $crate::act::ActionabilityParams => $crate::act::Actionability;
@@ -444,7 +444,7 @@ macro_rules! __method_table {
                 $crate::tree::ReadParams => $crate::tree::Tree;
             /// Connect to an app already running with the agent.
             SessionAttach = "session.attach", Driver, Acts, Session,
-                $crate::session::AttachParams => $crate::session::SessionInfo;
+                $crate::session::AttachParams => $crate::session::Attached;
             /// What the target can do.
             SessionCapabilities = "session.capabilities", Driver, ReadOnly, Session,
                 $crate::session::Empty => $crate::session::Capabilities;
@@ -453,7 +453,7 @@ macro_rules! __method_table {
                 $crate::session::CloseParams => $crate::session::Closed;
             /// Start an app with the agent attached.
             SessionLaunch = "session.launch", Driver, Acts, Core,
-                $crate::session::LaunchParams => $crate::session::SessionInfo;
+                $crate::session::LaunchParams => $crate::session::Attached;
             /// Hold out until a window presents more frames.
             WaitFrames = "wait.frames", Agent(window), ReadOnly, Session,
                 $crate::wait::FramesParams => $crate::wait::WaitOutcome;
@@ -514,7 +514,7 @@ macro_rules! declare_methods {
         ///
         /// Generated from the same list as the method types, so a method cannot be declared
         /// without a row.
-        pub const METHODS: &[MethodInfo] = &[$(MethodInfo::of::<$ty>()),+];
+        pub const METHODS: &[MethodRow] = &[$(MethodRow::of::<$ty>()),+];
     };
 }
 

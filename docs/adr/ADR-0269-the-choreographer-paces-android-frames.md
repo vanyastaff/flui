@@ -107,7 +107,7 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
 - `ndk_gate_table` rows for each marker, and `the_frame_callback_is_the_newest_the_system_has` in
   `os_capability_table` (`flui-native`, run on the Linux CI host).
 - `a_tick_places_its_vsync_and_presentation_around_the_reading` (`owner::android::frame_clock`).
-- `a_deadline_left_behind_is_offered_once` and `a_paused_loop_blocks_until_it_is_woken`
+- `a_deadline_left_behind_is_offered_once` and `a_stopped_loop_blocks_until_it_is_woken`
   (`owner::android::poll`), the latter with rows for a turn waiting for the
   next frame.
 - `os_entry` around both callbacks: `xtask panic-boundary`.

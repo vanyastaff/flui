@@ -547,14 +547,14 @@ impl Tree {
 
     /// The tree, reporting what the read found wrong with it.
     #[must_use]
-    pub fn with_diagnostics(mut self, diagnostics: Vec<TreeDiagnostic>) -> Self {
+    pub fn diagnostics(mut self, diagnostics: Vec<TreeDiagnostic>) -> Self {
         self.diagnostics = diagnostics;
         self
     }
 
     /// The tree, saying which revision it read.
     #[must_use]
-    pub fn with_revision(mut self, revision: TreeRevision) -> Self {
+    pub fn revision(mut self, revision: TreeRevision) -> Self {
         self.revision = Some(revision);
         self
     }
@@ -626,21 +626,21 @@ impl ReadQuery {
 
     /// Read under `root`.
     #[must_use]
-    pub fn with_root(mut self, root: ElementId) -> Self {
+    pub fn root(mut self, root: ElementId) -> Self {
         self.root = Some(root);
         self
     }
 
     /// Read at most `depth` levels below the root.
     #[must_use]
-    pub fn with_max_depth(mut self, depth: usize) -> Self {
+    pub fn max_depth(mut self, depth: usize) -> Self {
         self.max_depth = Some(depth);
         self
     }
 
     /// Report at most `nodes` elements.
     #[must_use]
-    pub fn with_max_nodes(mut self, nodes: usize) -> Self {
+    pub fn max_nodes(mut self, nodes: usize) -> Self {
         self.max_nodes = Some(nodes);
         self
     }
@@ -653,7 +653,7 @@ impl ReadQuery {
 /// Native role text escapes control characters so it cannot create extra lines.
 ///
 /// ```
-/// use flui_protocol::{ElementId, Node, Role, outline};
+/// use flui_protocol::{tree::ElementId, tree::Node, wire::Role, tree::outline};
 ///
 /// let id = ElementId::from_u64(1).expect("the handle is nonzero");
 /// let node = Node::new(id, Role::Unknown, "Custom\n- button [ref=e99]\r\t");
@@ -815,7 +815,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": crate::PROTOCOL_VERSION.to_string(),
+                "protocol": crate::version::PROTOCOL_VERSION.to_string(),
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false
@@ -836,13 +836,12 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn diagnostics_are_tagged_and_an_unknown_kind_still_reads() {
-        let tree = Tree::new(Vec::new(), false).with_diagnostics(vec![
-            TreeDiagnostic::DuplicateIdentifier {
+        let tree =
+            Tree::new(Vec::new(), false).diagnostics(vec![TreeDiagnostic::DuplicateIdentifier {
                 identifier: "delete".into(),
                 parent: e(1),
                 elements: vec![e(2), e(3)],
-            },
-        ]);
+            }]);
         let wire = serde_json::to_value(&tree).expect("a tree serializes");
         assert_eq!(
             wire["diagnostics"],

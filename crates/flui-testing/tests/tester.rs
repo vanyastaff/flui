@@ -1471,7 +1471,7 @@ fn a_session_end_writes_even_when_committing_the_composition_panics() {
 /// check, as `flutter_test` warns that it is not hit-testable.
 #[test]
 fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
-    use flui_protocol::ActionabilityCheck;
+    use flui_protocol::act::ActionabilityCheck;
     use flui_widgets::ListView;
 
     let items: Vec<_> = (0..40)

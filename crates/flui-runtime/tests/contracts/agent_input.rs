@@ -15,10 +15,13 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
 use flui_protocol::method::{self, InputInject, InputRelease};
 use flui_protocol::{
-    ActOutcome, ActionSequence, DeviceClass, EffectKind, EffectUnit, ErrorCode, ErrorObject, Event,
-    EventFilter, EventKind, InputKind, InputParams, InputPath, InputPolicy, InputSource, Journal,
-    JournalEntry, JournalParams, JournalSpan, KeyAction, LogicalPoint, PointerAction,
-    PointerButton, PointerDevice, Released, TrackpadAction, WindowParams,
+    act::ActOutcome, act::EffectKind, act::EffectUnit, act::JournalSpan, error::ErrorCode,
+    error::ErrorObject, events::Event, events::EventFilter, events::EventKind,
+    geometry::LogicalPoint, input::ActionSequence, input::DeviceClass, input::InputKind,
+    input::InputParams, input::InputPath, input::InputPolicy, input::InputSource, input::Journal,
+    input::JournalEntry, input::JournalParams, input::KeyAction, input::PointerAction,
+    input::PointerButton, input::PointerDevice, input::Released, input::TrackpadAction,
+    session::WindowParams,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};

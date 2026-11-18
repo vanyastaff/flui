@@ -18,6 +18,10 @@
   `SurfaceFactory::create` and the raster executor's `Attach`, `Release` and `Restore` commands.
   The `WindowTarget` bound, the lease, probing before creating, always rebuilding on a returned
   window and releasing before creating stand.
+- **Superseded-by:**
+  [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
+  for decision 6's "cost is per edge" bullet, the Android lifecycle pair only: `Stop` and `Start`
+  carry the signal beside `TerminateWindow` and `InitWindow`, and a pause pays nothing
 - **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
   for decision 1's public bound only: `Renderer::new` takes the window's `Arc<dyn SurfaceTarget>`,
   which also says who paces the surface, and `WindowTarget` is the lease's crate-private bound.

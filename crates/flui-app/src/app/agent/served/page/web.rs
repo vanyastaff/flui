@@ -10,8 +10,8 @@ use flui_native::PlatformError;
 use flui_native::page_export::{
     PageConnection, PageExport, PageExportHandler, PageLine, PageTimer,
 };
-use flui_protocol::AppInfo;
 use flui_protocol::framing::MAX_LINE;
+use flui_protocol::session::AppDescription;
 use flui_runtime::agent::{Service, ServiceConfig};
 use flui_view::dev_agent::AgentWindow;
 use parking_lot::Mutex;
@@ -73,7 +73,7 @@ impl Drop for Running {
 /// Define the global `launch` names and start accepting the connections its scripts open.
 pub(in super::super) fn listen(
     launch: &Launch,
-    app: AppInfo,
+    app: AppDescription,
     disconnect: Option<Arc<Disconnect>>,
     records_native: bool,
 ) -> Result<Running, PlatformError> {
