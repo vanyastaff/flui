@@ -644,6 +644,17 @@ impl RetainedCapture {
         self.last_plan
     }
 
+    /// How many recordings the painter's cache keeps, and the entries its
+    /// evictions looked at since the last call.
+    pub(crate) fn recording_cache_work(&mut self) -> (usize, u64) {
+        self.painter.recording_cache_work()
+    }
+
+    /// Holds the painter's recording cache to `budget` bytes.
+    pub(crate) fn set_recording_cache_budget(&mut self, budget: usize) {
+        self.painter.set_recording_cache_budget(budget);
+    }
+
     /// Renders `scene` the way `Renderer::render_scene` does: a frame no
     /// damage producer accounted for.
     ///

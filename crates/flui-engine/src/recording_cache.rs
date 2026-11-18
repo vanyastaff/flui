@@ -24,7 +24,7 @@ use std::num::NonZeroU64;
 
 use flui_foundation::IdMint;
 use flui_foundation::geometry::{Matrix4, canonical_bits, canonical_bits_f64};
-use flui_layer::{Bounds, ContentVersion};
+use flui_layer::{Bounds, ContentVersion, Lineage};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -38,6 +38,7 @@ use crate::instancing::{
     RadialGradientInstance, RectInstance, ShadowInstance, SweepGradientInstance,
 };
 use crate::pixel_shift::{PixelOrigin, PixelShift, Shift, split_translation};
+use crate::recency::{Place, RecencyList};
 use crate::state_stack::ResolvedClip;
 use crate::vertex::Vertex;
 
@@ -1250,6 +1251,51 @@ fn shrink_to_fit(recording: &mut ChunkRecording) {
     glyph_keys.shrink_to_fit();
 }
 
+/// The lineage of the scene version each target of a painter last drew.
+///
+/// A content version compares equal only within its lineage, and a target
+/// that draws another lineage's version (a new scene owner, a renewed one)
+/// or detaches never draws the old one's content again, so once no target
+/// draws a lineage its recordings are dead: [`Self::draws`] names it, and
+/// the painter drops them then instead of when the budget evicts them. A
+/// target that draws a layer tree keeps the lineage it drew before.
+#[derive(Debug)]
+pub(crate) struct DrawnLineages<T> {
+    drawn: FxHashMap<T, Lineage>,
+}
+
+impl<T: std::hash::Hash + Eq> DrawnLineages<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            drawn: FxHashMap::default(),
+        }
+    }
+
+    /// Notes that `target` draws `scene`, or nothing once it detaches
+    /// (`None`), and answers the lineage it drew before when no target draws
+    /// that lineage any more.
+    pub(crate) fn draws(
+        &mut self,
+        target: T,
+        scene: Option<flui_layer::SceneContent<'_>>,
+    ) -> Option<Lineage> {
+        let previous = match scene {
+            None => self.drawn.remove(&target)?,
+            Some(flui_layer::SceneContent::Tree(_)) => return None,
+            Some(flui_layer::SceneContent::Version(version)) => {
+                let lineage = version.id().lineage();
+                let previous = self.drawn.insert(target, lineage)?;
+                if previous == lineage {
+                    return None;
+                }
+                previous
+            }
+        };
+        // A handful of targets: one per window or offscreen slot.
+        (!self.drawn.values().any(|&drawn| drawn == previous)).then_some(previous)
+    }
+}
+
 /// One kept recording and the frame it was last rastered in.
 #[derive(Debug)]
 struct Entry {
@@ -1263,12 +1309,22 @@ struct Entry {
 /// fill the budget alone.
 const PER_CONTENT: usize = 2;
 
+/// The places of one lineage's recordings, by the sequence number of their
+/// content version.
+type LineageEntries = FxHashMap<NonZeroU64, SmallVec<[Place; PER_CONTENT]>>;
+
 /// The recordings a painter keeps, keyed by [`RecordingKey`], under
 /// [`BUDGET_BYTES`] at each frame's end, the least recently rastered evicted
 /// first.
+///
+/// The recordings sit in a [`RecencyList`] in the order they were last
+/// rastered, so an eviction takes the oldest without looking at the others;
+/// the index finds a key's place, by its content's lineage, so the
+/// recordings of a lineage no target draws any more are dropped together.
 #[derive(Debug)]
 pub(crate) struct RecordingCache {
-    entries: FxHashMap<ContentVersion, SmallVec<[Entry; PER_CONTENT]>>,
+    index: FxHashMap<Lineage, LineageEntries>,
+    recency: RecencyList<Entry>,
     bytes: usize,
     budget: usize,
     /// The frame now being drawn, counted from 0.
@@ -1278,8 +1334,9 @@ pub(crate) struct RecordingCache {
     epoch: Option<ResourceEpoch>,
     /// Recordings dropped since [`Self::take_counts`] last reported.
     evictions: u64,
-    /// Eviction's scratch, kept so a frame that evicts reuses its room.
-    order: Vec<(u64, RecordingKey)>,
+    /// The entries eviction and lineage drops have looked at.
+    #[cfg(test)]
+    visits: u64,
 }
 
 impl RecordingCache {
@@ -1291,14 +1348,16 @@ impl RecordingCache {
         let mint = IdMint::new();
         let epoch = mint.next().ok().map(ResourceEpoch);
         Self {
-            entries: FxHashMap::default(),
+            index: FxHashMap::default(),
+            recency: RecencyList::new(),
             bytes: 0,
             budget,
             frame: 0,
             mint,
             epoch,
             evictions: 0,
-            order: Vec::new(),
+            #[cfg(test)]
+            visits: 0,
         }
     }
 
@@ -1311,41 +1370,56 @@ impl RecordingCache {
     /// The painter's resources changed under every kept recording: they are
     /// dropped, and later ones are keyed by a new epoch.
     pub(crate) fn advance_epoch(&mut self) {
-        let dropped = self
-            .entries
-            .values()
-            .map(|entries| entries.len() as u64)
-            .sum::<u64>();
+        let dropped = self.recency.len() as u64;
         self.evictions = self.evictions.saturating_add(dropped);
-        self.entries.clear();
+        self.index.clear();
+        self.recency.clear();
         self.bytes = 0;
         self.epoch = self.mint.next().ok().map(ResourceEpoch);
     }
 
+    /// The place of the recording `key` names.
+    fn place(&self, key: &RecordingKey) -> Option<Place> {
+        self.index
+            .get(&key.content.lineage())?
+            .get(&key.content.seq())?
+            .iter()
+            .copied()
+            .find(|&place| self.recency.get(place).key == *key)
+    }
+
     /// The recording `key` names, stamped as rastered this frame.
     pub(crate) fn get(&mut self, key: &RecordingKey) -> Option<&ChunkRecording> {
-        let frame = self.frame;
-        let entry = self
-            .entries
-            .get_mut(&key.content)?
-            .iter_mut()
-            .find(|entry| entry.key == *key)?;
-        entry.last_rastered = frame;
+        let place = self.place(key)?;
+        let entry = self.recency.touch(place);
+        entry.last_rastered = self.frame;
         Some(&entry.recording)
+    }
+
+    /// Takes the recording at `place`, which `key` names, out of the index
+    /// and the list, and counts it evicted.
+    fn take(&mut self, key: &RecordingKey, place: Place) {
+        let lineage = key.content.lineage();
+        if let Some(entries) = self.index.get_mut(&lineage)
+            && let Some(places) = entries.get_mut(&key.content.seq())
+        {
+            places.retain(|kept| *kept != place);
+            if places.is_empty() {
+                entries.remove(&key.content.seq());
+                if entries.is_empty() {
+                    self.index.remove(&lineage);
+                }
+            }
+        }
+        let entry = self.recency.remove(place);
+        self.bytes = self.bytes.saturating_sub(entry.recording.bytes);
+        self.evictions = self.evictions.saturating_add(1);
     }
 
     /// Drops the recording `key` names.
     pub(crate) fn remove(&mut self, key: &RecordingKey) {
-        let Some(entries) = self.entries.get_mut(&key.content) else {
-            return;
-        };
-        if let Some(index) = entries.iter().position(|entry| entry.key == *key) {
-            let entry = entries.remove(index);
-            self.bytes = self.bytes.saturating_sub(entry.recording.bytes);
-            self.evictions = self.evictions.saturating_add(1);
-        }
-        if entries.is_empty() {
-            self.entries.remove(&key.content);
+        if let Some(place) = self.place(key) {
+            self.take(key, place);
         }
     }
 
@@ -1357,25 +1431,75 @@ impl RecordingCache {
         if self.epoch != Some(key.epoch) {
             return;
         }
-        self.remove(&key);
-        let entries = self.entries.entry(key.content).or_default();
-        if entries.len() >= PER_CONTENT
-            && let Some(oldest) = entries
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, entry)| entry.last_rastered)
-                .map(|(index, _)| index)
-        {
-            let entry = entries.remove(oldest);
+        let Self {
+            index,
+            recency,
+            bytes,
+            evictions,
+            frame,
+            ..
+        } = self;
+        let places = index
+            .entry(key.content.lineage())
+            .or_default()
+            .entry(key.content.seq())
+            .or_default();
+        // The recording it replaces, or else the sibling it pushes out.
+        let replaced = places
+            .iter()
+            .position(|&place| recency.get(place).key == key)
+            .or_else(|| {
+                (places.len() >= PER_CONTENT)
+                    .then(|| {
+                        places
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|&(_, &place)| recency.get(place).last_rastered)
+                            .map(|(at, _)| at)
+                    })
+                    .flatten()
+            });
+        if let Some(at) = replaced {
+            let entry = recency.remove(places.swap_remove(at));
+            *bytes = bytes.saturating_sub(entry.recording.bytes);
+            *evictions = evictions.saturating_add(1);
+        }
+        *bytes = bytes.saturating_add(recording.bytes);
+        places.push(recency.push_newest(Entry {
+            key,
+            recording,
+            last_rastered: *frame,
+        }));
+    }
+
+    /// Drops every recording of a content version of `lineage`: no target
+    /// draws its scenes any more, and no other lineage's content compares
+    /// equal to one of them.
+    pub(crate) fn drop_lineage(&mut self, lineage: Lineage) {
+        let Some(entries) = self.index.remove(&lineage) else {
+            return;
+        };
+        if self.index.is_empty() {
+            // The lineage held every recording: dropped in the order they
+            // sit, none unlinked.
+            #[cfg(test)]
+            {
+                self.visits += self.recency.len() as u64;
+            }
+            self.evictions = self.evictions.saturating_add(self.recency.len() as u64);
+            self.recency.clear();
+            self.bytes = 0;
+            return;
+        }
+        for place in entries.into_values().flatten() {
+            #[cfg(test)]
+            {
+                self.visits += 1;
+            }
+            let entry = self.recency.remove(place);
             self.bytes = self.bytes.saturating_sub(entry.recording.bytes);
             self.evictions = self.evictions.saturating_add(1);
         }
-        self.bytes = self.bytes.saturating_add(recording.bytes);
-        entries.push(Entry {
-            key,
-            recording,
-            last_rastered: self.frame,
-        });
     }
 
     /// Evicts the least recently rastered recordings until the cache is
@@ -1398,27 +1522,38 @@ impl RecordingCache {
         self.frame = self.frame.saturating_add(1);
     }
 
+    /// Takes the oldest recordings out until the bytes are within the
+    /// budget: each step looks at the one it evicts and no other.
     fn evict_over_budget(&mut self) {
-        if self.bytes <= self.budget {
-            return;
-        }
-        let mut order = std::mem::take(&mut self.order);
-        order.clear();
-        order.extend(
-            self.entries
-                .values()
-                .flatten()
-                .map(|entry| (entry.last_rastered, entry.key)),
-        );
-        order.sort_unstable_by_key(|&(last_rastered, _)| last_rastered);
-        for (_, key) in &order {
-            if self.bytes <= self.budget {
+        while self.bytes > self.budget {
+            let Some(oldest) = self.recency.oldest() else {
                 break;
+            };
+            #[cfg(test)]
+            {
+                self.visits += 1;
             }
-            self.remove(key);
+            let key = self.recency.get(oldest).key;
+            self.take(&key, oldest);
         }
-        order.clear();
-        self.order = order;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_budget(&mut self, budget: usize) {
+        self.budget = budget;
+    }
+
+    /// How many recordings the cache holds.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.recency.len()
+    }
+
+    /// The entries eviction and lineage drops looked at since this was last
+    /// asked, which starts the count again.
+    #[cfg(test)]
+    pub(crate) fn take_visits(&mut self) -> u64 {
+        std::mem::take(&mut self.visits)
     }
 }
 
@@ -1834,5 +1969,101 @@ mod tests {
         let fresh = key(&cache, a.content, 0.0);
         cache.insert(fresh, recording(10));
         assert!(cache.get(&fresh).is_some());
+    }
+
+    /// Over its budget, a cache evicts the least recently rastered and looks
+    /// at nothing else: with 1 000 and with 10 000 recordings, a frame that
+    /// keeps one more evicts one and looks at one, and the ones rastered
+    /// since stay.
+    #[test]
+    fn an_eviction_looks_only_at_the_recordings_it_evicts() {
+        for kept in [1_000, 10_000] {
+            let mut cache = RecordingCache::with_budget(kept * 10);
+            let contents = versions(kept + 3);
+            let keys: Vec<RecordingKey> = contents
+                .iter()
+                .map(|&content| key(&cache, content, 0.0))
+                .collect();
+            for &key in &keys[..kept] {
+                cache.insert(key, recording(10));
+            }
+            cache.end_frame();
+            assert_eq!(cache.take_visits(), 0, "within its budget at {kept}");
+            for (frame, &fresh) in keys[kept..].iter().enumerate() {
+                assert!(cache.get(&keys[kept - 1]).is_some());
+                cache.insert(fresh, recording(10));
+                cache.end_frame();
+                assert_eq!(
+                    (cache.take_visits(), cache.take_counts(), cache.len()),
+                    (1, (1, kept as u64 * 10), kept),
+                    "frame {frame} at {kept}"
+                );
+                assert!(
+                    cache.get(&keys[frame]).is_none(),
+                    "the oldest left at {kept}"
+                );
+            }
+            assert!(cache.get(&keys[kept - 1]).is_some(), "rastered each frame");
+        }
+    }
+
+    /// A lineage no target draws any more is named once: when the last
+    /// target that drew it draws another or detaches, not while another
+    /// target still draws it, and not for a layer tree. Dropping it takes
+    /// its recordings and leaves another lineage's.
+    #[test]
+    fn a_lineage_no_target_draws_drops_its_recordings() {
+        use flui_layer::{LayerTree, SceneContent};
+
+        let (old, new) = (SceneOwner::new(), SceneOwner::new());
+        let (old_version, new_version) = (old.current(), new.current());
+        let lineage = old_version.id().lineage();
+        let tree = LayerTree::default();
+        let mut drawn = super::DrawnLineages::new();
+        for (row, target, scene, dead) in [
+            (
+                "a first draw",
+                1,
+                Some(SceneContent::Version(old_version)),
+                None,
+            ),
+            (
+                "a second target",
+                2,
+                Some(SceneContent::Version(old_version)),
+                None,
+            ),
+            ("a layer tree", 1, Some(SceneContent::Tree(&tree)), None),
+            (
+                "one target moves on",
+                1,
+                Some(SceneContent::Version(new_version)),
+                None,
+            ),
+            ("a detach that leaves none", 2, None, Some(lineage)),
+            ("a detach of no lineage", 2, None, None),
+        ] {
+            assert_eq!(drawn.draws(target, scene), dead, "{row}");
+        }
+
+        let mut cache = RecordingCache::new();
+        let old_keys: Vec<RecordingKey> = versions(3)
+            .into_iter()
+            .map(|content| key(&cache, content, 0.0))
+            .collect();
+        let other = key(&cache, versions(1)[0], 0.0);
+        for &key in old_keys.iter().chain([&other]) {
+            cache.insert(key, recording(10));
+        }
+        let _ = cache.take_counts();
+        cache.drop_lineage(old_keys[0].content.lineage());
+        assert_eq!(
+            (cache.take_visits(), cache.take_counts(), cache.len()),
+            (3, (3, 10), 1)
+        );
+        assert!(cache.get(&other).is_some());
+        assert!(old_keys.iter().all(|key| cache.get(key).is_none()));
+        cache.drop_lineage(other.content.lineage());
+        assert_eq!((cache.take_counts(), cache.len()), ((1, 0), 0));
     }
 }

@@ -329,6 +329,9 @@ pub struct Renderer {
     color: ColorRequest,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
+    /// The lineage of the version the renderer last drew: the painter's
+    /// recordings of the one before are dropped when it draws another.
+    lineage: crate::recording_cache::DrawnLineages<()>,
     /// The newest frame of each live external texture, re-uploaded after the
     /// painter is rebuilt (device recovery, surface format change), which
     /// drops its imported allocations.
@@ -546,6 +549,7 @@ impl Renderer {
             color,
             capabilities: stack.capabilities,
             painter: stack.painter,
+            lineage: crate::recording_cache::DrawnLineages::new(),
             external_frames: rustc_hash::FxHashMap::default(),
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
@@ -1853,6 +1857,9 @@ impl Renderer {
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
+        if let Some(dead) = self.lineage.draws((), Some(scene.content())) {
+            self.painter.drop_recordings_of(dead);
+        }
         // Damage is what the tracker holds. No producer applies a partial
         // `flui_layer::DamageRegion` to a `Renderer`: its unmanaged entry
         // points mark every frame full. Widgets reporting their own
@@ -2506,6 +2513,7 @@ mod tests {
             },
             capabilities,
             painter,
+            lineage: crate::recording_cache::DrawnLineages::new(),
             offscreen,
             supports_copy_src: false,
             device_lost: Arc::clone(&callback_flag),

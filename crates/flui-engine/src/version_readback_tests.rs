@@ -2681,3 +2681,122 @@ fn a_chunk_drawn_without_a_glyph_is_recorded_again() {
     );
     assert_eq!(pixels_differing(&second.pixels, &oracle.pixels), 0);
 }
+
+/// A cache over its budget evicts, in each frame, what that frame's
+/// recordings push out and looks at no other entry: with 1 000 and with
+/// 10 000 recordings kept, each frame that recolours one box looks at the
+/// entries it evicts, and the same number at both sizes.
+#[test]
+fn a_cache_over_its_budget_looks_only_at_what_each_frame_evicts() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    const UPDATES: usize = 4;
+    // Per size, each update frame's (entries looked at, evictions).
+    let mut work = Vec::new();
+    for kept in [1_000, 10_000] {
+        let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let cell = writer.mint_node();
+        let mut content = BoundaryContent::builder();
+        for index in 0..kept {
+            content.chunk(chunk_of(&mut writer, index + 2, |canvas| {
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                    &Paint::fill(Color::GREEN),
+                );
+            }));
+        }
+        content.slot(cell);
+        writer.push(SceneOp::Publish {
+            node: root,
+            content: Arc::new(content.finish()),
+        });
+        publish(&mut writer, cell, kept, Color::RED);
+        writer.push(SceneOp::Place {
+            node: cell,
+            placement: Placement::try_new(Offset::new(64.0, 64.0)).expect("a finite offset"),
+        });
+        owner.apply(SURFACE).expect("the scene applies");
+
+        apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+        capture
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the first frame renders");
+        let first = capture.counters();
+        assert_eq!(first.chunks_recorded, kept as u64 + 1);
+        assert_eq!(capture.recording_cache_work().0, kept + 1);
+        // Full from here on: each recording the cell adds pushes one out.
+        capture.set_recording_cache_budget(
+            usize::try_from(first.recording_cache_bytes).expect("bytes fit"),
+        );
+        capture.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+        capture
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the warm-up renders");
+        let _ = capture.recording_cache_work();
+
+        let frames: Vec<(u64, u64)> = (0..UPDATES)
+            .map(|update| {
+                let mut writer = owner.writer();
+                let color = [Color::BLUE, Color::RED][update % 2];
+                publish(&mut writer, cell, kept, color);
+                owner.apply(SURFACE).expect("a recolour applies");
+                apply(&mut capture, owner.patch_damage());
+                capture
+                    .render_scene(&Scene::of_version(owner.current().clone()))
+                    .expect("the update renders");
+                let counters = capture.counters();
+                assert_eq!(counters.chunks_recorded, 1, "only the cell records");
+                (
+                    capture.recording_cache_work().1,
+                    counters.recording_cache_evictions,
+                )
+            })
+            .collect();
+        for &(visits, evictions) in &frames {
+            assert!(evictions > 0, "the cache is over its budget: {frames:?}");
+            assert_eq!(
+                visits, evictions,
+                "a frame looks at the entries it evicts and no other, at {kept}: {frames:?}"
+            );
+        }
+        work.push(frames);
+    }
+    assert_eq!(work[0], work[1], "the work is the same at both sizes");
+}
+
+/// A slot that draws another scene owner's version drops, in that frame, the
+/// recordings of the owner it drew before: a tree that was unmounted does not
+/// keep its recordings until the budget evicts them. A new version of the
+/// same owner keeps the recordings of its unchanged chunks.
+#[test]
+fn a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let draw = |version: SceneVersion| {
+        renderer
+            .render_scene(&Scene::of_version(version), (SIDE, SIDE))
+            .expect("the frame renders");
+        renderer.context().kept_recordings()
+    };
+    let first = Row::new([Color::RED; 4]);
+    assert_eq!(draw(first.version()), Some(4), "the first owner's boxes");
+    let mut second = Row::new([Color::BLUE; 4]);
+    assert_eq!(
+        draw(second.version()),
+        Some(4),
+        "the second owner's boxes, and none of the first's"
+    );
+    let _ = second.recolor(1, Color::GREEN);
+    assert_eq!(
+        draw(second.version()),
+        Some(5),
+        "a new version of one box beside the four the owner drew"
+    );
+    drop(first);
+}

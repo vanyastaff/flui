@@ -354,6 +354,8 @@ mod pipeline_warmup;
 mod pixel_shift;
 mod portable_coverage;
 mod profiler;
+/// Values in the order of their last use, for least-recently-used eviction.
+mod recency;
 mod recording_budget;
 /// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
 /// under the same transform and ambient state (ADR-0304 §9).
