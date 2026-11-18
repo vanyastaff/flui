@@ -186,7 +186,6 @@ objc2-foundation = { workspace = true, features = [
     "NSRunLoop",
     # The deadline `testing::appkit` waits for an event until.
     "NSDate",
-    "NSBundle",
     "NSRange",
     "NSNotification",
     "NSDistributedNotificationCenter",

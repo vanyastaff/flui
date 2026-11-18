@@ -1,12 +1,10 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 115 закрыты и 19 открыты (сверено с `main` @ `4db9c6981` и закрытием
-  LY85); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
-  задачи, — строки
+  Из 134 задач серии 116 закрыты и 18 открыты (сверено с `main` @ `4db9c6981`, закрытием
+  LY85 и закрытием LY61); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых
+  ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
-    провайдеры Android;
   - LY63 — `locale|layoutDirection` в `configChanges` шаблона, его теста и проверки манифеста;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
@@ -5751,17 +5749,24 @@ GPU-память простаивающего или невидимого окн
   ленивого доступа к большой папке и записи в неё нет (папка читается целиком); на движке без
   `cancel` (Chromium до 113, Safari до 16.4), а также в Firefox до 112 и Safari до 17, которые от
   него не отличить, поздний выбор ввода остаётся отменой.
-- [ ] **LY61** (открыта: ждёт LY67) — исполнителя на `Platform` нет: хост ведёт IO на runtime,
-  который одалживает создатель (`NativeExecutor`, ADR-0327 §3; нить `flui-native-bg` — его
-  собственные рабочие). Провайдеры `flui-system` есть на Windows, macOS, Linux, Web и iOS
-  (LY57–LY60, LY73); у сервисов `Platform` нет production-вызовов. Остаётся код, когда LY67 даст
-  провайдеры Android: удалить `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`,
-  `prompt_for_new_path`, `app_path` из `Platform` (`crates/flui-native/src/platform.rs:412–442`,
-  `:496`, реализация `:718–773`) и из таблицы хоста (`crates/flui-native/src/host.rs:184–208`) с
-  реализациями в каждом `owner/*`; типы `PathPromptOptions`, `Task`, `TaskLabel`
-  (`crates/flui-native/src/task.rs`); фикстуры trybuild
-  `tests/ui/{platform_and_host_window_are_sealed,host_table_names_every_position}.rs` и чтение
-  `app_path` в `tests/launch_values.rs`.
+- [x] **LY61** (закрыта веткой `platform/services-leave-platform`) — исполнителя на `Platform`
+  нет: хост ведёт IO на runtime, который одалживает создатель (`NativeExecutor`, ADR-0327 §3).
+  `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path` и `app_path`
+  удалены из `Platform`, из таблицы хоста и из каждого `owner/*` (Windows, X11, Wayland, macOS,
+  iOS, Android, Web, headless); удалены `task.rs` (`Task`, `TaskLabel`), `PathPromptOptions`,
+  варианты `PlatformError::{AppPath, Dialog}`, оболочка Windows (`shell_open`,
+  `foreground_recipient`, STA-нить диалогов), `xdg_open` Linux и список открытых URL headless.
+  Production-вызовов не было ни в `crates/`, ни в `packages/`, `examples/`, фасаде, книге и
+  шаблонах CLI; замена — `flui_platform::launch` и провайдеры `flui-system` (передача переднего
+  плана запущенному обработчику на Windows уже в `flui-system`), `app_path` — `std::env::current_exe`
+  (у FLUI своей формы нет: вызывал её только тест; путь бандла Apple — `NSBundle`). Трейт таблицы
+  `host::Services` стал `host::Launch` (`launch_value`, `page_origin`). Фикстуры trybuild
+  `host_table_names_every_position` и `platform_and_host_window_are_sealed` переписаны без
+  удалённых методов (ожидания — те же ошибки, сдвиг строк), тест `app_path` в
+  `tests/launch_values.rs` и `ready_tasks_return_results_without_executor_bounds` удалены вместе с
+  API. ADR-0039 §2 (`app_path`, оболочка, диалоги) — `Superseded-by` ADR-0151 §9, §9 переписан
+  (`Revised`), ADR-0327 §3 без диалогов Windows; `docs/gaps.md`, строка parity «App folders and
+  storage», ARCHITECTURE ядра.
 - [x] **LY67** (закрыта веткой `system/android-providers-2`: провайдеры Android лаунчера, файловых
   диалогов, message box, share, папок пользователя и сведений о системе; прогоны на Galaxy S21 и
   эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел

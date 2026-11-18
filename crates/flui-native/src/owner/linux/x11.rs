@@ -75,7 +75,6 @@
 
 use std::cell::Cell;
 use std::os::fd::{AsFd, OwnedFd};
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -105,7 +104,7 @@ use crate::host;
 use crate::owner::OpenWindows;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::linux::single_instance::FirstInstance;
-use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
+use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
@@ -114,8 +113,7 @@ use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
 use crate::owner::watch::Watch;
 use crate::owner::window_delivery::WindowDelivery;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
-use crate::platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform};
-use crate::task::Task;
+use crate::platform::{AppHandler, ExitAnswer, Platform};
 
 /// The connection to the X server the platform reads events from and its
 /// windows send requests on.
@@ -1728,13 +1726,7 @@ impl host::Preferences<X11Loop> for X11Loop {
     }
 }
 
-/// What a file prompt answers on this host: the file chooser portal is not
-/// spoken here yet.
-fn no_file_prompt() -> PlatformError {
-    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost).into()
-}
-
-impl host::Services for X11Loop {
+impl host::Launch for X11Loop {
     /// Only a page has an origin.
     fn page_origin(&self) -> Option<String> {
         None
@@ -1742,50 +1734,6 @@ impl host::Services for X11Loop {
 
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
-    }
-
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        std::env::current_exe().map_err(|error| PlatformError::AppPath {
-            message: error.to_string(),
-        })
-    }
-
-    fn open_url(&self, url: &str) {
-        xdg_open(url.as_ref());
-    }
-
-    fn reveal_path(&self, path: &Path) {
-        // The extension, not the path: a document the user picked is their
-        // data.
-        tracing::info!(extension = ?path.extension(), "revealing a path");
-        if let Some(parent) = path.parent() {
-            xdg_open(parent.as_os_str());
-        }
-    }
-
-    fn open_path(&self, path: &Path) {
-        tracing::info!(extension = ?path.extension(), "opening a path");
-        xdg_open(path.as_os_str());
-    }
-
-    /// The file chooser portal is the system capability crate's (ADR-0151
-    /// §3): this host has none, and says so.
-    fn prompt_for_paths(
-        &self,
-        options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        let _ = options;
-        Task::ready(Err(no_file_prompt()))
-    }
-
-    /// See [`Self::prompt_for_paths`].
-    fn prompt_for_new_path(
-        &self,
-        directory: &Path,
-        suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        let _ = (directory, suggested_name);
-        Task::ready(Err(no_file_prompt()))
     }
 }
 

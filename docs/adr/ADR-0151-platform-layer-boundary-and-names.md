@@ -26,6 +26,9 @@
   `native-capture` (it was `driver`), and say where the code differs from section 16; section 16
   names Android's presentation time as `VK_GOOGLE_display_timing`, not its frame timelines, which
   give a deadline.
+- **Revised:** 2026-11-18 — section 9 says where each service went as built (`app_path` to
+  `std::env::current_exe`) and that `Task`, `TaskLabel` and `PathPromptOptions` left with the file
+  prompts instead of staying as the hosts' marshaling.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -34,6 +37,8 @@
   [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) (its other decisions
   stand). The boundary ADR-0082 drew between a contract crate and a host crate stands. Also
   [ADR-0211](ADR-0211-unified-drag-and-drop.md) decision 12's `bitflags` type (section 5).
+  Also [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §2's `app_path`, shell dispatches
+  and file prompts (section 9: they leave `Platform`).
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) (section 13:
   `AppLifecycleState` stays where it is),
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (upstream types in Stable
@@ -481,10 +486,15 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 
 ### 9. `Platform` slims; one `AppHandler` replaces the application-level registrations
 
-Removed from `Platform`: `background_executor` (`BackgroundExecutor` and `Task` stay as the hosts' own marshaling),
-`active_window`, `write_to_clipboard`, `read_from_clipboard`, `on_window_event`,
-`compositor_name`, and `on_open_urls`, which has no producer. Moved to `flui-system`: `open_url`,
-`reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path`.
+Removed from `Platform`: `background_executor` (the host's own IO runs on the `NativeExecutor` its
+creator hands it, ADR-0327 §3), `active_window`, `write_to_clipboard`, `read_from_clipboard`,
+`on_window_event`, `compositor_name`, and `on_open_urls`, which has no producer. Moved to
+`flui-system`: `open_url`, `reveal_path`, `open_path` (the contract is `flui_platform::launch`,
+the providers are `flui-system`'s), `prompt_for_paths`, `prompt_for_new_path` (its file dialogs)
+and `app_path`, which has no FLUI form: the executable is `std::env::current_exe`, and the user's
+folders are `flui-system`'s. `Task`, `TaskLabel` and `PathPromptOptions`, which only the prompts
+named, are gone with them; the core host's loop answers only what the process was launched with
+(`host::Launch`).
 `keyboard_layout` and `on_keyboard_layout_change` become `pub(crate)` in the core host: nothing
 above the host reads them today. The menu feature, which labels shortcuts, publishes them with
 that consumer.
