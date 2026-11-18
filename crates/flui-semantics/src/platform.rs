@@ -36,6 +36,7 @@
 //! action straight to `SemanticsOwner::resolve_action` with no translation
 //! table in between.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use accesskit::{ActionRequest, TreeUpdate};
@@ -158,9 +159,15 @@ impl RouteChange {
 /// Told each [`RouteChange`] once the update that shows it is delivered, by
 /// a semantics owner whose adapter conveys route changes
 /// [natively](RouteChangeSupport::Native).
-pub type RouteChangeSink = Arc<dyn Fn(RouteChange) + Send + Sync>;
+pub type RouteChangeSink = Rc<dyn Fn(RouteChange)>;
 
 /// Platform capability for exposing one window's accessibility tree.
+///
+/// The window's owner thread holds and calls it. It keeps `Send + Sync` while
+/// a host still shares its window across threads (the Android window and the
+/// Win32 UI Automation bridge, ADR-0327 §5); the listeners it is handed stay
+/// `Send + Sync` for good, since an adapter calls them from the thread its
+/// platform speaks on, such as AT-SPI's D-Bus thread.
 pub trait PlatformAccessibility: Send + Sync {
     /// Hand the platform an update — incremental or self-contained.
     ///

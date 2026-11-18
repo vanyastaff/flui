@@ -2,6 +2,7 @@
 //! publication exports, what assistive technology never hears, and what the
 //! merge and boundary rules do with it.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
@@ -30,7 +31,7 @@ fn render_id(index: u32) -> RenderId {
 fn published_button() -> (SemanticsOwner, TreeUpdate) {
     let received: Arc<Mutex<Vec<TreeUpdate>>> = Arc::default();
     let sink = Arc::clone(&received);
-    let mut owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+    let mut owner = SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
         sink.lock().push(update.clone());
     }));
     let mut root = SemanticsNode::new().with_source_render_id(render_id(1));
@@ -199,7 +200,7 @@ fn the_identifier_is_exported_unannounced_unmerged_and_no_boundary() {
 /// budget leaves out.
 #[test]
 fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
-    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, label: &str, identifier: Option<&str>| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
         node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
@@ -286,7 +287,7 @@ fn debug_builds_queue_a_published_clash_once_per_shape() {
     if !cfg!(debug_assertions) {
         return;
     }
-    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, identifier: &str| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
         node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
@@ -358,7 +359,7 @@ fn debug_builds_queue_a_published_clash_once_per_shape() {
 /// group, is not reported, and the tree is published as written.
 #[test]
 fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
-    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
         node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
@@ -419,7 +420,7 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
 
 #[test]
 fn unpublished_identifiers_are_reported_once_per_parent_and_bounded() {
-    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, identifier: Option<String>| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
         node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 10.0));
@@ -468,7 +469,7 @@ fn unpublished_identifiers_are_reported_once_per_parent_and_bounded() {
 
 #[test]
 fn an_identifier_lifted_under_many_parents_leaves_room_for_the_rest() {
-    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
         node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 10.0));
