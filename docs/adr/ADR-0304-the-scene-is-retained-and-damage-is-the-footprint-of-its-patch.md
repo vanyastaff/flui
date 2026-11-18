@@ -174,9 +174,10 @@ of the parents' content, which their paint already produces. Bounds that are not
 `Bounds::Unbounded`.
 
 A chunk keeps its `ContentVersion` while its render object owes no paint work (it is absent from
-the paint queue, ADR-0062) and its recording inputs, the device pixel ratio and its origin in the
-boundary, are unchanged; otherwise it gets the next one. A composited-layer update republishes the
-boundary's content with the new effect and the same chunks. `seq` comes from the scene owner's
+the paint queue, ADR-0062) and its recording inputs, the device pixel ratio, its origin in the
+boundary and the paint anchor it reads, are unchanged; otherwise it gets the next one. A
+composited-layer update republishes the boundary's content with the new effect and the same
+chunks. `seq` comes from the scene owner's
 `IdMint<NonZeroU64>` (`crates/flui-foundation/src/sequence.rs:118-186`), which never wraps, and
 `SceneVersionId` draws from the same mint. `Lineage(NonZeroU64)` comes from a non-`pub`
 `static AtomicIdMint<NonZeroU64>`, because every UI thread builds scene owners; it never wraps,
