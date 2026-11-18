@@ -362,8 +362,8 @@ than maintained as a second ABI.
 
 `BoxFit::apply` returns source and destination sizes. Comparing those sizes
 cannot determine clipping: a contained image can scale up while showing the
-whole source. The unused `FittedSizes::will_clip` query is removed; `scale_factor`
-and `needs_scaling` retain their scalar and size-comparison contracts.
+whole source, so `FittedSizes` answers no clipping query; `scale_factor` keeps
+its scalar contract.
 
 ### 3. No `DisplayList` mutation, no analysis layer, no trait pair
 

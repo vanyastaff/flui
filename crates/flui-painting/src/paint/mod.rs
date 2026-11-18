@@ -4,8 +4,6 @@
 //! including blend modes, image handling, clipping, canvas primitives, and
 //! shaders.
 
-#![expect(unused)] // Painting API for future implementation
-
 pub mod blend_mode;
 pub mod canvas;
 pub mod clipping;
@@ -22,21 +20,18 @@ pub mod style;
 pub use crate::Alignment;
 pub use blend_mode::{BlendMode, CoverageClass};
 pub use canvas::{
-    BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,
-    StrokeJoin, TextureId, TileMode, VertexMode,
+    FilterQuality, PathFillType, PointMode, StrokeCap, StrokeJoin, TextureId, TileMode,
 };
-pub use clipping::{Clip, ClipBehavior, ClipOp};
+pub use clipping::{Clip, ClipOp};
 pub use effects::{
-    BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, ImageSampling,
-    ImageTransform, InvalidImageTransform, PathPaintMode, StrokeOptions,
+    ColorAdjustment, ColorMatrix, ImageFilter, ImageSampling, ImageTransform, InvalidImageTransform,
 };
 pub use image::{
-    BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageDataError, ImageRepeat,
-    MAX_ENCODED_IMAGE_BYTES,
+    BoxFit, ColorFilter, FittedSizes, Image, ImageDataError, ImageRepeat, MAX_ENCODED_IMAGE_BYTES,
 };
 #[cfg(feature = "decode")]
 pub use image_decode::{ImageDecodeError, MAX_DECODED_IMAGE_BYTES};
 pub use path::{Path, PathCommand};
-pub use shader::{ImageShader, MaskFilter, Shader};
+pub use shader::{ImageShader, Shader};
 pub use shapes::{CornerRounding, Morph, RoundedPolygon, ShapeError};
 pub use style::{DashPattern, Paint, PaintBuilder, PaintStyle};

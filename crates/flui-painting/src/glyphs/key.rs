@@ -200,13 +200,6 @@ impl GlyphKey {
         self
     }
 
-    /// This key, hinted or not.
-    #[must_use]
-    pub const fn with_hinting(mut self, hinted: bool) -> Self {
-        self.hinted = hinted;
-        self
-    }
-
     /// The face.
     #[must_use]
     pub const fn face(self) -> FaceKey {

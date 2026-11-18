@@ -4,6 +4,7 @@
 //! [`Corners<Radius>`](flui_foundation::geometry::Corners), offering ergonomic
 //! constructors and methods for defining corner radii in UI elements.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Corners, Radius};
 
 /// Border radius for all four corners of a rectangle.
@@ -298,13 +299,14 @@ impl BorderRadiusExt for BorderRadius {
 ///
 /// ```
 /// use flui_foundation::geometry::Radius;
+/// use flui_foundation::TextDirection;
 /// use flui_painting::styling::BorderRadiusDirectional;
 ///
 /// let directional = BorderRadiusDirectional::circular(16.0);
 ///
 /// // Resolve to physical corners based on text direction
-/// let ltr_radius = directional.resolve(true); // LTR
-/// let rtl_radius = directional.resolve(false); // RTL
+/// let ltr_radius = directional.resolve(TextDirection::Ltr);
+/// let rtl_radius = directional.resolve(TextDirection::Rtl);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -378,11 +380,10 @@ impl BorderRadiusDirectional {
     ///
     /// # Arguments
     ///
-    /// * `ltr` - If true, uses left-to-right layout. If false, uses
-    ///   right-to-left.
+    /// * `direction` - the text direction `start` and `end` follow.
     #[inline]
-    pub const fn resolve(self, ltr: bool) -> BorderRadius {
-        if ltr {
+    pub const fn resolve(self, direction: TextDirection) -> BorderRadius {
+        if direction.is_ltr() {
             Corners {
                 top_left: self.top_start,
                 top_right: self.top_end,
