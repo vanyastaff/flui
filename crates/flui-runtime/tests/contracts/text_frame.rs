@@ -2410,7 +2410,6 @@ fn drive_shared_prepared_frame(
             .owner_frame()
             .drive_frame(
                 now,
-                flui_scheduler::IdleDeadline::far_future(now),
                 || {
                     runtime.drain_owner_inbox();
                 },

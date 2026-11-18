@@ -1,6 +1,41 @@
 //! What a dialog is asked for, and what it answers.
 
+use std::ffi::OsStr;
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use flui_platform::data_transfer::TransferLimits;
+
+/// The longest title, button label or message a dialog shows, in bytes.
+///
+/// Checked with the rest of a request, before the system is asked, so one
+/// limit holds on every host: Windows takes text up to its first NUL and
+/// D-Bus refuses one, so a NUL in any of them is refused as well.
+pub const MAX_TEXT_LEN: usize = 4096;
+
+/// Whether `text` is a line a dialog can show as written: at most
+/// [`MAX_TEXT_LEN`] bytes and no control character (a title, a label).
+pub(super) fn is_line(text: &str) -> bool {
+    text.len() <= MAX_TEXT_LEN && !text.chars().any(char::is_control)
+}
+
+/// Whether `text` is a body a dialog can show as written: at most
+/// [`MAX_TEXT_LEN`] bytes and no NUL; line breaks are kept.
+pub(super) fn is_body(text: &str) -> bool {
+    text.len() <= MAX_TEXT_LEN && !text.contains('\0')
+}
+
+/// The first title or label of a request that is not a line.
+fn check_lines<'a>(
+    lines: impl IntoIterator<Item = Option<&'a str>>,
+) -> Result<(), MalformedRequest> {
+    if lines.into_iter().flatten().all(is_line) {
+        Ok(())
+    } else {
+        Err(MalformedRequest::Text)
+    }
+}
 
 /// A named set of files an open or save dialog offers to filter by: "Images"
 /// with `png` and `jpg`.
@@ -102,6 +137,40 @@ impl FileFilter {
     #[must_use]
     pub fn mime_types(&self) -> &[String] {
         &self.mime_types
+    }
+
+    /// Whether a file named `name`, of the MIME type `mime_type` where the
+    /// system says, is one this filter means: its name is longer than and
+    /// ends in `.` and one of the extensions, ignoring ASCII case, or its
+    /// type (without parameters, ignoring ASCII case) is one of the MIME
+    /// types, `image/*` meaning every image type.
+    ///
+    /// What a host checks a pick against when its dialog only suggests the
+    /// filters (ADR-0360 §4): a browser's file input offers every file
+    /// beside them.
+    #[must_use]
+    pub fn matches(&self, name: &str, mime_type: Option<&str>) -> bool {
+        let by_name = self.extensions.iter().any(|extension| {
+            name.len() > extension.len() + 1
+                && name.is_char_boundary(name.len() - extension.len() - 1)
+                && name[name.len() - extension.len() - 1..]
+                    .strip_prefix('.')
+                    .is_some_and(|tail| tail.eq_ignore_ascii_case(extension))
+        });
+        let by_type = mime_type
+            .map(|mime_type| mime_type.split(';').next().unwrap_or_default().trim())
+            .filter(|mime_type| !mime_type.is_empty())
+            .is_some_and(|mime_type| {
+                self.mime_types
+                    .iter()
+                    .any(|accepted| match accepted.strip_suffix("/*") {
+                        Some(kind) => mime_type
+                            .split_once('/')
+                            .is_some_and(|(given, _)| given.eq_ignore_ascii_case(kind)),
+                        None => mime_type.eq_ignore_ascii_case(accepted),
+                    })
+            });
+        by_name || by_type
     }
 
     /// The first thing wrong with the filter: its name, matching nothing, or
@@ -231,6 +300,14 @@ pub enum MalformedRequest {
     /// The folder the dialog opens in is relative.
     #[error("the dialog's folder is not absolute")]
     RelativeDirectory,
+    /// A title or a button label is longer than [`MAX_TEXT_LEN`] or holds a
+    /// control character, or a message is longer than [`MAX_TEXT_LEN`] or
+    /// holds a NUL: a host would cut it short or refuse it.
+    #[error("a title, label or message cannot be shown as written")]
+    Text,
+    /// A message box has no message to show.
+    #[error("the message box has no message")]
+    EmptyMessage,
 }
 
 /// What an open dialog picks.
@@ -246,6 +323,10 @@ enum Pick {
 pub struct OpenRequest {
     pick: Pick,
     multiple: bool,
+    /// The most bytes the picks may hold together where the system hands
+    /// over a pick's contents rather than its path (a browser), as
+    /// [`max_bytes`](Self::max_bytes) sets it.
+    pub max_bytes: u64,
     /// The dialog's title, if set.
     pub title: Option<String>,
     /// The folder the dialog opens in, if set; it must be absolute.
@@ -273,6 +354,7 @@ impl OpenRequest {
         Self {
             pick,
             multiple: false,
+            max_bytes: TransferLimits::default().max_bytes,
             title: None,
             directory: None,
             filters: Vec::new(),
@@ -316,6 +398,20 @@ impl OpenRequest {
         self
     }
 
+    /// Read at most `max_bytes` of the picks, together, where the system
+    /// hands over a pick's contents rather than its path (a browser): the
+    /// picks' sizes are checked against it before anything is read, and
+    /// more is answered with
+    /// [`DialogError::TooLarge`](super::DialogError::TooLarge). The default
+    /// is [`TransferLimits`]' default, the bound a drop's payload has; a
+    /// request that expects larger files opts in here. A pick at a path is
+    /// not read by the dialog, so this bounds nothing there.
+    #[must_use]
+    pub fn max_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_bytes = max_bytes;
+        self
+    }
+
     /// Whether it picks folders rather than files.
     #[must_use]
     pub fn picks_folders(&self) -> bool {
@@ -335,6 +431,7 @@ impl OpenRequest {
             return Err(MalformedRequest::FiltersOnFolders);
         }
         check_filters(&self.filters)?;
+        check_lines([self.title.as_deref(), self.accept_label.as_deref()])?;
         check_directory(self.directory.as_deref())
     }
 }
@@ -348,10 +445,14 @@ fn check_directory(directory: Option<&Path>) -> Result<(), MalformedRequest> {
     }
 }
 
-/// A save dialog: the user picks a new or existing file to write.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// A save dialog: the user picks a new or existing file to write, and the
+/// dialog writes the request's [`contents`](Self::contents) there when it
+/// carries them.
+#[derive(Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SaveRequest {
+    /// What the save writes, if set ([`contents`](Self::contents)).
+    pub contents: Option<Arc<[u8]>>,
     /// The dialog's title, if set.
     pub title: Option<String>,
     /// The folder the dialog opens in, if set; it must be absolute.
@@ -406,22 +507,44 @@ impl SaveRequest {
         self
     }
 
+    /// Write `contents` to the file the user chooses before the dialog
+    /// answers: the one way to save on a system that hands a page no file to
+    /// write later (a browser, which writes them through its save picker or
+    /// as a download), and the same save everywhere else, where the file is
+    /// written off the owner thread once the user has chosen it. A save that
+    /// fails to write answers the failure, not the location.
+    #[must_use]
+    pub fn contents(mut self, contents: impl Into<Arc<[u8]>>) -> Self {
+        self.contents = Some(contents.into());
+        self
+    }
+
     /// The first thing wrong with the request, which no dialog is shown
     /// for.
     pub(super) fn check(&self) -> Result<(), MalformedRequest> {
-        let is_name = |name: &String| {
-            !name.trim().is_empty()
-                && !name
-                    .chars()
-                    .any(|c| c.is_control() || matches!(c, '/' | '\\'))
-                && name != "."
-                && name != ".."
-        };
         check_filters(&self.filters)?;
-        if !self.suggested_name.as_ref().is_none_or(is_name) {
+        if !self.suggested_name.as_deref().is_none_or(is_file_name) {
             return Err(MalformedRequest::SuggestedName);
         }
+        check_lines([self.title.as_deref(), self.accept_label.as_deref()])?;
         check_directory(self.directory.as_deref())
+    }
+}
+
+impl fmt::Debug for SaveRequest {
+    /// The contents by their length: they are the user's.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SaveRequest")
+            .field("title", &self.title)
+            .field("directory", &self.directory)
+            .field("suggested_name", &self.suggested_name)
+            .field("filters", &self.filters)
+            .field("accept_label", &self.accept_label)
+            .field(
+                "contents_len",
+                &self.contents.as_ref().map(|contents| contents.len()),
+            )
+            .finish()
     }
 }
 
@@ -532,15 +655,68 @@ impl<'a> IntoIterator for &'a Picks {
     }
 }
 
+/// Whether `name` is a file name a dialog can hand out: not blank, not `.`
+/// or `..`, no path separator and no control character.
+fn is_file_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && !name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\'))
+        && name != "."
+        && name != ".."
+}
+
 /// A file or folder the user picked.
 ///
-/// Its own type rather than a path, so that a later backend can carry the
-/// access a sandbox grants with it (a security-scoped bookmark, a document
-/// portal entry, a content URI) without changing what callers receive.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Its own type rather than a path, since not every system answers one: a
+/// desktop dialog answers where the file is ([`path`](Self::path)), and a
+/// browser answers a file a page may read but never a path to it, which the
+/// pick carries as its name and its contents ([`contents`](Self::contents)).
+/// A later backend can carry the access a sandbox grants with a pick (a
+/// security-scoped bookmark, a document portal entry, a content URI) the
+/// same way, without changing what callers receive.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PickedFile {
-    path: PathBuf,
+    place: Place,
+}
+
+/// Where a pick is: what the system answered for it.
+#[derive(Clone, PartialEq, Eq)]
+enum Place {
+    /// A file at a path the application opens itself.
+    Path(PathBuf),
+    /// A file the browser handed over: its name, and what it holds, read
+    /// when the dialog answered (an open) or written before it did (a save).
+    Contents { name: String, contents: Arc<[u8]> },
+    /// Contents handed to the browser as a download under this name.
+    Download { name: String },
+}
+
+/// What a [`PickedFile`] is, as the system answered it: the form a caller
+/// branches on when it handles more than one system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PickedForm<'a> {
+    /// A file at a path, which the application reads or writes itself.
+    Path(&'a Path),
+    /// A file a browser handed over without a path: its name, and what it
+    /// holds, read when an open dialog answered or written before a save
+    /// answered.
+    Contents {
+        /// The name the browser gave it.
+        name: &'a str,
+        /// What it holds.
+        contents: &'a [u8],
+    },
+    /// A save's contents handed to the browser as a download under `name`.
+    /// Where it was written, under which name, and whether it was written
+    /// at all, the browser does not say: the user may cancel it, a setting
+    /// may block it, and the browser renames it beside a file of that name.
+    Download {
+        /// The name the download was offered under.
+        name: &'a str,
+    },
 }
 
 impl PickedFile {
@@ -551,12 +727,97 @@ impl PickedFile {
     pub fn try_new(path: impl Into<PathBuf>) -> Option<Self> {
         let path: PathBuf = path.into();
         let nul = path.as_os_str().as_encoded_bytes().contains(&0);
-        (path.is_absolute() && !nul).then_some(Self { path })
+        (path.is_absolute() && !nul).then_some(Self {
+            place: Place::Path(path),
+        })
     }
 
-    /// Where it is.
+    /// The file named `name` holding `contents`, as a system that hands
+    /// over no path reports it (a browser); `None` when `name` is not a file
+    /// name: blank, `.` or `..`, or holding a path separator or a control
+    /// character.
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn try_from_contents(name: impl Into<String>, contents: Arc<[u8]>) -> Option<Self> {
+        let name: String = name.into();
+        is_file_name(&name).then_some(Self {
+            place: Place::Contents { name, contents },
+        })
+    }
+
+    /// A save's contents handed to the browser as a download offered as
+    /// `name` ([`PickedForm::Download`]); `None` when `name` is not a file
+    /// name, as [`try_from_contents`](Self::try_from_contents) judges it.
+    #[must_use]
+    pub fn try_download(name: impl Into<String>) -> Option<Self> {
+        let name: String = name.into();
+        is_file_name(&name).then_some(Self {
+            place: Place::Download { name },
+        })
+    }
+
+    /// What it is, as the system answered it.
+    #[must_use]
+    pub fn form(&self) -> PickedForm<'_> {
+        match &self.place {
+            Place::Path(path) => PickedForm::Path(path),
+            Place::Contents { name, contents } => PickedForm::Contents { name, contents },
+            Place::Download { name } => PickedForm::Download { name },
+        }
+    }
+
+    /// Where it is; `None` for a file the system handed over without a
+    /// path (a browser's), whose [`contents`](Self::contents) the pick
+    /// holds instead, and for a download.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        match self.form() {
+            PickedForm::Path(path) => Some(path),
+            PickedForm::Contents { .. } | PickedForm::Download { .. } => None,
+        }
+    }
+
+    /// Its name: the last component of its [`path`](Self::path), the name
+    /// the system handed it over with, or the name a download was offered
+    /// under. `None` for a path that ends in `..` or is a root.
+    #[must_use]
+    pub fn file_name(&self) -> Option<&OsStr> {
+        match self.form() {
+            PickedForm::Path(path) => path.file_name(),
+            PickedForm::Contents { name, .. } | PickedForm::Download { name } => {
+                Some(OsStr::new(name))
+            }
+        }
+    }
+
+    /// What the file holds, for a file the system handed over without a
+    /// path: read when an open dialog answered, within the request's
+    /// [`max_bytes`](OpenRequest::max_bytes), or written before a save
+    /// answered. `None` for a pick at a path, which the application reads
+    /// itself, and for a download, which nobody saw written.
+    #[must_use]
+    pub fn contents(&self) -> Option<&[u8]> {
+        match self.form() {
+            PickedForm::Contents { contents, .. } => Some(contents),
+            PickedForm::Path(_) | PickedForm::Download { .. } => None,
+        }
+    }
+}
+
+impl fmt::Debug for PickedFile {
+    /// The path or the name, and a handed-over file's length: its contents
+    /// are the user's.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.place {
+            Place::Path(path) => f.debug_struct("PickedFile").field("path", path).finish(),
+            Place::Contents { name, contents } => f
+                .debug_struct("PickedFile")
+                .field("name", name)
+                .field("len", &contents.len())
+                .finish(),
+            Place::Download { name } => f
+                .debug_struct("PickedFile")
+                .field("download", name)
+                .finish(),
+        }
     }
 }

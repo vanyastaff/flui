@@ -20,7 +20,7 @@ autotests = false
 exclude = ["/ARCHITECTURE.md", "/benches/"]
 
 [dependencies]
-# Flui foundation (the minted TaskId and FrameCallbackId and their IdMint family;
+# Flui foundation (the minted FrameCallbackId and its IdMint family;
 # and MonotonicClock/ManualClock/SystemClock, which FrameClock's ClockSource reuses)
 flui-foundation = { workspace = true }
 
@@ -100,6 +100,4 @@ tier = "S"
 tier-kind = "internal"
 order = 2
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "task::next_task_id::COUNTER", grant = "ADR-0097", class = "counter", reason = "Task identities, minted by AtomicIdMint with permanent typed exhaustion refusal" },
-]
+globals = []

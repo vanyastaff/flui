@@ -1,28 +1,12 @@
 //! Post-frame callbacks run **after** the pipeline, in the same frame.
-//!
-//! # Persistent callbacks and the pipeline
-//!
-//! The pipeline is not itself a persistent callback: it is
-//! a closure passed to `OwnerFrame::drive_frame`, so a *registered* persistent
-//! callback runs **before** it. Post-frame ordering — the only thing a
-//! geometry-measuring post-frame callback needs — is unaffected.
-//! `persistent_callbacks_run_before_the_pipeline` pins the persistent-phase
-//! ordering.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_scheduler::__runtime::DriveFrame as _;
-use flui_scheduler::{IdleDeadline, Instant, SchedulerPhase, UpdateScheduler};
+use flui_scheduler::{Instant, SchedulerPhase, UpdateScheduler};
 use parking_lot::Mutex;
-
-/// An Idle-slice deadline far enough in the future that it never passes
-/// during a test — these tests exercise post-frame ordering, not the
-/// deadline gate itself, so Idle-priority work must never be deferred here.
-fn far_deadline() -> IdleDeadline {
-    IdleDeadline::far_future(Instant::now())
-}
 
 /// Append-only log of the order things happened in.
 #[derive(Clone, Default)]
@@ -37,8 +21,8 @@ impl Log {
     }
 }
 
-/// The draw-frame phases run in order: persistent, then post-frame. The pipeline sits in the persistent
-/// slot, so a post-frame callback must observe everything it did.
+/// A frame runs its pipeline, then its post-frame callbacks, so a post-frame
+/// callback observes everything the pipeline did.
 fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     let scheduler = UpdateScheduler::new();
     let log = Log::default();
@@ -53,7 +37,6 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             Instant::now(),
-            far_deadline(),
             || {},
             || {
                 log_pipe.push("pipeline");
@@ -68,12 +51,9 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 /// panic, calls `abort_frame` (phase → `Idle`, **no** post-frame callbacks), and
 /// resumes the unwind. The queued callbacks survive to the next completed frame.
 ///
-/// A panicking persistent callback skips the post-frame loop, and the phase is
-/// still reset.
-///
-/// `abort_frame` must not go through `set_scheduler_phase`: `PersistentCallbacks
-/// -> Idle` is an illegal transition, so its `debug_assert!` would fire and — were
-/// this a `Drop` guard running during unwind — double-panic into `abort`.
+/// `abort_frame` must not go through `set_scheduler_phase`: `Frame -> Idle` is
+/// not a step of the phase machine, so its `debug_assert!` would fire and,
+/// were this a `Drop` guard running during unwind, double-panic into `abort`.
 fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     let scheduler = UpdateScheduler::new();
     let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("one frame owner");
@@ -85,12 +65,7 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
         owner
-            .drive_frame(
-                Instant::now(),
-                far_deadline(),
-                || {},
-                || panic!("pipeline exploded"),
-            )
+            .drive_frame(Instant::now(), || {}, || panic!("pipeline exploded"))
             .expect("live owner frame");
     }))
     .is_err();
@@ -109,20 +84,20 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
 /// The guard the previous test's `Idle` assertion protects: a frame left open at
-/// `PersistentCallbacks` would make the next `handle_begin_frame` attempt an
-/// illegal `PersistentCallbacks -> TransientCallbacks` transition.
+/// `Frame` would make the next `handle_begin_frame` attempt an illegal
+/// `Frame -> Frame` transition.
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
     let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("one frame owner");
     let _ = catch_unwind(AssertUnwindSafe(|| {
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || panic!("boom"))
+            .drive_frame(Instant::now(), || {}, || panic!("boom"))
             .expect("live owner frame");
     }));
 
@@ -134,48 +109,10 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(ran.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-}
-
-/// **Persistent callbacks run before the pipeline.**
-///
-/// The pipeline is a closure, not a registered persistent callback, so every
-/// registered persistent callback runs *before* it. Nothing in the framework
-/// registers one today.
-fn persistent_callbacks_run_before_the_pipeline() {
-    let scheduler = UpdateScheduler::new();
-    let log = Log::default();
-
-    let log_persistent = log.clone();
-    scheduler.add_persistent_frame_callback(std::rc::Rc::new(move |_| {
-        log_persistent.push("persistent");
-    }));
-
-    let log_pipe = log.clone();
-    let log_post = log.clone();
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        log_post.push("post_frame");
-    }));
-    flui_scheduler::OwnerFrame::try_new(&scheduler)
-        .expect("the scheduler has no live owner frame")
-        .drive_frame(
-            Instant::now(),
-            far_deadline(),
-            || {},
-            || {
-                log_pipe.push("pipeline");
-            },
-        )
-        .expect("live owner frame");
-
-    assert_eq!(
-        log.get(),
-        vec!["persistent", "pipeline", "post_frame"],
-        "persistent callbacks run first; the pipeline follows them"
-    );
 }
 
 fn retiring_owner_cancels_the_active_local_tail() {
@@ -195,7 +132,7 @@ fn retiring_owner_cancels_the_active_local_tail() {
         lane.schedule(move |_| tail.set(true)).expect("tail");
         let result = catch_unwind(AssertUnwindSafe(|| {
             owner
-                .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+                .drive_frame(Instant::now(), || {}, || {})
                 .expect("live owner frame");
         }));
         assert_eq!(result.is_err(), fail_after_retire);
@@ -210,7 +147,7 @@ fn retiring_owner_cancels_the_active_local_tail() {
             "retirement cancels callbacks already snapshotted for this frame"
         );
         assert_eq!(
-            owner.drive_frame(Instant::now(), far_deadline(), || {}, || {}),
+            owner.drive_frame(Instant::now(), || {}, || {}),
             Err(flui_scheduler::ExecutionError::Retired)
         );
         assert!(
@@ -278,7 +215,7 @@ fn retirement_orders_captures_and_destroys_tail_after_failure() {
             lane.schedule(move |_| drop(capture)).expect("active tail");
         }
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
         let expected = vec!["older", "middle", "newer"];
         assert_eq!(
@@ -289,7 +226,7 @@ fn retirement_orders_captures_and_destroys_tail_after_failure() {
         assert!(owner.retire().is_none());
         assert!(lane.schedule(|_| {}).is_err());
         assert_eq!(
-            owner.drive_frame(Instant::now(), far_deadline(), || {}, || {}),
+            owner.drive_frame(Instant::now(), || {}, || {}),
             Err(flui_scheduler::ExecutionError::Retired)
         );
         assert_eq!(
@@ -332,7 +269,7 @@ fn incomplete_presentations_do_not_block_eligible_siblings() {
         .expect("runtime callback");
     b.complete_segment().expect("b coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(log.get(), ["b", "runtime"]);
 
@@ -355,11 +292,11 @@ fn incomplete_presentations_do_not_block_eligible_siblings() {
         .expect("resumed layout registration");
     a.complete_segment().expect("a coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(log.get(), ["b", "runtime", "a original", "a late layout"]);
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(
         log.get().len(),
@@ -369,7 +306,7 @@ fn incomplete_presentations_do_not_block_eligible_siblings() {
     a.enter_segment().expect("next a segment");
     a.complete_segment().expect("next a coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(
         log.get(),
@@ -404,7 +341,6 @@ fn an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next() {
     let aborted = catch_unwind(AssertUnwindSafe(|| {
         owner.drive_frame(
             Instant::now(),
-            far_deadline(),
             || {},
             || {
                 presentation.complete_segment().expect("coherent geometry");
@@ -429,7 +365,6 @@ fn an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next() {
     let entered = owner
         .drive_frame(
             Instant::now(),
-            far_deadline(),
             || {},
             || {
                 let entered = presentation.enter_segment();
@@ -461,7 +396,6 @@ fn an_aborted_frame_suspends_the_segment_it_left_running() {
     let aborted = catch_unwind(AssertUnwindSafe(|| {
         owner.drive_frame(
             Instant::now(),
-            far_deadline(),
             || {},
             || {
                 presentation.enter_segment().expect("segment");
@@ -487,7 +421,6 @@ fn an_aborted_frame_suspends_the_segment_it_left_running() {
     let resumed = owner
         .drive_frame(
             Instant::now(),
-            far_deadline(),
             || {},
             || {
                 let resumed = presentation.resume_segment();
@@ -515,7 +448,7 @@ fn cancelled_geometry_transfers_completion_debt_to_replacement() {
         .expect("callback");
     presentation.cancel_segment().expect("withdraw geometry");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(log.get(), [] as [&str; 0]);
     assert!(
@@ -529,7 +462,7 @@ fn cancelled_geometry_transfers_completion_debt_to_replacement() {
         .complete_segment()
         .expect("replacement coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(log.get(), ["coherent replacement"]);
 }
@@ -557,7 +490,7 @@ fn eligible_panic_preserves_exact_epochs_and_healthy_recovery() {
     a.complete_segment().expect("a coherent");
     let result = catch_unwind(AssertUnwindSafe(|| {
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
     }))
     .expect_err("head fails");
@@ -572,7 +505,7 @@ fn eligible_panic_preserves_exact_epochs_and_healthy_recovery() {
     b.resume_segment().expect("b resumes");
     b.complete_segment().expect("b coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(
         log.get(),
@@ -582,7 +515,7 @@ fn eligible_panic_preserves_exact_epochs_and_healthy_recovery() {
     a.resume_segment().expect("new a resumes");
     a.complete_segment().expect("new a coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(log.get(), ["b", "a tail"]);
 }
@@ -622,7 +555,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
         PollDecision::Skip(SkipReason::Hidden)
     );
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert!(log.get().is_empty(), "hidden completion remains accepted");
 
@@ -634,7 +567,6 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
     owner
         .drive_frame(
             Instant::now(),
-            far_deadline(),
             || {},
             || {
                 if presentation.has_completion_demand() {
@@ -650,7 +582,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
         PollDecision::Skip(SkipReason::NoDemand)
     );
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(log.get(), ["coherent completion"]);
 }
@@ -721,7 +653,7 @@ fn a_requested_completion_survives_wake_failure_and_host_clearing() {
         // An unrelated host frame can clear its latch without admitting this
         // presentation. The scoped completion promise remains owned.
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert_eq!(log.get(), ["unscoped"]);
         let before_rearm = healthy_wakes.load(Ordering::SeqCst);
@@ -731,7 +663,6 @@ fn a_requested_completion_survives_wake_failure_and_host_clearing() {
             owner
                 .drive_frame(
                     Instant::now(),
-                    far_deadline(),
                     || {},
                     || {
                         if presentation.has_completion_demand() {
@@ -751,7 +682,7 @@ fn a_requested_completion_survives_wake_failure_and_host_clearing() {
             ["unscoped", "first completion", "successor completion"]
         );
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert_eq!(log.get().len(), 3);
         drop(presentation);
@@ -794,7 +725,7 @@ fn reentrant_partial_geometry_blocks_an_already_selected_tail() {
     a.complete_segment().expect("a coherent");
     let failure = catch_unwind(AssertUnwindSafe(|| {
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
     }))
     .expect_err("a head fails");
@@ -813,7 +744,7 @@ fn reentrant_partial_geometry_blocks_an_already_selected_tail() {
         .expect("c callback");
     c.complete_segment().expect("c coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(
         log.get(),
@@ -824,10 +755,10 @@ fn reentrant_partial_geometry_blocks_an_already_selected_tail() {
     a.resume_segment().expect("replacement a resumes");
     a.complete_segment().expect("replacement a coherent");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     owner
-        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .drive_frame(Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert_eq!(
         log.get(),
@@ -880,7 +811,7 @@ fn preserving_scope_close_destroys_captures_and_keeps_siblings_deliverable() {
             .expect("b callback");
         b.complete_segment().expect("b coherent");
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert!(owner.retire().is_none());
         assert_eq!(log.get(), ["capture dropped", "healthy sibling"]);
@@ -967,7 +898,7 @@ fn withdrawal_defers_capture_retirement_until_other_authority_is_closed() {
             .expect("sibling callback");
         b.complete_segment().expect("sibling coherent");
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
         let expected = vec![
             "other authority retired",
@@ -1040,7 +971,7 @@ fn closing_a_scope_retires_its_active_tail_without_losing_siblings() {
         b.complete_segment().expect("b coherent");
         let result = catch_unwind(AssertUnwindSafe(|| {
             owner
-                .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+                .drive_frame(Instant::now(), || {}, || {})
                 .expect("live owner frame");
         }));
         assert_eq!(result.is_err(), failures.contains(&true));
@@ -1056,7 +987,7 @@ fn closing_a_scope_retires_its_active_tail_without_losing_siblings() {
             assert_eq!(log.get(), ["first retirement", "second retirement"]);
         }
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("live owner frame");
         let expected = vec!["first retirement", "second retirement", "b survives"];
         assert_eq!(
@@ -1190,7 +1121,7 @@ fn scope_retirement_after_live_owner_failure_destroys_captures() {
             .expect("sibling capture");
         b.complete_segment().expect("sibling coherent");
         owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .drive_frame(Instant::now(), || {}, || {})
             .expect("healthy next frame");
         assert_eq!(log.get(), ["healthy sibling"]);
     }
@@ -1272,10 +1203,6 @@ fn post_frame_ordering_matrix() {
             (
                 "a_frame_after_a_panicking_frame_starts_cleanly",
                 a_frame_after_a_panicking_frame_starts_cleanly as fn(),
-            ),
-            (
-                "persistent_callbacks_run_before_the_pipeline",
-                persistent_callbacks_run_before_the_pipeline as fn(),
             ),
         ],
     );

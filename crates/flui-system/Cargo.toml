@@ -6,9 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "FLUI's OS shell services: launching, file dialogs, autostart, global shortcuts, the launcher entry and the user's folders"
+description = "FLUI's OS shell services: launching, file dialogs and message boxes, sharing, autostart, global shortcuts, the launcher entry, the jump list, the user's folders and the system's version"
 repository.workspace = true
-keywords = ["ui", "flui", "dialog", "launcher"]
+keywords = ["ui", "flui", "dialog", "launcher", "taskbar"]
 categories = ["gui"]
 autotests = false
 
@@ -29,12 +29,108 @@ serde = { workspace = true }
 zbus = { workspace = true }
 zruntime = { version = "0.2", default-features = false, features = ["runtime", "event", "unblock"] }
 
+# The Windows providers: the shell's COM objects and Win32 calls, each run on
+# the thread and apartment its documentation names (ADR-0154 §1, §5).
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    # The share sheet: `DataTransferManager` and its `DataPackage`, with the
+    # shared files as `StorageFile`s.
+    "ApplicationModel_DataTransfer",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage",
+    "Storage_Streams",
+    # `RtlGetVersion`: the real OS build, which the manifest does not shim.
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    # The jump list's task titles (`PKEY_Title`).
+    "Win32_Storage_EnhancedStorage",
+    # Opening a file to judge what it is (`CreateFileW`,
+    # `GetFinalPathNameByHandleW`).
+    "Win32_Storage_FileSystem",
+    # Whether the process runs packaged, which owns its start-up task.
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    # A small icon's size at the window's scale, for the taskbar badge.
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# The panic a Windows OS entry contains, and a shell thread abandoned past
+# its deadline, are logged.
+tracing = { workspace = true }
+# The shared files, as the `IIterable` the share sheet takes.
+windows-collections = { workspace = true }
+raw-window-handle = { workspace = true }
+
+# The web providers: the browser's pickers, `<dialog>`, `window.open`, the
+# Web Share API and the Badging API, reached through the canvas of the
+# acquiring widget's window. Newer APIs (the File System Access pickers,
+# `navigator.share`, the Badging API,
+# `navigator.userActivation`) are read through `Reflect`, which also detects
+# a browser without them.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+raw-window-handle = { workspace = true }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = { workspace = true }
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "CssStyleDeclaration",
+    "HtmlCanvasElement",
+    "HtmlDialogElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Navigator",
+    "Node",
+    "Url",
+    "Window",
+] }
+
 [dev-dependencies]
 flui-platform = { workspace = true, features = ["testing"] }
 flui-sdk = { workspace = true }
 flui-testing = { workspace = true }
 # Reads the crate's own `[package.metadata.flui.capability]` in a test.
 toml = { workspace = true }
+
+# A save's file, written where a test's folder is.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = { workspace = true }
+
+# The web providers' tests, in a browser (`web::tests`).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+# What a test sets an input's files with, dispatches events by, and gives
+# its page a content security policy with.
+web-sys = { version = "0.3", features = [
+    "DataTransfer",
+    "DataTransferItem",
+    "DataTransferItemList",
+    "DomImplementation",
+    "EventInit",
+    "HtmlHeadElement",
+    "NodeList",
+] }
 
 # The stand-in desktop portal the Linux providers' tests serve on a private
 # bus.

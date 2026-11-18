@@ -8,71 +8,50 @@ use std::sync::{
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::scheduler::UpdateScheduler;
 
+/// The pipeline runs in every frame; a post-frame callback runs once, after
+/// the pipeline of the frame it was registered for.
 #[test]
-fn test_full_frame_lifecycle() {
-    // Test complete frame lifecycle: schedule -> begin -> callbacks -> end
+fn a_post_frame_callback_runs_once_after_the_pipeline() {
     let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler)
+        .expect("the scheduler has no live owner frame");
+    let pipeline_runs = Arc::new(AtomicU32::new(0));
+    let post_frame_saw = Arc::new(AtomicU32::new(0));
 
-    let transient_called = Arc::new(AtomicU32::new(0));
-    let persistent_called = Arc::new(AtomicU32::new(0));
-    let post_frame_called = Arc::new(AtomicU32::new(0));
-
-    // Register all callback types
-    let t = Arc::clone(&transient_called);
-    scheduler.schedule_frame_callback(Box::new(move |_timestamp| {
-        t.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let p = Arc::clone(&persistent_called);
-    scheduler.add_persistent_frame_callback(std::rc::Rc::new(move |_timing| {
-        p.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let pf = Arc::clone(&post_frame_called);
+    let runs = Arc::clone(&pipeline_runs);
+    let saw = Arc::clone(&post_frame_saw);
     scheduler.add_post_frame_callback(Box::new(move |_timing| {
-        pf.fetch_add(1, Ordering::SeqCst);
+        saw.store(runs.load(Ordering::SeqCst), Ordering::SeqCst);
     }));
 
-    // Execute frame
-    flui_scheduler::OwnerFrame::try_new(&scheduler)
-        .expect("the scheduler has no live owner frame")
-        .drive_frame(
-            flui_scheduler::Instant::now(),
-            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-            || {},
-            || {},
-        )
-        .expect("live owner frame");
+    for _ in 0..2 {
+        owner
+            .drive_frame(
+                flui_scheduler::Instant::now(),
+                || {},
+                || {
+                    pipeline_runs.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .expect("live owner frame");
+    }
 
-    // Verify all callbacks were called
-    assert_eq!(transient_called.load(Ordering::SeqCst), 1);
-    assert_eq!(persistent_called.load(Ordering::SeqCst), 1);
-    assert_eq!(post_frame_called.load(Ordering::SeqCst), 1);
-
-    // Execute another frame - only persistent should be called again
-    flui_scheduler::OwnerFrame::try_new(&scheduler)
-        .expect("the scheduler has no live owner frame")
-        .drive_frame(
-            flui_scheduler::Instant::now(),
-            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-            || {},
-            || {},
-        )
-        .expect("live owner frame");
-
-    assert_eq!(transient_called.load(Ordering::SeqCst), 1); // Still 1
-    assert_eq!(persistent_called.load(Ordering::SeqCst), 2); // Now 2
-    assert_eq!(post_frame_called.load(Ordering::SeqCst), 1); // Still 1
+    assert_eq!(pipeline_runs.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        post_frame_saw.load(Ordering::SeqCst),
+        1,
+        "the callback ran once, after the first frame's pipeline"
+    );
 }
 
 /// The frame span's `period_us` field is read by the profiler's jank line, so
-/// it must carry the budget's period, not the 60 Hz the scheduler starts with.
+/// it must carry the display period the runtime set, not the 60 Hz the
+/// scheduler starts with.
 #[test]
-fn frame_span_carries_the_budget_period() {
+fn frame_span_carries_the_display_period() {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use flui_scheduler::duration::{FrameDuration, InvalidDurationConfig};
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
 
@@ -108,14 +87,6 @@ fn frame_span_carries_the_budget_period() {
         fn exit(&self, _: &Id) {}
     }
 
-    assert_eq!(
-        FrameDuration::try_from_period(Duration::ZERO),
-        Err(InvalidDurationConfig::ZeroPeriod)
-    );
-    // 59.94 Hz stays exact: it is not rounded to 60 frames per second.
-    let ntsc = FrameDuration::try_from_period(Duration::from_nanos(16_683_333)).expect("period");
-    assert_eq!(ntsc.as_micros(), 16_683);
-
     let seen = Arc::new(Mutex::new(Vec::new()));
     flui_testing::log_capture::disarm_interest_cache();
     tracing::subscriber::with_default(Periods(Arc::clone(&seen)), || {
@@ -123,29 +94,22 @@ fn frame_span_carries_the_budget_period() {
         let drive = || {
             flui_scheduler::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
-                .drive_frame(
-                    flui_scheduler::Instant::now(),
-                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                    || {},
-                    || {},
-                )
+                .drive_frame(flui_scheduler::Instant::now(), || {}, || {})
                 .expect("frame");
         };
         drive();
-        scheduler.set_budget_frame_duration(
-            FrameDuration::try_from_period(Duration::from_micros(8_333)).expect("period"),
-        );
+        // 119.88 Hz: the span reports whole microseconds.
+        scheduler.set_display_period(Duration::from_nanos(8_341_675));
         drive();
     });
     let seen = seen.lock().expect("period log");
     assert_eq!(seen.len(), 2);
-    assert!(
-        (16_600..=17_000).contains(&seen[0]),
-        "the first frame reports the default 60 Hz-class budget, got {} us",
-        seen[0]
+    assert_eq!(
+        seen[0], 16_666,
+        "the first frame reports the default 60 Hz period"
     );
     assert_eq!(
-        seen[1], 8_333,
-        "the span reports the period the budget judged the frame against"
+        seen[1], 8_341,
+        "the span reports the period the runtime set"
     );
 }

@@ -85,17 +85,12 @@ impl Drop for SchedulerInner {
         // Detach every opaque collection before invocation or retirement. Rc's
         // strong count is already zero: callback reentry cannot revive the UI
         // scheduler or register work into collections being destroyed.
-        let transient = std::mem::take(self.callbacks.transient.get_mut());
-        let persistent = std::mem::take(self.callbacks.persistent.get_mut());
         let post_frame = self
             .callbacks
             .post_frame
             .get_mut()
             .detach_unclaimed_for_retirement();
-        let microtasks = std::mem::take(self.callbacks.microtasks.get_mut());
         let listeners = std::mem::take(self.callbacks.lifecycle_listeners.get_mut());
-        let timings = std::mem::take(self.binding.timings_callbacks.get_mut());
-        let tasks = self.task_queue.detach_for_retirement();
         let hook = self.wake.on_frame_scheduled.lock().take();
         let waiters = self.frame.completion_waiters.get_mut().drain();
         let mut delivery =
@@ -123,25 +118,10 @@ impl Drop for SchedulerInner {
         if let Some(payload) = delivery.into_failure() {
             retirement.observe(payload);
         }
-        for value in transient {
-            retirement.retire(value);
-        }
-        for value in persistent {
-            retirement.retire(value);
-        }
         for value in post_frame {
             retirement.retire(value);
         }
-        for value in microtasks {
-            retirement.retire(value);
-        }
         for value in listeners {
-            retirement.retire(value);
-        }
-        for value in timings {
-            retirement.retire(value);
-        }
-        for value in tasks {
             retirement.retire(value);
         }
         retirement.retire(hook);

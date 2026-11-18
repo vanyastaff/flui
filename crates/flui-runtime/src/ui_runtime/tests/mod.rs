@@ -135,7 +135,7 @@ fn coexistence_constraints() -> BoxConstraints {
 /// actually overlap. The rendezvous below fixes that by sitting INSIDE
 /// each UI runtime's own `drive_frame` pipeline closure — which
 /// `OwnerFrame::drive_frame` guarantees runs during
-/// `SchedulerPhase::PersistentCallbacks` (see
+/// `SchedulerPhase::Frame` (see
 /// `the_production_frame_polls_the_ui_runtimes_async_driver_once_before_the_pipeline`)
 /// — so neither closure can proceed past the rendezvous until BOTH
 /// UI runtimes are provably mid-transaction at the same instant.
@@ -175,10 +175,9 @@ pub(crate) fn two_ui_runtimes_two_threads_no_shared_state() {
                 .owner_frame()
                 .drive_frame(
                     flui_scheduler::Instant::now(),
-                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                     || {},
                     || {
-                        // Mid-PersistentCallbacks rendezvous: cannot return
+                        // Mid-frame rendezvous: cannot return
                         // until ui_runtime A's own closure below has ALSO
                         // reached this point.
                         rendezvous_or_timeout("ui_runtime B");
@@ -195,7 +194,6 @@ pub(crate) fn two_ui_runtimes_two_threads_no_shared_state() {
             .owner_frame()
             .drive_frame(
                 flui_scheduler::Instant::now(),
-                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {},
                 || {
                     rendezvous_or_timeout("ui_runtime A");

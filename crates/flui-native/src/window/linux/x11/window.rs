@@ -94,9 +94,7 @@
 //! destroyed; everything else names the window by its identity.
 
 mod manager_hints;
-mod surface;
-
-use surface::{X11Display, X11Redraw, X11Surface};
+mod sync;
 
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
@@ -116,6 +114,10 @@ use flui_platform::{
     WindowPosition, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
+use raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, WindowHandle, XcbDisplayHandle, XcbWindowHandle,
+};
 use rustc_hash::FxHashMap;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event;
@@ -127,6 +129,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
+use self::sync::{SyncCounters, initialize_sync};
 use super::hints::WM_HINTS;
 use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_mode,
@@ -151,7 +154,7 @@ use crate::owner::linux::x11::{
 };
 use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
-use crate::owner::window_delivery::{NativeFate, Publication, WindowDelivery};
+use crate::owner::window_delivery::{NativeFate, Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
 use crate::window::desktop::DisplayFrame;
 use crate::window::linux::class::AppClass;
@@ -394,56 +397,6 @@ struct Chrome {
     presses: ChromePresses,
     /// The button of the press the window took, whose release it takes too.
     held: Option<u32>,
-}
-
-/// The two XSync counters a window names in `_NET_WM_SYNC_REQUEST_COUNTER`,
-/// in that order: the one a window manager without frame synchronisation
-/// waits on, and the extended one (`protocols`).
-#[derive(Debug, Clone, Copy)]
-struct SyncCounters {
-    basic: xsync::Counter,
-    extended: xsync::Counter,
-}
-
-impl SyncCounters {
-    /// Two counters made on `xcb` at 0, or `None` when the connection has no
-    /// ids left or failed. Both ids are taken before either counter is made,
-    /// and the first is destroyed again when the second cannot be: none is
-    /// left on the server for nobody.
-    fn create(xcb: &x11rb::xcb_ffi::XCBConnection) -> Option<Self> {
-        let zero = xsync::Int64 { hi: 0, lo: 0 };
-        let basic = xcb.generate_id().ok()?;
-        let extended = xcb.generate_id().ok()?;
-        xcb.sync_create_counter(basic, zero).ok()?;
-        if xcb.sync_create_counter(extended, zero).is_err() {
-            let _: Result<(), _> = xcb
-                .sync_destroy_counter(basic)
-                .map(x11rb::cookie::VoidCookie::ignore_error);
-            return None;
-        }
-        Some(Self { basic, extended })
-    }
-}
-
-/// The SYNC version a connection asks for: 3.1, what libXext asks for GDK and
-/// Qt. The counters a window makes are in every version.
-const SYNC_VERSION: (u8, u8) = (3, 1);
-
-/// Initialise the SYNC extension on `xcb`, as the extension asks before any
-/// other of its requests: whether the server has it and answered.
-fn initialize_sync(xcb: &x11rb::xcb_ffi::XCBConnection) -> bool {
-    use x11rb::connection::RequestConnection as _;
-
-    let present = matches!(
-        xcb.extension_information(xsync::X11_EXTENSION_NAME),
-        Ok(Some(_))
-    );
-    present
-        && xcb
-            .sync_initialize(SYNC_VERSION.0, SYNC_VERSION.1)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .is_some()
 }
 
 /// The `_NET_WM_MOVERESIZE` direction that moves a window.
@@ -1788,6 +1741,119 @@ impl Drop for X11Window {
         // a drop while unwinding aborts).
         self.closed.set(true);
         crate::owner::panic_boundary::contain_owner_callback(|| self.retire());
+    }
+}
+
+/// An X11 window's surface target (ADR-0254 §5): the platform's connection
+/// as its display and the window as its window, until the window's
+/// retirement.
+struct X11Surface {
+    connection: Arc<X11Connection>,
+    xid: NonZeroU32,
+    visual: Option<NonZeroU32>,
+    retirement: Retirement,
+}
+
+impl HasWindowHandle for X11Surface {
+    #[expect(
+        unsafe_code,
+        reason = "a raw window handle is borrowed for as long as the target lives"
+    )]
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        if self.retirement.is_retired() {
+            return Err(HandleError::Unavailable);
+        }
+        let mut handle = XcbWindowHandle::new(self.xid);
+        handle.visual_id = self.visual;
+        // SAFETY: the X window lives until the window's retirement has let go
+        // of its handler (`X11Window::retire` destroys it in the retirement's
+        // completion), and the handler owns the renderer that holds this
+        // target and every surface made from the handle; once retirement has
+        // started, no handle is handed out.
+        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Xcb(handle)) })
+    }
+}
+
+impl HasDisplayHandle for X11Surface {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        if self.retirement.is_retired() {
+            return Err(HandleError::Unavailable);
+        }
+        xcb_display(&self.connection)
+    }
+}
+
+/// The X11 host's display connection (ADR-0305 §2): the connection its windows
+/// are made on, so its handle is every window target's.
+pub(crate) struct X11Display(pub(crate) Arc<X11Connection>);
+
+impl HasDisplayHandle for X11Display {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        xcb_display(&self.0)
+    }
+}
+
+impl flui_platform::DisplayConnection for X11Display {}
+
+/// The XCB display handle of `connection`, borrowed for as long as the
+/// connection is.
+#[expect(
+    unsafe_code,
+    reason = "a raw display handle is borrowed for as long as the connection lives"
+)]
+fn xcb_display(connection: &X11Connection) -> Result<DisplayHandle<'_>, HandleError> {
+    let raw = std::ptr::NonNull::new(connection.xcb().get_raw_xcb_connection());
+    let screen = i32::try_from(connection.screen_number()).map_err(|_| HandleError::Unavailable)?;
+    // SAFETY: the libxcb connection the pointer names closes only when the
+    // last `Arc<X11Connection>` drops, and the borrow cannot outlive the
+    // `&X11Connection` it is made from.
+    Ok(unsafe {
+        DisplayHandle::borrow_raw(RawDisplayHandle::Xcb(XcbDisplayHandle::new(raw, screen)))
+    })
+}
+
+impl flui_platform::SurfaceTarget for X11Surface {
+    /// X11 has no frame callback to arm: a present is paced by the swap
+    /// chain, and this returns at once. The swap chain's completion events go
+    /// to the GPU driver's own connection, so the host learns nothing of when
+    /// the frame is shown.
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
+
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its retirement, whichever way it comes (a
+    /// user's close, a command, the platform's release at quit), then unmaps
+    /// the X window instead of destroying it (`X11Window::retire`), and this
+    /// target, leaked, keeps the connection the window and the surface's
+    /// display live on. A keep after the retirement destroyed the window, or
+    /// after another client did, does nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
+    }
+}
+
+/// An X11 window's redraw requester: any thread marks the window and rings
+/// the loop's doorbell. It holds no window, so a requester a waker keeps
+/// never keeps a closed window alive.
+struct X11Redraw {
+    redraw: Arc<AtomicBool>,
+    doorbell: Doorbell,
+    retirement: Retirement,
+}
+
+impl flui_platform::RedrawRequester for X11Redraw {
+    fn request_redraw(&self) {
+        if self.retirement.is_retired() {
+            return;
+        }
+        self.redraw.store(true, Ordering::Release);
+        if let Err(error) = self.doorbell.ring() {
+            tracing::error!(%error, "a frame request could not wake the X11 loop");
+        }
     }
 }
 

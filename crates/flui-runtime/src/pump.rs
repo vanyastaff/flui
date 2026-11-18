@@ -17,14 +17,6 @@
 pub trait FrameClockSource {
     /// This frame's timestamp. Called exactly once per pump.
     fn frame_time(&mut self) -> web_time::Instant;
-
-    /// Deadline for idle-priority work in this frame.
-    ///
-    /// The default never defers idle work, which is what every host did
-    /// before a pump took a clock.
-    fn idle_deadline(&mut self, frame_time: web_time::Instant) -> flui_scheduler::IdleDeadline {
-        flui_scheduler::IdleDeadline::far_future(frame_time)
-    }
 }
 
 /// A clock the host has already read: the one `now` a wake samples for its
