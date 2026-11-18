@@ -1,14 +1,16 @@
 //! The message box as a `UIAlertController` in the alert style, presented
 //! from the requesting window's top controller (`presenter`).
 //!
-//! The title is the alert's title and the message its message. Each button
-//! is an action whose handler answers it. The button that closing the box
-//! means (OK of a box with one button, Cancel of a box that has one) is the
-//! cancel-style action, which UIKit places apart and gives Escape to on a
-//! hardware keyboard; the default button is the preferred action, drawn
-//! bold and given Return. A Yes or No box has no cancel action, so nothing
-//! closes it but an answer. The labels are English, as on macOS and the
-//! web. The level has no form in an alert, which shows no icon.
+//! The title is the alert's title and the message its message, with the
+//! detail below it after an empty line (an alert has one message). Each
+//! button is an action whose handler answers it, titled by the request's
+//! label or its English word, as on macOS and the web. The button that
+//! closing the box means (OK of a box with one button, Cancel of a box that
+//! has one) is the cancel-style action, which UIKit places apart and gives
+//! Escape to on a hardware keyboard; the request's default button is the
+//! preferred action, drawn bold and given Return. A Yes or No box has no
+//! cancel action, so nothing closes it but an answer. The level has no form
+//! in an alert, which shows no icon.
 //!
 //! A box is always the alert style, never an action sheet: that style is
 //! for a choice about something the user just touched, and an iPad shows it
@@ -20,7 +22,22 @@
 //! A box asked for while another controller of its window is still leaving
 //! is shown once that one has left.
 
-use crate::dialog::{MessageAnswer, MessageButtons};
+use crate::dialog::{MessageAnswer, MessageBoxRequest, MessageButtons};
+
+/// The alert's message: the request's message, and its detail below it
+/// after an empty line.
+pub(super) fn alert_message(request: &MessageBoxRequest) -> String {
+    match &request.detail {
+        Some(detail) => format!("{}\n\n{detail}", request.message),
+        None => request.message.clone(),
+    }
+}
+
+/// The title of `action` in an alert of `request`: the request's label for
+/// its button, or its English word.
+pub(super) fn action_title<'a>(request: &'a MessageBoxRequest, action: &Action) -> &'a str {
+    request.label(action.answer).unwrap_or(action.title)
+}
 
 /// How UIKit draws an action and what it does with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +99,7 @@ mod uikit {
     };
 
     use super::super::presenter::{dismiss, guarded, present, when_presentable};
-    use super::{ActionStyle, actions};
+    use super::{ActionStyle, action_title, actions, alert_message};
     use crate::apple::modal::{Pending, WeakPending};
     use crate::dialog::{
         DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
@@ -130,11 +147,12 @@ mod uikit {
     ) -> Retained<UIAlertController> {
         let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
             request.title.as_deref().map(NSString::from_str).as_deref(),
-            Some(&NSString::from_str(&request.message)),
+            Some(&NSString::from_str(&alert_message(request))),
             UIAlertControllerStyle::Alert,
             mtm,
         );
-        for (index, button) in actions(request.buttons).iter().enumerate() {
+        let preferred = request.default_answer();
+        for button in actions(request.buttons) {
             // Taken by the handler when it runs, so what it holds of the
             // caller is dropped inside the boundary.
             let answering = Cell::new(Some(pending.clone()));
@@ -156,13 +174,13 @@ mod uikit {
                 ActionStyle::Cancel => UIAlertActionStyle::Cancel,
             };
             let action = UIAlertAction::actionWithTitle_style_handler(
-                Some(&NSString::from_str(button.title)),
+                Some(&NSString::from_str(action_title(request, button))),
                 style,
                 Some(&handler),
                 mtm,
             );
             alert.addAction(&action);
-            if index == 0 {
+            if button.answer == preferred {
                 alert.setPreferredAction(Some(&action));
             }
         }
@@ -211,8 +229,26 @@ mod uikit {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActionStyle, actions};
-    use crate::dialog::{MessageAnswer, MessageButtons};
+    use super::{ActionStyle, action_title, actions, alert_message};
+    use crate::dialog::{MessageAnswer, MessageBoxRequest, MessageButtons};
+
+    #[test]
+    fn an_alert_shows_the_detail_below_the_message_and_each_buttons_label() {
+        let request = MessageBoxRequest::new("Delete the note?")
+            .detail("It cannot be brought back.")
+            .buttons(MessageButtons::OkCancel)
+            .button_label(MessageAnswer::Ok, "Delete");
+        assert_eq!(
+            alert_message(&request),
+            "Delete the note?\n\nIt cannot be brought back."
+        );
+        assert_eq!(alert_message(&MessageBoxRequest::new("Saved")), "Saved");
+        let titles = actions(request.buttons)
+            .iter()
+            .map(|action| action_title(&request, action))
+            .collect::<Vec<&str>>();
+        assert_eq!(titles, ["Delete", "Cancel"], "a label, or the English word");
+    }
 
     #[test]
     fn each_button_is_an_action_and_only_what_closing_means_is_the_cancel_one() {

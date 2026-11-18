@@ -27,10 +27,21 @@
 //! filter menu, so every filter is allowed at once and a save reports no
 //! selected filter.
 //!
+//! A filter of every file leaves the panel as one with no filter: with no
+//! menu to select it in, offering it beside others allows every file. A
+//! filter that names a file exactly (`Makefile`) has no content type to
+//! allow, so the panel is given no allowed types at all (ADR-0372): an open
+//! panel's delegate then enables only what the request's filters name or
+//! type, as it does under any filter, and a save panel takes any name and
+//! appends nothing.
+//!
 //! The title is the panel's message (a sheet has no title bar) as well as
 //! its title, the accept label its prompt. The panel ends with its window
 //! and with its caller's dialog: the hold ends the sheet, and the completion
-//! handler that ending runs answers nobody.
+//! handler that ending runs answers nobody. AppKit answers no panel at all
+//! where the process may not show one (an App Sandbox without the
+//! user-selected-file entitlement, the panel service failing): the request
+//! then answers `Unavailable`.
 
 use std::path::PathBuf;
 
@@ -118,7 +129,8 @@ mod appkit {
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
     use objc2::{
-        DefinedClass, MainThreadMarker, MainThreadOnly, Message as _, define_class, msg_send,
+        ClassType as _, DefinedClass, MainThreadMarker, MainThreadOnly, Message as _, define_class,
+        msg_send,
     };
     use objc2_app_kit::{
         NSModalResponse, NSOpenPanel, NSOpenSavePanelDelegate, NSSavePanel, NSWindow,
@@ -138,6 +150,46 @@ mod appkit {
         SaveResult,
     };
     use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
+
+    /// Where [`MacDialogs`] gets its panels: AppKit's own, or, in a test, a
+    /// source that makes none.
+    ///
+    /// AppKit answers no panel at all where the process may not show one
+    /// (an App Sandbox without the user-selected-file entitlement) or the
+    /// panel service did not answer, which a later request may find
+    /// changed: the request then answers `Unavailable`.
+    #[derive(Clone, Copy)]
+    struct Panels {
+        open: fn(MainThreadMarker) -> Option<Retained<NSOpenPanel>>,
+        save: fn(MainThreadMarker) -> Option<Retained<NSSavePanel>>,
+    }
+
+    /// AppKit's panels.
+    const APPKIT_PANELS: Panels = Panels {
+        open: open_panel,
+        save: save_panel,
+    };
+
+    /// A new open panel; `None` where AppKit makes none.
+    ///
+    /// Sent by hand: the binding's `openPanel` declares a panel that is
+    /// never nil and panics on the nil AppKit answers in an App Sandbox
+    /// without the user-selected-file entitlement, or when the panel
+    /// service fails.
+    fn open_panel(_mtm: MainThreadMarker) -> Option<Retained<NSOpenPanel>> {
+        // SAFETY: `+[NSOpenPanel openPanel]` takes no argument and answers an
+        // autoreleased `NSOpenPanel` or nil, on the main thread, which the
+        // marker proves this is.
+        unsafe { msg_send![NSOpenPanel::class(), openPanel] }
+    }
+
+    /// A new save panel; `None` where AppKit makes none, as [`open_panel`].
+    fn save_panel(_mtm: MainThreadMarker) -> Option<Retained<NSSavePanel>> {
+        // SAFETY: `+[NSSavePanel savePanel]` takes no argument and answers an
+        // autoreleased `NSSavePanel` or nil, on the main thread, which the
+        // marker proves this is.
+        unsafe { msg_send![NSSavePanel::class(), savePanel] }
+    }
 
     /// The item the panel answers for `url`: the target of an alias or a
     /// link, resolved without asking the user or mounting a volume, and
@@ -284,24 +336,35 @@ mod appkit {
     pub(crate) struct MacDialogs {
         mtm: MainThreadMarker,
         content_types: Option<HasContentTypes>,
+        panels: Panels,
     }
 
     impl MacDialogs {
         pub(crate) fn new(mtm: MainThreadMarker, version: MacOSVersion) -> Self {
+            Self::with_panels(mtm, version, APPKIT_PANELS)
+        }
+
+        fn with_panels(mtm: MainThreadMarker, version: MacOSVersion, panels: Panels) -> Self {
             Self {
                 mtm,
                 content_types: HasContentTypes::on(version),
+                panels,
             }
         }
 
         /// Allow `filter` on `panel`: its content types from macOS 11, its
         /// extensions' last parts as file types below it. A type the system
         /// does not know, or a MIME pattern below macOS 11, refuses the
-        /// request.
+        /// request. A filter that names a file exactly is checked the same
+        /// and then leaves the panel allowing every file, since no type
+        /// expresses a name.
         fn allow(&self, panel: &NSSavePanel, filter: &ContentFilter) -> Result<(), DialogError> {
             let refused = || unsupported(UnsupportedReason::NotOnThisDevice);
             let Some(proof) = self.content_types else {
                 let names = filter.file_types().ok_or_else(refused)?;
+                if !filter.restricts_by_type() {
+                    return Ok(());
+                }
                 let names = names
                     .iter()
                     .map(|name| NSString::from_str(name))
@@ -319,6 +382,9 @@ mod appkit {
                 .map(|content_type| ut_type(proof, content_type))
                 .collect::<Option<Vec<Retained<AnyObject>>>>()
                 .ok_or_else(refused)?;
+            if !filter.restricts_by_type() {
+                return Ok(());
+            }
             let types = NSArray::from_retained_slice(&types);
             // SAFETY: `setAllowedContentTypes:` takes an array of `UTType`s,
             // which `types` is, on a panel of the main thread.
@@ -329,13 +395,19 @@ mod appkit {
         }
     }
 
-    /// Tell `panel` what both dialogs share.
+    /// Tell `panel` what both dialogs share. Hidden files are shown when the
+    /// request asks, and otherwise as the panel finds the user's choice
+    /// (⌘⇧.).
     fn configure(
         panel: &NSSavePanel,
         title: Option<&str>,
         accept_label: Option<&str>,
         directory: Option<&std::path::Path>,
+        show_hidden: bool,
     ) {
+        if show_hidden {
+            panel.setShowsHiddenFiles(true);
+        }
         if let Some(title) = title {
             let title = NSString::from_str(title);
             panel.setTitle(Some(&title));
@@ -370,14 +442,22 @@ mod appkit {
         }
     }
 
+    /// Answer `refusal` for a dialog that is not shown: nothing is held.
+    fn refuse<T>(answer: Resolver<Result<T, DialogError>>, refusal: DialogError) -> DialogHold
+    where
+        T: 'static,
+    {
+        // The owner retiring first leaves nothing waiting.
+        let _ = answer.resolve(Err(refusal));
+        DialogHold::new(())
+    }
+
     /// The refusal of a dialog in a window with no AppKit window.
     fn no_window<T>(answer: Resolver<Result<T, DialogError>>) -> DialogHold
     where
         T: 'static,
     {
-        // The owner retiring first leaves nothing waiting.
-        let _ = answer.resolve(Err(unsupported(UnsupportedReason::NoWindow)));
-        DialogHold::new(())
+        refuse(answer, unsupported(UnsupportedReason::NoWindow))
     }
 
     impl FileDialogBackend for MacDialogs {
@@ -387,15 +467,18 @@ mod appkit {
             request: OpenRequest,
             answer: Resolver<OpenResult>,
         ) -> DialogHold {
+            let Some(panel) = (self.panels.open)(self.mtm) else {
+                return refuse(answer, unsupported(UnsupportedReason::Unavailable));
+            };
             let Some(parent) = ns_window(window, self.mtm) else {
                 return no_window(answer);
             };
-            let panel = NSOpenPanel::openPanel(self.mtm);
             configure(
                 &panel,
                 request.title.as_deref(),
                 request.accept_label.as_deref(),
                 request.directory.as_deref(),
+                request.show_hidden,
             );
             let folders = request.picks_folders();
             panel.setCanChooseFiles(!folders);
@@ -412,8 +495,7 @@ mod appkit {
                 None => Ok(()),
             });
             if let Err(refusal) = filtered {
-                let _ = answer.resolve(Err(refusal));
-                return DialogHold::new(());
+                return refuse(answer, refusal);
             }
             let delegate = rule
                 .as_ref()
@@ -461,15 +543,18 @@ mod appkit {
             request: SaveRequest,
             answer: Resolver<SaveResult>,
         ) -> DialogHold {
+            let Some(panel) = (self.panels.save)(self.mtm) else {
+                return refuse(answer, unsupported(UnsupportedReason::Unavailable));
+            };
             let Some(parent) = ns_window(window, self.mtm) else {
                 return no_window(answer);
             };
-            let panel = NSSavePanel::savePanel(self.mtm);
             configure(
                 &panel,
                 request.title.as_deref(),
                 request.accept_label.as_deref(),
                 request.directory.as_deref(),
+                request.show_hidden,
             );
             panel.setCanCreateDirectories(true);
             if let Some(name) = &request.suggested_name {
@@ -480,8 +565,7 @@ mod appkit {
                 None => Ok(()),
             });
             if let Err(refusal) = filtered {
-                let _ = answer.resolve(Err(refusal));
-                return DialogHold::new(());
+                return refuse(answer, refusal);
             }
             let pending = Pending::new(answer);
             let handler_pending = pending.clone();
@@ -510,6 +594,93 @@ mod appkit {
                 parent,
                 delegate: None,
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use flui_platform::capability::Abandoned;
+        use flui_platform::{Unsupported, UnsupportedReason};
+        use objc2::MainThreadMarker;
+        use objc2::rc::Retained;
+        use objc2_app_kit::{NSOpenPanel, NSSavePanel};
+
+        use super::{MacDialogs, Panels};
+        use crate::apple::version::MacOSVersion;
+        use crate::dialog::{
+            DialogError, FileDialogCapability, FileDialogs, OpenRequest, OpenResult, SaveRequest,
+            SaveResult,
+        };
+        use crate::testing::owner::TestOwner;
+        use crate::testing::window::window;
+
+        fn no_open_panel(_: MainThreadMarker) -> Option<Retained<NSOpenPanel>> {
+            None
+        }
+
+        fn no_save_panel(_: MainThreadMarker) -> Option<Retained<NSSavePanel>> {
+            None
+        }
+
+        /// AppKit in an App Sandbox without the user-selected-file
+        /// entitlement: no panel at all.
+        const NO_PANELS: Panels = Panels {
+            open: no_open_panel,
+            save: no_save_panel,
+        };
+
+        /// Turn `owner` until the completion `into` waits for lands.
+        fn landed<T: 'static>(
+            owner: &TestOwner,
+            into: &Rc<RefCell<Option<Result<T, Abandoned>>>>,
+        ) -> T {
+            owner.turn_until(|| into.borrow().is_some());
+            into.borrow_mut()
+                .take()
+                .expect("landed")
+                .expect("not abandoned")
+        }
+
+        #[test]
+        fn a_panel_appkit_does_not_make_answers_unavailable_and_frees_the_window() {
+            // SAFETY: no AppKit call is made: the panel source answers nil
+            // before anything main-thread-only is touched, and the window
+            // has no AppKit handle to read.
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let owner = TestOwner::new();
+            let (window, _closer) = window();
+            let dialogs = FileDialogs::try_new(
+                MacDialogs::with_panels(mtm, MacOSVersion::new(14, 0, 0), NO_PANELS),
+                &owner.ctx(Some(window)),
+            )
+            .expect("a window has dialogs");
+            let unavailable = Err(DialogError::Unsupported(Unsupported::of::<
+                FileDialogCapability,
+            >(
+                UnsupportedReason::Unavailable
+            )));
+
+            let opened: Rc<RefCell<Option<Result<OpenResult, Abandoned>>>> = Rc::default();
+            let into = Rc::clone(&opened);
+            dialogs
+                .open(OpenRequest::files())
+                .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+            assert_eq!(
+                landed(&owner, &opened),
+                unavailable,
+                "a refusal, not a panic"
+            );
+
+            // The window is free for the next dialog.
+            let saved: Rc<RefCell<Option<Result<SaveResult, Abandoned>>>> = Rc::default();
+            let into = Rc::clone(&saved);
+            dialogs
+                .save(SaveRequest::new())
+                .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+            assert_eq!(landed(&owner, &saved).map(|_| ()), unavailable.map(|_| ()));
         }
     }
 }

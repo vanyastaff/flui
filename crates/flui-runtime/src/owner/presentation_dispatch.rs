@@ -287,7 +287,13 @@ impl PendingWindowState {
         }
         first.contain(|| {
             if let Some(source) = runtime.media_query_for(id) {
-                source.update(|data| {
+                // A floating keyboard's frame is where it comes to rest,
+                // published at once and beside the media data (ADR-0372).
+                // Both are committed before the one wake of the root.
+                let floated = self.insets.and_then(|insets| {
+                    source.commit_floating_keyboard(insets.keyboard().floating_frame())
+                });
+                let changed = source.commit(|data| {
                     if let Some(metrics) = self.metrics {
                         data.size = metrics.logical();
                         data.device_pixel_ratio = metrics.scale().get();
@@ -295,8 +301,8 @@ impl PendingWindowState {
                     if let Some(insets) = self.insets {
                         data.view_padding = insets.safe_area();
                         data.system_gesture_insets = insets.system_gestures();
-                        // A moving keyboard is sampled by each frame at its
-                        // vsync (ADR-0277 §3); one at rest is its target.
+                        // A moving keyboard's inset is sampled by each frame at
+                        // its vsync (ADR-0277 §3); one at rest is its target.
                         let keyboard = insets.keyboard();
                         if keyboard.motion().is_none() {
                             data.view_insets = keyboard.target();
@@ -306,6 +312,9 @@ impl PendingWindowState {
                         data.platform_brightness = brightness;
                     }
                 });
+                if let Some(root) = changed.or(floated) {
+                    root.schedule(flui_view::RebuildReason::StateChange);
+                }
             }
         });
         if let Some(update) = self.display {

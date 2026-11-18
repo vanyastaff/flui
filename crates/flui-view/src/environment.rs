@@ -34,7 +34,7 @@ use std::sync::Arc;
 pub use focus_tree_root::{FocusTreeRoot, FocusTreeRootState};
 
 use flui_animation::{MotionPolicy, Vsync};
-use flui_foundation::geometry::{EdgeInsets, Edges, Size};
+use flui_foundation::geometry::{EdgeInsets, Edges, Rect, Size};
 use flui_interaction::gesture::{GestureArena, SweepModel};
 use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_painting::TextSizing;
@@ -105,10 +105,11 @@ pub struct MediaQueryData {
     pub view_padding: EdgeInsets,
 
     /// Insets occupied by system UI that fully obscures part of the window,
-    /// such as the software keyboard when it is visible. Unlike
+    /// such as the software keyboard when it is docked. Unlike
     /// [`padding`](Self::padding), these areas are hidden, not just reserved.
-    /// While the keyboard moves, each frame carries its occlusion at that
-    /// frame's time.
+    /// While the keyboard moves, each frame carries its inset at that
+    /// frame's time. A keyboard that floats covers no edge and is not here:
+    /// [`MediaQuery::floating_keyboard_of`] reads its frame.
     pub view_insets: EdgeInsets,
 
     /// Edges where a system gesture (back, home, the notification shade)
@@ -360,6 +361,24 @@ impl MediaQuery {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_VIEW_INSETS, |d| d.view_insets)
     }
 
+    /// The frame of the soft keyboard floating over the window (an iPad's
+    /// floating, undocked or split keyboard), in logical pixels in the
+    /// window's content coordinates; `None` while no keyboard floats or no
+    /// ancestor publishes one (ADR-0372). A floating keyboard covers no edge,
+    /// so it is not in [`view_insets_of`](Self::view_insets_of): a widget that
+    /// must stay in view (a focused field, a toolbar) reads this and moves out
+    /// from under the frame.
+    ///
+    /// The frame is the window's and its root publishes it as a
+    /// [`FloatingKeyboard`], not as a field of [`MediaQueryData`]: every
+    /// `MediaQuery` a widget nests would copy it. The dependency is on the
+    /// frame alone, and a widget that read `None` rebuilds when a keyboard
+    /// starts floating.
+    #[must_use]
+    pub fn floating_keyboard_of(ctx: &dyn BuildContext) -> Option<Rect> {
+        ctx.depend_on::<FloatingKeyboard, _>(FloatingKeyboard::frame)
+    }
+
     /// The system-gesture edges, depending on `system_gesture_insets` only.
     #[must_use]
     pub fn system_gesture_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
@@ -436,6 +455,45 @@ impl InheritedView for MediaQuery {
 }
 
 impl_inherited_view!(MediaQuery);
+
+// ---------------------------------------------------------------------------
+// The soft keyboard floating over the window.
+
+/// The soft keyboard floating over the window, a value published to a
+/// subtree (ADR-0322 §5, ADR-0372): its frame in logical pixels in the
+/// window's content coordinates.
+///
+/// The runtime publishes one from each window's root while a keyboard floats
+/// over the window and none otherwise, so a window with no floating keyboard
+/// adds nothing to its tree's inherited scope. A keyboard that starts or
+/// stops floating re-derives the scope below the root once; one the user
+/// drags rebuilds only the widgets that read it. A test or a preview
+/// publishes its own from a view's `provide` hook. A widget reads it with
+/// [`MediaQuery::floating_keyboard_of`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatingKeyboard {
+    frame: Rect,
+}
+
+impl FloatingKeyboard {
+    /// The keyboard floating at `frame`.
+    #[must_use]
+    pub const fn new(frame: Rect) -> Self {
+        Self { frame }
+    }
+
+    /// Where the keyboard floats.
+    #[must_use]
+    pub const fn frame(&self) -> Rect {
+        self.frame
+    }
+}
+
+impl crate::ProvidedValue for FloatingKeyboard {
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self != old
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The platform whose conventions the subtree follows.

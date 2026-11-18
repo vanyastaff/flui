@@ -53,6 +53,12 @@ have them:
 - The message box, the share sheet and the jump list came with their Windows provider. No portal
   has a message box or a share sheet, and the jump list is Windows', so the Linux provider refuses
   the three with `NotOnThisPlatform`.
+- A message box names its default button and may label its buttons and carry a detail
+  (`MessageBoxRequest`). The handle refuses a default or a label for a button the box does not
+  offer, a blank label, and two buttons labelled alike. A box without a title shows none on any
+  host. A host that cannot show a label shows its standard one for that button, which still means
+  the button's `MessageAnswer`; none refuses the request for it. What each host shows is under its
+  heading below, and in `MessageBoxRequest`'s documentation.
 
 ## Windows (`win32`)
 
@@ -115,11 +121,31 @@ name (`GetFinalPathNameByHandleW`) must be on a local drive (a link that led to 
 Reveal is `SHOpenFolderAndSelectItems`; trash is `IFileOperation` with `FOFX_RECYCLEONDELETE` and
 `FOF_WANTNUKEWARNING`, so an item the recycle bin cannot take asks the user before it goes for good.
 
-A file dialog's filter becomes `*.ext` patterns, which the dialog matches ignoring case and to the
-end of the name, as the contract does (ADR-0360 §3); it filters by name only, so a MIME type is
-refused with `NotOnThisPlatform` rather than dropped (§4). A save names a typed file without an
-extension after the selected filter (`SetDefaultExtension` with the first filter's first) and
-reports the selected filter from `GetFileTypeIndex`.
+A file dialog's filter becomes the dialog's patterns, which it matches ignoring case and to the end
+of the name, as the contract does (ADR-0360 §3, ADR-0372): `*.ext` for an extension, the name itself
+for a file name (`Makefile`), `*.*` for a filter of every file. It filters by name only, so a MIME
+type is refused with `NotOnThisPlatform` rather than dropped (ADR-0360 §4). A save names a typed
+file without an extension after the selected filter (`SetDefaultExtension` with the first filter's
+first, when it has one) and reports the selected filter from `GetFileTypeIndex`. A request that
+asks for hidden files adds `FOS_FORCESHOWHIDDEN`.
+
+A dialog and the box are owned by the widget's window, which is what makes them modal to it: a
+window whose handle names no Win32 window answers `NoWindow`, and nothing is shown unowned. The
+folder a dialog opens in is named to it as a shell item, and the shell's parser does not read a
+verbatim path, so `win32::verbatim` gives `\\?\C:\…` and `\\?\UNC\server\share\…` their plain form
+first, where that names the same file; the launcher hands the shell a final name the same way. A
+folder that is not there (the shell answers file or path not found, an invalid drive, a drive not
+ready, a share that does not answer) is left out and the dialog opens where the system would, as
+every host does with a remembered folder that has gone since. A folder the shell cannot name for
+another reason fails the request with the shell's code before anything is shown. The check is the
+shell's own, on the dialog's thread: no file system call runs on the owner thread (ADR-0360 §2).
+
+The message box is `MessageBoxW`, which has one text, a caption and a fixed set of buttons. The
+detail goes below the message after an empty line; a request without a title gets an empty caption,
+never the null one the system shows as "Error" whatever the level; the default button is
+`MB_DEFBUTTON` of its place among the buttons. `MessageBoxW` cannot label a button, so a request
+that labels one is refused with `NotYetOnThisHost` before anything is shown, rather than shown with
+the system's words where its author wrote others (`MessageBoxRequest::is_labelled`).
 
 The launcher entry is shown on the taskbar button of each window a `TaskbarEntry` was acquired in,
 one state for all of them, since every top-level window has a button of its own. The provider
@@ -210,8 +236,23 @@ delegate and the handle's name check judge one file. Under a MIME pattern, where
 not check, a pick whose name and type both fail the rule answers the handle's `NotInFilter`; a
 pick whose type cannot be read is not refused for that. A save's pick names a file to create and
 is not checked. A panel has no filter menu, so every filter is allowed at once and a save reports
-no selected filter. The alert adds its buttons default first, so AppKit puts it rightmost and
-gives Escape to the button titled Cancel.
+no selected filter. For the same reason a filter of every file leaves the panel with no allowed
+types, as a request without filters does. A filter that names a file exactly has no content type,
+so the panel is given no allowed types then either (ADR-0372 §4): the open panel's delegate enables
+what the request's filters name or type, and a save panel takes any name and appends no extension.
+A request that asks for hidden files sets `showsHiddenFiles`. `openPanel` and `savePanel` answer nil
+where the process may not show a panel (an App Sandbox without the user-selected-file entitlement)
+or the panel service fails; the binding declares them never nil and would panic, so the provider
+sends them itself and answers `Unavailable` for nil. It makes a panel through its panel source
+before it looks for the window, so a test drives `open` and `save` with a source that makes none.
+The mapping of filters to content types is `apple::content_types`, which iOS's picker shares.
+
+An alert has two texts and no title bar: the title is its message text over the message and the
+detail, and with no title the message is the message text over the detail. Its buttons are added in
+the order `MessageButtons::answers` gives, which AppKit lays out from the right, each titled by the
+request's label or by its English word. The provider sets every button's key itself, so the rule
+holds under any label: Return for the request's default button, Escape for the one that answers
+Cancel unless it is the default (a button has one key), none for the rest.
 
 A path reaches Foundation as the file system's bytes (`fileURLWithFileSystemRepresentation:`) and
 comes back the same way (`getFileSystemRepresentation:`), so a name that is not UTF-8, which a FAT,
@@ -333,7 +374,9 @@ UIKit disposes of the block.
 An open is `UIDocumentPickerViewController` opening documents in place, filtered by content type
 as on macOS from iOS 14 (`UTType`, looked up at run time; a type the application's bundle declares
 is found by its extension, ADR-0361); below it an open without filters shows every document and
-one with filters answers `NotOnThisDevice`. The picker shows no title and no accept label. Nothing
+one with filters answers `NotOnThisDevice`. A filter of every file, or one that names a file
+exactly, which no type expresses, shows every document (ADR-0372 §4). The picker shows no title,
+no accept label and has no option for hidden files. Nothing
 is read, and nothing downloaded, for an answer the request will not get: under the picks'
 security-scoped access, which is started before a document is judged and stopped after it is
 read, every pick is first held to the contract's rule, by its name and then its type's conformance
@@ -342,15 +385,16 @@ knows of a document still in the cloud, are summed against the request's `max_by
 (`TooLarge`). Only then is each read through `NSFileCoordinator`, which downloads a file a
 provider keeps in the cloud, and bounded again by the size its opened file reports. A folder
 dialog answers `NotYetOnThisHost`. A save exports: its contents are written to a file of the
-request's name (the suggested name, or `Untitled`, with the first filter's extension when it has
-none) in a folder of its own in the temporary directory, the picker moves that file where the
+request's name (the suggested name, or `Untitled`, completed by the first filter as a typed name is
+on the portal, so a hidden name stays as it is) in a folder of its own in the temporary directory, the picker moves that file where the
 user chose, and the folder is removed when the export ends, whichever way, a picker UIKit did not
 take included; a save without contents answers `NotOnThisPlatform`.
 
 The message box is a `UIAlertController` in the alert style, which no tap and no swipe dismisses:
-the title its title, the message its message, the default button the preferred action (bold, and
-Return's), and the button closing the box means (OK alone, or Cancel) the cancel-style action
-(Escape's); a Yes or No box has none. The labels are English and the level is not shown. The
+the title its title, the message its message with the detail below it after an empty line, the
+request's default button the preferred action (bold, and Return's), and the button closing the box
+means (OK alone, or Cancel) the cancel-style action (Escape's); a Yes or No box has none. Each
+action is titled by the request's label or its English word; the level is not shown. The
 share sheet is `UIActivityViewController`, handed the same items as on macOS once the files were
 checked, dismissed when its window closes while it is up; it shows no title. A link goes to
 `UIApplication` `openURL:options:completionHandler:` as written, and a completion that reports no
@@ -381,6 +425,22 @@ container's, and the folders a container does not hold none. The system's name i
   window, or a closed one, names none.
 - Every object path is the one the portal will give (`request::object_path`), so each
   subscription is in place before the call that could answer it.
+- A file dialog's filter is globs and MIME types (ADR-0360 §4, ADR-0372 §4): an extension in lower
+  and in upper case, a file name as written and in both cases, `*` for a filter of every file. The
+  folder a dialog opens in is a hint the portal may not use, and the file chooser has no option
+  for hidden files, so a request that asks for them keeps the user's own toggle.
+- A save's typed name with no extension is completed by the provider after the portal answered,
+  with the first extension of the filter the portal reports as selected
+  (`FileFilter::completes`): GTK's chooser, behind the portal on GNOME, answers the name as typed,
+  where Windows' and macOS's dialogs complete it themselves. The portal asked the user about
+  replacing the name as typed, so a completed name a file already has is not used and the name
+  stands as typed. Nor is a name completed in the document portal's folder (`$XDG_RUNTIME_DIR/doc`
+  or `/run/flatpak/doc`), where a sandboxed application reaches the file the portal granted, by
+  the name it answered, and no other. A hidden name (`.env`) is not completed on any host: its
+  leading dot starts its name, as Windows' dialog reads it. The rule is the provider's rather than
+  the handle's because the check reads the file system, off the owner thread, and because the
+  other hosts' dialogs complete the name before they ask about replacing a file, which a rule
+  applied after the answer cannot.
 - When the UI runtime's portal ends, its bus is retired: every request still showing something
   closes its `Request`, every shortcut session closes its `Session`, and the thread stops when
   the tasks have ended or at `DRAIN_BOUND`. Every call is bounded by `METHOD_TIMEOUT`.
@@ -434,18 +494,38 @@ container's, and the folders a container does not hold none. The system's name i
   every system's dialog lets a user past its filters somewhere (a name typed into it, a link whose
   target has another name, a type that only conforms to an allowed one, a browser's input that
   offers every file beside them). The handle cannot tell a file's type, so it checks a request
-  whose filters name extensions only, and a backend that mapped a MIME pattern judges the pick by
-  its type (`FileFilter::matches` with the browser's type on the web, type conformance on macOS
-  and iOS). An iOS pick is judged before it is read, so one the filters do not mean is never read.
+  whose filters name extensions and file names only, and a backend that mapped a MIME pattern
+  judges the pick by its type (`FileFilter::matches` with the browser's type on the web, type
+  conformance on macOS and iOS). An iOS pick is judged before it is read, so one the filters do
+  not mean is never read. A request that offers a filter of every file admits every pick
+  (ADR-0372 §3).
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
   the system hands over no file to write later (a page, iOS). The handle writes them to a path the
-  user chose on a thread of its own, into a new file beside it that is synced and renamed over it, so a
-  failed write leaves the chosen file as it was, and answers once they are written (a failed write
+  user chose on a thread of its own (`dialog::write`) and answers once they are written (a failed write
   answers the system's code); a backend that hands over no path writes them itself and answers the
   file it wrote. Once the user has chosen, the write completes even if the caller let the dialog
   go, on every host. A save without contents answers where to save, and on the web and iOS, which
   have no path to answer, is refused with `NotOnThisPlatform`. Access to a pick that outlasts the process
   (a security-scoped bookmark on macOS and iOS) is not built: [`docs/gaps.md`](../../docs/gaps.md).
+- The contents replace the chosen file whole or not at all: they go into a new file beside it,
+  synced, which takes its name, so a failed write leaves the chosen file as it was. A chosen link
+  is written through: the new file is made beside the file the link leads to and takes that
+  file's name, so the link stays a link. On Unix the new file is made with the mode of the file it
+  replaces, before anything is written to it, so the contents are never readable by more users
+  than the old file's; its owner, access control list and extended attributes are its own. Only a
+  regular file is replaced; a device or a pipe is written into.
+- The contents go into the chosen file itself only where the file system refuses the new file by
+  its design, classified by the error's kind and code (`dialog::write`): it cannot be made beside
+  the chosen one (a folder that takes no other name, as a sandbox's document folder; a read-only
+  folder holding a writable file; a name too long to make a sibling's from), or it cannot take the
+  chosen file's name because the two are on different devices (`EXDEV`,
+  `ERROR_NOT_SAME_DEVICE`), the chosen file is a mount point (`EBUSY`) or another user's in a
+  sticky folder (`EPERM`). That write is not whole or nothing: it empties the file first, so one
+  that fails midway, or a process killed during it, leaves the file cut short. Any other failure
+  answers the system's code with the chosen file as it was and the new file removed: a volume out
+  of room, a read-only file, a file another process holds open without letting it be replaced (on
+  Windows, open without `FILE_SHARE_DELETE`), where writing into it would empty a file someone
+  else is using.
 
 ## The web providers (`web`)
 
@@ -467,7 +547,11 @@ container's, and the folders a container does not hold none. The system's name i
 - **Open.** The File System Access picker where the browser has it (Chromium, in a secure
   context) and can express the filters (each extension of ASCII letters, digits, `+` and `.`, at
   most 16 characters with its dot, Chromium's `VerifyIsValidExtension`); `<input type=file>`
-  otherwise, its `accept` the filters' union. A picker the document may not show (`SecurityError`:
+  otherwise, its `accept` the filters' union. A filter of every file, or one that names a file
+  exactly, keeps the picker's own entry of every file (`excludeAcceptAllOption` false) and empties
+  the input's `accept`, since neither names a file by its whole name; the picker's types are the
+  filters that have an extension or a MIME type (ADR-0372 §4), and the handle holds each pick to
+  the filters. A picker the document may not show (`SecurityError`:
   a cross-origin frame, which may show an input) hands over to the input while the page still
   handles the gesture, and answers `Unavailable` once the gesture is spent. A dismissed picker
   answers `AbortError`. An input ends on its `change`, its `cancel` (Chromium 113, Firefox 91,
@@ -498,8 +582,8 @@ container's, and the folders a container does not hold none. The system's name i
   a failure, after the user chose even if the dialog was dropped: the browser has made or emptied
   the chosen file by then. Without a picker, outside a gesture (which the picker needs and a
   download does not), or when the browser refuses the picker for want of either, the contents are
-  handed to the browser as a download under the suggested name, given the first filter's
-  extension when it has none, from an object URL revoked a minute later, and answered as
+  handed to the browser as a download under the suggested name, completed by the first filter as a
+  typed name is on the portal (`dialog::save_file_name`), from an object URL revoked a minute later, and answered as
   `PickedForm::Download`. The answer reports no filter: the browser says none was selected.
 - **One picker per page.** A page cannot close a browser's picker, and the browser shows one at
   a time. While one is up the document carries a mark (`web::dialogs::ShownPicker`, an expando
@@ -516,7 +600,9 @@ container's, and the folders a container does not hold none. The system's name i
 - **The launcher entry** is the Badging API's count (`setAppBadge`, `clearAppBadge`), honouring
   the count alone and never confirmed: a browser badges only an installed application and does
   not say whether it did. A browser without the API answers `NotOnThisDevice`.
-- **The message box** is a modal `<dialog>` beside the canvas, its buttons labelled in English. A
+- **The message box** is a modal `<dialog>` beside the canvas, each button titled by the request's
+  label or its English word, the request's default button focused (`autofocus`, so Enter presses
+  it), and its detail a paragraph below the message. A box without a title has no heading. A
   page's own `alert` and `confirm` are not used: they block the page's one thread while they are
   up (no frames, owner turns or network callbacks), the page cannot close them when the caller
   drops the dialog or its window closes (ADR-0344), and they offer no Yes, No and Cancel. Escape

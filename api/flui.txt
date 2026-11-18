@@ -11902,6 +11902,7 @@ impl core::error::Error for flui::platform::InvalidInsets
 impl core::fmt::Debug for flui::platform::InvalidInsets
 impl core::fmt::Display for flui::platform::InvalidInsets
 impl core::marker::StructuralPartialEq for flui::platform::InvalidInsets
+variant flui::platform::InvalidInsets::EmptyFrame // at 4
 variant flui::platform::InvalidInsets::InvalidCurve // at 3
 variant flui::platform::InvalidInsets::Negative // at 1
 variant flui::platform::InvalidInsets::NonFinite // at 0
@@ -11964,21 +11965,15 @@ impl core::error::Error for flui::platform::InvalidWindowOption
 impl core::fmt::Debug for flui::platform::InvalidWindowOption
 impl core::fmt::Display for flui::platform::InvalidWindowOption
 impl core::marker::StructuralPartialEq for flui::platform::InvalidWindowOption
-pub struct flui::platform::KeyboardInset { .. }
-impl Clone for flui::platform::KeyboardInset
-impl Copy for flui::platform::KeyboardInset
-impl Default for flui::platform::KeyboardInset
-impl PartialEq for flui::platform::KeyboardInset
-impl core::fmt::Debug for flui::platform::KeyboardInset
-impl core::marker::StructuralPartialEq for flui::platform::KeyboardInset
-pub const flui::platform::KeyboardInset::HIDDEN: Self = _
-pub const fn flui::platform::KeyboardInset::motion(&self) -> Option<flui::platform::InsetMotion>
-pub const fn flui::platform::KeyboardInset::settled(self) -> Self
-pub const fn flui::platform::KeyboardInset::target(&self) -> flui::geometry::EdgeInsets
-pub fn flui::platform::KeyboardInset::at(&self, time: flui::interaction::EventTime) -> flui::geometry::EdgeInsets
-pub fn flui::platform::KeyboardInset::settles_at(&self) -> Option<flui::interaction::EventTime>
-pub fn flui::platform::KeyboardInset::try_at_rest(target: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
-pub fn flui::platform::KeyboardInset::try_moving(target: flui::geometry::EdgeInsets, motion: flui::platform::InsetMotion) -> Result<Self, flui::platform::InvalidInsets>
+#[non_exhaustive] pub enum flui::platform::KeyboardPlacement
+impl Clone for flui::platform::KeyboardPlacement
+impl Copy for flui::platform::KeyboardPlacement
+impl PartialEq for flui::platform::KeyboardPlacement
+impl core::fmt::Debug for flui::platform::KeyboardPlacement
+impl core::marker::StructuralPartialEq for flui::platform::KeyboardPlacement
+variant flui::platform::KeyboardPlacement::Docked { inset: flui::geometry::EdgeInsets } // at 1
+variant flui::platform::KeyboardPlacement::Floating { frame: flui::geometry::Rect<f64> } // at 2
+variant flui::platform::KeyboardPlacement::Hidden // at 0
 #[non_exhaustive] pub enum flui::platform::Launch
 impl Clone for flui::platform::Launch
 impl Copy for flui::platform::Launch
@@ -12421,6 +12416,23 @@ impl core::marker::StructuralPartialEq for flui::platform::SizeConstraints
 pub const flui::platform::SizeConstraints::NONE: Self = _
 pub const fn flui::platform::SizeConstraints::new(min: Option<flui::platform::WindowExtent>, max: Option<flui::platform::WindowExtent>) -> Self
 pub fn flui::platform::SizeConstraints::try_new(min: Option<flui::geometry::Size<f64>>, max: Option<flui::geometry::Size<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
+pub struct flui::platform::SoftKeyboard { .. }
+impl Clone for flui::platform::SoftKeyboard
+impl Copy for flui::platform::SoftKeyboard
+impl Default for flui::platform::SoftKeyboard
+impl PartialEq for flui::platform::SoftKeyboard
+impl core::fmt::Debug for flui::platform::SoftKeyboard
+impl core::marker::StructuralPartialEq for flui::platform::SoftKeyboard
+pub const flui::platform::SoftKeyboard::HIDDEN: Self = _
+pub const fn flui::platform::SoftKeyboard::floating_frame(&self) -> Option<flui::geometry::Rect<f64>>
+pub const fn flui::platform::SoftKeyboard::motion(&self) -> Option<flui::platform::InsetMotion>
+pub const fn flui::platform::SoftKeyboard::placement(&self) -> flui::platform::KeyboardPlacement
+pub const fn flui::platform::SoftKeyboard::settled(self) -> Self
+pub const fn flui::platform::SoftKeyboard::target(&self) -> flui::geometry::EdgeInsets
+pub fn flui::platform::SoftKeyboard::at(&self, time: flui::interaction::EventTime) -> flui::geometry::EdgeInsets
+pub fn flui::platform::SoftKeyboard::settles_at(&self) -> Option<flui::interaction::EventTime>
+pub fn flui::platform::SoftKeyboard::try_at_rest(placement: flui::platform::KeyboardPlacement) -> Result<Self, flui::platform::InvalidInsets>
+pub fn flui::platform::SoftKeyboard::try_moving(placement: flui::platform::KeyboardPlacement, motion: flui::platform::InsetMotion) -> Result<Self, flui::platform::InvalidInsets>
 pub struct flui::platform::SrgbColor { .. }
 impl Clone for flui::platform::SrgbColor
 impl Copy for flui::platform::SrgbColor
@@ -12927,11 +12939,11 @@ impl PartialEq for flui::platform::WindowInsets
 impl core::fmt::Debug for flui::platform::WindowInsets
 impl core::marker::StructuralPartialEq for flui::platform::WindowInsets
 pub const flui::platform::WindowInsets::ZERO: Self = _
-pub const fn flui::platform::WindowInsets::keyboard(&self) -> flui::platform::KeyboardInset
+pub const fn flui::platform::WindowInsets::keyboard(&self) -> flui::platform::SoftKeyboard
 pub const fn flui::platform::WindowInsets::safe_area(&self) -> flui::geometry::EdgeInsets
 pub const fn flui::platform::WindowInsets::system_gestures(&self) -> flui::geometry::EdgeInsets
-pub const fn flui::platform::WindowInsets::with_keyboard(self, keyboard: flui::platform::KeyboardInset) -> Self
-pub fn flui::platform::WindowInsets::try_new(safe_area: flui::geometry::EdgeInsets, keyboard: flui::platform::KeyboardInset, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
+pub const fn flui::platform::WindowInsets::with_keyboard(self, keyboard: flui::platform::SoftKeyboard) -> Self
+pub fn flui::platform::WindowInsets::try_new(safe_area: flui::geometry::EdgeInsets, keyboard: flui::platform::SoftKeyboard, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::WindowInsets::try_with_safe_area(self, safe_area: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::WindowInsets::try_with_system_gestures(self, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 #[non_exhaustive] pub enum flui::platform::WindowInteraction
@@ -16811,6 +16823,7 @@ impl flui::prelude::View for flui::prelude::MediaQuery
 pub fn flui::prelude::MediaQuery::accent_color_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::Color>
 pub fn flui::prelude::MediaQuery::depend_on_fields<R>(ctx: &dyn flui::prelude::BuildContext, mask: flui::view::FieldMask<flui::prelude::MediaQueryData>, f: impl FnOnce(&flui::prelude::MediaQueryData) -> R) -> Option<R>
 pub fn flui::prelude::MediaQuery::device_pixel_ratio_of(ctx: &dyn flui::prelude::BuildContext) -> Option<f64>
+pub fn flui::prelude::MediaQuery::floating_keyboard_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::Rect>
 pub fn flui::prelude::MediaQuery::font_weight_adjustment_of(ctx: &dyn flui::prelude::BuildContext) -> Option<i32>
 pub fn flui::prelude::MediaQuery::high_contrast_of(ctx: &dyn flui::prelude::BuildContext) -> Option<bool>
 pub fn flui::prelude::MediaQuery::maybe_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::MediaQueryData>
@@ -22615,12 +22628,16 @@ pub const flui::services::system::dialog::FileFilter::MAX_NAME_LEN: usize = 255
 pub const flui::services::system::dialog::FileFilter::MAX_PATTERNS: usize = 64
 pub const flui::services::system::dialog::FileFilter::MAX_PATTERN_LEN: usize = 255
 pub const flui::services::system::dialog::FileFilter::MAX_PER_REQUEST: usize = 64
+pub fn flui::services::system::dialog::FileFilter::all_files(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::extensions(&self) -> &[String]
+pub fn flui::services::system::dialog::FileFilter::file_names(&self) -> &[String]
+pub fn flui::services::system::dialog::FileFilter::is_all_files(&self) -> bool
 pub fn flui::services::system::dialog::FileFilter::matches(&self, name: &str, mime_type: Option<&str>) -> bool
 pub fn flui::services::system::dialog::FileFilter::mime_types(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
 pub fn flui::services::system::dialog::FileFilter::new(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_extension(self, extension: impl Into<String>) -> Self
+pub fn flui::services::system::dialog::FileFilter::with_file_name(self, file_name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_mime_type(self, mime_type: impl Into<String>) -> Self
 pub struct flui::services::system::dialog::FolderFile { .. }
 impl Clone for flui::services::system::dialog::FolderFile
@@ -22654,18 +22671,22 @@ impl core::error::Error for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Debug for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
-variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
+variant flui::services::system::dialog::MalformedRequest::ButtonLabel // at 15
+variant flui::services::system::dialog::MalformedRequest::DefaultButton // at 14
+variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 8
 variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
-variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 11
-variant flui::services::system::dialog::MalformedRequest::Extension // at 4
+variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 13
+variant flui::services::system::dialog::MalformedRequest::Extension // at 5
+variant flui::services::system::dialog::MalformedRequest::FileName // at 6
 variant flui::services::system::dialog::MalformedRequest::FilterName // at 0
-variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 7
-variant flui::services::system::dialog::MalformedRequest::MimeType // at 5
-variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 9
-variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 8
-variant flui::services::system::dialog::MalformedRequest::Text // at 10
-variant flui::services::system::dialog::MalformedRequest::TooManyFilters // at 3
-variant flui::services::system::dialog::MalformedRequest::TooManyPatterns // at 2
+variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 9
+variant flui::services::system::dialog::MalformedRequest::MimeType // at 7
+variant flui::services::system::dialog::MalformedRequest::PatternOnAllFiles // at 2
+variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 11
+variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 10
+variant flui::services::system::dialog::MalformedRequest::Text // at 12
+variant flui::services::system::dialog::MalformedRequest::TooManyFilters // at 4
+variant flui::services::system::dialog::MalformedRequest::TooManyPatterns // at 3
 #[non_exhaustive] pub enum flui::services::system::dialog::MessageAnswer
 impl Clone for flui::services::system::dialog::MessageAnswer
 impl Copy for flui::services::system::dialog::MessageAnswer
@@ -22683,9 +22704,11 @@ fn flui::services::system::dialog::MessageBoxBackend::show(&self, window: &flui:
 pub enum flui::services::system::dialog::MessageBoxCapability
 impl core::fmt::Debug for flui::services::system::dialog::MessageBoxCapability
 impl flui::platform::capability::Capability for flui::services::system::dialog::MessageBoxCapability { type Handle = flui::services::system::dialog::MessageBoxes; }
-#[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest
-field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 3
-field flui::services::system::dialog::MessageBoxRequest::level: flui::services::system::dialog::MessageLevel // at 2
+#[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest { .. }
+field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 4
+field flui::services::system::dialog::MessageBoxRequest::default_button: Option<flui::services::system::dialog::MessageAnswer> // at 5
+field flui::services::system::dialog::MessageBoxRequest::detail: Option<String> // at 2
+field flui::services::system::dialog::MessageBoxRequest::level: flui::services::system::dialog::MessageLevel // at 3
 field flui::services::system::dialog::MessageBoxRequest::message: String // at 1
 field flui::services::system::dialog::MessageBoxRequest::title: Option<String> // at 0
 impl Clone for flui::services::system::dialog::MessageBoxRequest
@@ -22693,7 +22716,13 @@ impl Eq for flui::services::system::dialog::MessageBoxRequest
 impl PartialEq for flui::services::system::dialog::MessageBoxRequest
 impl core::fmt::Debug for flui::services::system::dialog::MessageBoxRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageBoxRequest
+pub fn flui::services::system::dialog::MessageBoxRequest::button_label(self, answer: flui::services::system::dialog::MessageAnswer, label: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::MessageBoxRequest::buttons(self, buttons: flui::services::system::dialog::MessageButtons) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::default_answer(&self) -> flui::services::system::dialog::MessageAnswer
+pub fn flui::services::system::dialog::MessageBoxRequest::default_button(self, answer: flui::services::system::dialog::MessageAnswer) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::detail(self, detail: impl Into<String>) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::is_labelled(&self) -> bool
+pub fn flui::services::system::dialog::MessageBoxRequest::label(&self, answer: flui::services::system::dialog::MessageAnswer) -> Option<&str>
 pub fn flui::services::system::dialog::MessageBoxRequest::level(self, level: flui::services::system::dialog::MessageLevel) -> Self
 pub fn flui::services::system::dialog::MessageBoxRequest::new(message: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::MessageBoxRequest::title(self, title: impl Into<String>) -> Self
@@ -22713,6 +22742,7 @@ impl core::fmt::Debug for flui::services::system::dialog::MessageButtons
 impl core::hash::Hash for flui::services::system::dialog::MessageButtons
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageButtons
 pub const fn flui::services::system::dialog::MessageButtons::admits(self, answer: flui::services::system::dialog::MessageAnswer) -> bool
+pub const fn flui::services::system::dialog::MessageButtons::answers(self) -> &'static [flui::services::system::dialog::MessageAnswer]
 variant flui::services::system::dialog::MessageButtons::Ok // at 0
 variant flui::services::system::dialog::MessageButtons::OkCancel // at 1
 variant flui::services::system::dialog::MessageButtons::YesNo // at 2
@@ -22734,7 +22764,8 @@ field flui::services::system::dialog::OpenRequest::accept_label: Option<String> 
 field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 4
 field flui::services::system::dialog::OpenRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 5
 field flui::services::system::dialog::OpenRequest::max_bytes: u64 // at 2
-field flui::services::system::dialog::OpenRequest::max_entries: usize // at 7
+field flui::services::system::dialog::OpenRequest::max_entries: usize // at 8
+field flui::services::system::dialog::OpenRequest::show_hidden: bool // at 7
 field flui::services::system::dialog::OpenRequest::title: Option<String> // at 3
 impl Clone for flui::services::system::dialog::OpenRequest
 impl Eq for flui::services::system::dialog::OpenRequest
@@ -22752,6 +22783,7 @@ pub fn flui::services::system::dialog::OpenRequest::is_multiple(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::max_bytes(self, max_bytes: u64) -> Self
 pub fn flui::services::system::dialog::OpenRequest::max_entries(self, max_entries: usize) -> Self
 pub fn flui::services::system::dialog::OpenRequest::picks_folders(&self) -> bool
+pub fn flui::services::system::dialog::OpenRequest::show_hidden(self) -> Self
 pub fn flui::services::system::dialog::OpenRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::OpenResult = Result<Option<flui::services::system::dialog::Picks>, flui::services::system::dialog::DialogError>
 #[non_exhaustive] pub struct flui::services::system::dialog::PickedFile { .. }
@@ -22808,6 +22840,7 @@ field flui::services::system::dialog::SaveRequest::accept_label: Option<String> 
 field flui::services::system::dialog::SaveRequest::contents: Option<alloc::rcs::arc::Arc<[u8]>> // at 0
 field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 2
 field flui::services::system::dialog::SaveRequest::filters: Vec<flui::services::system::dialog::FileFilter> // at 4
+field flui::services::system::dialog::SaveRequest::show_hidden: bool // at 6
 field flui::services::system::dialog::SaveRequest::suggested_name: Option<String> // at 3
 field flui::services::system::dialog::SaveRequest::title: Option<String> // at 1
 impl Clone for flui::services::system::dialog::SaveRequest
@@ -22821,6 +22854,7 @@ pub fn flui::services::system::dialog::SaveRequest::contents(self, contents: imp
 pub fn flui::services::system::dialog::SaveRequest::directory(self, directory: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::filter(self, filter: flui::services::system::dialog::FileFilter) -> Self
 pub fn flui::services::system::dialog::SaveRequest::new() -> Self
+pub fn flui::services::system::dialog::SaveRequest::show_hidden(self) -> Self
 pub fn flui::services::system::dialog::SaveRequest::suggested_name(self, name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::SaveLocation>, flui::services::system::dialog::DialogError>
@@ -25059,6 +25093,15 @@ pub fn flui::view::element::probe_item_count(builder: &dyn Fn(usize) -> Option<f
 pub mod flui::view::element::unified
 reexport flui::view::element::unified::Element => flui::view::element::Element
 pub mod flui::view::environment
+pub struct flui::view::environment::FloatingKeyboard { .. }
+impl Clone for flui::view::environment::FloatingKeyboard
+impl Copy for flui::view::environment::FloatingKeyboard
+impl PartialEq for flui::view::environment::FloatingKeyboard
+impl core::fmt::Debug for flui::view::environment::FloatingKeyboard
+impl core::marker::StructuralPartialEq for flui::view::environment::FloatingKeyboard
+impl flui::view::ProvidedValue for flui::view::environment::FloatingKeyboard
+pub const fn flui::view::environment::FloatingKeyboard::frame(&self) -> flui::geometry::Rect
+pub const fn flui::view::environment::FloatingKeyboard::new(frame: flui::geometry::Rect) -> Self
 pub struct flui::view::environment::FocusTreeRoot { .. }
 impl Clone for flui::view::environment::FocusTreeRoot
 impl core::fmt::Debug for flui::view::environment::FocusTreeRoot
@@ -32761,7 +32804,7 @@ variant flui_protocol::input_recording::WindowObservation::Brightness(flui_proto
 variant flui_protocol::input_recording::WindowObservation::Execution(flui_protocol::input_recording::Execution) // at 3
 variant flui_protocol::input_recording::WindowObservation::Focus(bool) // at 1
 variant flui_protocol::input_recording::WindowObservation::Hover(bool) // at 5
-variant flui_protocol::input_recording::WindowObservation::Insets { safe_area: [f64; 4], keyboard: Option<flui_protocol::native_recording::window::KeyboardInset>, system_gestures: [f64; 4] } // at 7
+variant flui_protocol::input_recording::WindowObservation::Insets { safe_area: [f64; 4], keyboard: Option<Box<flui_protocol::native_recording::window::KeyboardInset>>, system_gestures: [f64; 4] } // at 7
 variant flui_protocol::input_recording::WindowObservation::Metrics { width: i32, height: i32, scale_factor: f64 } // at 0
 variant flui_protocol::input_recording::WindowObservation::Moved // at 6
 variant flui_protocol::input_recording::WindowObservation::Snapshot { execution: flui_protocol::input_recording::Execution, focused: bool, visible: bool } // at 4
@@ -34197,6 +34240,7 @@ impl schemars::JsonSchema for flui_protocol::native_recording::window::InsetMoti
 impl serde_core::ser::Serialize for flui_protocol::native_recording::window::InsetMotion
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::window::InsetMotion
 pub struct flui_protocol::native_recording::window::KeyboardInset
+field flui_protocol::native_recording::window::KeyboardInset::floating: Option<[f64; 4]> // at 2
 field flui_protocol::native_recording::window::KeyboardInset::motion: Option<flui_protocol::native_recording::window::InsetMotion> // at 1
 field flui_protocol::native_recording::window::KeyboardInset::target: [f64; 4] // at 0
 impl Clone for flui_protocol::native_recording::window::KeyboardInset

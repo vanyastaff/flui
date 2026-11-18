@@ -50,6 +50,7 @@ pub(crate) mod taskbar;
 mod threads;
 #[expect(unsafe_code, reason = "the known folders' lookup")]
 mod user_dirs;
+mod verbatim;
 
 use std::ffi::OsStr;
 use std::num::NonZeroIsize;

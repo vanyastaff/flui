@@ -17,6 +17,12 @@
 //! which reads nothing of the file, then by its type against the MIME
 //! patterns' types, and only a type that was read refuses it.
 //!
+//! Neither system's dialog has a filter menu, so a filter of every file
+//! offered beside others allows every file. A filter that names a file
+//! exactly (`Makefile`) has no content type, so a request with one leaves
+//! the dialog allowing every type ([`ContentFilter::restricts_by_type`]) and
+//! each item to the contract's rule (ADR-0372).
+//!
 //! `UTType` is macOS 11 and iOS 14, in a framework the floors lack, so the
 //! class is looked up at run time behind `HasContentTypes`, never linked.
 
@@ -59,6 +65,16 @@ impl ContentFilter {
             })
             .collect::<Option<Vec<String>>>()
     }
+
+    /// Whether the dialog itself can be told what to allow: not when a
+    /// filter names a file exactly, which no content type and no file type
+    /// expresses (ADR-0372). The dialog then allows every file, and what the
+    /// request means is left to the rule each item is judged by.
+    pub(crate) fn restricts_by_type(&self) -> bool {
+        self.filters
+            .iter()
+            .all(|filter| filter.file_names().is_empty())
+    }
 }
 
 /// The refusal of a request the dialog cannot show, for `reason`.
@@ -85,12 +101,11 @@ fn mime_content_type(mime_type: &str) -> Result<ContentType, DialogError> {
     }
 }
 
-/// What `filters` ask of the system's dialog; `None` when there are none,
-/// and the dialog allows every file.
+/// What `filters` ask of the system's dialog; `None` when the dialog allows
+/// every file: there are none, or one of them is a filter of every file,
+/// which a dialog with no filter menu offers together with the rest. A MIME
+/// family the systems have no type for refuses the request either way.
 pub(crate) fn content_filter(filters: &[FileFilter]) -> Result<Option<ContentFilter>, DialogError> {
-    if filters.is_empty() {
-        return Ok(None);
-    }
     let mut filter = ContentFilter {
         types: Vec::new(),
         filters: filters.to_vec(),
@@ -109,7 +124,8 @@ pub(crate) fn content_filter(filters: &[FileFilter]) -> Result<Option<ContentFil
             allow(mime_content_type(mime_type)?, &mut filter.types);
         }
     }
-    Ok(Some(filter))
+    let every_file = filters.is_empty() || filters.iter().any(FileFilter::is_all_files);
+    Ok((!every_file).then_some(filter))
 }
 
 /// What the contract's rule makes of one item a dialog shows or answers.
@@ -401,6 +417,63 @@ mod tests {
             "below macOS 11 a panel allows the last part, and the delegate checks the name"
         );
         assert_eq!(content_filter(&[]), Ok(None), "no filter allows every file");
+    }
+
+    #[test]
+    fn a_filter_of_every_file_frees_the_dialog_and_a_named_file_leaves_it_to_the_rule() {
+        let text = || FileFilter::new("Text").with_extension("txt");
+        assert_eq!(
+            content_filter(&[text(), FileFilter::all_files("All files")]),
+            Ok(None),
+            "a dialog has no filter menu, so every file beside text is every file"
+        );
+        assert!(
+            content_filter(&[
+                FileFilter::all_files("All files"),
+                FileFilter::new("Models").with_mime_type("model/*"),
+            ])
+            .is_err(),
+            "a pattern the systems cannot express is refused beside it, not dropped"
+        );
+
+        let build = content_filter(&[
+            text(),
+            FileFilter::new("Build files")
+                .with_file_name("Makefile")
+                .with_extension("mk"),
+        ])
+        .expect("maps")
+        .expect("given");
+        assert!(
+            !build.restricts_by_type(),
+            "no content type is a file's name, so the dialog allows every type"
+        );
+        assert!(
+            content_filter(&[text()])
+                .expect("maps")
+                .expect("given")
+                .restricts_by_type()
+        );
+        assert_eq!(
+            build.file_types(),
+            Some(extensions(&["txt", "mk"])),
+            "its types are still made, so one the system does not know still refuses the request"
+        );
+        for (name, admitted) in [
+            (&b"Makefile"[..], true),
+            (b"makefile", true),
+            (b"rules.mk", true),
+            (b"notes.txt", true),
+            (b"Makefile.bak", false),
+            (b"main.swift", false),
+        ] {
+            assert_eq!(
+                judge_item(Some(name), &build.filters, || Some(false)) == Judged::Admitted,
+                admitted,
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
     }
 
     #[test]
