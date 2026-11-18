@@ -93,23 +93,16 @@ impl WakeDelivery {
         // a later failure and is discarded. Taken now, so a signal this
         // delivery's own hook sets is not mistaken for an earlier one.
         let held = failure_signal.as_ref().is_some_and(|signal| signal.get());
-        let mut first_panic = None;
+        let mut first = FirstPanic::new();
         // Keep both owning envelopes until delivery bookkeeping is closed.
         // Switching hooks must not run the displaced callback's capture Drop.
         let mut compensation_hook: Option<Arc<dyn Fn() + Send + Sync>> = None;
         loop {
             let current_hook = compensation_hook.as_ref().unwrap_or(&hook);
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a wake hook runs contained so delivery bookkeeping closes"
-            )]
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| current_hook()));
-            let succeeded = outcome.is_ok();
-            if let Err(payload) = outcome {
-                if let Some(signal) = &failure_signal {
-                    signal.set(true);
-                }
-                FirstPanic::fold(&mut first_panic, Some(payload));
+            // The hook runs contained so delivery bookkeeping closes.
+            let succeeded = first.contain(|| current_hook()).is_some();
+            if !succeeded && let Some(signal) = &failure_signal {
+                signal.set(true);
             }
             let compensation = {
                 let mut state = self.state.lock();
@@ -159,29 +152,24 @@ impl WakeDelivery {
                 // a competing failure: the first one stays, and one the owner
                 // turn already held stays first too (ADR-0281).
                 for envelope in [Some(hook), compensation_hook] {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: a retired hook envelope's drop runs contained; the first failure stays"
-                    )]
-                    if let Err(payload) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(envelope)))
+                    let mut retired = FirstPanic::new();
+                    if retired.contain(move || drop(envelope)).is_none()
+                        && let Some(signal) = &failure_signal
                     {
-                        if let Some(signal) = &failure_signal {
-                            signal.set(true);
-                        }
-                        if held {
-                            flui_foundation::panic::discard_payload(payload);
-                        } else {
-                            FirstPanic::fold(&mut first_panic, Some(payload));
-                        }
+                        signal.set(true);
+                    }
+                    if held {
+                        // Dropping the collector discards its payload.
+                        drop(retired);
+                    } else {
+                        first.absorb(retired);
                     }
                 }
-                if let Some(payload) = first_panic {
-                    if preserve_failure {
-                        flui_foundation::panic::discard_payload(payload);
-                    } else {
-                        std::panic::resume_unwind(payload);
-                    }
+                if preserve_failure {
+                    // Dropping the collector discards its payload.
+                    drop(first);
+                } else {
+                    first.resume();
                 }
                 return;
             }

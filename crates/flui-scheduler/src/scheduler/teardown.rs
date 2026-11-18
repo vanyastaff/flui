@@ -1,8 +1,8 @@
 //! Terminal scheduler retirement after its last strong UI reference is gone.
 
 use crate::wake_delivery::FailureSignal;
+use flui_foundation::panic::FirstPanic;
 use std::cell::RefCell;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -39,30 +39,34 @@ impl UpdateScheduler {
 }
 
 struct Retirement<'a> {
+    /// A failure was already unwinding or held when retirement began: it stays
+    /// first, and every failure retirement raises is discarded (ADR-0281).
     preserve_failure: bool,
     signal: &'a FailureSignal,
-    first: Option<RetirePanic>,
+    first: FirstPanic,
 }
 
 impl Retirement<'_> {
     fn observe(&mut self, payload: RetirePanic) {
         self.signal.set(true);
-        if self.preserve_failure || self.first.is_some() {
-            flui_foundation::panic::discard_payload(payload);
-        } else {
-            self.first = Some(payload);
-        }
+        self.first.record(payload);
     }
 
     fn retire<T>(&mut self, value: T) {
         // Contained after any earlier failure too: a destructor panic competes
         // and the first failure stays (ADR-0281).
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a retired value's drop runs contained; the first failure stays"
-        )]
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
-            self.observe(payload);
+        if self.first.contain(move || drop(value)).is_none() {
+            self.signal.set(true);
+        }
+    }
+
+    /// The failure retirement raised first, unless an earlier one stays first;
+    /// then the held payload is destroyed under containment as `first` drops.
+    fn into_failure(self) -> Option<RetirePanic> {
+        if self.preserve_failure {
+            None
+        } else {
+            self.first.into_payload()
         }
     }
 }
@@ -113,7 +117,7 @@ impl Drop for SchedulerInner {
         let mut retirement = Retirement {
             preserve_failure: incoming,
             signal,
-            first: None,
+            first: FirstPanic::new(),
         };
         if let Some(payload) = delivery.into_failure() {
             retirement.observe(payload);
@@ -126,7 +130,7 @@ impl Drop for SchedulerInner {
         }
         retirement.retire(hook);
 
-        if let Some(payload) = retirement.first {
+        if let Some(payload) = retirement.into_failure() {
             if let Some(release) = &execution {
                 *release.failure.borrow_mut() = Some(payload);
             } else {
