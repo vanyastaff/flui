@@ -24,8 +24,6 @@ pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut RecoveryScope<'_>)>;
 /// This enum represents whether an animation is progressing forward (from begin to end)
 /// or in reverse (from end to begin).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
 pub(crate) enum AnimationDirection {
     /// Animation is running forward (from begin to end).
     #[default]

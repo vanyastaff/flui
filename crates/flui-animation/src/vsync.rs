@@ -640,7 +640,7 @@ impl Vsync {
     /// registry stop advancing.
     #[must_use]
     pub fn is_muted(&self) -> bool {
-        self.inner.borrow_mut().muted
+        self.inner.borrow().muted
     }
 
     /// Mute or unmute this registry: while muted it delivers no ticks, to its

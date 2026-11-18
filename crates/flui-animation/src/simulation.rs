@@ -12,7 +12,6 @@ use std::time::Duration;
 /// The input a [`SimulationError::NonFinite`] or [`SimulationError::OutOfRange`]
 /// refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationParameter {
     /// A spring's mass.
@@ -90,7 +89,6 @@ impl fmt::Display for SimulationParameter {
 
 /// Why a simulation, spring, tolerance or bounds value could not be built.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationError {
     /// One input is NaN or infinite where only finite values are admitted.
@@ -105,7 +103,6 @@ pub enum SimulationError {
         /// The refused input.
         parameter: SimulationParameter,
         /// The refused numeric value; duration inputs are expressed in seconds.
-        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         value: f64,
     },
     /// Every input is in range, but a constant derived from them is not a
@@ -117,10 +114,8 @@ pub enum SimulationError {
     #[error("bounds must be finite and ordered, got [{min}, {max}]")]
     InvalidBounds {
         /// The refused lower bound.
-        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         min: f64,
         /// The refused upper bound.
-        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         max: f64,
     },
 }

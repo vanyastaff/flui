@@ -17,4 +17,3 @@
   `flui-native`; `winit-backend` no longer brings them.
 - On Linux the display source chooses Wayland only when `WAYLAND_DISPLAY` names a socket it can
   connect to; `WAYLAND_SOCKET` alone no longer makes a session Wayland.
-- The winit host on Linux reaps the `xdg-open` it starts for `reveal_path` and `open_path`.

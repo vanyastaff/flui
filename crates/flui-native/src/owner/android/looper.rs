@@ -51,7 +51,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
     rc::Rc,
     sync::{
         Arc,
@@ -1312,7 +1311,7 @@ impl AndroidLoop {
     }
 }
 
-impl host::Services for AndroidLoop {
+impl host::Launch for AndroidLoop {
     /// Only a page has an origin.
     fn page_origin(&self) -> Option<String> {
         None
@@ -1320,41 +1319,6 @@ impl host::Services for AndroidLoop {
 
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         super::launch::string_extra(&self.app, key)
-    }
-
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        Ok(PathBuf::from("/data/local/tmp"))
-    }
-
-    // The Android host opens no URL, path or file prompt and reports no
-    // compositor: those services move to the system capability crate.
-    fn open_url(&self, url: &str) {
-        let _ = url;
-    }
-
-    fn reveal_path(&self, path: &std::path::Path) {
-        let _ = path;
-    }
-
-    fn open_path(&self, path: &std::path::Path) {
-        let _ = path;
-    }
-
-    fn prompt_for_paths(
-        &self,
-        options: crate::PathPromptOptions,
-    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        let _ = options;
-        crate::Task::ready(Ok(None))
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        directory: &std::path::Path,
-        suggested_name: Option<&str>,
-    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
-        let _ = (directory, suggested_name);
-        crate::Task::ready(Ok(None))
     }
 }
 

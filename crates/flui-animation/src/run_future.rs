@@ -1,5 +1,6 @@
 //! Run resolution, continuation delivery and waiter custody.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -9,12 +10,12 @@ use std::{
     task::{Context, Poll},
 };
 
+use flui_foundation::panic::FirstPanic;
 use slab::Slab;
 
 /// A continuation registered via [`AnimationRunFuture::when_complete_or_cancel`]
 /// while the future was still pending.
-type Continuation = Box<dyn FnMut(Result<(), RunCanceled>)>;
-type PanicPayload = Box<dyn std::any::Any + Send>;
+type Continuation = Box<dyn FnOnce(Result<(), RunCanceled>)>;
 
 /// The durable resolution, `None` while pending, plus whatever fan-out was
 /// registered before it was known. A single `RefCell` borrow lets
@@ -106,16 +107,25 @@ fn poll_resolution(
     Poll::Pending
 }
 
-/// Keep chronological failure priority even when reporting it runs foreign
-/// tracing subscribers. A later payload is dropped (ADR-0281).
-fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPayload) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: reporting runs foreign tracing subscribers, contained"
-    )]
-    let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let text =
-            flui_foundation::panic::payload_text(&*payload).unwrap_or("<non-string panic payload>");
+/// Run one delivery step contained, report its panic and keep it in `first`
+/// unless an earlier one is held there (ADR-0281). A waker or continuation
+/// consumed by its step is destroyed inside the same containment.
+fn contain_reported(first: &mut FirstPanic, step: impl FnOnce()) {
+    let mut failure = FirstPanic::new();
+    failure.contain(step);
+    if let Some(payload) = failure.held() {
+        report_delivery_failure(payload);
+    }
+    first.absorb(failure);
+}
+
+/// Reporting runs foreign tracing subscribers: a panic one raises is dropped
+/// with the collector that caught it, and the delivery failure stays first.
+fn report_delivery_failure(payload: &(dyn Any + Send)) {
+    let text =
+        flui_foundation::panic::payload_text(payload).unwrap_or("<non-string panic payload>");
+    let mut report = FirstPanic::new();
+    report.contain(|| {
         if std::thread::panicking() {
             tracing::error!(
                 payload = text,
@@ -124,50 +134,7 @@ fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPaylo
         } else {
             tracing::error!(payload = text, "AnimationRunFuture delivery failed");
         }
-    }));
-    if first.is_none() {
-        *first = Some(payload);
-    } else {
-        flui_foundation::panic::discard_payload(payload);
-    }
-    if let Err(secondary) = reported {
-        flui_foundation::panic::discard_payload(secondary);
-    }
-}
-
-/// Call `invoke` on a continuation or waker, then drop it, each step inside its
-/// own `catch_unwind`. The first failure is recorded; a destructor that panics
-/// after an earlier failure is a competing failure and is dropped (ADR-0281).
-fn invoke_contained<T>(
-    mut value: T,
-    invoke: impl FnOnce(&mut T),
-    first: &mut Option<PanicPayload>,
-) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a continuation or waker runs contained; the first failure is kept"
-    )]
-    let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&mut value)));
-    if let Err(payload) = called {
-        record_delivery_failure(first, payload);
-    }
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a continuation's drop runs contained; the first failure is kept"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
-        record_delivery_failure(first, payload);
-    }
-}
-
-fn finish_delivery(first: Option<PanicPayload>) {
-    if let Some(payload) = first {
-        if std::thread::panicking() {
-            flui_foundation::panic::discard_payload(payload);
-        } else {
-            std::panic::resume_unwind(payload);
-        }
-    }
+    });
 }
 
 /// Every continuation runs before waiters wake. Foreign code and owning waker
@@ -177,16 +144,14 @@ fn deliver_now(
     continuations: Vec<Continuation>,
     waiters: Slab<std::task::Waker>,
 ) {
-    let mut first = None;
+    let mut first = FirstPanic::new();
     for continuation in continuations {
-        let call = |continuation: &mut Continuation| continuation(outcome);
-        invoke_contained(continuation, call, &mut first);
+        contain_reported(&mut first, move || continuation(outcome));
     }
     for (_, waker) in waiters {
-        let wake = |waker: &mut std::task::Waker| waker.wake_by_ref();
-        invoke_contained(waker, wake, &mut first);
+        contain_reported(&mut first, move || waker.wake());
     }
-    finish_delivery(first);
+    first.resume();
 }
 
 /// A future representing an animation run.
@@ -263,11 +228,11 @@ impl AnimationRunFuture {
     ///
     /// This never blocks: on a still-pending future, `f` is stored and run
     /// later when the controller completes or cancels the run.
-    /// `f` is called exactly once. Its `FnMut` bound keeps captures owned
-    /// outside the invocation so a callback panic cannot unwind through them.
+    /// `f` is called exactly once, so it may move its captures out (a
+    /// `oneshot::Sender`, a value handed to the next step).
     pub fn when_complete_or_cancel<F>(&self, f: F)
     where
-        F: FnMut(Result<(), RunCanceled>) + 'static,
+        F: FnOnce(Result<(), RunCanceled>) + 'static,
     {
         let mut state = self.inner.state.borrow_mut();
         let Some(resolved) = state.resolution else {
@@ -275,10 +240,10 @@ impl AnimationRunFuture {
             return;
         };
         drop(state);
-        let mut first = None;
+        let mut first = FirstPanic::new();
         let outcome = resolved.as_output();
-        invoke_contained(f, |f| f(outcome), &mut first);
-        finish_delivery(first);
+        contain_reported(&mut first, move || f(outcome));
+        first.resume();
     }
 }
 
@@ -442,7 +407,7 @@ impl RunDelivery {
         }
     }
 
-    /// Run every continuation, each inside its own `catch_unwind` (the
+    /// Run every continuation, each contained (the
     /// payload logged at `error!` immediately), then wake polling waiters,
     /// then re-raise the first caught payload — unless this call is itself
     /// running during an unwind, in which case it is logged instead of
