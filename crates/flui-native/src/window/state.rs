@@ -1311,8 +1311,8 @@ mod tests {
                 requests: &[Fullscreen, Normal],
                 settled: false,
                 reads: &[
-                    (1920.0, Fullscreen, Normal, Some(800.0)),
                     (1920.0, Normal, Normal, Some(800.0)),
+                    (1920.0, Fullscreen, Normal, Some(800.0)),
                     (800.0, Normal, Normal, Some(800.0)),
                 ],
             },
