@@ -849,6 +849,7 @@ fn run_scoped_routes_child(fail_cursor: bool) {
             dispatch
                 .invoke_pointer_route(saved_route, &event)
                 .expect("mixed route still resolves")
+                .held()
                 .is_none()
         );
         assert_eq!(
@@ -933,6 +934,7 @@ fn run_scoped_routes_child(fail_cursor: bool) {
             dispatch
                 .invoke_pointer_route(token, &event)
                 .expect("B dispatch")
+                .held()
                 .is_none()
         );
         assert_eq!(calls_b.get(), 3);

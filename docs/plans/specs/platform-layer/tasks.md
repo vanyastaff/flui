@@ -8142,7 +8142,7 @@ GPU-память простаивающего или невидимого окн
   `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
   падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
 - [x] **Краевые случаи диалогов `flui-system`** (строки в таблице нет: сверка файловых диалогов
-  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0372.
+  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0374.
   Построено. Фильтр: `FileFilter::all_files` (свой вид `Kind::EveryFile`, а не строка `*`; запрос
   с ним принимает любой выбор, шаблон, добавленный к нему, — `MalformedRequest::PatternOnAllFiles`)
   и точное имя `with_file_name` (`Makefile`, `.env`; без учёта регистра ASCII,
