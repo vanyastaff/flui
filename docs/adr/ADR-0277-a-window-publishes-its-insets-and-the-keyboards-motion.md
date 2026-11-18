@@ -4,12 +4,18 @@
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0373](ADR-0373-a-window-publishes-where-the-keyboard-rests-and-the-layout-decides.md)
+  for `KeyboardInset` in §1 (it is `SoftKeyboard`, and its target becomes a placement), what
+  applying a keyboard writes in §3, the iOS and Web keyboard cells of §4 and
+  `HeadlessHost::move_keyboard`'s target in §5
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) (where each host reads its insets;
   this record is the contract those producers publish into),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (one frame transaction: a frame
   lays out with the inset at its own time),
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (`Since<F>` gates for Android API 29 and 30),
   [ADR-0152](ADR-0152-capability-seam-revised.md) (the reasons a capability is missing)
+- **Revised:** 2026-11-18 — §4: a macOS window publishes the part of its content under its
+  screen's camera housing as its safe area, which the row for desktop hosts left at none.
 
 ## Context and problem statement
 
@@ -172,7 +178,8 @@ asks for the next frame; at or after its end the keyboard is kept settled and no
 | Android | `systemBars() \| displayCutout()` as today | `Type.ime()`; API 30 and later: `WindowInsetsAnimation.Callback` publishes a motion at `onStart` (the bottom edge from `onPrepare` and at `onStart`, `getDurationMillis`, the interpolator mapped to the nearest of the insets controller's curves by its values at three times) and re-anchors its start at an `onProgress` whose `getFraction()` puts the start more than a frame away; a motion with no duration (one the user drives) and below API 30: the target alone | `systemGestures()` (API 29 and later) |
 | iOS | `safeAreaInsets` as today | `UIKeyboardWillChangeFrameNotification`: the end frame, kept in screen coordinates and converted to the view at each metrics sample, the duration, the curve (7 is `SystemKeyboard`); the motion starts where the keyboard is when the notification arrives, and a change with no duration is the target alone | none |
 | Web | `env(safe-area-inset-*)` with `viewport-fit=cover` | `navigator.virtualKeyboard` where the browser has it: the window sets `overlaysContent` (the page's own value back when it retires) and reads `boundingRect` at each `geometrychange`, capability `Native`; else the layout viewport below the visual viewport (`documentElement.clientHeight - (visualViewport.offsetTop + visualViewport.height)`) at its `resize` and `scroll`, none while the page is pinch-zoomed; both read again when the page or an ancestor of the canvas scrolls, capability `Emulated`; the target alone | none |
-| Desktop | as today | none | none |
+| macOS | the part of the window's content under its screen's camera housing (`NSScreen.safeAreaInsets`, macOS 12 and later; none below it) | none | none |
+| Win32, X11, Wayland | none | none | none |
 | Headless | `HeadlessHost::set_window_insets` sets any value; `HeadlessHost::move_keyboard` starts a motion now, from where the keyboard is | same | same |
 
 ### §5 Tests script the motion

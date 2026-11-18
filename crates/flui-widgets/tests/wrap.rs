@@ -49,7 +49,7 @@ pub(crate) fn wrap_three_boxes_form_two_runs_when_width_is_narrow() {
 /// Red-check: never hand the render object the ambient direction (every
 /// run starts at the left).
 pub(crate) fn wrap_starts_its_runs_at_the_reading_edge() {
-    use flui_painting::typography::TextDirection;
+    use flui_foundation::TextDirection;
     use flui_widgets::Directionality;
 
     let view = |direction| {

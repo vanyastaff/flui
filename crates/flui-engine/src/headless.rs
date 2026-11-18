@@ -1005,7 +1005,7 @@ mod twin_readback_tests {
     fn repeated_capture_resizes_and_recovers_after_invalid_geometry() {
         use flui_foundation::geometry::Rect;
         use flui_layer::{Layer, LayerNode, PictureLayer};
-        use flui_painting::{Canvas, Paint, styling::Color};
+        use flui_painting::{Canvas, paint::Paint, styling::Color};
 
         let Some(renderer) = crate::test_support::renderer_or_skip() else {
             return;
@@ -1103,7 +1103,7 @@ mod twin_readback_tests {
         let mut canvas = flui_painting::Canvas::new();
         canvas.draw_rect(
             Rect::from_xywh(0.0, 0.0, span, span),
-            &flui_painting::Paint::fill(flui_painting::styling::Color::WHITE),
+            &flui_painting::paint::Paint::fill(flui_painting::styling::Color::WHITE),
         );
         let mut tree = LayerTree::new(Layer::from(PictureLayer::new(canvas.finish())));
         for _ in 0..3 {

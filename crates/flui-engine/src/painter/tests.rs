@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::Rect;
-use flui_painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 use super::WgpuPainter;
 
@@ -18,8 +18,8 @@ fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 #[test]
 fn integral_hard_rect_clip_needs_no_mask_texture() {
     use flui_painting::{
-        Paint,
-        paint::{Clip, path::Path},
+        paint::Paint,
+        paint::{Clip, Path},
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
@@ -127,8 +127,8 @@ fn integral_hard_rect_clip_needs_no_mask_texture() {
 fn closed_form_path_fill_fits_without_ssaa_attachments() {
     use flui_foundation::geometry::{RRect, Radius};
     use flui_painting::{
-        Paint,
-        paint::{Clip, path::Path},
+        paint::Paint,
+        paint::{Clip, Path},
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
@@ -194,7 +194,7 @@ fn closed_form_path_fill_fits_without_ssaa_attachments() {
 
 fn reused_ssaa_tiles_do_not_retain_previous_geometry() {
     use flui_foundation::geometry::Point;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
     let (device, queue) = test_device_and_queue();
     let mut first = Path::new();
     first.move_to(Point::new(8.0, 8.0));
@@ -222,8 +222,8 @@ fn reused_ssaa_tiles_do_not_retain_previous_geometry() {
 fn degenerate_rounded_paths_preserve_contour_coverage() {
     use flui_foundation::geometry::RRect;
     use flui_painting::{
-        Paint,
-        paint::path::{Path, PathCommand},
+        paint::Paint,
+        paint::{Path, PathCommand},
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
@@ -261,8 +261,8 @@ fn degenerate_rounded_paths_preserve_contour_coverage() {
 fn rounded_rect_route_quality() {
     use flui_foundation::geometry::{Offset, Point, RRect};
     use flui_painting::{
-        Paint,
-        paint::path::{Path, PathCommand},
+        paint::Paint,
+        paint::{Path, PathCommand},
         styling::Color,
     };
 
@@ -362,8 +362,8 @@ fn rounded_rect_route_quality() {
 #[test]
 fn clipped_out_ssaa_path_needs_no_tile_or_mask_allocation() {
     use flui_painting::{
-        Paint,
-        paint::{Clip, path::Path},
+        paint::Paint,
+        paint::{Clip, Path},
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
@@ -428,7 +428,7 @@ fn clipped_out_ssaa_path_needs_no_tile_or_mask_allocation() {
 
 #[test]
 fn shared_clip_snapshot_survives_segment_barriers_with_one_mask_budget() {
-    use flui_painting::{Paint, paint::Clip, styling::Color};
+    use flui_painting::{paint::Clip, paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let domain = crate::device_domain::DeviceDomain::with_limits(
         Arc::clone(&device),
@@ -593,7 +593,7 @@ fn atlas_image_is_sharp_at_one_to_one() {
         painter.draw_image(
             &img,
             Rect::from_xywh(0.0, 0.0, 2.0, 1.0),
-            flui_painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
         );
     });
 
@@ -651,7 +651,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
 }
 
 fn clear_offscreen_result(nested: bool) {
-    use flui_painting::Paint;
+    use flui_painting::paint::Paint;
 
     const SIZE: u32 = 64;
     let (device, queue) = test_device_and_queue();
@@ -1179,7 +1179,7 @@ fn offscreen_pool_reuses_a_resized_working_set() {
 /// colour and translation on the normal, SSAA and advanced-blend routes.
 fn cached_paths_reconstruct_colour_and_transform() {
     use flui_foundation::geometry::Offset;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
 
     let (device, queue) = test_device_and_queue();
     let mut path = Path::new();
@@ -1202,7 +1202,7 @@ fn cached_paths_reconstruct_colour_and_transform() {
 
 fn tiny_finite_circle_scale_remains_visible() {
     use flui_foundation::geometry::{Offset, Point};
-    use flui_painting::{Paint, styling::Color};
+    use flui_painting::{paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
         painter.translate(Offset::new(32.0, 32.0));
@@ -1223,7 +1223,7 @@ fn tiny_finite_circle_scale_remains_visible() {
 
 fn dashed_intervals_that_cannot_advance_refuse_the_whole_stroke() {
     use flui_foundation::geometry::Point;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
     let (device, queue) = test_device_and_queue();
     let mut unrepresentable = Path::new();
     unrepresentable.move_to(Point::new(8.0, 16.0));
@@ -1252,7 +1252,7 @@ fn dashed_intervals_that_cannot_advance_refuse_the_whole_stroke() {
 
 fn invalid_dashed_contour_recovers() {
     use flui_foundation::geometry::Point;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
     let (device, queue) = test_device_and_queue();
     let mut invalid = Path::new();
     invalid.move_to(Point::new(8.0, 16.0));
@@ -1291,7 +1291,7 @@ fn closed_dash_gap_keeps_seam_open() {
     closed_dash_seam(vec![20.0, 10.0], 24.0, false);
 }
 fn closed_dash_seam(intervals: Vec<f64>, phase: f64, covered: bool) {
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
     let (device, queue) = test_device_and_queue();
     let mut path = Path::new();
     path.add_rect(Rect::from_xywh(8.0, 8.0, 16.0, 16.0));
@@ -1322,7 +1322,7 @@ fn closed_dash_seam(intervals: Vec<f64>, phase: f64, covered: bool) {
 }
 
 fn dashed_closed_contour_has_its_closing_edge() {
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
 
     let (device, queue) = test_device_and_queue();
     let mut path = Path::new();
@@ -1347,7 +1347,7 @@ fn dashed_closed_contour_has_its_closing_edge() {
 
 fn dashed_contours_do_not_bridge() {
     use flui_foundation::geometry::Point;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
 
     let (device, queue) = test_device_and_queue();
     let mut path = Path::new();
@@ -1372,7 +1372,7 @@ fn dashed_contours_do_not_bridge() {
 
 fn dashed_curves_and_phase_follow_contour_length() {
     use flui_foundation::geometry::Point;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
 
     let (device, queue) = test_device_and_queue();
     // The first contour consumes twelve units: phase four then starts the
@@ -1445,7 +1445,7 @@ fn low_alpha_images_preserve_their_contribution() {
 /// Equal bytes can describe different row layouts. A CPU filter must not make
 /// the vertical image reuse the horizontal image's uploaded texture.
 fn filtered_images_keep_their_dimensions() {
-    use flui_painting::paint::{Image, image::ColorFilter};
+    use flui_painting::paint::{ColorFilter, Image};
 
     const SIZE: u32 = 4;
     let (device, queue) = test_device_and_queue();
@@ -1499,7 +1499,7 @@ fn transient_images_keep_their_own_pixels() {
 }
 
 fn viewport_bindings_survive_resize_before_submit() {
-    use flui_painting::{Paint, styling::Color};
+    use flui_painting::{paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let (first, first_view) = crate::test_support::create_target(
         &device,
@@ -1618,7 +1618,7 @@ fn recording_failure_case(
     external_first: bool,
     draw: fn(&mut WgpuPainter),
 ) {
-    use flui_painting::{Paint, styling::Color};
+    use flui_painting::{paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let (target, view) = crate::test_support::create_target(
         &device,
@@ -1694,13 +1694,13 @@ fn recording_quota_refuses_then_next_frame_renders() {
     recording_quota_case(0, 0, |painter| {
         painter.draw_rect(
             Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
-            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+            &flui_painting::paint::Paint::fill(flui_painting::styling::Color::RED),
         );
     });
 }
 fn recording_quota_is_shared_by_isolated_layers() {
     recording_quota_case(1024 * 1024, 3, |painter| {
-        use flui_painting::{Paint, styling::Color};
+        use flui_painting::{paint::Paint, styling::Color};
         painter.draw_rect(
             Rect::from_xywh(0.0, 0.0, 24.0, 64.0),
             &Paint::fill(Color::RED).with_anti_alias(false),
@@ -1714,7 +1714,7 @@ fn recording_quota_is_shared_by_isolated_layers() {
     });
 }
 fn foreground_filter_renders_within_recording_allowance() {
-    use flui_painting::{Paint, styling::Color};
+    use flui_painting::{paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let (target, view) = crate::test_support::create_sampleable_target(
         &device,
@@ -1782,7 +1782,7 @@ fn foreground_filter_renders_within_recording_allowance() {
 
 fn recording_quota_charges_live_ssaa_clone() {
     recording_quota_case(1024 * 1024, 20, |painter| {
-        use flui_painting::{Paint, paint::Path, styling::Color};
+        use flui_painting::{paint::Paint, paint::Path, styling::Color};
         painter.draw_path(
             &Path::rectangle(Rect::from_xywh(8.0, 8.0, 48.0, 48.0)),
             &Paint::fill(Color::RED),
@@ -1794,7 +1794,7 @@ fn recording_quota_charges_live_ssaa_clone() {
     });
 }
 fn offscreen_only_flushes_freeze_viewport_after_resize() {
-    use flui_painting::Paint;
+    use flui_painting::paint::Paint;
     let (device, queue) = test_device_and_queue();
     let (first, first_view) = crate::test_support::create_target(
         &device,
@@ -1944,13 +1944,13 @@ fn tess_quad(painter: &mut WgpuPainter, rect: Rect<f64>, color: flui_painting::s
         None,
         None,
         &[0, 1, 2, 0, 2, 3],
-        &flui_painting::Paint::fill(color).with_anti_alias(false),
+        &flui_painting::paint::Paint::fill(color).with_anti_alias(false),
     );
 }
 
 fn tess_merge_preserves_order_and_clip_boundaries() {
     use flui_foundation::geometry::RRect;
-    use flui_painting::{Paint, paint::Clip, styling::Color};
+    use flui_painting::{paint::Clip, paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
         tess_quad(painter, Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::RED);
@@ -2592,7 +2592,7 @@ fn external_contents_are_live_within_the_same_allocation() {
 
 fn external_nested_opacity_preserves_recorded_allocation() {
     use flui_painting::{
-        Paint,
+        paint::Paint,
         paint::{FilterQuality, TextureId},
         styling::Color,
     };
@@ -2632,7 +2632,7 @@ fn external_nested_opacity_preserves_recorded_allocation() {
 
 fn external_competing_recording_failures() {
     use flui_painting::{
-        Paint,
+        paint::Paint,
         paint::{FilterQuality, TextureId},
         styling::Color,
     };
@@ -2823,7 +2823,7 @@ fn external_straight_linear_filtering_has_no_halo() {
 /// A device without dual-source blending refuses unsupported direct coverage
 /// instead of publishing wrong pixels, and the same public painter recovers.
 fn featureless_direct_aa_refusal_recovers() {
-    use flui_painting::{BlendMode, Paint, paint::Clip, styling::Color};
+    use flui_painting::{paint::BlendMode, paint::Clip, paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     assert!(
         !device
@@ -2894,7 +2894,7 @@ fn featureless_direct_aa_refusal_recovers() {
 /// A legal custom device's smaller fragment uniform count is admitted before
 /// lazy mask layout creation; refusal leaves the reusable public painter valid.
 fn limited_fragment_uniforms_clip_refusal_recovers() {
-    use flui_painting::{Paint, paint::Clip, styling::Color};
+    use flui_painting::{paint::Clip, paint::Paint, styling::Color};
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -2989,7 +2989,7 @@ fn limited_fragment_uniforms_clip_refusal_recovers() {
 /// Binary bounds coverage needs no readable destination: fixed-function
 /// Porter-Duff blending writes the inside and discards the outside mask.
 fn view_only_hard_group_blends() {
-    use flui_painting::{Paint, styling::Color};
+    use flui_painting::{paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let mut failed = Vec::new();
     for (mode, inside) in [
@@ -3021,7 +3021,7 @@ fn view_only_hard_group_blends() {
 }
 
 fn limited_mrt_coverage_refusal_recovers() {
-    use flui_painting::{BlendMode, Paint, paint::Clip, styling::Color};
+    use flui_painting::{paint::BlendMode, paint::Clip, paint::Paint, styling::Color};
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -3114,7 +3114,7 @@ fn limited_mrt_coverage_refusal_recovers() {
 }
 
 fn invalid_texture_target_recovers() {
-    use flui_painting::{Paint, styling::Color};
+    use flui_painting::{paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("valid multi-mip render target"),
@@ -3217,12 +3217,13 @@ fn vertical_glyph_bearings_do_not_overflow_before_clipping() {
 fn extreme_glyph_bearings_do_not_overflow_before_clipping(
     origin: flui_foundation::geometry::Point<f64>,
 ) {
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::{Offset, Point};
     use flui_painting::glyphs::SwashRasterizer;
     use flui_painting::styling::Color;
-    use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+    use flui_painting::typography::{TextSpan, TextStyle};
     use flui_painting::{
-        Canvas, DrawOp, FontCollection, GlyphRasterizer, TextContext, TextPainter,
+        Canvas, DrawOp, FontCollection, TextContext, TextPainter, glyphs::GlyphRasterizer,
     };
 
     let fonts = FontCollection::new();
@@ -3288,7 +3289,7 @@ fn replacement_fonts_keep_source_policy(
     source: crate::frame_protocol::FontSource,
     fresh_domain: bool,
 ) {
-    use flui_painting::GlyphRasterizer;
+    use flui_painting::glyphs::GlyphRasterizer;
     use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3469,7 +3470,8 @@ fn repeat_crop(repeat: flui_painting::paint::ImageRepeat, mode: BlendMode) {
     painter.begin_frame().expect("repeat crop frame begins");
     painter.draw_rect(
         Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
-        &flui_painting::Paint::fill(flui_painting::styling::Color::WHITE).with_anti_alias(false),
+        &flui_painting::paint::Paint::fill(flui_painting::styling::Color::WHITE)
+            .with_anti_alias(false),
     );
     painter.draw_image_repeat(
         &image,
@@ -3479,7 +3481,8 @@ fn repeat_crop(repeat: flui_painting::paint::ImageRepeat, mode: BlendMode) {
     );
     painter.draw_rect(
         Rect::from_xywh(8.0, 8.0, 1.0, 1.0),
-        &flui_painting::Paint::fill(flui_painting::styling::Color::GREEN).with_anti_alias(false),
+        &flui_painting::paint::Paint::fill(flui_painting::styling::Color::GREEN)
+            .with_anti_alias(false),
     );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     // Advanced images require the actual readable destination, not a view-only
@@ -3590,7 +3593,7 @@ fn repeat_refusal(
         return;
     }
     use flui_foundation::geometry::Offset;
-    use flui_painting::{Paint, paint::Image, styling::Color};
+    use flui_painting::{paint::Image, paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let (target, view) = crate::test_support::create_target(
         &device,

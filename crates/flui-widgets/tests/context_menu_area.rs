@@ -10,10 +10,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_interaction::drag::{DragItem, DragTrigger};
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
@@ -666,7 +666,7 @@ pub(crate) fn items_read_in_the_area_direction() {
 /// app sets around it: under white text, the items are not painted white on
 /// the menu's white.
 pub(crate) fn the_menu_labels_contrast_with_its_surface_under_any_text_colour() {
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_painting::typography::TextStyle;
     use flui_widgets::DefaultTextStyle;
 

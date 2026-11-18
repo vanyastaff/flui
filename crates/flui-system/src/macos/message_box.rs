@@ -1,29 +1,105 @@
 //! The message box as an `NSAlert` sheet on the acquiring widget's window.
 //!
-//! The title is the alert's message text and the message its informative
-//! text; with no title the message is the message text. The buttons are
-//! added in the order AppKit places them from the right, the default first,
-//! so `OkCancel` shows Cancel left of OK and Return answers OK; AppKit gives
-//! Escape to the button titled Cancel. The alert ends with its window and
-//! with its caller's dialog: the hold ends the sheet, and the completion
-//! handler that ending runs answers nobody.
+//! An alert has two texts and no title bar. The title is its message text,
+//! with the message and then the detail as its informative text; with no
+//! title the message is the message text and the detail the informative
+//! text, so a box without a title shows no heading of its own.
+//!
+//! The buttons are added in the order [`MessageButtons::answers`] gives,
+//! which AppKit lays out from the right, each titled by the request's label
+//! for it or by its English word. AppKit would give Return to the first
+//! button added and Escape to one titled "Cancel"; the provider sets every
+//! button's key itself, so the rule holds under any label: Return for the
+//! request's default button, Escape for the one that answers Cancel when it
+//! is not the default, and no key for the rest.
+//!
+//! The alert ends with its window and with its caller's dialog: the hold
+//! ends the sheet, and the completion handler that ending runs answers
+//! nobody.
 
 use flui_platform::SystemFailure;
 
-use crate::dialog::{DialogError, MessageAnswer, MessageBoxResult, MessageButtons, MessageLevel};
+use crate::dialog::{
+    DialogError, MessageAnswer, MessageBoxRequest, MessageBoxResult, MessageButtons, MessageLevel,
+};
 
-/// The buttons an alert adds for `buttons`, in the order it adds them (the
-/// first is the default, rightmost), with the answer each gives.
-pub(super) fn buttons(buttons: MessageButtons) -> &'static [(&'static str, MessageAnswer)] {
-    match buttons {
-        MessageButtons::Ok => &[("OK", MessageAnswer::Ok)],
-        MessageButtons::OkCancel => &[("OK", MessageAnswer::Ok), ("Cancel", MessageAnswer::Cancel)],
-        MessageButtons::YesNo => &[("Yes", MessageAnswer::Yes), ("No", MessageAnswer::No)],
-        MessageButtons::YesNoCancel => &[
-            ("Yes", MessageAnswer::Yes),
-            ("No", MessageAnswer::No),
-            ("Cancel", MessageAnswer::Cancel),
-        ],
+/// The key that presses an alert's button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ButtonKey {
+    /// Return: the default button.
+    Return,
+    /// Escape: the button that cancels.
+    Escape,
+    /// No key: the button is clicked.
+    Unbound,
+}
+
+impl ButtonKey {
+    /// The button's `keyEquivalent`.
+    pub(super) fn equivalent(self) -> &'static str {
+        match self {
+            Self::Return => "\r",
+            Self::Escape => "\u{1b}",
+            Self::Unbound => "",
+        }
+    }
+}
+
+/// One button of an alert, in the order it is added.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct AlertButton {
+    pub(super) title: String,
+    pub(super) answer: MessageAnswer,
+    pub(super) key: ButtonKey,
+}
+
+/// The word an alert shows on the button that answers `answer` when the
+/// request labels it with none. English: AppKit localizes only the OK it
+/// adds itself, and no public API gives its Cancel, Yes or No.
+fn standard_title(answer: MessageAnswer) -> &'static str {
+    match answer {
+        MessageAnswer::Ok => "OK",
+        MessageAnswer::Cancel => "Cancel",
+        MessageAnswer::Yes => "Yes",
+        MessageAnswer::No => "No",
+    }
+}
+
+/// The buttons an alert adds for `request`, in the order it adds them.
+pub(super) fn buttons(request: &MessageBoxRequest) -> Vec<AlertButton> {
+    let default = request.default_answer();
+    request
+        .buttons
+        .answers()
+        .iter()
+        .map(|answer| AlertButton {
+            title: request
+                .label(*answer)
+                .unwrap_or_else(|| standard_title(*answer))
+                .to_owned(),
+            answer: *answer,
+            key: if *answer == default {
+                ButtonKey::Return
+            } else if *answer == MessageAnswer::Cancel {
+                ButtonKey::Escape
+            } else {
+                ButtonKey::Unbound
+            },
+        })
+        .collect::<Vec<AlertButton>>()
+}
+
+/// The alert's message text and its informative text for `request`: the
+/// title over the message and the detail, or, with no title, the message
+/// over the detail.
+pub(super) fn texts(request: &MessageBoxRequest) -> (String, Option<String>) {
+    match (&request.title, &request.detail) {
+        (Some(title), Some(detail)) => (
+            title.clone(),
+            Some(format!("{}\n\n{detail}", request.message)),
+        ),
+        (Some(title), None) => (title.clone(), Some(request.message.clone())),
+        (None, detail) => (request.message.clone(), detail.clone()),
     }
 }
 
@@ -38,8 +114,8 @@ pub(super) fn answer(offered: MessageButtons, response: isize) -> MessageBoxResu
     response
         .checked_sub(FIRST_BUTTON)
         .and_then(|index| usize::try_from(index).ok())
-        .and_then(|index| buttons(offered).get(index))
-        .map(|(_, answer)| *answer)
+        .and_then(|index| offered.answers().get(index))
+        .copied()
         .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))
 }
 
@@ -66,8 +142,8 @@ mod appkit {
     use objc2_foundation::NSString;
 
     use super::super::appkit::ns_window;
-    use super::super::sheet::Pending;
-    use super::{answer, buttons, style};
+    use super::{answer, buttons, style, texts};
+    use crate::apple::modal::Pending;
     use crate::dialog::{
         DialogError, DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest,
         MessageBoxResult,
@@ -121,16 +197,15 @@ mod appkit {
                 return DialogHold::new(());
             };
             let alert = NSAlert::new(self.mtm);
-            match &request.title {
-                Some(title) => {
-                    alert.setMessageText(&NSString::from_str(title));
-                    alert.setInformativeText(&NSString::from_str(&request.message));
-                }
-                None => alert.setMessageText(&NSString::from_str(&request.message)),
+            let (message, informative) = texts(&request);
+            alert.setMessageText(&NSString::from_str(&message));
+            if let Some(informative) = informative {
+                alert.setInformativeText(&NSString::from_str(&informative));
             }
             alert.setAlertStyle(NSAlertStyle(style(request.level)));
-            for (title, _) in buttons(request.buttons) {
-                let _ = alert.addButtonWithTitle(&NSString::from_str(title));
+            for button in buttons(&request) {
+                let added = alert.addButtonWithTitle(&NSString::from_str(&button.title));
+                added.setKeyEquivalent(&NSString::from_str(button.key.equivalent()));
             }
             let pending = Pending::new(answer_to);
             let handler_pending = pending.clone();
@@ -157,8 +232,10 @@ mod appkit {
 mod tests {
     use flui_platform::SystemFailure;
 
-    use super::{answer, buttons, style};
-    use crate::dialog::{DialogError, MessageAnswer, MessageButtons, MessageLevel};
+    use super::{AlertButton, ButtonKey, answer, buttons, style, texts};
+    use crate::dialog::{
+        DialogError, MessageAnswer, MessageBoxRequest, MessageButtons, MessageLevel,
+    };
 
     #[test]
     fn each_button_answers_its_answer_and_no_other_response_is_one() {
@@ -169,12 +246,13 @@ mod tests {
             MessageButtons::YesNoCancel,
         ];
         for offered in every {
-            for (index, (_, expected)) in buttons(offered).iter().enumerate() {
+            let added = buttons(&MessageBoxRequest::new("Saved").buttons(offered));
+            for (index, button) in added.iter().enumerate() {
                 let response = 1000 + isize::try_from(index).expect("a few buttons");
-                assert_eq!(answer(offered, response), Ok(*expected), "{offered:?}");
-                assert!(offered.admits(*expected), "{offered:?} offers {expected:?}");
+                assert_eq!(answer(offered, response), Ok(button.answer), "{offered:?}");
+                assert!(offered.admits(button.answer), "{offered:?} offers it");
             }
-            let past = 1000 + isize::try_from(buttons(offered).len()).expect("a few buttons");
+            let past = 1000 + isize::try_from(added.len()).expect("a few buttons");
             for response in [past, 999, 0, -1001] {
                 assert_eq!(
                     answer(offered, response),
@@ -183,10 +261,86 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn return_presses_the_default_button_and_escape_the_one_that_cancels_under_any_label() {
+        let button = |title: &str, answer, key| AlertButton {
+            title: title.to_owned(),
+            answer,
+            key,
+        };
         assert_eq!(
-            buttons(MessageButtons::OkCancel)[0],
-            ("OK", MessageAnswer::Ok),
-            "the default is added first"
+            buttons(&MessageBoxRequest::new("Save?").buttons(MessageButtons::YesNoCancel)),
+            [
+                button("Yes", MessageAnswer::Yes, ButtonKey::Return),
+                button("No", MessageAnswer::No, ButtonKey::Unbound),
+                button("Cancel", MessageAnswer::Cancel, ButtonKey::Escape),
+            ],
+            "the first button is the default unless the request names another"
+        );
+        assert_eq!(
+            buttons(
+                &MessageBoxRequest::new("Delete the note?")
+                    .buttons(MessageButtons::YesNoCancel)
+                    .default_button(MessageAnswer::No)
+                    .button_label(MessageAnswer::Yes, "Delete")
+                    .button_label(MessageAnswer::Cancel, "Keep editing")
+            ),
+            [
+                // No Return left on the first button, which AppKit gives it.
+                button("Delete", MessageAnswer::Yes, ButtonKey::Unbound),
+                button("No", MessageAnswer::No, ButtonKey::Return),
+                // Escape by its answer: AppKit reads it from the title.
+                button("Keep editing", MessageAnswer::Cancel, ButtonKey::Escape),
+            ]
+        );
+        assert_eq!(
+            buttons(
+                &MessageBoxRequest::new("Replace it?")
+                    .buttons(MessageButtons::OkCancel)
+                    .default_button(MessageAnswer::Cancel)
+            ),
+            [
+                button("OK", MessageAnswer::Ok, ButtonKey::Unbound),
+                button("Cancel", MessageAnswer::Cancel, ButtonKey::Return),
+            ],
+            "a button has one key: the default's"
+        );
+        assert_eq!(ButtonKey::Return.equivalent(), "\r");
+        assert_eq!(ButtonKey::Escape.equivalent(), "\u{1b}");
+        assert_eq!(ButtonKey::Unbound.equivalent(), "");
+    }
+
+    #[test]
+    fn an_alert_shows_the_title_over_the_message_and_the_detail_or_the_message_over_the_detail() {
+        let request = || MessageBoxRequest::new("The note was deleted.");
+        assert_eq!(
+            texts(&request()),
+            ("The note was deleted.".to_owned(), None),
+            "no title: no heading but the message"
+        );
+        assert_eq!(
+            texts(&request().detail("It is in the trash for 30 days.")),
+            (
+                "The note was deleted.".to_owned(),
+                Some("It is in the trash for 30 days.".to_owned())
+            )
+        );
+        assert_eq!(
+            texts(&request().title("Notes")),
+            ("Notes".to_owned(), Some("The note was deleted.".to_owned()))
+        );
+        assert_eq!(
+            texts(
+                &request()
+                    .title("Notes")
+                    .detail("It is in the trash for 30 days.")
+            ),
+            (
+                "Notes".to_owned(),
+                Some("The note was deleted.\n\nIt is in the trash for 30 days.".to_owned())
+            )
         );
     }
 

@@ -59,7 +59,7 @@ mod registration {
     use flui_platform::{Unsupported, UnsupportedReason};
 
     use super::badge::WebBadge;
-    use super::dialogs::{PagePicker, WebDialogs};
+    use super::dialogs::WebDialogs;
     use super::launcher::WebLauncher;
     use super::message_box::WebMessageBoxes;
     use super::page::Page;
@@ -99,13 +99,7 @@ mod registration {
             ))
         });
         registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-            FileDialogs::try_new(
-                WebDialogs::new(
-                    page::<FileDialogCapability>(ctx)?,
-                    ctx.runtime_local::<PagePicker>(),
-                ),
-                ctx,
-            )
+            FileDialogs::try_new(WebDialogs::new(page::<FileDialogCapability>(ctx)?), ctx)
         });
         registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
             MessageBoxes::try_new(

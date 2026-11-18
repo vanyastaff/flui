@@ -9,9 +9,10 @@ use super::{
         motion_history,
     },
 };
+use crate::containment::keep_first;
 use crate::gesture::observer::GestureContest;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught, try_run},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         GestureArena, GestureArenaEntry, GestureArenaMember, MotionFrame, MotionRole,
@@ -152,7 +153,7 @@ impl MultiDragGestureRecognizerBuilder {
         callback: impl Fn(PointerId, Offset<f64>) -> Option<Rc<dyn MultiDragHandle>> + 'static,
     ) -> Self {
         let outgoing = self.callbacks.on_start.replace(Rc::new(callback));
-        let mut failure = None;
+        let mut failure = FirstPanic::new();
         retire_callback(outgoing, &mut failure);
         finish_containment(failure, std::thread::panicking());
         self
@@ -243,25 +244,25 @@ impl MultiDragGestureRecognizer {
         pointer: PointerId,
         mut state: MultiDragPointerState,
         dispatch: Option<PointerDispatch<'_>>,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) {
-        let retirement = RoutePanic::capture(|| {
+        let retirement = caught(|| {
             if dispatch.is_some_and(|d| matches!(d.local, PointerEvent::Up(_))) {
                 state.arena_entry.reject_without_self();
             } else {
                 withdraw_cancelled(&state.arena_entry, self.membership.arena());
             }
         });
-        RoutePanic::preserve_first(first, retirement, "multi-drag contact retirement");
+        keep_first(first, retirement, "multi-drag contact retirement");
         let client = state.client.take();
         if let Some(client) = client.as_ref() {
             let delivered = if let Some(dispatch) =
                 dispatch.filter(|d| matches!(d.local, PointerEvent::Up(_)))
             {
-                let clock = match RoutePanic::try_run(|| self.membership.arena().sample_now()) {
+                let clock = match try_run(|| self.membership.arena().sample_now()) {
                     Ok(now) => now,
                     Err(panic) => {
-                        RoutePanic::preserve_first(first, Some(panic), "multi-drag terminal clock");
+                        keep_first(first, panic, "multi-drag terminal clock");
                         state.last_time
                     }
                 };
@@ -275,15 +276,15 @@ impl MultiDragGestureRecognizer {
                     velocity: state.velocity_tracker.velocity_at(now),
                     kind: state.kind,
                 };
-                RoutePanic::capture(|| {
+                caught(|| {
                     invoke_callback(Some(client.clone()), || {}, |client| client.end(details));
                 })
             } else {
-                RoutePanic::capture(|| {
+                caught(|| {
                     invoke_callback(Some(client.clone()), || {}, MultiDragHandle::cancel);
                 })
             };
-            RoutePanic::preserve_first(first, delivered, "multi-drag terminal client");
+            keep_first(first, delivered, "multi-drag terminal client");
         }
         retire_callback(client, first);
     }
@@ -306,7 +307,7 @@ impl MultiDragGestureRecognizer {
         {
             let removed = self.pointers.borrow_mut().remove(&pointer);
             if let Some(state) = removed {
-                let mut failure = None;
+                let mut failure = FirstPanic::new();
                 self.finish_pointer(pointer, state, None, &mut failure);
                 finish_containment(failure, std::thread::panicking());
             }
@@ -345,7 +346,7 @@ impl MultiDragGestureRecognizer {
             {
                 drop(pointers);
                 if let Some(state) = self.remove_current(pointer, id) {
-                    let mut failure = None;
+                    let mut failure = FirstPanic::new();
                     self.finish_pointer(pointer, state, None, &mut failure);
                     finish_containment(failure, std::thread::panicking());
                 }
@@ -398,7 +399,7 @@ impl MultiDragGestureRecognizer {
             }
         };
         if let (Some(client), Some(update)) = (client, update) {
-            let mut failure = RoutePanic::capture(|| {
+            let mut failure = caught(|| {
                 invoke_callback(Some(client.clone()), || {}, |client| client.update(update));
             });
             retire_callback(Some(client), &mut failure);
@@ -429,7 +430,7 @@ impl MultiDragGestureRecognizer {
         };
         let callback = self.callbacks.on_start.clone();
         let mut client = None;
-        let mut failure = RoutePanic::capture(|| {
+        let mut failure = caught(|| {
             invoke_callback(
                 callback,
                 || {},
@@ -438,7 +439,7 @@ impl MultiDragGestureRecognizer {
                 },
             );
         });
-        if failure.is_some() || client.is_none() {
+        if failure.is_held() || client.is_none() {
             if let Some(state) = self.remove_current(pointer, id) {
                 self.finish_pointer(pointer, state, None, &mut failure);
             }
@@ -478,11 +479,11 @@ impl MultiDragGestureRecognizer {
         if self.is_current(pointer, id)
             && let Some(update) = update
         {
-            failure = RoutePanic::capture(|| {
+            failure = caught(|| {
                 invoke_callback(Some(client.clone()), || {}, |client| client.update(update));
             });
         } else {
-            failure = RoutePanic::capture(|| {
+            failure = caught(|| {
                 invoke_callback(Some(client.clone()), || {}, MultiDragHandle::cancel);
             });
         }
@@ -522,7 +523,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         }
         let removed = self.pointers.borrow_mut().remove(&pointer);
         if let Some(state) = removed {
-            let mut failure = None;
+            let mut failure = FirstPanic::new();
             self.finish_pointer(pointer, state, None, &mut failure);
             finish_containment(failure, std::thread::panicking());
             if self.pointers.borrow().contains_key(&pointer) {
@@ -593,7 +594,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
                 let removed = self.pointers.borrow_mut().remove(&pointer);
                 if let Some(state) = removed {
-                    let mut failure = None;
+                    let mut failure = FirstPanic::new();
                     self.finish_pointer(pointer, state, Some(dispatch), &mut failure);
                     finish_containment(failure, std::thread::panicking());
                 }
@@ -606,7 +607,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         if removed.is_empty() {
             return CancelOutcome::Idle;
         }
-        let mut failure = None;
+        let mut failure = FirstPanic::new();
         for (pointer, state) in removed {
             self.finish_pointer(pointer, state, None, &mut failure);
         }
@@ -627,7 +628,7 @@ impl GestureArenaMember for MultiDragGestureRecognizer {
         let pointer = contest.pointer();
         let removed = self.pointers.borrow_mut().remove(&pointer);
         if let Some(state) = removed {
-            let mut failure = None;
+            let mut failure = FirstPanic::new();
             self.finish_pointer(pointer, state, None, &mut failure);
             finish_containment(failure, std::thread::panicking());
         }
@@ -636,7 +637,7 @@ impl GestureArenaMember for MultiDragGestureRecognizer {
 impl Drop for MultiDragGestureRecognizer {
     fn drop(&mut self) {
         let removed = std::mem::take(self.pointers.get_mut());
-        let mut failure = None;
+        let mut failure = FirstPanic::new();
         for (_, mut state) in removed {
             state.arena_entry.withdraw_deferred();
             retire_callback(state.client.take(), &mut failure);

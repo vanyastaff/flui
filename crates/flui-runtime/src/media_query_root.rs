@@ -4,7 +4,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_view::environment::{MediaQuery, MediaQueryData};
+use flui_foundation::geometry::Rect;
+use flui_view::environment::{FloatingKeyboard, MediaQuery, MediaQueryData};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RebuildHandle};
 
@@ -16,6 +17,10 @@ use flui_view::{BoxedView, RebuildHandle};
 #[derive(Default)]
 pub(crate) struct MediaQuerySource {
     data: RefCell<MediaQueryData>,
+    /// The frame of the keyboard floating over the window, published beside
+    /// the media query and not in it (ADR-0373): a nested `MediaQuery` copies
+    /// its data, and this is the window's alone.
+    floating_keyboard: Cell<Option<Rect>>,
     rebuild: RefCell<Option<(u64, RebuildHandle)>>,
     generation: Cell<u64>,
 }
@@ -24,6 +29,7 @@ impl std::fmt::Debug for MediaQuerySource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MediaQuerySource")
             .field("data", &self.data.borrow())
+            .field("floating_keyboard", &self.floating_keyboard.get())
             .field("generation", &self.generation.get())
             .finish_non_exhaustive()
     }
@@ -50,14 +56,28 @@ impl MediaQuerySource {
             mutate(&mut data);
             *data != before
         };
-        if changed {
-            self.rebuild
-                .borrow()
-                .as_ref()
-                .map(|(_, handle)| handle.clone())
-        } else {
+        if changed { self.root_rebuild() } else { None }
+    }
+
+    /// Commit the frame of the keyboard floating over the window, `None`
+    /// while none floats, without waking: like [`Self::commit`], it hands
+    /// back the root rebuild when the frame changed.
+    #[must_use = "schedule the returned root rebuild after publication guards release"]
+    pub(crate) fn commit_floating_keyboard(&self, frame: Option<Rect>) -> Option<RebuildHandle> {
+        if self.floating_keyboard.replace(frame) == frame {
             None
+        } else {
+            self.root_rebuild()
         }
+    }
+
+    /// The mounted root's rebuild handle, cloned out of its slot so that the
+    /// wake runs with no borrow of this source held.
+    fn root_rebuild(&self) -> Option<RebuildHandle> {
+        self.rebuild
+            .borrow()
+            .as_ref()
+            .map(|(_, handle)| handle.clone())
     }
 
     pub(crate) fn from_window(
@@ -66,6 +86,7 @@ impl MediaQuerySource {
     ) -> Self {
         let snapshot = window.state();
         Self {
+            floating_keyboard: Cell::new(snapshot.insets.keyboard().floating_frame()),
             data: RefCell::new(MediaQueryData {
                 size: snapshot.metrics.map_or(
                     snapshot.content_size.get(),
@@ -134,7 +155,9 @@ impl Drop for MediaQueryRegistration {
     }
 }
 
-/// Publishes one presentation's [`MediaQuerySource`] as the root `MediaQuery`.
+/// Publishes one presentation's [`MediaQuerySource`] as the root `MediaQuery`,
+/// and the window's floating keyboard, while one floats, as a provided
+/// `FloatingKeyboard`.
 ///
 /// Installed by the primary root attach paths and the addressed sized attach
 /// used by headless multi-window consumers. Each wrapper publishes only its
@@ -198,6 +221,20 @@ impl flui_view::ViewState<MediaQueryRoot> for MediaQueryRootState {
 
     fn dispose(&mut self) {
         self.registration.take();
+    }
+
+    /// The window's floating keyboard while one floats, and nothing
+    /// otherwise: a root that publishes nothing adds no layer to every
+    /// node's inherited scope.
+    fn provide(
+        &self,
+        _view: &MediaQueryRoot,
+        _ctx: &dyn BuildContext,
+        values: &mut flui_view::Provided<'_>,
+    ) {
+        if let Some(frame) = self.source.floating_keyboard.get() {
+            values.value(FloatingKeyboard::new(frame));
+        }
     }
 
     fn build(&self, view: &MediaQueryRoot, _ctx: &dyn BuildContext) -> impl IntoView {

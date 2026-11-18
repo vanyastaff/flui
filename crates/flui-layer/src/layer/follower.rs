@@ -2,7 +2,7 @@
 //! [`LeaderLayer`](super::LeaderLayer) elsewhere in the tree.
 
 use flui_foundation::geometry::{Offset, Size};
-use flui_painting::paint::Alignment;
+use flui_painting::Alignment;
 
 use crate::LayerLink;
 

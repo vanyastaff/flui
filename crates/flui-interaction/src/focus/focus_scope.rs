@@ -11,14 +11,13 @@ use std::{
     collections::VecDeque,
     num::NonZeroU64,
     rc::{Rc, Weak},
-    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
 use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, GroupOrderSnapshot};
-use flui_foundation::ChangeNotifier;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_foundation::panic::RecoveryScope;
-use flui_painting::typography::TextDirection;
+use flui_foundation::{AtomicIdMint, ChangeNotifier};
 use flui_platform::keyboard::KeyEvent;
 use thiserror::Error;
 
@@ -28,17 +27,13 @@ use crate::close::{CloseMode, CloseTombstone};
 
 use crate::ids::FocusNodeId;
 
-static NEXT_FOCUS_NODE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_FOCUS_NODE_ID: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
 
-fn allocate_focus_node_id(counter: &AtomicU64) -> FocusNodeId {
-    let raw = counter
-        .try_update(
-            AtomicOrdering::Relaxed,
-            AtomicOrdering::Relaxed,
-            |current| (current != 0).then(|| current.checked_add(1).unwrap_or(0)),
-        )
-        .expect("BUG: focus node identity capacity exhausted");
-    FocusNodeId::new(NonZeroU64::new(raw).expect("BUG: allocated focus identity is nonzero"))
+fn allocate_focus_node_id(mint: &AtomicIdMint<NonZeroU64>) -> FocusNodeId {
+    FocusNodeId::new(
+        mint.next()
+            .expect("BUG: a process creates fewer than 2^64 - 1 focus nodes"),
+    )
 }
 
 /// Owner-local callback for handling key events.
@@ -723,16 +718,16 @@ impl FocusNode {
         label: Option<Cow<'static, str>>,
         scope_owner: Option<Weak<FocusScopeNode>>,
     ) -> Rc<Self> {
-        Self::create_with_counter(label, scope_owner, &NEXT_FOCUS_NODE_ID)
+        Self::create_with_mint(label, scope_owner, &NEXT_FOCUS_NODE_ID)
     }
 
-    fn create_with_counter(
+    fn create_with_mint(
         label: Option<Cow<'static, str>>,
         scope_owner: Option<Weak<FocusScopeNode>>,
-        counter: &AtomicU64,
+        mint: &AtomicIdMint<NonZeroU64>,
     ) -> Rc<Self> {
         Rc::new(Self {
-            id: allocate_focus_node_id(counter),
+            id: allocate_focus_node_id(mint),
             debug_label: label,
             parent: RefCell::new(None),
             children: RefCell::new(Vec::new()),
@@ -1917,16 +1912,11 @@ fn following_candidates(root: &Rc<FocusNode>, removed: &Rc<FocusNode>) -> Vec<We
 #[cfg(test)]
 pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
     let manager = FocusManager::new();
-    let start = manager
-        .root_scope()
-        .id()
-        .get()
-        .checked_add(1)
-        .expect("root identity");
-    let counter = AtomicU64::new(start);
-    let first = FocusNode::create_with_counter(None, None, &counter);
-    counter.store(u64::MAX, AtomicOrdering::Relaxed);
-    let last = FocusNode::create_with_counter(None, None, &counter);
+    let root = manager.root_scope().id().get();
+    let first = FocusNode::create_with_mint(None, None, &AtomicIdMint::starting_after(root));
+    // The mint issues its terminal identity and refuses from then on.
+    let counter = AtomicIdMint::starting_after(u64::MAX - 1);
+    let last = FocusNode::create_with_mint(None, None, &counter);
     manager
         .root_scope()
         .attach_node(&first)
@@ -1957,7 +1947,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
     let _ = last.request_focus();
     for _ in 0..8 {
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            FocusNode::create_with_counter(None, None, &counter)
+            FocusNode::create_with_mint(None, None, &counter)
         }))
         .expect_err("exhausted allocator must permanently refuse");
         flui_foundation::panic::discard_payload(failure);
@@ -1978,8 +1968,8 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         &manager.primary_focus().expect("focused node"),
         &first
     ));
-    let fresh_counter = AtomicU64::new(start.checked_add(1).expect("fresh identity"));
-    let fresh = FocusNode::create_with_counter(None, None, &fresh_counter);
+    let fresh_counter = AtomicIdMint::starting_after(root.checked_add(1).expect("fresh identity"));
+    let fresh = FocusNode::create_with_mint(None, None, &fresh_counter);
     manager
         .root_scope()
         .attach_node(&fresh)
@@ -2120,11 +2110,6 @@ impl FocusScopeNode {
     #[inline]
     pub fn traps_focus(&self) -> bool {
         self.traps_focus.get()
-    }
-
-    /// Change whether focus is trapped inside this scope.
-    pub fn set_traps_focus(&self, traps: bool) {
-        self.traps_focus.set(traps);
     }
 
     /// Replace this scope's owner-local traversal policy.

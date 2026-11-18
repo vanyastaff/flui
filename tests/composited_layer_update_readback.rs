@@ -431,7 +431,7 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {
         use flui_foundation::geometry::Rect;
-        use flui_painting::Paint;
+        use flui_painting::paint::Paint;
         use flui_painting::styling::Color;
 
         let canvas = ctx.canvas();
@@ -587,7 +587,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use flui::painting::{Canvas, CustomPainter, Paint};
+    use flui::painting::{Canvas, CustomPainter, paint::Paint};
     use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
@@ -750,9 +750,10 @@ fn decoration_filters_preserve_tap_order_and_batch_identity() {
     use flui::painting::CustomPainter;
     use flui_foundation::geometry::Rect;
     use flui_objects::RenderCustomPaint;
-    use flui_painting::paint::{BlendMode, BoxFit, ColorFilter, Image};
+    use flui_painting::BoxFit;
+    use flui_painting::paint::{BlendMode, ColorFilter, Image};
     use flui_painting::styling::{BoxDecoration, Color, DecorationImage};
-    use flui_painting::{Canvas, DecorationPaintOptions, Paint, paint_box_decoration};
+    use flui_painting::{Canvas, paint::Paint, styling::DecorationPaintOptions};
     use std::rc::Rc;
 
     #[derive(Debug)]
@@ -786,10 +787,9 @@ fn decoration_filters_preserve_tap_order_and_batch_identity() {
                 let image = DecorationImage::new(self.0.clone_handle())
                     .with_fit(BoxFit::Fill)
                     .with_color_filter(filter);
-                paint_box_decoration(
+                BoxDecoration::with_image(image).paint(
                     canvas,
                     Rect::from_xywh(x, 1.0, 3.0, 14.0),
-                    &BoxDecoration::with_image(image),
                     DecorationPaintOptions::default(),
                 );
             }
@@ -855,7 +855,7 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
     use flui_objects::RenderCustomPaint;
     use flui_painting::paint::Image;
     use flui_painting::styling::{BoxDecoration, Color, DecorationImage};
-    use flui_painting::{Canvas, DecorationPaintOptions, Paint, paint_box_decoration};
+    use flui_painting::{Canvas, paint::Paint, styling::DecorationPaintOptions};
 
     #[derive(Debug)]
     struct ImagePainter(BoxDecoration);
@@ -864,10 +864,9 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
         fn paint(&self, canvas: &mut Canvas, size: Size) {
             let bounds = Rect::from_xywh(0.0, 0.0, size.width, size.height);
             canvas.draw_rect(bounds, &Paint::fill(Color::BLACK));
-            paint_box_decoration(
+            self.0.paint(
                 canvas,
                 Rect::from_xywh(1.0, 1.0, 14.0, 14.0),
-                &self.0,
                 DecorationPaintOptions::default(),
             );
         }
@@ -885,7 +884,7 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
         let mut interiors = Vec::new();
         for alpha in [0.0025_f32, 0.005_f32] {
             let image = DecorationImage::new(Image::solid_color(1, 1, Color::WHITE))
-                .with_fit(flui_painting::paint::BoxFit::Fill);
+                .with_fit(flui_painting::BoxFit::Fill);
             let image = if filtered {
                 image.with_opacity(0.5).with_color_filter(filter(alpha))
             } else {

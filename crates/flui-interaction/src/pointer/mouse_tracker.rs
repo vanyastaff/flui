@@ -30,6 +30,7 @@
 //! does hover" different call shapes, not because the underlying contract
 //! differs.
 
+use crate::containment::keep_first;
 use std::{cell::RefCell, collections::BTreeMap, collections::HashSet, num::NonZeroU64, rc::Rc};
 
 use flui_foundation::{IdMint, geometry::Offset};
@@ -39,7 +40,7 @@ pub use super::interaction_lane::{
     MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseRegionTarget,
 };
 use super::{HitTestResult, OwnerLatch, active_dispatch_handle};
-use crate::containment::RoutePanic;
+use crate::containment::{FirstPanic, caught};
 use crate::{
     events::{CursorIcon, PointerEvent, PointerKind, PointerSource},
     ids::{InputSurface, RegionId},
@@ -193,7 +194,7 @@ type Latched<C> = (C, OwnerLatch);
 struct DeviceState {
     /// Authority retained by ambient probes across their reentrant hit-test call.
     observation: Rc<()>,
-    /// Latest source metadata for callbacks and the `mouse_is_connected` query.
+    /// Latest source metadata for callbacks.
     pointer: PointerSource,
     /// Last known position.
     last_position: Offset<f64>,
@@ -961,18 +962,18 @@ impl MouseTracker {
     ///
     /// Per-target panics are isolated the same way the render tree isolates
     /// resolved pointer-route dispatch: the first is returned for the caller
-    /// to resume after its own mandatory cleanup, later ones are traced.
+    /// to resume after its own mandatory cleanup, later ones are discarded.
     #[must_use = "a captured hover-callback panic must be resumed after dispatch cleanup"]
     pub fn dispatch_hover(
         &self,
         event: &PointerEvent,
         hit_test_result: &HitTestResult,
-    ) -> Option<RoutePanic> {
+    ) -> FirstPanic {
         let PointerEvent::Move(update) = event else {
-            return None;
+            return FirstPanic::new();
         };
         if !update.buttons.is_empty() {
-            return None;
+            return FirstPanic::new();
         }
         let pointer = update.pointer;
         let point = update.current().position.get();
@@ -984,15 +985,15 @@ impl MouseTracker {
             .filter_map(|(_, annotation)| annotation.on_hover())
             .collect();
 
-        let mut first_panic = None;
+        let mut first_panic = FirstPanic::new();
         for (callback, latch) in hover_callbacks {
             // An earlier callback may have closed this region's owner.
             if !latch.is_closed() {
-                let delivered = RoutePanic::capture(|| callback(pointer, position));
-                RoutePanic::preserve_first(&mut first_panic, delivered, "mouse hover callback");
+                let delivered = caught(|| callback(pointer, position));
+                keep_first(&mut first_panic, delivered, "mouse hover callback");
             }
-            let cleanup = RoutePanic::capture(|| drop(callback));
-            RoutePanic::preserve_first(&mut first_panic, cleanup, "mouse hover snapshot cleanup");
+            let cleanup = caught(|| drop(callback));
+            keep_first(&mut first_panic, cleanup, "mouse hover snapshot cleanup");
         }
         first_panic
     }
@@ -1085,13 +1086,6 @@ impl MouseTracker {
             work.invoke(&mut failure);
         }
         failure.finish();
-    }
-
-    /// Checks if any mouse is currently connected.
-    #[inline]
-    #[must_use]
-    pub fn mouse_is_connected(&self) -> bool {
-        self.inner.borrow().mouse_connected
     }
 
     /// Gets the last known window position for reported hardware, excluding fallback contacts.

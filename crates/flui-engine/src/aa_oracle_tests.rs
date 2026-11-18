@@ -79,7 +79,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_foundation::geometry::Rect;
-    use flui_painting::Paint;
+    use flui_painting::paint::Paint;
     use flui_painting::styling::Color;
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};

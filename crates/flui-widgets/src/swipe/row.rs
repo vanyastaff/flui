@@ -9,9 +9,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{MotionPolicy, SharedCurve};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Size};
 use flui_objects::SubtreeAnchor;
-use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;

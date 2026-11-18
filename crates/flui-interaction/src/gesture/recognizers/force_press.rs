@@ -8,6 +8,7 @@
 //! revokes the remainder of the old packet; observer failures preserve the first
 //! panic while allowing the still-current measured tail to finish.
 
+use crate::containment::keep_first;
 use std::{cell::RefCell, rc::Rc};
 
 use smallvec::SmallVec;
@@ -26,7 +27,7 @@ use super::{
 use crate::gesture::observer::GestureContest;
 use crate::{
     ForcePressDetails,
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt},
     gesture::PositionSmoother,
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
@@ -79,7 +80,7 @@ struct ForcePressCallbacks {
 
 impl Drop for ForcePressCallbacks {
     fn drop(&mut self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         retire_callback(self.on_start.take(), &mut first);
         retire_callback(self.on_update.take(), &mut first);
         retire_callback(self.on_peak.take(), &mut first);
@@ -279,7 +280,7 @@ impl ForcePressGestureRecognizer {
         let ends_sequence = notices
             .iter()
             .any(|notice| matches!(notice, Notice::End(_)));
-        let mut first = RoutePanic::capture(|| match step {
+        let mut first = caught(|| match step {
             ArenaStep::None => {}
             ArenaStep::Claim(entry) => entry.resolve(GestureDisposition::Accepted),
             ArenaStep::Withdraw => {
@@ -296,9 +297,9 @@ impl ForcePressGestureRecognizer {
             if !ends_sequence && !id.is_some_and(|id| self.contact.is_current(id)) {
                 break;
             }
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| self.deliver(notice)),
+                caught(|| self.deliver(notice)),
                 "force press callback",
             );
         }
@@ -503,14 +504,14 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                     .iter()
                     .zip(global.coalesced())
                     .chain(std::iter::once((data.current(), global.current())));
-                let mut first = None;
+                let mut first = FirstPanic::new();
                 for (local, root) in samples {
                     if !self.contact.is_current(contact.id) {
                         break;
                     }
                     let local_position = local.position.get();
                     let root_position = root.position.get();
-                    let candidate = RoutePanic::capture(|| {
+                    let candidate = caught(|| {
                         self.handle_sample(
                             Offset::new(local_position.x, local_position.y),
                             Offset::new(root_position.x, root_position.y),
@@ -518,7 +519,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                             Some(local.time.as_nanos()),
                         );
                     });
-                    RoutePanic::preserve_first(&mut first, candidate, "measured pressure history");
+                    keep_first(&mut first, candidate, "measured pressure history");
                 }
                 finish_containment(first, std::thread::panicking());
             }

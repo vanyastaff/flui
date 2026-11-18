@@ -3,7 +3,7 @@
 
 use flui_foundation::geometry::Rect;
 use flui_painting::paint::Shader;
-use flui_painting::{BlendMode, Paint};
+use flui_painting::{paint::BlendMode, paint::Paint};
 
 use super::{
     super::{

@@ -3,13 +3,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_painting::paint::Clip;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::layer::Layer;
 use flui_rendering::semantics::{AccessibilityNodeId, ActionCall, SemanticsActionRequest};

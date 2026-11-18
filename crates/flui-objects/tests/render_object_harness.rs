@@ -136,6 +136,7 @@ use flui_animation::curve::SharedCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
@@ -144,11 +145,11 @@ use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
 use flui_painting::{Alignment, BoxFit, BoxShape, ImagePlacement};
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 use flui_painting::{
     paint::{Clip, ImageFilter, Path, Shader},
     styling::{BorderSide, BorderStyle, BoxDecoration, Color, TableBorder},
-    typography::{TextDirection, TextSpan},
+    typography::TextSpan,
 };
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::TableCellVerticalAlignment;
@@ -1887,7 +1888,12 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     );
 
     lane.enter(|| {
-        assert!(tracker.dispatch_hover(&hover_event, &inside).is_none());
+        assert!(
+            tracker
+                .dispatch_hover(&hover_event, &inside)
+                .held()
+                .is_none()
+        );
     });
     assert_eq!(
         hovers.get(),
@@ -1903,7 +1909,12 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     );
     lane.enter(|| {
         tracker.update_with_motion(&contact_event, PointerMotionKind::Contact, &inside);
-        assert!(tracker.dispatch_hover(&contact_event, &inside).is_none());
+        assert!(
+            tracker
+                .dispatch_hover(&contact_event, &inside)
+                .held()
+                .is_none()
+        );
     });
     assert_eq!(
         hovers.get(),
@@ -5983,7 +5994,7 @@ fn held<T: Clone + 'static>(value: T) -> ProxyAnimation<T> {
 /// Every rounded rectangle painted in the frame, in paint order, with the
 /// `from`/`to` points of its linear gradient (`None` for a flat fill).
 fn rrect_fills(run: &FrameRun) -> Vec<(Color, Option<(Offset, Offset)>)> {
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_rendering::layer::Layer;
     let tree = run.layer_tree().expect("a painted frame");
     let mut fills = Vec::new();
@@ -6095,7 +6106,7 @@ fn harness_skeleton_sizes_by_width_factor_and_clamps_corners() {
                     .picture()
                     .iter()
                     .find_map(|command| match &command.op {
-                        flui_painting::display_list::DrawOp::RRect { rrect, .. } => Some(*rrect),
+                        flui_painting::DrawOp::RRect { rrect, .. } => Some(*rrect),
                         _ => None,
                     }),
                 _ => None,

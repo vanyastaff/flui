@@ -9,6 +9,7 @@
 //! defined in the `flui_rendering` crate, next to the render protocols they
 //! serve.
 
+use crate::containment::keep_first;
 pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
 use flui_platform::pointer::{
@@ -17,7 +18,7 @@ use flui_platform::pointer::{
 };
 
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught, try_run},
     events::{CursorIcon, PointerEvent},
     pointer::MouseTrackerAnnotation,
     pointer::interaction_lane::{
@@ -49,12 +50,6 @@ pub enum EventPropagation {
 }
 
 impl EventPropagation {
-    /// Returns `true` if dispatch should continue to the next entry.
-    #[inline]
-    pub const fn should_continue(self) -> bool {
-        matches!(self, Self::Continue)
-    }
-
     /// Returns `true` if dispatch should stop at this entry.
     #[inline]
     pub const fn should_stop(self) -> bool {
@@ -423,27 +418,6 @@ impl HitTestEntry {
         self.smart_zoom_target = Some(target);
         self
     }
-
-    /// Builder: set the entry's transform directly, bypassing the
-    /// `HitTestResult`'s transform stack.
-    ///
-    /// Use this when the caller has already computed the
-    /// global-to-local transform out-of-band (for example, from a
-    /// protocol-side `BoxHitTestResult` adapter that owns the
-    /// transform graph itself). The standard `HitTestResult::add`
-    /// captures the current transform stack via `last_transform()`;
-    /// this builder lets callers preserve a transform that the stack
-    /// does not currently hold.
-    ///
-    /// "Unchecked" here means the transform is not validated against
-    /// the result's transform stack -- not that it bypasses any
-    /// safety invariant. The receiver is still `&mut self` because
-    /// the field is private.
-    #[must_use]
-    pub fn with_transform_unchecked(mut self, transform: Matrix4) -> Self {
-        self.transform = Some(transform);
-        self
-    }
 }
 
 // ============================================================================
@@ -492,34 +466,28 @@ impl Drop for HitTestResult {
     /// abort. The first failure propagates; while the thread is already
     /// unwinding it is discarded instead of starting a second panic.
     fn drop(&mut self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         self.retire_entries(&mut first);
-        if let Some(failure) = first {
-            if std::thread::panicking() {
-                failure.discard();
-            } else {
-                failure.resume();
-            }
-        }
+        first.resume();
     }
 }
 
 impl HitTestResult {
     /// Retire framework-owned entries individually after dispatch, outside any
     /// binding borrow. An opaque payload's destructor may reenter or fail.
-    pub(crate) fn retire_metadata(mut self, first: &mut Option<RoutePanic>) {
+    pub(crate) fn retire_metadata(mut self, first: &mut FirstPanic) {
         self.retire_entries(first);
     }
 
     /// Destroy each entry's payload on its own, under containment, keeping
     /// the first failure.
-    fn retire_entries(&mut self, first: &mut Option<RoutePanic>) {
+    fn retire_entries(&mut self, first: &mut FirstPanic) {
         for entry in &mut self.path {
             let Some(metadata) = entry.metadata.take() else {
                 continue;
             };
-            let retired = RoutePanic::capture(|| drop(metadata));
-            RoutePanic::preserve_first(first, retired, "hover hit-test metadata retirement");
+            let retired = caught(|| drop(metadata));
+            keep_first(first, retired, "hover hit-test metadata retirement");
         }
     }
 
@@ -763,16 +731,14 @@ impl HitTestResult {
     /// carrying pointer targets cannot be delivered; the typed boundary error
     /// is traced and the event is dropped.
     pub fn dispatch(&self, event: &PointerEvent) {
-        if let Some(panic) = self.dispatch_capturing_panic(event) {
-            panic.resume();
-        }
+        self.dispatch_capturing_panic(event).resume();
     }
 
     /// Dispatch an ephemeral pointer route while returning the first target
     /// panic to a binding that still has later transaction phases to run.
-    pub(crate) fn dispatch_capturing_panic(&self, event: &PointerEvent) -> Option<RoutePanic> {
+    pub(crate) fn dispatch_capturing_panic(&self, event: &PointerEvent) -> FirstPanic {
         if !self.path.iter().any(|e| e.pointer_target.is_some()) {
-            return None;
+            return FirstPanic::new();
         }
         let handle = match active_dispatch_handle() {
             Ok(handle) => handle,
@@ -781,7 +747,7 @@ impl HitTestResult {
                     ?error,
                     "pointer dispatch outside an active interaction lane; event not delivered"
                 );
-                return None;
+                return FirstPanic::new();
             }
         };
         let resolution = match handle.resolve_pointer_route(&self.path) {
@@ -791,7 +757,7 @@ impl HitTestResult {
                     ?error,
                     "pointer route resolution failed; event not delivered"
                 );
-                return None;
+                return FirstPanic::new();
             }
         };
         for miss in resolution.misses() {
@@ -804,12 +770,12 @@ impl HitTestResult {
         let delivery = handle.invoke_pointer_route(token, event);
         // Mandatory cleanup precedes any resumed panic: the ephemeral route is
         // released whether or not a target panicked.
-        let release = RoutePanic::try_run(|| handle.release_route(token));
+        let release = try_run(|| handle.release_route(token));
         let mut first_panic = match delivery {
             Ok(panic) => panic,
             Err(error) => {
                 tracing::error!(?error, "pointer route invocation failed");
-                None
+                FirstPanic::new()
             }
         };
         match release {
@@ -818,11 +784,7 @@ impl HitTestResult {
                 tracing::error!(?error, "failed to release ephemeral pointer route");
             }
             Err(panic) => {
-                RoutePanic::preserve_first(
-                    &mut first_panic,
-                    Some(panic),
-                    "ephemeral route cleanup",
-                );
+                keep_first(&mut first_panic, panic, "ephemeral route cleanup");
             }
         }
         first_panic
@@ -851,13 +813,13 @@ impl HitTestResult {
     pub(crate) fn dispatch_hover_interleaved_capturing_panic(
         &self,
         event: &PointerEvent,
-    ) -> Option<RoutePanic> {
+    ) -> FirstPanic {
         if !self
             .path
             .iter()
             .any(|e| e.pointer_target.is_some() || e.mouse_annotation.is_some())
         {
-            return None;
+            return FirstPanic::new();
         }
         let handle = match active_dispatch_handle() {
             Ok(handle) => handle,
@@ -867,7 +829,7 @@ impl HitTestResult {
                     "hover-interleaved dispatch outside an active interaction lane; \
                      event not delivered"
                 );
-                return None;
+                return FirstPanic::new();
             }
         };
         handle.dispatch_hover_interleaved(&self.path, event)

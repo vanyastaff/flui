@@ -2,12 +2,12 @@
 
 use std::fmt;
 
+use flui_foundation::TextDirection;
 use flui_objects::{
     CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, RenderFlex,
     VerticalDirection,
 };
 use flui_painting::typography::TextBaseline;
-use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, CreationSite};

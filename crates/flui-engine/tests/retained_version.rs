@@ -11,7 +11,7 @@ use flui_layer::{
     SceneOwner, SurfaceKey, TransformLayer,
 };
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 
 const SIDE: u32 = 96;
 

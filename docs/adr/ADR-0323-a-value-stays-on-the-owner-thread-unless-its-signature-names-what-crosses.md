@@ -181,7 +181,7 @@ positions keeps all of them unless a marker is named.
 | `flui_app::app::direct::run_direct` | `impl FnMut(&mut SceneBuilder, f64, f64) + 'static` |
 | `flui_app::app::config::AppConfig::memory_reclaim` | `impl ReclaimMemory + 'static`, held as `Rc`: a receiver is reclaimed on the owner thread |
 | `flui_hot_reload::pipeline::PluginPipeline::mount` | `V: View + StatelessView + Clone + 'static` |
-| `flui_painting::typography::text_spans::InlineSpan::as_trait` and `InlineSpanTrait` | deleted: `InlineSpan` is a closed enum, and its methods match its variants |
+| `flui_painting::typography::InlineSpan::as_trait` and `InlineSpanTrait` | deleted: `InlineSpan` is a closed enum, and its methods match its variants |
 
 The verdict of a row rests on where the item's contract says it is called. The change that removes
 a bound is its proof: the workspace compiles without it, or the compiler names the thread the

@@ -2,7 +2,6 @@
 //! [`GestureObserver`].
 
 use std::{
-    any::Any,
     cell::{Cell, RefCell},
     collections::VecDeque,
     fmt,
@@ -12,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
 use flui_platform::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
@@ -398,7 +398,7 @@ pub(crate) struct ObserverHub {
     clock: Option<Arc<dyn MonotonicClock>>,
     /// The first failure of that clock, raised by the arena operation once
     /// the verdicts it committed are delivered.
-    clock_failure: RefCell<Option<Box<dyn Any + Send>>>,
+    clock_failure: RefCell<FirstPanic>,
 }
 
 impl ObserverHub {
@@ -423,28 +423,20 @@ impl ObserverHub {
         let Some(clock) = self.clock.as_deref() else {
             return EventTime::from_nanos(0);
         };
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a user clock cannot unwind past a stamped verdict"
-        )]
-        match catch_unwind(AssertUnwindSafe(|| crate::events::interaction_now(clock))) {
-            Ok(now) => now,
-            Err(payload) => {
-                let mut first = self.clock_failure.borrow_mut();
-                if first.is_none() && !after_failure {
-                    *first = Some(payload);
-                } else {
-                    drop(first);
-                    flui_foundation::panic::discard_payload(payload);
-                }
-                EventTime::from_nanos(0)
-            }
+        let mut failure = FirstPanic::new();
+        if let Some(now) = failure.contain(|| crate::events::interaction_now(clock)) {
+            return now;
         }
+        if !after_failure && !self.clock_failure.borrow().is_held() {
+            self.clock_failure.borrow_mut().absorb(failure);
+        }
+        // A failure not kept is destroyed here, with no borrow held.
+        EventTime::from_nanos(0)
     }
 
     /// The clock failure [`Self::now`] kept, for the operation to raise.
-    pub(crate) fn take_clock_failure(&self) -> Option<Box<dyn Any + Send>> {
-        self.clock_failure.borrow_mut().take()
+    pub(crate) fn take_clock_failure(&self) -> FirstPanic {
+        std::mem::take(&mut *self.clock_failure.borrow_mut())
     }
 
     /// Queue one observation if anyone observes; build nothing otherwise.
@@ -531,15 +523,8 @@ impl ObserverHub {
                 .map(|entry| Rc::clone(&entry.observer))
                 .collect();
             for observer in observers {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a listener's panic must not stop the remaining observers"
-                )]
-                if let Err(payload) =
-                    catch_unwind(AssertUnwindSafe(|| observer.observe(&observation)))
-                {
-                    failures.capture(payload);
-                }
+                // A listener's panic must not stop the remaining observers.
+                failures.contain(|| observer.observe(&observation));
                 retire.retire(Some(observer));
                 let outgoing = std::mem::take(&mut *self.outgoing.borrow_mut());
                 for observer in outgoing {
@@ -589,32 +574,35 @@ impl Drop for DeliveryHold<'_> {
 /// Observer failures of one pass; the first is the one reported.
 #[derive(Default)]
 struct Failures {
-    first: Option<Box<dyn Any + Send>>,
+    first: FirstPanic,
     later: usize,
 }
 
 impl Failures {
-    fn capture(&mut self, payload: Box<dyn Any + Send>) {
-        if self.first.is_none() {
-            self.first = Some(payload);
-        } else {
-            self.later += 1;
-            flui_foundation::panic::discard_payload(payload);
+    /// Run one observer's code, keeping its panic as the first or counting it
+    /// behind an earlier one.
+    fn contain(&mut self, run: impl FnOnce()) {
+        let mut failure = FirstPanic::new();
+        let _: Option<()> = failure.contain(run);
+        if failure.is_held() {
+            if self.first.is_held() {
+                self.later += 1;
+            }
+            self.first.absorb(failure);
         }
     }
 
     fn report(self, retire: &Retire) {
-        let Some(first) = self.first else {
+        let Some(first) = self.first.held() else {
             return;
         };
-        let panic = flui_foundation::panic::payload_text(first.as_ref()).unwrap_or("<opaque>");
+        let panic = flui_foundation::panic::payload_text(first).unwrap_or("<opaque>");
         let later = self.later;
         let destroyed = retire.failed.get();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: reporting runs foreign tracing subscribers, contained"
-        )]
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+        // Reporting runs foreign tracing subscribers, contained; a failure of
+        // one is destroyed with the first when this returns.
+        let mut reporting = FirstPanic::new();
+        let _: Option<()> = reporting.contain(|| {
             tracing::error!(
                 target: "flui.input.observer",
                 panic,
@@ -622,10 +610,7 @@ impl Failures {
                 failed_retirements = destroyed,
                 "a gesture observer panicked; it stays registered and later observations continue"
             );
-        })) {
-            flui_foundation::panic::discard_payload(payload);
-        }
-        flui_foundation::panic::discard_payload(first);
+        });
     }
 }
 

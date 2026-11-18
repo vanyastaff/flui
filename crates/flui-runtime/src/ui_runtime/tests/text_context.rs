@@ -275,7 +275,7 @@ fn the_overlay_shapes_through_the_ui_runtime_text_context() {
                 min_width: 0.0,
                 text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
-                direction: flui_painting::typography::TextDirection::Ltr,
+                direction: flui_foundation::TextDirection::Ltr,
                 max_lines: None,
                 ellipsis: None,
             })

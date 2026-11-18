@@ -1,14 +1,16 @@
-//! `WindowInsets`: validation, and the keyboard's occlusion sampled along its
-//! motion (ADR-0277 §1).
+//! `WindowInsets`: validation, the keyboard's placement, and its inset sampled
+//! along its motion (ADR-0277 §1, ADR-0373).
 
 use std::time::Duration;
 
-use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::{EdgeInsets, Rect};
 use flui_platform::{
-    EventTime, InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets,
+    EventTime, InsetCurve, InsetMotion, InvalidInsets, KeyboardPlacement, SoftKeyboard,
+    WindowInsets,
 };
 
 const SHOWN: EdgeInsets = EdgeInsets::new(0.0, 0.0, 300.0, 0.0);
+const DOCKED: KeyboardPlacement = KeyboardPlacement::Docked { inset: SHOWN };
 const START: EventTime = EventTime::from_nanos(1_000_000_000);
 
 fn at_ms(ms: u64) -> EventTime {
@@ -17,10 +19,10 @@ fn at_ms(ms: u64) -> EventTime {
         .expect("on the timeline")
 }
 
-fn showing(curve: InsetCurve) -> KeyboardInset {
+fn showing(curve: InsetCurve) -> SoftKeyboard {
     let motion = InsetMotion::try_new(EdgeInsets::ZERO, START, Duration::from_millis(250), curve)
         .expect("a valid motion");
-    KeyboardInset::try_moving(SHOWN, motion).expect("a valid target")
+    SoftKeyboard::try_moving(DOCKED, motion).expect("a valid target")
 }
 
 fn a_linear_motion_is_sampled_along_its_duration() {
@@ -80,7 +82,8 @@ fn an_overshooting_motion_stays_finite() {
         overshoot,
     )
     .expect("a valid motion");
-    let keyboard = KeyboardInset::try_moving(far, motion).expect("a finite target");
+    let keyboard = SoftKeyboard::try_moving(KeyboardPlacement::Docked { inset: far }, motion)
+        .expect("a finite target");
     for ms in (0..=250).step_by(5) {
         let edges = keyboard.at(at_ms(ms));
         assert!(
@@ -96,21 +99,21 @@ fn an_overshooting_motion_stays_finite() {
 }
 
 fn a_keyboard_at_rest_is_its_target() {
-    let keyboard = KeyboardInset::try_at_rest(SHOWN).expect("a valid target");
+    let keyboard = SoftKeyboard::try_at_rest(DOCKED).expect("a valid target");
     assert_eq!(keyboard.at(START), SHOWN);
     assert_eq!(keyboard.settles_at(), None);
-    assert_eq!(KeyboardInset::HIDDEN.at(START), EdgeInsets::ZERO);
+    assert_eq!(SoftKeyboard::HIDDEN.at(START), EdgeInsets::ZERO);
 }
 
 fn invalid_insets_are_refused() {
     let nan = EdgeInsets::new(f64::NAN, 0.0, 0.0, 0.0);
     let negative = EdgeInsets::new(0.0, 0.0, -1.0, 0.0);
     assert_eq!(
-        KeyboardInset::try_at_rest(nan),
+        SoftKeyboard::try_at_rest(KeyboardPlacement::Docked { inset: nan }),
         Err(InvalidInsets::NonFinite)
     );
     assert_eq!(
-        KeyboardInset::try_at_rest(negative),
+        SoftKeyboard::try_at_rest(KeyboardPlacement::Docked { inset: negative }),
         Err(InvalidInsets::Negative)
     );
     assert_eq!(
@@ -134,6 +137,38 @@ fn invalid_insets_are_refused() {
     assert_eq!(
         InsetMotion::try_new(EdgeInsets::ZERO, START, Duration::from_millis(1), outside),
         Err(InvalidInsets::InvalidCurve)
+    );
+    let floating = |frame| SoftKeyboard::try_at_rest(KeyboardPlacement::Floating { frame });
+    assert_eq!(
+        floating(Rect::from_xywh(0.0, f64::NAN, 300.0, 200.0)),
+        Err(InvalidInsets::NonFinite)
+    );
+    assert_eq!(
+        floating(Rect::from_xywh(0.0, 100.0, 300.0, 0.0)),
+        Err(InvalidInsets::EmptyFrame)
+    );
+}
+
+/// A floating keyboard covers no edge, and a keyboard that undocks moves its
+/// inset to none; a docked one that covers nothing is hidden.
+fn a_floating_keyboard_has_no_inset() {
+    let frame = Rect::from_xywh(40.0, 200.0, 320.0, 260.0);
+    let motion = InsetMotion::try_new(SHOWN, START, Duration::from_millis(250), InsetCurve::Linear)
+        .expect("a valid motion");
+    let undocking = SoftKeyboard::try_moving(KeyboardPlacement::Floating { frame }, motion)
+        .expect("a valid placement");
+    assert_eq!(undocking.placement(), KeyboardPlacement::Floating { frame });
+    assert_eq!(undocking.floating_frame(), Some(frame));
+    assert_eq!(showing(InsetCurve::Linear).floating_frame(), None);
+    assert_eq!(SoftKeyboard::HIDDEN.floating_frame(), None);
+    assert_eq!(undocking.target(), EdgeInsets::ZERO);
+    assert_eq!(undocking.at(at_ms(125)).bottom, 150.0);
+    assert_eq!(undocking.at(at_ms(250)), EdgeInsets::ZERO);
+    assert_eq!(
+        SoftKeyboard::try_at_rest(KeyboardPlacement::Docked {
+            inset: EdgeInsets::ZERO
+        }),
+        Ok(SoftKeyboard::HIDDEN)
     );
 }
 
@@ -163,6 +198,10 @@ fn window_insets_table() {
                 a_keyboard_at_rest_is_its_target,
             ),
             ("invalid_insets_are_refused", invalid_insets_are_refused),
+            (
+                "a_floating_keyboard_has_no_inset",
+                a_floating_keyboard_has_no_inset,
+            ),
         ],
     );
 }

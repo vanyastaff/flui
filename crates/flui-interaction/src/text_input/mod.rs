@@ -1406,13 +1406,6 @@ impl TextInputOwner {
             .as_ref()
             .is_some_and(|client| client.token == token)
     }
-
-    /// Number of active clients (always zero or one).
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn active_count(&self) -> usize {
-        usize::from(self.state.borrow().active.is_some())
-    }
 }
 
 impl std::fmt::Debug for TextInputOwner {

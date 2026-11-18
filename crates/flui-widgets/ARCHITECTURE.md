@@ -1656,7 +1656,7 @@ different kinds of gap, not one undifferentiated "not yet":
   recorded fragment, or a clip scoped to a sub-range of one), not a new
   `Option` field.
 - **`foregroundDecoration` is additive.** A second decoration field, a
-  `paint_box_decoration` call after the child (painted on top rather than
+  `BoxDecoration::paint` call after the child (painted on top rather than
   behind), and a hit arm —
   `DecoratedBox`'s own doc states a foreground decoration participates in
   `hitTestSelf` exactly like the background one does.

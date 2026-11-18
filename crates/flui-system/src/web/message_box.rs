@@ -13,8 +13,10 @@
 //! The box answers the button the user pressed. The Escape key closes it
 //! with what closing means for its buttons; a box with no way out but an
 //! answer (Yes or No) keeps Escape from closing it, and is shown again if
-//! the browser closes it anyway. The buttons are labelled in English, since
-//! a page has no system labels to borrow. Its look is set through each
+//! the browser closes it anyway. A button the request labels shows that
+//! label, and the others their English word, since a page has no system
+//! labels to borrow; the request's default button takes focus, and its
+//! detail is a paragraph below the message. Its look is set through each
 //! element's style declarations, which a content security policy without
 //! `'unsafe-inline'` styles leaves in force, as it would not a `style`
 //! attribute.
@@ -271,9 +273,11 @@ fn name_box(document: &Document, dialog: &Element, name: &Element, description: 
     let _ = dialog.set_attribute("aria-describedby", &description_id);
 }
 
-/// The `<dialog>` for `request`: its title, its message and a form of its
-/// buttons, the first of which takes focus. It is named by its title (its
-/// message when it has none) and described by its message.
+/// The `<dialog>` for `request`: its title, its message, its detail below
+/// it and a form of its buttons, each with the request's label or its
+/// English word, the default one taking focus, so Enter presses it. It is
+/// named by its title (its message when it has none) and described by its
+/// message.
 fn build(page: &Page, request: &MessageBoxRequest) -> Result<HtmlDialogElement, DialogError> {
     let document = page.document();
     let element = |tag: &str| {
@@ -303,6 +307,12 @@ fn build(page: &Page, request: &MessageBoxRequest) -> Result<HtmlDialogElement, 
     message.set_text_content(Some(&request.message));
     style(&message, &MESSAGE_STYLE);
     let _ = dialog.append_child(&message);
+    if let Some(detail) = &request.detail {
+        let paragraph = element("p")?;
+        paragraph.set_text_content(Some(detail));
+        style(&paragraph, &MESSAGE_STYLE);
+        let _ = dialog.append_child(&paragraph);
+    }
     name_box(
         document,
         &dialog,
@@ -312,11 +322,12 @@ fn build(page: &Page, request: &MessageBoxRequest) -> Result<HtmlDialogElement, 
     let form = element("form")?;
     let _ = form.set_attribute("method", "dialog");
     style(&form, &BUTTONS_STYLE);
-    for (at, button) in rules::box_buttons(request.buttons).iter().enumerate() {
+    let default = request.default_answer();
+    for button in rules::box_buttons(request.buttons) {
         let element = element("button")?;
         let _ = element.set_attribute("value", button.value);
-        element.set_text_content(Some(button.label));
-        if at == 0 {
+        element.set_text_content(Some(request.label(button.answer).unwrap_or(button.label)));
+        if button.answer == default {
             let _ = element.unchecked_ref::<HtmlElement>().set_autofocus(true);
         }
         let _ = form.append_child(&element);

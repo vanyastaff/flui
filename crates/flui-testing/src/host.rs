@@ -361,6 +361,16 @@ impl HeadlessWindow {
         self
     }
 
+    /// Open the window with `insets` already covering it, as a window a
+    /// native host opens while the keyboard is up: its presentation is built
+    /// from them, with no report of a change.
+    /// [`HeadlessHost::set_window_insets`] reports a later one.
+    #[must_use]
+    pub fn with_insets(self, insets: flui_platform::WindowInsets) -> Self {
+        *self.insets.lock() = insets;
+        self
+    }
+
     /// Offer a pull-model text input instead: the UI runtime's presentation gets
     /// a [`RecordingTextStoreHost`] ([`HeadlessHost::text_store_host`]) and
     /// tells it which field's store takes input, as it tells the Win32 text
@@ -2229,32 +2239,32 @@ impl HeadlessHost {
         );
     }
 
-    /// Start moving `window`'s keyboard to `target` now, over `duration` on
-    /// `curve`, as a host reports a keyboard that begins to show or hide: the
-    /// motion starts where the keyboard is at this instant, and the safe area
-    /// and system gesture regions stay as they were. Returns the keyboard as
-    /// reported, whose [`at`](flui_platform::KeyboardInset::at) names the
-    /// occlusion each later frame lays out with.
+    /// Start moving `window`'s keyboard to `placement` now, over `duration`
+    /// on `curve`, as a host reports a keyboard that begins to show, hide,
+    /// undock or dock: the inset moves from where it is at this instant, and
+    /// the safe area and system gesture regions stay as they were. Returns
+    /// the keyboard as reported, whose [`at`](flui_platform::SoftKeyboard::at)
+    /// names the inset each later frame lays out with.
     ///
     /// # Panics
     ///
     /// If `window` was not opened by this host, or the motion is invalid: a
-    /// negative or non-finite `target`, a zero `duration`, or an invalid
-    /// `curve`.
+    /// placement [`SoftKeyboard::try_moving`](flui_platform::SoftKeyboard::try_moving)
+    /// refuses, a zero `duration`, or an invalid `curve`.
     pub fn move_keyboard(
         &self,
         window: HeadlessWindowId,
-        target: flui_foundation::geometry::EdgeInsets,
+        placement: flui_platform::KeyboardPlacement,
         duration: Duration,
         curve: flui_platform::InsetCurve,
-    ) -> flui_platform::KeyboardInset {
+    ) -> flui_platform::SoftKeyboard {
         let now = self.event_now();
         let insets = *self.window_of(window).insets.lock();
         let motion =
             flui_platform::InsetMotion::try_new(insets.keyboard().at(now), now, duration, curve)
                 .expect("a keyboard motion with a duration and a valid curve");
-        let keyboard = flui_platform::KeyboardInset::try_moving(target, motion)
-            .expect("a keyboard target that is finite and not negative");
+        let keyboard = flui_platform::SoftKeyboard::try_moving(placement, motion)
+            .expect("a keyboard placement that is finite, not negative and not empty");
         self.set_window_insets(window, insets.with_keyboard(keyboard));
         keyboard
     }

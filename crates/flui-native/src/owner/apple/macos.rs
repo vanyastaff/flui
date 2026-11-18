@@ -100,7 +100,9 @@ pub(crate) trait HostDisplays: StaleOnWake {
     fn id_of(&self, screen: &NSScreen) -> Option<DisplayId>;
 
     /// Mark the screens stale and wake the owner behind `signal` when AppKit
-    /// reports a change of screen parameters, until the watch is dropped.
+    /// reports a change of screen parameters, or Foundation a change of the
+    /// power state (Low Power Mode, which changes a display's refresh
+    /// period), until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
 
     /// The macOS version the process runs on, read once (ADR-0244).
@@ -210,8 +212,9 @@ pub struct MacOSLoop {
     /// identity.
     pub(crate) displays: Arc<dyn HostDisplays>,
 
-    /// Marks `displays` stale and wakes the owner when AppKit reports a
-    /// change of screen parameters; removed when the platform is dropped.
+    /// Marks `displays` stale and wakes the owner when the screens' parameters
+    /// or the power state change ([`HostDisplays::observe`]); removed when the
+    /// platform is dropped.
     _screen_observer: NativeOwner<Watch>,
 
     /// Where sleep, wake, lock and memory notices go, and what a wake marks

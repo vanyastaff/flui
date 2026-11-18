@@ -35,11 +35,11 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
-use flui_interaction::gesture::horizontal_drag;
+use flui_foundation::TextDirection;
+use flui_interaction::gesture::DragAxis;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
 };
-use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
@@ -646,7 +646,7 @@ impl BackGestureDetectorState {
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
-        horizontal_drag(policy.arena().clone())
+        DragGestureRecognizer::builder(policy.arena().clone(), DragAxis::Horizontal)
             .settings(policy.settings().clone())
             .on_start(move |details| start_runtime.on_drag_start(details))
             .on_update(move |details| update_runtime.on_drag_update(details))

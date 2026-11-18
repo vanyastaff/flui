@@ -1,6 +1,7 @@
 //! Open owner-local gesture recognition and event timing.
+use crate::containment::keep_first;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerButton, PointerEvent},
     gesture::arena::GestureArenaMember,
     pointer::PointerDispatch,
@@ -81,15 +82,15 @@ pub fn cancel_all<'a>(
     if incoming_failure {
         return CancelOutcome::Idle;
     }
-    let mut first = None;
+    let mut first = FirstPanic::new();
     let mut outcome = CancelOutcome::Idle;
     for recognizer in recognizers {
-        let candidate = RoutePanic::capture(|| {
+        let candidate = caught(|| {
             if recognizer.cancel() == CancelOutcome::Cancelled {
                 outcome = CancelOutcome::Cancelled;
             }
         });
-        RoutePanic::preserve_first(&mut first, candidate, "recognizer cancellation");
+        keep_first(&mut first, candidate, "recognizer cancellation");
     }
     super::callback_containment::finish_containment(first, incoming_failure);
     outcome

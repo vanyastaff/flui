@@ -6,10 +6,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_interaction::events::{Code, Key, NamedKey};
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, IntoView, ViewExt};
@@ -136,7 +136,7 @@ pub(crate) fn painted_at(laid: &LaidOut, color: Color) -> (f64, f64) {
             continue;
         };
         for command in picture.picture() {
-            let flui_painting::display_list::DrawOp::Rect { rect, paint } = &command.op else {
+            let flui_painting::DrawOp::Rect { rect, paint } = &command.op else {
                 continue;
             };
             if paint.color != color {

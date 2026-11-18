@@ -630,7 +630,7 @@ pub(crate) fn horizontal_pull_refreshes_from_the_left_edge() {
 /// indicator pulls left from there, shows itself along the right side, and
 /// an overscroll at the list's end, on the left, pulls nothing.
 pub(crate) fn horizontal_pull_refreshes_from_the_reading_start_under_rtl() {
-    use flui_painting::typography::TextDirection;
+    use flui_foundation::TextDirection;
     use flui_widgets::Directionality;
 
     for device in DEVICES {

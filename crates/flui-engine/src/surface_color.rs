@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn a_wide_gamut_frame_reaches_the_surface_through_the_working_target() {
         use flui_foundation::geometry::Rect;
-        use flui_painting::Paint;
+        use flui_painting::paint::Paint;
         use flui_painting::styling::Color;
 
         let Some((device, queue)) =

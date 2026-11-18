@@ -1509,7 +1509,7 @@ impl flui_widgets::CustomPainter for SwatchPainter {
                 flui_foundation::geometry::Point::ZERO,
                 size,
             ),
-            &flui_painting::Paint::fill(self.0),
+            &flui_painting::paint::Paint::fill(self.0),
         );
     }
     fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
@@ -1799,7 +1799,7 @@ struct OverhangPainter(flui_painting::styling::Color);
 impl flui_widgets::CustomPainter for OverhangPainter {
     fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
         use flui_foundation::geometry::{Point, Rect, Size};
-        let paint = flui_painting::Paint::fill(self.0);
+        let paint = flui_painting::paint::Paint::fill(self.0);
         canvas.draw_rect(Rect::from_origin_size(Point::ZERO, size), &paint);
         canvas.draw_rect(
             Rect::from_origin_size(Point::new(size.width, 0.0), Size::new(4.0, 4.0)),
@@ -1920,7 +1920,7 @@ impl flui_widgets::CustomPainter for RegionPainter {
                 flui_foundation::geometry::Point::ZERO,
                 size,
             ),
-            &flui_painting::Paint::fill(flui_painting::styling::Color::rgb(1, 0, 0)),
+            &flui_painting::paint::Paint::fill(flui_painting::styling::Color::rgb(1, 0, 0)),
         );
     }
     fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {

@@ -15,7 +15,7 @@
 //! reason: [`FRINGE_COVERAGE`] is derived on paper, and one derivation is
 //! enough.
 
-use flui_painting::BlendMode;
+use flui_painting::paint::BlendMode;
 use flui_painting::styling::Color;
 
 use crate::pipeline_cache::blend_state_for;

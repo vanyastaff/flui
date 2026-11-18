@@ -64,7 +64,6 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
     sync::Arc,
 };
@@ -103,6 +102,7 @@ use recovery::ArenaRecovery;
 use crate::gesture::settings::GestureSettingsProvider;
 use crate::pointer::pointer_capture::ContactFeeder;
 use flui_foundation::geometry::Offset;
+use flui_foundation::panic::FirstPanic;
 
 /// What a joining recognizer tells the arena about one admission.
 #[derive(Clone, Default)]
@@ -224,12 +224,6 @@ impl GestureDisposition {
     #[inline]
     pub const fn is_accepted(self) -> bool {
         matches!(self, Self::Accepted)
-    }
-
-    /// Returns `true` if rejected.
-    #[inline]
-    pub const fn is_rejected(self) -> bool {
-        matches!(self, Self::Rejected)
     }
 }
 
@@ -454,21 +448,16 @@ impl ArenaSlot {
 /// operation preceded it, so a kept clock failure, stamped before the
 /// operation began or inside it, precedes the operation's own failure.
 fn observe_after(observers: &ObserverHub, operation: impl FnOnce()) {
-    let earlier = observers.take_clock_failure();
+    let mut first = observers.take_clock_failure();
     let hold = observers.hold();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: an arena operation runs contained so observers still deliver"
-    )]
-    let outcome = catch_unwind(AssertUnwindSafe(operation));
+    // The operation runs contained so observers still deliver.
+    let mut failed = FirstPanic::new();
+    let _: Option<()> = failed.contain(operation);
     drop(hold);
     observers.deliver();
-    let during = observers.take_clock_failure();
-    let mut failures = earlier.into_iter().chain(during).chain(outcome.err());
-    if let Some(first) = failures.next() {
-        failures.for_each(flui_foundation::panic::discard_payload);
-        resume_unwind(first);
-    }
+    first.absorb(observers.take_clock_failure());
+    first.absorb(failed);
+    first.resume();
 }
 
 /// Queue a contest's cancellation and the rejections it committed.
@@ -2228,20 +2217,6 @@ impl GestureArena {
         }
         let pending = self.resolve_slot(pointer, &slot, winner.as_ref(), Resolution::Claimed);
         self.dispatch_with_candidate(pending, slot.contest(), winner);
-    }
-
-    /// Withdraw a single member from the arena, leaving the others to keep
-    /// competing.
-    ///
-    /// Unlike [`resolve`](Self::resolve) with no winner — which resolves the
-    /// whole entry and rejects *every* member — this removes only `member`.
-    /// When exactly one member remains in a closed arena, that member wins
-    /// (the caller is withdrawn without rejecting its competitors).
-    pub fn reject_member(&self, pointer: PointerId, member: &Rc<dyn GestureArenaMember>) {
-        let Some(slot) = self.current_slot(pointer) else {
-            return;
-        };
-        self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
     }
 
     /// Sweep - remove resolved arenas for a pointer.

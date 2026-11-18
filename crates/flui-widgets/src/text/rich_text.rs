@@ -1,7 +1,8 @@
 //! [`RichText`] — displays a tree of styled inline spans in one paragraph.
 
+use flui_foundation::TextDirection;
 use flui_objects::{RenderParagraph, TextLinkFocus};
-use flui_painting::typography::{InlineSpan, TextAlign, TextDirection, TextLink};
+use flui_painting::typography::{InlineSpan, TextAlign, TextLink};
 use flui_rendering::layer::LayerLink;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::semantics::SemanticsAnchor;

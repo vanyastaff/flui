@@ -462,7 +462,7 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 /// Every slop, ratio and velocity is finite and not negative, and the
 /// minimum fling velocity never exceeds the maximum. These invariants hold
 /// for every value of the type: the built-in profiles satisfy them, and
-/// [`Self::try_new`] and the `try_with_*` builders reject a value that would
+/// [`Self::try_from_values`] and the `try_with_*` builders reject a value that would
 /// break one with a [`GestureSettingsError`] instead of storing it.
 ///
 /// # Example
@@ -979,44 +979,6 @@ impl GestureSettings {
         } else {
             velocity.clamp_magnitude(0.0, max)
         }
-    }
-    /// Create settings with custom values.
-    ///
-    /// The per-axis pan slops start equal to `pan_slop`.
-    ///
-    /// # Errors
-    ///
-    /// [`GestureSettingsError::InvalidValue`] when a slop, ratio or velocity
-    /// is NaN, infinite or negative; [`GestureSettingsError::InvertedFlingRange`]
-    /// when `min_fling_velocity > max_fling_velocity`.
-    #[expect(clippy::too_many_arguments)]
-    pub fn try_new(
-        touch_slop: f64,
-        pan_slop: f64,
-        scale_slop: f64,
-        double_tap_slop: f64,
-        double_tap_timeout: Duration,
-        long_press_timeout: Duration,
-        min_fling_velocity: f64,
-        max_fling_velocity: f64,
-    ) -> Result<Self, GestureSettingsError> {
-        let pan_slop = checked("pan_slop", pan_slop)?;
-        let (min_fling_velocity, max_fling_velocity) =
-            checked_fling_range(min_fling_velocity, max_fling_velocity)?;
-        Ok(Self::authored(GestureValues {
-            touch_slop: checked("touch_slop", touch_slop)?,
-            pan_slop,
-            pan_slop_vertical: pan_slop,
-            pan_slop_horizontal: pan_slop,
-            scale_slop: checked("scale_slop", scale_slop)?,
-            double_tap_slop: checked("double_tap_slop", double_tap_slop)?,
-            double_tap_timeout,
-            long_press_timeout,
-            spring_loading_delay: long_press_timeout,
-            min_fling_velocity,
-            max_fling_velocity,
-            ..Self::default().values
-        }))
     }
 
     // ========================================================================

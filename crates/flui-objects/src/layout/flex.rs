@@ -1,8 +1,8 @@
 //! RenderFlex - lays out children in a row or column.
 
+use flui_foundation::TextDirection;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Size};
-use flui_painting::typography::TextDirection;
 
 use crate::VerticalDirection;
 

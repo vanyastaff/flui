@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Rect;
-use flui_painting::Paint;
-use flui_painting::display_list::{DisplayList, DrawOp};
+use flui_painting::paint::Paint;
 use flui_painting::paint::TextureId;
+use flui_painting::{DisplayList, DrawOp};
 use smallvec::SmallVec;
 
 use super::geometry::Reach;
