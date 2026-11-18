@@ -1306,11 +1306,11 @@ value, applies it again; an unchanged value does nothing.
 `UiRuntime::refresh_interval` is the one reader's answer: the display's period, or
 `DEFAULT_REFRESH_PERIOD` (60 Hz, a policy of this crate, never a value the snapshot
 carries) while it is unknown, and it falls back when the window moves to a display that
-reports nothing. The scheduler's frame budget is set to the shortest interval among the
-runtime's presentations in the pump's preparation, before the frame begins, because the
-frame copies the budget's target when it starts
-(`jank_is_judged_against_the_current_period`,
-`shared_frame_budget_uses_the_shortest_period`). The presentation shares its stored
+reports nothing. The scheduler labels its frames with the shortest interval among the
+runtime's shown presentations in the pump's preparation, before the frame begins, so the
+frame's span carries the period of the display it is produced for
+(`frame_period_follows_the_current_display`,
+`shared_frame_period_is_the_shortest_one`). The presentation shares its stored
 `WindowDisplay` with its haptics host, whose frame deadline is ADR-0212's metric:
 `flui_interaction::haptic_frame_deadline` multiplies the display's period by the
 preset's factor, and a period that is unknown or whose product overflows uses the 60 Hz

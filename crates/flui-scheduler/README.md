@@ -10,10 +10,9 @@ render pipeline or event loop.
 
 - **Frame Scheduling** - Complete owner turns and frame lifecycle management
 - **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Frame Budget Statistics** - Measure phase durations and bound Idle-priority work
-- **Type-Safe Durations** - Newtype wrappers prevent unit confusion
+- **Frame Telemetry** - Per-phase durations of every frame, and Idle-priority work bounded by the frame's deadline
 - **Type-Safe IDs** - PhantomData markers prevent ID type mixing
-- **Optional Serde Support** - Serialization for supported duration, priority and statistics values
+- **Optional Serde Support** - Serialization for priorities and the frame and lifecycle enums
 
 ## Architecture
 
@@ -22,7 +21,7 @@ Application
     ↓
 UpdateScheduler (frame phases and owner turns)
     ├─ TaskQueue (priority-based execution)
-    └─ FrameBudget (phase-duration stats)
+    └─ FrameClock (per-phase frame telemetry)
 
 Frame Timeline:
 BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
@@ -118,36 +117,6 @@ run within the frame's supplied deadline. Direct access to the scheduler's
 `TaskQueue` and manual timing-phase mutation were removed; standalone `TaskQueue`
 is still available as a separate queue, without authority over an owner's frame.
 
-### Frame Budget Management
-
-```rust
-use std::num::NonZeroU32;
-
-use flui_scheduler::{BudgetPolicy, FrameBudget, Instant, Milliseconds};
-
-let mut budget = FrameBudget::new(NonZeroU32::new(60).expect("60 is non-zero"));
-budget.set_policy(BudgetPolicy::SkipIdle);
-
-// Instants come from the clock your frames are stamped with.
-let start = Instant::now();
-budget.reset(start); // Start new frame
-
-// Record phase times
-budget.record_build_duration(Milliseconds::new(5.0));
-budget.record_layout_duration(Milliseconds::new(3.0));
-budget.record_paint_duration(Milliseconds::new(4.0));
-
-if budget.is_over_budget(Instant::now()) {
-    println!("Frame is over budget!");
-}
-
-// Get statistics
-let build_stats = budget.build_stats();
-// `BudgetPercentage`'s Display already renders one decimal and the `%` sign.
-println!("Build took {:.2}ms ({} of budget)",
-         build_stats.duration_ms(), build_stats.budget_percent);
-```
-
 ### Priority-based Task Queue
 
 ```rust
@@ -168,25 +137,6 @@ queue.execute_all();
 
 This crate uses small, explicit Rust types for correctness at API boundaries.
 
-### Type-Safe Duration Wrappers
-
-Newtype pattern prevents unit mixing:
-
-```rust
-use flui_scheduler::duration::{Milliseconds, Seconds, FrameDuration};
-
-let elapsed = Milliseconds::new(10.0);        // 10ms
-let timeout = Seconds::new(1.5);              // 1.5s
-let budget = FrameDuration::try_from_fps(60)  // ~60fps
-    .expect("fps > 0");
-
-// Type-safe comparisons
-assert!(!budget.is_over_budget(elapsed));
-
-// Conversions are explicit
-let as_seconds: Seconds = elapsed.to_seconds();
-```
-
 ### Type-Safe IDs
 
 Callback and task ids are distinct opaque types; only a mint issues one, and
@@ -205,28 +155,15 @@ assert_ne!(first.id(), second.id());
 ### Builder Pattern
 
 ```rust
-use flui_scheduler::{FrameBudgetBuilder, SchedulerBuilder};
-use flui_scheduler::duration::FrameDuration;
+use flui_foundation::ManualClock;
+use flui_scheduler::{ClockSource, SchedulerBuilder};
 
-// Fluent builder for FrameBudget
-let budget = FrameBudgetBuilder::new()
-    .target_fps(std::num::NonZeroU32::new(120).expect("120 is non-zero"))
-    .build();
-
-// Builder for UpdateScheduler. `target_fps` only labels the seeded
-// `FrameBudget`'s stats (see `UpdateScheduler::new`'s doc) — it has no
-// effect on frame gating, which `drive_frame`'s own `deadline` controls.
+// A scheduler that reads time from a test's manual clock, so the Idle
+// deadline is measured on the frames' own timeline.
 let scheduler = SchedulerBuilder::new()
-    .target_fps(std::num::NonZeroU32::new(60).expect("60 is non-zero"))
+    .clock(ClockSource::Manual(ManualClock::new()))
     .build();
-```
-
-## Prelude
-
-The prelude exports common scheduler types:
-
-```rust
-use flui_scheduler::prelude::*;
+assert_eq!(scheduler.frame_count(), 0);
 ```
 
 ## Priority Levels
@@ -298,26 +235,23 @@ match event {
 
 ## Performance
 
-### Frame Budget Statistics
+### Frame telemetry
 
-| Target FPS | Frame Duration |
-|------------|-----------------|
-| 60 FPS | ~16.7ms |
-| 120 FPS | ~8.3ms |
-| 144 FPS | ~6.9ms |
-
-`FrameBudget` reports timing statistics (jank, phase durations, over-budget)
-against whichever target the caller chose — `UpdateScheduler` itself makes
-no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is the frame drive's own `deadline`
-parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
-and `Priority::Build` always run to completion.
+`UpdateScheduler` makes no frame-rate assumption and does not skip work by
+how long a frame took. The runtime labels frames with the refresh period of
+the display they are produced for (`UpdateScheduler::set_display_period`); the
+`frame` span carries it as `period_us`, and a profiler judges a frame late
+against it. Per-phase durations of each frame come from the
+`FrameSnapshot`s `FrameClock::frames_since` returns. The only thing that
+ever defers work is the frame drive's own
+`deadline` parameter, and it bounds `Priority::Idle` tasks alone;
+`Priority::Animation` and `Priority::Build` always run to completion.
 
 ## Feature Flags
 
 | Feature | Description |
 |---------|-------------|
-| `serde` | Enable serialization for duration types, priorities, and statistics |
+| `serde` | Enable serialization for priorities and the frame and lifecycle enums |
 
 ## Platform Support
 

@@ -78,7 +78,7 @@ pub struct Trigger {
 
 /// The keys a trigger takes: those every system names alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TriggerKey {
+pub(crate) enum TriggerKey {
     /// An ASCII letter (kept in lower case) or digit.
     Character(char),
     /// A function, editing or navigation key.
@@ -121,6 +121,15 @@ impl Trigger {
     #[must_use]
     pub fn modifiers(&self) -> Modifiers {
         self.modifiers
+    }
+
+    /// The key, for a provider that names it its system's way.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the Windows provider names keys by virtual key")
+    )]
+    pub(crate) fn key(&self) -> TriggerKey {
+        self.key
     }
 
     /// The trigger as the XDG shortcuts specification writes it
@@ -173,7 +182,7 @@ fn keysym(key: NamedKey) -> Option<String> {
 }
 
 /// The number of a function key, F1 to F24.
-fn function_key(key: NamedKey) -> Option<u8> {
+pub(crate) fn function_key(key: NamedKey) -> Option<u8> {
     const KEYS: [NamedKey; 24] = [
         NamedKey::F1,
         NamedKey::F2,
@@ -290,6 +299,13 @@ pub enum ShortcutError {
     /// closed it.
     #[error("the system ended the binding")]
     Revoked,
+    /// The UI runtime bound more shortcuts over its life than the system
+    /// numbers: a Windows hot key takes one of 49 151 numbers, and the
+    /// provider gives each number once, so a press still queued for an
+    /// unbound shortcut never reaches a later one. No later binding of the
+    /// runtime is bound.
+    #[error("the system has no number left for another shortcut")]
+    Exhausted,
     /// The service is not here (no shortcuts portal, or one too old), as the
     /// [`Unsupported`] says.
     #[error("global shortcuts are not available: {0}")]

@@ -400,7 +400,10 @@ impl OwnerFrame {
                     *scheduler.inner.frame.idle_deadline.borrow_mut() = Some(deadline.0);
                     let id = scheduler.handle_begin_frame(timestamp, self);
                     span.record("id", tracing::field::debug(id));
-                    span.record("period_us", scheduler.budget_period_micros());
+                    span.record(
+                        "period_us",
+                        u64::try_from(scheduler.display_period().as_micros()).unwrap_or(u64::MAX),
+                    );
                     scheduler.handle_draw_frame();
                     *scheduler.inner.frame.idle_deadline.borrow_mut() = None;
                     output = Some(pipeline());

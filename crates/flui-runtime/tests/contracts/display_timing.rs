@@ -1,5 +1,5 @@
 //! What reads the display's refresh period once the host has delivered it
-//! (ADR-0236): the frame budget, the pointer resampler's window, the
+//! (ADR-0236): the frame span's period, the pointer resampler's window, the
 //! refresh-interval metric and the haptic frame deadline. Each row delivers a
 //! display through the host's own observation and reads the consequence
 //! through the public runtime.
@@ -250,44 +250,37 @@ impl Rig {
         out.borrow_mut().take().expect("read synchronously")
     }
 
-    /// Janky frames the scheduler counted after one frame whose timestamp is
-    /// `late` in the past, so it has already run that long when it ends.
-    fn janky_after_a_frame_that_ran(&self, late: Duration) -> u64 {
-        self.effects.frame_at.set(Some(
-            web_time::Instant::now()
-                .checked_sub(late)
-                .expect("the clock reaches back a frame"),
-        ));
+    /// The display period the scheduler labelled a frame with, after one
+    /// frame ran.
+    fn period_after_a_frame(&self) -> Duration {
+        self.effects.frame_at.set(Some(web_time::Instant::now()));
         self.owner
             .frame_dispatcher(self.address)
             .expect("frame authority")
             .deliver(crate::VSYNC, &self.effects)
             .expect("frame");
-        self.read(|runtime, _| runtime.scheduler().janky_frame_count())
+        self.read(|runtime, _| runtime.scheduler().display_period())
     }
 }
 
-/// A frame this far in the past is janky on a 120 Hz display and not against a
-/// one-second period. The smooth case uses a period far above any run time, as
-/// a loaded host can only lengthen the frame.
-const FRAME_RUNTIME: Duration = Duration::from_millis(12);
-const SMOOTH_PERIOD_US: u64 = 1_000_000;
+const FAST_US: u64 = 8_333;
+const SLOW_US: u64 = 1_000_000;
 
-fn jank_is_judged_against_the_current_period() {
-    for (micros, janky) in [(8_333, 1), (SMOOTH_PERIOD_US, 0)] {
+fn frame_period_follows_the_current_display() {
+    for micros in [FAST_US, SLOW_US] {
         let rig = rig();
         let display = rig.display(1, Some(micros));
         rig.deliver(Some(display));
         assert_eq!(
-            rig.janky_after_a_frame_that_ran(FRAME_RUNTIME),
-            janky,
-            "an {FRAME_RUNTIME:?} frame on a {micros:?} us display"
+            rig.period_after_a_frame(),
+            Duration::from_micros(micros),
+            "the frame on a {micros} us display"
         );
     }
 }
 
-fn shared_frame_budget_uses_the_shortest_period() {
-    // One runtime serving a 60 Hz window and a 120 Hz window judges its frame by
+fn shared_frame_period_is_the_shortest_one() {
+    // One runtime serving a slow window and a fast window labels its frame with
     // the faster one, whichever window the frame happens to belong to.
     for fast_first in [true, false] {
         let rig = rig();
@@ -300,10 +293,7 @@ fn shared_frame_budget_uses_the_shortest_period() {
             .owner
             .presentation_dispatcher(second)
             .expect("second window");
-        let (fast, slow) = (
-            rig.display(1, Some(8_333)),
-            rig.display(2, Some(SMOOTH_PERIOD_US)),
-        );
+        let (fast, slow) = (rig.display(1, Some(FAST_US)), rig.display(2, Some(SLOW_US)));
         let (first_display, second_display) = if fast_first {
             (fast, slow)
         } else {
@@ -312,16 +302,16 @@ fn shared_frame_budget_uses_the_shortest_period() {
         rig.deliver_to(&rig.window, Some(first_display));
         rig.deliver_to(&second, Some(second_display));
         assert_eq!(
-            rig.janky_after_a_frame_that_ran(FRAME_RUNTIME),
-            1,
-            "the budget followed the slower window (fast window first: {fast_first})"
+            rig.period_after_a_frame(),
+            Duration::from_micros(FAST_US),
+            "the period followed the slower window (fast window first: {fast_first})"
         );
     }
 }
 
-fn a_hidden_window_does_not_set_the_shared_frame_budget() {
+fn a_hidden_window_does_not_set_the_shared_frame_period() {
     // A minimised window on a fast display is not produced for, so the frames
-    // of the visible window beside it are judged by the visible window's period.
+    // of the visible window beside it carry the visible window's period.
     let rig = rig();
     let hidden = rig
         .owner
@@ -332,16 +322,16 @@ fn a_hidden_window_does_not_set_the_shared_frame_budget() {
         .owner
         .presentation_dispatcher(hidden)
         .expect("second window");
-    rig.deliver_to(&rig.window, Some(rig.display(2, Some(SMOOTH_PERIOD_US))));
-    rig.deliver_to(&hidden, Some(rig.display(1, Some(8_333))));
+    rig.deliver_to(&rig.window, Some(rig.display(2, Some(SLOW_US))));
+    rig.deliver_to(&hidden, Some(rig.display(1, Some(FAST_US))));
     assert_eq!(
         hidden.observe(WindowObservation::Visibility(false), &rig.effects),
         Ok(InputOutcome::Handled)
     );
     assert_eq!(
-        rig.janky_after_a_frame_that_ran(FRAME_RUNTIME),
-        0,
-        "the hidden window's faster display does not judge the visible window's frame"
+        rig.period_after_a_frame(),
+        Duration::from_micros(SLOW_US),
+        "the hidden window's faster display does not label the visible window's frame"
     );
 }
 
@@ -489,16 +479,16 @@ fn display_timing_contract() {
         "display_timing_contract",
         &[
             (
-                "jank_is_judged_against_the_current_period",
-                jank_is_judged_against_the_current_period as fn(),
+                "frame_period_follows_the_current_display",
+                frame_period_follows_the_current_display as fn(),
             ),
             (
-                "shared_frame_budget_uses_the_shortest_period",
-                shared_frame_budget_uses_the_shortest_period as fn(),
+                "shared_frame_period_is_the_shortest_one",
+                shared_frame_period_is_the_shortest_one as fn(),
             ),
             (
-                "a_hidden_window_does_not_set_the_shared_frame_budget",
-                a_hidden_window_does_not_set_the_shared_frame_budget as fn(),
+                "a_hidden_window_does_not_set_the_shared_frame_period",
+                a_hidden_window_does_not_set_the_shared_frame_period as fn(),
             ),
             (
                 "frame_aligned_resampling_window_follows_the_display_period",
