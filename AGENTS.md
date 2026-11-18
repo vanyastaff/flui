@@ -43,21 +43,39 @@ The reader is a contributor who opens one file without the conversation that pro
 
 ## Recurring defects
 
-Each has shipped more than once:
+Each has shipped more than once, and reviews keep finding them; the most frequent come first:
 
-- user code (callbacks, wakers, observers, `Drop`) re-entering with guards or borrows still held;
-- cleanup after a caught panic that loses captures or the first failure (`thread::panicking()`
-  is false after a catch);
+- a document that states what the code does not do: an ADR, a field doc, a comment or a
+  changelog line written for one round of a change and left when the next round changed the
+  code, or a count, citation or rule copied without being checked against the source;
+- a regression test that passes with the fix reverted, or that never reaches the path it names;
+  the test a review fix adds is the usual case;
 - accepted work dropped when a hook is missing, replaced or panics, or an older wake clearing a
-  newer obligation;
-- identity compared by label instead of typed ID, stale generations, ID counters that wrap;
-- overflow in intermediate arithmetic, non-finite geometry published;
-- regression tests that pass with the fix reverted;
-- workspace-wide changes that skip features, examples, shaders or tooling;
+  newer obligation; and the reverse, a wake or deadline reported where nothing serves it, so a
+  loop spins or a retry never ends;
 - a replacement that leaves the replaced form alive: a better primitive, API or rule lands, the
   old one keeps its callers and the documents that teach it, and the next change copies the old
   one (panic containment, frame demand, navigation and crate ordering each have two or three live
-  generations on `main`).
+  generations on `main`);
+- a copy of state that misses its source: a mirror, cache or snapshot not refreshed on one
+  operation or exit, one failed read that drops the whole snapshot, a cache key missing an input;
+- state spread over several flags or records (a mark, a retry, a refusal, a base) whose rules
+  disagree for some order of events: each review round finds the next order, and the cure is one
+  owner for that state, not one more rule;
+- a rule held by one host or caller instead of at the seam, or written twice so the copies
+  disagree, headless included;
+- untrusted input checked by a deny-list, after it is decoded or copied, or before the thing it
+  names is opened; a queue, cache or walk without a bound;
+- a check that covers only the forms its author wrote (the first refusal, one syntax, the
+  obvious case), so a later or unusual form passes, or one that refuses a valid input;
+- cleanup after a caught panic that loses captures or the first failure (`thread::panicking()`
+  is false after a catch);
+- identity compared by label instead of typed ID, stale generations, ID counters that wrap, a
+  mark or failure attributed to the wrong frame, window or owner;
+- workspace-wide changes that skip features, examples, shaders, tooling or a target the author
+  did not build;
+- user code (callbacks, wakers, observers, `Drop`) re-entering with guards or borrows still held;
+- overflow or lost precision in intermediate arithmetic, non-finite geometry published.
 
 ## Current forms
 
