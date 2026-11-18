@@ -10,6 +10,8 @@
   `dyn PlatformWindow` and `dyn HostWindow` in §3. The remaining sections are
   unchanged.
   Also [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §4 only (an owner-only callback is kept sound by the compiler, not by `OwnerSlot`'s refusal).
+  Also [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the API-closure gate only (Confirmation): the rule stands and its reader confirms it.
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace` and `xtask reach` gates only (§3, Verification): the rule stands and
   its reader confirms it.
