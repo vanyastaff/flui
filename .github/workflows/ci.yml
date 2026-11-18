@@ -353,7 +353,11 @@ jobs:
     needs: [plan]
     if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # A cold cache and a busy runner pool can push this job past 40 min with
+    # every test passed; a warm run takes about 16 min. 60 min leaves room
+    # without hiding a hang, which nextest's per-test timeouts
+    # (.config/nextest.toml) catch first.
+    timeout-minutes: 60
     # Workspace crates unoptimized; dependencies keep the opt-level 3 of
     # `[profile.dev.package."*"]`. rust-cache never caches workspace crates,
     # so this job compiles them on every run: on 4 cores the test scope's
