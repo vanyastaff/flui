@@ -1,15 +1,15 @@
 error[E0046]: not all trait items implemented, missing: `page_origin`
-  --> tests/ui/host_table_names_every_position.rs:30:1
+  --> tests/ui/host_table_names_every_position.rs:27:1
    |
-30 | impl Launch for Idle {
+27 | impl Launch for Idle {
    | ^^^^^^^^^^^^^^^^^^^^ missing `page_origin` in implementation
    |
    = help: implement the missing item: `fn page_origin(&self) -> Option<String> { todo!() }`
 
 error[E0046]: not all trait items implemented, missing: `Storage`
-  --> tests/ui/host_table_names_every_position.rs:38:1
+  --> tests/ui/host_table_names_every_position.rs:35:1
    |
-38 | impl Host for WithoutStorage {
+35 | impl Host for WithoutStorage {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `Storage` in implementation
    |
    = help: implement the missing item: `type Storage = /* Type */;`
