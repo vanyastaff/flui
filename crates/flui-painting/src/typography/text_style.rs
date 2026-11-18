@@ -1,5 +1,7 @@
 //! Text styling types.
 
+use std::num::NonZeroU16;
+
 use crate::styling::{Color, Shadow};
 use crate::typography::{FontFeature, FontVariation, TextDecoration};
 
@@ -15,7 +17,11 @@ use crate::typography::{FontFeature, FontVariation, TextDecoration};
     derive(serde::Serialize, serde::Deserialize),
     serde(try_from = "u16", into = "u16")
 )]
-pub struct FontWeight(u16);
+pub struct FontWeight(NonZeroU16);
+
+// The zero niche keeps `Option<FontWeight>`, which every `TextStyle` holds, at
+// two bytes: a plain `u16` would grow each style and its clones.
+const _: () = assert!(size_of::<Option<FontWeight>>() == size_of::<u16>());
 
 /// A font weight outside the CSS range of 1 to 1000.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -24,23 +30,23 @@ pub struct InvalidFontWeight(pub u16);
 
 impl FontWeight {
     /// Thin (100).
-    pub const W100: Self = Self(100);
+    pub const W100: Self = Self::in_range(100);
     /// Extra-light (200).
-    pub const W200: Self = Self(200);
+    pub const W200: Self = Self::in_range(200);
     /// Light (300).
-    pub const W300: Self = Self(300);
+    pub const W300: Self = Self::in_range(300);
     /// Normal (400).
-    pub const W400: Self = Self(400);
+    pub const W400: Self = Self::in_range(400);
     /// Medium (500).
-    pub const W500: Self = Self(500);
+    pub const W500: Self = Self::in_range(500);
     /// Semi-bold (600).
-    pub const W600: Self = Self(600);
+    pub const W600: Self = Self::in_range(600);
     /// Bold (700).
-    pub const W700: Self = Self(700);
+    pub const W700: Self = Self::in_range(700);
     /// Extra-bold (800).
-    pub const W800: Self = Self(800);
+    pub const W800: Self = Self::in_range(800);
     /// Black (900).
-    pub const W900: Self = Self(900);
+    pub const W900: Self = Self::in_range(900);
 
     /// Normal font weight (400).
     pub const NORMAL: Self = Self::W400;
@@ -49,10 +55,10 @@ impl FontWeight {
     pub const BOLD: Self = Self::W700;
 
     /// The lightest weight CSS admits.
-    pub const MIN: Self = Self(1);
+    pub const MIN: Self = Self::in_range(1);
 
     /// The heaviest weight CSS admits.
-    pub const MAX: Self = Self(1000);
+    pub const MAX: Self = Self::in_range(1000);
 
     /// The weight `value`, which CSS admits from 1 to 1000.
     ///
@@ -60,18 +66,24 @@ impl FontWeight {
     ///
     /// [`InvalidFontWeight`] when `value` is 0 or above 1000.
     pub const fn try_new(value: u16) -> Result<Self, InvalidFontWeight> {
-        if value >= Self::MIN.0 && value <= Self::MAX.0 {
-            Ok(Self(value))
+        if value >= Self::MIN.value() && value <= Self::MAX.value() {
+            Ok(Self::in_range(value))
         } else {
             Err(InvalidFontWeight(value))
         }
+    }
+
+    /// `value`, which the caller has checked lies in 1..=1000. A zero in a
+    /// `const` fails to compile.
+    const fn in_range(value: u16) -> Self {
+        Self(NonZeroU16::MIN.saturating_add(value - 1))
     }
 
     /// The numeric weight, 1 to 1000.
     #[must_use]
     #[inline]
     pub const fn value(self) -> u16 {
-        self.0
+        self.0.get()
     }
 
     /// The weight nearest `value`, held inside 1..=1000: what an
@@ -88,7 +100,7 @@ impl FontWeight {
             reason = "clamped into 1..=1000 first, so the cast is exact"
         )]
         let weight = value.round().clamp(1.0, 1000.0) as u16;
-        Some(Self(weight))
+        Some(Self::in_range(weight))
     }
 }
 
@@ -109,7 +121,7 @@ impl TryFrom<u16> for FontWeight {
 
 impl From<FontWeight> for u16 {
     fn from(weight: FontWeight) -> Self {
-        weight.0
+        weight.value()
     }
 }
 
