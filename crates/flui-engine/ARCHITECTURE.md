@@ -59,7 +59,7 @@ oversized radii against the same public path commands without a shape hint.
 | Entry points | `renderer.rs`, `gpu_context.rs`, `surface_factory.rs`, `window_slot.rs`, `surface_present.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; each slot's external textures kept apart, since each presentation mints its own `TextureId`s, uploaded only when the slot draws (a frame that wrote and submitted nothing flushes the writes, since `write_texture` holds staging memory until a submission), lent to the painter for the slot's frame and uploaded again on a rebuilt device; `bootstrap` probes the backends over the host's `DisplayConnection` and the first window, and the raster executor's backend); `SurfaceFactory` (the owner thread's `!Send` maker of `UnconfiguredSurface`s on the context's instance, which refuses a target on another display before wgpu sees it, §2); `WindowSlot` (a window's surface, configuration, frame protocol and recovery inside the context; it attaches unconfigured and its first size configures it, and a surface still lost after a reconfigure is dropped for the owner to replace through the factory and `Restore`, never made again by the executor); the acquire and present path a `Renderer` and a window slot share; `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
 | Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
-| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs`, `recording_cache.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks, the recordings of unchanged chunks kept across frames |
+| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs`, `recording_cache.rs`, `recency.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks, the recordings of unchanged chunks kept across frames and the recency order they are evicted in |
 | Replay | `replay/`, `pipeline_cache.rs`, `pipeline_set.rs`, `instancing.rs`, `vertex.rs`, `shaders/` | Command IR → wgpu encoding; pipeline caching keyed by blend/coverage state; instance layouts; WGSL |
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
@@ -216,9 +216,18 @@ which drops every entry, as a raster panic does (ADR-0304 §10). The target
 format is not among them: no recording names a pipeline. A hit marks its glyphs
 used for the frame (`GlyphAtlas::retain`), and a glyph gone since is a miss.
 Entries over 64 MiB, or past two per chunk, are evicted least recently
-rastered first; a `Full(DamageOff)` frame, a window's or an offscreen slot's,
-does not read the cache; evictions are counted until a submitted frame reports
-them, and bytes by the capacity a recording holds.
+rastered first. The entries sit in a `RecencyList` (`recency.rs`) in the order
+they were last rastered, so a frame's eviction takes the oldest and looks at
+no entry it keeps, whatever the cache holds
+(`a_cache_over_its_budget_looks_only_at_what_each_frame_evicts`). A content
+version compares equal only within its lineage, so once no target draws a
+lineage (`DrawnLineages`: each slot that drew it detached or draws another
+scene owner's version, or a `Renderer` drew another) its entries are dropped
+in that frame, at the cost of the entries dropped
+(`a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings`).
+A `Full(DamageOff)` frame, a window's or an offscreen slot's, does not read the
+cache; evictions are counted until a submitted frame reports them, and bytes by
+the capacity a recording holds, which a capture allocates to its length.
 
 The Scene IR remains GPU-free and names logical `TextureId`s. At engine lowering,
 an external draw captures an immutable allocation lease: view, validated
