@@ -21,8 +21,7 @@ use super::exec::{Cmd, Runner};
 /// proves nothing here, since feature unification would enable `material`
 /// from a sibling and turn a broken combination green. `--all-targets` is
 /// deliberate: a missing `required-features` on an example or test is exactly
-/// the wiring these builds exist to catch. `cargo xtask reach` resolves the
-/// facade under the same selections.
+/// the wiring these builds exist to catch.
 pub(crate) const COMBOS: [&str; 11] = [
     "--no-default-features",
     "--no-default-features --features material",

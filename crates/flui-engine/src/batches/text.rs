@@ -79,11 +79,26 @@ impl DrawBatcher {
                 origin: [(origin.x as f32), (origin.y as f32)],
             },
         };
-        let raster_origin = match placement {
-            Placement::Uniform => (origin.x, origin.y),
-            Placement::Affine { .. } => (0.0, 0.0),
+        // On the device grid, the paragraph's top-left is the translation's
+        // whole pixels plus the rest: the translation's fraction plus the
+        // linear part's image of `position`. Neither adds the whole pixels
+        // first, so a chunk recorded at one whole pixel and replayed at
+        // another places its glyphs from the same bits (ADR-0304 §9).
+        let (whole, offset) = match placement {
+            Placement::Uniform => {
+                let m = state.current_transform_matrix().m;
+                let (whole_x, fraction_x) = crate::pixel_shift::split_translation(m[12]);
+                let (whole_y, fraction_y) = crate::pixel_shift::split_translation(m[13]);
+                (
+                    (whole_x, whole_y),
+                    (
+                        m[0] * position.x + m[4] * position.y + fraction_x,
+                        m[1] * position.x + m[5] * position.y + fraction_y,
+                    ),
+                )
+            }
+            Placement::Affine { .. } => ((0.0, 0.0), (0.0, 0.0)),
         };
-        let raster_origin = (raster_origin.0 as f32, raster_origin.1 as f32);
 
         for run in paragraph.runs() {
             // The face first, in a statement of its own: the placement below
@@ -95,7 +110,7 @@ impl DrawBatcher {
                     continue;
                 }
             };
-            for glyph in run.placed_glyphs(key, raster_origin, scale) {
+            for glyph in run.placed_glyphs(key, whole, offset, scale) {
                 let Some(slot) = atlas.slot(glyph.key) else {
                     continue;
                 };

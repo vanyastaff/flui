@@ -157,7 +157,7 @@ pub(crate) fn resolve_alignment(
     match alignment {
         flui_painting::AlignmentGeometry::Absolute(alignment) => alignment,
         flui_painting::AlignmentGeometry::Directional(directional) => {
-            directional.resolve(text_direction().is_ltr())
+            directional.resolve(text_direction())
         }
     }
 }

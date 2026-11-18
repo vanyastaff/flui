@@ -125,12 +125,6 @@ impl Canvas {
     /// 3. Requires copying framebuffer contents.
     ///
     /// Use sparingly, especially on lower-end hardware.
-    #[tracing::instrument(skip(self, paint), fields(
-        bounds = ?bounds,
-        opacity = paint.color.alpha_f32(),
-        blend_mode = ?paint.blend_mode,
-        layer_depth = self.save_stack.len(),
-    ))]
     pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
         self.save_stack.push(CanvasState {
             transform: self.transform,
@@ -140,7 +134,7 @@ impl Canvas {
         let paint = self.intern_paint(paint);
         self.record(DrawOp::SaveLayer { bounds, paint });
 
-        tracing::debug!(layer_depth = self.save_stack.len(), "Layer created");
+        tracing::trace!(layer_depth = self.save_stack.len(), "Layer created");
     }
 
     /// Saves the canvas state with a layer that applies alpha

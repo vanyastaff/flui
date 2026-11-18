@@ -26,8 +26,7 @@
 //! The host's loop-scoped composition root (`flui-app`'s `AppRuntime`) owns
 //! exactly one [`ExecutionServices`] value. Nothing here is ambient: there is
 //! no global accessor, and library crates cannot reach these pools — this
-//! crate's only allowed normal dependent is `flui-app`, checked by
-//! `cargo xtask workspace`. An embedded host
+//! crate's only allowed normal dependent is `flui-app`. An embedded host
 //! that already runs its own executors injects them through
 //! [`HostExecutors`] (`AppConfig::executors`); the default pools are
 //! then **never constructed**, so FLUI and the host cannot oversubscribe the

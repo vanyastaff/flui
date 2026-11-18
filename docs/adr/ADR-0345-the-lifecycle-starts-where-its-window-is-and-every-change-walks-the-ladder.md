@@ -26,7 +26,7 @@ from its window's snapshot, and a UI runtime starts with the host `Resumed`. Flu
 `handleAppLifecycleStateChanged`, which its scheduler and observers share, each state of
 `_generateStateTransitions` (`binding.dart:303-342`); only that first read jumps.
 
-The scheduler's lifecycle listeners (`UpdateScheduler::add_lifecycle_state_listener`, public in the
+The scheduler's lifecycle listeners (`UpdateScheduler::listen_lifecycle_state`, public in the
 facade) had the same skip in another form: the aggregate jumped to its target, so a window shown
 again after a pause went `Paused → Resumed` with nothing in between, and a runtime over a window
 that opens hidden reported `Resumed → Hidden` at start-up though no window was ever `Resumed`.

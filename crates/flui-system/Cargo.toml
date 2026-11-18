@@ -238,10 +238,6 @@ all-features = true
 tier = "pkg"
 tier-kind = "capability"
 order = 5
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "macos::shortcuts::appkit::LAST_HOT_KEY", grant = "ADR-0097", class = "counter", reason = "Carbon hot key numbers, one domain for the process since every handler on the application event target hears every hot key; advanced by `try_update` through a reference, so the last number refuses the binding instead of reissuing one" },
-]
 
 # What the Android providers need from the application's APK (ADR-0307).
 [package.metadata.flui.declares]

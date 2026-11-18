@@ -97,9 +97,7 @@
 //!
 //! # Modules
 //!
-//! The modules form layers (ADR-0217); a module names only modules below it,
-//! which `cargo xtask module-dag` checks against the manifest's
-//! `[package.metadata.flui.modules]`:
+//! The modules form layers (ADR-0217); a module names only modules below it:
 //!
 //! 0. [`events`] - The owned input vocabulary; [`ids`] - Type-safe identifiers
 //! 1. Close policy and panic containment (private)

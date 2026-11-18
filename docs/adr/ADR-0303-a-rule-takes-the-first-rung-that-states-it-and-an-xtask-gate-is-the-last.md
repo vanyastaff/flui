@@ -8,12 +8,19 @@
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) Confirmation, the last
   bullet: the hand-written `catch_unwind` calls are a `clippy.toml` entry with an expectation at
   each site, not a counting gate (§6).
+- **Superseded-by:** [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)
+  for §9 only, for the five jobs its §2 moves to main, which run there with no narrow form.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for §2 rung 5, §3 and §8 only: before the first release no rule about the sources is an
+  `xtask` gate, and the fifteen gates §1 of that record names are removed.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry
   boundary); [ADR-0242](ADR-0242-typed-inspect-and-tracing-conventions.md) (`inspect`'s `Debug` escape
   hatch); [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (the
   `clippy.toml` entries that gate OS versions)
+- **Revised:** 2026-11-18 — §9 refers to ADR-0370 §2 for the jobs that run on main without a
+  narrow form.
 
 ## Context and problem statement
 
@@ -191,7 +198,7 @@ When a pull request cannot see the break, `main` goes red one merge later, and t
 pays for it. So a check that runs only on main has a narrow form that a wide-lane pull request
 runs when its diff reaches what the check reads. The narrow form is worked out by
 `cargo xtask affected` in the `plan` job, the tool that already picks the lane. It is not a gate
-of its own.
+of its own. The five jobs ADR-0370 §2 moves to main run there without one.
 
 - **What the check reads comes from its own expectations.** A trybuild expectation quotes, in its
   `--> path` and `::: path` lines, every file of the error chain: the fixture, and the declaration

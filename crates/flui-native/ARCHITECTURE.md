@@ -50,18 +50,15 @@ trait depends on `flui-platform` instead.
   scene events) is named at the crate root, except one OS's window
   extensions, which are named in that OS's module of `os` (`os::windows`,
   `os::macos`), the modules the facade publishes as `flui::native::<os>`.
-  `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
-  checks: the features listed above; `owner`, `version`, `storage`, `transfer` and
-  `display_connection` as `base`, which
-  names no feature; `hosts`, which nothing names; and the crate-level modules
-  (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
-  `task`, `os`, `testing`, `journal`, `process`, `page_export`,
-  `associations`). A top-level module with none of these roles is a finding, so a
-  directory the layout does not name cannot come back unchecked
-  (`table_test`, built for tests only, needs none). A platform file names its
-  model, a base and other features' models; every other edge is a
-  named, dated exception whose `reason` says what removes it, and none is
-  left. No window file names another
+  The modules have roles: the features listed above; `owner`, `version`,
+  `storage`, `transfer` and `display_connection` as the base, which names no
+  feature; `hosts`, which nothing names; and the crate-level modules (`host`,
+  `platform`, `host_window`, `error`, `executor`, `task`, `os`, `testing`,
+  `journal`, `process`, `page_export`, `associations`). A top-level module
+  takes one of these roles, so a directory the layout does not name cannot
+  come back (`table_test`, built for tests only, needs none). A platform file
+  names its model, a base and other features' models, and no other edge exists.
+  No window file names another
   feature's: a window's text input, accessibility bridge, actuator and
   chrome reach it through the host table; a feature keeps its own state of a
   window, keyed by the window's identity and set up and dropped by its own
@@ -223,9 +220,8 @@ trait depends on `flui-platform` instead.
   (`LifecycleHooks`),
   `owner::sources` what a loop keeps of a feature's source
   (`SystemPreferenceSource`), and `owner::watch` an observation a feature
-  started for a loop. `owner` is a `base` of
-  `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
-  import from it into a feature's directory. Its public items are named at the
+  started for a loop. `owner` is a base: it names no feature, so no import runs
+  from it into a feature's directory. Its public items are named at the
   crate root only. Its tests name no feature or host either: they run over
   stand-ins of the owner's own (`owner::windows::testing::QuietHost<C>`, a
   Win32 host with the window hooks `C` gives, none by default;
@@ -517,12 +513,11 @@ trait depends on `flui-platform` instead.
   `web.rs` (the pure `ime`, `input`), `linux/{text_input, input_context, wayland, x11}.rs` (the
   pure `text_input` client of `zwp_text_input_v3` over a wire trait, the pure
   `input_context` key hold and D-Bus input-method values, the Wayland
-  objects and the X11 daemon's wire and bus task) and `headless.rs`. `cargo
-  xtask module-dag` lists each feature directory in `features`: a platform
+  objects and the X11 daemon's wire and bus task) and `headless.rs`. Each
+  feature directory is a feature: a platform
   module names its model, `owner/`, `version/` and other features' models,
-  never another platform's module; `owner/` and `version/` name no feature's
-  item; each edge into another feature's platform file is a named exception
-  that goes when the feature keeps its own per-window state. The
+  never another platform's module or another feature's platform file;
+  `owner/` and `version/` name no feature's item. The
   pure halves are built for their target and for tests on every host; which
   key belongs to the input method is the input feature's
   (`input::android::keys`, `input::web::keys`), and a window's text input
@@ -583,8 +578,7 @@ trait depends on `flui-platform` instead.
   around a position) is the model's, tested on every host.
 - **Clipboard, drag and drop, accessibility and haptics are feature
   directories (ADR-0151 §10).** Each holds its model beside one file per
-  platform, and `[package.metadata.flui.modules]` lists the four as
-  `features`: `cargo xtask module-dag` holds a platform file to its own model,
+  platform, and the four are features: a platform file names only its own model,
   `owner/`, `version/` and other features' models. The models are
   `clipboard::patience` (the schedule on which the Win32 clipboard tries
   again to open a clipboard another process holds), `drag::offers` (the offer table every data-transfer source mints its
@@ -1162,19 +1156,13 @@ trait depends on `flui-platform` instead.
   `owner::panic_boundary::ContainedIvars<…>`, whose destructor is one call of
   `os_entry`: what a view or a delegate owns is destroyed inside the
   boundary, a destructor's panic is logged, and the super `dealloc` still
-  runs. The gate holds each class's `#[ivars = …]` to that type and a class's
-  own `Drop` to the entry rule. A GCD work
+  runs. Each class's `#[ivars = …]` is that type and a class's own `Drop`
+  follows the entry rule. A GCD work
   item's body is a `move` closure, so its captures drop inside the boundary; a
   block's or delegate's captures live as long as the OS keeps it and are
-  values whose destructor runs no user code. `cargo xtask panic-boundary`
-  finds every entry and holds it to that shape, with no allowlist. It reads
-  functions and constructors of OS crates by their path, but methods by name,
-  since a receiver's type is out of its reach: a new OS method that takes a
-  closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
-  `after`, `barrier_*`, names the crate keeps for GCD) or its looper list
-  (the ndk's `add_fd_with_callback`, whose trampoline aborts on a panic), and
-  a constructor a glob import hides to its list of callback types. `wasm_bindgen` closures are
-  out of its scope because wasm32 aborts on panic,
+  values whose destructor runs no user code. Every OS entry is a constant or
+  one call of `os_entry`. `wasm_bindgen` closures are
+  out of that rule because wasm32 aborts on panic,
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
   first failure is logged before the answer, with the entry's arguments, and a
@@ -1578,7 +1566,7 @@ trait depends on `flui-platform` instead.
   gate at or below the floor fails to compile, so raising a floor turns the
   gates it makes dead into errors, and an unreadable version unlocks nothing.
   Clippy refuses `objc2::available!` and `AndroidApp::sdk_version`. `version`
-  is a `base` of `module-dag`: it names no feature, in its tests too. Each
+  is a base: it names no feature, in its tests too. Each
   module that declares markers checks them, at the version before `SINCE`, at
   `SINCE` and at an unknown version: `os_version_gate_table` the markers of
   `version::gate`, `ndk_gate_table` the NDK functions' (`owner::android::ndk`)
@@ -3214,7 +3202,7 @@ posts a window makes to itself, the surface target, the pacer of a modal loop.
   during an unwind. The owner hooks the delivery holds weakly are declared
   before the teardown guard, so they outlive it.
 
-Tests (pull-request CI only type-checks Win32; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
+Tests (CI only type-checks Win32, on main; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 (`owner/hwnd_affinity.rs`), and the callback panic and re-entrancy rules by
 `tests/window_callback_unwind.rs` and `tests/handler_reentry.rs`.
@@ -4103,7 +4091,7 @@ window or UI runtime frame. It is not a generic closure executor.
 A live macOS run needs a GUI session. External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. On Windows, a turn through the real
 message loop runs on the owner and is released there. **Unasserted:** no test
-pins this. Pull-request CI only type-checks Win32. UIKit, Android and the web register
+pins this. CI only type-checks Win32, on main. UIKit, Android and the web register
 the same way over their loop's slot; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode
@@ -4995,7 +4983,7 @@ at once, the host's once a background scan added them, which wakes the loop.
 The engine does not draw it, though that was the first shape asked for:
 
 - the host cannot reach the engine: the host's manifest forbids the name in
-  every root build (`reach-forbid`, checked by `cargo xtask reach`), and the
+  every root build (`reach-forbid`), and the
   engine's device and raster thread are the composition root's
   (ADR-0091); a `wgpu::Instance` the host made apart from its surface is a
   defect of its own;
@@ -5949,9 +5937,8 @@ host.
 
 Every closure the host sends to Android's Java main thread goes through
 `owner::android::main_thread::post` (or `run`, for a step whose only report is its failure, which
-calls `post`), which runs it inside `os_entry` and reports each exit but success; `cargo xtask
-panic-boundary` refuses the identifier `run_on_java_main_thread` anywhere else in a build, the
-tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
+calls `post`), which runs it inside `os_entry` and reports each exit but success; the identifier `run_on_java_main_thread` appears nowhere else in a
+build, the tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
 closure's panic and lose what it owed; under `post`, a work's report settles it (the insets query
 answers none), and every capture of the work, the report's included, is destroyed inside the
 boundary on every exit, since the last reference to a host object may be one of them
@@ -5962,8 +5949,7 @@ refused, or that stopped short after Java took the handle, asks the window for t
 (`FluiView.handle()`), detaches it and frees the handle, and keeps the handle when the window cannot
 be read; a `detach` that fails keeps it too
 (`every_exit_of_the_installation_frees_only_handles_no_view_names`). Every native method of
-FluiView's classes is one call of `owner::android::native_call::jni_native`, which `cargo xtask
-panic-boundary` holds them to: Java receives the method's answer, or its "nothing" (`false`, `0`,
+FluiView's classes is one call of `owner::android::native_call::jni_native`: Java receives the method's answer, or its "nothing" (`false`, `0`,
 `null`, no value) after a failed JNI call or a panic, and never a pending exception, which
 `ClearsPending` describes to the log and clears on every exit
 (`a_native_method_answers_and_leaves_no_exception_pending_on_any_exit`): each caller is a

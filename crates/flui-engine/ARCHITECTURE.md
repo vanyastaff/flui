@@ -186,14 +186,30 @@ chunk that stayed one fragment of the open segment: no external texture, no
 draw item, layer or clip of its own, every glyph it asked for placed, recorded
 Ok under a finite affine transform whose translation is below 2^23.
 `RecordingKey` holds the chunk's `ContentVersion`, the transform's bits
-(`RasterKey`, the whole translation, so a moved chunk records again), what the
-IR bakes from outside the chunk (`AmbientKey`: the scissor relative to the
-whole-pixel translation or `Covers`, the inherited opacity, and the target's
-size, which a fill of the whole target records) and the painter's
-`ResourceEpoch`. A recording holds no clip chain, scissor or absolute offset:
-the splice gives it the entry's clip and scissor, rebases every arena offset
-onto the segment as it stands, runs the merge rules on its first element only,
-and charges the frame's `RecordingBudget`. Whatever moves texels a recording
+(`RasterKey`: the linear part and the fraction of the translation, so a chunk
+moved by a fraction of a pixel records again), what the IR bakes from outside
+the chunk (`AmbientKey`: the scissor relative to the chunk's `PixelOrigin` or
+`Covers`, the inherited opacity, and the target's size, which a fill of the
+whole target records) and the painter's `ResourceEpoch`. The whole pixels of
+the translation are the `PixelOrigin` a recording keeps: a chunk moved by whole
+device pixels hits when the fraction of its translation keeps its bits, as a
+translation on a dyadic grid (whole or quarter pixels) does at every magnitude
+below 2^23; a non-dyadic fraction can round to other bits as the translation
+crosses a power of two, and that move records again. The splice adds the
+difference to every device position the recording holds (`pixel_shift.rs`, one
+exhaustive destructure per instance type and for tessellated vertices). Text
+on the device grid is placed from the translation's whole pixels and, apart,
+an offset of its fraction plus the linear part's image of the paragraph's
+position (`ShapedRun::placed_glyphs`), so a replay places the glyphs a fresh
+recording at the new origin does while the paragraph is drawn under the
+chunk's own translation; under a translation pushed inside the chunk, which
+is composed at the device magnitude, a glyph at a rounding boundary can land a
+bin or a row away. A scissor that cuts the chunk
+moves with it only when its clip does, so a chunk moved under a fixed clip that
+cuts it records again. A recording holds no clip chain or scissor: the splice
+gives it the entry's clip and scissor, rebases every arena offset onto the
+segment as it stands, runs the merge rules on its first element only, and
+charges the frame's `RecordingBudget`. Whatever moves texels a recording
 names (a glyph slot evicted or dropped, a glyph-atlas reset, a font-source
 switch, an image evicted, the image atlas reset, a reclaim) advances the epoch,
 which drops every entry, as a raster panic does (ADR-0304 §10). The target
@@ -328,8 +344,8 @@ by default, not part of the public API, and the same name and meaning as
 flui-layer's and flui-rendering's `testing`. `cargo xtask gpu-test` sets
 `FLUI_REQUIRE_GPU=1` for both the engine and facade readback suites, so
 missing adapter/device initialization fails instead of silently skipping, and
-`--backend` pins `WGPU_BACKEND`, which every test instance here reads. Pull-request CI runs
-the suites on Mesa's lavapipe (Vulkan) and llvmpipe (GL); the nightly platform runs
+`--backend` pins `WGPU_BACKEND`, which every test instance here reads. CI runs
+the suites on Mesa's lavapipe (Vulkan) and, on main, llvmpipe (GL); the nightly platform runs
 run them on Metal (`macos-latest`) and on D3D12 through WARP (`windows-latest`); hardware
 drivers stay local runs.
 

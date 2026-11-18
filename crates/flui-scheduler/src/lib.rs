@@ -108,8 +108,7 @@ mod table_test;
 
 pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
 pub use frame::{
-    AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback, PostFrameCallback,
-    SchedulerPhase,
+    AppLifecycleState, FrameId, FramePhase, FrameTiming, PostFrameCallback, SchedulerPhase,
 };
 pub use frame_clock::{
     ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, FramesInFlight, PollDecision,

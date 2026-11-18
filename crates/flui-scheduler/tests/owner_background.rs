@@ -374,10 +374,10 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
     assert_eq!(
         owner.pump_background(|| {
             let capture = HookCapture(Arc::clone(&healthy_drops));
-            let id = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+            let subscription = scheduler.listen_lifecycle_state(move |_| {
                 let _ = &capture;
-            }));
-            assert!(scheduler.remove_lifecycle_state_listener(id));
+            });
+            subscription.detach();
             let capture = HookCapture(Arc::clone(&teardown_drops));
             owner
                 .post_frame_handle()

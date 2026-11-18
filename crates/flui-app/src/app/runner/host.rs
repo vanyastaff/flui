@@ -431,11 +431,12 @@ pub(super) fn build_lending_ui_runtime(
 
 /// Feed the lifecycle the application's services watch from `ui_runtime`'s
 /// scheduler: its state now, each change it commits, and its retirement,
-/// when the scheduler drops the listener with the runtime.
+/// when the scheduler drops the listener with the runtime. The services'
+/// lifecycle holds the subscription until then.
 #[cfg(not(target_arch = "wasm32"))]
 fn feed_service_lifecycle(ui_runtime: &crate::app::ui_runtime::UiRuntime) {
-    /// Takes the runtime out of the services' lifecycle as the scheduler
-    /// drops it with the runtime's listeners.
+    /// Takes the runtime out of the services' lifecycle as the listener
+    /// retires: with the runtime's scheduler, or when the loop ends.
     struct Fed {
         lifecycle: Rc<crate::app::lifecycle::ServiceLifecycle>,
         runtime: flui_foundation::UiRuntimeId,
@@ -451,12 +452,13 @@ fn feed_service_lifecycle(ui_runtime: &crate::app::ui_runtime::UiRuntime) {
     let scheduler = ui_runtime.scheduler();
     lifecycle.note(ui_runtime.id(), scheduler.lifecycle_state());
     let fed = Fed {
-        lifecycle,
+        lifecycle: Rc::clone(&lifecycle),
         runtime: ui_runtime.id(),
     };
-    let _listener = scheduler.add_lifecycle_state_listener(Rc::new(move |state| {
+    let subscription = scheduler.listen_lifecycle_state(move |state| {
         fed.lifecycle.note(fed.runtime, state);
-    }));
+    });
+    lifecycle.hold(ui_runtime.id(), subscription);
 }
 
 /// [`build_lending_ui_runtime`] for a test that installs no window: a loan it

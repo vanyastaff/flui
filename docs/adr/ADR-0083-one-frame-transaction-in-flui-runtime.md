@@ -14,6 +14,9 @@
 - **Supersedes:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   for the paragraph "No `flui-runtime` without two consumers" only
 - **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §1 the scheduler phases inside the transaction only: the frame polls its tasks, runs the pipeline, then its post-frame callbacks.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask reach` gate only (Migration, Verification): the rule stands and its reader
+  confirms it.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the public
   UI runtime/runtime surface); [ADR-0037](ADR-0037-presentation-ownership-domains.md) §1 and §4 (the
   composition and `PresentationState` leave `flui-app`) and §12 (the two-production-consumer

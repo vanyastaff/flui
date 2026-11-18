@@ -5,6 +5,9 @@
 - **Superseded-by:** [ADR-0333](ADR-0333-a-display-list-keeps-large-payloads-beside-its-commands.md) for
   how §3's large payloads are held (beside the op, not boxed, and `Path` not one pointer); §3 below
   states the current rule
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask panic-messages` gate only (Confirmation): the rule stands and its reader confirms
+  it.
 - **Supersedes:** [ADR-0066](ADR-0066-display-list-command-representation.md) "The command is
   `{ transform, op }`" and "The op has a budget" only (the absolute matrix stored in every command,
   `draw_picture` as a per-command re-stamp, and the unasserted 128- and 192-byte budget with a

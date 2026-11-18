@@ -11,6 +11,8 @@
   `PlatformProxy` alone)
 - **Superseded-by:** [ADR-0351](ADR-0351-a-linux-window-and-its-desktop-entry-carry-the-application-id.md)
   for §3's signature of `CurrentHost::start_with` only (it also takes the application id)
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask send-impls` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)
   §1, §2 and §4 (the rule this record applies to `flui-native`, and the five capability traits
   of `flui-platform` whose bounds wait on it), [ADR-0047](ADR-0047-unified-execution-services.md)
