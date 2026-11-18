@@ -7,7 +7,9 @@
   [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md) §2 only
   for `xtask-native.yml` on a pull request, and its Confirmation;
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
-  its Confirmation (the `ci` job's rule is a shell step, not `cargo xtask ci-verify`).
+  its Confirmation (the `ci` job's rule is a shell step, not `cargo xtask ci-verify`);
+  [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
+  §1 only for the CI lanes and change scope it lists as xtask's.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   and ADR-0375 (the same reduction of `tools/xtask` before the first release).
 
@@ -49,10 +51,12 @@ documentation lane, which most documentation pull requests take.
 
 ### §1. The lane is a shell step
 
-`plan` lists the pull request's changed files and takes `docs` when every one is documentation (a
-root `*.md`, `docs/` but `docs/gaps.md` and `docs/platform-parity.md`, `book/`, `changelog.d/`, a
-crate's `ARCHITECTURE.md` or `CHANGELOG.md`, a licence text, the issue templates, `CODEOWNERS`),
-`wide` otherwise, and `full` for every other event. There is no `tooling` lane: a change to
+`plan` lists the pull request's changed files, a rename by both its paths, and takes `docs` when
+every one is documentation (a root `*.md` or licence text, `docs/` but `docs/gaps.md` and
+`docs/platform-parity.md`, `changelog.d/`, a crate's own `ARCHITECTURE.md`, `CHANGELOG.md` or
+licence text, the issue templates, `CODEOWNERS`), `wide` otherwise, and `full` for every other
+event. `book/` is not documentation: its chapters are doctests of the facade (`src/book.rs`). A
+listing that fails stops the step; it never leaves a lane. There is no `tooling` lane: a change to
 repository tooling runs the gate.
 
 ### §2. The `ci` job is a shell step
@@ -77,7 +81,7 @@ step blocks on main and reports on a pull request.
 
 - Good, because `tools/xtask` loses `affected`, `ci-verify`, `expectations` and `paths-filter`,
   and a pull request no longer starts a Windows or macOS runner for xtask's own tests.
-- Bad, because a documentation file a crate later includes with `include_str!` lets a docs-only
+- Bad, because a documentation file a crate starts to include with `include_str!` lets a docs-only
   pull request skip the jobs that would read it; main's run finds it.
 - Bad, because a pull request that brings a RustSec advisory, or breaks a fuzz target or xtask on
   Windows or macOS, turns main red, or the next scheduled run, instead of failing itself.

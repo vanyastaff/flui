@@ -11,7 +11,7 @@
 //! Every step runs even when an earlier one failed, so one run reports every
 //! problem. CI runs the two [`Part`]s as separate steps so that the
 //! advisories, which change with the RustSec database rather than with the
-//! commit, can block only in the `wide` and `full` lanes (advisories.yml runs
+//! commit, can block on main and only report on a pull request (advisories.yml runs
 //! that step daily against main).
 
 use anyhow::bail;

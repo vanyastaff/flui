@@ -220,12 +220,14 @@ jobs:
   #   push, merge_group, workflow_dispatch   full
   #   pull_request                           docs when every changed file is
   #                                          documentation, otherwise wide
-  # Documentation is a root `*.md`, anything under docs/, book/ or
-  # changelog.d/, a crate's ARCHITECTURE.md or CHANGELOG.md, a licence text,
-  # the issue templates and CODEOWNERS. docs/gaps.md and
-  # docs/platform-parity.md are not: flui-native's tests read them. A file
-  # another crate's code includes with include_str! later is not caught here,
-  # and main's run finds what the skipped jobs would have (ADR-0376).
+  # Documentation is a root `*.md` or licence text, anything under docs/ or
+  # changelog.d/, a crate's own ARCHITECTURE.md, CHANGELOG.md or licence text,
+  # and the issue templates and CODEOWNERS. docs/gaps.md and
+  # docs/platform-parity.md are not: flui-native's tests read them. Neither is
+  # book/: its chapters are doctests of the facade (src/book.rs). Renames count
+  # both paths, so a file moved into docs/ still runs the gate. A file another
+  # crate's code includes with include_str! later is not caught here, and
+  # main's run finds what the skipped jobs would have (ADR-0376).
   #
   # Skipping is done with job-level `if:` on `plan`'s output, NOT with
   # `on.pull_request.paths-ignore`: that would make GitHub never create the
@@ -251,25 +253,40 @@ jobs:
         name: Decide the lane
         env:
           EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           lane=full
           if [ "$EVENT" = pull_request ]; then
             # The checkout is the PR merged into its base branch's current
             # tip, its first parent: the diff against it is the PR's own.
+            # `base.sha` stays where the base was at the PR's last push.
+            base=$BASE_SHA
+            if git rev-parse --verify --quiet HEAD^2 > /dev/null; then
+              base=$(git rev-parse HEAD^1)
+            fi
+            # Listed first, so a failure stops the step instead of leaving
+            # the most permissive lane.
+            files=$(git diff --no-renames --name-only "$base" HEAD)
             lane=docs
             while IFS= read -r file; do
+              [ -n "$file" ] || continue
               case "$file" in
                 docs/gaps.md | docs/platform-parity.md) lane=wide ;;
-                docs/* | book/* | changelog.d/* | .github/ISSUE_TEMPLATE/* | .github/CODEOWNERS | .github/*.md) ;;
-                crates/*/ARCHITECTURE.md | crates/*/CHANGELOG.md) ;;
-                packages/*/ARCHITECTURE.md | packages/*/CHANGELOG.md) ;;
-                LICENSE* | NOTICE* | crates/*/LICENSE* | packages/*/LICENSE*) ;;
+                docs/* | changelog.d/* | .github/ISSUE_TEMPLATE/* | .github/CODEOWNERS) ;;
+                crates/*/* | packages/*/*)
+                  # a crate's own top-level documentation and licence texts
+                  case "${file#*/*/}" in
+                    */*) lane=wide ;;
+                    ARCHITECTURE.md | CHANGELOG.md | LICENSE* | NOTICE*) ;;
+                    *) lane=wide ;;
+                  esac
+                  ;;
                 */*) lane=wide ;;
-                *.md) ;;
+                *.md | LICENSE* | NOTICE*) ;;
                 *) lane=wide ;;
               esac
-            done < <(git diff --name-only HEAD^1 HEAD)
+            done <<< "$files"
           fi
           echo "lane=$lane" >> "$GITHUB_OUTPUT"
           echo "event=$EVENT lane=$lane"
@@ -970,9 +987,9 @@ jobs:
 
 
       - name: cargo test --doc
-        # `flui/testing` compiles the book's chapters that run through Tester; the
-        # catalogs are lane_args.rs FACADE_CATALOGS, the narrowed run's (keep them in step), so
-        # the theme chapter and the facade's Material-gated half compile here too (src/book.rs).
+        # `flui/testing` compiles the book's chapters that run through Tester, and
+        # the catalogs compile the theme chapter and the facade's Material-gated half
+        # (src/book.rs).
         run: cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 
   # ─────────────────────────────────────────────────────────────────────────

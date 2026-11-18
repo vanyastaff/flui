@@ -1248,7 +1248,7 @@ Each CI run takes one of three lanes. The `plan` job picks it with a shell step
 
 | Lane | When | Adds |
 |---|---|---|
-| `docs` | a pull request every changed file of which is documentation (a root `*.md`, `docs/` but `gaps.md` and `platform-parity.md`, `book/`, `changelog.d/`, a crate's `ARCHITECTURE.md` or `CHANGELOG.md`, a licence text, the issue templates, `CODEOWNERS`) | nothing |
+| `docs` | a pull request every changed file of which is documentation (a root `*.md` or licence text, `docs/` but `gaps.md` and `platform-parity.md`, `changelog.d/`, a crate's own `ARCHITECTURE.md`, `CHANGELOG.md` or licence text, the issue templates, `CODEOWNERS`; a rename counts both its paths, and `book/` is code: its chapters are the facade's doctests) | nothing |
 | `wide` | every other pull request | `deps`, `clippy` and `test` over the whole workspace on Linux |
 | `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `feature-matrix`, `doc-test`, `test-nested`, `test-features`, `doc`, `wasm-check`, `cross-typecheck`, `test-trybuild`, `size`, `miri`, `perf-gates` and `test-without-agent`; in `clippy` and `test` it also turns on the `native-features`, `gpu-test --backend gl` and `build-all-targets` steps |
 
