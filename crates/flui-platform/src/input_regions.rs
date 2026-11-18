@@ -8,7 +8,7 @@
 //! the projection changed.
 
 use flui_foundation::geometry::{
-    DevicePixelRatio, DevicePoint, DeviceRect, Point, Rect, device_rect_covering,
+    DevicePixelRatio, DevicePoint, DeviceRect, Rect, device_rect_covering,
 };
 
 /// What the OS should do with an input region.
@@ -34,13 +34,16 @@ pub enum InputRegionKind {
     /// [`WindowResize`](Self::WindowResize) region below it: a press here reaches the
     /// application.
     WindowContent,
-    /// The click that brings an inactive window forward also acts here: a toolbar button,
-    /// a drag source. Where the system lets the application decide (AppKit's
-    /// `acceptsFirstMouse:`), the host delivers such a press marked
+    /// The click that brings an inactive window forward may act here: a toolbar button, a
+    /// drag source. On macOS the host reads these regions as a rough pre-filter
+    /// (`acceptsFirstMouse:`): a press inside one, edges included, is delivered marked
     /// ([`PointerButtonEvent::is_first_click`](crate::pointer::PointerButtonEvent::is_first_click)),
-    /// and the framework hands a marked press only to what lies inside a region of this
-    /// kind; anywhere else that click only activates the window. Where the system decides
-    /// alone, it marks no press and the region changes nothing.
+    /// and anywhere else that click only activates the window. The gesture binding then
+    /// admits a marked press only when its hit path runs through the box that reported the
+    /// region, so a widget painted over the box does not receive it. On Windows, X11 and
+    /// Wayland FLUI delivers the activating click unmarked, by those desktops' convention
+    /// (Win32's `WM_MOUSEACTIVATE` could swallow it; FLUI does not), and the region changes
+    /// nothing ([`InputCapabilities::input_region`](crate::input_capabilities::InputCapabilities::input_region)).
     FirstClick,
 }
 
@@ -104,17 +107,6 @@ impl InputRegion {
     #[must_use]
     pub const fn rect(&self) -> Rect {
         self.rect
-    }
-
-    /// Whether the region holds `point`, in window-logical pixels: from its minimum edges
-    /// up to, not including, its maximum ones, as [`DeviceInputRegion::contains`] counts.
-    #[must_use]
-    pub fn contains(&self, point: Point) -> bool {
-        let rect = self.rect;
-        rect.min.x <= point.x
-            && point.x < rect.max.x
-            && rect.min.y <= point.y
-            && point.y < rect.max.y
     }
 }
 

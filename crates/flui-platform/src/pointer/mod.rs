@@ -528,8 +528,9 @@ impl PointerButtonEvent<Press> {
     /// Whether this press is the click that brought its window forward: it landed while
     /// the window was not the active one, and the host delivered it because it lies in an
     /// [`InputRegionKind::FirstClick`](crate::input_regions::InputRegionKind::FirstClick)
-    /// region. The framework hands such a press only to what lies inside one of those
-    /// regions; a host whose system decides alone what that click does never marks one.
+    /// region. The framework hands such a press to the widgets only when its hit path runs
+    /// through the box that reported the region. Only the macOS host marks presses; on
+    /// Windows, X11 and Wayland FLUI delivers the activating click unmarked.
     #[must_use]
     pub const fn is_first_click(&self) -> bool {
         self.first_click

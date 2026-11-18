@@ -249,6 +249,13 @@ impl HitMetadata {
     }
 }
 
+/// The hit-test payload of a box that accepts the click bringing an inactive window
+/// forward (an `InputRegionKind::FirstClick` region the box reports). The gesture binding
+/// admits a press marked first click only when its hit path carries one, so the press
+/// reaches the box's subtree and not a widget painted over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FirstClickTarget;
+
 impl std::fmt::Debug for HitMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The value is `dyn Any` and has no `Debug` of its own.

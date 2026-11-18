@@ -8,16 +8,21 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Lets the click that brings an inactive window forward also act on its child: a toolbar
 /// button, a drag source, a control the user reaches for in a window behind.
 ///
-/// Where the system leaves that click to the application (AppKit), it only activates the
-/// window by default, as AppKit's own controls do; inside this widget's box it is
-/// delivered too, as a press marked
-/// [`is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click), and
-/// the gestures under it see it as any other press. Outside every such box the press, and
-/// the rest of its contact, reach nothing. Where the system delivers or swallows that click
-/// itself (Windows, X11, Wayland), the widget changes nothing.
+/// On macOS that click only activates the window by default, as AppKit's own controls do.
+/// A press marked
+/// [`is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click) reaches
+/// the widgets only when its hit path runs through this widget: the press lands in the
+/// child, and no widget painted over the child took the hit first. The gestures on that
+/// path then see it as any other press. Anywhere else the press, and the rest of its
+/// contact, reach nothing. A widget painted over the child that lets presses through
+/// (`HitTestBehavior::Translucent`) shares the press with the child.
 ///
-/// The box is mapped into the window through every transform and clip above it, as it is
-/// painted; a rotated child accepts the click over its bounding box.
+/// The host reads the box, mapped into the window through every transform and clip above
+/// it as it is painted (a rotated child counts as its bounding box), only as a rough
+/// pre-filter for which presses AppKit delivers; the hit path decides. On Windows, X11 and
+/// Wayland FLUI delivers the activating click unmarked, as applications there do (Win32's
+/// `WM_MOUSEACTIVATE` could swallow it with `MA_ACTIVATEANDEAT`; FLUI does not), so the
+/// widget changes nothing there.
 ///
 /// ```ignore
 /// FirstClick::new().child(toolbar_button)

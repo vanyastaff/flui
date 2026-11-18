@@ -7,25 +7,56 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Point, Rect, Size};
+use flui_interaction::pointer::FirstClickTarget;
+use flui_rendering::hit_testing::HitMetadata;
 use flui_rendering::input_regions::{InputRegionKind, InputRegionSink};
 use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
 
 /// A render object whose box is a `kind` input region while it is enabled.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// An enabled [`InputRegionKind::FirstClick`] region also marks every hit that lands in its
+/// child with a [`FirstClickTarget`], which is how the gesture binding knows a press marked
+/// first click reached this box rather than a widget painted over it.
+#[derive(Debug, Clone)]
 pub struct RenderInputRegion {
     kind: InputRegionKind,
     enabled: bool,
     has_child: bool,
+    /// The [`FirstClickTarget`] payload while the box accepts the first click, made once so
+    /// that a hit test allocates nothing.
+    first_click: Option<HitMetadata>,
 }
+
+impl PartialEq for RenderInputRegion {
+    fn eq(&self, other: &Self) -> bool {
+        // `first_click` follows from the other two fields.
+        self.kind == other.kind
+            && self.enabled == other.enabled
+            && self.has_child == other.has_child
+    }
+}
+
+impl Eq for RenderInputRegion {}
 
 impl RenderInputRegion {
     /// Claims this object's box as a `kind` region.
     #[must_use]
-    pub const fn new(kind: InputRegionKind) -> Self {
-        Self {
+    pub fn new(kind: InputRegionKind) -> Self {
+        let mut region = Self {
             kind,
             enabled: true,
             has_child: false,
+            first_click: None,
+        };
+        region.refresh_first_click();
+        region
+    }
+
+    /// Makes the hit payload agree with the kind and the enabled flag.
+    fn refresh_first_click(&mut self) {
+        let accepts = self.enabled && self.kind == InputRegionKind::FirstClick;
+        if accepts != self.first_click.is_some() {
+            self.first_click = accepts.then(|| HitMetadata::new(FirstClickTarget));
         }
     }
 
@@ -48,6 +79,7 @@ impl RenderInputRegion {
             return RenderUpdateImpact::NONE;
         }
         self.kind = kind;
+        self.refresh_first_click();
         RenderUpdateImpact::PAINT
     }
 
@@ -58,6 +90,7 @@ impl RenderInputRegion {
             return RenderUpdateImpact::NONE;
         }
         self.enabled = enabled;
+        self.refresh_first_click();
         RenderUpdateImpact::PAINT
     }
 }
@@ -84,6 +117,12 @@ impl RenderBox for RenderInputRegion {
     flui_rendering::forward_single_child_box_queries!();
 
     flui_rendering::forward_single_child_box_hit_test!();
+
+    /// A hit in the child of an enabled first-click region carries the
+    /// [`FirstClickTarget`].
+    fn metadata(&self) -> Option<HitMetadata> {
+        self.first_click.clone()
+    }
 
     fn describe_input_regions(&self, size: Size, regions: &mut InputRegionSink) {
         if self.enabled {

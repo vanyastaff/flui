@@ -9004,11 +9004,15 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   ошибкой); полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят. Первый клик:
   `InputRegionKind::FirstClick` (виджет `FirstClick`), пометка `PointerPress::is_first_click`;
   `acceptsFirstMouse:` двигает окно с области перемещения заголовка, доставляет нажатие внутри
-  региона первого клика с пометкой (билет по `eventNumber`, `FirstClickTicket`) и только
-  активирует окно в остальных местах; привязка жестов на каждом хосте пропускает помеченное
-  нажатие только внутри региона первого клика кадра на экране (`GestureBinding::set_input_regions`,
-  отказ — весь контакт). Тесты: `first_click::a_first_click_reaches_only_the_widgets_that_accept_it`
-  (без проверки в привязке падает: первый клик вне региона нажимает простой квадрат),
+  региона первого клика (края включены в логических единицах, как у проверки попадания) с
+  пометкой (билет по номеру и времени события, `FirstClickTicket`) и только активирует окно в
+  остальных местах; регион хоста — грубый предфильтр, а привязка жестов на каждом хосте
+  пропускает помеченное нажатие, только если путь попадания проходит через коробку `FirstClick`
+  (`FirstClickTarget`), отказ — весь контакт. Тесты:
+  `first_click::a_first_click_reaches_only_the_widgets_that_accept_it` (без проверки в привязке
+  падает: первый клик вне региона нажимает простой квадрат),
+  `first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click` (падает,
+  если привязка проверяет только прямоугольник региона: виджет поверх получает первый клик),
   `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting` (строки региона
   первого клика падают без его проверки в модели), `a_first_click_is_marked_only_on_the_press_it_was_answered_for`,
   `an_explicit_quit_fences_a_reopen_already_accepted`, `a_reopen_during_a_drain_is_told_by_that_drain`.

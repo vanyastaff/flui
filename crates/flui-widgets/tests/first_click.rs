@@ -1,6 +1,6 @@
 //! `FirstClick`: a press marked as the click that brought its window forward reaches the
-//! widgets inside a first-click region, and nothing outside one, through the input regions
-//! the window's frame published (ADR-0217 §5).
+//! widgets its hit path runs through inside a `FirstClick` box, and nothing else: not a
+//! widget beside the box, nor one painted over it.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -104,4 +104,34 @@ pub(crate) fn a_first_click_reaches_only_the_widgets_that_accept_it() {
     );
     click(&laid, 5, 50.0, false);
     assert_eq!(accepting.get(), 2);
+}
+
+/// A widget painted over a `FirstClick` box takes the hit, so the first click there reaches
+/// neither it nor the box under it; an ordinary press reaches the widget on top.
+pub(crate) fn a_widget_painted_over_a_first_click_box_does_not_take_the_first_click() {
+    let under = Rc::new(Cell::new(0));
+    let over = Rc::new(Cell::new(0));
+    let laid = lay_out(
+        Stack::new((
+            Positioned::new(FirstClick::new().child(counted(&under)))
+                .left(0.0)
+                .top(0.0),
+            Positioned::new(counted(&over)).left(0.0).top(0.0),
+        )),
+        tight(200.0, 100.0),
+    );
+
+    click(&laid, 1, 50.0, true);
+    assert_eq!(
+        (under.get(), over.get()),
+        (0, 0),
+        "the box's region holds the point, but the covering widget took the hit"
+    );
+
+    click(&laid, 2, 50.0, false);
+    assert_eq!(
+        (under.get(), over.get()),
+        (0, 1),
+        "a press into an active window"
+    );
 }

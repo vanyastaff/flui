@@ -904,8 +904,9 @@ pub(crate) mod title_bar {
         /// does.
         Moves,
         /// It makes the window key and reaches the application, marked as the
-        /// first click: it landed in an
-        /// [`InputRegionKind::FirstClick`] region, where a widget asked for it.
+        /// first click: it landed in an [`InputRegionKind::FirstClick`]
+        /// region. The region is a rough pre-filter: the gesture binding
+        /// decides by the press's hit path whether it reaches a widget.
         Delivered,
     }
 
@@ -917,25 +918,43 @@ pub(crate) mod title_bar {
         }
     }
 
+    /// Which press an `NSEvent` is: its event number (`-[NSEvent eventNumber]`)
+    /// and its timestamp. The number alone does not tell presses apart:
+    /// synthesized events all carry 0.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct PressStamp {
+        number: isize,
+        /// The timestamp's bits (`f64::to_bits`), seconds since boot.
+        timestamp: u64,
+    }
+
+    impl PressStamp {
+        /// The press numbered `number` at `timestamp` seconds since boot.
+        pub(crate) fn new(number: isize, timestamp: f64) -> Self {
+            Self {
+                number,
+                timestamp: timestamp.to_bits(),
+            }
+        }
+    }
+
     /// The press `acceptsFirstMouse:` last delivered as a first click, by its
-    /// event number (`-[NSEvent eventNumber]`): AppKit asks before it sends
-    /// the press, and the press it then sends is marked when its number
-    /// matches. Any press spends the ticket, so an answer whose press never
-    /// came marks no later one.
+    /// stamp: AppKit asks before it sends the press, and the press it then
+    /// sends is marked when its stamp matches. Any press spends the ticket,
+    /// so an answer whose press never came marks no later one.
     #[derive(Debug, Default)]
-    pub(crate) struct FirstClickTicket(std::cell::Cell<Option<isize>>);
+    pub(crate) struct FirstClickTicket(std::cell::Cell<Option<PressStamp>>);
 
     impl FirstClickTicket {
-        /// `acceptsFirstMouse:` delivers the press numbered `event_number` as
-        /// a first click.
-        pub(crate) fn issue(&self, event_number: isize) {
-            self.0.set(Some(event_number));
+        /// `acceptsFirstMouse:` delivers the press `stamp` as a first click.
+        pub(crate) fn issue(&self, stamp: PressStamp) {
+            self.0.set(Some(stamp));
         }
 
-        /// The press numbered `event_number` arrived: whether it is the first
-        /// click the ticket was issued for.
-        pub(crate) fn redeem(&self, event_number: isize) -> bool {
-            self.0.take() == Some(event_number)
+        /// The press `stamp` arrived: whether it is the first click the ticket
+        /// was issued for.
+        pub(crate) fn redeem(&self, stamp: PressStamp) -> bool {
+            self.0.take() == Some(stamp)
         }
     }
 
@@ -950,10 +969,9 @@ pub(crate) mod title_bar {
         match press_of(regions, scale, reading) {
             Press::Drag | Press::DoubleClick => FirstMouse::Moves,
             Press::App => {
-                let accepted = device_point(reading.x, reading.y, scale).is_some_and(|point| {
-                    regions.iter().any(|region| {
-                        region.kind() == InputRegionKind::FirstClick && region.contains(point)
-                    })
+                let accepted = regions.iter().any(|region| {
+                    region.kind() == InputRegionKind::FirstClick
+                        && holds_with_edges(region, reading.x, reading.y, scale)
                 });
                 if accepted {
                     FirstMouse::Delivered
@@ -962,6 +980,22 @@ pub(crate) mod title_bar {
                 }
             }
         }
+    }
+
+    /// Whether `region`, projected at `scale`, holds the logical point
+    /// `(x, y)`, its edges included: read back in logical units, as the
+    /// framework's hit test counts a box. The device rectangle was rounded
+    /// outward from the logical one, so this holds every point the hit test
+    /// of the region's box holds, and the binding never refuses a press for
+    /// lying past an edge the host let through the other way.
+    fn holds_with_edges(region: &DeviceInputRegion, x: f64, y: f64, scale: f64) -> bool {
+        if !(scale.is_finite() && scale > 0.0) {
+            return false;
+        }
+        let rect = region.rect();
+        let [left, top, right, bottom] =
+            [rect.min.x, rect.min.y, rect.max.x, rect.max.y].map(|edge| f64::from(edge) / scale);
+        left <= x && x <= right && top <= y && y <= bottom
     }
 
     /// What a double-click on the bar does: `action` is `AppleActionOnDoubleClick`
@@ -984,8 +1018,8 @@ pub(crate) mod title_bar {
         use flui_platform::input_regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
 
         use super::{
-            DoubleClick, FirstClickTicket, FirstMouse, Press, PressReading, double_click,
-            first_mouse, press_of,
+            DoubleClick, FirstClickTicket, FirstMouse, Press, PressReading, PressStamp,
+            double_click, first_mouse, press_of,
         };
 
         #[test]
@@ -1023,8 +1057,11 @@ pub(crate) mod title_bar {
                 ((10.0, 10.0, 2.0, 4), Press::DoubleClick, Moves, Activates),
                 ((110.0, 10.0, 2.0, 1), Press::App, Delivered, Delivered),
                 ((110.0, 10.0, 2.0, 2), Press::App, Delivered, Delivered),
-                // The first pixel past the button is the bar's again.
-                ((130.0, 10.0, 2.0, 1), Press::Drag, Moves, Activates),
+                // The first pixel past the button is the bar's again; the
+                // first-click pre-filter still holds the button's edge, which
+                // the framework's hit test of the button includes too.
+                ((130.0, 10.0, 2.0, 1), Press::Drag, Moves, Delivered),
+                ((130.5, 10.0, 2.0, 1), Press::Drag, Moves, Activates),
                 ((360.0, 10.0, 2.0, 1), Press::App, Activates, Activates),
                 ((460.0, 10.0, 2.0, 1), Press::App, Delivered, Delivered),
                 ((460.0, 40.0, 2.0, 1), Press::App, Activates, Activates),
@@ -1071,19 +1108,30 @@ pub(crate) mod title_bar {
 
         #[test]
         fn a_first_click_is_marked_only_on_the_press_it_was_answered_for() {
+            let press = PressStamp::new;
             let ticket = FirstClickTicket::default();
-            assert!(!ticket.redeem(7), "no answer, no mark");
-            ticket.issue(7);
-            assert!(ticket.redeem(7), "the press answered for is marked");
-            assert!(!ticket.redeem(7), "once");
+            assert!(!ticket.redeem(press(7, 1.0)), "no answer, no mark");
+            ticket.issue(press(7, 1.0));
+            assert!(
+                ticket.redeem(press(7, 1.0)),
+                "the press answered for is marked"
+            );
+            assert!(!ticket.redeem(press(7, 1.0)), "once");
             // An answer whose press never came marks no later press.
-            ticket.issue(8);
-            assert!(!ticket.redeem(9));
-            assert!(!ticket.redeem(8), "the press that came spent the ticket");
+            ticket.issue(press(8, 2.0));
+            assert!(!ticket.redeem(press(9, 2.5)));
+            assert!(
+                !ticket.redeem(press(8, 2.0)),
+                "the press that came spent the ticket"
+            );
+            // Synthesized events all carry the number 0: the timestamp tells
+            // a stale answer from a later press.
+            ticket.issue(press(0, 3.0));
+            assert!(!ticket.redeem(press(0, 3.5)));
             // A second question about the same press keeps it marked.
-            ticket.issue(10);
-            ticket.issue(10);
-            assert!(ticket.redeem(10));
+            ticket.issue(press(10, 4.0));
+            ticket.issue(press(10, 4.0));
+            assert!(ticket.redeem(press(10, 4.0)));
         }
 
         #[test]
@@ -1439,6 +1487,12 @@ pub(crate) mod macos {
             || kind == NSEventType::OtherMouseDown
     }
 
+    /// Which press `event` is; `None` for any other event, whose
+    /// `eventNumber` AppKit leaves undefined (and may raise for).
+    fn press_stamp(event: &NSEvent) -> Option<title_bar::PressStamp> {
+        is_press(event).then(|| title_bar::PressStamp::new(event.eventNumber(), event.timestamp()))
+    }
+
     impl ViewInputs {
         /// How the view reads the press `event`, every value read from AppKit
         /// before the regions are borrowed: no borrow is held across a
@@ -1465,7 +1519,8 @@ pub(crate) mod macos {
     impl ViewInput for ViewInputs {
         fn event(&self, view: &ContentView<'_>, event: &NSEvent) {
             // A press spends the first-click ticket, whatever it does next.
-            let first_click = is_press(event) && self.first_click.redeem(event.eventNumber());
+            let first_click =
+                press_stamp(event).is_some_and(|stamp| self.first_click.redeem(stamp));
             // Each AppKit call below runs with no borrow held: the drag runs a
             // tracking loop of its own, and the window's callbacks may re-enter.
             match self.title_bar_press(view, event) {
@@ -1499,13 +1554,16 @@ pub(crate) mod macos {
 
         fn accepts_first_mouse(&self, view: &ContentView<'_>, event: &NSEvent) -> bool {
             let reading = Self::press_reading(view, event);
-            let number = event.eventNumber();
             let answer = {
                 let chrome = self.chrome.borrow();
                 title_bar::first_mouse(chrome.projected.sent(), chrome.scale.get(), reading)
             };
-            if answer == title_bar::FirstMouse::Delivered {
-                self.first_click.issue(number);
+            // Read from AppKit only for a press it will deliver marked, with
+            // the regions let go.
+            if answer == title_bar::FirstMouse::Delivered
+                && let Some(stamp) = press_stamp(event)
+            {
+                self.first_click.issue(stamp);
             }
             answer.delivers()
         }

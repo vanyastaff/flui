@@ -135,8 +135,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
-use flui_platform::input_regions::InputRegion;
-use flui_platform::pointer::{PanZoomEvent, PointerPress, ScrollEvent};
+use flui_platform::pointer::{PanZoomEvent, ScrollEvent};
 use smallvec::SmallVec;
 
 use self::{
@@ -171,6 +170,20 @@ use crate::{
         active_dispatch_handle, pointer_capture::ContactCapture,
     },
 };
+
+/// Whether a press marked first click
+/// ([`PointerButtonEvent::is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click))
+/// whose hit path is `result` may reach the widgets: the path holds a box that accepts the
+/// first click ([`FirstClickTarget`](crate::pointer::FirstClickTarget)), so the press lands
+/// in that box's subtree. A widget painted over the box takes the hit instead, and the
+/// path then holds no such box.
+fn accepts_first_click(result: &HitTestResult) -> bool {
+    result.path().iter().any(|entry| {
+        entry
+            .metadata_as::<crate::pointer::FirstClickTarget>()
+            .is_some()
+    })
+}
 
 fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
     unreachable!("BUG: terminal Cancel never hit-tests")
@@ -371,10 +384,6 @@ pub struct GestureBinding {
     /// Contacts whose packet a dispatch on the stack is delivering, innermost
     /// last.
     in_flight: RefCell<SmallVec<[PointerId; 2]>>,
-    /// The window's input regions as its platform window last received them
-    /// ([`set_input_regions`](Self::set_input_regions)): where a press marked
-    /// first click is admitted.
-    input_regions: RefCell<Rc<[InputRegion]>>,
 }
 
 impl Default for GestureBinding {
@@ -439,46 +448,7 @@ impl GestureBinding {
             surfaces: IdMint::new(),
             sequences,
             in_flight: RefCell::default(),
-            input_regions: RefCell::new(Rc::new([])),
         }
-    }
-
-    /// The window's input regions, in its logical coordinates, as its platform
-    /// window received them with the frame on screen
-    /// ([`PlatformWindow::set_input_regions`](flui_platform::PlatformWindow::set_input_regions)).
-    ///
-    /// A press marked first click
-    /// ([`PointerPress::is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click))
-    /// is admitted only where an
-    /// [`InputRegionKind::FirstClick`](flui_platform::input_regions::InputRegionKind::FirstClick)
-    /// region holds it: anywhere else, and on an embedded surface, whose coordinates the
-    /// window's regions do not describe, the press and the rest of its contact reach
-    /// nothing, and the click only brought the window forward.
-    pub fn set_input_regions(&self, regions: Rc<[InputRegion]>) {
-        *self.input_regions.borrow_mut() = regions;
-    }
-
-    /// Whether the press `down`, on `surface` at `position`, may reach the
-    /// widgets: every press but a first click, and a first click where a
-    /// [`FirstClick`](flui_platform::input_regions::InputRegionKind::FirstClick)
-    /// region of the window holds it.
-    fn admits_press(
-        &self,
-        surface: InputSurface,
-        down: &PointerPress,
-        position: Offset<f64>,
-    ) -> bool {
-        if !down.is_first_click() {
-            return true;
-        }
-        if surface != InputSurface::Window {
-            return false;
-        }
-        let point = flui_foundation::geometry::Point::new(position.dx, position.dy);
-        self.input_regions.borrow().iter().any(|region| {
-            region.kind() == flui_platform::input_regions::InputRegionKind::FirstClick
-                && region.contains(point)
-        })
     }
 
     /// Publish the input being dispatched, in the arena's one cell: the
@@ -1659,20 +1629,6 @@ impl GestureBinding {
                     let cleanup = self.supersede(pointer_id);
                     keep_first(&mut first_panic, cleanup, "superseded pointer teardown");
                 }
-                let position = event
-                    .position()
-                    .expect("BUG: Down carries a checked position");
-                // A first click no region accepts only brought the window
-                // forward: no target sees the contact, and its tail is refused.
-                if !self.admits_press(surface, down, position) {
-                    self.contacts.refuse(pointer_id);
-                    tracing::debug!(
-                        ?pointer_id,
-                        "a first click outside every first-click region only activated its window"
-                    );
-                    first_panic.resume();
-                    return;
-                }
                 // Minted before hit testing: an exhausted binding refuses the
                 // contact before any target sees it, and never reissues an id.
                 let Ok(sequence) = self.sequences.next().map(PointerSequence) else {
@@ -1721,6 +1677,9 @@ impl GestureBinding {
                 }
                 self.publish_contact_sequence(pointer_id, sequence.0);
 
+                let position = event
+                    .position()
+                    .expect("BUG: Down carries a checked position");
                 let result = match try_run(|| hit_test_fn(position)) {
                     Ok(result) => result,
                     Err(panic) => {
@@ -1734,6 +1693,21 @@ impl GestureBinding {
                         crate::containment::raise(first_panic);
                     }
                 };
+
+                // A first click whose hit path holds no first-click box only
+                // brought the window forward: no target sees the contact, its
+                // tail is refused, and it reports no input sequence.
+                if down.is_first_click() && !accepts_first_click(&result) {
+                    self.contacts.refuse(pointer_id);
+                    self.arena.arena().set_dispatched(None);
+                    drop(result);
+                    tracing::debug!(
+                        ?pointer_id,
+                        "a first click whose hit path holds no first-click box only activated its window"
+                    );
+                    first_panic.resume();
+                    return;
+                }
 
                 let token = Self::resolve_route(&result);
                 // Hit entries contain inert target identities and transforms;

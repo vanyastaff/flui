@@ -1670,15 +1670,12 @@ impl PresentationState {
     /// what the OS holds (ADR-0217 §5).
     ///
     /// The regions are committed before the backend runs, and no borrow is held while it
-    /// does: a backend that panics or reenters leaves them committed for the next move. The
-    /// gesture binding takes the same set, so it admits a first click where the window
-    /// delivers one ([`GestureBinding::set_input_regions`]).
+    /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(
         &self,
         regions: Rc<[flui_platform::input_regions::InputRegion]>,
     ) {
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
-        self.gestures().set_input_regions(Rc::clone(&regions));
         self.hand_input_regions(&regions);
     }
 

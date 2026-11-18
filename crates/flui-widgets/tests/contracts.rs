@@ -26,6 +26,7 @@ fn input_regions() {
             ("system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic", crate::system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic),
             ("system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped", crate::system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped),
             ("first_click::a_first_click_reaches_only_the_widgets_that_accept_it", crate::first_click::a_first_click_reaches_only_the_widgets_that_accept_it),
+            ("first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click", crate::first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click),
         ],
     );
 }

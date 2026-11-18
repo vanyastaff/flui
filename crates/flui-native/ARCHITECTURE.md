@@ -4116,14 +4116,16 @@ which `Send + Sync` surface targets and text inputs hold).
 asks its input, which answers by the press model (`input::apple::title_bar`):
 a press on the move area of a title bar the application draws activates the
 window and moves it at once, as the system's title bar does; a press inside an
-`InputRegionKind::FirstClick` region (a `FirstClick` widget's box) activates
-it and is delivered, marked `is_first_click`; a press anywhere else only
-activates it, AppKit's convention. The answer issues a ticket for the press's
-`eventNumber`, and only the press of that number is marked when it arrives
-(`FirstClickTicket`): any press spends the ticket, so an answer whose press
-never came marks none. The gesture binding admits a marked press only inside
-a first-click region of the frame on screen, on every host, so the widgets
-decide where the first click acts, not the host alone.
+`InputRegionKind::FirstClick` region (a `FirstClick` widget's box), its edges
+included in logical units as the hit test counts a box, activates it and is
+delivered, marked `is_first_click`; a press anywhere else only activates it,
+AppKit's convention. The region is a rough pre-filter: the gesture binding
+admits a marked press only when its hit path runs through the `FirstClick`
+box (`FirstClickTarget`), so a widget painted over the box does not receive
+it. The answer issues a ticket for the press's event number and timestamp,
+read only for a press it delivers marked, and only the press with that stamp
+is marked when it arrives (`FirstClickTicket`): any press spends the ticket,
+so an answer whose press never came marks none.
 
 **Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
 types against the selector encoding at run time and found `makeFirstResponder:`
