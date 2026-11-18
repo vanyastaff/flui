@@ -45,12 +45,14 @@ pub(super) fn outgoing_drag_is_delivered_as_claimed<B: BackendUnderTest>(
     let claimed = backend.capabilities().outgoing_drag();
     let source = backend.drag_source();
     match (claimed, source) {
-        (Availability::Unavailable, Some(_)) => {
-            Err("starts OS drag sessions yet claims outgoing drags unavailable".to_owned())
+        (Availability::Unavailable, Some(_)) => Err(
+            "starts OS drag sessions yet claims outgoing drags unavailable"
+                .to_owned()
+                .into(),
+        ),
+        (Availability::Native | Availability::Emulated, None) => {
+            Err(format!("claims outgoing drags {claimed:?} but offers no drag source").into())
         }
-        (Availability::Native | Availability::Emulated, None) => Err(format!(
-            "claims outgoing drags {claimed:?} but offers no drag source"
-        )),
         (Availability::Unavailable, None) => {
             let refused = plan_os_session(
                 backend.drag_start(),
@@ -63,9 +65,10 @@ pub(super) fn outgoing_drag_is_delivered_as_claimed<B: BackendUnderTest>(
             if matches!(refused, Err(DragError::Unsupported(_))) {
                 Ok(RowOutcome::Held)
             } else {
-                Err(format!(
-                    "a drag that needs the OS did not fail as unavailable: {refused:?}"
-                ))
+                Err(
+                    format!("a drag that needs the OS did not fail as unavailable: {refused:?}")
+                        .into(),
+                )
             }
         }
         (_, Some(_)) => Ok(RowOutcome::Held),
@@ -84,9 +87,7 @@ pub(super) fn a_drag_source_starts_when_the_backend_declares<B: BackendUnderTest
     if declared == actual {
         Ok(RowOutcome::Held)
     } else {
-        Err(format!(
-            "declares {declared:?} but its source starts at {actual:?}"
-        ))
+        Err(format!("declares {declared:?} but its source starts at {actual:?}").into())
     }
 }
 
@@ -108,7 +109,7 @@ pub(super) fn an_at_start_backend_never_escalates_mid_drag<B: BackendUnderTest>(
         true,
     );
     if mid != Ok(None) {
-        return Err(format!("escalated mid-drag: {mid:?}"));
+        return Err(format!("escalated mid-drag: {mid:?}").into());
     }
     let start = plan_os_session(
         timing,
@@ -123,9 +124,7 @@ pub(super) fn an_at_start_backend_never_escalates_mid_drag<B: BackendUnderTest>(
             offer: OsOffer::Full,
             ..
         })) => Ok(RowOutcome::Held),
-        other => Err(format!(
-            "did not start a full session at the start: {other:?}"
-        )),
+        other => Err(format!("did not start a full session at the start: {other:?}").into()),
     }
 }
 
@@ -153,7 +152,7 @@ pub(super) fn start_decision_includes_sibling_presentation_with_identity_only_of
         advertised: TransferActions::MOVE,
     };
     if with_sibling != Ok(Some(expected)) {
-        return Err(format!("with a sibling presentation: {with_sibling:?}"));
+        return Err(format!("with a sibling presentation: {with_sibling:?}").into());
     }
     let alone = plan_os_session(
         timing,
@@ -164,7 +163,7 @@ pub(super) fn start_decision_includes_sibling_presentation_with_identity_only_of
         true,
     );
     if alone != Ok(None) {
-        return Err(format!("with no sibling presentation: {alone:?}"));
+        return Err(format!("with no sibling presentation: {alone:?}").into());
     }
     Ok(RowOutcome::Held)
 }
@@ -195,7 +194,7 @@ pub(super) fn a_leaving_backend_escalates_when_the_pointer_leaves_the_window<
         true,
     );
     if early != Ok(None) {
-        return Err(format!("started before the pointer left: {early:?}"));
+        return Err(format!("started before the pointer left: {early:?}").into());
     }
     let leaving = plan_os_session(
         timing,
@@ -210,9 +209,7 @@ pub(super) fn a_leaving_backend_escalates_when_the_pointer_leaves_the_window<
             offer: OsOffer::Full,
             ..
         })) => Ok(RowOutcome::Held),
-        other => Err(format!(
-            "did not start a full session on leaving: {other:?}"
-        )),
+        other => Err(format!("did not start a full session on leaving: {other:?}").into()),
     }
 }
 

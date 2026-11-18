@@ -421,8 +421,55 @@ pub enum RowOutcome {
     /// it there yet: the `docs/gaps.md` entry. Not a failure of the table,
     /// and not a pass either: a backend's suite names the gaps it expects.
     Gap(GapEntry),
-    /// The backend's output broke the row: what did not hold.
-    Failed(String),
+    /// The backend broke the row: why, and what did not hold.
+    Failed(RowFailure),
+}
+
+/// Why a row failed, and what did not hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RowFailure {
+    /// What kind of failure it is.
+    pub kind: FailureKind,
+    /// What did not hold, for a person to read.
+    pub message: String,
+}
+
+/// What kind of failure a row reports, so a backend's suite that expects a
+/// row to fail names the kind it expects rather than words of its message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FailureKind {
+    /// The backend has no reading for a step the row performs, or for one
+    /// its capabilities claim it delivers.
+    NoReading,
+    /// Two events are not as far apart as the readings they came from.
+    Interval,
+    /// The backend's output broke the row's rule.
+    Output,
+    /// The row panicked, in the backend or in the table.
+    Panicked,
+}
+
+impl RowFailure {
+    pub(crate) fn new(kind: FailureKind, message: String) -> Self {
+        Self { kind, message }
+    }
+
+    /// This failure, its message told what it concerns.
+    pub(crate) fn about(self, what: &str) -> Self {
+        Self {
+            message: format!("{what}: {}", self.message),
+            ..self
+        }
+    }
+}
+
+/// The table's own messages are about the backend's output.
+impl From<String> for RowFailure {
+    fn from(message: String) -> Self {
+        Self::new(FailureKind::Output, message)
+    }
 }
 
 /// The outcome of every row for one backend.
@@ -438,7 +485,7 @@ impl ConformanceReport {
         self.rows
             .iter()
             .filter_map(|(name, _, outcome)| match outcome {
-                RowOutcome::Failed(message) => Some((*name, message.as_str())),
+                RowOutcome::Failed(failure) => Some((*name, failure.message.as_str())),
                 RowOutcome::Held | RowOutcome::NotApplicable(_) | RowOutcome::Gap(_) => None,
             })
     }
@@ -466,7 +513,7 @@ pub fn run_backend_conformance<B: BackendUnderTest>(backend: &mut B) -> Conforma
             )]
             let outcome = match catch_unwind(AssertUnwindSafe(|| (row.check)(backend))) {
                 Ok(Ok(outcome)) => outcome,
-                Ok(Err(message)) => RowOutcome::Failed(message),
+                Ok(Err(failure)) => RowOutcome::Failed(failure),
                 Err(payload) => {
                     let text = payload
                         .downcast_ref::<&str>()
@@ -476,7 +523,10 @@ pub fn run_backend_conformance<B: BackendUnderTest>(backend: &mut B) -> Conforma
                     // The table owns the caught opaque payload; an aggregate's
                     // Drop may panic before any catch regains control.
                     flui_foundation::panic::discard_payload(payload);
-                    RowOutcome::Failed(format!("panicked: {text}"))
+                    RowOutcome::Failed(RowFailure::new(
+                        FailureKind::Panicked,
+                        format!("panicked: {text}"),
+                    ))
                 }
             };
             (row.name, row.group, outcome)

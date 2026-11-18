@@ -38,20 +38,22 @@ pub(super) fn menu_keys_arrive_as_the_bindings_name_them<B: BackendUnderTest>(
             .collect();
         for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             let Some(event) = events.iter().find(|event| event.state == state) else {
-                return Err(format!("{key:?}: no {state:?} event among {events:?}"));
+                return Err(format!("{key:?}: no {state:?} event among {events:?}").into());
             };
             if event.key != Key::Named(expected) {
                 return Err(format!(
                     "{key:?}: {state:?} arrived as {:?}, not {expected:?}",
                     event.key
-                ));
+                )
+                .into());
             }
             if event.modifiers.contains(Modifiers::SHIFT) != shift {
                 return Err(format!(
                     "{key:?}: {state:?} carried {:?} with Shift {}",
                     event.modifiers,
                     if shift { "held" } else { "up" }
-                ));
+                )
+                .into());
             }
         }
     }
@@ -85,13 +87,14 @@ pub(super) fn a_key_during_composition_is_the_input_methods<B: BackendUnderTest>
         .collect();
     for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let Some(event) = events.iter().find(|event| event.state == state) else {
-            return Err(format!("no {state:?} event among {events:?}"));
+            return Err(format!("no {state:?} event among {events:?}").into());
         };
         if event.composition != ImeComposition::Active {
             return Err(format!(
                 "Escape {state:?} during a composition arrived as {:?}, not the input method's",
                 event.composition
-            ));
+            )
+            .into());
         }
     }
     Ok(RowOutcome::Held)

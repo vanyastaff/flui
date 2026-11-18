@@ -45,13 +45,13 @@ pub(super) fn a_backend_never_queues<B: BackendUnderTest>(backend: &mut B) -> Ou
         let request = HapticRequest::new(timing);
         for kind in HapticFeedback::ALL {
             if let HapticOutcome::Queued(_) = haptics.perform_with(kind, &request) {
-                return Err(format!("{kind:?} at {timing:?} was queued by the backend"));
+                return Err(format!("{kind:?} at {timing:?} was queued by the backend").into());
             }
         }
         if let HapticOutcome::Queued(_) =
             haptics.play(&taps(), HapticFeedback::LightImpact, &request)
         {
-            return Err(format!("a pattern at {timing:?} was queued by the backend"));
+            return Err(format!("a pattern at {timing:?} was queued by the backend").into());
         }
     }
     Ok(RowOutcome::Held)
@@ -72,7 +72,7 @@ pub(super) fn semantic_feedback_reports_a_tier_one_outcome<B: BackendUnderTest>(
             outcome,
             HapticOutcome::Submitted | HapticOutcome::Approximated | HapticOutcome::Unsupported(_)
         ) {
-            return Err(format!("{kind:?} reported {outcome:?}"));
+            return Err(format!("{kind:?} reported {outcome:?}").into());
         }
     }
     let outcome = haptics.play(
@@ -81,7 +81,7 @@ pub(super) fn semantic_feedback_reports_a_tier_one_outcome<B: BackendUnderTest>(
         &HapticRequest::default(),
     );
     if outcome == HapticOutcome::Suppressed {
-        return Err("a pattern was suppressed by the backend".to_owned());
+        return Err("a pattern was suppressed by the backend".to_owned().into());
     }
     Ok(RowOutcome::Held)
 }
@@ -101,9 +101,7 @@ pub(super) fn a_stale_source_plays_on_the_window_actuator<B: BackendUnderTest>(
         let expected = haptics.perform_with(kind, &window);
         let actual = haptics.perform_with(kind, &stale);
         if actual != expected {
-            return Err(format!(
-                "{kind:?} from a stale source reported {actual:?}, the window's actuator {expected:?}"
-            ));
+            return Err(format!("{kind:?} from a stale source reported {actual:?}, the window's actuator {expected:?}").into());
         }
     }
     let expected = haptics.play(&taps(), HapticFeedback::Drop, &window);
@@ -111,7 +109,8 @@ pub(super) fn a_stale_source_plays_on_the_window_actuator<B: BackendUnderTest>(
     if actual != expected {
         return Err(format!(
             "a pattern from a stale source reported {actual:?}, the window's actuator {expected:?}"
-        ));
+        )
+        .into());
     }
     Ok(RowOutcome::Held)
 }
@@ -130,7 +129,8 @@ pub(super) fn capabilities_match_what_plays<B: BackendUnderTest>(backend: &mut B
         return Err(format!(
             "claims feedback {} but a selection click reported {feedback:?}",
             capabilities.feedback
-        ));
+        )
+        .into());
     }
     let pattern = haptics.play(&taps(), HapticFeedback::SelectionClick, &request);
     let expected = match (capabilities.feedback, capabilities.patterns) {
@@ -144,7 +144,8 @@ pub(super) fn capabilities_match_what_plays<B: BackendUnderTest>(backend: &mut B
         return Err(format!(
             "claims {:?} patterns but two taps reported {pattern:?}",
             capabilities.patterns
-        ));
+        )
+        .into());
     }
     Ok(RowOutcome::Held)
 }
