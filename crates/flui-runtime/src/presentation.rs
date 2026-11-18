@@ -1809,21 +1809,20 @@ impl PresentationState {
     /// is over, if the window may still be covered: the window may have been
     /// minimized or locked since it was hidden, which no visibility change
     /// says, and then it owes nothing more until it is next hidden. The quiet
-    /// period starts again at `now`. Returns whether a frame was granted.
-    pub(crate) fn grant_occluded_frame(&self, now: Instant) -> bool {
+    /// period starts again at `now`.
+    pub(crate) fn grant_occluded_frame(&self, now: Instant) {
         if self.occluded_frame_at().is_none_or(|due| now < due) {
-            return false;
+            return;
         }
         let covered = self
             .with_window(|window| crate::occluded_frame::may_be_covered(&window.state()))
             .unwrap_or(false);
-        if !covered {
+        if covered {
+            self.occluded_frame.set(OccludedFrame::QuietSince(now));
+            self.clock.grant_hidden_frame();
+        } else {
             self.occluded_frame.set(OccludedFrame::NotOwed);
-            return false;
         }
-        self.occluded_frame.set(OccludedFrame::QuietSince(now));
-        self.clock.grant_hidden_frame();
-        true
     }
 
     /// Whether this is the first time the presentation's surface withheld
