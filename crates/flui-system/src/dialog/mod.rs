@@ -37,6 +37,9 @@ pub use request::{
     FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
     SaveLocation, SaveRequest,
 };
+// The macOS panel's delegate holds each item it shows to the same name rule.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) use request::name_ends_in;
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
@@ -78,10 +81,11 @@ pub enum DialogError {
     /// handle cannot hand out.
     #[error("the pick is not a local file")]
     NotAFile,
-    /// A pick matches none of the request's filters, on a system whose
-    /// dialog only suggests them (a browser's file input, which offers every
-    /// file beside them). The whole answer is refused, since it is not what
-    /// the request asked the user for; nothing was read.
+    /// A pick matches none of the request's filters: its system's dialog
+    /// let the user past them (a browser's file input offers every file
+    /// beside them, a desktop dialog takes a typed name). The whole answer
+    /// is refused, since it is not what the request asked the user for;
+    /// nothing was read. [`FileDialogs::open`] says what is checked where.
     #[error("a pick matches none of the request's filters")]
     NotInFilter,
     /// The picks hold more than the request's
@@ -413,15 +417,29 @@ impl FileDialogs {
     /// A backend that answers several picks to a request that allowed one
     /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
     /// request can have.
+    ///
+    /// Every pick is held to the request's filters by its name, on every
+    /// host: a system's dialog may let the user past them (a name typed
+    /// into it, a link whose target has another name, a type that only
+    /// conforms to an allowed one). When the filters name extensions only
+    /// and a pick's name ends in none of them, the whole answer is
+    /// [`DialogError::NotInFilter`], and no pick is handed out. A request
+    /// with a MIME type among its filters is not checked here: a file's
+    /// type is its system's to tell, so the backend that mapped the pattern
+    /// judges the pick by it.
     pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
         let checked = request.check();
         let multiple = request.is_multiple();
+        let filters = request.filters.clone();
         self.scope.show(
             checked,
             |window, answer| self.backend.open(window, request, answer),
             move |result| match result {
                 Ok(Some(picks)) if !multiple && picks.len() > 1 => {
                     Err(SystemFailure::MalformedAnswer.into())
+                }
+                Ok(Some(picks)) if !request::names_admit(&filters, &picks) => {
+                    Err(DialogError::NotInFilter)
                 }
                 result => result,
             },

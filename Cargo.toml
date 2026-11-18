@@ -261,6 +261,10 @@ objc2-app-kit = { version = "0.3.2", default-features = false }
 # Core Haptics, the iOS backend's second haptic tier (ADR-0210 §7); the
 # same objc2 0.3 generation as the bindings above.
 objc2-core-haptics = { version = "0.3.2", default-features = false }
+# flui-system's macOS login item (`SMAppService`), of the same generation.
+# The framework links on every macOS FLUI supports; the class, macOS 13, is
+# looked up when first used, behind its version gate.
+objc2-service-management = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 block2 = "0.6.2"
 # ANDROID - the NativeActivity glue flui-native and flui-app share.
