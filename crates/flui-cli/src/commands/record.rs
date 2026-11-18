@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use flui_protocol::native_recording::{CutReason, MAX_RECORDING_BYTES, MAX_ROWS};
 use flui_protocol::session::ClientRole;
 use flui_protocol::{record::RecordLayer, record::RecordParams, tree::WindowId};
 
@@ -165,6 +166,18 @@ fn report_native(dir: &str, streams: &[WrittenStream]) -> CliResult<()> {
             ui::warning(format!(
                 "native stream {} lost {} rows, so a replay refuses it at its gap",
                 stream.stream, stream.lost_rows
+            ))?;
+        }
+        if let Some(cut) = stream.cut {
+            let bound = match cut.reason {
+                CutReason::Rows => format!("{MAX_ROWS} rows"),
+                CutReason::Bytes => format!("{MAX_RECORDING_BYTES} bytes"),
+                reason => reason.name().to_owned(),
+            };
+            ui::warning(format!(
+                "native stream {} reached the {bound} a native recording holds and ends at a \
+                 cut; its last {} rows were not written, and a replay stops at the cut",
+                stream.stream, cut.dropped
             ))?;
         }
     }

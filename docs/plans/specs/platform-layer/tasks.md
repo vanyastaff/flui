@@ -8194,6 +8194,39 @@ GPU-память простаивающего или невидимого окн
   фильтра на Windows, запись в папку Flatpak document portal, через точку монтирования и в липкой
   папке, пункт «все файлы» пикера рядом с типами запроса.
 
+- [ ] **LY98** (код по ней закрыт; открыта одним: чтением записи крейтом `flui-driver`, которого
+  нет, — ждёт FD6 спеки [flui-driver](../flui-driver/tasks.md)) — ветка
+  `native/capture-out-of-release` от `main` @ `4db9c6981`. **Codec вне release.** `flui-app`
+  включает `native-capture` в каждой сборке (Cargo не привязывает фичу к профилю), поэтому
+  `journal::codec`, `order`, `store` и `CurrentHost::backend` теперь собираются только при
+  `all(debug_assertions, feature = "native-capture")` или с `testing`, как уже собирались захват,
+  строки и рекордер; вызовы `native_journal::begin` в раннерах (настольный, Android, iOS) стоят под
+  `cfg(native_journal)`. Доказательство: `cargo heli check -p flui-app --release` проходит, а
+  проба в раннере, называющая `flui_native::journal::codec::Backend` в release, не собирается
+  (`E0433: cannot find codec in journal`), то есть release-сборка кодека не содержит; в CI это же
+  проверяет release-сборка счётчика в задании `size` (диф касается манифестов). `flui record
+  --native` в debug не тронут: журнал и `cfg(native_journal)` прежние
+  (`a_native_recording_writes_each_stream_with_the_devices_its_rows_read`). **Граница записи.**
+  Границы и их счёт — во `flui-protocol`: `native_recording::Budget` (`admit_row` для писателя,
+  `read_line` для читателя) и типизированная `Overrun` (`LineBytes`, `HeaderBytes`, `Rows`,
+  `RecordingBytes`, у полных — `cut_reason`); константы переехали в `native_recording/bounds.rs`
+  на прежних путях. `CutBudget` из `flui-native` удалён: рекордер, `NativeRecording::write` и
+  `NativeRecording::read` считают тем же `Budget`; `write` отвечает на слишком длинную строку
+  (или заголовок) `CodecError::LineTooLong`, ничего не записав. `NativeFiles` в `flui-cli` держит
+  `Budget` на поток с момента заголовка, каждую строку принимает с байтами, на которые вырастет
+  заголовок, объявляя её устройства, первую строку за `MAX_ROWS`/`MAX_RECORDING_BYTES` заменяет
+  строкой `cut` и дальше ничего не пишет (в индексе `cut: {reason, dropped}`, в отчёте
+  предупреждение), строку длиннее `MAX_LINE_BYTES` заменяет `gap`. Тесты (в скобках — с откатом):
+  `a_stream_past_the_byte_bound_ends_at_a_cut`, `a_stream_past_the_row_bound_ends_at_a_cut`,
+  `a_row_past_the_line_bound_leaves_a_gap` (`flui-cli`, файл больше границы и без `cut`; строка
+  пишется как есть); `a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit`,
+  `what_a_writer_admits_with_its_cut_a_reader_takes`, `a_reader_refuses_the_line_past_either_bound`,
+  `an_overrun_names_its_limit_and_its_cut` (`flui-protocol`, новые); прежние
+  `a_native_recording_past_its_bounds_is_refused`, `a_recording_past_its_bound_is_written_cut`,
+  `a_live_recording_past_its_bound_holds_one_cut_and_nothing_after` держат перенос счёта в
+  `flui-native`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity
+  «Recorded native input replays deterministically on the headless host».
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

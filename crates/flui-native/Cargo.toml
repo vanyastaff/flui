@@ -56,8 +56,9 @@ tracing = { workspace = true }
 # Pointer assembly returns the one or two events a reading makes inline.
 smallvec = { workspace = true }
 
-# The native recording codec (`journal::codec`, ADR-0215 §4), with
-# `native-capture` or `testing` only, so the backends link no serializer.
+# The native recording codec (`journal::codec`, ADR-0215 §4), in a debug
+# build with `native-capture` or with `testing` only, so the backends link no
+# serializer.
 # Recordings are JSON Lines in the schema `flui-protocol` declares. A replay
 # reproduces the delivered floats only if every number reads back to the bits
 # it was written from, which serde_json's default parser does not guarantee.
@@ -671,7 +672,8 @@ single-instance = []
 
 # Debug builds only: `journal::capture` journals every pointer registry call
 # on a thread as a native recording (ADR-0215 §4), for turning a session on a
-# native host into a checked-in test; with it comes the recording codec.
+# native host into a checked-in test; with it comes the recording codec. A
+# release build with the feature compiles none of the journal (ADR-0151 §16).
 native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 
 # The `testing` module (ADR-0243): what a test of a native host's windows

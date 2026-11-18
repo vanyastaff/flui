@@ -5414,9 +5414,10 @@ major version, unknown fields skipped, an unknown variant a typed error); its
 schema is `flui-protocol`'s `native_recording`, which a reader such as the
 driver reads without this crate, and its codec is `journal::codec`
 (`journal/`, a crate-level module, since it names the input feature's model
-and the Win32 touchpad assembler its replay drives), built only with
-`native-capture` or `testing`, so serde never enters the
-backend graph. The header declares every device label its rows read, with the
+and the Win32 touchpad assembler its replay drives), built only in a debug
+build with `native-capture`, or with `testing`, so serde never enters the
+backend graph and a release build compiles no journal, though `flui-app`
+turns the feature on in every build (ADR-0151 §16). The header declares every device label its rows read, with the
 kinds they read it as, and the reader refuses a row that names another.
 
 Recordings are captured in debug builds with the `native-capture` feature:
@@ -5578,7 +5579,9 @@ order no delivery writes (a second close, a request after the close, `closing`
 with nothing granted, a request after a grant, a cause that contradicts the
 requests). The in-process writers never write what their reader refuses, and
 the recorder never holds more: `Recorder` counts each row's bytes and the rows
-as they arrive, under the rule `NativeRecording::write` applies (`CutBudget`),
+as they arrive, under the rule `NativeRecording::write` applies
+(`flui_protocol::native_recording::Budget`, which the reader counts its lines
+with too),
 replaces the first row past either bound with a `cut` row naming why and keeps
 nothing its source reports after it, so a recording holds at most `MAX_ROWS`
 rows and `MAX_RECORDING_BYTES` of lines however long the capture runs.
@@ -5587,8 +5590,12 @@ it at the last row that fits with room for a `cut` row, encoding nothing past
 it, so a value the format does not mirror past the cut does not fail the write;
 a header that grew after the recorder's first row (a device it declares) can
 move that cut a few rows earlier. A line sink drops what a source reports after
-its cut. `flui record --native` in `flui-cli` writes
-lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
+its cut. `flui record --native` in `flui-cli`, which writes a live stream's
+lines as they come, keeps the same `Budget`, each row admitted with the bytes
+its header grows by to declare the row's devices, and ends a file with a `cut`
+row where the next would pass a bound; a row longer than a line may be is
+refused by every writer (`CodecError::LineTooLong` from
+`NativeRecording::write`, a `gap` in the CLI's file). A replay of a cut
 recording replays every row before the cut and returns `Replayed::Cut` with its
 line and reason, never plain success. When a window's store journal cannot be
 kept (no owner slot left), its stream is cut (`store_journal`) instead of a host

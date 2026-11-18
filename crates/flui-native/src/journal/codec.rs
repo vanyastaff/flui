@@ -57,7 +57,7 @@ use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
 pub use wire::{Backend, CloseAnswer, CloseCause, CutReason, FORMAT_VERSION, FailureKind, Stream};
 
-use super::order::{CutBudget, RowOrder, read_bounded_line};
+use super::order::{RowOrder, read_bounded_line};
 use super::store::{self, RecordedStore, StoreDivergence, StoreFocus, StoreLock};
 use crate::error::PlatformError;
 
@@ -144,6 +144,20 @@ pub enum CodecError {
         /// The type that grew.
         what: &'static str,
     },
+}
+
+impl CodecError {
+    /// Line `line` passes `overrun`'s bound.
+    fn past_bound(line: u64, overrun: wire::Overrun) -> Self {
+        let limit = overrun.limit();
+        match overrun {
+            wire::Overrun::Rows => Self::TooManyRows { line, limit },
+            wire::Overrun::RecordingBytes => Self::TooLarge { line, limit },
+            // A header too long is line 1 too long, and an overrun the
+            // format adds later is a line it cannot hold.
+            _ => Self::LineTooLong { line, limit },
+        }
+    }
 }
 
 /// What the JSON parser or writer refused on a line of a native recording.
@@ -841,7 +855,7 @@ impl NativeRecording {
     /// [`CodecError`] for the first line that cannot be read.
     pub fn read(mut input: impl BufRead) -> Result<Self, CodecError> {
         let mut buffer = String::new();
-        let mut total = read_bounded_line(&mut input, &mut buffer, 1)?;
+        let mut budget = wire::Budget::after_header(read_bounded_line(&mut input, &mut buffer, 1)?);
         let value: serde_json::Value =
             serde_json::from_str(&buffer).map_err(|source| CodecError::Json {
                 line: 1,
@@ -871,19 +885,9 @@ impl NativeRecording {
             if read == 0 {
                 break;
             }
-            total = total.saturating_add(read);
-            if total > wire::MAX_RECORDING_BYTES {
-                return Err(CodecError::TooLarge {
-                    line,
-                    limit: wire::MAX_RECORDING_BYTES,
-                });
-            }
-            if usize::try_from(line - 1).map_or(true, |rows| rows > wire::MAX_ROWS) {
-                return Err(CodecError::TooManyRows {
-                    line,
-                    limit: wire::MAX_ROWS,
-                });
-            }
+            budget
+                .read_line(read)
+                .map_err(|overrun| CodecError::past_bound(line, overrun))?;
             if buffer.trim().is_empty() {
                 continue;
             }
@@ -915,17 +919,20 @@ impl NativeRecording {
     /// [`wire::MAX_ROWS`] rows or [`wire::MAX_RECORDING_BYTES`] bytes is
     /// written up to the last row that fits with room for a `cut` row after
     /// it, which ends it: the writer never writes what its reader refuses, and
-    /// one that fits whole is written whole.
+    /// one that fits whole is written whole. It counts both bounds with the
+    /// [`wire::Budget`] every writer of the format keeps.
     ///
     /// # Errors
     ///
     /// [`CodecError::Unmirrored`] for a value this format does not mirror,
+    /// [`CodecError::LineTooLong`] for a row, or a header declaring the rows'
+    /// devices, longer than [`wire::MAX_LINE_BYTES`], with nothing written,
     /// and [`CodecError::Io`] when the sink fails.
     pub fn write(&self, mut out: impl Write) -> Result<(), CodecError> {
         // The header that declares every row's devices is the longest it can
         // be: what fits after it fits after the one that declares fewer.
         let longest = encode_line(1, &self.header_declaring(&self.rows)?)?.len();
-        let mut budget = CutBudget::after_header(longest);
+        let mut budget = wire::Budget::after_header(longest);
         // Each row is encoded only once the rows before it fit, so nothing
         // past the cut is encoded, and no value there can fail the write.
         let mut lines: Vec<Vec<u8>> = Vec::new();
@@ -935,7 +942,18 @@ impl NativeRecording {
             let wire = row_to_wire(row).map_err(|error| error.at(number))?;
             let line = encode_line(number, &wire)?;
             let follows = index + 1 < self.rows.len();
-            if let Err(reason) = budget.admit(line.len(), follows) {
+            if let Err(overrun) = budget.admit_row(line.len(), 0, follows) {
+                // A full recording ends at a cut; a line no recording holds
+                // (the row's, or the header that declares its device) is
+                // refused, since its reader would refuse the whole file.
+                let Some(reason) = overrun.cut_reason() else {
+                    let line = if overrun == wire::Overrun::HeaderBytes {
+                        1
+                    } else {
+                        number
+                    };
+                    return Err(CodecError::past_bound(line, overrun));
+                };
                 cut = Some(reason);
                 break;
             }

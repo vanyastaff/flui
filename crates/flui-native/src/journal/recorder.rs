@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use flui_platform::ImeEvent;
+use flui_protocol::native_recording::Budget;
 use parking_lot::Mutex;
 
 use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
@@ -13,7 +14,7 @@ use super::codec::{
     Backend, DisplayRead, Header, NativeRecording, PreferenceRead, ReadFailure, RecordedDisplay,
     RecordedWindowState, Row,
 };
-use super::order::{CutBudget, line_bytes};
+use super::order::line_bytes;
 use super::store::{StoreDocument, StoreLock};
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
@@ -100,7 +101,7 @@ struct Folding {
     pseudonyms: Pseudonyms,
     /// The bytes and rows the recording holds, from its first row on: the
     /// header is final once setup ends.
-    budget: Option<CutBudget>,
+    budget: Option<Budget>,
 }
 
 /// Fold one captured call into the recording of its source. The recording
@@ -151,14 +152,17 @@ fn journal(
     let header = &recording.header;
     let budget = folding
         .budget
-        .get_or_insert_with(|| CutBudget::after_header(line_bytes(header.to_wire())));
+        .get_or_insert_with(|| Budget::after_header(line_bytes(header.to_wire())));
     // Room is always kept for a `cut` row, so a cut always fits: a row that
-    // is one stands in for nothing after it.
+    // is one stands in for nothing after it. A row no recording can hold
+    // (longer than a line may be) is kept, so `NativeRecording::write`
+    // refuses the recording with the line's error rather than cut a
+    // recording that is not full.
     let row = match row {
         Row::Cut(_) => row,
-        row => match budget.admit(line_bytes(row.to_wire()), true) {
+        row => match budget.admit_row(line_bytes(row.to_wire()), 0, true) {
             Ok(()) => row,
-            Err(reason) => Row::Cut(reason),
+            Err(overrun) => overrun.cut_reason().map_or(row, Row::Cut),
         },
     };
     recording.rows.push(row);

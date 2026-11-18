@@ -87,7 +87,9 @@ flui-painting = { workspace = true }
 flui-layer = { workspace = true }
 flui-engine = { workspace = true }
 # `native-capture`: the native journal a debug build serving the driver agent records
-# (ADR-0288 §11). Its code is compiled in debug builds only; a release build links none.
+# (ADR-0288 §11). On in every build, since Cargo cannot tie a feature to a profile: the
+# journal, its codec included, follows `debug_assertions` in flui-native, so a release build
+# compiles none of it (ADR-0151 §16).
 flui-native = { workspace = true, features = ["native-capture"] }
 # Widget catalog: every runner wraps each root it attaches, the main window
 # and each secondary one, in `flui_widgets::app_root`, the catalog's keyboard
