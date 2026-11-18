@@ -1,7 +1,7 @@
 # cargo-deny configuration (schema: cargo-deny 0.20)
 # https://embarkstudios.github.io/cargo-deny/
 #
-# Run it through `cargo xtask deps`, which passes `--workspace`: the root
+# Run it as `cargo deny --workspace` (CI's `deps` job does): the root
 # manifest is the `flui` package, not a virtual manifest, so a bare
 # `cargo deny check` roots the graph at the facade alone and never sees
 # flui-cli, the examples, the tools or flui-assets' `network` feature.

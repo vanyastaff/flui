@@ -139,7 +139,7 @@ state the gates and the kinds of value that cross.
 ## Validation
 
 - §3: `cargo xtask send-impls` runs in `cargo xtask checks` and `cargo xtask send-positions` in
-  CI's `api-contracts` job, each with its `--self-test`; `cargo xtask deps` (cargo-deny over
+  CI's `api-contracts` job, each with its `--self-test`; `cargo deny` (CI's `deps` job, over
   `deny.toml`) holds the crate bans; xtask's `send_positions_list_entry_names_one_of_the_kinds_that_cross`
   refuses a `crosses` kind ADR-0323 §2 does not name.
 - `tests/thread_boundary_ui.rs` (`async_driver_stays_on_its_thread`): an `AsyncDriver` handed

@@ -188,7 +188,7 @@ pub(crate) trait OpenWindows {
 /// ```compile_fail,E0277
 /// // Illustration only: the item-position `assert_not_impl_any!` below is
 /// // the compile-time evidence. This doctest runs with the workspace
-/// // doctests (`cargo test --doc`, part of `cargo xtask ci`).
+/// // doctests (`cargo test --doc`, CI's `doc-test` job).
 /// fn assert_send<T: Send>() {}
 /// assert_send::<flui_native::OwnerPlatform>();
 /// ```
