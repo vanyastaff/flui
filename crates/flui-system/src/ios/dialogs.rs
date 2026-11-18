@@ -161,19 +161,19 @@ mod uikit {
         unsafe impl UIDocumentPickerDelegate for PickerDelegate {
             #[unsafe(method(documentPicker:didPickDocumentsAtURLs:))]
             fn did_pick(&self, _picker: &UIDocumentPickerViewController, urls: &NSArray<NSURL>) {
-                Self::picked(self, urls)
+                Self::picked(self, urls);
             }
 
             #[unsafe(method(documentPickerWasCancelled:))]
             fn was_cancelled(&self, _picker: &UIDocumentPickerViewController) {
-                Self::cancelled(self)
+                Self::cancelled(self);
             }
         }
 
         unsafe impl UIAdaptivePresentationControllerDelegate for PickerDelegate {
             #[unsafe(method(presentationControllerDidDismiss:))]
             fn did_dismiss(&self, _presentation: &UIPresentationController) {
-                Self::cancelled(self)
+                Self::cancelled(self);
             }
         }
     );
