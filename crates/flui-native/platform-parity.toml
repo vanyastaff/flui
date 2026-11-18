@@ -1128,8 +1128,8 @@ Synchronised live resize, where the content matches the frame on every size, is 
 quality = 'Zero CPU when idle: every OS signal is a notification, nothing polls'
 short = 'zero idle CPU'
 status = "partial"
-enforced_by = 'nothing yet'
-note = 'No host polls a healthy, installed preference source (Android keeps a 500 ms cadence only while `FluiView` is not in the window), and Linux polls no portal that is missing or lacks a key; the Galaxy S21 loop made no turn in 15 s idle once settled, resumed or behind Home. Only the Linux portal has a check that keeps a poll from coming back (the quiet cases of `linux_preferences`); nothing measures idle wakes on the other environments.'
+enforced_by = '`a_healthy_source_never_wakes_the_owner_but_for_a_change` and `a_failed_read_owes_one_retry_and_then_nothing` (the AppKit and Android sources), the quiet cases of `linux_preferences`'
+note = 'No host polls a healthy, installed preference source (Android keeps a 500 ms cadence only while `FluiView` is not in the window), and Linux polls no portal that is missing or lacks a key; the Galaxy S21 loop made no turn in 15 s idle once settled, resumed or behind Home. The wake model both the AppKit and the Android source read through is held in virtual time on the Linux host: no deadline and no post while idle, one wake per change; the Android 500 ms cadence before `FluiView` is in the window lives in the loop and is not under it. Still owed: a Mac run (vanyastaff/flui#1840) and the Android wakes per minute behind Home on a device.'
 
 [[quality.row]]
 quality = 'Power and thermal state change what the loop does, not only what it reports'

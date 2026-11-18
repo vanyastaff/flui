@@ -17,10 +17,7 @@
 // The notification-name constants are AppKit's and Foundation's statics.
 #![expect(unsafe_code)]
 
-use std::{
-    sync::{Arc, Weak},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use flui_platform::{
     GesturePreferences, MotionPreference, ScrollBarPreferences, ScrollBarVisibility,
@@ -43,7 +40,7 @@ use crate::{
     PlatformError,
     owner::sources::SystemPreferenceSource,
     owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
-    preferences::{apple::regional, locales as preferred_locales, read::ReadAdmission},
+    preferences::{apple::regional, locales as preferred_locales, read::WakingRead},
 };
 
 /// What a loop keeps of AppKit's preferences: the observers, then the source,
@@ -79,8 +76,7 @@ impl SystemPreferenceSource for AppKitPreferences {
 
 /// The macOS host's preferences: what AppKit reports, sampled on the owner lane.
 struct PreferenceSource {
-    signal: Weak<OwnerSignal>,
-    admission: ReadAdmission,
+    reads: WakingRead,
 }
 
 impl std::fmt::Debug for PreferenceSource {
@@ -98,8 +94,7 @@ struct PreferenceObservers {
 impl PreferenceSource {
     fn new(signal: &Arc<OwnerSignal>) -> (Arc<Self>, PreferenceObservers) {
         let source = Arc::new(Self {
-            signal: Arc::downgrade(signal),
-            admission: ReadAdmission::default(),
+            reads: WakingRead::new(signal),
         });
         // Registration precedes the first getter: a change during the cold
         // read still wakes the owner, and a failed or contained read leaves
@@ -122,7 +117,8 @@ impl SystemPreferenceSource for PreferenceSource {
             });
         }
         if !self
-            .signal
+            .reads
+            .signal()
             .upgrade()
             .is_some_and(|signal| signal.accepting())
         {
@@ -136,20 +132,16 @@ impl SystemPreferenceSource for PreferenceSource {
             source: self,
             owed: true,
         };
-        let read = self
-            .admission
-            .read_observation(web_time::Instant::now(), sample);
+        let read = self.reads.observe(web_time::Instant::now(), sample);
         retry.owed = matches!(
             read,
             Err(ref error) if !matches!(error, PlatformError::PreferencesDeferred)
         );
         drop(retry);
         let (current, needs_delivery) = read?;
-        if needs_delivery && let Some(signal) = self.signal.upgrade() {
-            // Publication precedes admission. OwnerSignal retains delivery
-            // debt when the hook has not been installed yet.
-            let _ = signal.wake();
-        }
+        // Publication precedes admission. OwnerSignal retains delivery
+        // debt when the hook has not been installed yet.
+        self.reads.announce(needs_delivery);
         Ok(current)
     }
 }
@@ -165,12 +157,12 @@ impl Drop for RetryWake<'_> {
     fn drop(&mut self) {
         let Some(deadline) = self
             .owed
-            .then(|| self.source.admission.retry_deadline())
+            .then(|| self.source.reads.retry_deadline())
             .flatten()
         else {
             return;
         };
-        let signal = self.source.signal.clone();
+        let signal = self.source.reads.signal().clone();
         let delay = deadline.saturating_duration_since(web_time::Instant::now());
         crate::owner::apple::macos::exec_after_on_owner(
             crate::owner::apple::macos::owner_queue(),

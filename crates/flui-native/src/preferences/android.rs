@@ -22,7 +22,7 @@ mod configuration {
     //! `FluiView` reports a changed setting or contrast level, even without a user
     //! surface.
 
-    use std::sync::{Arc, Weak};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use android_activity::AndroidApp;
@@ -42,7 +42,7 @@ mod configuration {
     use crate::owner::android::activity::with_activity;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::sources::SystemPreferenceSource;
-    use crate::preferences::{locales, read::ReadAdmission, regional};
+    use crate::preferences::{locales, read::WakingRead, regional};
     use crate::version::gate::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
     use flui_platform::{
         GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
@@ -55,8 +55,7 @@ mod configuration {
     pub(crate) struct AndroidPreferences {
         app: AndroidApp,
         api: AndroidApi,
-        admission: ReadAdmission,
-        signal: Weak<OwnerSignal>,
+        reads: WakingRead,
     }
 
     impl std::fmt::Debug for AndroidPreferences {
@@ -72,8 +71,7 @@ mod configuration {
             Self {
                 app: app.clone(),
                 api,
-                admission: ReadAdmission::default(),
-                signal: Arc::downgrade(signal),
+                reads: WakingRead::new(signal),
             }
         }
     }
@@ -81,23 +79,17 @@ mod configuration {
     /// The loop calls it on the owner thread, which it checked.
     impl SystemPreferenceSource for AndroidPreferences {
         fn sample(&self) -> Result<SystemPreferences, PlatformError> {
-            let (current, needs_delivery) =
-                self.admission
-                    .read_observation(web_time::Instant::now(), || {
-                        sample(&self.app, self.api).map_err(|error| PlatformError::Preferences {
-                            message: error.to_string(),
-                        })
-                    })?;
-            if needs_delivery && let Some(signal) = self.signal.upgrade() {
-                let _ = signal.wake();
-            }
-            Ok(current)
+            self.reads.read(web_time::Instant::now(), || {
+                sample(&self.app, self.api).map_err(|error| PlatformError::Preferences {
+                    message: error.to_string(),
+                })
+            })
         }
     }
 
     impl ActivityPreferences for AndroidPreferences {
         fn retry_deadline(&self) -> Option<web_time::Instant> {
-            self.admission.retry_deadline()
+            self.reads.retry_deadline()
         }
 
         fn night_mode(&self) -> Result<bool, PreferenceQueryError> {

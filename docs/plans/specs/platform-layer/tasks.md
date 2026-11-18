@@ -6095,17 +6095,21 @@ GPU-память простаивающего или невидимого окн
   говорят комментарии `crates/flui-widgets/src/text/editable_text.rs` (контракт подавления
   `Key::Character`, два места) и `crates/flui-widgets/ARCHITECTURE.md` («Winit's `LineDelta`»).
   Строке нужно либо их исправить, либо сузить тест до упоминаний winit как зависимости.
-- [ ] **LY89** (не закрыта: уведомления вместо опроса на `main`; счётчика пробуждений в
-  виртуальном времени и прогона на Mac нет) — macOS #1843 (`7211538ea`), Android #1847
+- [x] **LY89** (закрыта: счётчик пробуждений в виртуальном времени на `main`; прогоны на Mac и
+  Android — в parity) — источники macOS и Android читают через `WakingRead`
+  (`crates/flui-native/src/preferences/read.rs`): здоровый источник не называет срока и не будит
+  владельца за час простоя, каждая смена будит ровно раз, смены до хода владельца делят один
+  вызов (`a_healthy_source_never_wakes_the_owner_but_for_a_change`,
+  `a_failed_read_owes_one_retry_and_then_nothing`); вернувшийся таймер в модели их роняет.
+  Кадентность 500 мс лупера Android, пока `FluiView` не в окне, остаётся в лупере и под тестом не
+  стоит. Было: macOS #1843 (`7211538ea`), Android #1847
   (`9f03db7da`), переезд в `preferences/` #1863, региональные форматы #2129. macOS слушает
   `NSWorkspace` и `NSNotificationCenter` (параметры отображения доступности, локаль, активация);
   Android — `ContentObserver` в `FluiView` (`nativeSettingsChanged`) и `ConfigChanged`
   android-activity; `ComponentCallbacks2` служит только `onTrimMemory`. Пока `FluiView` не в
   окне, лупер Android читает предпочтения раз в 500 мс (`owner/android/looper.rs`). Прогон:
   Galaxy S21, 2026-10-21, ни одного хода цикла за 10 с простоя, в том числе за Home. Остаётся:
-  headless-тест «N секунд простоя — ноль пробуждений, смена — ровно одно», который падает при
-  возврате таймера; прогон на Mac (vanyastaff/flui#1840); измерение пробуждений за минуту на
-  Android.
+  прогон на Mac (vanyastaff/flui#1840); измерение пробуждений за минуту на Android.
 - [ ] **LY93** (не начата) — на `main` только место под неё: `flui_system::PickedFile`
   (`crates/flui-system/src/dialog/request.rs`) сделан своим типом, а не путём, чтобы позже нести
   доступ песочницы, и держит один `PathBuf`. Закладок, URI SAF, портала документов, путей
