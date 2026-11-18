@@ -24,7 +24,7 @@ pub use flui_painting::paint::Clip;
 pub use flui_painting::paint::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
 // Re-export canvas types from flui_painting
 pub use dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind, PaintQueue};
-pub use flui_painting::paint::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
+pub use flui_painting::paint::{StrokeCap, StrokeJoin, TileMode};
 pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
 pub use local_invalidation::LocalRenderInvalidationHandle;
 pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};

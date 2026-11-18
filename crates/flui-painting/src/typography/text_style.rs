@@ -55,13 +55,6 @@ impl FontWeight {
         }
     }
 
-    /// Returns `true` if this weight renders as bold (600 or heavier).
-    #[must_use]
-    #[inline]
-    pub const fn is_bold(&self) -> bool {
-        self.value() >= 600
-    }
-
     /// Converts a CSS numeric weight to the nearest `FontWeight` variant.
     ///
     /// Values round to the closest hundred and clamp to `W100`..=`W900`.
