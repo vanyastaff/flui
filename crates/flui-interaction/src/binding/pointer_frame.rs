@@ -2,12 +2,16 @@
 //! instant, or one flush of coalesced motion, delivered so that recognizers
 //! measuring several contacts settle once, after all of them moved.
 
+use crate::containment::keep_first;
 use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
 
 use super::{DispatchOutcome, GestureBinding, MotionFlush};
 use crate::{
-    containment::RoutePanic, events::PointerEvent, ids::InputSurface, pointer::HitTestResult,
+    containment::{FirstPanic, caught, try_run},
+    events::PointerEvent,
+    ids::InputSurface,
+    pointer::HitTestResult,
 };
 
 impl GestureBinding {
@@ -27,21 +31,17 @@ impl GestureBinding {
         self.dispatch(|| {
             let arena = self.arena.arena();
             arena.begin_pointer_frame();
-            let ran = RoutePanic::try_run(body);
+            let ran = try_run(body);
             let ended = arena.end_pointer_frame();
             match ran {
                 Ok(value) => {
-                    if let Some(failure) = ended {
-                        failure.resume();
-                    }
+                    ended.resume();
                     value
                 }
                 Err(failure) => {
-                    let mut first = Some(failure);
-                    RoutePanic::preserve_first(&mut first, ended, "pointer frame end");
-                    first
-                        .expect("BUG: the failure of the frame was stored just above")
-                        .resume()
+                    let mut first = failure;
+                    keep_first(&mut first, ended, "pointer frame end");
+                    crate::containment::raise(first)
                 }
             }
         })
@@ -64,16 +64,14 @@ impl GestureBinding {
     {
         let mut outcomes = SmallVec::new();
         self.pointer_frame(|| {
-            let mut first = None;
+            let mut first = FirstPanic::new();
             for event in frame {
-                let delivered = RoutePanic::capture(|| {
+                let delivered = caught(|| {
                     outcomes.push(self.dispatch_pointer_on(surface, event, &mut hit_test_fn));
                 });
-                RoutePanic::preserve_first(&mut first, delivered, "pointer frame event");
+                keep_first(&mut first, delivered, "pointer frame event");
             }
-            if let Some(failure) = first {
-                failure.resume();
-            }
+            first.resume();
         });
         outcomes
     }
@@ -83,21 +81,17 @@ impl GestureBinding {
     pub(super) fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
         let arena = self.arena.arena();
         arena.begin_pointer_frame();
-        let flushed = RoutePanic::try_run(|| self.deliver_pending_moves(mode));
+        let flushed = try_run(|| self.deliver_pending_moves(mode));
         let ended = arena.end_pointer_frame();
         match flushed {
             Ok(count) => {
-                if let Some(failure) = ended {
-                    failure.resume();
-                }
+                ended.resume();
                 count
             }
             Err(failure) => {
-                let mut first = Some(failure);
-                RoutePanic::preserve_first(&mut first, ended, "pointer frame end");
-                first
-                    .expect("BUG: the failure of the flush was stored just above")
-                    .resume()
+                let mut first = failure;
+                keep_first(&mut first, ended, "pointer frame end");
+                crate::containment::raise(first)
             }
         }
     }

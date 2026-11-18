@@ -13,6 +13,7 @@
 //!   being added or lifted;
 //! - ends below that count; combined mode ends on the final contact.
 
+use crate::containment::keep_first;
 use flui_platform::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
@@ -36,7 +37,7 @@ use super::{
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionFrame, MotionRole,
@@ -265,7 +266,7 @@ struct ScaleCallbacks {
 
 impl Drop for ScaleCallbacks {
     fn drop(&mut self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         retire_callback(self.on_start.take(), &mut first);
         retire_callback(self.on_update.take(), &mut first);
         retire_callback(self.on_end.take(), &mut first);
@@ -1210,7 +1211,7 @@ impl ScaleGestureRecognizer {
                     .add_position(time, Offset::new(native.scale, 0.0));
                 let id = native.id;
                 drop(state);
-                let mut first = RoutePanic::capture(|| dispatch.claim());
+                let mut first = caught(|| dispatch.claim());
                 let live = || {
                     self.native
                         .borrow()
@@ -1220,16 +1221,16 @@ impl ScaleGestureRecognizer {
                 if live()
                     && let Some(start) = start
                 {
-                    RoutePanic::preserve_first(
+                    keep_first(
                         &mut first,
-                        RoutePanic::capture(|| self.deliver(Outcome::Start(start))),
+                        caught(|| self.deliver(Outcome::Start(start))),
                         "native scale start",
                     );
                 }
                 if live() {
-                    RoutePanic::preserve_first(
+                    keep_first(
                         &mut first,
-                        RoutePanic::capture(|| self.deliver(Outcome::Update(details))),
+                        caught(|| self.deliver(Outcome::Update(details))),
                         "native scale update",
                     );
                 }
@@ -1240,9 +1241,9 @@ impl ScaleGestureRecognizer {
                         .take()
                         .expect("BUG: independent native step remains live");
                     let end = state.end(time);
-                    RoutePanic::preserve_first(
+                    keep_first(
                         &mut first,
-                        RoutePanic::capture(|| self.deliver(Outcome::End(end))),
+                        caught(|| self.deliver(Outcome::End(end))),
                         "native scale end",
                     );
                 }
@@ -1316,25 +1317,21 @@ impl ScaleGestureRecognizer {
     /// after both have run.
     fn withdraw_then_deliver(&self, entries: Vec<GestureArenaEntry>, outcome: Outcome) {
         let self_driven = self.membership.arena().sweep_model() == SweepModel::SelfDriven;
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for entry in entries {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| entry.reject_without_self()),
+                caught(|| entry.reject_without_self()),
                 "scale arena withdrawal",
             );
             // A failing withdrawal still leaves the contest ended.
             if self_driven {
-                RoutePanic::preserve_first(
-                    &mut first,
-                    RoutePanic::capture(|| entry.sweep()),
-                    "scale arena sweep",
-                );
+                keep_first(&mut first, caught(|| entry.sweep()), "scale arena sweep");
             }
         }
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| self.deliver(outcome)),
+            caught(|| self.deliver(outcome)),
             "scale callback",
         );
         // Entered while the thread is already unwinding, the failure is retained
@@ -1345,11 +1342,11 @@ impl ScaleGestureRecognizer {
     /// Claim every listed arena, then start if that won the gesture.
     fn claim(&self, entries: Vec<GestureArenaEntry>) {
         let claim_sequence = self.gesture_state.borrow().sequence;
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for entry in entries {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted)),
+                caught(|| entry.resolve(GestureDisposition::Accepted)),
                 "scale arena claim",
             );
         }
@@ -1369,9 +1366,9 @@ impl ScaleGestureRecognizer {
             (start, update, state.sequence)
         };
         if let Some(details) = start {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| self.deliver(Outcome::Start(details))),
+                caught(|| self.deliver(Outcome::Start(details))),
                 "scale start callback",
             );
         }
@@ -1382,9 +1379,9 @@ impl ScaleGestureRecognizer {
             state.phase == ScalePhase::Started && state.sequence == sequence
         };
         if let Some(details) = update.filter(|_| live()) {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| self.deliver(Outcome::Update(details))),
+                caught(|| self.deliver(Outcome::Update(details))),
                 "scale update callback",
             );
         }
@@ -1628,15 +1625,15 @@ impl ScaleGestureRecognizer {
         self.sync_motion_role();
         // An accepted contact's arena in a self-driven arena has no binding to
         // sweep it on Up; its entry does, so the slot does not outlive it.
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if let Some(entry) = accepted
             && self.membership.arena().sweep_model() == SweepModel::SelfDriven
         {
-            first = RoutePanic::capture(|| entry.sweep());
+            first = caught(|| entry.sweep());
         }
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| {
+            caught(|| {
                 self.withdraw_then_deliver(withdraw.into_iter().collect(), outcome);
             }),
             "scale terminal delivery",
@@ -1683,11 +1680,11 @@ impl ScaleGestureRecognizer {
             Outcome::Nothing
         };
         // Only the cancelled contact ends without a winner; other contacts retain rivals.
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for (contact, entry) in &entries {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| {
+                caught(|| {
                     if *contact == pointer {
                         withdraw_cancelled(entry, self.membership.arena());
                     } else {
@@ -1697,9 +1694,9 @@ impl ScaleGestureRecognizer {
                 "scale arena withdrawal",
             );
         }
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| self.deliver(outcome)),
+            caught(|| self.deliver(outcome)),
             "scale callback",
         );
         // Entered while the thread is already unwinding, the failure is retained
@@ -1799,11 +1796,11 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         drop(state);
         self.sync_motion_role();
 
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if let Some(entry) = claim {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted)),
+                caught(|| entry.resolve(GestureDisposition::Accepted)),
                 "scale arena claim",
             );
         }
@@ -1814,9 +1811,9 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                 && state.contacts.iter().any(|contact| contact.id == id)
         };
         if let Some(details) = start.filter(|_| live) {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| self.deliver(Outcome::Start(details))),
+                caught(|| self.deliver(Outcome::Start(details))),
                 "scale start callback",
             );
         }

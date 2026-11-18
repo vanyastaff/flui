@@ -5,9 +5,10 @@ use super::{
     contact::{ArenaMembership, ContactEnd, PrimaryContact},
     recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, slop_travel},
 };
+use crate::containment::keep_first;
 use crate::gesture::observer::GestureContest;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionFrame,
@@ -191,7 +192,7 @@ impl DoubleTapGestureRecognizer {
         first_entry: Option<crate::gesture::arena::GestureArenaEntry>,
     ) {
         let incoming = std::thread::panicking();
-        let mut first = RoutePanic::capture(|| {
+        let mut first = caught(|| {
             if cancelled {
                 self.contact.cancel();
             } else {
@@ -199,21 +200,21 @@ impl DoubleTapGestureRecognizer {
             }
         });
         if let Some(entry) = first_entry {
-            let candidate = RoutePanic::capture(|| {
+            let candidate = caught(|| {
                 entry.resolve(GestureDisposition::Rejected);
             });
-            RoutePanic::preserve_first(&mut first, candidate, "double tap first rejection");
-            let candidate = RoutePanic::capture(|| entry.release());
-            RoutePanic::preserve_first(&mut first, candidate, "double tap hold release");
+            keep_first(&mut first, candidate, "double tap first rejection");
+            let candidate = caught(|| entry.release());
+            keep_first(&mut first, candidate, "double tap hold release");
         }
-        let candidate = RoutePanic::capture(|| {
+        let candidate = caught(|| {
             invoke_callback(
                 self.callbacks.on_double_tap_cancel.clone(),
                 || {},
                 |callback| callback(details),
             );
         });
-        RoutePanic::preserve_first(&mut first, candidate, "double tap cancellation");
+        keep_first(&mut first, candidate, "double tap cancellation");
         finish_containment(first, incoming);
     }
     /// Withdraw the hold a bounced contact keeps on its contest.
@@ -259,32 +260,32 @@ impl DoubleTapGestureRecognizer {
         *self.gesture.borrow_mut() = DoubleTapState::Ready;
         let first_entry = self.first_entry.borrow_mut().take();
         let incoming = std::thread::panicking();
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if let Some(entry) = first_entry {
-            let candidate = RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted));
-            RoutePanic::preserve_first(&mut first, candidate, "double tap first acceptance");
-            let candidate = RoutePanic::capture(|| entry.release());
-            RoutePanic::preserve_first(&mut first, candidate, "double tap hold release");
+            let candidate = caught(|| entry.resolve(GestureDisposition::Accepted));
+            keep_first(&mut first, candidate, "double tap first acceptance");
+            let candidate = caught(|| entry.release());
+            keep_first(&mut first, candidate, "double tap hold release");
         }
         if self.contact.is_current(snapshot.id) {
-            let candidate = RoutePanic::capture(|| self.contact.accept());
-            RoutePanic::preserve_first(&mut first, candidate, "double tap acceptance");
+            let candidate = caught(|| self.contact.accept());
+            keep_first(&mut first, candidate, "double tap acceptance");
         }
         if self.contact.is_current(snapshot.id) {
-            let candidate = RoutePanic::capture(|| {
+            let candidate = caught(|| {
                 invoke_callback(
                     self.callbacks.on_double_tap.clone(),
                     || {},
                     |callback| callback(details),
                 );
             });
-            RoutePanic::preserve_first(&mut first, candidate, "double tap completion");
+            keep_first(&mut first, candidate, "double tap completion");
         }
         if self.contact.is_current(snapshot.id) {
-            let candidate = RoutePanic::capture(|| {
+            let candidate = caught(|| {
                 self.contact.finish(ContactEnd::Contending);
             });
-            RoutePanic::preserve_first(&mut first, candidate, "double tap contact retirement");
+            keep_first(&mut first, candidate, "double tap contact retirement");
         }
         finish_containment(first, incoming);
     }
@@ -305,7 +306,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         };
         let state = self.gesture.borrow().clone();
         let mut admitted_settings = self.settings.snapshot_for(data.pointer.kind);
-        let mut failure = None;
+        let mut failure = FirstPanic::new();
         let mut second = false;
         match state {
             DoubleTapState::FirstDown { .. } | DoubleTapState::SecondDown => return,
@@ -338,7 +339,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         ),
                     )
                 {
-                    failure = RoutePanic::capture(|| self.retire_attempt(details, false));
+                    failure = caught(|| self.retire_attempt(details, false));
                 } else if now.saturating_duration_since(first_up) < Duration::from_millis(40) {
                     // Contact bounce is not a second tap. Keep the held first
                     // verdict and its timeout; a later Up cannot admit this
@@ -363,7 +364,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                     return;
                 } else {
                     // The held first generation survives retiring its contact.
-                    failure = RoutePanic::capture(|| {
+                    failure = caught(|| {
                         self.contact.finish(ContactEnd::Contending);
                     });
                     second = true;
@@ -387,14 +388,14 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 }
             };
             if second {
-                let candidate = RoutePanic::capture(|| {
+                let candidate = caught(|| {
                     invoke_callback(
                         self.callbacks.on_double_tap_down.clone(),
                         || {},
                         |callback| callback(self.details()),
                     );
                 });
-                RoutePanic::preserve_first(&mut failure, candidate, "double tap second down");
+                keep_first(&mut failure, candidate, "double tap second down");
             }
         }
         finish_containment(failure, std::thread::panicking());
@@ -480,13 +481,13 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         // bounced contact included; an expiring attempt leaves that hold to
         // the contact's own end.
         let mut first = if idle {
-            None
+            FirstPanic::new()
         } else {
-            RoutePanic::capture(|| self.retire_attempt(self.details(), true))
+            caught(|| self.retire_attempt(self.details(), true))
         };
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| self.end_bounce()),
+            caught(|| self.end_bounce()),
             "double tap bounce withdrawal",
         );
         finish_containment(first, std::thread::panicking());

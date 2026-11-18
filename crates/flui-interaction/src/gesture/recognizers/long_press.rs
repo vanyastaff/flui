@@ -8,10 +8,11 @@ use super::{
         motion_history,
     },
 };
+use crate::containment::keep_first;
 use crate::gesture::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
 use crate::gesture::observer::GestureContest;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught, try_run},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
@@ -224,7 +225,7 @@ impl LongPressGestureRecognizer {
         }
     }
     fn clock_for(&self, id: ContactId) -> Option<EventTime> {
-        match RoutePanic::try_run(|| self.contact.now()) {
+        match try_run(|| self.contact.now()) {
             Ok(now) => self.contact.is_current(id).then_some(now),
             Err(failure) => {
                 self.cancel_failed_contact(id, failure);
@@ -232,12 +233,12 @@ impl LongPressGestureRecognizer {
             }
         }
     }
-    fn cancel_failed_contact(&self, id: ContactId, failure: RoutePanic) {
-        let mut first = Some(failure);
+    fn cancel_failed_contact(&self, id: ContactId, failure: FirstPanic) {
+        let mut first = failure;
         if self.contact.is_current(id) {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| {
+                caught(|| {
                     self.cancel();
                 }),
                 "long press clock failure cancellation",
@@ -245,11 +246,11 @@ impl LongPressGestureRecognizer {
         }
         finish_containment(first, std::thread::panicking());
     }
-    fn finish_contact(&self, id: ContactId, end: ContactEnd, first: &mut Option<RoutePanic>) {
+    fn finish_contact(&self, id: ContactId, end: ContactEnd, first: &mut FirstPanic) {
         if self.contact.is_current(id) {
-            RoutePanic::preserve_first(
+            keep_first(
                 first,
-                RoutePanic::capture(|| {
+                caught(|| {
                     let _ = self.contact.finish(end);
                 }),
                 "long press contact completion",
@@ -377,7 +378,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             state.velocity_tracker.add_position(now, contact.local);
             state.sample_time = Some(now);
         }
-        if let Err(failure) = RoutePanic::try_run(|| {
+        if let Err(failure) = try_run(|| {
             self.contact
                 .arm_deadline(contact.settings.long_press_timeout())
         }) {
@@ -516,9 +517,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                         .measured_travel(dispatch)
                         .any(|travel| contact.settings.exceeds_hit_slop(contact.kind, travel));
                 let mut first = if due {
-                    RoutePanic::capture(|| self.fire_deadline(clock))
+                    caught(|| self.fire_deadline(clock))
                 } else {
-                    None
+                    FirstPanic::new()
                 };
                 self.contact.disarm_deadline();
                 if !self.contact.is_current(contact.id) {
@@ -554,9 +555,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                         });
                     }
                 }
-                RoutePanic::preserve_first(
+                keep_first(
                     &mut first,
-                    RoutePanic::capture(|| notices.finish()),
+                    caught(|| notices.finish()),
                     "long press release",
                 );
                 // A press released before its timeout recognized nothing: it
@@ -586,7 +587,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             state.phase = LongPressPhase::Ready;
             notify
         };
-        let mut first = RoutePanic::capture(|| {
+        let mut first = caught(|| {
             let _ = self.contact.cancel();
         });
         let mut notices = CallbackSequence::new();
@@ -595,9 +596,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 callback(details);
             });
         }
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| notices.finish()),
+            caught(|| notices.finish()),
             "long press cancellation",
         );
         finish_containment(first, std::thread::panicking());
