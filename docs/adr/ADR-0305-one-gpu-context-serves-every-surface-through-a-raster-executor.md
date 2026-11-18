@@ -712,8 +712,7 @@ the facade. Every production use of `with_backend` becomes:
     `a_corrupt_stored_pipeline_cache_is_emptied_and_the_context_starts_cold`,
     `a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter`,
     `a_saved_pipeline_cache_seeds_the_next_context`
-    and `a_device_rebuild_restarts_the_pipeline_cache_cold`;
-  - `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
+    and `a_device_rebuild_restarts_the_pipeline_cache_cold`.
 - Tests to be added through the public API, without a GPU, in `flui-engine`'s `tests/` against
   the testing backend: `a_full_lifecycle_queue_returns_the_command`,
   `a_stale_slot_id_is_refused_after_detach`,
@@ -737,6 +736,8 @@ the facade. Every production use of `with_backend` becomes:
   `stale_surface_generation_is_rejected_before_render`,
   `trims_coalesce_to_the_strongest_level_and_apply_before_the_frame`,
   `every_render_outcome_settles_its_frame`,
+  `a_slot_that_is_not_shown_settles_not_shown_and_redraws_in_full_when_shown` (a hidden slot is
+  not drawn, so no surface texture is acquired for it),
   `a_stopped_executor_settles_every_pending_frame_failed`,
   `a_full_settlement_ring_holds_the_next_frame`,
   `a_full_lifecycle_queue_returns_the_command` and
