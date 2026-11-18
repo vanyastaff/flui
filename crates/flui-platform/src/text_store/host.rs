@@ -79,7 +79,7 @@ pub trait TextStoreHost {
 /// ([`TextStoreHost::selection_ui`]).
 ///
 /// The field always draws its text and its composition's underline.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[expect(
     clippy::exhaustive_enums,
     reason = "the selection UI is the field's or the platform's: there is no third party to draw it"
@@ -87,6 +87,7 @@ pub trait TextStoreHost {
 pub enum SelectionUi {
     /// The field, as on every platform whose input method draws nothing
     /// over it.
+    #[default]
     Field,
     /// The platform: the field draws none of it and recognizes none of those
     /// gestures while it holds the input, and the platform's edit menu

@@ -24,9 +24,8 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, LockKind, LockOutcome,
     LockTiming, OwnerCalls, PointMode, RangeRect, Selection, SelectionUi, TextChange, TextStore,
-    TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    TextStoreChange, TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError,
+    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
 use super::capture::{Captured, Journal};

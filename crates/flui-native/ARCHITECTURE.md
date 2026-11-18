@@ -486,7 +486,11 @@ trait depends on `flui-platform` instead.
   `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
   window's accessor goes through it, as do its text sizing
   (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
-  (`detach`). Where the text feature keeps a
+  (`detach`). UIKit's store host is the one that answers
+  `SelectionUi::Platform`: while it serves a field its responder puts a
+  `UITextInteraction` on the window's view, whose gestures begin only over
+  the field and on its selection's handles, and the edit menu's actions reach
+  the field as `EditCommand`s through its store. Where the text feature keeps a
   window's state itself the handle is a key to it: Android's input method
   keeps each window's field by `owner::android::ActivityWindowId`, and the
   Web's text input lives in the canvas window's owner-thread slot. On

@@ -62,10 +62,9 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
     CommitGate, Composition, EditCommand, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    PointMode, RangeRect,
-    Selection, TextChange, TextInputOptions, TextStore, TextStoreChange, TextStoreEdit,
-    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
-    utf16,
+    PointMode, RangeRect, Selection, TextChange, TextInputOptions, TextStore, TextStoreChange,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
+    Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -249,8 +248,10 @@ pub(super) struct EditableTextStore {
     text_input: Rc<Cell<TextInputOptions>>,
     obscuring_character: Rc<Cell<char>>,
     edits: EditObserver,
-    /// What a platform's edit menu asks of the field.
-    commands: FieldCommands,
+    /// What a platform's edit menu asks of the field. `None` only inside
+    /// `Drop`, which retires it: it holds the controller and `on_changed`
+    /// too.
+    commands: Option<FieldCommands>,
 }
 
 impl Drop for EditableTextStore {
@@ -261,6 +262,9 @@ impl Drop for EditableTextStore {
     /// during an unwind too (ADR-0281). The arbiter retires its queued grants
     /// the same way. A failure is not raised while the thread already unwinds.
     fn drop(&mut self) {
+        // The commands' copies of the controller and `on_changed` go first,
+        // so the store's own are the last ones retired below.
+        let commands = self.commands.take();
         let observer = self.observer.get_mut().take();
         let controller = std::mem::replace(
             &mut self.controller,
@@ -268,6 +272,7 @@ impl Drop for EditableTextStore {
         );
         let owed = std::mem::take(self.owed.get_mut());
         let mut calls = OwnerCalls::new();
+        calls.retire(commands);
         calls.retire(observer);
         calls.retire(owed);
         self.edits.retire(&mut calls);
@@ -313,7 +318,7 @@ impl EditableTextStore {
             text_input: parts.text_input,
             obscuring_character: parts.obscuring_character,
             edits: parts.edits,
-            commands: parts.commands,
+            commands: Some(parts.commands),
         })
     }
 
@@ -890,7 +895,10 @@ impl TextStore for EditableTextStore {
     fn edit_command_enabled(&self, command: EditCommand) -> bool {
         self.alive.get()
             && matches!(*self.publication.borrow(), Publication::Idle)
-            && self.commands.is_enabled(command)
+            && self
+                .commands
+                .as_ref()
+                .is_some_and(|commands| commands.is_enabled(command))
     }
 
     /// The edit reaches the observer at once, as a key edit does: a select
@@ -901,7 +909,10 @@ impl TextStore for EditableTextStore {
         if !self.edit_command_enabled(command) {
             return false;
         }
-        let performed = self.commands.perform(command);
+        let performed = self
+            .commands
+            .as_ref()
+            .is_some_and(|commands| commands.perform(command));
         self.controller_changed();
         performed
     }

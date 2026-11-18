@@ -5920,11 +5920,20 @@ GPU-память простаивающего или невидимого окн
   `a_range_gets_a_rectangle_for_each_line_it_crosses` (одна строка, три строки, конец на начале
   строки, RTL после LTR, пустой диапазон — каретка, концы внутри суррогатной пары) красная, когда
   модель отвечает пустым массивом. `UITextInteraction` (editable) ставится на view окна, пока поле
-  обслуживается, и снимается без поля; жесты начинаются только над полем
-  (`interactionShouldBegin:atPoint:`). Открыто (gaps «No text input on mobile and the Web»):
-  собственные каретка, выделение, ручки, лупа и панель `EditableText` рисуются рядом с системными;
-  Cut/Copy/Paste/Select All меню правки — нет канала команды правки к полю; клаузы составления
-  CJK — хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
+  обслуживается, и снимается без поля; жесты начинаются только над полем и у ручек выделения
+  (`interactionShouldBegin:atPoint:`, края ручек — `SelectionRect::handle_edges`, таблица
+  `the_handles_stand_on_the_starts_leading_and_the_ends_trailing_edge`). Store host iOS отвечает
+  `SelectionUi::Platform` (`TextStoreHost::selection_ui`), и `EditableText`, пока держит ввод,
+  не рисует своих каретки, выделения, ручек, лупы и панели и не ставит своих распознавателей
+  касаний в поле: `a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
+  `the_fields_own_handles_go_when_the_platform_takes_the_selection_ui` (обе красные без
+  переключателя). Меню правки: `cut:`/`copy:`/`paste:`/`selectAll:` и
+  `canPerformAction:withSender:` у responder, команда — `EditCommand` через
+  `TextStore::perform_edit_command`, исполняют действия поля:
+  `uikit_edit_commands_reach_the_focused_field`,
+  `the_platforms_edit_menu_reaches_the_field_through_its_store`,
+  `an_obscured_field_offers_the_platform_no_copy_or_cut` (красные без команды). Клаузы
+  составления CJK не различаются: хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
   CoreText по языку (`crates/flui-native/src/fonts/apple.rs`); квадраты вместо кана и кандзи
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,
   и решит прогон Simulator. Прогон на пути через store host — заметка строки parity «IME

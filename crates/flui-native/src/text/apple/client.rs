@@ -32,14 +32,14 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
+#[cfg(any(target_os = "ios", test))]
+use flui_platform::text_store::EditCommand;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     Composition, CompositionEnd, LockGrant, LockTiming, OwnerCalls, PointMode, Selection,
     SelectionUi, TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreHost,
     TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
 };
-#[cfg(any(target_os = "ios", test))]
-use flui_platform::text_store::EditCommand;
 
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::text::host_queue::{HostQueue, MirrorHostOp};
@@ -247,7 +247,9 @@ fn selection_in(change: TextChange, selected: Utf16Range) -> Selection {
 }
 
 impl TextClient {
-    /// AppKit's client: the field draws its own selection UI.
+    /// AppKit's client: the field draws its own selection UI. Also the
+    /// conformance table's (`feature = "testing"`).
+    #[cfg(any(target_os = "macos", test, feature = "testing"))]
     pub(crate) fn new() -> Rc<Self> {
         Self::with_selection_ui(SelectionUi::Field)
     }

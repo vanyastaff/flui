@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_platform::text_store::{
-    CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreHost,
+    CompositionEnd, LockGrant, LockOutcome, LockTiming, SelectionUi, TextStore, TextStoreHost,
     TextStoreHostError,
 };
 use flui_platform::{Unsupported, UnsupportedReason};
@@ -42,6 +42,7 @@ pub struct RecordingTextStoreHost {
     depth: Cell<u32>,
     nested: Cell<bool>,
     unavailable: Cell<bool>,
+    selection_ui: Cell<SelectionUi>,
 }
 
 impl std::fmt::Debug for RecordingTextStoreHost {
@@ -83,6 +84,13 @@ impl RecordingTextStoreHost {
     /// shut down does.
     pub fn shut_down(&self) {
         self.unavailable.set(true);
+    }
+
+    /// From now on, answer [`TextStoreHost::selection_ui`] with `ui`, as
+    /// iOS's host answers [`SelectionUi::Platform`]: a field that attaches
+    /// afterwards leaves its selection UI to the platform.
+    pub fn set_selection_ui(&self, ui: SelectionUi) {
+        self.selection_ui.set(ui);
     }
 
     fn enter(&self, call: StoreHostCall) -> Depth<'_> {
@@ -151,5 +159,10 @@ impl TextStoreHost for RecordingTextStoreHost {
         if focused {
             let _depth = self.enter(StoreHostCall::ShowKeyboard);
         }
+    }
+
+    /// What [`Self::set_selection_ui`] last set; the field's by default.
+    fn selection_ui(&self) -> SelectionUi {
+        self.selection_ui.get()
     }
 }

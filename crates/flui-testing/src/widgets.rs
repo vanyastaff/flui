@@ -349,6 +349,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         constraints,
         None,
         flui_platform::TargetPlatform::Unknown,
+        KitInput::Push,
     )
 }
 
@@ -360,7 +361,19 @@ pub fn lay_out_on(
     constraints: BoxConstraints,
     platform: flui_platform::TargetPlatform,
 ) -> LaidOut {
-    mount_laid_out(root, constraints, None, platform)
+    mount_laid_out(root, constraints, None, platform, KitInput::Push)
+}
+
+/// Like [`lay_out_on`], in a window whose input method pulls from the focused
+/// field through a recording host ([`LaidOut::store_host`]), as a harness
+/// from [`harness::mount_with_ime_on`] has: a test answers for the platform
+/// through it, its selection UI among the answers.
+pub fn lay_out_with_ime_on(
+    root: impl View,
+    constraints: BoxConstraints,
+    platform: flui_platform::TargetPlatform,
+) -> LaidOut {
+    mount_laid_out(root, constraints, None, platform, KitInput::Pull)
 }
 
 /// Like [`lay_out`], with `storage` as the UI runtime's byte storage: the tree's
@@ -380,6 +393,7 @@ pub fn lay_out_with_storage(
             provided: None,
         }),
         flui_platform::TargetPlatform::Unknown,
+        KitInput::Push,
     )
 }
 
@@ -401,7 +415,17 @@ pub fn lay_out_with_provided_storage(
             provided: Some(Arc::new(provided)),
         }),
         flui_platform::TargetPlatform::Unknown,
+        KitInput::Push,
     )
+}
+
+/// How a laid-out window's input method reaches the focused field.
+#[derive(Clone, Copy)]
+enum KitInput {
+    /// Pushed events ([`LaidOut::dispatch_ime`]).
+    Push,
+    /// Pulled through a recording store host ([`LaidOut::store_host`]).
+    Pull,
 }
 
 fn mount_laid_out(
@@ -409,6 +433,7 @@ fn mount_laid_out(
     constraints: BoxConstraints,
     storage: Option<KitStorage>,
     platform: flui_platform::TargetPlatform,
+    input: KitInput,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
     let surface = surface_for(&constraints);
@@ -433,10 +458,13 @@ fn mount_laid_out(
         unconstrained_wrap,
     );
     // Every platform window has an input method: the kit's plays a push-model
-    // one, so [`LaidOut::dispatch_ime`] reaches the focused field.
-    let window = HeadlessWindow::new(surface.0, surface.1)
-        .with_text_input()
-        .with_platform(platform);
+    // one, so [`LaidOut::dispatch_ime`] reaches the focused field, unless the
+    // caller asked for a host the input method pulls through.
+    let window = HeadlessWindow::new(surface.0, surface.1).with_platform(platform);
+    let window = match input {
+        KitInput::Push => window.with_text_input(),
+        KitInput::Pull => window.with_text_store_host(),
+    };
     let host = WidgetHost::mount(wrapped, window, storage);
     let pipeline_owner = host.pipeline().clone();
 
@@ -1905,6 +1933,20 @@ impl LaidOut {
     /// field composes, commits or cancels with it.
     pub fn dispatch_ime(&self, event: flui_platform::ImeEvent) {
         self.host.dispatch_ime(event);
+    }
+
+    /// The window's input-method host, to answer as a platform host would
+    /// ([`crate::RecordingTextStoreHost::set_selection_ui`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the tree was laid out with [`lay_out_with_ime_on`]: no
+    /// other window offers a host.
+    pub fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
+        self.host
+            .ui_runtime()
+            .text_store_host()
+            .expect("the input-method host requires lay_out_with_ime_on")
     }
 
     /// Advance the UI runtime's virtual clock by `dt` before a synthetic Move

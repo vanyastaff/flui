@@ -367,7 +367,13 @@ impl Harness {
         self.store_host().calls()
     }
 
-    fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
+    /// The window's input-method host, to answer as a platform host would
+    /// ([`crate::RecordingTextStoreHost::set_selection_ui`]).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::store_host_calls`].
+    pub fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
         self.host
             .ui_runtime()
             .text_store_host()

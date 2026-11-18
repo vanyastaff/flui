@@ -40,15 +40,11 @@ impl PlatformSelection {
     }
 
     /// The field attached its client to a host that answered `ui`, or holds
-    /// the input no more (`None`). A change rebuilds the field; whether the
-    /// platform took the selection UI over from it is returned, so the
-    /// caller takes down what the field showed of its own.
-    pub(super) fn follow(&self, ui: Option<SelectionUi>) -> bool {
+    /// the input no more (`None`). A change rebuilds the field.
+    pub(super) fn follow(&self, ui: Option<SelectionUi>) {
         let active = ui == Some(SelectionUi::Platform);
-        let was = self.active.replace(active);
-        if was != active {
+        if self.active.replace(active) != active {
             self.rebuild.schedule(RebuildReason::StateChange);
         }
-        active && !was
     }
 }

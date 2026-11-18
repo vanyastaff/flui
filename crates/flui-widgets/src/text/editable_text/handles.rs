@@ -281,6 +281,10 @@ pub(super) struct FieldHandles {
     menu: Rc<MenuHost>,
     /// Whether the finger on a handle has dragged it since it touched.
     touch_dragged: Cell<bool>,
+    /// The platform draws the field's selection UI: the handles, the
+    /// magnifier and the toolbar show nothing, a touch under way when the
+    /// platform took over included.
+    platform_selection: Cell<bool>,
 }
 
 impl FieldHandles {
@@ -312,6 +316,7 @@ impl FieldHandles {
             warned: Cell::new(false),
             menu: Rc::new(MenuHost::default()),
             touch_dragged: Cell::new(false),
+            platform_selection: Cell::new(false),
             magnifier: RefCell::new(None),
             magnifier_along: Cell::new(0.0),
             haptics: RefCell::new(None),
@@ -593,6 +598,9 @@ impl FieldHandles {
     /// `bare_caret`, for a toolbar the caller shows. Without an overlay
     /// there are none, which a debug build reports once.
     pub(super) fn show_for_touch(self: &Rc<Self>, bare_caret: bool, failure: &mut FirstPanic) {
+        if self.platform_selection.get() {
+            return;
+        }
         let Some((selection, caret, revision)) = self.controller_state() else {
             return;
         };
@@ -647,6 +655,24 @@ impl FieldHandles {
         });
         *self.entry.borrow_mut() = Some(entry.clone());
         Some(entry)
+    }
+
+    /// The platform took the field's selection UI over (`active`), or gave
+    /// it back: what the field shows of its own goes, and none of it shows
+    /// while the platform holds it, at the end of a touch already under way
+    /// included.
+    pub(super) fn set_platform_selection(&self, active: bool, failure: &mut FirstPanic) {
+        self.platform_selection.set(active);
+        if active {
+            self.abandon(failure);
+            failure.contain(|| self.menu.close());
+        }
+    }
+
+    /// The platform gave the selection UI back: the field shows its own
+    /// again from the next touch. Nothing is taken down.
+    pub(super) fn release_platform_selection(&self) {
+        self.platform_selection.set(false);
     }
 
     /// The field stopped taking touches here (it was disabled, given another
@@ -811,7 +837,7 @@ impl FieldHandles {
     /// moves, while the touch stays down; the field publishes its ends for
     /// it. Without a magnifier or an overlay it shows nothing.
     fn magnify_press(self: &Rc<Self>, side: HandleSide, global: Offset<f64>) {
-        if self.magnifier.borrow().is_none() {
+        if self.magnifier.borrow().is_none() || self.platform_selection.get() {
             return;
         }
         let Some(overlay) = self.overlay.borrow().clone() else {

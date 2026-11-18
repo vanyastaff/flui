@@ -832,8 +832,7 @@ impl TextInputView {
             return false;
         };
         let rects = client.selection_rects(selection);
-        SelectionRect::handle_edges(&rects)
-            .any(|edge| edge.dilate(HANDLE_REACH).contains(&point))
+        SelectionRect::handle_edges(&rects).any(|edge| edge.dilate(HANDLE_REACH).contains(&point))
     }
 
     /// Put UIKit's text interaction on the window's view, the view the

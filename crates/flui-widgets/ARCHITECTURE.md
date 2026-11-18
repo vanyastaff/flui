@@ -1290,6 +1290,29 @@ unconsumed and the clipboard untouched. A concealed clipboard entry
 family pins this with
 `copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed`.
 
+### A platform that draws the selection UI owns it while the field holds the input
+
+Who draws a focused field's caret, selection highlight, handles, magnifier and edit menu,
+and recognizes the taps, long presses and drags that make its selection, is the answer of
+the text-store host that serves it (`TextStoreHost::selection_ui`), which the field reads
+through `TextInputHandle::selection_ui` when it attaches its client. iOS's host answers
+`SelectionUi::Platform` (its `UITextInteraction`); every other host, a push platform and a
+test without a host answer `SelectionUi::Field`. The switch follows the host, not
+`PlatformConvention`: a convention says how a platform's own fields look and behave, and an
+iOS convention under a host that draws nothing (a test, the Web on an iPhone) still needs the
+field's own selection UI. While the platform owns it, `EditableText` paints no caret or
+highlight, hides its menu, takes down the handles, magnifier and toolbar a touch of its own
+showed and shows none at the end of one under way, and builds no pointer handlers, long
+press, double tap or secondary tap; its listener stays opaque, so a touch on the field still
+reaches nothing behind it. It keeps painting its text and its composition's underline. The
+platform's edit menu reaches the field as `EditCommand`s through its store
+(`TextStore::perform_edit_command`), performed by the actions its chords invoke, under the
+same rules. The `text_editing` family pins this with
+`a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
+`the_fields_own_handles_go_when_the_platform_takes_the_selection_ui`,
+`the_platforms_edit_menu_reaches_the_field_through_its_store` and
+`an_obscured_field_offers_the_platform_no_copy_or_cut`.
+
 ### A field commits its composition before it loses its input
 
 `EditableText` commits an active composition, keeping its text, through
