@@ -585,6 +585,27 @@ fn from_state_remembers_the_normal_bounds_relative_to_the_usable_area() {
         Some(Point::new(200.0, 100.0))
     );
     assert_eq!(captured.size, Size::new(800.0, 600.0));
+
+    // A normal snapshot of a mode change on its way names the rectangle the
+    // window returns to while its outer rectangle is a fullscreen-sized
+    // step: the placement is of the rectangle it returns to.
+    let stepping = window(
+        Some(on(DESK.left, 0.0, 0.0)),
+        Size::new(1920.0, 1080.0),
+        Size::new(1904.0, 1041.0),
+    )
+    .with_normal_geometry(Some(geometry(
+        Some(on(DESK.right, 200.0, 100.0)),
+        Size::new(816.0, 639.0),
+    )));
+    let captured = WindowPlacement::from_state(&stepping, &DESK.displays, false).expect("usable");
+    assert_eq!(captured.mode, WindowMode::Normal);
+    assert_eq!(captured.display.as_deref(), Some("key-right"));
+    assert_eq!(
+        captured.offset.map(PlacementOffset::get),
+        Some(Point::new(200.0, 100.0))
+    );
+    assert_eq!(captured.size, Size::new(800.0, 600.0));
 }
 
 /// A position is measured from its display's corner and a placement's offset

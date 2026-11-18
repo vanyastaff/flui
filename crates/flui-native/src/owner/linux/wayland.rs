@@ -741,6 +741,9 @@ pub(crate) mod wait {
         /// When the input next delivers something no event brings: a held
         /// key's repeat.
         pub(crate) input_due: Option<Instant>,
+        /// The earliest instant a window stops waiting for the compositor to
+        /// carry out a mode change it asked for, and publishes what it reads.
+        pub(crate) mode_due: Option<Instant>,
         /// The wake deadline armed: one the application's handler asked for
         /// and the last delivery does not hold back. One already due is
         /// delivered on the next turn.
@@ -789,11 +792,16 @@ pub(crate) mod wait {
         if turn.frame_due {
             return Some(Duration::ZERO);
         }
-        [turn.wake_deadline, turn.frame_wait, turn.input_due]
-            .into_iter()
-            .flatten()
-            .min()
-            .map(|instant| instant.saturating_duration_since(now))
+        [
+            turn.wake_deadline,
+            turn.frame_wait,
+            turn.input_due,
+            turn.mode_due,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|instant| instant.saturating_duration_since(now))
     }
 
     #[cfg(test)]
@@ -813,12 +821,21 @@ pub(crate) mod wait {
                 frame_due,
                 frame_wait,
                 input_due: None,
+                mode_due: None,
                 wake_deadline,
             };
             let repeating = |input_due, wake_deadline| LoopTurn {
                 frame_due: false,
                 frame_wait: None,
                 input_due,
+                mode_due: None,
+                wake_deadline,
+            };
+            let waiting = |mode_due, wake_deadline| LoopTurn {
+                frame_due: false,
+                frame_wait: None,
+                input_due: None,
+                mode_due,
                 wake_deadline,
             };
             for (case, turn, expected) in [
@@ -872,6 +889,16 @@ pub(crate) mod wait {
                     "the earlier of a repeat and a deadline",
                     repeating(Some(now + ms(33)), Some(now + ms(500))),
                     Some(ms(33)),
+                ),
+                (
+                    "a window waits for a mode change",
+                    waiting(Some(now + ms(900)), None),
+                    Some(ms(900)),
+                ),
+                (
+                    "the earlier of a mode change's wait and a deadline",
+                    waiting(Some(now + ms(900)), Some(now + ms(500))),
+                    Some(ms(500)),
                 ),
             ] {
                 assert_eq!(poll_timeout(turn, now), expected, "{case}");
@@ -1720,6 +1747,11 @@ mod event_loop {
 
         /// What holds back a frame asked of the window now.
         fn frame_hold(&self) -> FrameHold;
+
+        /// When the window stops waiting for the compositor to carry out a
+        /// mode change it asked for: the turn after it publishes what the
+        /// window reads.
+        fn mode_due(&self) -> Option<Instant>;
 
         /// A wake deadline came due: ask the window for a frame.
         fn request_frame(&self);
@@ -2828,6 +2860,7 @@ mod event_loop {
                 .iter()
                 .filter_map(|window| window.frame_wait())
                 .min();
+            let mode_due = windows.iter().filter_map(|window| window.mode_due()).min();
             // The wake deadline is served by the windows' frames: the loop
             // wakes for it once one of them can take a frame.
             let first_release = windows.iter().map(|window| window.frame_hold()).min();
@@ -2854,6 +2887,7 @@ mod event_loop {
                     frame_due,
                     frame_wait,
                     input_due: self.input.next_due(),
+                    mode_due,
                     wake_deadline: [wake_deadline, turn_deadline].into_iter().flatten().min(),
                 },
                 now,
@@ -3286,6 +3320,9 @@ mod event_loop {
             }
             fn frame_hold(&self) -> FrameHold {
                 FrameHold::Free
+            }
+            fn mode_due(&self) -> Option<Instant> {
+                None
             }
             fn request_frame(&self) {}
             fn release(&self) {}
