@@ -26,7 +26,7 @@
   `native-capture` (it was `driver`), and say where the code differs from section 16; section 16
   names Android's presentation time as `VK_GOOGLE_display_timing`, not its frame timelines, which
   give a deadline.
-- **Revised:** 2026-11-18 — section 9 says where each service went as built (`app_path` to
+- **Revised:** 2026-11-18 — sections 3 and 9 say where each service went as built (`app_path` to
   `std::env::current_exe`) and that `Task`, `TaskLabel` and `PathPromptOptions` left with the file
   prompts instead of staying as the hosts' marshaling.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
@@ -342,8 +342,9 @@ because a macOS application without one has no Quit or Edit menu (the App menu b
 `docs/platform-parity.md`).
 
 What is permission-gated, hardware-bound or legitimately absent on a supported platform is a
-capability crate. The first one, `flui-system`, takes `open_url`, `reveal_path`, `open_path`, the
-file prompts and `app_path` off `Platform`, plus the message box, trash, share, launch at login,
+capability crate. The first one, `flui-system`, takes `open_url`, `reveal_path`, `open_path` (whose
+contract is `flui_platform::launch`) and the file prompts off `Platform`, and `app_path` leaves
+`Platform` with no FLUI form (section 9); plus the message box, trash, share, launch at login,
 global shortcuts, taskbar progress and badge, the jump list, and the tray when the menu feature
 lands. A capability whose handle framework widgets must name keeps its marker and handle in the
 lowest crate that names it (ADR-0152); only the OS provider lives in the capability crate.
