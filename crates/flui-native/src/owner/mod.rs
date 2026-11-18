@@ -338,6 +338,13 @@ impl OwnerPlatform {
         self.platform.preferences()
     }
 
+    /// The application delivered `values`, read through
+    /// [`preferences`](Self::preferences), to its runtimes
+    /// ([`Platform::preferences_delivered`]).
+    pub fn preferences_delivered(&self, values: &flui_platform::SystemPreferences) {
+        self.platform.preferences_delivered(values);
+    }
+
     /// Sample every display (monitor) the platform knows right now.
     ///
     /// # Errors
