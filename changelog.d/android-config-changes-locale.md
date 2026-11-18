@@ -1,0 +1,2 @@
+### Changed
+- The Android manifest `flui create` and `flui build` generate declares `locale` and `layoutDirection` in the Activity's `configChanges`, so a language change reaches the running app (the host reads the languages again and the font fallback follows) instead of recreating the Activity and restarting `android_main`. The layout direction follows the locale only; a forced right-to-left setting has no effect yet ([gaps](/docs/gaps.md#locale-edge-layout-direction-per-app-language-system-fonts-and-fallback)).
