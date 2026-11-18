@@ -1036,7 +1036,7 @@ mod cases {
         // (the configures that take the window to fullscreen, the modes asked
         // out of it with no turn between, the configures that answer, the mode
         // between)
-        let table: [(&[Configure], &[WindowMode], [Configure; 2], WindowMode); 3] = [
+        let table: [(&[_], &[_], [_; 2], _); 3] = [
             (
                 &[fullscreen()],
                 &[WindowMode::Maximized],

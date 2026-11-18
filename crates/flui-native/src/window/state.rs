@@ -727,7 +727,8 @@ impl WindowStateCell {
     /// and the frame it puts back after it is still to come.
     #[cfg(any(target_os = "macos", test))]
     pub(crate) fn wait_longer(&self, until: web_time::Instant) {
-        if let Some(change) = &mut self.last.lock().mode_change {
+        let mut slot = self.last.lock();
+        if let Some(change) = &mut slot.mode_change {
             change.until = until;
             change.reached = false;
         }
