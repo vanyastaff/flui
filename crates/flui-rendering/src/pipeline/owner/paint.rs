@@ -28,7 +28,7 @@ use super::{PipelineOwner, counters::PaintCounts, rebind_phase, subtree_arena::e
 
 mod kept_chunks;
 
-use kept_chunks::{ChunkIndex, PreviousChunks};
+use kept_chunks::{ChunkIndex, PaintedSlots, PreviousChunks};
 
 // ============================================================================
 // Paint phase: run_paint + helpers
@@ -572,8 +572,8 @@ impl PipelineOwner<PaintPhase> {
     /// `placed_as_before` says that the node is painted where the content's
     /// previous paint painted it: its content's root is, and so is a child
     /// whose parent was, laid out by no layout since, marked for paint
-    /// itself by no mark, and paints it for the first time in the content
-    /// (ADR-0304 §2).
+    /// itself by no mark, read no paint anchor, and paints it for the first
+    /// time in the content (ADR-0304 §2).
     fn paint_subtree(
         &self,
         composer: &mut FragmentComposer<'_, '_, '_>,
@@ -771,7 +771,7 @@ impl PipelineOwner<PaintPhase> {
             || paint_changed
             || render_node.needs_paint()
             || render_node.needs_composited_layer_update();
-        let children_placed_as_before = placed_as_before && !laid_out && !paint_changed;
+        let may_have_moved_children = laid_out || paint_changed;
 
         // Clear BEFORE paint so the post-paint check catches a paint
         // body that marks its own node dirty (paint-must-not-redirty).
@@ -896,12 +896,13 @@ impl PipelineOwner<PaintPhase> {
         let start = composer.work.recorder.0.end();
         let end = composer.work.recorder.0.ops_mut().len();
         composer.note_painted();
-        // A paint that read its anchor recorded where the anchor is, which
-        // no flag of this node follows.
-        let visit = composer.begin_visit(
-            node_id,
-            !owes_paint && placed_as_before && !composer.work.recorder.0.anchor_read(),
-        );
+        // A paint that read its anchor recorded, and may have placed its
+        // children, where the anchor is, which no flag of this node follows.
+        // Read before the replay below, where each child's paint begins anew.
+        let read_anchor = composer.work.recorder.0.anchor_read();
+        let visit = composer.begin_visit(node_id, !owes_paint && placed_as_before && !read_anchor);
+        let children_placed_as_before =
+            placed_as_before && !may_have_moved_children && !read_anchor;
 
         debug_assert!(
             !render_node.needs_paint(),
@@ -929,10 +930,8 @@ impl PipelineOwner<PaintPhase> {
         composer.work.own_effects = own_effects;
 
         let mut painted_children = ChildPaintOrder::new();
-        // The lowest and highest slot painted so far: a child outside them is
-        // painted for the first time, so a parent painting its children in
-        // either order never searches the list.
-        let mut children_painted: Option<(usize, usize)> = None;
+        // Which slots this paint painted, to tell a child painted again.
+        let mut painted_slots = PaintedSlots::default();
         // The group opacity of each scope the fragment has open, so a child painted inside
         // one (a flow delegate's `paint_child_with_opacity`) records what it is drawn at.
         let mut scope_opacity: SmallVec<[f64; 4]> = SmallVec::new();
@@ -979,15 +978,11 @@ impl PipelineOwner<PaintPhase> {
                 } => {
                     // A second paint of a child in the content is not where
                     // its first one was, and neither is its subtree's.
-                    let repeated = match children_painted {
-                        Some((lowest, highest)) if (lowest..=highest).contains(&index) => {
-                            painted_children.iter().any(|child| child.slot == index)
-                        }
-                        _ => false,
-                    };
-                    children_painted = Some(
-                        children_painted
-                            .map_or((index, index), |(l, h)| (l.min(index), h.max(index))),
+                    let repeated = painted_slots.paint(
+                        &mut composer.work.painted_slots,
+                        child_ids.len(),
+                        &painted_children,
+                        index,
                     );
                     painted_children.push(PaintedChild {
                         slot: index,
@@ -1058,6 +1053,7 @@ impl PipelineOwner<PaintPhase> {
         // replayed operations. A pass that fails above leaves the rest for
         // the next pass's `clear`.
         let work = &mut *composer.work;
+        painted_slots.release(&mut work.painted_slots);
         let ops = work.recorder.0.ops_mut();
         work.fragment_peak = work.fragment_peak.max(ops.len());
         ops.truncate(start);
@@ -1809,6 +1805,7 @@ impl PaintScratch {
         recycle_vec(&mut composer.stale);
         recycle_vec(&mut composer.orphans);
         recycle_vec(&mut composer.own_effects);
+        recycle_vec(&mut composer.painted_slots);
         composer.chunk_index.recycle(KEPT_CAPACITY);
         let peak = std::mem::take(&mut composer.fragment_peak);
         let kept = composer.fragment_room.after_pass(peak);
@@ -1969,6 +1966,9 @@ struct ComposerScratch {
     /// inside its paint's containment and pushed before its children paint:
     /// empty between nodes.
     own_effects: Vec<Layer>,
+    /// The words of [`PaintedSlots`] of the nodes on the path being painted
+    /// that needed them, each after its ancestors': empty between passes.
+    painted_slots: Vec<u64>,
     /// The previous chunks of the open contents that were looked up out of
     /// order.
     chunk_index: ChunkIndex,
@@ -2009,6 +2009,7 @@ impl ComposerScratch {
         self.stale.clear();
         self.recorder.0.reset();
         self.own_effects.clear();
+        self.painted_slots.clear();
         self.chunk_index.recycle(KEPT_CAPACITY);
     }
 }

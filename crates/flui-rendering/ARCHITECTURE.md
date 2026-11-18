@@ -895,18 +895,21 @@ is clean; otherwise `seal_picture` mints a new version
 
 - its render object owes no paint work: no `NEEDS_PAINT`,
   `NEEDS_COMPOSITED_LAYER_UPDATE`, `PAINT_CHANGED` or `LAID_OUT_SINCE_PAINT`.
-  Layout marks paint only on a dirty root and on the boundaries it lays out
-  (`Scheduler::commit_laid_out_paint`), so a node that laid out says so
-  through `LAID_OUT_SINCE_PAINT`, set where the arena lays a node out past its
-  cache;
+  Layout marks paint only on a dirty root and on the boundaries it lays out,
+  so any other node that laid out says so through `LAID_OUT_SINCE_PAINT`, set
+  where the arena lays a node out past its cache. Its parent laid out too, so
+  the placement rule below already holds it back; the bit says so at the
+  node itself;
 - it is `placed_as_before`: the content's root is, and a child is when its
-  parent was and carried neither `LAID_OUT_SINCE_PAINT` nor `PAINT_CHANGED`,
-  the bit `Scheduler::commit_needs_paint` sets on the node a mark names and
-  not on the ancestors the mark walks through. A child's origin is its
-  parent's plus the offset the parent's layout or paint gave it, so this holds
-  the origin to the previous one without storing either. A child its parent
-  paints a second time in the content is not placed as before, and neither is
-  its subtree;
+  parent was, carried neither `LAID_OUT_SINCE_PAINT` nor `PAINT_CHANGED`, and
+  read no paint anchor. `PAINT_CHANGED` is the bit
+  `Scheduler::commit_needs_paint` sets on the node a mark names, layout's
+  marks included, and not on the ancestors the mark walks through. A child's
+  origin is its parent's plus the offset the parent's layout, or its paint
+  from its state or its anchor, gave it, so this holds the origin to the
+  previous one without storing either. A child its parent paints a second
+  time in the content is not placed as before, and neither is its subtree
+  (`PaintedSlots`, one step per child in any paint order);
 - it read no paint anchor (`FragmentRecorder::anchor_read`): an anchor outside
   the boundary moves against it with no bit set inside;
 - the previous content can be trusted: a pass after one that failed or

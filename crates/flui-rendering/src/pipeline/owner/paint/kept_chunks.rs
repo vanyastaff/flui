@@ -12,9 +12,10 @@
 //! owner's state, its layout, its origin in the boundary and the paint anchor
 //! it reads. A change of state marks the owner, and a layout sets its
 //! `LAID_OUT_SINCE_PAINT`. Its origin is the sum of the offsets its
-//! ancestors in the boundary placed it at, each set by its parent's layout or
-//! paint, so it is the previous one while no ancestor laid out or was marked
-//! itself (`PAINT_CHANGED`) since: the walk passes that down as
+//! ancestors in the boundary placed it at, each set by its parent's layout,
+//! or by its parent's paint from that parent's state or anchor, so it is the
+//! previous one while no ancestor laid out, was marked itself
+//! (`PAINT_CHANGED`) since, or read its anchor: the walk passes that down as
 //! `placed_as_before`. A paint that reads its anchor is not kept. Where the
 //! owner's runs are cut into chunks depends on which children add entries
 //! between them, and a child that starts or stops adding one is marked: its
@@ -141,6 +142,74 @@ impl ChunkIndex {
     }
 }
 
+/// Which of its child slots a node's paint has painted, to tell a child it
+/// paints a second time, which is not placed as before.
+///
+/// A parent painting its slots in rising or falling order holds only the
+/// range it painted, since a slot outside it is new. The first slot inside
+/// the range files every slot painted so far as one bit of the node's words
+/// on the pass's stack, and the bits answer from then on, so any order costs
+/// one step per child.
+#[derive(Debug, Default)]
+pub(super) struct PaintedSlots {
+    /// The lowest and highest slot painted.
+    range: Option<(usize, usize)>,
+    /// Where the node's words start on the stack, once it has them.
+    words_from: Option<usize>,
+}
+
+impl PaintedSlots {
+    /// Records that `slot` of `slots` is painted after `painted`, the slots
+    /// painted before it, and answers whether it was painted already.
+    pub(super) fn paint(
+        &mut self,
+        stack: &mut Vec<u64>,
+        slots: usize,
+        painted: &[super::PaintedChild],
+        slot: usize,
+    ) -> bool {
+        let inside = self
+            .range
+            .is_some_and(|(lowest, highest)| (lowest..=highest).contains(&slot));
+        self.range = Some(self.range.map_or((slot, slot), |(lowest, highest)| {
+            (lowest.min(slot), highest.max(slot))
+        }));
+        if self.words_from.is_none() {
+            if !inside {
+                return false;
+            }
+            let from = stack.len();
+            stack.resize(from + slots.div_ceil(64), 0);
+            for child in painted {
+                set_bit(stack, from, child.slot);
+            }
+            self.words_from = Some(from);
+        }
+        self.words_from
+            .is_some_and(|from| set_bit(stack, from, slot))
+    }
+
+    /// Gives the node's words back to the stack, after its children gave
+    /// back theirs.
+    pub(super) fn release(self, stack: &mut Vec<u64>) {
+        if let Some(from) = self.words_from {
+            stack.truncate(from);
+        }
+    }
+}
+
+/// Sets `slot`'s bit in the words from `from` and answers whether it was set;
+/// a slot past them has none.
+fn set_bit(stack: &mut [u64], from: usize, slot: usize) -> bool {
+    let Some(word) = stack.get_mut(from + slot / 64) else {
+        return false;
+    };
+    let bit = 1_u64 << (slot % 64);
+    let was = *word & bit != 0;
+    *word |= bit;
+    was
+}
+
 #[cfg(test)]
 mod tests {
     use flui_layer::SceneOwner;
@@ -205,5 +274,36 @@ mod tests {
         assert!(!found(chunks[2].owner(), 1));
         assert!(!found(RenderId::new(9), 0), "an effect is not a chunk");
         assert!(found(chunks[3].owner(), 0));
+    }
+
+    /// A slot painted again is told apart from a first paint whatever order
+    /// the slots come in, and the stack holds words only while an order
+    /// needs them.
+    #[test]
+    fn painted_slots_tell_a_slot_painted_again_in_any_order() {
+        let mut stack = vec![7];
+        for (order, again) in [
+            (&[0, 1, 2, 3][..], &[false, false, false, false][..]),
+            (&[3, 2, 1, 0], &[false, false, false, false]),
+            (
+                &[2, 0, 3, 1, 0, 70],
+                &[false, false, false, false, true, false],
+            ),
+            (&[0, 0], &[false, true]),
+            (&[5, 1, 70, 70, 3], &[false, false, false, true, false]),
+        ] {
+            let mut slots = PaintedSlots::default();
+            let mut painted = super::super::ChildPaintOrder::new();
+            for (&slot, &again) in order.iter().zip(again) {
+                assert_eq!(
+                    slots.paint(&mut stack, 71, &painted, slot),
+                    again,
+                    "slot {slot} of {order:?}"
+                );
+                painted.push(super::super::PaintedChild { slot, opacity: 1.0 });
+            }
+            slots.release(&mut stack);
+            assert_eq!(stack, [7], "{order:?} gave its words back");
+        }
     }
 }

@@ -802,11 +802,56 @@ impl flui_rendering::traits::RenderBox for DrawsAtItsAnchor {
     }
 }
 
+/// A parent that paints its one child at its paint anchor's origin.
+#[derive(Debug)]
+struct PlacesChildAtItsAnchor;
+
+impl flui_foundation::inspect::Inspect for PlacesChildAtItsAnchor {
+    fn kind(&self) -> &'static str {
+        "PlacesChildAtItsAnchor"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for PlacesChildAtItsAnchor {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        let size = ctx.layout_child(0, BoxConstraints::tight(Size::new(10.0, 10.0)))?;
+        Ok(ctx.constrain(size))
+    }
+
+    flui_rendering::forward_single_child_box_queries!();
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Single>) {
+        let at = ctx
+            .paint_anchor()
+            .map_or(flui_foundation::geometry::Offset::ZERO, |anchor| {
+                -anchor.offset
+            });
+        ctx.paint_child_at(at);
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
 /// A render object that read its paint anchor records its chunk again when
-/// its boundary repaints: the anchor lies outside the boundary, and nothing
-/// in it marks a move of the boundary against the anchor (ADR-0304 §2).
+/// its boundary repaints, and so does the child of one that placed the
+/// child from it: the anchor lies outside the boundary, and nothing in it
+/// marks a move of the boundary against the anchor (ADR-0304 §2).
 ///
-/// Red-check: keep the chunk of a paint that read its anchor.
+/// Red-check: keep the chunk of a paint that read its anchor, or of a child
+/// its parent placed from its anchor.
 #[test]
 fn a_chunk_that_read_its_paint_anchor_is_a_new_recording() {
     let dx = Arc::new(std::sync::atomic::AtomicU64::new(0.0_f64.to_bits()));
@@ -820,16 +865,19 @@ fn a_chunk_that_read_its_paint_anchor_is_a_new_recording() {
                         .child(
                             box_node(RenderFlex::row())
                                 .child(box_node(DrawsAtItsAnchor).label("reader"))
+                                .child(
+                                    box_node(PlacesChildAtItsAnchor).child(leaf().label("placed")),
+                                )
                                 .child(leaf().label("sibling")),
                         ),
                 ),
         ),
     );
     let get = |name| registry.get(name).expect("labelled");
-    let (mover, boundary, reader) = (get("mover"), get("boundary"), get("reader"));
+    let (mover, boundary) = (get("mover"), get("boundary"));
     let mut scene = SceneHost::new();
     let mut owner = frame(&mut scene, owner);
-    let before = chunk_version(&content(&scene, &owner, boundary), reader);
+    let before = content(&scene, &owner, boundary);
 
     // The boundary moves against the anchor, and repaints for its sibling.
     dx.store(20.0_f64.to_bits(), std::sync::atomic::Ordering::Relaxed);
@@ -838,11 +886,23 @@ fn a_chunk_that_read_its_paint_anchor_is_a_new_recording() {
         leaf.set_color([0.0, 0.0, 1.0, 1.0])
     });
     let owner = frame(&mut scene, owner);
-    assert_ne!(
-        chunk_version(&content(&scene, &owner, boundary), reader),
-        before,
-        "a chunk drawn from the moved anchor is a new recording"
-    );
+    let after = content(&scene, &owner, boundary);
+    for (name, why) in [
+        (
+            "reader",
+            "a chunk drawn from the moved anchor is a new recording",
+        ),
+        (
+            "placed",
+            "a chunk placed from the moved anchor is a new recording",
+        ),
+    ] {
+        assert_ne!(
+            chunk_version(&after, get(name)),
+            chunk_version(&before, get(name)),
+            "{why}"
+        );
+    }
 }
 
 /// A paint pass that fails after painting a changed render object clears its

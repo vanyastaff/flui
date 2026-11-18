@@ -394,13 +394,6 @@ impl DirtyTracker {
         if let Some(node) = tree.get(id) {
             node.mark_paint_changed();
         }
-        self.commit_laid_out_paint(tree, id)
-    }
-
-    /// [`Self::commit_needs_paint`] for a node layout marks because it laid
-    /// out: the layout walk set its `LAID_OUT_SINCE_PAINT`, which is what its
-    /// paint reads, so its paint is not marked as changed by itself.
-    pub(super) fn commit_laid_out_paint(&mut self, tree: &RenderTree, id: RenderId) -> bool {
         let mut current = id;
         loop {
             let Some(node) = tree.get(current) else {
