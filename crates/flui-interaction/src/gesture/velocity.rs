@@ -27,7 +27,7 @@ use flui_foundation::geometry::Offset;
 ///
 /// ```
 /// use flui_foundation::geometry::Offset;
-/// use flui_interaction::Velocity;
+/// use flui_interaction::gesture::Velocity;
 ///
 /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
 /// assert_eq!(velocity.pixels_per_second, Offset::new(100.0, 50.0));
@@ -58,7 +58,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
     /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
@@ -75,7 +75,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::from_components(100.0, 50.0);
     /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
@@ -97,7 +97,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::from_direction(100.0, 0.0);
     /// assert!((velocity.pixels_per_second.dx - 100.0).abs() < 0.01);
@@ -117,7 +117,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(3.0, 4.0));
     /// assert_eq!(velocity.magnitude(), 5.0);
@@ -138,7 +138,7 @@ impl Velocity {
     /// use std::f64::consts::PI;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(1.0, 0.0));
     /// assert!((velocity.direction() - 0.0).abs() < 0.01);
@@ -158,7 +158,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// assert!(Velocity::ZERO.is_zero());
     /// assert!(!Velocity::new(Offset::new(1.0, 0.0)).is_zero());
@@ -175,7 +175,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let valid = Velocity::new(Offset::new(100.0, 50.0));
     /// assert!(valid.is_finite());
@@ -208,7 +208,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let clamped = velocity.clamp_magnitude(0.0, 50.0);
@@ -266,7 +266,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// let scaled = velocity.scale(0.5);
@@ -288,7 +288,7 @@ impl Velocity {
     /// use std::time::Duration;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let distance = velocity.distance_over_duration(Duration::from_secs(1));
@@ -307,7 +307,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// assert_eq!(velocity.dx(), 100.0);
@@ -324,7 +324,7 @@ impl Velocity {
     ///
     /// ```
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::Velocity;
+    /// use flui_interaction::gesture::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// assert_eq!(velocity.dy(), 50.0);
@@ -353,7 +353,7 @@ impl Default for Velocity {
 /// use std::time::Duration;
 ///
 /// use flui_foundation::geometry::Offset;
-/// use flui_interaction::VelocityEstimate;
+/// use flui_interaction::gesture::VelocityEstimate;
 ///
 /// let estimate = VelocityEstimate::new(
 ///     Offset::new(100.0, 50.0),
@@ -392,7 +392,7 @@ impl VelocityEstimate {
     /// use std::time::Duration;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::VelocityEstimate;
+    /// use flui_interaction::gesture::VelocityEstimate;
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::new(100.0, 50.0),
@@ -425,7 +425,7 @@ impl VelocityEstimate {
     /// use std::time::Duration;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::VelocityEstimate;
+    /// use flui_interaction::gesture::VelocityEstimate;
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::ZERO,
@@ -450,7 +450,7 @@ impl VelocityEstimate {
     /// use std::time::Duration;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::VelocityEstimate;
+    /// use flui_interaction::gesture::VelocityEstimate;
     ///
     /// let valid = VelocityEstimate::new(
     ///     Offset::new(100.0, 50.0),
@@ -481,7 +481,7 @@ impl VelocityEstimate {
     /// use std::time::Duration;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::VelocityEstimate;
+    /// use flui_interaction::gesture::VelocityEstimate;
     ///
     /// let valid = VelocityEstimate::new(
     ///     Offset::new(100.0, 50.0),
@@ -513,7 +513,7 @@ impl VelocityEstimate {
     /// use std::time::Duration;
     ///
     /// use flui_foundation::geometry::Offset;
-    /// use flui_interaction::VelocityEstimate;
+    /// use flui_interaction::gesture::VelocityEstimate;
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::ZERO,

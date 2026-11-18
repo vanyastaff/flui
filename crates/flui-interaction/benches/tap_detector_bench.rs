@@ -14,7 +14,9 @@ use flui_interaction::events::{
 };
 use flui_interaction::gesture::GestureArena;
 use flui_interaction::{
-    GestureRecognizer, PointerDispatch, PointerId, RecognizerSet, TapGestureRecognizer,
+    gesture::{GestureRecognizer, RecognizerSet, TapGestureRecognizer},
+    ids::PointerId,
+    pointer::PointerDispatch,
 };
 
 struct TapFixture {

@@ -1,8 +1,9 @@
 //! Reusable owner-local composite recognizer contracts.
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    CancelOutcome, GestureArena, GestureRecognizer, PointerId, TapAndDragGestureRecognizer,
     events::{PointerKind, make_down_event_for_id, make_up_event_for_id},
+    gesture::{CancelOutcome, GestureArena, GestureRecognizer, TapAndDragGestureRecognizer},
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 use std::{cell::RefCell, rc::Rc};

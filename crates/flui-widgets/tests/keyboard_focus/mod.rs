@@ -8,7 +8,7 @@ pub(crate) mod modality;
 pub(crate) mod requests;
 pub(crate) mod routes;
 
-use flui_interaction::FocusManager;
+use flui_interaction::focus::FocusManager;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 

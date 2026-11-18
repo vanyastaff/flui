@@ -15,8 +15,10 @@ use std::sync::{Arc, Weak};
 use flui_animation::{FrameTick, MotionClock, Vsync};
 use flui_foundation::{PresentationId, panic::FirstPanic};
 use flui_interaction::{
-    FocusManager, GestureBinding, InteractionDispatchHandle, TextInputBackend, TextInputHandle,
-    TextInputOwner,
+    binding::GestureBinding,
+    focus::FocusManager,
+    pointer::InteractionDispatchHandle,
+    text_input::{TextInputBackend, TextInputHandle, TextInputOwner},
 };
 use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
@@ -130,7 +132,7 @@ pub enum PointerResamplingError {
     PresentationUnavailable,
     /// A contact retains the policy admitted with its Down.
     #[error(transparent)]
-    ActiveContact(#[from] flui_interaction::ResamplingModeChangeError),
+    ActiveContact(#[from] flui_interaction::binding::ResamplingModeChangeError),
 }
 
 /// The window a presentation is built on, with the accessibility bridge its
@@ -154,7 +156,7 @@ pub struct PresentationWindow {
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     text_store_host: Option<Rc<dyn TextStoreHost>>,
     pointer_resampling: PointerResampling,
-    gesture_profiles: flui_interaction::GestureProfiles,
+    gesture_profiles: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
 }
 
@@ -182,7 +184,7 @@ impl PresentationWindow {
             accessibility,
             text_store_host: None,
             pointer_resampling: PointerResampling::Disabled,
-            gesture_profiles: flui_interaction::GestureProfiles::preset(
+            gesture_profiles: flui_interaction::gesture::GestureProfiles::preset(
                 flui_platform::TargetPlatform::Unknown,
             ),
             platform: flui_platform::TargetPlatform::Unknown,
@@ -214,12 +216,12 @@ impl PresentationWindow {
     ///
     /// Without one, the platform-neutral presets apply, one per pointer kind,
     /// never the build host's: a runner names its platform, and a headless
-    /// test its preset (one [`GestureSettings`](flui_interaction::GestureSettings)
+    /// test its preset (one [`GestureSettings`](flui_interaction::gesture::GestureSettings)
     /// value is one profile for every kind).
     #[must_use]
     pub fn with_gesture_profiles(
         mut self,
-        profiles: impl Into<flui_interaction::GestureProfiles>,
+        profiles: impl Into<flui_interaction::gesture::GestureProfiles>,
     ) -> Self {
         self.gesture_profiles = profiles.into();
         self
@@ -371,7 +373,7 @@ pub struct PresentationState {
     pub(super) platform: flui_platform::TargetPlatform,
     /// Presentation-local projection of the host's accepted interaction policy.
     /// Recognizers read it at admission; active sequences keep owned snapshots.
-    pub(super) gesture_settings: flui_interaction::GestureSettingsSource,
+    pub(super) gesture_settings: flui_interaction::gesture::GestureSettingsSource,
     pub(crate) gesture_geometry: RefCell<crate::ui_runtime::preferences::GeometryProjection>,
     pub(crate) text_preparation: RefCell<TextPreparation>,
     pub(crate) sampled_motion_tick: Cell<Option<FrameTick>>,
@@ -429,8 +431,8 @@ pub struct PresentationState {
     gestures: GestureBinding,
     /// The frame queue, outcome mailbox and observer of this presentation's
     /// haptics (ADR-0210), on the gesture clock.
-    haptics: flui_interaction::HapticsHost,
-    pub(crate) wheel_preferences: flui_interaction::WheelPreferencesSource,
+    haptics: flui_interaction::haptics::HapticsHost,
+    pub(crate) wheel_preferences: flui_interaction::pointer::WheelPreferencesSource,
     interaction_dispatch: Option<InteractionDispatchHandle>,
     /// Pointer input retained while this presentation has no committed tree.
     /// The queue is owner-thread-only and internally capped; replay detaches
@@ -787,7 +789,7 @@ impl PresentationState {
         id: PresentationId,
         window: &Rc<dyn PlatformWindow>,
         clock: &ClockSource,
-        preset: flui_interaction::GestureProfiles,
+        preset: flui_interaction::gesture::GestureProfiles,
     ) -> GestureBinding {
         // The arena's deadlines read the ui_runtime's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
@@ -841,10 +843,10 @@ impl PresentationState {
         display: &Rc<Cell<Option<flui_platform::WindowDisplay>>>,
         gestures: &GestureBinding,
         request_frame: impl Fn() + 'static,
-    ) -> flui_interaction::HapticsHost {
+    ) -> flui_interaction::haptics::HapticsHost {
         let actuator = Rc::downgrade(window);
         let display = Rc::downgrade(display);
-        let haptics = flui_interaction::HapticsHost::builder(gestures, move || {
+        let haptics = flui_interaction::haptics::HapticsHost::builder(gestures, move || {
             actuator.upgrade().and_then(|window| window.haptics())
         })
         .frame_requester(request_frame)
@@ -949,7 +951,7 @@ impl PresentationState {
             // (the tree). A ui_runtime may host several presentations, each with
             // its own `PipelineOwner`, so a probe installed once per ui_runtime
             // would answer every presentation with the first one's tree.
-            owner.set_hit_test_handle(flui_interaction::HitTestHandle::new(
+            owner.set_hit_test_handle(flui_interaction::pointer::HitTestHandle::new(
                 interaction_dispatch.clone(),
                 Rc::new(
                     flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(
@@ -1090,7 +1092,7 @@ impl PresentationState {
             gesture_geometry: RefCell::new(
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
-            gesture_settings: flui_interaction::GestureSettingsSource::new(
+            gesture_settings: flui_interaction::gesture::GestureSettingsSource::new(
                 gestures.default_profiles(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
@@ -1122,7 +1124,7 @@ impl PresentationState {
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
             haptics,
-            wheel_preferences: flui_interaction::WheelPreferencesSource::new(
+            wheel_preferences: flui_interaction::pointer::WheelPreferencesSource::new(
                 flui_platform::WheelPreferences::default(),
             ),
             interaction_dispatch: Some(interaction_dispatch),
@@ -1198,7 +1200,7 @@ impl PresentationState {
             id,
             &window,
             &ClockSource::Platform,
-            flui_interaction::GestureSettings::default().into(),
+            flui_interaction::gesture::GestureSettings::default().into(),
         );
         let window_display = Rc::new(Cell::new(None));
         let haptics = Self::build_haptics(&window, &window_display, &gestures, || {});
@@ -1238,7 +1240,7 @@ impl PresentationState {
             gesture_geometry: RefCell::new(
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
-            gesture_settings: flui_interaction::GestureSettingsSource::new(
+            gesture_settings: flui_interaction::gesture::GestureSettingsSource::new(
                 gestures.default_profiles(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
@@ -1270,7 +1272,7 @@ impl PresentationState {
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
             haptics,
-            wheel_preferences: flui_interaction::WheelPreferencesSource::new(
+            wheel_preferences: flui_interaction::pointer::WheelPreferencesSource::new(
                 flui_platform::WheelPreferences::default(),
             ),
             interaction_dispatch: None,
@@ -1353,7 +1355,7 @@ impl PresentationState {
 
     /// The fresh hit test over this presentation's tree that drags use to find
     /// its receivers (ADR-0211).
-    pub(crate) fn hit_test_handle(&self) -> flui_interaction::HitTestHandle {
+    pub(crate) fn hit_test_handle(&self) -> flui_interaction::pointer::HitTestHandle {
         self.widgets
             .with_build_owner(|owner| owner.hit_test_handle().cloned())
             .expect("BUG: every presentation pairs its hit-test handle when it is assembled")
@@ -1702,7 +1704,7 @@ impl PresentationState {
 
     /// This presentation's haptics host: its frame queue and outcome
     /// mailbox, played on the window's actuator (ADR-0210).
-    pub(crate) fn haptics(&self) -> &flui_interaction::HapticsHost {
+    pub(crate) fn haptics(&self) -> &flui_interaction::haptics::HapticsHost {
         &self.haptics
     }
 
@@ -2468,7 +2470,7 @@ impl PresentationState {
 
     fn close_interaction_with_mode(
         &self,
-        lane: Option<&flui_interaction::InteractionLane>,
+        lane: Option<&flui_interaction::pointer::InteractionLane>,
         mode: flui_interaction::__runtime::CloseMode,
     ) {
         if let Some(handle) = self.interaction_dispatch() {
@@ -2484,7 +2486,7 @@ impl PresentationState {
     /// [`flui_interaction::__runtime::retire_dispatch`].
     fn withdraw_interaction(
         &self,
-        lane: Option<&flui_interaction::InteractionLane>,
+        lane: Option<&flui_interaction::pointer::InteractionLane>,
         mode: flui_interaction::__runtime::CloseMode,
     ) -> Option<flui_interaction::__runtime::DispatchCustody> {
         let handle = self.interaction_dispatch()?;
@@ -2497,7 +2499,7 @@ impl PresentationState {
     pub(crate) fn close_with_mode_in(
         &self,
         mode: flui_interaction::__runtime::CloseMode,
-        lane: &flui_interaction::InteractionLane,
+        lane: &flui_interaction::pointer::InteractionLane,
     ) {
         self.close_impl(mode, Some(lane));
     }
@@ -2513,7 +2515,7 @@ impl PresentationState {
     fn close_impl(
         &self,
         mode: flui_interaction::__runtime::CloseMode,
-        lane: Option<&flui_interaction::InteractionLane>,
+        lane: Option<&flui_interaction::pointer::InteractionLane>,
     ) {
         self.withdraw_animation();
         use flui_interaction::__runtime::{
@@ -2686,7 +2688,7 @@ impl PresentationState {
     /// retire; the presentation's own close later retires everything else.
     pub(crate) fn withdraw_for_ui_runtime_close(
         &self,
-        lane: &flui_interaction::InteractionLane,
+        lane: &flui_interaction::pointer::InteractionLane,
     ) -> Vec<flui_view::__runtime::WithdrawnKey> {
         self.withdraw_animation();
         use flui_view::__runtime::BindingRuntime as _;
@@ -2744,7 +2746,7 @@ impl PresentationState {
     fn withdraw_retained_ownership(
         &self,
         failure: &mut PresentationCloseRecovery<'_>,
-        lane: Option<&flui_interaction::InteractionLane>,
+        lane: Option<&flui_interaction::pointer::InteractionLane>,
     ) {
         use flui_interaction::__runtime::{
             CloseMode, close_focus, close_gestures, close_mouse_tracker, close_text_input,

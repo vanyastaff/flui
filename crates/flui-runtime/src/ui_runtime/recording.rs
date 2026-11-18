@@ -19,7 +19,7 @@ use flui_foundation::{IdMint, InputSequenceId, PresentationId};
 use flui_interaction::gesture::{
     GestureContest, GestureObservation, ObservedMember, ObserverHandle,
 };
-use flui_interaction::{GestureDisposition, InputSurface};
+use flui_interaction::{gesture::GestureDisposition, ids::InputSurface};
 use flui_platform::{EventTime, WindowId};
 
 use super::UiRuntime;
@@ -281,7 +281,7 @@ impl UiRuntime {
         &self,
         presentation: &crate::presentation::PresentationState,
         surface: InputSurface,
-        event: &flui_interaction::PointerEvent,
+        event: &flui_interaction::events::PointerEvent,
     ) -> HeldInputRow {
         let arrival = self.event_now();
         let input = HostInput::Platform(flui_platform::PlatformInput::Pointer(event.clone()));

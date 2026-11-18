@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
-use flui_interaction::InteractionLane;
+use flui_interaction::pointer::InteractionLane;
 use flui_objects::{
     RenderClipPath, RenderClipRRect, RenderOpacity, RenderRotatedBox, RenderTransform,
 };

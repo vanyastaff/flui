@@ -1,19 +1,14 @@
 use flui_foundation::geometry::Offset;
-use flui_interaction::{
-    DragUpdateDetails, ForcePressDetails, GestureArena, LongPressEndDetails,
-    LongPressDetails, LongPressDownDetails, LongPressStartDetails, TapDetails,
-    LongPressMoveUpdateDetails, PointerKind, TapDownDetails, TapGestureRecognizer, TapUpDetails,
-    Velocity,
-    gesture::{
+use flui_interaction::{gesture::{DragUpdateDetails, ForcePressDetails, GestureArena, LongPressEndDetails, LongPressDetails, LongPressDownDetails, LongPressStartDetails, TapDetails, LongPressMoveUpdateDetails, TapDownDetails, TapGestureRecognizer, TapUpDetails, Velocity}, gesture::{
         DoubleTapDetails, DoubleTapGestureRecognizer, LongPressGestureRecognizer,
         MultiTapDetails, MultiTapGestureRecognizer,
-    },
-};
+    }};
+use flui_platform::pointer::PointerKind;
 
 fn main() {
     let global = Offset::new(40.0, 60.0);
     let local = Offset::new(10.0, 20.0);
-    let pointer = flui_interaction::PointerId::try_from(1_u64).expect("authored contact");
+    let pointer = flui_interaction::ids::PointerId::try_from(1_u64).expect("authored contact");
     let _down = TapDownDetails::new(global, local, pointer).with_kind(PointerKind::Mouse);
     let _up = TapUpDetails::new(global, local, pointer).with_kind(PointerKind::Mouse);
     let _move = LongPressMoveUpdateDetails::new(global, local, Offset::ZERO, Offset::ZERO);
@@ -46,7 +41,7 @@ fn main() {
         .on_long_press_end(|LongPressEndDetails { velocity, .. }| { let _ = velocity; })
         .on_long_press_cancel(|LongPressDetails { kind, .. }| { let _ = kind; })
         .build();
-    let _multi = MultiTapGestureRecognizer::builder(arena, flui_interaction::MultiTapCount::TWO)
+    let _multi = MultiTapGestureRecognizer::builder(arena, flui_interaction::gesture::MultiTapCount::TWO)
         .on_multi_tap(|MultiTapDetails { positions, .. }| { let _ = positions; })
         .build();
 }

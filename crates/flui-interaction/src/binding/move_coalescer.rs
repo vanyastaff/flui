@@ -1,9 +1,7 @@
 //! Frame-coalesced moves: one queued packet per pointer and surface.
 
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-};
+use rustc_hash::FxHashMap;
+use std::cell::{Cell, RefCell};
 
 use smallvec::SmallVec;
 
@@ -75,7 +73,7 @@ pub(super) struct FrozenMove {
 #[derive(Default)]
 pub(super) struct MoveCoalescer {
     /// Only the latest move per pointer and surface is kept.
-    pending: RefCell<HashMap<MoveKey, PendingMoveState>>,
+    pending: RefCell<FxHashMap<MoveKey, PendingMoveState>>,
     /// Monotonic identity for direct/coalesced move slots. Unlike a pointer
     /// sequence, hover has no Down transaction, so it needs its own identity
     /// while moving through `Queued -> InFlight`.

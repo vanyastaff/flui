@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_interaction::testing::InMemoryTextStore;
-use flui_interaction::{TextInputBackend, TextInputClient, TextInputError, TextInputOwner};
+use flui_interaction::text_input::{
+    TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
+};
 use flui_platform::text_store::{
     CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreHost,
     TextStoreHostError, project_ime_event,

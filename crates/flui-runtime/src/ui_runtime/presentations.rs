@@ -3,9 +3,9 @@
 use super::UiRuntime;
 use crate::presentation::{PresentationState, PresentationWindow};
 use flui_foundation::{PresentationId, panic::FirstPanic};
+use flui_interaction::binding::GestureBinding;
 #[cfg(any(test, feature = "testing"))]
-use flui_interaction::FocusManager;
-use flui_interaction::GestureBinding;
+use flui_interaction::focus::FocusManager;
 use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::resume_unwind;
 #[cfg(any(test, feature = "testing"))]
@@ -597,7 +597,7 @@ impl UiRuntime {
     /// Weak text-input capability for this exact presentation.
     #[must_use]
     #[cfg(any(test, feature = "testing"))]
-    pub fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
+    pub fn text_input_handle(&self) -> flui_interaction::text_input::TextInputHandle {
         self.presentations.primary().text_input_handle()
     }
 

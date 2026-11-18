@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use flui_interaction::FocusNode;
+use flui_interaction::focus::FocusNode;
 
 fn main() {
     let first = FocusNode::new();

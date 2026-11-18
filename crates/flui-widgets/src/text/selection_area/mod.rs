@@ -27,7 +27,10 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
-use flui_interaction::{ClipboardCapability, ClipboardHandle, KeyEventResult};
+use flui_interaction::{
+    focus::KeyEventResult,
+    text_input::{ClipboardCapability, ClipboardHandle},
+};
 use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;

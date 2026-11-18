@@ -73,27 +73,6 @@ const GRAPH_TARGETS: [(&str, &str); 5] = [
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
-/// The first of the changed `files` (repo-relative, `/`-separated) that can
-/// move a counter past what a code change does: a manifest or the lock (the
-/// graph, the features), the toolchain or cargo's configuration, the templates
-/// `flui create` writes (the measured projects and their release profile), the
-/// baseline, or this check. A pull request whose diff holds one runs the
-/// `size` job (ADR-0303 §9); `main` runs it on every push, which catches the
-/// slow drift of code changes.
-pub(crate) fn changed_input(files: &[String]) -> Option<&str> {
-    files.iter().map(String::as_str).find(|f| {
-        *f == "Cargo.lock"
-            || *f == "Cargo.toml"
-            || f.ends_with("/Cargo.toml")
-            || *f == "rust-toolchain.toml"
-            || f.starts_with(".cargo/")
-            || *f == BASELINE
-            || *f == "tools/xtask/src/perf.rs"
-            || f.starts_with("tools/xtask/src/perf/size")
-            || f.starts_with("crates/flui-cli/src/templates/")
-    })
-}
-
 const BASELINE_HEADER: &str = "# Written by `cargo xtask perf --size --bless`; Linux x86_64.\n\
 # Package counts of the facade's default graph and the release sizes of a\n\
 # `flui create` counter (host and wasm32) and of a `flui create --hot-reload` host.\n";
@@ -682,36 +661,6 @@ mod tests {
             assert_eq!(compare(&base, &current), expected, "{case}");
         }
         assert!(!past_tolerance(u64::MAX, u64::MAX));
-    }
-
-    #[test]
-    fn size_inputs_table() {
-        let cases: [(&[&str], Option<&str>); 11] = [
-            (&["Cargo.lock"], Some("Cargo.lock")),
-            (&["Cargo.toml"], Some("Cargo.toml")),
-            (
-                &["src/lib.rs", "crates/flui-app/Cargo.toml"],
-                Some("crates/flui-app/Cargo.toml"),
-            ),
-            (&["rust-toolchain.toml"], Some("rust-toolchain.toml")),
-            (&[".cargo/config.toml"], Some(".cargo/config.toml")),
-            (&["perf/size.toml"], Some("perf/size.toml")),
-            (&["examples/counter.rs"], None),
-            (
-                &["tools/xtask/src/perf/size/step.rs"],
-                Some("tools/xtask/src/perf/size/step.rs"),
-            ),
-            (
-                &["crates/flui-cli/src/templates/hot_reload.rs"],
-                Some("crates/flui-cli/src/templates/hot_reload.rs"),
-            ),
-            (&["docs/Cargo.toml.md"], None),
-            (&["crates/flui-view/src/lib.rs"], None),
-        ];
-        for (files, expected) in cases {
-            let files: Vec<String> = files.iter().map(|f| (*f).to_owned()).collect();
-            assert_eq!(changed_input(&files), expected, "{files:?}");
-        }
     }
 
     fn measured(commit: &str, bytes: u64, baseline: u64) -> step::Measurement {

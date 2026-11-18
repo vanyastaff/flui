@@ -104,7 +104,7 @@ pub struct HeadlessWindow {
     cursor: Mutex<Cursor>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
-    gesture_preset: flui_interaction::GestureProfiles,
+    gesture_preset: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
     display: Mutex<Option<DisplayId>>,
     /// Whether the platform lets the window run, as the test last reported it.
@@ -289,7 +289,7 @@ impl HeadlessWindow {
             cursor: Mutex::new(Cursor::Icon(CursorIcon::Default)),
             text_input: None,
             text_store_host: false,
-            gesture_preset: flui_interaction::GestureSettings::default().into(),
+            gesture_preset: flui_interaction::gesture::GestureSettings::default().into(),
             platform: flui_platform::TargetPlatform::Unknown,
             display: Mutex::new(None),
             execution: Mutex::new(flui_platform::WindowExecutionState::Running),
@@ -349,7 +349,7 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_gesture_preset(
         mut self,
-        preset: impl Into<flui_interaction::GestureProfiles>,
+        preset: impl Into<flui_interaction::gesture::GestureProfiles>,
     ) -> Self {
         self.gesture_preset = preset.into();
         self
@@ -1007,7 +1007,7 @@ pub struct HeadlessHost {
     /// its own.
     window_ids: WindowIdMint,
     /// The surfaces embedded in the primary window, in minting order.
-    embedded: Vec<flui_interaction::InputSurface>,
+    embedded: Vec<flui_interaction::ids::InputSurface>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the UI runtime made
     /// between pumps, which the next pump raises before it frames.
@@ -1587,14 +1587,14 @@ impl HeadlessHost {
     ///
     /// As [`dispatch`](Self::dispatch).
     pub fn dispatch_to(&self, window: HeadlessWindowId, input: PlatformInput) {
-        self.dispatch_on_to(window.0, flui_interaction::InputSurface::Window, input);
+        self.dispatch_on_to(window.0, flui_interaction::ids::InputSurface::Window, input);
     }
 
     /// [`dispatch`](Self::dispatch) as `surface` of `presentation`'s window.
     fn dispatch_on_to(
         &self,
         presentation: PresentationId,
-        surface: flui_interaction::InputSurface,
+        surface: flui_interaction::ids::InputSurface,
         input: PlatformInput,
     ) {
         // A real host routes nothing to a window that closed.
@@ -2315,7 +2315,7 @@ impl HeadlessHost {
     /// The primary window's gesture arena, the one its detectors compete in:
     /// observe it to watch the arena decide what this host dispatches.
     #[must_use]
-    pub fn arena(&self) -> &flui_interaction::GestureArena {
+    pub fn arena(&self) -> &flui_interaction::gesture::GestureArena {
         self.ui_runtime().gestures().arena()
     }
 
@@ -2375,11 +2375,12 @@ impl HeadlessHost {
     ///
     /// # Errors
     ///
-    /// [`SurfaceIdsExhausted`](flui_interaction::SurfaceIdsExhausted) once the
+    /// [`SurfaceIdsExhausted`](flui_interaction::ids::SurfaceIdsExhausted) once the
     /// binding minted every identity.
     pub fn embed_surface(
         &mut self,
-    ) -> Result<flui_interaction::InputSurface, flui_interaction::SurfaceIdsExhausted> {
+    ) -> Result<flui_interaction::ids::InputSurface, flui_interaction::ids::SurfaceIdsExhausted>
+    {
         let surface = self.ui_runtime().gestures().embed_surface()?;
         self.embedded.push(surface);
         Ok(surface)
@@ -2391,7 +2392,7 @@ impl HeadlessHost {
     /// # Panics
     ///
     /// As [`dispatch`](Self::dispatch).
-    pub fn dispatch_on(&self, surface: flui_interaction::InputSurface, input: PlatformInput) {
+    pub fn dispatch_on(&self, surface: flui_interaction::ids::InputSurface, input: PlatformInput) {
         self.dispatch_on_to(self.primary.id, surface, input);
     }
 
@@ -2769,16 +2770,16 @@ impl HeadlessHost {
         &self,
         presentation: PresentationId,
         surface: flui_runtime::RecordedSurface,
-    ) -> flui_interaction::InputSurface {
+    ) -> flui_interaction::ids::InputSurface {
         match surface {
-            flui_runtime::RecordedSurface::Window => flui_interaction::InputSurface::Window,
+            flui_runtime::RecordedSurface::Window => flui_interaction::ids::InputSurface::Window,
             flui_runtime::RecordedSurface::Embedded(raw) => self
                 .embedded
                 .iter()
                 .copied()
                 .find(|embedded| {
                     presentation == self.primary.id
-                        && matches!(embedded, flui_interaction::InputSurface::Embedded(id) if id.get() == raw)
+                        && matches!(embedded, flui_interaction::ids::InputSurface::Embedded(id) if id.get() == raw)
                 })
                 .unwrap_or_else(|| {
                     panic!("the recording names embedded surface {raw}, which this host has not embedded")

@@ -271,8 +271,8 @@ impl UiRuntime {
 
     /// Where the rebuild of the primary presentation's lost GPU device
     /// stands; `None` while its device is healthy. The renderer's owner reads
-    /// this to learn that the application asked for a new rebuild after one
-    /// was given up ([`Self::retry_render_device`]).
+    /// this to learn that the application asked for a new device after a
+    /// rebuild was given up ([`Self::retry_render_device`]).
     // Primary-addressed for the same reason as
     // `mark_primary_needs_full_repaint` (#559).
     #[must_use]
@@ -325,12 +325,14 @@ impl UiRuntime {
         }
     }
 
-    /// Ask again for the rebuild of every lost GPU device whose rebuild was
-    /// given up (ADR-0267): each such presentation returns to
+    /// Ask for a new device for every lost GPU device whose rebuild was given
+    /// up (ADR-0267): each such presentation returns to
     /// [`DeviceRecovery::Pending`](crate::frame_failure::DeviceRecovery::Pending)
-    /// and asks for a frame, before which its renderer's owner rebuilds the
-    /// device again with a fresh backoff. Returns whether any rebuild was
-    /// asked for; a healthy device or one still being rebuilt is left as it is.
+    /// and asks for a frame, before which its renderer's owner probes for a
+    /// device in fresh instances to replace the given-up one (ADR-0305 §8); a
+    /// probe that answers none gives the device up again. Returns whether any
+    /// retry was asked for; a healthy device or one still being rebuilt is
+    /// left as it is.
     pub fn retry_render_device(&self) -> bool {
         let mut asked = false;
         for presentation in self.presentations.iter() {
@@ -481,7 +483,7 @@ impl UiRuntime {
     /// both tiers; an unobserved setting plays them (ADR-0212 §1).
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn haptics(&self) -> flui_interaction::HapticsHandle {
+    pub(crate) fn haptics(&self) -> flui_interaction::haptics::HapticsHandle {
         self.presentations.primary().haptics().handle()
     }
 

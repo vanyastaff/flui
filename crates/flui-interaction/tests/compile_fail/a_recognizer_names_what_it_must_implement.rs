@@ -1,6 +1,6 @@
 //! A type used where a recognizer is expected is told what a recognizer
 //! implements, not only that a bound failed.
-use flui_interaction::GestureRecognizer;
+use flui_interaction::gesture::GestureRecognizer;
 
 struct Swipe;
 

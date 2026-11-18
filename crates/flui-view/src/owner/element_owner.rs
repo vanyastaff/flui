@@ -38,7 +38,7 @@ use std::any::{Any, TypeId};
 
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{CreationSite, ElementId, RenderId, ViewKey};
-use flui_interaction::FocusManager;
+use flui_interaction::focus::FocusManager;
 
 use flui_objects::BuildDuringLayoutCell;
 
@@ -279,7 +279,8 @@ pub struct ElementOwner<'a> {
 
     /// The binding's owner-local interaction dispatch capability (ADR-0027),
     /// threaded into render-object lifecycle contexts.
-    pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,
+    pub(crate) interaction_dispatch:
+        &'a Option<flui_interaction::pointer::InteractionDispatchHandle>,
 
     /// Whether the presentation collects its semantics tree, threaded into
     /// render-object lifecycle contexts.
@@ -287,7 +288,7 @@ pub struct ElementOwner<'a> {
 
     /// This presentation's fresh-hit-test capability, threaded into every
     /// `LiveBuildContext` the same way `text_input_handle` is.
-    pub(crate) hit_test_handle: &'a Option<flui_interaction::HitTestHandle>,
+    pub(crate) hit_test_handle: &'a Option<flui_interaction::pointer::HitTestHandle>,
 
     /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).
     /// `Copy`, so every split-borrow construction site just copies it — no
