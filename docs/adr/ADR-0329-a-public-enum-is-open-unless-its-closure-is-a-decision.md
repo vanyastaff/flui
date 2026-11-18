@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-11-13)
 - **Date:** 2026-11-13
+- **Superseded-by:** [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `api/flui.txt` snapshot only (Consequences, Confirmation): the rule stands and its reader
+  confirms it.
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §5 (the rule in the
   platform contract, which this record extends to every crate);
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §1 and §3 (what the facade reaches

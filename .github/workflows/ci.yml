@@ -1,9 +1,9 @@
 name: CI
 
 # Runtime CI runs on Linux. A pull request that compiles anything runs the
-# Linux gate (clippy, test, public-api) and the on-demand jobs its diff asks
-# for; main, the merge queue and a manual run add every other check: the nested
-# and feature-gated suites, rustdoc, wasm32 and the platform typechecks. This
+# Linux gate (clippy, test); main, the merge queue and a manual run add every
+# other check: the nested, feature-gated and compile-fail suites, rustdoc,
+# wasm32, the platform typechecks, the sizes, perf, miri (ADR-0372). This
 # workflow compiles no other target for a pull request: what a change breaks there
 # shows on main, and nightly-platforms.yml runs each host's suites.
 # There is no scheduled run: advisories.yml checks the RustSec database daily,
@@ -248,14 +248,6 @@ jobs:
       lane: ${{ steps.scope.outputs.lane }}
       mode: ${{ steps.scope.outputs.mode }}
       heavy_required: ${{ steps.scope.outputs.heavy_required }}
-      trybuild_required: ${{ steps.scope.outputs.trybuild_required }}
-      size_required: ${{ steps.scope.outputs.size_required }}
-      send_positions_required: ${{ steps.scope.outputs.send_positions_required }}
-      miri_required: ${{ steps.scope.outputs.miri_required }}
-      perf_required: ${{ steps.scope.outputs.perf_required }}
-      without_agent_required: ${{ steps.scope.outputs.without_agent_required }}
-      features_required: ${{ steps.scope.outputs.features_required }}
-      hack_args: ${{ steps.scope.outputs.hack_args }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -285,7 +277,7 @@ jobs:
             # The checkout is the PR merged into its base branch's current
             # tip, its first parent. `base.sha` stays where the base was at
             # the PR's last push: its diff would count every later main
-            # commit as the PR's own (and ask for test-trybuild).
+            # commit as the PR's own.
             if git rev-parse --verify --quiet HEAD^2 > /dev/null; then
               BASE_SHA=$(git rev-parse HEAD^1)
             fi
@@ -299,7 +291,7 @@ jobs:
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc instead of gating them: clippy
   # compiles the whole workspace (minutes); the rest of `checks` is seconds.
-  # The pull-request gate (clippy, test, public-api) waits for `plan` alone,
+  # The pull-request gate (clippy, test) waits for `plan` alone,
   # beside `checks`: a pull request `checks` fails is pushed again, which
   # cancels the run, and `ci` is red for it either way.
   # ─────────────────────────────────────────────────────────────────────────
@@ -585,13 +577,8 @@ jobs:
       - name: cargo xtask test --nested --nested-group native
         run: cargo xtask test --nested --nested-group native
 
-  # The compile-fail suites: on main, and on a pull request whose diff can
-  # change what a case prints. `plan` reads the sources each `*.stderr`
-  # expectation cites in its `--> path` lines, plus the cases beside them, the
-  # runners, the toolchain and Cargo.lock
-  # (tools/xtask/src/change_scope/diagnostics.rs), and sets `trybuild_required`
-  # when the diff touches one; any other pull request skips the job. Locally a
-  # changed crate's `cargo nextest run` still runs its suite, and
+  # The compile-fail suites, on main. Locally a changed crate's
+  # `cargo nextest run` still runs its suite, and
   # `cargo xtask test --nested --nested-group trybuild` runs them all.
   #
   # Three shards on three runners (`TrybuildShard` in tools/xtask/src/tasks.rs
@@ -604,7 +591,7 @@ jobs:
   test-trybuild:
     name: test-trybuild (${{ matrix.shard }})
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.trybuild_required == 'true')
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
@@ -782,102 +769,6 @@ jobs:
           BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
-  # Nightly API contracts keep their rustdoc JSON output in one job, separately
-  # from stable documentation and the semver report. On main both gates run.
-  # On a pull request only send-positions runs, and only when the diff can
-  # change what it reports. `plan` sets `send_positions_required` when a
-  # changed line of a library the facade reaches names `Send` or `Sync`,
-  # declares or sits inside a `pub use`, declares a `pub mod`, or names an
-  # item the list names in its file, and when the gate itself changes
-  # (tools/xtask/src/change_scope/thread_positions.rs).
-  # api-closure stays on main. Locally:
-  # `cargo xtask api-closure` and `cargo xtask send-positions`.
-  api-contracts:
-    name: api-contracts
-    needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.send_positions_required == 'true')
-    runs-on: ubuntu-26.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      # rustdoc's JSON output is nightly-only. The gate runs it through
-      # `rustup run nightly`, so the committed rust-toolchain.toml pin stays the
-      # toolchain of every other step.
-      - name: Install Rust nightly (rustdoc JSON)
-        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
-        with:
-          # The core host's API is documented as each target it builds a host
-          # for builds it (`targets` in flui-native's api-closure table).
-          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-apple-ios,aarch64-linux-android,wasm32-unknown-unknown
-
-      # What a Stable crate's public API names from upstream crates (ADR-0089
-      # §2), and that the core host's names only its allow list on every target
-      # it builds a host for (ADR-0151 §8), then the same rules over planted
-      # violations. Nightly
-      # adds lints ahead of stable; lints are the stable jobs' business, so its
-      # warnings do not fail this step.
-      - name: cargo xtask api-closure (+ --self-test)
-        if: needs.plan.outputs.lane == 'full'
-        env:
-          CARGO_BUILD_WARNINGS: warn
-        run: |
-          set -euo pipefail
-          cargo xtask api-closure
-          cargo xtask api-closure --self-test
-
-      # Every place the facade's public API names `Send` or `Sync` is listed,
-      # and the list only shrinks (ADR-0136, ADR-0089 §6). Same loader, private
-      # items included; its self-test reads a built-in document and also runs
-      # in `cargo test -p xtask`.
-      - name: cargo xtask send-positions (+ --self-test)
-        env:
-          CARGO_BUILD_WARNINGS: warn
-        run: |
-          set -euo pipefail
-          cargo xtask send-positions
-          cargo xtask send-positions --self-test
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # public-api — the facade's public API against its committed snapshot
-  # `api/flui.txt` (ADR-0324), on every pull request that compiles anything,
-  # so the pull request that changes the surface carries its diff. Locally:
-  # `cargo xtask public-api` (`--write` restates the file), with a nightly
-  # toolchain.
-  # ─────────────────────────────────────────────────────────────────────────
-  public-api:
-    name: public-api
-    needs: [plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      # No rust-cache: the nightly builds of every crate the facade reaches
-      # take 5 GB, half the repository's cache budget.
-      # rustdoc's JSON output is nightly-only; the gate runs it through
-      # `rustup run nightly`, so the pin stays every other step's toolchain.
-      - name: Install Rust nightly (rustdoc JSON)
-        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
-
-      # Nightly adds lints ahead of stable; lints are the stable jobs'
-      # business, so its warnings do not fail this step.
-      - name: cargo xtask public-api
-        env:
-          CARGO_BUILD_WARNINGS: warn
-        run: cargo xtask public-api
-
   # ─────────────────────────────────────────────────────────────────────────
   # perf-gates — what a frame costs, by counts that do not depend on the
   # runner: `cargo xtask perf --check` compares every perf scenario's frame
@@ -885,17 +776,13 @@ jobs:
   # `--instructions --check` runs each `perf_scaling_` scenario on its small
   # and large tree under callgrind and fails when the large one costs more
   # than 5% over the small. The scenarios' own assertions (equal allocations
-  # on both sizes) run on every PR with flui-widgets' suite. The baseline
-  # comparison runs in `full`, and on a pull request whose diff reaches code
-  # that runs for every node of a frame or the comparison's own inputs
-  # (`perf_required`, `change_scope::perf_scope`): one more allocation there
-  # is a rise in every scenario. Callgrind is the slow half and runs in
-  # `full` only.
+  # on both sizes) run on every PR with flui-widgets' suite; the baseline
+  # comparison and callgrind run in `full`.
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.perf_required == 'true')
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -938,16 +825,13 @@ jobs:
   # templates write (a counter on Linux and its wasm32 module, and the host of
   # a `--hot-reload` project), each within 2% of perf/size.toml, and the
   # default graph's package counts (`cargo xtask perf --size --check`). Three
-  # cold release builds, so a pull request runs it only when `size_required`:
-  # its diff touches a manifest, Cargo.lock, the toolchain, .cargo/, the
-  # `flui create` templates, the baseline or the check (ON_DEMAND). A code
-  # change moves a size a little at a time; main runs it on every push, where
-  # one push may grow a binary by 0.5% over the commit before it.
+  # cold release builds, so main runs them, on every push, where one push may
+  # grow a binary by 0.5% over the commit before it.
   # ─────────────────────────────────────────────────────────────────────────
   size:
     name: size
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.size_required == 'true')
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -1115,15 +999,13 @@ jobs:
   # flui-foundation and flui-log whole, the rendering storage arena,
   # rendering owner failure/publishing families, public GlobalKey migration,
   # surface-before-target destruction and cancellation of renderer construction.
-  # A pull request runs it when its diff reaches a source the job interprets
-  # whole (`miri_required`, `change_scope::miri_scope`). The same scopes are
-  # used by `cargo xtask miri`; they are not a full
-  # workspace memory-safety audit.
+  # It runs on main. The same scopes are used by `cargo xtask miri`; they are
+  # not a full workspace memory-safety audit.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.miri_required == 'true')
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -1202,14 +1084,12 @@ jobs:
   # build reads no agent launch value, from the environment or an Android
   # intent (ADR-0288 §7). No other job compiles those tests. The dev profile
   # with debug assertions off is that build, without the release profile's
-  # link time. A pull request runs it when its diff reaches the agent's
-  # module or flui-app's build script (`without_agent_required`,
-  # `change_scope::without_agent_scope`).
+  # link time. It runs on main.
   # ─────────────────────────────────────────────────────────────────────────
   test-without-agent:
     name: test-without-agent
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.without_agent_required == 'true')
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -1287,45 +1167,6 @@ jobs:
       - name: cargo xtask feature-matrix --slice ${{ matrix.slice }}
         run: cargo xtask feature-matrix --slice "$SLICE"
         env:
-          SLICE: ${{ matrix.slice }}
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # feature-scope — a pull request's slice of `feature-matrix` (ADR-0303 §9):
-  # the same per-feature cargo-hack passes over `plan`'s `hack_args` only (the
-  # changed packages that have features, and a package whose Cargo.toml
-  # changed), split over three runners as main splits the workspace over five.
-  # A pull request that changes no such package skips it; main runs the
-  # whole matrix instead.
-  # ─────────────────────────────────────────────────────────────────────────
-  feature-scope:
-    name: feature-scope (${{ matrix.slice }})
-    needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'wide' && needs.plan.outputs.features_required == 'true'
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        slice: ["1/3", "2/3", "3/3"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust + clippy
-        uses: ./.github/actions/rust-toolchain
-        with:
-          components: clippy
-
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-hack@0.6.45
-
-      - name: cargo xtask feature-matrix --packages --slice ${{ matrix.slice }}
-        run: cargo xtask feature-matrix --packages "$HACK_ARGS" --slice "$SLICE"
-        env:
-          HACK_ARGS: ${{ needs.plan.outputs.hack_args }}
           SLICE: ${{ matrix.slice }}
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -1540,7 +1381,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, public-api, api-contracts, perf-gates, size, deps, doc-test, miri, test-without-agent]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, perf-gates, size, deps, doc-test, miri, test-without-agent]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1569,20 +1410,12 @@ jobs:
       #    passed or failed, and gated nothing.
       #
       # 2. EXACTLY THE EXPECTED SKIPS -- which jobs run is decided by
-      #    `plan`'s `lane` and its on-demand outputs, and the aggregator
-      #    recomputes it instead of trusting each job's `if:`. Every lane
-      #    runs checks and plan; then
+      #    `plan`'s `lane`, and the aggregator recomputes it instead of
+      #    trusting each job's `if:`. Every lane runs checks and plan; then
       #      docs      nothing else
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
-      #      full      wide + FULL_JOBS (the nested and feature-gated suites,
-      #                rustdoc, wasm32, the platform typechecks) + test-trybuild
-      #                + size + api-contracts + miri + perf-gates + test-without-agent
-      #    and a wide pull request adds test-trybuild when `trybuild_required`,
-      #    size when `size_required`, feature-scope when `features_required`,
-      #    api-contracts when `send_positions_required`, miri when
-      #    `miri_required`, perf-gates when `perf_required` and test-without-agent
-      #    when `without_agent_required` (ON_DEMAND).
+      #      full      wide + FULL_JOBS (every other check, ADR-0372)
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1591,17 +1424,11 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy test public-api
+            clippy test
           FULL_JOBS: >-
             feature-matrix doc-test test-nested test-features doc wasm-check cross-typecheck
+            test-trybuild size miri perf-gates test-without-agent
           LANE: ${{ needs.plan.outputs.lane }}
-          TRYBUILD_REQUIRED: ${{ needs.plan.outputs.trybuild_required }}
-          SIZE_REQUIRED: ${{ needs.plan.outputs.size_required }}
-          SEND_POSITIONS_REQUIRED: ${{ needs.plan.outputs.send_positions_required }}
-          MIRI_REQUIRED: ${{ needs.plan.outputs.miri_required }}
-          PERF_REQUIRED: ${{ needs.plan.outputs.perf_required }}
-          WITHOUT_AGENT_REQUIRED: ${{ needs.plan.outputs.without_agent_required }}
-          FEATURES_REQUIRED: ${{ needs.plan.outputs.features_required }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify
 

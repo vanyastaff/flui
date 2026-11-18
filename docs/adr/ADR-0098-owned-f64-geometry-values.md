@@ -12,6 +12,9 @@
   bullet only (colour now interpolates in Oklab, premultiplied).
 - **Superseded-by:** [ADR-0194](ADR-0194-continuous-color-and-opacity.md) for the
   implementation-status deferral of normalized `Color` storage only.
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `xtask api-closure` gate only (the Closure list): the rule stands and its reader confirms
+  it.
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (kept as is: this
   record needs no exception to it), [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),

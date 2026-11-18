@@ -5,6 +5,9 @@
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask globals`, `xtask reach` and `xtask workspace` gates only (Decision, Confirmation):
   the rule stands and its reader confirms it.
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
+  it.
 - **Related:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond
   record this one takes the seam from); [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md)
   (the scene callback's lifetime contract); [ADR-0111](ADR-0111-worker-image-lifetime.md) (worker

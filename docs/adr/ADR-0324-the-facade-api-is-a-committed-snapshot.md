@@ -1,7 +1,9 @@
 # ADR-0324: The facade's public API is a committed snapshot every pull request keeps current
 
-- **Status:** Accepted (2026-11-12)
+- **Status:** Superseded (2026-11-18)
 - **Date:** 2026-11-12
+- **Superseded-by:** [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  whole: the facade's API has no committed snapshot before the first release.
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (every item the facade
   reaches carries the Stable promise; this record lists them); [ADR-0136](ADR-0136-owner-local-ui-surfaces.md)
   §3 (`send-positions`, which walks the same surface); [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)

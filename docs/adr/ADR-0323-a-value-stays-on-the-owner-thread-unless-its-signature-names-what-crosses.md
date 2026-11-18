@@ -10,6 +10,9 @@
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask send-impls` gate only (§3, Confirmation): the rule stands and its reader confirms
   it.
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `xtask send-positions` gate only (§3, Confirmation): the rule stands and its reader
+  confirms it.
 - **Related:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) §1, §2 and §5 (one
   owner thread per process, which this record builds on), [ADR-0136](ADR-0136-owner-local-ui-surfaces.md)
   §2 (owner-local tasks and `Weak` handles), [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)

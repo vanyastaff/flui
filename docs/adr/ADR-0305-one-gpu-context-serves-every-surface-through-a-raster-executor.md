@@ -23,6 +23,9 @@
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask globals` and `xtask send-impls` gates only (Confirmation): the rule stands and its
   reader confirms it.
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
+  it.
 - **Amends:** [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §3, §4 and §7
   (their shape: the executor owns the context, and a slot per presentation holds what §4 calls
   its raster owner state and §7's external textures);

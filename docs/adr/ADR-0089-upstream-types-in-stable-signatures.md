@@ -5,6 +5,9 @@
   vocabulary and its flags only (FLUI's roles and actions now cover ARIA 1.2 where AccessKit has
   a counterpart, and role-bearing flags are roles). The rule that stable signatures carry no
   upstream type stands.
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `xtask api-closure` and `xtask send-positions` gates only (§6, Verification): the rule
+  stands and its reader confirms it.
 - **Revised:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
   `Send` and `Sync` positions in the facade's API (ADR-0323); synthetic auto-trait impls are not
   positions.

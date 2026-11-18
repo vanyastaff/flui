@@ -1162,9 +1162,9 @@ pub(crate) struct FeatureMatrixArgs {
     #[arg(long, default_value = "all", value_parser = Slice::parse)]
     slice: Slice,
     /// Instead of the workspace, the per-feature passes over these packages
-    /// only (`-p a -p b`, the `hack_args` of `cargo xtask affected`): what a
-    /// pull request's `feature-scope` job runs, a `k/N` slice of them per
-    /// runner.
+    /// only (`-p a -p b`): the per-feature clippy of the crates a change
+    /// touches, run locally before a pull request; `--slice k/N` takes a share
+    /// of them.
     #[arg(long, allow_hyphen_values = true)]
     packages: Option<String>,
     #[command(flatten)]
@@ -1786,7 +1786,7 @@ mod tests {
             both(" --partition 2/3")
         );
         assert!(feature_scope_plan(packages, Slice::Combinations).is_err());
-        // the invocation CI's `feature-scope` job writes: a value that starts
+        // the invocation a contributor writes: a value that starts
         // with `-p`, beside a slice
         #[derive(clap::Parser)]
         struct FeatureMatrixCli {

@@ -11,6 +11,9 @@
 - **Superseded-by:** [ADR-0339](ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)
   for §5's paragraph on how the application runner routes what the platform opens (the URLs
   held for a presentation that does not exist yet)
+  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  for the `api/flui.txt` snapshot and the `xtask send-positions` gate only (§4, Confirmation): the
+  rule stands and its reader confirms it.
 - **Related:** [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6 (the
   router's stack restored from the application's own document),
   [ADR-0254](ADR-0254-window-contract.md) (the URLs the platform opens reach `AppHandler`),

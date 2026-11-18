@@ -1,7 +1,7 @@
 //! The expectations a change edits, and the pull-request body that names each one (ADR-0331).
 //!
-//! An expectation is a file or a line that says what correct is: the API snapshot, a trybuild
-//! `*.stderr`, an insta `*.snap`, a golden protocol schema, a perf baseline, an allowlist entry,
+//! An expectation is a file or a line that says what correct is: a trybuild `*.stderr`, an insta
+//! `*.snap`, a golden protocol schema, a perf baseline,
 //! a test, an exemption in `deny.toml` or `typos.toml`. A change that edits one also changes
 //! what the checks accept, so the same diff can fix a defect or hide one. `cargo xtask
 //! expectations` lists every such edit; with `--body` it fails unless the body's
@@ -44,8 +44,6 @@ pub(crate) struct ExpectationsArgs {
 /// What kind of expectation an edit touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
-    /// Lines removed from `api/flui.txt` (ADR-0324).
-    ApiSnapshot,
     /// A trybuild `*.stderr` changed or deleted.
     Trybuild,
     /// An insta `*.snap` changed or deleted.
@@ -54,8 +52,6 @@ enum Kind {
     ProtocolSchema,
     /// A perf baseline whose count rose or left, or that was deleted.
     PerfBaseline,
-    /// An allowlist of a gate gained an entry, a count or a name.
-    Allowlist,
     /// A Rust file has fewer tests: test attributes and table-test cases (`case as fn()`).
     TestsRemoved,
     /// A Rust file has more `#[ignore]` attributes.
@@ -67,12 +63,10 @@ enum Kind {
 impl Kind {
     fn label(self) -> &'static str {
         match self {
-            Self::ApiSnapshot => "API snapshot",
             Self::Trybuild => "trybuild expectation",
             Self::Snapshot => "insta snapshot",
             Self::ProtocolSchema => "protocol schema",
             Self::PerfBaseline => "perf baseline",
-            Self::Allowlist => "allowlist",
             Self::TestsRemoved => "tests removed",
             Self::TestIgnored => "test ignored",
             Self::Exemption => "exemption",
@@ -117,9 +111,7 @@ struct Change {
     new: Option<String>,
 }
 
-const API_SNAPSHOT: &str = "api/flui.txt";
 const PROTOCOL_SCHEMAS: &str = "crates/flui-protocol/tests/schema/";
-const ALLOWLISTS: &str = "tools/xtask/allowlists/";
 const SIZE_BASELINE: &str = "perf/size.toml";
 const PERF_BASELINES: &str = "/perf/baseline/";
 const EXEMPTION_FILES: [&str; 2] = ["deny.toml", "typos.toml"];
@@ -130,21 +122,13 @@ fn has_extension(path: &str, extension: &str) -> bool {
         .is_some_and(|found| found.eq_ignore_ascii_case(extension))
 }
 
-fn is_allowlist(path: &str) -> bool {
-    path.starts_with(ALLOWLISTS) && has_extension(path, "toml")
-}
-
 fn is_perf_baseline(path: &str) -> bool {
     path == SIZE_BASELINE || (path.contains(PERF_BASELINES) && has_extension(path, "toml"))
 }
 
 /// Whether the check compares the file's text, and not only how git reports it.
 fn reads_text(path: &str) -> bool {
-    path == API_SNAPSHOT
-        || has_extension(path, "rs")
-        || is_allowlist(path)
-        || is_perf_baseline(path)
-        || EXEMPTION_FILES.contains(&path)
+    has_extension(path, "rs") || is_perf_baseline(path) || EXEMPTION_FILES.contains(&path)
 }
 
 /// What a Rust file's tokens say about its tests.
@@ -365,11 +349,6 @@ fn edits(changes: &[Change]) -> Vec<Edit> {
             }
         } else if path.starts_with(PROTOCOL_SCHEMAS) && has_extension(path, "json") {
             edit(Kind::ProtocolSchema, status.verb().to_owned());
-        } else if path == API_SNAPSHOT {
-            let removed = lines_removed(old_text, new_text);
-            if removed > 0 {
-                edit(Kind::ApiSnapshot, format!("{removed} line(s) removed"));
-            }
         } else if is_perf_baseline(path) {
             if *status == Status::Deleted {
                 edit(Kind::PerfBaseline, status.verb().to_owned());
@@ -378,12 +357,6 @@ fn edits(changes: &[Change]) -> Vec<Edit> {
                 let ceilings_only = path == SIZE_BASELINE;
                 for detail in baseline_edits(old_text, new_text, ceilings_only) {
                     edit(Kind::PerfBaseline, detail);
-                }
-            }
-        } else if is_allowlist(path) {
-            if let Some(new) = new {
-                for detail in allowlist_growth(old.as_deref(), new) {
-                    edit(Kind::Allowlist, detail);
                 }
             }
         } else if EXEMPTION_FILES.contains(&path.as_str()) {
@@ -408,26 +381,6 @@ fn edits(changes: &[Change]) -> Vec<Edit> {
         }
     }
     edits.into_iter().collect()
-}
-
-/// How many lines of `old` have no counterpart in `new`, each line counted as often as it
-/// occurs. The API snapshot writes an item's whole path on its line, so a moved line is not a
-/// removed one.
-fn lines_removed(old: &str, new: &str) -> usize {
-    let mut left: BTreeMap<&str, usize> = BTreeMap::new();
-    for line in new.lines() {
-        *left.entry(line).or_default() += 1;
-    }
-    old.lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter(|line| match left.get_mut(line) {
-            Some(count) if *count > 0 => {
-                *count -= 1;
-                false
-            }
-            _ => true,
-        })
-        .count()
 }
 
 /// What a TOML value says, one line per fact: `path = value` for a key, `path[] = value` for
@@ -546,105 +499,6 @@ fn baseline_edits(old: &str, new: &str, ceilings_only: bool) -> Vec<String> {
         }
     }
     edits
-}
-
-/// How an allowlist grew from `old` to `new`: each entry with no counterpart before, each count
-/// that rose and each list field that gained a member. An entry is a table of a top-level array
-/// (`[[allow]]`, `positions = [...]`); it is matched by its fields other than `reason`, `exit`,
-/// the integers (counts) and the arrays of strings (names), which are compared instead. A file
-/// that does not parse counts as one growth, so the body explains it.
-fn allowlist_growth(old: Option<&str>, new: &str) -> Vec<String> {
-    let parse = |text: &str| text.parse::<toml::Table>();
-    let Ok(new) = parse(new) else {
-        return vec!["does not parse as TOML".to_owned()];
-    };
-    let old = match old.map(parse) {
-        None => toml::Table::new(),
-        Some(Ok(table)) => table,
-        Some(Err(_)) => return vec!["did not parse as TOML before".to_owned()],
-    };
-    let before: BTreeMap<String, Measured> = entries(&old)
-        .into_iter()
-        .map(|m| (m.key.clone(), m))
-        .collect();
-    let mut growth = Vec::new();
-    for entry in entries(&new) {
-        let Some(prior) = before.get(&entry.key) else {
-            growth.push(format!("new entry {}", entry.key));
-            continue;
-        };
-        for (field, value) in &entry.counts {
-            let was = prior.counts.get(field).copied().unwrap_or(0);
-            if *value > was {
-                growth.push(format!("{} {field} {was} -> {value}", entry.key));
-            }
-        }
-        for (field, members) in &entry.lists {
-            let empty = BTreeSet::new();
-            let was = prior.lists.get(field).unwrap_or(&empty);
-            let gained: Vec<&str> = members.difference(was).map(String::as_str).collect();
-            if !gained.is_empty() {
-                growth.push(format!(
-                    "{} {field} gained {}",
-                    entry.key,
-                    gained.join(", ")
-                ));
-            }
-        }
-    }
-    growth
-}
-
-/// An allowlist entry: its identity, its counts and its lists of names.
-#[derive(Debug)]
-struct Measured {
-    key: String,
-    counts: BTreeMap<String, i64>,
-    lists: BTreeMap<String, BTreeSet<String>>,
-}
-
-fn entries(table: &toml::Table) -> Vec<Measured> {
-    let mut out = Vec::new();
-    for (array_name, value) in table {
-        let Some(array) = value.as_array() else {
-            continue;
-        };
-        for item in array {
-            let Some(entry) = item.as_table() else {
-                continue;
-            };
-            let mut identity = toml::Table::new();
-            let mut counts = BTreeMap::new();
-            let mut lists = BTreeMap::new();
-            for (field, value) in entry {
-                match value {
-                    toml::Value::Integer(n) => {
-                        counts.insert(field.clone(), *n);
-                    }
-                    toml::Value::Array(items) if items.iter().all(toml::Value::is_str) => {
-                        let names: BTreeSet<String> = items
-                            .iter()
-                            .filter_map(toml::Value::as_str)
-                            .map(str::to_owned)
-                            .collect();
-                        lists.insert(field.clone(), names);
-                    }
-                    _ if field == "reason" || field == "exit" => {}
-                    _ => {
-                        identity.insert(field.clone(), value.clone());
-                    }
-                }
-            }
-            let mut key = format!("{array_name} {{");
-            for (i, (field, value)) in identity.iter().enumerate() {
-                let sep = if i == 0 { " " } else { ", " };
-                let _ = write!(key, "{sep}{field} = {value}");
-            }
-            key.push_str(" }");
-            out.push(Measured { key, counts, lists });
-        }
-    }
-    out
 }
 
 /// The report `expectations` prints: one line per edit, or a line saying there is none.
@@ -808,20 +662,6 @@ mod tests {
         assert_eq!(found[1].detail, "added");
     }
 
-    fn api_lines_removed_count_and_lines_added_or_moved_do_not() {
-        let old = "pub fn flui::a()\npub fn flui::b()\n\nimpl Clone for flui::T\nimpl Clone for flui::T\n";
-        let found = edits(&modified(
-            API_SNAPSHOT,
-            old,
-            "pub fn flui::c()\nimpl Clone for flui::T\n",
-        ));
-        assert_eq!(kinds(&found), [(API_SNAPSHOT, Kind::ApiSnapshot)]);
-        assert_eq!(found[0].detail, "3 line(s) removed");
-        let moved = "impl Clone for flui::T\npub fn flui::b()\npub fn flui::new()\n\
-                     impl Clone for flui::T\npub fn flui::a()\n";
-        assert_eq!(edits(&modified(API_SNAPSHOT, old, moved)), []);
-    }
-
     fn a_file_that_loses_tests_counts_and_a_conversion_to_a_table_does_not() {
         let path = "crates/x/tests/a.rs";
         let two = "#[test]\nfn a() {}\nfn table() { run(&[(\"b\", b as fn())]) }\n";
@@ -938,52 +778,11 @@ mod tests {
         assert_eq!(edits(&added), []);
     }
 
-    fn an_allowlist_file_counts_by_its_growth() {
-        let path = "tools/xtask/allowlists/send-positions.toml";
-        let old = "[[allow]]\npath = \"a.rs\"\ncount = 2\n";
-        let found = edits(&modified(
-            path,
-            old,
-            "[[allow]]\npath = \"a.rs\"\ncount = 3\n",
-        ));
-        assert_eq!(kinds(&found), [(path, Kind::Allowlist)]);
-        let lowered = "[[allow]]\npath = \"a.rs\"\ncount = 1\n";
-        assert_eq!(edits(&modified(path, old, lowered)), []);
-        assert_eq!(edits(&[change(Status::Deleted, path, Some(old), None)]), []);
-    }
-
-    fn an_allowlist_grows_by_a_new_entry_a_higher_count_or_a_new_name_and_not_by_shrinking() {
-        let old = "reason = \"r\"\n[[allow]]\npath = \"a.rs\"\ncount = 2\n\
-                   [[allow]]\npath = \"b.rs\"\nkind = \"pump\"\nnames = [\"advance\"]\n";
-        let grown = "reason = \"r\"\n[[allow]]\npath = \"a.rs\"\ncount = 3\n\
-                     [[allow]]\npath = \"b.rs\"\nkind = \"pump\"\nnames = [\"advance\", \"tick\"]\n\
-                     [[allow]]\npath = \"c.rs\"\ncount = 1\nreason = \"new\"\n";
-        assert_eq!(
-            allowlist_growth(Some(old), grown),
-            [
-                "allow { path = \"a.rs\" } count 2 -> 3",
-                "allow { kind = \"pump\", path = \"b.rs\" } names gained tick",
-                "new entry allow { path = \"c.rs\" }",
-            ]
-        );
-        let shrunk =
-            "reason = \"r\"\n[[allow]]\npath = \"a.rs\"\ncount = 1\nreason = \"reworded\"\n";
-        assert_eq!(allowlist_growth(Some(old), shrunk), Vec::<String>::new());
-        assert_eq!(
-            allowlist_growth(None, shrunk),
-            ["new entry allow { path = \"a.rs\" }"]
-        );
-        assert_eq!(
-            allowlist_growth(Some(old), "[[allow"),
-            ["does not parse as TOML"]
-        );
-    }
-
     fn a_body_names_a_path_only_inside_the_section_and_with_a_reason() {
         let found = vec![
             Edit {
-                path: "api/flui.txt".to_owned(),
-                kind: Kind::ApiSnapshot,
+                path: "perf/size.toml".to_owned(),
+                kind: Kind::PerfBaseline,
                 detail: String::new(),
             },
             Edit {
@@ -992,24 +791,24 @@ mod tests {
                 detail: String::new(),
             },
         ];
-        let body = "## Summary\n\napi/flui.txt is mentioned here, outside the section.\n\n\
+        let body = "## Summary\n\nperf/size.toml is mentioned here, outside the section.\n\n\
                     ## Expectations\n\n- `crates/x/tests/a.rs`: moved to crates/x/tests/b.rs with its cases\n\
-                    - `api/flui.txt`\n\n## Notes\n- api/flui.txt removes Foo::bar, deprecated since 0.3\n";
-        assert_eq!(unnamed(&found, body), ["api/flui.txt"]);
+                    - `perf/size.toml`\n\n## Notes\n- perf/size.toml lowers a ceiling, measured on main\n";
+        assert_eq!(unnamed(&found, body), ["perf/size.toml"]);
         let named = body.replace(
-            "- `api/flui.txt`\n",
-            "- `api/flui.txt`: drops Foo::bar, which ADR-0330 removed\n",
+            "- `perf/size.toml`\n",
+            "- `perf/size.toml`: lowers the counter ceiling the crate split freed\n",
         );
         assert_eq!(unnamed(&found, &named), Vec::<String>::new());
         let by_directory = body.replace(
-            "- `api/flui.txt`\n",
-            "- api/: the snapshot drops Foo::bar\n- crates/: too wide to name a test file\n",
+            "- `perf/size.toml`\n",
+            "- perf/: the baseline lowers a ceiling\n- crates/: too wide to name a test file\n",
         );
         assert_eq!(unnamed(&found, &by_directory), Vec::<String>::new());
         let too_wide = body.replace("`crates/x/tests/a.rs`: moved", "crates/x/: moved");
         assert_eq!(
             unnamed(&found, &too_wide),
-            ["api/flui.txt", "crates/x/tests/a.rs"]
+            ["crates/x/tests/a.rs", "perf/size.toml"]
         );
         // A longer file name that starts with an edited path does not name it.
         let longer = named.replace(
@@ -1044,11 +843,8 @@ mod tests {
             &[
                 (
                     "golden_files_count_when_changed_or_deleted_and_a_schema_also_when_added",
-                    golden_files_count_when_changed_or_deleted_and_a_schema_also_when_added as fn(),
-                ),
-                (
-                    "api_lines_removed_count_and_lines_added_or_moved_do_not",
-                    api_lines_removed_count_and_lines_added_or_moved_do_not as fn(),
+                    golden_files_count_when_changed_or_deleted_and_a_schema_also_when_added
+                        as fn(),
                 ),
                 (
                     "a_file_that_loses_tests_counts_and_a_conversion_to_a_table_does_not",
@@ -1066,15 +862,6 @@ mod tests {
                 (
                     "a_perf_baseline_counts_a_raised_ceiling_a_changed_work_count_and_a_dropped_count",
                     a_perf_baseline_counts_a_raised_ceiling_a_changed_work_count_and_a_dropped_count
-                        as fn(),
-                ),
-                (
-                    "an_allowlist_file_counts_by_its_growth",
-                    an_allowlist_file_counts_by_its_growth as fn(),
-                ),
-                (
-                    "an_allowlist_grows_by_a_new_entry_a_higher_count_or_a_new_name_and_not_by_shrinking",
-                    an_allowlist_grows_by_a_new_entry_a_higher_count_or_a_new_name_and_not_by_shrinking
                         as fn(),
                 ),
                 (
