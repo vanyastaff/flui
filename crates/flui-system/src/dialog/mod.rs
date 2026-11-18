@@ -15,11 +15,12 @@
 
 mod message;
 mod request;
+#[cfg(not(target_arch = "wasm32"))]
+mod write;
 
+#[cfg(target_arch = "wasm32")]
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Mutex;
 use std::{any::Any, cell::Cell, cell::RefCell, fmt, future::Future, rc::Rc, rc::Weak};
 
 use flui_platform::capability::{
@@ -37,6 +38,8 @@ pub use request::{
     FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile,
     PickedForm, Picks, SaveLocation, SaveRequest,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use write::write_file;
 // The web provider lists a folder before it reads a byte, by the type a
 // folder pick is made of.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -512,12 +515,14 @@ impl FileDialogs {
     /// Every pick is held to the request's filters by its name, on every
     /// host: a system's dialog may let the user past them (a name typed
     /// into it, a link whose target has another name, a type that only
-    /// conforms to an allowed one). When the filters name extensions only
-    /// and a pick's name ends in none of them, the whole answer is
-    /// [`DialogError::NotInFilter`], and no pick is handed out. A request
-    /// with a MIME type among its filters is not checked here: a file's
-    /// type is its system's to tell, so the backend that mapped the pattern
-    /// judges the pick by it.
+    /// conforms to an allowed one). When the filters name extensions and
+    /// file names only and no filter names a pick ([`FileFilter::matches`]),
+    /// the whole answer is [`DialogError::NotInFilter`], and no pick is
+    /// handed out. A request that offers a filter of
+    /// [every file](FileFilter::all_files) admits every pick. A request with
+    /// a MIME type among its filters is not checked here: a file's type is
+    /// its system's to tell, so the backend that mapped the pattern judges
+    /// the pick by it.
     ///
     /// What a system hands over rather than names by a path is held to the
     /// request's bounds, on every host: a handed-over folder of more files
@@ -551,6 +556,12 @@ impl FileDialogs {
     /// chose, the handle writes them on a thread of its own, since no file
     /// system call runs on the owner thread (ADR-0360 §2), and a failed
     /// write answers [`DialogError::Failed`] with the system's code. The
+    /// contents replace the chosen file whole or not at all, through a new
+    /// file beside it that takes its name: a chosen link is written through
+    /// to the file it leads to, and the replaced file's mode is kept. Where
+    /// no new file can be made beside the chosen one (a sandbox's document
+    /// folder, a read-only folder) the contents are written into the file
+    /// itself, and a write that fails midway there leaves it cut short. The
     /// window is free for the next dialog once the user has chosen; the
     /// write itself cannot be called back, so dropping the [`Dialog`] while
     /// it runs drops only the answer.
@@ -619,62 +630,6 @@ impl FileDialogs {
     }
 }
 
-/// Write `contents` to `path` on a thread of its own, then answer `caller`
-/// with `location`, or with the failure of the write.
-#[cfg(not(target_arch = "wasm32"))]
-fn write_file(
-    completions: &CompletionSource,
-    path: PathBuf,
-    contents: Arc<[u8]>,
-    location: SaveLocation,
-    caller: Resolver<SaveResult>,
-) {
-    let (written, answer) = completions.pending::<Result<(), DialogError>>();
-    let mut waiting = Some((caller, location));
-    written.on_complete(move |outcome| {
-        let Some((caller, location)) = waiting.take() else {
-            return;
-        };
-        match outcome {
-            Ok(Ok(())) => {
-                // A retired owner has nobody left to answer.
-                let _ = caller.resolve(Ok(Some(location)));
-            }
-            Ok(Err(error)) => {
-                // A retired owner has nobody left to answer.
-                let _ = caller.resolve(Err(error));
-            }
-            Err(_) => drop(caller),
-        }
-    });
-    // The thread answers through the slot; a thread that cannot start leaves
-    // the resolver there, and the failure is answered here.
-    let slot = Arc::new(Mutex::new(Some(answer)));
-    let writer = Arc::clone(&slot);
-    let started = std::thread::Builder::new()
-        .name("flui-system-save".to_owned())
-        .spawn(move || {
-            let written = write_replacing(&path, &contents).map_err(|error| write_failure(&error));
-            let answer = writer
-                .lock()
-                .expect("BUG: the save slot's holders run no code under its lock")
-                .take();
-            if let Some(answer) = answer {
-                // A retired owner has nobody left to answer.
-                let _ = answer.resolve(written);
-            }
-        });
-    if let Err(error) = started {
-        let answer = slot
-            .lock()
-            .expect("BUG: the save slot's holders run no code under its lock")
-            .take();
-        if let Some(answer) = answer {
-            let _ = answer.resolve(Err(write_failure(&error)));
-        }
-    }
-}
-
 /// A save to a path on a system with no file system of its own: a backend
 /// of this platform hands over no path, so only a stand-in answers one.
 #[cfg(target_arch = "wasm32")]
@@ -691,60 +646,6 @@ fn write_file(
     >(
         UnsupportedReason::NotOnThisPlatform,
     ))));
-}
-
-/// How many names beside the chosen file a save tries for its new file
-/// before it gives up: each is taken only by one this process is writing.
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_TEMPORARY_NAMES: u32 = 16;
-
-/// Write `contents` to `path` whole or not at all: into a new file beside
-/// it, synced, then renamed over it, so a write that fails leaves the file
-/// the user chose as it was, and a reader never sees it half written.
-#[cfg(not(target_arch = "wasm32"))]
-fn write_replacing(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::{ErrorKind, Write as _};
-
-    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(ErrorKind::InvalidInput.into());
-    };
-    let mut taken = None;
-    for attempt in 0..MAX_TEMPORARY_NAMES {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(name);
-        temporary_name.push(format!(".{}-{attempt}.flui-save", std::process::id()));
-        let temporary = folder.join(temporary_name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(mut file) => {
-                let written = file.write_all(contents).and_then(|()| file.sync_all());
-                drop(file);
-                let replaced = written.and_then(|()| std::fs::rename(&temporary, path));
-                if replaced.is_err() {
-                    // The write's failure is the answer; the clean-up's is not.
-                    let _ = std::fs::remove_file(&temporary);
-                }
-                return replaced;
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => taken = Some(error),
-            Err(error) => return Err(error),
-        }
-    }
-    Err(taken.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
-}
-
-/// The failure a write reports: the system's code, or a write that took no
-/// bytes without one ([`SystemFailure::MalformedAnswer`]).
-#[cfg(not(target_arch = "wasm32"))]
-fn write_failure(error: &std::io::Error) -> DialogError {
-    DialogError::Failed(
-        error
-            .raw_os_error()
-            .map_or(SystemFailure::MalformedAnswer, SystemFailure::Os),
-    )
 }
 
 impl fmt::Debug for FileDialogs {

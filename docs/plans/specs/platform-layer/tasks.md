@@ -8141,6 +8141,61 @@ GPU-память простаивающего или невидимого окн
   (перепутанные `Always`/`WhenScrolling` в разборе — падают),
   `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
   падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
+- [x] **Краевые случаи диалогов `flui-system`** (строки в таблице нет: сверка файловых диалогов
+  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0372.
+  Построено. Фильтр: `FileFilter::all_files` (свой вид `Kind::EveryFile`, а не строка `*`; запрос
+  с ним принимает любой выбор, шаблон, добавленный к нему, — `MalformedRequest::PatternOnAllFiles`)
+  и точное имя `with_file_name` (`Makefile`, `.env`; без учёта регистра ASCII,
+  `MalformedRequest::FileName`); Windows — `*.*` и имя как шаблон, портал — `*` и глоб имени в
+  трёх написаниях, macOS и iOS (общий `apple::content_types`) — без типов, имя проверяет правило
+  контракта, web — собственный пункт «все файлы» у пикера (`excludeAcceptAllOption: false`) и
+  пустой `accept` у input. Windows: `\\?\C:\…` и `\\?\UNC\…` приводятся к обычному виду общим
+  `win32::verbatim` (лаунчер берёт его же, `held_name`); папки, которой нет (удалена, диск
+  отключён, шара не отвечает), диалог не получает и открывается где решит система, как на прочих
+  хостах; папка, которую оболочка не разбирает по иной причине, — `Failed(Os)`; окно без
+  Win32-дескриптора — `NoWindow`. Портал: имя без расширения дополняется расширением выбранного
+  фильтра, кроме случаев, когда файл с таким именем уже есть или файл лежит в папке document
+  portal (выдан под своим именем); скрытое имя (`.env`) не дополняется нигде, как на Windows.
+  Message box: без заголовка — пустой заголовок на всех хостах, `default_button`, `detail`,
+  `button_label`; macOS, iOS и web показывают всё, Windows показывает деталь и кнопку по умолчанию,
+  а запрос с подписями отклоняет `NotYetOnThisHost` (`MessageBoxW` подписать кнопку не умеет).
+  Скрытые файлы: `show_hidden` (`FOS_FORCESHOWHIDDEN`, `showsHiddenFiles`; у портала, iOS и
+  браузера опции нет). macOS: панель делает источник панелей до поиска окна; nil — `Unavailable`.
+  Запись содержимого (`dialog::write`): через ссылку — в её файл, новый файл создаётся сразу с
+  режимом заменяемого; запись на месте — только где ФС отказывает по устройству (папка без
+  соседнего имени, `EXDEV`, `EBUSY`, `EPERM` липкой папки), любой другой отказ переименования
+  (файл открыт без `FILE_SHARE_DELETE`, файл только для чтения) отвечает кодом системы, файл цел.
+  Тесты, в скобках результат с откатом:
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer` и
+  `a_filter_means_a_files_name_or_its_type_ignoring_ascii_case` (новые строки),
+  `a_malformed_request_is_refused_without_showing_a_dialog` (строки `PatternOnAllFiles`),
+  `a_typed_name_without_an_extension_is_completed_by_the_selected_filters_first`,
+  `a_message_box_carries_its_detail_its_default_button_and_its_labels_to_the_system`;
+  Windows 11 через nextest: `a_save_over_a_file_held_open_fails_and_leaves_it_whole` (файл
+  опустошён и переписан на месте), `a_folder_that_is_gone_is_left_out_and_one_the_shell_cannot_name_fails`
+  (настоящая оболочка, диалог не показан; без правки — `Failed(Os)`),
+  `a_box_whose_request_labels_a_button_is_refused_and_shows_nothing` (box показан с системными
+  подписями), `a_verbatim_folder_is_named_to_the_dialog_in_the_form_the_shell_reads`,
+  `a_box_shows_its_title_or_none_its_detail_below_its_message_and_its_default_button`,
+  `the_default_button_is_named_by_its_place_among_the_buttons`,
+  `a_window_that_is_no_win32_window_is_refused_and_shows_no_dialog` и `…_no_box`,
+  `a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led` (шара после `held_name`
+  остаётся шарой); WSL: `a_saves_new_file_is_never_more_readable_than_the_file_it_replaces`,
+  `a_save_to_a_symlink_updates_its_target`, `a_save_keeps_the_mode_of_the_file_it_replaces`,
+  `a_save_where_no_file_can_be_made_beside_the_chosen_one_writes_into_it`,
+  `a_portal_save_without_an_extension_is_named_after_the_selected_filter` (строки `.env` и
+  document portal), `a_path_in_the_document_portals_folder_is_known_by_its_mounts`; модели на
+  всех хостах: `a_filter_of_every_file_frees_the_dialog_and_a_named_file_leaves_it_to_the_rule`,
+  `every_file_and_a_named_file_keep_the_browsers_entry_of_every_file`,
+  `an_alert_shows_the_detail_below_the_message_and_each_buttons_label`,
+  `return_presses_the_default_button_and_escape_the_one_that_cancels_under_any_label`; macOS CI:
+  `a_panel_appkit_does_not_make_answers_unavailable_and_frees_the_window`; headless Chrome CI:
+  `a_box_shows_its_detail_its_labels_and_focuses_its_default_button`. Не прогнаны: ни один
+  настоящий диалог, панель, пикер или alert; вызовы AppKit и UIKit — только проверка типов. Долги
+  в `docs/gaps.md` и в заметках строк «Open, save and folder dialogs» и «Message box»: фокус
+  клавиатуры после закрытия диалога, пустая панель macOS после отмены, смена расширения при смене
+  фильтра на Windows, запись в папку Flatpak document portal, через точку монтирования и в липкой
+  папке, пункт «все файлы» пикера рядом с типами запроса.
 
 ## Отступление от порядка, решённое владельцем
 

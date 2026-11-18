@@ -7,7 +7,10 @@
 //! ADR-0361). The system admits a file whose type conforms to an allowed
 //! one and matches a several-part extension by its last part, so every
 //! pick is held to the contract's rule before any is read, and one the
-//! request does not mean refuses the answer (`NotInFilter`). The picks are
+//! request does not mean refuses the answer (`NotInFilter`). A filter of
+//! every file shows every document, and so does a request with a filter
+//! that names a file exactly, which no type expresses (ADR-0372); hidden
+//! files are the picker's own to show or not. The picks are
 //! then read under their security-scoped access, off the main thread and
 //! within the request's `max_bytes` (`document_access`), and handed over as
 //! name and contents. A folder dialog answers `NotYetOnThisHost`: a
@@ -354,12 +357,17 @@ mod uikit {
                 .map_err(not_presented);
             };
             let every = [ContentType::Identifier(EVERY_DOCUMENT)];
-            let types = filter
+            let mut types = filter
                 .map_or(&every[..], |filter| filter.types.as_slice())
                 .iter()
                 .map(|content_type| ut_type(proof, content_type))
                 .collect::<Option<Vec<Retained<AnyObject>>>>()
                 .ok_or_else(not_here)?;
+            if filter.is_some_and(|filter| !filter.restricts_by_type()) {
+                // A file named exactly has no type: every document is
+                // shown, and each pick is held to the request's rule.
+                types = vec![ut_type(proof, &every[0]).ok_or_else(not_here)?];
+            }
             let types = NSArray::from_retained_slice(&types);
             let picker: Option<Retained<UIDocumentPickerViewController>> =
                 guarded("making a document picker", || {

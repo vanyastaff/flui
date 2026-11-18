@@ -1969,6 +1969,40 @@ async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
 }
 
 #[wasm_bindgen_test]
+fn a_box_shows_its_detail_its_labels_and_focuses_its_default_button() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let shown = message_boxes(&owner, &window).show(
+        MessageBoxRequest::new("Delete the file?")
+            .detail("It cannot be restored.")
+            .buttons(MessageButtons::OkCancel)
+            .button_label(MessageAnswer::Ok, "Delete")
+            .default_button(MessageAnswer::Cancel),
+    );
+    let dialog = the_box(&window);
+    let paragraphs = dialog.query_selector_all("p").expect("the paragraphs");
+    let texts: Vec<String> = (0..paragraphs.length())
+        .filter_map(|at| paragraphs.get(at)?.text_content())
+        .collect();
+    assert_eq!(texts, ["Delete the file?", "It cannot be restored."]);
+    let buttons = dialog.query_selector_all("button").expect("the buttons");
+    let button = |at: u32| {
+        buttons
+            .get(at)
+            .expect("a button")
+            .unchecked_into::<web_sys::HtmlElement>()
+    };
+    assert_eq!(button(0).text_content().as_deref(), Some("Delete"));
+    assert_eq!(button(1).text_content().as_deref(), Some("Cancel"));
+    assert!(
+        !button(0).autofocus(),
+        "the default is not the first button"
+    );
+    assert!(button(1).autofocus(), "the default button takes focus");
+    drop(shown);
+}
+
+#[wasm_bindgen_test]
 fn a_box_with_no_title_is_named_by_its_message() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);

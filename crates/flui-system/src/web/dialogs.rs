@@ -245,11 +245,11 @@ impl FileDialogBackend for WebDialogs {
         };
         let options = Object::new();
         set(&options, "suggestedName", &JsValue::from_str(&name));
-        set(&options, "types", &picker_types(&types));
+        set(&options, "types", &picker_types(&types.types));
         set(
             &options,
             "excludeAcceptAllOption",
-            &(!request.filters.is_empty()).into(),
+            &(!types.accepts_all).into(),
         );
         match call_promise(&picker, self.page.view(), &options) {
             Ok(promise) => {
@@ -423,11 +423,11 @@ fn picker_options(request: &OpenRequest) -> Option<Object> {
     } else {
         let types = rules::picker_types(&request.filters)?;
         set(&options, "multiple", &request.is_multiple().into());
-        set(&options, "types", &picker_types(&types));
+        set(&options, "types", &picker_types(&types.types));
         set(
             &options,
             "excludeAcceptAllOption",
-            &(!request.filters.is_empty()).into(),
+            &(!types.accepts_all).into(),
         );
     }
     Some(options)
