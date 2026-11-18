@@ -451,7 +451,7 @@ async fn read_picks(
         let buffer = settle(Ok(file.array_buffer())).await?;
         let bytes = Uint8Array::new(&buffer);
         read = read.saturating_add(u64::from(bytes.length()));
-        rules::admit_read(read, limit)?;
+        crate::dialog::admit_read(read, limit)?;
         let length = usize::try_from(bytes.length()).map_err(|_| DialogError::TooLarge {
             actual: read,
             limit,

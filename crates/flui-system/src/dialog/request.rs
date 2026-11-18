@@ -213,7 +213,7 @@ impl FileFilter {
 /// ASCII case: the one rule a name is matched by (ADR-0360 §3). `name` is a
 /// file name in the bytes its system keeps it in; an extension is ASCII, so
 /// the rule reads no character of a name that is not UTF-8.
-pub(crate) fn name_ends_in(name: &[u8], extension: &str) -> bool {
+fn name_ends_in(name: &[u8], extension: &str) -> bool {
     let extension = extension.as_bytes();
     name.len()
         .checked_sub(extension.len())
@@ -240,6 +240,56 @@ pub(super) fn names_admit(filters: &[FileFilter], picks: &Picks) -> bool {
             filters.iter().any(|filter| filter.names(name))
         })
     })
+}
+
+/// The name a save's file is given where the provider names it from the
+/// request rather than from what the user typed into a dialog (a browser's
+/// save picker or download, an export to iOS's Files): `suggested`, or
+/// `unnamed` when there is none, with the first filter's first extension
+/// added when the name has none, as a desktop save dialog names a typed file
+/// after the selected filter.
+#[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
+pub(crate) fn save_file_name(
+    suggested: Option<&str>,
+    filters: &[FileFilter],
+    unnamed: &str,
+) -> String {
+    let name = suggested.unwrap_or(unnamed);
+    let has_extension = name
+        .rsplit_once('.')
+        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
+    match filters
+        .first()
+        .and_then(|filter| filter.extensions().first())
+    {
+        Some(extension) if !has_extension => {
+            // `notes.` is `notes` with an empty extension: the filter's
+            // replaces it rather than following a second dot.
+            let stem = match name.trim_end_matches('.') {
+                "" => name,
+                stem => stem,
+            };
+            format!("{stem}.{extension}")
+        }
+        _ => name.to_owned(),
+    }
+}
+
+/// Refuse `read` bytes of picks past `limit`, an open's
+/// [`max_bytes`](OpenRequest::max_bytes), with
+/// [`DialogError::TooLarge`](super::DialogError::TooLarge): what a provider
+/// that hands over a pick's contents checks before it reads, by the sizes
+/// the system declares, and again by the bytes it read.
+#[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
+pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), super::DialogError> {
+    if read > limit {
+        Err(super::DialogError::TooLarge {
+            actual: read,
+            limit,
+        })
+    } else {
+        Ok(())
+    }
 }
 
 /// Whether `extension` is one: at most [`FileFilter::MAX_PATTERN_LEN`]
@@ -360,7 +410,7 @@ pub struct OpenRequest {
     pick: Pick,
     multiple: bool,
     /// The most bytes the picks may hold together where the system hands
-    /// over a pick's contents rather than its path (a browser), as
+    /// over a pick's contents rather than its path (a browser, iOS), as
     /// [`max_bytes`](Self::max_bytes) sets it.
     pub max_bytes: u64,
     /// The dialog's title, if set.
@@ -435,7 +485,7 @@ impl OpenRequest {
     }
 
     /// Read at most `max_bytes` of the picks, together, where the system
-    /// hands over a pick's contents rather than its path (a browser): the
+    /// hands over a pick's contents rather than its path (a browser, iOS): the
     /// picks' sizes are checked against it before anything is read, and
     /// more is answered with
     /// [`DialogError::TooLarge`](super::DialogError::TooLarge). The default
@@ -544,11 +594,12 @@ impl SaveRequest {
     }
 
     /// Write `contents` to the file the user chooses before the dialog
-    /// answers: the one way to save on a system that hands a page no file to
+    /// answers: the one way to save on a system that hands over no file to
     /// write later (a browser, which writes them through its save picker or
-    /// as a download), and the same save everywhere else, where the file is
-    /// written off the owner thread once the user has chosen it. A save that
-    /// fails to write answers the failure, not the location.
+    /// as a download; iOS, whose picker places a file that exists), and the
+    /// same save everywhere else, where the file is written off the owner
+    /// thread once the user has chosen it. A save that fails to write
+    /// answers the failure, not the location.
     #[must_use]
     pub fn contents(mut self, contents: impl Into<Arc<[u8]>>) -> Self {
         self.contents = Some(contents.into());
@@ -705,12 +756,14 @@ fn is_file_name(name: &str) -> bool {
 /// A file or folder the user picked.
 ///
 /// Its own type rather than a path, since not every system answers one: a
-/// desktop dialog answers where the file is ([`path`](Self::path)), and a
-/// browser answers a file a page may read but never a path to it, which the
-/// pick carries as its name and its contents ([`contents`](Self::contents)).
-/// A later backend can carry the access a sandbox grants with a pick (a
-/// security-scoped bookmark, a document portal entry, a content URI) the
-/// same way, without changing what callers receive.
+/// desktop dialog answers where the file is ([`path`](Self::path)), while a
+/// browser answers a file a page may read but never a path to it, and iOS a
+/// document the application may reach only while it holds the access the
+/// picker granted; both are carried as the file's name and its contents
+/// ([`contents`](Self::contents)). A later backend can carry the access a
+/// sandbox grants with a pick (a security-scoped bookmark, a document portal
+/// entry, a content URI) the same way, without changing what callers
+/// receive.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PickedFile {
@@ -722,7 +775,7 @@ pub struct PickedFile {
 enum Place {
     /// A file at a path the application opens itself.
     Path(PathBuf),
-    /// A file the browser handed over: its name, and what it holds, read
+    /// A file the system handed over: its name, and what it holds, read
     /// when the dialog answered (an open) or written before it did (a save).
     Contents { name: String, contents: Arc<[u8]> },
     /// Contents handed to the browser as a download under this name.
@@ -736,11 +789,11 @@ enum Place {
 pub enum PickedForm<'a> {
     /// A file at a path, which the application reads or writes itself.
     Path(&'a Path),
-    /// A file a browser handed over without a path: its name, and what it
-    /// holds, read when an open dialog answered or written before a save
-    /// answered.
+    /// A file a browser or iOS handed over without a path: its name, and
+    /// what it holds, read when an open dialog answered or written before a
+    /// save answered.
     Contents {
-        /// The name the browser gave it.
+        /// The name the system gave it.
         name: &'a str,
         /// What it holds.
         contents: &'a [u8],
@@ -769,7 +822,7 @@ impl PickedFile {
     }
 
     /// The file named `name` holding `contents`, as a system that hands
-    /// over no path reports it (a browser); `None` when `name` is not a file
+    /// over no path reports it (a browser, iOS); `None` when `name` is not a file
     /// name: blank, `.` or `..`, or holding a path separator or a control
     /// character.
     #[must_use]
@@ -802,7 +855,7 @@ impl PickedFile {
     }
 
     /// Where it is; `None` for a file the system handed over without a
-    /// path (a browser's), whose [`contents`](Self::contents) the pick
+    /// path (a browser's, iOS's), whose [`contents`](Self::contents) the pick
     /// holds instead, and for a download.
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
