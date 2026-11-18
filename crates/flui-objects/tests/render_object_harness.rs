@@ -454,9 +454,11 @@ impl RemovalNotifier {
         })
     }
 
-    fn withdraw(&self, id: flui_foundation::ListenerId) {
+    fn withdraw(&self, subscription: Option<flui_foundation::Subscription>) {
         assert!(!self.before.replace(false), "{} removal", self.name);
-        self.source.remove_listener(id);
+        if let Some(subscription) = subscription {
+            subscription.detach();
+        }
         assert!(!self.fail.replace(false), "{} removal", self.name);
     }
 }
@@ -467,7 +469,7 @@ impl flui_foundation::Listenable for RemovalNotifier {
         // anything; the caller holds the closure and never gets a
         // subscription.
         assert!(!self.fail_add.replace(false), "{} registration", self.name);
-        let id = self.source.add_listener(listener);
+        let inner = Cell::new(Some(self.source.listen(listener)));
         // The removals run the source's own machinery; the subscription
         // carries it the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
@@ -475,14 +477,14 @@ impl flui_foundation::Listenable for RemovalNotifier {
             RemovalNotifier {
                 state: Rc::clone(&state),
             }
-            .withdraw(id);
+            .withdraw(inner.take());
         })
     }
     fn listen_with_recovery(
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        let id = self.source.add_with_recovery(relay);
+        let inner = Cell::new(Some(self.source.listen_with_recovery(relay)));
         // The removals run the source's own machinery; the subscription
         // carries it the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
@@ -490,7 +492,7 @@ impl flui_foundation::Listenable for RemovalNotifier {
             RemovalNotifier {
                 state: Rc::clone(&state),
             }
-            .withdraw(id);
+            .withdraw(inner.take());
         })
     }
 }

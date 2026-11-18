@@ -57,7 +57,7 @@ registration (`a_subscription_detaches_only_its_own_channel`,
 No id-based registration or withdrawal is a `Listenable` method
 ([ADR-0109](../../docs/adr/ADR-0109-notification-channel-surface.md) decision
 5): the id machinery is the channel level's own
-(`take_listener`, `take_listeners`, `add_listener`, `add_with_recovery`),
+(`add_with_recovery` with `take_callback`/`take_listener`, `take_listeners`),
 reached through concrete types, not through the trait.
 
 ## Slot generations (ADR-0313, ADR-0320)

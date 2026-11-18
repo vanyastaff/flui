@@ -53,7 +53,7 @@ impl ViewState<Counted> for CountedState {
 /// Registers a listener that captures `count` on `notifier`.
 fn listen(notifier: &ChangeNotifier, count: &Rc<Cell<u32>>) -> impl Any {
     let count = Rc::clone(count);
-    notifier.add_listener(Rc::new(move || count.set(count.get() + 1)))
+    notifier.listen(Rc::new(move || count.set(count.get() + 1)))
 }
 
 #[test]
