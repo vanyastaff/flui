@@ -137,11 +137,46 @@ mod appkit {
         view.window()
     }
 
-    /// `path` as a file URL; `None` for a path that is not UTF-8, which no
-    /// file on a macOS volume has.
-    pub(crate) fn file_url(path: &Path) -> Option<Retained<NSURL>> {
-        path.to_str()
-            .map(|path| NSURL::fileURLWithPath(&NSString::from_str(path)))
+    /// `path` as a file URL, from its bytes as the file system has them, so
+    /// a name that is not UTF-8 (a FAT, exFAT, SMB or NFS volume may hold
+    /// one) names the same file; `None` for a path holding a NUL, which no
+    /// file has. `directory` says whether it names a folder.
+    pub(crate) fn file_url(path: &Path, directory: bool) -> Option<Retained<NSURL>> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let bytes = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        let pointer = std::ptr::NonNull::new(bytes.as_ptr().cast_mut())?;
+        // SAFETY: a NUL-terminated byte string that outlives the call, which
+        // copies it into the URL.
+        Some(unsafe {
+            NSURL::fileURLWithFileSystemRepresentation_isDirectory_relativeToURL(
+                pointer, directory, None,
+            )
+        })
+    }
+
+    /// The path a file URL names, as the file system's bytes; `None` for a
+    /// URL that names no file. `getFileSystemRepresentation:` answers `NO`
+    /// where `fileSystemRepresentation` would raise an exception.
+    pub(crate) fn url_path(url: &NSURL) -> Option<std::path::PathBuf> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        if !url.isFileURL() {
+            return None;
+        }
+        let mut buffer = vec![0_u8; usize::try_from(libc::PATH_MAX).unwrap_or(1024) + 1];
+        let pointer = std::ptr::NonNull::new(buffer.as_mut_ptr().cast::<std::ffi::c_char>())?;
+        // SAFETY: the buffer outlives the call and holds the length given,
+        // which the method writes at most, a NUL included.
+        let written = unsafe { url.getFileSystemRepresentation_maxLength(pointer, buffer.len()) };
+        if !written {
+            return None;
+        }
+        let length = buffer.iter().position(|byte| *byte == 0)?;
+        buffer.truncate(length);
+        Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+            &buffer,
+        )))
     }
 
     /// What `error`'s code is a code of: its POSIX code where it carries
@@ -227,7 +262,10 @@ mod appkit {
         registrar.provide::<TaskbarCapability>(|ctx: &ProviderContext<'_>| {
             let mtm = main_thread::<TaskbarCapability>()?;
             Ok::<_, Unsupported>(TaskbarEntry::new(
-                super::taskbar::MacDockTile::new(mtm),
+                super::taskbar::MacDockTile::new(
+                    mtm,
+                    ctx.runtime_local::<super::taskbar::DockViews>(),
+                ),
                 ctx,
             ))
         });

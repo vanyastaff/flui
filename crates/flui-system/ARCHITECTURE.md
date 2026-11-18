@@ -190,22 +190,34 @@ and a window with no AppKit window answers `NoWindow`. The sheet's completion ha
 dialog's hold share the caller's resolver (`macos::sheet::Pending`): the first to come takes it, so
 a hold dropped while the sheet is up (the caller let go, the window closed, the runtime retired)
 ends the sheet (`endSheet:returnCode:`), and the handler that ending runs answers nobody
-(ADR-0344). A filter becomes the panel's allowed content types: an extension the `UTType` of its last
-part, a MIME type its type, a MIME family (`image/*`, `audio/*`, `video/*`, `text/*`, `font/*`) the
-family's system type; another family is refused `NotOnThisPlatform` rather than widened. An open
-panel with a several-part extension (`tar.gz`) checks names itself through its delegate
-(`panel:shouldEnableURL:`), which enables a folder to browse or a file the contract's rule admits
-(ADR-0360 §3, §4). A panel has no filter menu, so every filter's types are allowed at once and a save
-reports no selected filter. The alert adds its buttons default first, so AppKit puts it rightmost and
-gives Escape to the button titled Cancel.
+(ADR-0344). A filter is what the panel allows: from macOS 11 its content types (an extension the
+`UTType` of its last part, a MIME type its type, a MIME family, `image/*`, `audio/*`, `video/*`,
+`text/*` or `font/*`, the family's system type; another family is refused `NotOnThisPlatform`
+rather than widened); below macOS 11, on an Intel Mac, its file types, the extensions' last parts,
+and a filter with a MIME type answers `NotOnThisDevice`. macOS admits what conforms to an allowed
+type (`.swift` under `txt`) and derives a type from a name's last part, so an open panel with a
+filter holds every item to the contract's rule through its delegate (`panel:shouldEnableURL:`,
+a folder to browse or a file whose name ends in an extension or whose type conforms to a MIME
+pattern's), and checks each pick it answers by the same rule: a pick the rule refuses is
+`MalformedAnswer`, never handed out (ADR-0360 §3, §4). A save's pick names a file to create and is
+not checked. A panel has no filter menu, so every filter is allowed at once and a save reports no
+selected filter. The alert adds its buttons default first, so AppKit puts it rightmost and gives
+Escape to the button titled Cancel.
+
+A path reaches Foundation as the file system's bytes (`fileURLWithFileSystemRepresentation:`) and
+comes back the same way (`getFileSystemRepresentation:`), so a name that is not UTF-8, which a FAT,
+exFAT, SMB or NFS volume may hold, names its file.
 
 Launching opens no shell. A URI goes to `NSWorkspace` `openURL:` as written once
-`URLForApplicationToOpenURL:` finds a handler. A document is opened first (`open(2)`, following
-links), and its final path (`F_GETPATH`) is judged: the name floor (`runs_when_opened`), an execute
-bit on a regular file, and a folder Launch Services calls an application (`NSURLIsApplicationKey`)
-are `NotADocument`; only then is the final path handed to `openURL:`, while the file is still open.
-Reveal is `activateFileViewerSelectingURLs:` once the path exists; trash is `NSFileManager`
-`trashItemAtURL:`, a volume with no trash `NotOnThisDevice`.
+`URLForApplicationToOpenURL:` finds a handler. A document is opened first, following links and
+without blocking (`O_NONBLOCK`: a named pipe with no writer would hold the open, and its work
+item's place, forever), and only a regular file or a folder is a document; its final path
+(`F_GETPATH`) is judged: the name floor (`runs_when_opened`), an execute bit on a regular file, and
+a folder Launch Services calls an application (`NSURLIsApplicationKey`) are `NotADocument`; only
+then is the final path handed to `openURL:`, while the file is still open. Reveal is
+`activateFileViewerSelectingURLs:` once the path exists; trash is `NSFileManager`
+`trashItemAtURL:`, a volume with no trash `NotOnThisDevice`. A volume that stops answering holds a
+request's place until it answers.
 
 The share picker is a popover on the window's content view, shown at the owner turn where the file
 check settles, unless the window closed meanwhile; it shares the text as a string, the link as a URL
@@ -216,20 +228,26 @@ in System Settings (`requiresApproval`) is never registered over: enabling then 
 An unbundled executable has no item (`NotDeclared`).
 
 A global shortcut is a Carbon hot key (`RegisterEventHotKey`), which needs no Accessibility
-permission and reports the release. The runtime's handler on the application event target is
-installed with its first binding; a shortcut is bound to the trigger it prefers or left out of
-`Bound` (no preferred trigger, F21 to F24, which have no key code, or a chord another application
-holds); a letter is bound by its position on an ANSI keyboard; a hot key number is never handed out
-twice in a runtime's life, and the handler passes on an event whose number it does not hold.
+permission and reports the release. Each runtime installs its handler on the application event
+target with its first binding. A shortcut is bound to the trigger it prefers or left out of `Bound`:
+no preferred trigger, F21 to F24 (no key code), or a chord another application holds, which an
+exclusive registration (`kEventHotKeyExclusive`) refuses. A letter or digit is the key that types it
+on the layout current when the binding is made (`UCKeyTranslate` over the current input source), or
+its ANSI position where that layout types it on no key. Carbon hands every hot key to every handler
+on the application target, so a hot key's number is unique in the process (a monotonic counter,
+ADR-0097 §2, folded into the `EventHotKeyID`'s signature and id) and never handed out again: a
+handler passes on an event whose number it does not hold, for the next runtime's handler.
 
-The launcher entry is the application's Dock tile: the count its badge, in full; a known extent a bar
-over the application's icon in the tile's content view. The Dock draws the tile once per change, so
-an indeterminate bar could not move and shows no progress.
+The launcher entry is the process's Dock tile: the count its badge, in full; a known extent a bar
+over the application's icon in the tile's content view, made once per runtime and updated. The Dock
+draws the tile once per change, so an indeterminate bar could not move and shows no progress. The
+entry's state is a UI runtime's (`TaskbarEntry`), while the tile is the process's: in a process with
+two runtimes, the last to set its entry is what the tile shows.
 
 A user folder is `URLsForDirectory:inDomains:` in the user's domain (Movies for videos, Public for
-the public share; there is no templates folder), the home folder `NSHomeDirectory`; a folder the
-user does not have answers none. The system information is `NSProcessInfo`'s version, read once per
-runtime, and the machine's processor, Arm64 for a process Rosetta translates.
+the public share; there is no templates folder), the home folder `homeDirectoryForCurrentUser`; a
+folder the user does not have answers none. The system information is `NSProcessInfo`'s version,
+read once per runtime, and the machine's processor, Arm64 for a process Rosetta translates.
 
 ## Linux (`portal`)
 

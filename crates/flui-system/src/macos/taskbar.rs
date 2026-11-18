@@ -2,8 +2,10 @@
 //! tile's badge, the progress a bar drawn over the application's icon in
 //! the tile's content view.
 //!
-//! The Dock tile is the application's, not a window's, so the entry is shown
-//! whether a window is open or not. The Dock draws the content view when
+//! The Dock tile is the process's, not a window's, so the entry is shown
+//! whether a window is open or not; the entry's state is a UI runtime's, so
+//! in a process with two runtimes the last to set its entry is what the
+//! tile shows, the other's count and bar included. The Dock draws the content view when
 //! asked (`display`), not continuously, so an indeterminate bar could not
 //! move: [`Progress::Indeterminate`] shows no progress, as
 //! [`Honoured::indeterminate`] says. The badge shows the count in full; the
@@ -30,10 +32,14 @@ pub(super) fn bar(state: EntryState) -> Option<f64> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use appkit::MacDockTile;
+pub(crate) use appkit::{DockViews, MacDockTile};
 
 #[cfg(target_os = "macos")]
 mod appkit {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use objc2::rc::Retained;
     use objc2::{MainThreadMarker, MainThreadOnly as _};
     use objc2_app_kit::{
         NSApplication, NSImageView, NSProgressIndicator, NSProgressIndicatorStyle, NSView,
@@ -43,23 +49,29 @@ mod appkit {
     use super::{HONOURED, badge, bar};
     use crate::taskbar::{EntryState, Honoured, TaskbarBackend};
 
+    /// The tile's content view and its bar, made with the first bar and
+    /// kept: a later change sets the bar's value.
+    #[derive(Default)]
+    pub(crate) struct DockViews(RefCell<Option<(Retained<NSView>, Retained<NSProgressIndicator>)>>);
+
     /// [`TaskbarBackend`] over the application's Dock tile.
     pub(crate) struct MacDockTile {
         mtm: MainThreadMarker,
+        views: Rc<DockViews>,
     }
 
     impl MacDockTile {
-        pub(crate) fn new(mtm: MainThreadMarker) -> Self {
-            Self { mtm }
+        pub(crate) fn new(mtm: MainThreadMarker, views: Rc<DockViews>) -> Self {
+            Self { mtm, views }
         }
 
-        /// The tile's content view for a bar `done` along: the
-        /// application's icon with the bar along its bottom.
-        fn content(&self, size: NSSize, done: f64) -> objc2::rc::Retained<NSView> {
+        /// The application's icon with a bar along its bottom, sized for a
+        /// tile of `size`.
+        fn make(&self, size: NSSize) -> (Retained<NSView>, Retained<NSProgressIndicator>) {
             let application = NSApplication::sharedApplication(self.mtm);
             let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
-            let view: objc2::rc::Retained<NSView> = match application.applicationIconImage() {
-                Some(icon) => objc2::rc::Retained::into_super(objc2::rc::Retained::into_super(
+            let view: Retained<NSView> = match application.applicationIconImage() {
+                Some(icon) => Retained::into_super(Retained::into_super(
                     NSImageView::imageViewWithImage(&icon, self.mtm),
                 )),
                 None => NSView::initWithFrame(NSView::alloc(self.mtm), frame),
@@ -77,9 +89,8 @@ mod appkit {
             indicator.setIndeterminate(false);
             indicator.setMinValue(0.0);
             indicator.setMaxValue(1.0);
-            indicator.setDoubleValue(done);
             view.addSubview(&indicator);
-            view
+            (view, indicator)
         }
     }
 
@@ -89,7 +100,12 @@ mod appkit {
             let label = badge(state.count).map(|label| NSString::from_str(&label));
             tile.setBadgeLabel(label.as_deref());
             match bar(state) {
-                Some(done) => tile.setContentView(Some(&self.content(tile.size(), done))),
+                Some(done) => {
+                    let mut views = self.views.0.borrow_mut();
+                    let (view, indicator) = views.get_or_insert_with(|| self.make(tile.size()));
+                    indicator.setDoubleValue(done);
+                    tile.setContentView(Some(view));
+                }
                 None => tile.setContentView(None),
             }
             tile.display();

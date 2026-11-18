@@ -3,26 +3,34 @@
 //! Accessibility permission nor an exemption from the sandbox, and report
 //! the release as well as the press.
 //!
-//! The application event target's handler, installed with the runtime's
-//! first binding, hears each hot key on the main run loop. macOS has no
-//! shortcut settings an application binds through: a shortcut is bound to
-//! the trigger it prefers, or not at all, and the [`ShortcutEvent::Bound`]
-//! list names the ones bound. One whose chord another application holds,
-//! that prefers none, or whose key has no key code (F21 to F24) is left out
-//! of it. A trigger's key is the key code of its position on an ANSI
-//! keyboard; the modifiers map Control, Option (`ALT`), Shift and Command
-//! (`META`). A hot key number is never handed out twice in a runtime's
-//! life, so an event still queued for a dropped binding finds no shortcut
-//! rather than a later one.
+//! Each UI runtime installs a handler on the application event target with
+//! its first binding, and hears its hot keys on the main run loop. macOS has
+//! no shortcut settings an application binds through: a shortcut is bound
+//! to the trigger it prefers, or not at all, and the
+//! [`ShortcutEvent::Bound`] list names the ones bound. One whose chord
+//! another application holds (each is registered exclusive), that prefers
+//! none, or whose key has no key code (F21 to F24) is left out of it. A
+//! letter or digit is the key that types it on the keyboard layout current
+//! when the binding is made, or its ANSI position where that layout types
+//! it on no key (a non-Latin layout); the modifiers map Control, Option
+//! (`ALT`), Shift and Command (`META`).
+//!
+//! A hot key's number is unique in the process: Carbon delivers every hot
+//! key to every handler on the application target, so two runtimes with
+//! numbers of their own would each take the other's events. The number is
+//! never handed out again, so an event still queued for a dropped binding
+//! finds no shortcut rather than a later one, and a handler passes on an
+//! event whose number it does not hold, for the next handler to hear.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_platform::keyboard::{Modifiers, NamedKey};
 use rustc_hash::FxHashMap;
 
 use crate::shortcuts::{
-    BoundShortcut, Shortcut, ShortcutError, ShortcutEvent, ShortcutFeed, ShortcutId, Trigger,
-    TriggerKey, function_key,
+    BoundShortcut, Shortcut, ShortcutEvent, ShortcutFeed, ShortcutId, Trigger, TriggerKey,
+    function_key,
 };
 
 /// Carbon's modifier flags (`Events.h`).
@@ -33,8 +41,9 @@ mod flag {
     pub(super) const CONTROL: u32 = 1 << 12;
 }
 
-/// The key code (`kVK_ANSI_*`) of an ASCII letter or digit's position.
-fn character_key(character: char) -> Option<u32> {
+/// The key code (`kVK_ANSI_*`) of an ASCII letter or digit's position on an
+/// ANSI keyboard.
+fn ansi_key(character: char) -> Option<u32> {
     let code = match character.to_ascii_lowercase() {
         'a' => 0x00,
         's' => 0x01,
@@ -77,6 +86,19 @@ fn character_key(character: char) -> Option<u32> {
     Some(code)
 }
 
+/// The highest key code a keyboard layout maps.
+const LAST_KEY_CODE: u16 = 0x7F;
+
+/// The key code that types `character` (ASCII, lower case) with no
+/// modifier on the layout whose keys `typed` reads, or its ANSI position
+/// when no key of that layout types it.
+pub(super) fn key_code_for(character: char, typed: impl Fn(u16) -> Option<char>) -> Option<u32> {
+    (0..=LAST_KEY_CODE)
+        .find(|code| typed(*code).is_some_and(|typed| typed.to_ascii_lowercase() == character))
+        .map(u32::from)
+        .or_else(|| ansi_key(character))
+}
+
 /// The key code (`kVK_*`) and the name macOS shows of a named key a
 /// trigger takes; `None` for F21 to F24, which have no key code.
 fn named_key(key: NamedKey) -> Option<(u32, String)> {
@@ -96,11 +118,11 @@ fn named_key(key: NamedKey) -> Option<(u32, String)> {
         NamedKey::ArrowDown => (0x7D, "↓"),
         NamedKey::ArrowUp => (0x7E, "↑"),
         _ => {
-            let number = function_key(key)?;
             const CODES: [u32; 20] = [
                 0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F, 0x69, 0x6B,
                 0x71, 0x6A, 0x40, 0x4F, 0x50, 0x5A,
             ];
+            let number = function_key(key)?;
             let code = *CODES.get(usize::from(number).checked_sub(1)?)?;
             return Some((code, format!("F{number}")));
         }
@@ -110,8 +132,11 @@ fn named_key(key: NamedKey) -> Option<(u32, String)> {
 
 /// A trigger as `RegisterEventHotKey` takes it: its key code, its modifier
 /// flags, and the chord as macOS shows it (`⌃⌥⇧⌘A`); `None` for a key with
-/// no key code.
-pub(super) fn hot_key(trigger: &Trigger) -> Option<(u32, u32, String)> {
+/// no key code. `key_code` names the key of a letter or digit.
+pub(super) fn hot_key(
+    trigger: &Trigger,
+    key_code: impl Fn(char) -> Option<u32>,
+) -> Option<(u32, u32, String)> {
     let mut flags = 0;
     let mut shown = String::new();
     for (modifier, carbon, symbol) in [
@@ -128,7 +153,7 @@ pub(super) fn hot_key(trigger: &Trigger) -> Option<(u32, u32, String)> {
     let code = match trigger.key() {
         TriggerKey::Character(character) => {
             shown.push(character.to_ascii_uppercase());
-            character_key(character)?
+            key_code(character)?
         }
         TriggerKey::Named(named) => {
             let (code, name) = named_key(named)?;
@@ -139,38 +164,61 @@ pub(super) fn hot_key(trigger: &Trigger) -> Option<(u32, u32, String)> {
     Some((code, flags, shown))
 }
 
-/// Carbon's hot keys as the provider reaches them, on the main thread.
-pub(super) trait HotKeySystem {
-    /// Register hot key `id`; the failure is the `OSStatus`.
-    fn register(&self, id: u32, code: u32, flags: u32) -> Result<(), i32>;
+/// The next hot key number of the process: one domain, since every handler
+/// on the application target hears every hot key. Only `fetch_add` reads it,
+/// a monotonic counter (ADR-0097 §2) that 64 bits keep from wrapping.
+static NEXT_HOT_KEY: AtomicU64 = AtomicU64::new(1);
 
-    /// Unregister hot key `id`.
-    fn unregister(&self, id: u32);
+/// A hot key's number in the process, never handed out twice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct HotKeyNumber(u64);
+
+/// `'flui'`, which a number's high half is folded into as Carbon's
+/// signature.
+const SIGNATURE: u32 = u32::from_be_bytes(*b"flui");
+
+impl HotKeyNumber {
+    fn mint() -> Self {
+        Self(NEXT_HOT_KEY.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The number as Carbon's `EventHotKeyID`: the signature, then the id.
+    pub(super) fn to_carbon(self) -> (u32, u32) {
+        let high = u32::try_from(self.0 >> 32).expect("BUG: the high half of a u64 fits a u32");
+        let low = u32::try_from(self.0 & u64::from(u32::MAX)).expect("BUG: masked to 32 bits");
+        (SIGNATURE ^ high, low)
+    }
+
+    /// The number an `EventHotKeyID` names, whoever registered it.
+    pub(super) fn from_carbon(signature: u32, id: u32) -> Self {
+        Self((u64::from(signature ^ SIGNATURE) << 32) | u64::from(id))
+    }
 }
 
-/// Where each registered hot key's events go, by number, and the last
-/// number handed out.
+/// Carbon's hot keys as the provider reaches them, on the main thread.
+pub(super) trait HotKeySystem {
+    /// Register hot key `number`, exclusive; the failure is the `OSStatus`.
+    fn register(&self, number: HotKeyNumber, code: u32, flags: u32) -> Result<(), i32>;
+
+    /// Unregister hot key `number`.
+    fn unregister(&self, number: HotKeyNumber);
+
+    /// The key code that types an ASCII letter or digit now.
+    fn key_code(&self, character: char) -> Option<u32>;
+}
+
+/// Where each of a runtime's hot keys' events go, by number.
 #[derive(Default)]
 pub(crate) struct HotKeyTable {
-    entries: RefCell<FxHashMap<u32, (ShortcutFeed, ShortcutId)>>,
-    last: Cell<u32>,
+    entries: RefCell<FxHashMap<HotKeyNumber, (ShortcutFeed, ShortcutId)>>,
 }
 
 impl HotKeyTable {
-    /// `count` numbers no hot key of this runtime has had; `None`, and
-    /// nothing handed out, when fewer are left.
-    fn mint(&self, count: usize) -> Option<std::ops::RangeInclusive<u32>> {
-        let first = self.last.get().checked_add(1)?;
-        let last = self.last.get().checked_add(u32::try_from(count).ok()?)?;
-        self.last.set(last);
-        Some(first..=last)
-    }
-
-    /// Hot key `id` was pressed or released: its binding hears it, and
-    /// whether the runtime has such a hot key. The table's borrow ends
-    /// before the event is sent.
-    pub(super) fn heard(&self, id: u32, pressed: bool) -> bool {
-        let entry = self.entries.borrow().get(&id).cloned();
+    /// Hot key `number` was pressed or released: its binding hears it.
+    /// Returns whether the runtime holds that hot key; the table's borrow
+    /// ends before the event is sent.
+    pub(super) fn heard(&self, number: HotKeyNumber, pressed: bool) -> bool {
+        let entry = self.entries.borrow().get(&number).cloned();
         let Some((feed, shortcut)) = entry else {
             return false;
         };
@@ -182,71 +230,77 @@ impl HotKeyTable {
         true
     }
 
-    fn insert(&self, id: u32, feed: ShortcutFeed, shortcut: ShortcutId) {
-        let replaced = self.entries.borrow_mut().insert(id, (feed, shortcut));
+    fn insert(&self, number: HotKeyNumber, feed: ShortcutFeed, shortcut: ShortcutId) {
+        let replaced = self.entries.borrow_mut().insert(number, (feed, shortcut));
         drop(replaced);
     }
 
-    fn remove(&self, id: u32) {
-        let removed = self.entries.borrow_mut().remove(&id);
+    fn remove(&self, number: HotKeyNumber) {
+        let removed = self.entries.borrow_mut().remove(&number);
         drop(removed);
     }
 }
 
 /// Register each of `shortcuts` that prefers a trigger with a key code, its
-/// events sent to `feed`: the numbers registered and the shortcuts bound,
-/// or why none could be.
+/// events sent to `feed`: the numbers registered and the shortcuts bound.
 pub(super) fn bind(
     table: &HotKeyTable,
     system: &dyn HotKeySystem,
     shortcuts: Vec<Shortcut>,
     feed: &ShortcutFeed,
-) -> Result<(Vec<u32>, Vec<BoundShortcut>), ShortcutError> {
-    let ids = table
-        .mint(shortcuts.len())
-        .ok_or(ShortcutError::Exhausted)?;
+) -> (Vec<HotKeyNumber>, Vec<BoundShortcut>) {
     let mut registered = Vec::new();
     let mut bound = Vec::new();
-    for (id, shortcut) in ids.zip(shortcuts) {
-        let Some((code, flags, shown)) = shortcut.preferred.as_ref().and_then(hot_key) else {
+    for shortcut in shortcuts {
+        let Some((code, flags, shown)) = shortcut
+            .preferred
+            .as_ref()
+            .and_then(|trigger| hot_key(trigger, |character| system.key_code(character)))
+        else {
             continue;
         };
+        let number = HotKeyNumber::mint();
         // In the table first: an event the system reports at once finds it.
-        table.insert(id, feed.clone(), shortcut.id.clone());
-        match system.register(id, code, flags) {
+        table.insert(number, feed.clone(), shortcut.id.clone());
+        match system.register(number, code, flags) {
             Ok(()) => {
-                registered.push(id);
+                registered.push(number);
                 bound.push(BoundShortcut::new(shortcut.id, Some(shown)));
             }
             // Another application, or this binding, holds the chord: this
             // shortcut is not bound.
-            Err(_) => table.remove(id),
+            Err(_) => table.remove(number),
         }
     }
-    Ok((registered, bound))
+    (registered, bound)
 }
 
-/// Unregister hot key `id` and forget its binding.
-pub(super) fn unbind(table: &HotKeyTable, system: &dyn HotKeySystem, id: u32) {
-    system.unregister(id);
-    table.remove(id);
+/// Unregister hot key `number` and forget its binding.
+pub(super) fn unbind(table: &HotKeyTable, system: &dyn HotKeySystem, number: HotKeyNumber) {
+    system.unregister(number);
+    table.remove(number);
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) use appkit::{HotKeys, MacShortcuts};
 
 #[cfg(target_os = "macos")]
-#[expect(unsafe_code, reason = "Carbon's hot keys and their event handler")]
+#[expect(
+    unsafe_code,
+    reason = "Carbon's hot keys, their event handler and the keyboard layout"
+)]
 mod appkit {
     use std::cell::{OnceCell, RefCell};
     use std::ffi::c_void;
     use std::rc::Rc;
 
-    use flui_platform::SystemFailure;
     use objc2::MainThreadMarker;
     use rustc_hash::FxHashMap;
 
-    use super::{HotKeySystem, HotKeyTable, bind, unbind};
+    use super::{
+        HotKeyNumber, HotKeySystem, HotKeyTable, LAST_KEY_CODE, ansi_key, bind, key_code_for,
+        unbind,
+    };
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::shortcuts::{
         Shortcut, ShortcutBackend, ShortcutError, ShortcutEvent, ShortcutFeed, ShortcutHold,
@@ -260,7 +314,7 @@ mod appkit {
     type EventHotKeyRef = *mut c_void;
     type EventHandlerUpp = extern "C" fn(EventHandlerCallRef, EventRef, *mut c_void) -> OsStatus;
 
-    /// `EventHotKeyID`: the application's signature and the key's number.
+    /// `EventHotKeyID`: a signature and an id.
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
     struct EventHotKeyId {
@@ -275,8 +329,6 @@ mod appkit {
         event_kind: u32,
     }
 
-    /// `'flui'`, the signature every hot key of the crate carries.
-    const SIGNATURE: u32 = u32::from_be_bytes(*b"flui");
     /// `kEventClassKeyboard`.
     const KEYBOARD: u32 = u32::from_be_bytes(*b"keyb");
     /// `kEventHotKeyPressed`, `kEventHotKeyReleased`.
@@ -287,6 +339,12 @@ mod appkit {
     const HOT_KEY_ID: u32 = u32::from_be_bytes(*b"hkid");
     /// `eventNotHandledErr`: the next handler hears the event.
     const NOT_HANDLED: OsStatus = -9874;
+    /// `kEventHotKeyExclusive`: the registration fails when another
+    /// application holds the chord.
+    const EXCLUSIVE: u32 = 1 << 0;
+    /// `kUCKeyActionDown`, `kUCKeyTranslateNoDeadKeysMask`.
+    const KEY_DOWN: u16 = 0;
+    const NO_DEAD_KEYS: u32 = 1 << 0;
 
     #[link(name = "Carbon", kind = "framework")]
     unsafe extern "C" {
@@ -319,9 +377,96 @@ mod appkit {
             actual_size: *mut usize,
             data: *mut c_void,
         ) -> OsStatus;
+        fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+        fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *mut c_void;
+        static kTISPropertyUnicodeKeyLayoutData: *const c_void;
+        fn LMGetKbdType() -> u8;
+        fn UCKeyTranslate(
+            layout: *const c_void,
+            code: u16,
+            action: u16,
+            modifiers: u32,
+            keyboard: u32,
+            options: u32,
+            dead_keys: *mut u32,
+            capacity: usize,
+            length: *mut usize,
+            text: *mut u16,
+        ) -> OsStatus;
     }
 
-    /// The application event target's handler of the runtime's hot keys,
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFDataGetBytePtr(data: *const c_void) -> *const u8;
+        fn CFRelease(object: *const c_void);
+    }
+
+    /// The keyboard layout current now, while held.
+    struct CurrentLayout {
+        source: *mut c_void,
+        layout: *const c_void,
+    }
+
+    impl CurrentLayout {
+        /// The current layout, when it has Unicode key data (an input
+        /// method may have none).
+        fn read() -> Option<Self> {
+            // SAFETY: on the main thread; the copy is released by `Drop`.
+            let source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
+            if source.is_null() {
+                return None;
+            }
+            // SAFETY: the property key is HIToolbox's constant; the data it
+            // answers is owned by `source`, which this value holds.
+            let data =
+                unsafe { TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) };
+            let layout = if data.is_null() {
+                std::ptr::null()
+            } else {
+                // SAFETY: `data` is a live `CFData` owned by `source`.
+                unsafe { CFDataGetBytePtr(data) }.cast::<c_void>()
+            };
+            let current = Self { source, layout };
+            (!current.layout.is_null()).then_some(current)
+        }
+
+        /// The character key `code` types with no modifier, when it types one.
+        fn typed(&self, code: u16) -> Option<char> {
+            let mut dead_keys = 0_u32;
+            let mut text = [0_u16; 4];
+            let mut length = 0_usize;
+            // SAFETY: `layout` is the held source's `UCKeyboardLayout`; the
+            // buffers outlive the call, which writes at most `text.len()`
+            // units and their count.
+            let status = unsafe {
+                UCKeyTranslate(
+                    self.layout,
+                    code,
+                    KEY_DOWN,
+                    0,
+                    u32::from(LMGetKbdType()),
+                    NO_DEAD_KEYS,
+                    &raw mut dead_keys,
+                    text.len(),
+                    &raw mut length,
+                    text.as_mut_ptr(),
+                )
+            };
+            if status != 0 || length != 1 {
+                return None;
+            }
+            char::from_u32(u32::from(text[0]))
+        }
+    }
+
+    impl Drop for CurrentLayout {
+        fn drop(&mut self) {
+            // SAFETY: the copy `read` made, released once.
+            unsafe { CFRelease(self.source) };
+        }
+    }
+
+    /// The application event target's handler of a runtime's hot keys,
     /// whose user data is the runtime's [`HotKeyTable`].
     extern "C" fn hot_key_handler(
         call: EventHandlerCallRef,
@@ -350,14 +495,15 @@ mod appkit {
                 };
                 // SAFETY: as above.
                 let kind = unsafe { GetEventKind(event) };
-                if status != 0 || id.signature != SIGNATURE || !matches!(kind, PRESSED | RELEASED) {
+                if status != 0 || !matches!(kind, PRESSED | RELEASED) {
                     return NOT_HANDLED;
                 }
                 // SAFETY: the user data is the table the installed handler's
                 // owner keeps alive until it removes the handler, and this
                 // runs on the main thread, where the table is used.
                 let table = unsafe { &*table.cast::<HotKeyTable>() };
-                if table.heard(id.id, kind == PRESSED) {
+                let number = HotKeyNumber::from_carbon(id.signature, id.id);
+                if table.heard(number, kind == PRESSED) {
                     0
                 } else {
                     NOT_HANDLED
@@ -366,11 +512,14 @@ mod appkit {
         )
     }
 
-    /// The real hot key system: the handler on the application event
-    /// target, and each registered key's reference.
+    /// The real hot key system: the runtime's handler on the application
+    /// event target, and each registered key's reference.
     struct CarbonHotKeys {
         handler: EventHandlerRef,
-        keys: RefCell<FxHashMap<u32, EventHotKeyRef>>,
+        keys: RefCell<FxHashMap<HotKeyNumber, EventHotKeyRef>>,
+        /// Read when a binding is made, so a letter is the key that types
+        /// it on the layout of that moment.
+        layout: RefCell<Option<CurrentLayout>>,
         /// Kept while the handler is installed: its user data points here.
         _table: Rc<HotKeyTable>,
     }
@@ -407,6 +556,7 @@ mod appkit {
             Ok(Self {
                 handler,
                 keys: RefCell::default(),
+                layout: RefCell::new(None),
                 _table: Rc::clone(table),
             })
         }
@@ -414,7 +564,8 @@ mod appkit {
 
     impl Drop for CarbonHotKeys {
         fn drop(&mut self) {
-            for (_, key) in self.keys.borrow_mut().drain() {
+            let keys = std::mem::take(&mut *self.keys.borrow_mut());
+            for key in keys.into_values() {
                 // SAFETY: a key this value registered and did not unregister.
                 let _ = unsafe { UnregisterEventHotKey(key) };
             }
@@ -424,7 +575,8 @@ mod appkit {
     }
 
     impl HotKeySystem for CarbonHotKeys {
-        fn register(&self, id: u32, code: u32, flags: u32) -> Result<(), i32> {
+        fn register(&self, number: HotKeyNumber, code: u32, flags: u32) -> Result<(), i32> {
+            let (signature, id) = number.to_carbon();
             let mut key: EventHotKeyRef = std::ptr::null_mut();
             // SAFETY: on the main thread; the reference is written into
             // `key`, which outlives the call.
@@ -432,28 +584,37 @@ mod appkit {
                 RegisterEventHotKey(
                     code,
                     flags,
-                    EventHotKeyId {
-                        signature: SIGNATURE,
-                        id,
-                    },
+                    EventHotKeyId { signature, id },
                     GetApplicationEventTarget(),
-                    0,
+                    EXCLUSIVE,
                     &raw mut key,
                 )
             };
             if status != 0 {
                 return Err(status);
             }
-            let replaced = self.keys.borrow_mut().insert(id, key);
+            let replaced = self.keys.borrow_mut().insert(number, key);
             debug_assert!(replaced.is_none(), "a hot key number is handed out once");
             Ok(())
         }
 
-        fn unregister(&self, id: u32) {
-            let key = self.keys.borrow_mut().remove(&id);
+        fn unregister(&self, number: HotKeyNumber) {
+            let key = self.keys.borrow_mut().remove(&number);
             if let Some(key) = key {
                 // SAFETY: a key this value registered.
                 let _ = unsafe { UnregisterEventHotKey(key) };
+            }
+        }
+
+        fn key_code(&self, character: char) -> Option<u32> {
+            let layout = self.layout.borrow();
+            match layout.as_ref() {
+                Some(layout) => key_code_for(character, |code| {
+                    (code <= LAST_KEY_CODE)
+                        .then(|| layout.typed(code))
+                        .flatten()
+                }),
+                None => ansi_key(character),
             }
         }
     }
@@ -478,14 +639,14 @@ mod appkit {
     /// Unregisters a binding's hot keys when dropped.
     struct Registered {
         hot_keys: Rc<HotKeys>,
-        ids: Vec<u32>,
+        numbers: Vec<HotKeyNumber>,
     }
 
     impl Drop for Registered {
         fn drop(&mut self) {
             if let Ok(system) = self.hot_keys.system() {
-                for id in self.ids.drain(..) {
-                    unbind(&self.hot_keys.table, system, id);
+                for number in self.numbers.drain(..) {
+                    unbind(&self.hot_keys.table, system, number);
                 }
             }
         }
@@ -505,24 +666,24 @@ mod appkit {
 
     impl ShortcutBackend for MacShortcuts {
         fn bind(&self, shortcuts: Vec<Shortcut>, feed: ShortcutFeed) -> ShortcutHold {
-            let bound = self
-                .hot_keys
-                .system()
-                .map_err(|status| ShortcutError::Failed(SystemFailure::Framework(status.into())))
-                .and_then(|system| bind(&self.hot_keys.table, system, shortcuts, &feed));
-            match bound {
-                Ok((ids, bound)) => {
-                    feed.send(ShortcutEvent::Bound(bound));
-                    ShortcutHold::new(Registered {
-                        hot_keys: Rc::clone(&self.hot_keys),
-                        ids,
-                    })
+            let system = match self.hot_keys.system() {
+                Ok(system) => system,
+                Err(status) => {
+                    feed.send(ShortcutEvent::Ended(ShortcutError::Failed(
+                        flui_platform::SystemFailure::Framework(status.into()),
+                    )));
+                    return ShortcutHold::new(());
                 }
-                Err(error) => {
-                    feed.send(ShortcutEvent::Ended(error));
-                    ShortcutHold::new(())
-                }
-            }
+            };
+            // The layout of this moment: a letter is the key that types it.
+            let replaced = system.layout.replace(CurrentLayout::read());
+            drop(replaced);
+            let (numbers, bound) = bind(&self.hot_keys.table, system, shortcuts, &feed);
+            feed.send(ShortcutEvent::Bound(bound));
+            ShortcutHold::new(Registered {
+                hot_keys: Rc::clone(&self.hot_keys),
+                numbers,
+            })
         }
     }
 }
@@ -533,7 +694,9 @@ mod tests {
 
     use flui_platform::keyboard::{Key, Modifiers, NamedKey};
 
-    use super::{HotKeySystem, HotKeyTable, bind, hot_key, unbind};
+    use super::{
+        HotKeyNumber, HotKeySystem, HotKeyTable, ansi_key, bind, hot_key, key_code_for, unbind,
+    };
     use crate::shortcuts::{Shortcut, ShortcutFeed, ShortcutId, Trigger};
 
     #[test]
@@ -572,34 +735,85 @@ mod tests {
         for (modifiers, key, expected) in cases {
             let trigger = Trigger::try_new(modifiers, &key).expect("a trigger");
             assert_eq!(
-                hot_key(&trigger),
+                hot_key(&trigger, ansi_key),
                 expected.map(|(code, flags, shown)| (code, flags, shown.to_owned())),
                 "{modifiers:?} {key:?}"
             );
         }
     }
 
-    /// Hot keys whose chords another application may hold.
+    /// French AZERTY's unshifted keys at the ANSI positions of Q, A, W, Z
+    /// and 1: `a`, `q`, `z`, `w` and `&`.
+    fn azerty(code: u16) -> Option<char> {
+        match code {
+            0x0C => Some('a'),
+            0x00 => Some('q'),
+            0x0D => Some('z'),
+            0x06 => Some('w'),
+            0x12 => Some('&'),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_letter_is_the_key_that_types_it_on_the_current_layout() {
+        assert_eq!(key_code_for('a', azerty), Some(0x0C), "AZERTY types a at Q");
+        assert_eq!(key_code_for('q', azerty), Some(0x00));
+        assert_eq!(key_code_for('w', azerty), Some(0x06));
+        assert_eq!(
+            key_code_for('1', azerty),
+            ansi_key('1'),
+            "a digit the layout types only shifted keeps its ANSI position"
+        );
+        let cyrillic = |_: u16| Some('ф');
+        assert_eq!(
+            key_code_for('a', cyrillic),
+            ansi_key('a'),
+            "a layout that types no Latin letter binds the ANSI position"
+        );
+    }
+
+    #[test]
+    fn a_number_names_one_hot_key_in_the_process_and_survives_carbon_unchanged() {
+        let first = HotKeyNumber::mint();
+        let second = HotKeyNumber::mint();
+        assert_ne!(first, second);
+        for number in [first, HotKeyNumber(u64::MAX), HotKeyNumber(1 << 32)] {
+            let (signature, id) = number.to_carbon();
+            assert_eq!(HotKeyNumber::from_carbon(signature, id), number);
+        }
+        assert_eq!(
+            HotKeyNumber(7).to_carbon(),
+            (u32::from_be_bytes(*b"flui"), 7)
+        );
+    }
+
+    /// Hot keys whose chords another application may hold, on a layout
+    /// that types letters at their ANSI positions.
     #[derive(Default)]
     struct Keys {
         held_elsewhere: Vec<u32>,
-        registered: RefCell<Vec<u32>>,
+        registered: RefCell<Vec<HotKeyNumber>>,
     }
 
     impl HotKeySystem for Keys {
-        fn register(&self, id: u32, code: u32, _flags: u32) -> Result<(), i32> {
+        fn register(&self, number: HotKeyNumber, code: u32, _flags: u32) -> Result<(), i32> {
             if self.held_elsewhere.contains(&code) {
-                // eventHotKeyExistsErr.
+                // eventHotKeyExistsErr, for an exclusive registration.
                 return Err(-9878);
             }
-            self.registered.borrow_mut().push(id);
+            self.registered.borrow_mut().push(number);
             Ok(())
         }
 
-        fn unregister(&self, id: u32) {
+        fn unregister(&self, number: HotKeyNumber) {
             self.registered
                 .borrow_mut()
-                .retain(|registered| *registered != id);
+                .retain(|registered| *registered != number);
+        }
+
+        fn key_code(&self, character: char) -> Option<u32> {
+            ansi_key(character)
         }
     }
 
@@ -614,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_numbers_are_never_reused() {
+    fn a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_a_number_is_never_reused() {
         let table = HotKeyTable::default();
         // `s`'s key code: another application holds ⌘S.
         let keys = Keys {
@@ -622,7 +836,7 @@ mod tests {
             ..Keys::default()
         };
         let feed = ShortcutFeed::new();
-        let (ids, bound) = bind(
+        let (numbers, bound) = bind(
             &table,
             &keys,
             vec![
@@ -631,26 +845,42 @@ mod tests {
                 shortcut("unbound", None),
             ],
             &feed,
-        )
-        .expect("numbers are left");
-        assert_eq!(ids, [1]);
+        );
+        assert_eq!(numbers.len(), 1);
         assert_eq!(bound.len(), 1);
         assert_eq!(bound[0].trigger.as_deref(), Some("⌘R"));
-        assert!(table.heard(1, true), "the bound key's press reaches it");
+        let recorded = numbers[0];
         assert!(
-            !table.heard(2, true),
-            "the left-out shortcut has no hot key"
+            table.heard(recorded, true),
+            "the bound key's press reaches it"
         );
 
-        unbind(&table, &keys, 1);
+        unbind(&table, &keys, recorded);
         assert!(keys.registered.borrow().is_empty());
-        assert!(!table.heard(1, false), "a dropped binding hears nothing");
-        let (again, _) = bind(&table, &keys, vec![shortcut("record", Some("r"))], &feed)
-            .expect("numbers are left");
-        assert_eq!(
-            again,
-            [4],
-            "a number is handed out once in a runtime's life"
+        assert!(
+            !table.heard(recorded, false),
+            "a dropped binding hears nothing"
         );
+        let (again, _) = bind(&table, &keys, vec![shortcut("record", Some("r"))], &feed);
+        assert_ne!(again, [recorded], "a number is handed out once");
+    }
+
+    #[test]
+    fn two_runtimes_never_take_each_others_hot_keys() {
+        let (first, second) = (HotKeyTable::default(), HotKeyTable::default());
+        let keys = Keys::default();
+        let feed = ShortcutFeed::new();
+        let (in_first, _) = bind(&first, &keys, vec![shortcut("one", Some("1"))], &feed);
+        let (in_second, _) = bind(&second, &keys, vec![shortcut("two", Some("2"))], &feed);
+        assert!(
+            !second.heard(in_first[0], true),
+            "the second runtime passes it on"
+        );
+        assert!(first.heard(in_first[0], true));
+        assert!(
+            !first.heard(in_second[0], true),
+            "the first runtime passes it on"
+        );
+        assert!(second.heard(in_second[0], true));
     }
 }

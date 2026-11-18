@@ -81,14 +81,14 @@ pub(super) fn answer(item: &dyn LoginItem, request: &AutostartRequest) -> Autost
         }));
     }
     if request.is_enabled() {
-        match before {
-            // On already, or switched off by the user: nothing to write, and
-            // the user's choice stands.
-            ItemStatus::Enabled | ItemStatus::RequiresApproval => return Ok(granted(before)),
-            ItemStatus::NotRegistered | ItemStatus::NotFound => match item.register() {
-                Ok(()) | Err(ErrorCode::Other(code::ALREADY_REGISTERED)) => {}
-                Err(code) => return Err(item_error(code)),
-            },
+        // On already, or switched off by the user: nothing to write, and the
+        // user's choice stands.
+        if matches!(before, ItemStatus::Enabled | ItemStatus::RequiresApproval) {
+            return Ok(granted(before));
+        }
+        match item.register() {
+            Ok(()) | Err(ErrorCode::Other(code::ALREADY_REGISTERED)) => {}
+            Err(code) => return Err(item_error(code)),
         }
     } else if before != ItemStatus::NotRegistered {
         match item.unregister() {

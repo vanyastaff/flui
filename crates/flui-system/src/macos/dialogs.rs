@@ -1,21 +1,27 @@
 //! The file dialogs as `NSOpenPanel` and `NSSavePanel` sheets on the
 //! acquiring widget's window.
 //!
-//! A filter becomes the panel's allowed content types (ADR-0360 §3, §4): an
-//! extension the type macOS derives from it (`UTType typeWithFilenameExtension:`,
-//! which matches ignoring case), a MIME type its type, and `image/*`,
-//! `audio/*`, `video/*`, `text/*` and `font/*` the family's type
-//! (`public.image`, …); another `type/*` names no family macOS has and is
-//! refused with `NotOnThisPlatform` rather than widened. macOS derives a
-//! file's type from the last part of its name, so `tar.gz` is filtered on
-//! `gz`, and an open panel then checks each name itself through its
-//! delegate (`panel:shouldEnableURL:`), which enables only a folder or a
-//! file the contract's rule admits. A save panel appends the first allowed
-//! type's extension to a typed name without one, which for a several-part
-//! extension is its last part. A panel shows no filter menu, so every
-//! filter's types are allowed at once and a save reports no selected
-//! filter. Content types are macOS 11; below it a request with filters
-//! answers `NotOnThisDevice`.
+//! A filter becomes what the panel allows (ADR-0360 §3, §4). From macOS 11
+//! that is its allowed content types: an extension the type macOS derives
+//! from its last part (`UTType typeWithFilenameExtension:`), a MIME type its
+//! type, and `image/*`, `audio/*`, `video/*`, `text/*` and `font/*` the
+//! family's type (`public.image`, …); another `type/*` names no family macOS
+//! has and is refused with `NotOnThisPlatform` rather than widened. Below
+//! macOS 11, on an Intel Mac, it is the allowed file types, the extensions'
+//! last parts, and a filter with a MIME type answers `NotOnThisDevice`.
+//!
+//! macOS admits a file whose type conforms to an allowed one (`.swift` under
+//! `txt`, `.docx` under `zip`) and derives a type from the last part of a
+//! name, while the contract matches names exactly. So an open panel with a
+//! filter checks each item itself through its delegate
+//! (`panel:shouldEnableURL:`), which enables a folder to browse or a file
+//! the contract's rule admits, and every pick it answers is checked again by
+//! that rule: a pick the rule refuses is a malformed answer, never handed
+//! out. A save panel appends the first allowed type's extension to a typed
+//! name without one, which for a several-part extension is its last part;
+//! its pick is not checked, since it names a file to create. A panel shows
+//! no filter menu, so every filter is allowed at once and a save reports no
+//! selected filter.
 //!
 //! The title is the panel's message (a sheet has no title bar) as well as
 //! its title, the accept label its prompt. The panel ends with its window
@@ -50,9 +56,20 @@ pub(super) struct PanelFilter {
     pub(super) types: Vec<ContentType>,
     /// Every extension of the request, for the name check.
     pub(super) extensions: Vec<String>,
-    /// Whether an extension has several parts, which the content types
-    /// match only by the last: an open panel then checks names itself.
-    pub(super) checks_names: bool,
+}
+
+impl PanelFilter {
+    /// The file types a panel without content types allows: the
+    /// extensions' last parts, or `None` when a MIME pattern needs a type.
+    pub(super) fn file_types(&self) -> Option<Vec<String>> {
+        self.types
+            .iter()
+            .map(|content_type| match content_type {
+                ContentType::Extension(extension) => Some(extension.clone()),
+                ContentType::Mime(_) | ContentType::Identifier(_) => None,
+            })
+            .collect::<Option<Vec<String>>>()
+    }
 }
 
 /// The refusal of a request the panel cannot show, for `reason`.
@@ -88,7 +105,6 @@ pub(super) fn panel_filter(filters: &[FileFilter]) -> Result<Option<PanelFilter>
     let mut filter = PanelFilter {
         types: Vec::new(),
         extensions: Vec::new(),
-        checks_names: false,
     };
     let allow = |content_type: ContentType, types: &mut Vec<ContentType>| {
         if !types.contains(&content_type) {
@@ -98,7 +114,6 @@ pub(super) fn panel_filter(filters: &[FileFilter]) -> Result<Option<PanelFilter>
     for requested in filters {
         for extension in requested.extensions() {
             let (_, last) = extension.rsplit_once('.').unwrap_or(("", extension));
-            filter.checks_names |= last.len() != extension.len();
             allow(ContentType::Extension(last.to_owned()), &mut filter.types);
             if !filter.extensions.contains(extension) {
                 filter.extensions.push(extension.clone());
@@ -113,8 +128,7 @@ pub(super) fn panel_filter(filters: &[FileFilter]) -> Result<Option<PanelFilter>
 
 /// Whether a file named `name` ends in `.` and one of `extensions`,
 /// ignoring ASCII case: the contract's rule for a name (ADR-0360 §3).
-pub(super) fn name_matches(name: &str, extensions: &[String]) -> bool {
-    let name = name.as_bytes();
+pub(super) fn name_matches(name: &[u8], extensions: &[String]) -> bool {
     extensions.iter().any(|extension| {
         let extension = extension.as_bytes();
         name.len() > extension.len()
@@ -126,8 +140,11 @@ pub(super) fn name_matches(name: &str, extensions: &[String]) -> bool {
 /// One item the user picked, as the panel names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PanelPick {
-    /// A file URL's path.
+    /// A file the request admits, at this path.
     Path(PathBuf),
+    /// A file the request's filters do not admit, which the panel answered
+    /// all the same.
+    Unfiltered,
     /// A URL that names no file.
     NotAFile,
 }
@@ -145,6 +162,7 @@ fn picked(pick: PanelPick) -> Result<PickedFile, DialogError> {
         PanelPick::Path(path) => {
             PickedFile::try_new(path).ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))
         }
+        PanelPick::Unfiltered => Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
         PanelPick::NotAFile => Err(DialogError::NotAFile),
     }
 }
@@ -184,9 +202,10 @@ pub(super) fn save_answer(response: isize, pick: impl FnOnce() -> Option<PanelPi
     })
 }
 
-/// `UTType` and the panels' content types, macOS 11: below it a request
-/// with filters answers `NotOnThisDevice`. On arm64 the floor is 11, and
-/// the types are always there.
+/// `UTType` and the panels' content types, macOS 11: below it a filter is
+/// the panel's allowed file types, and one with a MIME type answers
+/// `NotOnThisDevice`. On arm64 the floor is 11, and the types are always
+/// there.
 #[cfg(not(target_arch = "aarch64"))]
 pub(super) enum ContentTypes {}
 
@@ -204,8 +223,6 @@ pub(crate) use appkit::MacDialogs;
     reason = "UTType through the runtime, the panel's delegate"
 )]
 mod appkit {
-    use std::path::PathBuf;
-
     use block2::RcBlock;
     use flui_platform::UnsupportedReason;
     use flui_platform::capability::{Resolver, WindowRef};
@@ -217,7 +234,7 @@ mod appkit {
     };
     use objc2_foundation::{NSArray, NSNumber, NSString, NSURL};
 
-    use super::super::appkit::ns_window;
+    use super::super::appkit::{file_url, ns_window, url_path};
     use super::super::sheet::Pending;
     use super::super::version::MacOSVersion;
     use super::{
@@ -235,6 +252,10 @@ mod appkit {
     struct HasContentTypes;
 
     #[cfg(target_arch = "aarch64")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the x86_64 build of the same function answers None below macOS 11"
+    )]
     fn content_types(_version: MacOSVersion) -> Option<HasContentTypes> {
         Some(HasContentTypes)
     }
@@ -268,17 +289,17 @@ mod appkit {
         }
     }
 
-    /// What the name check of an open panel needs: the request's extensions
-    /// and the types of its MIME patterns.
+    /// The contract's rule for an open panel's items: the request's
+    /// extensions, matched by name, and the types of its MIME patterns
+    /// (none below macOS 11, where such a request is refused).
     struct NameRule {
         extensions: Vec<String>,
         mime_types: Vec<Retained<AnyObject>>,
     }
 
     define_class!(
-        /// An open panel's delegate that enables only a folder or a file the
-        /// contract's rule admits, for a filter macOS matches by the last
-        /// part of an extension alone.
+        /// An open panel's delegate that enables only a folder to browse or
+        /// a file the contract's rule admits.
         #[unsafe(super(NSObject))]
         #[thread_kind = MainThreadOnly]
         #[name = "FluiSystemPanelNameRule"]
@@ -306,8 +327,8 @@ mod appkit {
             os_entry(
                 "panel:shouldEnableURL:",
                 (),
-                // A rule that failed hides nothing it cannot judge.
-                AfterPanic::Answer(|()| true),
+                // A pick is checked again when the panel answers.
+                AfterPanic::Answer(|()| false),
                 || self.admits(url),
             )
         }
@@ -344,18 +365,24 @@ mod appkit {
                 return true;
             }
             let rule = &**self.ivars();
-            let named = url
-                .lastPathComponent()
-                .is_some_and(|name| name_matches(&name.to_string(), &rule.extensions));
-            named || self.conforms(&values.objectForKey(type_key), rule)
+            let named = url_path(url)
+                .and_then(|path| {
+                    use std::os::unix::ffi::OsStrExt as _;
+                    path.file_name()
+                        .map(|name| name_matches(name.as_bytes(), &rule.extensions))
+                })
+                .unwrap_or(false);
+            named || Self::conforms(values.objectForKey(type_key).as_deref(), rule)
         }
 
         /// Whether a file of the type `identifier` is one of the rule's
         /// MIME types.
-        fn conforms(&self, identifier: &Option<Retained<AnyObject>>, rule: &NameRule) -> bool {
-            let Some(identifier) = identifier
-                .as_ref()
-                .and_then(|identifier| identifier.downcast_ref::<NSString>())
+        fn conforms(identifier: Option<&AnyObject>, rule: &NameRule) -> bool {
+            if rule.mime_types.is_empty() {
+                return false;
+            }
+            let Some(identifier) =
+                identifier.and_then(|identifier| identifier.downcast_ref::<NSString>())
             else {
                 return false;
             };
@@ -389,9 +416,11 @@ mod appkit {
             if self.pending.dismiss() {
                 self.parent.endSheet_returnCode(&self.panel, ABORTED);
             }
-            if self.delegate.take().is_some() {
-                // SAFETY: clearing the weak delegate before it is released.
+            if self.delegate.is_some() {
+                // SAFETY: the weak delegate is cleared while this value still
+                // holds it, then released.
                 unsafe { self.panel.setDelegate(None) };
+                drop(self.delegate.take());
             }
         }
     }
@@ -410,18 +439,31 @@ mod appkit {
             }
         }
 
-        /// Allow `filter`'s types on `panel`; a type the system does not
-        /// know, or a macOS without content types, refuses the request.
+        /// Allow `filter` on `panel`: its content types from macOS 11, its
+        /// extensions' last parts as file types below it. A type the system
+        /// does not know, or a MIME pattern below macOS 11, refuses the
+        /// request.
         fn allow(&self, panel: &NSSavePanel, filter: &PanelFilter) -> Result<(), DialogError> {
-            let proof = self
-                .content_types
-                .ok_or_else(|| unsupported(UnsupportedReason::NotOnThisDevice))?;
+            let refused = || unsupported(UnsupportedReason::NotOnThisDevice);
+            let Some(proof) = self.content_types else {
+                let names = filter.file_types().ok_or_else(refused)?;
+                let names = names
+                    .iter()
+                    .map(|name| NSString::from_str(name))
+                    .collect::<Vec<Retained<NSString>>>();
+                #[expect(
+                    deprecated,
+                    reason = "the content types replacing it are macOS 11, above this Mac"
+                )]
+                panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&names)));
+                return Ok(());
+            };
             let types = filter
                 .types
                 .iter()
                 .map(|content_type| ut_type(proof, content_type))
                 .collect::<Option<Vec<Retained<AnyObject>>>>()
-                .ok_or_else(|| unsupported(UnsupportedReason::NotOnThisDevice))?;
+                .ok_or_else(refused)?;
             let types = NSArray::from_retained_slice(&types);
             // SAFETY: `setAllowedContentTypes:` takes an array of `UTType`s,
             // which `types` is, on a panel of the main thread.
@@ -431,25 +473,23 @@ mod appkit {
             Ok(())
         }
 
-        /// The delegate that checks names for an open panel whose filter
-        /// matches a several-part extension by its last part.
-        fn name_rule(&self, filter: &PanelFilter) -> Option<Retained<NameRuleDelegate>> {
-            let proof = self.content_types?;
-            filter.checks_names.then(|| {
-                let mime_types = filter
+        /// The delegate that holds an open panel to the contract's rule.
+        fn name_rule(&self, filter: &PanelFilter) -> Retained<NameRuleDelegate> {
+            let mime_types = self.content_types.map_or_else(Vec::new, |proof| {
+                filter
                     .types
                     .iter()
                     .filter(|content_type| !matches!(content_type, ContentType::Extension(_)))
                     .filter_map(|content_type| ut_type(proof, content_type))
-                    .collect::<Vec<Retained<AnyObject>>>();
-                NameRuleDelegate::new(
-                    self.mtm,
-                    NameRule {
-                        extensions: filter.extensions.clone(),
-                        mime_types,
-                    },
-                )
-            })
+                    .collect::<Vec<Retained<AnyObject>>>()
+            });
+            NameRuleDelegate::new(
+                self.mtm,
+                NameRule {
+                    extensions: filter.extensions.clone(),
+                    mime_types,
+                },
+            )
         }
     }
 
@@ -468,19 +508,18 @@ mod appkit {
         if let Some(label) = accept_label {
             panel.setPrompt(Some(&NSString::from_str(label)));
         }
-        if let Some(directory) = directory.and_then(std::path::Path::to_str) {
-            panel.setDirectoryURL(Some(&NSURL::fileURLWithPath_isDirectory(
-                &NSString::from_str(directory),
-                true,
-            )));
+        if let Some(directory) = directory.and_then(|directory| file_url(directory, true)) {
+            panel.setDirectoryURL(Some(&directory));
         }
     }
 
-    /// A URL the panel answered, as a pick.
-    fn pick(url: &NSURL) -> PanelPick {
-        match url.path() {
-            Some(path) if url.isFileURL() => PanelPick::Path(PathBuf::from(path.to_string())),
-            _ => PanelPick::NotAFile,
+    /// A URL the panel answered, as a pick: refused when `rule` is set and
+    /// does not admit it.
+    fn pick(url: &NSURL, rule: Option<&NameRuleDelegate>) -> PanelPick {
+        match url_path(url) {
+            Some(_) if rule.is_some_and(|rule| !rule.admits(url)) => PanelPick::Unfiltered,
+            Some(path) => PanelPick::Path(path),
+            None => PanelPick::NotAFile,
         }
     }
 
@@ -520,7 +559,7 @@ mod appkit {
             let filtered = panel_filter(&request.filters).and_then(|filter| match filter {
                 Some(filter) => {
                     self.allow(&panel, &filter)?;
-                    delegate = self.name_rule(&filter);
+                    delegate = Some(self.name_rule(&filter));
                     Ok(())
                 }
                 None => Ok(()),
@@ -537,6 +576,7 @@ mod appkit {
             let pending = Pending::new(answer);
             let handler_pending = pending.clone();
             let answered = Weak::from_retained(&panel);
+            let rule = delegate.as_ref().map(Weak::from_retained);
             let handler = RcBlock::new(move |response: NSModalResponse| {
                 os_entry(
                     "NSOpenPanel completion handler",
@@ -545,13 +585,23 @@ mod appkit {
                     || {
                         handler_pending.answer(|| {
                             open_answer(response, || {
+                                let rule = rule.as_ref().map(Weak::load);
+                                // A rule that was set and is gone admits nothing.
+                                if rule.as_ref().is_some_and(Option::is_none) {
+                                    return vec![PanelPick::Unfiltered];
+                                }
+                                let rule = rule.flatten();
                                 answered.load().map_or_else(Vec::new, |panel| {
-                                    panel.URLs().iter().map(|url| pick(&url)).collect()
+                                    panel
+                                        .URLs()
+                                        .iter()
+                                        .map(|url| pick(&url, rule.as_deref()))
+                                        .collect()
                                 })
                             })
                         });
                     },
-                )
+                );
             });
             panel.beginSheetModalForWindow_completionHandler(&parent, &handler);
             DialogHold::new(PanelHold {
@@ -604,11 +654,11 @@ mod appkit {
                                 answered
                                     .load()
                                     .and_then(|panel| panel.URL())
-                                    .map(|url| pick(&url))
+                                    .map(|url| pick(&url, None))
                             })
                         });
                     },
-                )
+                );
             });
             panel.beginSheetModalForWindow_completionHandler(&parent, &handler);
             DialogHold::new(PanelHold {
@@ -662,14 +712,15 @@ mod tests {
             ]
         );
         assert_eq!(filter.extensions, extensions(&["tar.gz", "zip", "png"]));
-        assert!(filter.checks_names, "`gz` alone would admit `notes.gz`");
+        assert_eq!(filter.file_types(), None, "a MIME pattern needs a type");
 
-        let plain = panel_filter(&[FileFilter::new("Text").with_extension("txt")])
+        let plain = panel_filter(&[FileFilter::new("Archives").with_extension("tar.gz")])
             .expect("maps")
             .expect("given");
-        assert!(
-            !plain.checks_names,
-            "a one-part extension is matched exactly"
+        assert_eq!(
+            plain.file_types(),
+            Some(extensions(&["gz"])),
+            "below macOS 11 a panel allows the last part, and the delegate checks the name"
         );
         assert_eq!(panel_filter(&[]), Ok(None), "no filter allows every file");
     }
@@ -694,20 +745,31 @@ mod tests {
 
     #[test]
     fn a_name_matches_as_the_contract_says() {
-        let rule = extensions(&["tar.gz", "png"]);
-        let cases = [
-            ("backup.tar.gz", true),
-            ("BACKUP.TAR.GZ", true),
-            ("photo.Png", true),
-            ("notes.gz", false),
-            ("tar.gz", false),
-            (".png", true),
-            ("png", false),
-            ("photo.png.txt", false),
-            ("é.png", true),
+        let rule = extensions(&["tar.gz", "png", "txt", "zip"]);
+        let cases: [(&[u8], bool); 13] = [
+            (b"backup.tar.gz", true),
+            (b"BACKUP.TAR.GZ", true),
+            (b"photo.Png", true),
+            (b"notes.gz", false),
+            (b"tar.gz", false),
+            (b".png", true),
+            (b"png", false),
+            (b"photo.png.txt", true),
+            ("é.png".as_bytes(), true),
+            // A name that is not UTF-8 still ends in its extension.
+            (b"\xff\xfe.png", true),
+            // Types that conform to an allowed one are not its names.
+            (b"main.swift", false),
+            (b"photo.jpeg", false),
+            (b"letter.docx", false),
         ];
         for (name, matches) in cases {
-            assert_eq!(name_matches(name, &rule), matches, "{name}");
+            assert_eq!(
+                name_matches(name, &rule),
+                matches,
+                "{}",
+                String::from_utf8_lossy(name)
+            );
         }
     }
 
@@ -731,6 +793,14 @@ mod tests {
         assert_eq!(
             open_answer(1, || vec![PanelPick::NotAFile]),
             Err(DialogError::NotAFile)
+        );
+        assert_eq!(
+            open_answer(1, || vec![
+                PanelPick::Path(file.clone()),
+                PanelPick::Unfiltered
+            ]),
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
+            "a pick the filters do not admit is never handed out"
         );
         assert_eq!(
             open_answer(ABORTED, Vec::new),

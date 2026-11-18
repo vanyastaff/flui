@@ -130,7 +130,7 @@ mod appkit {
                         NSURL::URLWithString(&NSString::from_str(link))?,
                     )),
                     ShareItem::File(file) => {
-                        Retained::into_super(Retained::into_super(file_url(file)?))
+                        Retained::into_super(Retained::into_super(file_url(file, false)?))
                     }
                 })
             })

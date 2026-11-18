@@ -17,8 +17,7 @@
 //! changes nothing. Each provider's own behaviour is tested beside it,
 //! behind its OS seam, with the system's answers as inputs (`win32::*::tests`
 //! on Windows, the portal's tests on a private bus on Linux, `macos::*::tests`
-//! as a model on every host). On macOS the headless host's owner thread is
-//! not the main thread, so the AppKit services answer `NotYetOnThisHost`.
+//! as a model on every host).
 
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -141,7 +141,7 @@ mod appkit {
                     response,
                     AfterPanic::Answer(|_| ()),
                     || handler_pending.answer(|| answer(offered, response)),
-                )
+                );
             });
             alert.beginSheetModalForWindow_completionHandler(&parent, Some(&handler));
             DialogHold::new(AlertHold {

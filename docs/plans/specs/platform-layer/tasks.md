@@ -5548,7 +5548,7 @@ GPU-память простаивающего или невидимого окн
   reveal — `activateFileViewerSelectingURLs:`, trash — `trashItemAtURL:`. Автозапуск —
   `SMAppService.mainAppService` (macOS 13; ниже — `NotOnThisDevice`), выключение пользователем
   (`requiresApproval`) не перезаписывается: включение отвечает `Disabled`. Глобальные сочетания
-  — Carbon `RegisterEventHotKey` (нажатие и отпускание, номера не переиспользуются). Запись
+  — Carbon `RegisterEventHotKey`, исключительная регистрация (нажатие и отпускание; буква — клавиша текущей раскладки через `UCKeyTranslate`; номер уникален в процессе и не переиспользуется). Запись
   лаунчера — плитка Dock (значок и полоса, неопределённый прогресс не показывается). Папки —
   `URLsForDirectory:inDomains:`, сведения об ОС — `NSProcessInfo` и Rosetta. Ворота версий —
   `macos::version` той же формы, что в `flui-native` (до него ёмкостный крейт не дотягивается),
@@ -5573,14 +5573,22 @@ GPU-память простаивающего или невидимого окн
   `the_tile_shows_the_count_and_a_known_extent_and_says_so`,
   `each_folder_is_the_one_foundation_keeps_and_templates_none`,
   `the_system_is_macos_at_its_version_on_the_machines_processor`,
-  `a_runtime_holds_a_bounded_number_of_places_and_each_comes_back_when_dropped`, ворота
+  `a_runtime_holds_a_bounded_number_of_places_and_each_comes_back_when_dropped`,
+  `a_pipe_named_like_a_document_is_opened_at_once_and_refused_by_its_type` (Linux),
+  `a_letter_is_the_key_that_types_it_on_the_current_layout`,
+  `two_runtimes_never_take_each_others_hot_keys`,
+  `a_number_names_one_hot_key_in_the_process_and_survives_carbon_unchanged`, ворота
   `the_login_item_is_there_from_macos_13_on`, `content_types_are_there_from_macos_11_on`,
   `a_gate_opens_from_its_version_on_and_never_for_an_unknown_one`. Проверено: модели на Windows и
   Linux (WSL), проверка типов `aarch64-apple-darwin` на nightly в WSL; clippy для macOS — только
   CI. Не запускалось: ни одна панель, лист, запуск, сочетание, вход в систему, плитка Dock на
   Mac; цель `x86_64-apple-darwin` (ворота `UTType`) не проверялась здесь. Чего macOS не достаёт
-  до контракта (буква сочетания по позиции ANSI, номера Carbon общие для двух runtime, английские
-  подписи кнопок, суффикс многочастного расширения при сохранении) — `docs/gaps.md`.
+  до контракта (английские подписи кнопок, суффикс многочастного расширения при сохранении,
+  плитка Dock процесса при двух runtime, стоящий том держит место запроса) — `docs/gaps.md`.
+  После независимого чтения: открытие без блокировки (FIFO отказывается по типу), фильтр
+  открывающей панели всегда сверяется по имени делегатом и в ответе, `setAllowedFileTypes:` ниже
+  macOS 11 на Intel, пути байтами файловой системы. С откатом `O_NONBLOCK` красный
+  `a_pipe_named_like_a_document_is_opened_at_once_and_refused_by_its_type` (истёк срок ожидания).
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`

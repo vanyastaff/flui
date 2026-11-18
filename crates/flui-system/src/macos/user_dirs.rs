@@ -1,7 +1,8 @@
 //! The user's folders as Foundation names them: `NSFileManager`'s
-//! `URLsForDirectory:inDomains:` in the user's domain, the home folder from
-//! `NSHomeDirectory`. A sandboxed application is answered its container's
-//! folders, as the system gives them to it.
+//! `URLsForDirectory:inDomains:` in the user's domain, the home folder its
+//! `homeDirectoryForCurrentUser`, each path as the file system's bytes. A
+//! sandboxed application is answered its container's folders, as the system
+//! gives them to it.
 //!
 //! macOS has no templates folder, so [`UserDir::Templates`] is none;
 //! [`UserDir::PublicShare`] is the Public folder file sharing serves, and
@@ -12,31 +13,42 @@
 
 use crate::user_dirs::UserDir;
 
+/// A folder Foundation's search paths name in the user's domain: each is
+/// the `NSSearchPathDirectory` of its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SearchPath {
+    Desktop,
+    Document,
+    Downloads,
+    Music,
+    Pictures,
+    Movies,
+    SharedPublic,
+}
+
 /// Where Foundation keeps a kind of folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Location {
     /// `NSHomeDirectory`.
     Home,
-    /// The `NSSearchPathDirectory` of this value, in the user's domain.
-    Search(usize),
+    /// A search path in the user's domain.
+    Search(SearchPath),
     /// macOS names no folder of this kind.
     None,
 }
 
-/// Where Foundation keeps `dir`.
+/// Where Foundation keeps `dir`: videos are Movies, the public share is
+/// the Public folder file sharing serves, and there is no templates folder.
 pub(super) fn location(dir: UserDir) -> Location {
     match dir {
         UserDir::Home => Location::Home,
-        // NSDesktopDirectory, NSDocumentDirectory, NSDownloadsDirectory,
-        // NSMusicDirectory, NSPicturesDirectory, NSMoviesDirectory,
-        // NSSharedPublicDirectory.
-        UserDir::Desktop => Location::Search(12),
-        UserDir::Documents => Location::Search(9),
-        UserDir::Downloads => Location::Search(15),
-        UserDir::Music => Location::Search(18),
-        UserDir::Pictures => Location::Search(19),
-        UserDir::Videos => Location::Search(17),
-        UserDir::PublicShare => Location::Search(21),
+        UserDir::Desktop => Location::Search(SearchPath::Desktop),
+        UserDir::Documents => Location::Search(SearchPath::Document),
+        UserDir::Downloads => Location::Search(SearchPath::Downloads),
+        UserDir::Music => Location::Search(SearchPath::Music),
+        UserDir::Pictures => Location::Search(SearchPath::Pictures),
+        UserDir::Videos => Location::Search(SearchPath::Movies),
+        UserDir::PublicShare => Location::Search(SearchPath::SharedPublic),
         UserDir::Templates => Location::None,
     }
 }
@@ -46,17 +58,16 @@ pub(crate) use appkit::MacUserDirs;
 
 #[cfg(target_os = "macos")]
 mod appkit {
-    use std::path::PathBuf;
+
     use std::rc::Rc;
 
     use flui_platform::capability::Resolver;
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
-    use objc2_foundation::{
-        NSFileManager, NSHomeDirectory, NSSearchPathDirectory, NSSearchPathDomainMask,
-    };
+    use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
 
+    use super::super::appkit::url_path;
     use super::super::queue::WorkQueue;
-    use super::{Location, location};
+    use super::{Location, SearchPath, location};
     use crate::user_dirs::{
         UserDir, UserDirBackend, UserDirCapability, UserDirError, UserDirResult,
     };
@@ -72,19 +83,33 @@ mod appkit {
         }
     }
 
+    /// The search path directory `path` is.
+    fn search_directory(path: SearchPath) -> NSSearchPathDirectory {
+        match path {
+            SearchPath::Desktop => NSSearchPathDirectory::DesktopDirectory,
+            SearchPath::Document => NSSearchPathDirectory::DocumentDirectory,
+            SearchPath::Downloads => NSSearchPathDirectory::DownloadsDirectory,
+            SearchPath::Music => NSSearchPathDirectory::MusicDirectory,
+            SearchPath::Pictures => NSSearchPathDirectory::PicturesDirectory,
+            SearchPath::Movies => NSSearchPathDirectory::MoviesDirectory,
+            SearchPath::SharedPublic => NSSearchPathDirectory::SharedPublicDirectory,
+        }
+    }
+
     /// The folder Foundation names for `dir`, when the user has it.
     fn locate(dir: UserDir) -> UserDirResult {
         let path = match location(dir) {
             Location::None => return Ok(None),
-            Location::Home => Some(PathBuf::from(NSHomeDirectory().to_string())),
+            Location::Home => {
+                url_path(&NSFileManager::defaultManager().homeDirectoryForCurrentUser())
+            }
             Location::Search(directory) => NSFileManager::defaultManager()
                 .URLsForDirectory_inDomains(
-                    NSSearchPathDirectory(directory),
+                    search_directory(directory),
                     NSSearchPathDomainMask::UserDomainMask,
                 )
                 .firstObject()
-                .and_then(|url| url.path())
-                .map(|path| PathBuf::from(path.to_string())),
+                .and_then(|url| url_path(&url)),
         };
         match path {
             Some(path) if !path.is_absolute() => {
@@ -109,20 +134,23 @@ mod appkit {
 
 #[cfg(test)]
 mod tests {
-    use super::{Location, location};
+    use super::{Location, SearchPath, location};
     use crate::user_dirs::UserDir;
 
     #[test]
     fn each_folder_is_the_one_foundation_keeps_and_templates_none() {
         let cases = [
             (UserDir::Home, Location::Home),
-            (UserDir::Desktop, Location::Search(12)),
-            (UserDir::Documents, Location::Search(9)),
-            (UserDir::Downloads, Location::Search(15)),
-            (UserDir::Music, Location::Search(18)),
-            (UserDir::Pictures, Location::Search(19)),
-            (UserDir::Videos, Location::Search(17)),
-            (UserDir::PublicShare, Location::Search(21)),
+            (UserDir::Desktop, Location::Search(SearchPath::Desktop)),
+            (UserDir::Documents, Location::Search(SearchPath::Document)),
+            (UserDir::Downloads, Location::Search(SearchPath::Downloads)),
+            (UserDir::Music, Location::Search(SearchPath::Music)),
+            (UserDir::Pictures, Location::Search(SearchPath::Pictures)),
+            (UserDir::Videos, Location::Search(SearchPath::Movies)),
+            (
+                UserDir::PublicShare,
+                Location::Search(SearchPath::SharedPublic),
+            ),
             (UserDir::Templates, Location::None),
         ];
         for (dir, expected) in cases {

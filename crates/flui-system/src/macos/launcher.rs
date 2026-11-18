@@ -5,14 +5,19 @@
 //!
 //! A URI goes to Launch Services as written, which hands it to the
 //! application the user chose for its scheme; the seam admitted only the
-//! schemes its caller named. An open first opens the file and judges what
-//! the descriptor holds (ADR-0360 §2): its final path (`F_GETPATH`, which
-//! names the file every link the open followed led to) must pass the floor
+//! schemes its caller named. An open first opens the file, without blocking
+//! (a named pipe with no writer would hold the open forever), and judges
+//! what the descriptor holds (ADR-0360 §2): only a regular file or a folder
+//! is a document, and its final path (`F_GETPATH`, which names the file
+//! every link the open followed led to) must pass the floor
 //! (`runs_when_opened`), must not be a Unix executable, and must not be an
 //! application bundle, as Launch Services' `NSURLIsApplicationKey` says;
-//! only then is that final path handed on. Every request runs as a work
-//! item off the main thread (`queue::WorkQueue`), since each touches the file
-//! system or asks Launch Services, which may wait on a volume.
+//! only then is that final path handed on. A path is handed to Foundation
+//! as the file system's bytes, so a name that is not UTF-8 names its file.
+//! Every request runs as a work item off the main thread
+//! (`queue::WorkQueue`), since each touches the file system or asks Launch
+//! Services, which may wait on a volume; a volume that stops answering
+//! holds the request's place until it does.
 
 use std::path::Path;
 
@@ -65,6 +70,47 @@ pub(super) fn path_error(code: ErrorCode) -> LaunchError {
     }
 }
 
+/// What a file an open opened is, by its type, before Launch Services is
+/// asked about a folder.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OpenedType {
+    /// A regular file, and whether any execute bit is set.
+    Regular { executable: bool },
+    /// A folder.
+    Folder,
+    /// Anything else: a named pipe, a device, a socket.
+    Other,
+}
+
+/// Open `path` to judge what it is, following its links: read-only and
+/// non-blocking, so a named pipe with no writer is opened at once (and then
+/// refused by its type) rather than holding the work item, and its place,
+/// until a writer comes. The descriptor is never read.
+#[cfg(unix)]
+pub(super) fn open_for_judging(path: &Path) -> Result<(std::fs::File, OpenedType), LaunchError> {
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+    let io_error =
+        |error: &std::io::Error| path_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0)));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| io_error(&error))?;
+    let metadata = file.metadata().map_err(|error| io_error(&error))?;
+    let opened = if metadata.is_file() {
+        OpenedType::Regular {
+            executable: metadata.permissions().mode() & 0o111 != 0,
+        }
+    } else if metadata.is_dir() {
+        OpenedType::Folder
+    } else {
+        OpenedType::Other
+    };
+    Ok((file, opened))
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) use appkit::MacLauncher;
 
@@ -76,7 +122,6 @@ pub(crate) use appkit::MacLauncher;
 mod appkit {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
@@ -91,7 +136,7 @@ mod appkit {
     use super::super::ErrorCode;
     use super::super::appkit::{error_code, file_url};
     use super::super::queue::WorkQueue;
-    use super::{OpenedKind, judge, path_error};
+    use super::{OpenedKind, OpenedType, judge, open_for_judging, path_error};
 
     /// What a request answers when the runtime has no place for it, or when
     /// Launch Services declined a handler it has.
@@ -161,26 +206,19 @@ mod appkit {
     /// Open the document at `path`: open it, judge what was opened, and
     /// hand on its final path while the file is still open.
     fn open_document(path: &Path) -> LaunchResult {
-        let io_error = |error: &std::io::Error| {
-            path_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0)))
-        };
-        let file = std::fs::File::open(path).map_err(|error| io_error(&error))?;
-        let metadata = file.metadata().map_err(|error| io_error(&error))?;
+        let (file, opened) = open_for_judging(path)?;
         let final_path = final_path(&file)?;
         if !is_local_path(&final_path) {
             return Err(LaunchError::NotLocal);
         }
-        let url = file_url(&final_path).ok_or(LaunchError::NotFound)?;
-        let kind = if metadata.is_file() {
-            OpenedKind::Regular {
-                executable: metadata.permissions().mode() & 0o111 != 0,
-            }
-        } else if metadata.is_dir() {
-            OpenedKind::Folder {
+        let folder = opened == OpenedType::Folder;
+        let url = file_url(&final_path, folder).ok_or(LaunchError::NotFound)?;
+        let kind = match opened {
+            OpenedType::Regular { executable } => OpenedKind::Regular { executable },
+            OpenedType::Folder => OpenedKind::Folder {
                 application: is_application(&url),
-            }
-        } else {
-            OpenedKind::Other
+            },
+            OpenedType::Other => OpenedKind::Other,
         };
         judge(&final_path, kind)?;
         let handed = hand_on(&url);
@@ -190,9 +228,9 @@ mod appkit {
 
     /// Show `path` selected in the Finder, once it exists.
     fn reveal(path: &Path) -> LaunchResult {
-        std::fs::symlink_metadata(path)
+        let metadata = std::fs::symlink_metadata(path)
             .map_err(|error| path_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0))))?;
-        let url = file_url(path).ok_or(LaunchError::NotFound)?;
+        let url = file_url(path, metadata.is_dir()).ok_or(LaunchError::NotFound)?;
         NSWorkspace::sharedWorkspace()
             .activateFileViewerSelectingURLs(&NSArray::from_slice(&[&*url]));
         Ok(())
@@ -200,7 +238,7 @@ mod appkit {
 
     /// Move `path` to the trash of its volume.
     fn trash(path: &Path) -> LaunchResult {
-        let url = file_url(path).ok_or(LaunchError::NotFound)?;
+        let url = file_url(path, false).ok_or(LaunchError::NotFound)?;
         NSFileManager::defaultManager()
             .trashItemAtURL_resultingItemURL_error(&url, None)
             .map_err(|error| match error_code(&error) {
@@ -248,6 +286,47 @@ mod tests {
 
     use super::super::{ErrorCode, errno};
     use super::{OpenedKind, judge, path_error};
+
+    /// A named pipe nothing writes to, named like a document: the open
+    /// returns at once and the pipe is not a document. A blocking open would
+    /// wait for a writer forever, holding its work item's place.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_named_like_a_document_is_opened_at_once_and_refused_by_its_type() {
+        use super::{OpenedType, open_for_judging};
+
+        let folder = std::env::temp_dir().join(format!("flui-pipe-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("a folder");
+        let pipe = folder.join("report.pdf");
+        let _ = std::fs::remove_file(&pipe);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "the pipe was made");
+
+        let (sent, opened) = std::sync::mpsc::channel();
+        let path = pipe.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(open_for_judging(&path).map(|(_, opened)| opened));
+        });
+        let opened = opened
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the open returned without a writer");
+        assert_eq!(opened, Ok(OpenedType::Other));
+        assert_eq!(
+            judge(&pipe, OpenedKind::Other),
+            Err(LaunchError::NotADocument)
+        );
+
+        let document = folder.join("notes.txt");
+        std::fs::write(&document, b"text").expect("a file");
+        assert_eq!(
+            open_for_judging(&document).map(|(_, opened)| opened),
+            Ok(OpenedType::Regular { executable: false })
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     #[test]
     fn only_a_document_or_a_plain_folder_is_handed_on() {
