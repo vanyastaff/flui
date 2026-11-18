@@ -1903,6 +1903,11 @@ pub(crate) mod text_store {
                 panic!("the frame fails after the commit was queued");
             })
             .expect("post-frame handle installed");
+        // A post-frame callback asks for no frame; the frame it runs in is asked for.
+        harness
+            .post_frame_handle()
+            .schedule_frame()
+            .expect("post-frame handle installed");
 
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
         assert!(failed.is_err(), "the failing frame is raised");
@@ -2480,6 +2485,11 @@ pub(crate) mod text_store {
                     );
                 }
             })
+            .expect("post-frame handle installed");
+        // A post-frame callback asks for no frame; the frame it runs in is asked for.
+        harness
+            .post_frame_handle()
+            .schedule_frame()
             .expect("post-frame handle installed");
     }
 

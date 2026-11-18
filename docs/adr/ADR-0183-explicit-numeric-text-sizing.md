@@ -3,6 +3,8 @@
 - **Status:** Accepted (2026-10-10)
 - **Date:** 2026-10-09
 - **Supersedes:** ADR-0092 §10, raw query and text-acquisition contract only.
+- **Superseded-by:** [ADR-0367](ADR-0367-a-post-frame-callback-asks-for-no-frame.md) in part
+  (completion demand from a registration between segments)
 - **Related:** [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -103,8 +105,10 @@ rather than continuously retrying the competing loan. The public
 
 Post-frame callbacks belong to the presentation whose lifecycle issued their
 handle. An incomplete segment withholds its callbacks while healthy scopes and
-ordinary host-frame completion remain deliverable. Between segments, scheduling
-through a retained handle creates completion demand without dirtying a clean
+ordinary host-frame completion remain deliverable. A callback scheduled between
+segments asks for no frame and runs after the next segment that completes; a
+caller that needs that frame asks for it with `PostFrameHandle::schedule_frame`,
+which creates completion demand without dirtying a clean
 widget tree or submitting another scene. Presentation withdrawal closes callback
 admission before capture retirement. Standalone presentation retirement borrows
 the owner's weak cleanup authority and establishes the same execution exclusion
