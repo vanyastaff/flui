@@ -12,7 +12,8 @@
 //! [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal, never a
 //! skipped row. A recording is untrusted input: a reader refuses a line longer than
 //! [`MAX_LINE_BYTES`] before it parses it, a row past [`MAX_ROWS`] and a line that takes the
-//! recording past [`MAX_RECORDING_BYTES`].
+//! recording past [`MAX_RECORDING_BYTES`]; a writer counts the same bounds with a [`Budget`] as
+//! it writes, and ends the recording with a [`Row::Cut`] where its next row would pass one.
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -21,6 +22,7 @@
 //! With the `serde` feature its types read and write the recording; without it they are plain
 //! data, which the input recording's preference rows share.
 
+mod bounds;
 mod delivery;
 mod display;
 mod pointer;
@@ -28,6 +30,7 @@ mod preferences;
 mod text_store;
 mod window;
 
+pub use bounds::{Budget, MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS, Overrun};
 pub use delivery::{Ime, ImeEvent, MemoryPressureLevel, Notice, SessionEndPhase};
 pub use display::{
     Absence, Color, Display, DisplayColor, DisplayRead, DynamicRange, Gamut, Headroom,
@@ -259,20 +262,6 @@ pub enum Time {
     Epoch(u64),
 }
 
-/// How long one line of a native recording may be, in bytes, its newline excluded: a reader
-/// refuses a longer line before it parses it. A [`StoreLock`] row within its two bounds fits.
-pub const MAX_LINE_BYTES: usize = 1024 * 1024;
-
-/// How many rows one native recording may hold: a reader refuses the row past it.
-pub const MAX_ROWS: usize = 1 << 20;
-
-/// How many bytes one native recording may hold, its lines and their endings together: a reader
-/// refuses the line that would pass it, as it reads, before it parses or keeps that line. The two
-/// bounds above alone admit about a tebibyte held at once; the largest recording a device run has
-/// written is a few mebibytes, so this leaves room for long sessions and keeps what one read
-/// holds within what a test host and a CI runner have.
-pub const MAX_RECORDING_BYTES: usize = 64 * 1024 * 1024;
-
 vocabulary! {
     /// Why a writer stopped a recording ([`Row::Cut`]).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -322,6 +311,14 @@ pub enum Line {
     schemars(rename = "NativeRow")
 )]
 #[non_exhaustive]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::large_enum_variant,
+        reason = "with 4-byte pointers the window-state row outweighs the others past the lint's \
+                  ratio; rows are decoded and written one at a time, never held in bulk"
+    )
+)]
 pub enum Row {
     /// One reading, decoded.
     Reading {

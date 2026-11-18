@@ -13,6 +13,8 @@
 //! the [`DialogHold`] its backend gave for it, and frees the window for the
 //! next one.
 
+#[cfg(any(test, target_arch = "wasm32", target_os = "android", target_os = "ios"))]
+pub(crate) mod handed_over;
 mod message;
 mod request;
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,9 +47,9 @@ use write::write_file;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) use request::FolderListing;
 // What a provider that names a save's file itself, or hands over a pick's
-// contents, decides the same way on the web and on iOS.
+// contents, decides the same way on the web, on iOS and on Android.
 #[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
-pub(crate) use request::{admit_read, save_file_name};
+pub(crate) use handed_over::{admit_read, save_file_name};
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].

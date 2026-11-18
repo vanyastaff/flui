@@ -317,8 +317,14 @@ impl FileFilter {
     /// the leading dot of a hidden file's name (`.env`, as Windows' dialog
     /// leaves it). Trailing dots are dropped (`report.` is `report.txt`), and
     /// a name of dots alone has no stem.
-    #[cfg(any(target_os = "linux", target_os = "ios", target_arch = "wasm32", test))]
-    fn completion(&self, name: &[u8]) -> Option<(usize, &str)> {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "ios",
+        target_os = "android",
+        target_arch = "wasm32",
+        test
+    ))]
+    pub(super) fn completion(&self, name: &[u8]) -> Option<(usize, &str)> {
         let extension = self.extensions().first()?;
         if self.names(name) {
             return None;
@@ -430,46 +436,6 @@ pub(super) fn names_admit(filters: &[FileFilter], picks: &Picks) -> bool {
             filters.iter().any(|filter| filter.names(name))
         })
     })
-}
-
-/// The name a save's file is given where the provider names it from the
-/// request rather than from what the user typed into a dialog (a browser's
-/// save picker or download, an export to iOS's Files): `suggested`, or
-/// `unnamed` when there is none, completed by the first filter as a desktop
-/// save dialog completes a typed name by the selected one
-/// (the rule of `FileFilter::completes`).
-#[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
-pub(crate) fn save_file_name(
-    suggested: Option<&str>,
-    filters: &[FileFilter],
-    unnamed: &str,
-) -> String {
-    let name = suggested.unwrap_or(unnamed);
-    match filters
-        .first()
-        .and_then(|filter| filter.completion(name.as_bytes()))
-    {
-        // The stem ends before ASCII dots, on a character boundary.
-        Some((stem, extension)) => format!("{}.{extension}", &name[..stem]),
-        None => name.to_owned(),
-    }
-}
-
-/// Refuse `read` bytes of picks past `limit`, an open's
-/// [`max_bytes`](OpenRequest::max_bytes), with
-/// [`DialogError::TooLarge`](super::DialogError::TooLarge): what a provider
-/// that hands over a pick's contents checks before it reads, by the sizes
-/// the system declares, and again by the bytes it read.
-#[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
-pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), super::DialogError> {
-    if read > limit {
-        Err(super::DialogError::TooLarge {
-            actual: read,
-            limit,
-        })
-    } else {
-        Ok(())
-    }
 }
 
 /// Whether `extension` is one: at most [`FileFilter::MAX_PATTERN_LEN`]

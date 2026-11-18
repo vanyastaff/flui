@@ -141,7 +141,7 @@ pub enum HostInput {
     Accessibility(accesskit::ActionRequest),
     /// Where the assistive technology's cursor moved: the node it reads, or
     /// `None` once it left the window's tree. Reported by an adapter whose
-    /// support is [`Reported`](flui_semantics::AssistiveFocusSupport::Reported),
+    /// support is [`Reported`](flui_semantics::platform::AssistiveFocusSupport::Reported),
     /// and by the presentation itself as assistive technology detaches.
     AssistiveFocus(Option<accesskit::NodeId>),
 }

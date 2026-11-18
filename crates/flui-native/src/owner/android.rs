@@ -60,6 +60,10 @@ pub(crate) mod main_thread;
 pub(crate) mod native_call;
 pub(crate) mod ndk;
 pub(crate) mod poll;
+// The queue of providers' work for the main thread, a model the host drives;
+// its tests run on every host.
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod posted_work;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]

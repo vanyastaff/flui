@@ -7,12 +7,13 @@
 //! keys and text content. The tree they build, its owner and the platform bridges are the
 //! runtime's and are not part of this module.
 
+pub use flui_rendering::semantics::platform::AssistiveFocusSupport;
 pub use flui_rendering::semantics::{
     ActionCall, AssistiveFocusHandler, CustomActionId, DeclaredCustomAction, Reveal, ScrollUnit,
     SemanticsAction, SemanticsActionHandler, SemanticsConfiguration, TextSelection,
 };
 pub use flui_rendering::semantics::{
-    AnnounceError, Announcer, AssistiveFocus, AssistiveFocusChange, AssistiveFocusSupport,
+    AnnounceError, Announcer, AssistiveFocus, AssistiveFocusChange,
 };
 pub use flui_rendering::semantics::{
     AutoComplete, Current, HasPopup, Invalid, NumericRange, NumericRangeError, States, Toggled,

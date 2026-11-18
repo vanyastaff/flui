@@ -608,7 +608,9 @@ impl LifecycleContext for ElementBuildContext {
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.owner.borrow().capabilities().announcer.clone()
     }
-    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
+    fn assistive_focus_support(
+        &self,
+    ) -> flui_rendering::semantics::platform::AssistiveFocusSupport {
         self.owner.borrow().capabilities().assistive_focus
     }
     fn haptics(&self) -> Option<flui_interaction::haptics::HapticsHandle> {
