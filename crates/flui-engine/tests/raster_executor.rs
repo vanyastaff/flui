@@ -2186,10 +2186,12 @@ fn every_probed_device_sent_is_adopted_in_order() {
         .iter()
         .filter(|call| **call == SlotCall::AdoptDevice)
         .count();
-    assert_eq!(adoptions, 2, "the second probe is the one the owner's factory serves");
+    assert_eq!(
+        adoptions, 2,
+        "the second probe is the one the owner's factory serves"
+    );
     assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
 }
-
 
 /// A rebuild that panics once its new device is in place leaves the backend
 /// rendering: the slots are restamped before the turn serves them, so a frame

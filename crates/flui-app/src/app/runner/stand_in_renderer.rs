@@ -42,6 +42,8 @@ struct Device {
     lost: bool,
     failing_rebuilds: u32,
     rebuild_attempts: u32,
+    /// Devices probed for a retry and adopted in place of a given-up one.
+    adoptions: u32,
     /// How many of the next frames, of any window, panic.
     panics_ahead: u32,
     /// How many of the next resizes, of any window, panic.
@@ -155,6 +157,13 @@ impl StandInRenderer {
     #[must_use]
     pub fn recovery_attempts(&self) -> u32 {
         self.shared.lock().device.rebuild_attempts
+    }
+
+    /// Devices the run adopted so far, each probed for the application's
+    /// retry of a given-up device (ADR-0305 §8).
+    #[must_use]
+    pub fn device_adoptions(&self) -> u32 {
+        self.shared.lock().device.adoptions
     }
 
     /// Whether this window's slot was detached.
@@ -375,6 +384,7 @@ impl RasterBackend for StandInBackend {
         drop(device);
         let shared = &mut *self.shared.lock();
         shared.device.lost = false;
+        shared.device.adoptions = shared.device.adoptions.saturating_add(1);
         let device = &shared.device;
         shared
             .windows
