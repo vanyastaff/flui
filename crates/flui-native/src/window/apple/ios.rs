@@ -1699,7 +1699,7 @@ impl IOSWindow {
                 "a UIKit window takes commands on the main thread".to_owned(),
             ));
         };
-        if !self.lifecycle.lock().focused {
+        if !self.lifecycle.borrow().focused {
             return Ok(());
         }
         // Cloned out first: no borrow is held while UIKit is messaged.
