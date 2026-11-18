@@ -173,7 +173,8 @@ mod toplevel {
     use crate::text::WindowTextInput;
     use crate::window::linux::class::AppClass;
     use crate::window::state::{
-        ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out, system_frame_or_none,
+        MODE_ANSWER_LIMIT, ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out,
+        system_frame_or_none,
     };
 
     /// What the compositor said of one window since the owner last looked,
@@ -1127,9 +1128,19 @@ mod toplevel {
                     }
                 }
                 Action::Menu { x, y } => toplevel.show_window_menu(&asked.seat, asked.serial, x, y),
-                Action::Minimize => toplevel.set_minimized(),
-                Action::Maximize => toplevel.set_maximized(),
-                Action::Restore => toplevel.unset_maximized(),
+                // A button of the frame asks for a mode as a command does.
+                Action::Minimize => {
+                    self.expect_mode(WindowMode::Minimized);
+                    toplevel.set_minimized();
+                }
+                Action::Maximize => {
+                    self.expect_mode(WindowMode::Maximized);
+                    toplevel.set_maximized();
+                }
+                Action::Restore => {
+                    self.expect_mode(WindowMode::Normal);
+                    toplevel.unset_maximized();
+                }
                 Action::Close => {}
             }
             #[cfg(any(test, feature = "testing"))]
@@ -1378,11 +1389,32 @@ mod toplevel {
             self.surface.0.commit();
         }
 
+        /// The window asks the compositor for `mode`, which it may answer in
+        /// several configures (Weston restores a maximized mode on the way out
+        /// of fullscreen): the snapshot keeps the mode the window left until a
+        /// configure says `mode`, or for [`MODE_ANSWER_LIMIT`]
+        /// (`WindowStateCell::expect_mode`). Every request that changes or
+        /// leaves a mode calls it (a mode command, a size given to a window
+        /// the compositor sizes, a button of the frame the window draws), one
+        /// for the mode the window is in too, so a newer request replaces the
+        /// wait of an older one whose configures may still be coming. A
+        /// minimize, which no compositor reports, ends the wait.
+        fn expect_mode(&self, mode: WindowMode) {
+            if mode == WindowMode::Minimized {
+                self.state.end_mode_wait();
+            } else {
+                self.state
+                    .expect_mode(mode, Instant::now() + MODE_ANSWER_LIMIT);
+            }
+        }
+
         /// Ask the compositor to stop sizing the window: out of fullscreen
-        /// and out of maximized. A compositor that puts a window maximized
-        /// before fullscreen back in it as it leaves fullscreen is asked again
-        /// once it has (`leaving_maximized`).
+        /// and out of maximized, for normal mode, which the snapshot waits
+        /// for. A compositor that puts a window maximized before fullscreen
+        /// back in it as it leaves fullscreen is asked again once it has
+        /// (`leaving_maximized`).
         fn leave_compositor_modes(&self) {
+            self.expect_mode(WindowMode::Normal);
             {
                 let mut applied = self.applied.borrow_mut();
                 applied.leaving_maximized = applied.sizing.states().fullscreen;
@@ -1881,6 +1913,7 @@ mod toplevel {
                 }
                 WindowCommand::SetMode(WindowMode::Normal) => self.leave_compositor_modes(),
                 WindowCommand::SetMode(mode) => {
+                    self.expect_mode(mode);
                     let fullscreen = {
                         let mut applied = self.applied.borrow_mut();
                         applied.leaving_maximized = false;
@@ -2132,6 +2165,10 @@ mod toplevel {
                 return None;
             }
             self.pacing().gives_up_at()
+        }
+
+        fn mode_due(&self) -> Option<Instant> {
+            self.state.mode_deadline().filter(|_| !self.closed.get())
         }
 
         fn frame_hold(&self) -> FrameHold {

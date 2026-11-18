@@ -249,9 +249,9 @@ fn terminal_release_closes_authority_and_destroys_the_result() {
             drops: Rc::clone(&capture_drops),
             fail,
         };
-        let _listener = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+        let _listener = scheduler.listen_lifecycle_state(move |_| {
             std::hint::black_box(&capture);
-        }));
+        });
         let producer = Rc::new(RefCell::new(Some(scheduler)));
         let result_drops = Rc::new(Cell::new(0));
         let sibling_scheduler = UpdateScheduler::new();

@@ -301,9 +301,11 @@ accessor such as `current_frame()`.
 of them fails to compile there until it is classified, and probes every
 `RefCell` and `Mutex` a callback could observe. It runs from inside a
 post-frame callback and a frame-completion waker
-(`callbacks_run_with_no_scheduler_lock_held`). A removed lifecycle listener is
-located under the borrow (`position` + `remove`) and dropped only after the
-borrow ends, since its captures may re-enter the scheduler from `Drop`.
+(`callbacks_run_with_no_scheduler_lock_held`). Lifecycle listeners are a
+`Notifier`, held by the `Subscription` that `listen_lifecycle_state` returns:
+the notifier lends no borrow of its list to a listener it runs, and a detached
+listener drops after its borrow ends, since its captures may re-enter the
+scheduler from `Drop`.
 **Unasserted** for the lifecycle-listener and wake-hook families: no test runs
 the oracle from inside them.
 

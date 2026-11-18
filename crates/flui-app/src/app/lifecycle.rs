@@ -1101,6 +1101,11 @@ pub(crate) struct ServiceLifecycle {
     runtimes: std::cell::RefCell<
         rustc_hash::FxHashMap<flui_foundation::UiRuntimeId, flui_scheduler::AppLifecycleState>,
     >,
+    /// Each live runtime's subscription to its scheduler's lifecycle, held
+    /// until the runtime retires ([`forget`](Self::forget)) or the loop ends.
+    listening: std::cell::RefCell<
+        rustc_hash::FxHashMap<flui_foundation::UiRuntimeId, flui_foundation::Subscription>,
+    >,
 }
 
 impl ServiceLifecycle {
@@ -1110,6 +1115,7 @@ impl ServiceLifecycle {
         Self {
             published: std::cell::RefCell::new(Some(published)),
             runtimes: std::cell::RefCell::default(),
+            listening: std::cell::RefCell::default(),
         }
     }
 
@@ -1128,6 +1134,9 @@ impl ServiceLifecycle {
     pub(crate) fn close(&self) {
         let published = self.published.borrow_mut().take();
         self.runtimes.borrow_mut().clear();
+        // Detached with no borrow held: a listener's captures retire here.
+        let listening = std::mem::take(&mut *self.listening.borrow_mut());
+        drop(listening);
         if let Some(published) = published {
             // Told with no borrow held: a reader's waker runs here.
             published.send_if_modified(|state| {
@@ -1153,9 +1162,23 @@ impl ServiceLifecycle {
         self.publish();
     }
 
+    /// Hold `runtime`'s subscription to its scheduler's lifecycle until the
+    /// runtime retires ([`forget`](Self::forget)) or the loop ends.
+    pub(crate) fn hold(
+        &self,
+        runtime: flui_foundation::UiRuntimeId,
+        subscription: flui_foundation::Subscription,
+    ) {
+        let replaced = self.listening.borrow_mut().insert(runtime, subscription);
+        // Detached with no borrow held: a listener's captures retire here.
+        drop(replaced);
+    }
+
     /// `runtime` has retired.
     pub(crate) fn forget(&self, runtime: flui_foundation::UiRuntimeId) {
         self.runtimes.borrow_mut().remove(&runtime);
+        let listening = self.listening.borrow_mut().remove(&runtime);
+        drop(listening);
         self.publish();
     }
 

@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn a_nested_delivery_keeps_the_first_failure_and_later_computation() {
     let notifier = Notifier::<()>::new();
-    notifier.add(Rc::new(|()| panic!("first delivery")));
+    let _failing = notifier.subscribe(Rc::new(|()| panic!("first delivery")));
     let tail = Rc::new(Cell::new(false));
     let delivered = Rc::clone(&tail);
-    notifier.add(Rc::new(move |()| delivered.set(true)));
+    let _tail = notifier.subscribe(Rc::new(move |()| delivered.set(true)));
     let mut recovery = PanicRecovery::new();
     assert!(
         recovery
@@ -101,21 +101,20 @@ fn unproved_retirement_does_not_inherit_a_delivery_claim() {
 
 fn notification_capture_retirement(class: FailureClass) {
     let notifier = Rc::new(Notifier::<()>::new());
-    let identity = Rc::new(Cell::new(None));
+    let identity = Rc::new(Cell::new(None::<flui_foundation::Subscription>));
     let callback_identity = Rc::clone(&identity);
-    let callback_owner = Rc::downgrade(&notifier);
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = HostileDrop(Arc::clone(&drops));
-    identity.set(Some(notifier.add(Rc::new(move |()| {
+    identity.set(Some(notifier.subscribe(Rc::new(move |()| {
         let _capture = &capture;
-        callback_owner
-            .upgrade()
-            .expect("the notification owner remains live")
-            .remove(callback_identity.take().expect("live callback identity"));
+        callback_identity
+            .take()
+            .expect("live callback identity")
+            .detach();
     }))));
     let delivered = Rc::new(Cell::new(0));
     let tail = Rc::clone(&delivered);
-    notifier.add(Rc::new(move |()| tail.set(tail.get() + 1)));
+    let _tail = notifier.subscribe(Rc::new(move |()| tail.set(tail.get() + 1)));
     let mut recovery = PanicRecovery::new();
     assert!(recovery.scope().run_classified(class, |scope| {
         notifier.notify_with_recovery(&(), scope);
@@ -182,7 +181,7 @@ fn an_inherited_failure_keeps_local_annotation_without_rethrowing_it() {
 
 fn a_nested_channel_latch_does_not_demote_its_owners_original_failure() {
     let notifier = Rc::new(Notifier::<()>::new());
-    notifier.add(Rc::new(|()| panic!("first channel failure")));
+    let _failing = notifier.subscribe(Rc::new(|()| panic!("first channel failure")));
     let reenter = Rc::new(Cell::new(true));
     let nested = Rc::downgrade(&notifier);
     notifier.add_with_recovery(Rc::new(move |(), scope| {
@@ -195,7 +194,7 @@ fn a_nested_channel_latch_does_not_demote_its_owners_original_failure() {
     }));
     let delivered = Rc::new(Cell::new(0));
     let tail = Rc::clone(&delivered);
-    notifier.add(Rc::new(move |()| tail.set(tail.get() + 1)));
+    let _tail = notifier.subscribe(Rc::new(move |()| tail.set(tail.get() + 1)));
     let mut recovery = PanicRecovery::new();
     recovery
         .scope()
