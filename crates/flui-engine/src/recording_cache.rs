@@ -20,6 +20,10 @@
 //! (`ResourceEpoch`): a glyph texel or an image's atlas rectangle is valid
 //! only while no slot the recording names was freed since.
 
+pub(crate) mod admission;
+
+pub(crate) use admission::Admission;
+
 use std::num::NonZeroU64;
 
 use flui_foundation::IdMint;
@@ -1348,6 +1352,10 @@ pub(crate) struct RecordingCache {
     epoch: Option<ResourceEpoch>,
     /// Recordings dropped since [`Self::take_counts`] last reported.
     evictions: u64,
+    /// The keys drawn but not kept yet, which a recording is captured under
+    /// only once they are drawn on enough frames, at most
+    /// [`admission::CANDIDATES`] of them.
+    candidates: admission::Candidates<RecordingKey>,
 }
 
 impl RecordingCache {
@@ -1368,6 +1376,7 @@ impl RecordingCache {
             mint,
             epoch,
             evictions: 0,
+            candidates: admission::Candidates::new(),
         }
     }
 
@@ -1378,12 +1387,13 @@ impl RecordingCache {
     }
 
     /// The painter's resources changed under every kept recording: they are
-    /// dropped, with the room that held them, and later ones are keyed by a
-    /// new epoch.
+    /// dropped, with the candidates keyed by the same epoch and the room
+    /// that held them, and later ones are keyed by a new epoch.
     pub(crate) fn advance_epoch(&mut self) {
         let dropped = self.recency.len() as u64;
         self.evictions = self.evictions.saturating_add(dropped);
         self.release();
+        self.candidates.release();
         self.epoch = self.mint.next().ok().map(ResourceEpoch);
     }
 
@@ -1449,6 +1459,14 @@ impl RecordingCache {
             }
         }
         drop(self.take_out(place));
+    }
+
+    /// Notes a draw under `key`, which the cache does not hold, and answers
+    /// whether to capture the recording it makes: only once `key` has been
+    /// drawn on [`admission::DRAWS_TO_ADMIT`] frames, so a chunk
+    /// drawn once is recorded and never captured (ADR-0304 §9).
+    pub(crate) fn admission(&mut self, key: RecordingKey) -> Admission {
+        self.candidates.draw(key, self.frame)
     }
 
     /// Drops the recording `key` names.
@@ -1589,7 +1607,10 @@ impl RecordingCache {
     /// the count again.
     #[cfg(test)]
     pub(crate) fn take_visits(&mut self) -> u64 {
-        self.recency.take_visits() + self.by_content.take_visits() + self.by_lineage.take_visits()
+        self.recency.take_visits()
+            + self.by_content.take_visits()
+            + self.by_lineage.take_visits()
+            + self.candidates.take_visits()
     }
 
     /// Both indexes hold every kept recording's place once, and each

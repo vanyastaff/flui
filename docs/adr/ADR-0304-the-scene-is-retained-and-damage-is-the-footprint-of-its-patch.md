@@ -535,8 +535,23 @@ applies that state at replay, which ADR-0306 decides. A chunk under a projective
 cached. `ResourceEpoch` advances when texels a recording names move: a glyph-atlas or image-atlas
 reset or eviction, device recovery and a font-source switch. No kept recording reads the surface
 format (a backdrop, which does, is a draw item and is never kept), so a format change keeps them.
-An entry is inserted only after its recording completed and placed every glyph it asked for;
-eviction is least recently rastered first under a byte budget (a hypothesis), and a presentation's
+A chunk's recording is captured only when the chunk is drawn under one key on a second frame:
+capture copies every arena the chunk appended, and a chunk drawn once (every chunk of a first
+frame, content that changes on every frame) pays for the copy and never replays it. Flutter's
+raster cache is the precedent: `RasterCache` caches a picture only once it has been seen on
+`access_threshold` frames (three by default). FLUI takes two, the earliest frame that tells a
+repeated chunk from a one-off: on the `raster_share` bench, under lavapipe, two and three cost the
+same on a first frame and on an update, and three only delays the first replay by a frame. Until it
+is admitted a key is a candidate, held in a table of at most 4096 keys in the order they were last
+drawn; a new key displaces at most two of the oldest, each only once it has gone four frames
+undrawn, and is not tracked while none has. So each draw costs a bounded number of steps and the
+table is never walked whole, and a frame that draws more keys than the table holds admits the
+first 4096 on their next draw rather than displacing each before it comes round again. A
+resource-epoch advance drops the candidates with the recordings. Flutter's second rule, which
+skips a picture too simple to be worth caching, is not taken: the measured frames capture nothing
+once admission waits for a second draw, so it has nothing left to save there. An admitted entry
+is inserted only after its recording completed and placed every glyph it asked for; a refused
+capture starts its key over as a candidate. Eviction is least recently rastered first under a byte budget (a hypothesis), and a presentation's
 entries go when its slot detaches. Counters: `recording_cache_bytes`, `recording_cache_hits`,
 `recording_cache_evictions`. A chunk has one parent entry, so it never straddles an effect scope,
 and the renderer's straddle self-heal (`crates/flui-engine/src/renderer.rs:2654-2675`) becomes a
@@ -625,8 +640,9 @@ consecutive versions. The patch damage must cover the diff damage.
   (`crates/flui-rendering/tests/nested_boundary_capture.rs:549`) compares flattened versions, and
   `pipeline_frames_diff_to_the_changed_boundary_rect`
   (`crates/flui-rendering/tests/boundary_contents.rs:251`) asserts the patch damage.
-- `flui-engine` (to be added): `a_cached_chunk_replays_the_command_stream_it_recorded` (ADR-0006
-  §6), `a_chunk_moved_by_whole_pixels_hits_the_recording_cache`,
+- `flui-engine` (to be added): `a_chunk_drawn_once_is_not_captured`,
+  `the_candidate_table_stays_bounded`, `a_cached_chunk_replays_the_command_stream_it_recorded`
+  (ADR-0006 §6), `a_chunk_moved_by_whole_pixels_hits_the_recording_cache`,
   `an_atlas_reset_misses_every_cached_recording`, `the_renderer_kernel_stays_inside_read_closure`,
   `a_texture_frame_damages_only_its_users`, `a_base_mismatch_renders_full`,
   `a_raster_panic_renders_the_next_frame_in_full`, and the readback row
@@ -686,8 +702,9 @@ consecutive versions. The patch damage must cover the diff damage.
 
 ## More information
 
-- The measurements cited are `flui-engine`'s `damage_scissor` bench (ADR-0061) and `flui-layer`'s
-  `damage_diff` bench (`crates/flui-layer/ARCHITECTURE.md:172-173`).
+- The measurements cited are `flui-engine`'s `damage_scissor` bench (ADR-0061), `flui-layer`'s
+  `damage_diff` bench (`crates/flui-layer/ARCHITECTURE.md:172-173`) and `flui-app`'s
+  `raster_share` bench.
 - Revisit `Region::MAX`, the `Bounds` plan's factor of two, the pending log's 16 entries and the
-  recording cache's budget when the `caret_blink_in_10k_list` counts or a readback bench show
-  another value wins; each is a constant, not a contract.
+  recording cache's budget and admission threshold when the `caret_blink_in_10k_list` counts or a
+  readback bench show another value wins; each is a constant, not a contract.

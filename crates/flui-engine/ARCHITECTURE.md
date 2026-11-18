@@ -181,7 +181,20 @@ image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
 
-`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) keeps the recording of a
+`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) captures a chunk's
+recording only on the second frame that draws it under one key, as Flutter's
+raster cache admits a picture after `access_threshold` frames: a chunk drawn
+once, every chunk of a first frame and content that changes each frame, is
+recorded and never copied (`a_chunk_drawn_once_is_not_captured`). Until then
+its key is a candidate (`recording_cache/admission.rs`): at most 4096, in a
+`RecencyList` by last draw and found through a `TalliedMap`; a new key
+displaces at most two of the oldest that went four frames undrawn and is not
+tracked while none has, so a draw costs a few steps and a frame that draws
+more keys than the table holds admits the first ones on their next draw
+(`the_candidate_table_stays_bounded`). An epoch advance drops the candidates
+with the recordings, an admitted capture that is refused starts its key
+over, and a kept recording missed for a glyph evicted since captures again
+at once. The cache keeps the recording of a
 chunk that stayed one fragment of the open segment: no external texture, no
 draw item, layer or clip of its own, every glyph it asked for placed, recorded
 Ok under a finite affine transform whose translation is below 2^23.
