@@ -179,19 +179,14 @@ impl WindowScale {
         self.0.get().dpi
     }
 
-    /// Its scale: its DPI over the 96 of 100%.
-    pub(crate) fn scale(&self) -> f64 {
-        self.ratio().get()
-    }
-
     /// Its scale as a device pixel ratio.
     pub(crate) fn ratio(&self) -> DevicePixelRatio {
         self.0.get().ratio()
     }
 
-    /// The window is now at `dpi`; answers the scale it was at.
-    pub(crate) fn rescale(&self, dpi: WindowDpi) -> f64 {
-        self.0.replace(dpi).ratio.get()
+    /// The window is now at `dpi`; answers the ratio it was at.
+    pub(crate) fn rescale(&self, dpi: WindowDpi) -> DevicePixelRatio {
+        self.0.replace(dpi).ratio
     }
 }
 

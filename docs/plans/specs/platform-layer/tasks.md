@@ -7010,18 +7010,34 @@ GPU-память простаивающего или невидимого окн
   `input::assembly` удалены: сборка не встречает масштаба, которого нет у экрана. Кодек нативной
   записи проверяет каждое отношение пикселей при чтении одной функцией `ratio` и отказывает
   типизированным `CodecError::Ratio` со строкой: масштаб чтения, колеса, кадра тачпада, масштаб
-  дисплея, отношение окна и системы
+  дисплея, метрики окна, отношение геометрии мыши и касания
   (`a_ratio_no_screen_has_is_refused_where_a_recording_holds_it`: 0, −2, 1/64 и 64 в каждом из
-  четырёх видов строк; без проверки при чтении тест красный — запись читается). Формат записи —
-  версия 4 (`FORMAT_VERSION`): читатель версии 4 отказывает отношениям, которые версия 3
-  принимала. Тем же типом — курсор-образ AppKit (`NativeCursor`) и шаг колеса Web (`WheelStep`),
-  где масштаб проверялся вручную второй раз. Зум DirectManipulation (`ContentTransform`) и
+  семи видов строк, под заголовком версии 4 и версии 3; без проверки при чтении тест красный —
+  запись читается). Писатель пишет версию 4 (`FORMAT_VERSION`), читатель читает версии 3 и 4
+  (`OLDEST_READABLE_VERSION`): поля и формы те же, версия 4 только ограничивает каждое отношение
+  диапазоном экрана, и строка вне его отказана, а не вся запись; диапазон записан у каждого поля
+  схемы. Запись ввода (`flui-runtime`, `flui-testing`) отказывает тем же строкам типом
+  `WireError::Ratio` / `RecordingError::Ratio`
+  (`a_preferences_row_whose_pixel_ratio_no_screen_has_is_refused_on_its_line`,
+  `a_recording_whose_window_scale_no_screen_has_is_refused_on_its_line`). `WindowMetrics::try_new`
+  и `from_logical` принимают `DevicePixelRatio` (`InvalidMetrics::InvalidScale` удалён), как и
+  `try_set_scale_factor` тестового хоста. Тем же типом — курсор-образ AppKit (`NativeCursor`),
+  шаг колеса Web (`WheelStep`, отношение холста через `HostInput::register`) и масштаб окна Win32
+  (`WindowScale::scale` удалён: перенос, точка сброса, IME, цель перетаскивания читают `ratio`;
+  `checked_logical_to_device` остаётся множителем, потому что пересчитывает и отношением двух
+  DPI). Масштаб окна X11 остаётся атомарным: `InputTarget` держит транспорт перетаскивания,
+  который `Send + Sync`. Зум DirectManipulation (`ContentTransform`) и
   отношения боксов хоста Web (`window::web`, `accessibility::web::dom`) — не отношение пикселей
   экрана и не ограничены его диапазоном (зум жеста, CSS-трансформ, ноль у схлопнутого бокса) и
   сохраняют свою проверку ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit),
   «Scales still checked by hand»). Строки, которые тип делает невозможными («zero scale» в
   `an_undecodable_reading_cancels_its_contact_as_invalid_input`, нулевой и NaN-масштаб в
-  `invalid_native_sensor_is_refused`), сняты; отказ перенесён в кодек.
+  `invalid_native_sensor_is_refused`, строки масштаба `InvalidScale` в
+  `a_report_that_is_not_a_drawable_area_names_its_cause`), сняты; отказ перенесён в кодек и в
+  `a_ratio_is_held_to_the_range_a_screen_can_have`. Тест
+  `a_scale_no_window_can_have_is_answered_and_changes_nothing` заменён на
+  `the_largest_ratio_a_screen_can_have_is_a_scale_the_window_takes`: отношение вне диапазона
+  больше нельзя передать окну.
   Проверки: Windows — clippy `-p flui-native -p flui-protocol -p flui-cli --all-targets --all-features
   -D warnings`, nextest тех же крейтов; WSL Ubuntu 24.04 — clippy `-p flui-native --all-targets`
   (`--all-features`, по умолчанию, `--no-default-features`, `--features x11`), nextest `-p flui-native`

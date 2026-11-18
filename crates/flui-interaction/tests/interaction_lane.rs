@@ -499,7 +499,13 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
             flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         )
         .with_focus(flui_platform::WindowFocus::Focused)
-        .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
+        .with_metrics(
+            flui_foundation::geometry::WindowMetrics::from_logical(
+                size,
+                flui_foundation::geometry::DevicePixelRatio::ONE,
+            )
+            .ok(),
+        )
         .with_capabilities(self.1)
     }
 

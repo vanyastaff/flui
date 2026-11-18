@@ -108,7 +108,11 @@ fn a_window_state_round_trips_through_its_parts() {
     capabilities.reports_system_gestures =
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let capabilities = capabilities.into_capabilities();
-    let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
+    let metrics = WindowMetrics::try_new(
+        DeviceSize::new(1600, 1200),
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    )
+    .expect("valid");
     let display = DisplayRegistry::new()
         .mint(&DisplayKey::Injected(1))
         .expect("an id");

@@ -549,7 +549,7 @@ fn screen_point(hwnd: HWND) -> POINTL {
 }
 
 fn scale(hwnd: HWND) -> f64 {
-    with_window_context(hwnd, "test", |context| context.scale.scale()).expect("a context")
+    with_window_context(hwnd, "test", |context| context.scale.ratio().get()).expect("a context")
 }
 
 /// Resolve a ready transfer request.
@@ -855,8 +855,10 @@ fn a_window_hands_its_drop_target_and_text_services_its_one_scale() {
     let read = || {
         (
             scale(target.hwnd),
-            super::testing::scale_of(window).expect("the window's drop target"),
-            services.scale(),
+            super::testing::scale_of(window)
+                .expect("the window's drop target")
+                .get(),
+            services.scale().get(),
         )
     };
     let opened = read();

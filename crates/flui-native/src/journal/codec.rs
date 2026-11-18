@@ -102,12 +102,16 @@ pub enum CodecError {
         /// What the parser refused.
         source: MalformedJson,
     },
-    /// The header's major version is not this reader's.
-    #[error("native recording version {found} is not supported (this reader reads {supported})")]
+    /// The header's major version is not one this reader reads.
+    #[error(
+        "native recording version {found} is not supported (this reader reads {oldest} to {supported})"
+    )]
     Version {
         /// The header's version.
         found: u32,
-        /// The version this reader reads.
+        /// The oldest version this reader reads.
+        oldest: u32,
+        /// The newest version this reader reads, the one it writes.
         supported: u32,
     },
     /// Line `line` names a variant this reader does not know.
@@ -862,9 +866,10 @@ impl NativeRecording {
             .and_then(serde_json::Value::as_u64)
             .and_then(|version| u32::try_from(version).ok())
             .unwrap_or(0);
-        if found != FORMAT_VERSION {
+        if !(wire::OLDEST_READABLE_VERSION..=FORMAT_VERSION).contains(&found) {
             return Err(CodecError::Version {
                 found,
+                oldest: wire::OLDEST_READABLE_VERSION,
                 supported: FORMAT_VERSION,
             });
         }
@@ -2635,9 +2640,13 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
     let metrics = metrics
         .map(|wire::WindowMetrics { physical, scale }| {
             let [width, height] = physical;
-            let scale = ratio(scale)?.get();
-            WindowMetrics::try_new(Size::new(width, height), scale)
-                .map_err(|error| invalid(format!("metrics {width}x{height} at {scale}: {error}")))
+            let scale = ratio(scale)?;
+            WindowMetrics::try_new(Size::new(width, height), scale).map_err(|error| {
+                invalid(format!(
+                    "metrics {width}x{height} at {}: {error}",
+                    scale.get()
+                ))
+            })
         })
         .transpose()?;
     let insets = WindowInsets::try_new(

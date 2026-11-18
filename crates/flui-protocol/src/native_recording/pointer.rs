@@ -386,7 +386,8 @@ pub struct Reading {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub position: Option<[f64; 2]>,
-    /// Device pixels per logical pixel.
+    /// Device pixels per logical pixel, within `1/32..=32`: the range a screen can
+    /// have, and a reader refuses a row outside it.
     #[cfg_attr(
         feature = "serde",
         serde(default = "super::one", skip_serializing_if = "super::is_one")
@@ -452,7 +453,8 @@ pub struct Frame {
     pub counter: Option<u64>,
     /// The cursor, in device pixels.
     pub position: [f64; 2],
-    /// Device pixels per logical pixel.
+    /// Device pixels per logical pixel, within `1/32..=32`: the range a screen can
+    /// have, and a reader refuses a row outside it.
     #[cfg_attr(
         feature = "serde",
         serde(default = "super::one", skip_serializing_if = "super::is_one")
@@ -478,7 +480,8 @@ pub struct Wheel {
     pub distance: i16,
     /// The cursor, in device pixels.
     pub position: [f64; 2],
-    /// Device pixels per logical pixel.
+    /// Device pixels per logical pixel, within `1/32..=32`: the range a screen can
+    /// have, and a reader refuses a row outside it.
     #[cfg_attr(
         feature = "serde",
         serde(default = "super::one", skip_serializing_if = "super::is_one")

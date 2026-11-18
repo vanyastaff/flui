@@ -762,7 +762,10 @@ pub(crate) struct InputTarget {
 }
 
 /// A window's scale (device pixels per logical pixel) as the window last
-/// read it, which its input reads positions with.
+/// read it, which its input reads positions with. Atomic, not a `Cell`: the
+/// drag transport keeps each window's `InputTarget`, and `DragTransport` is
+/// `Send + Sync`. Only a `DevicePixelRatio`'s bits are stored, so reading one
+/// back cannot fail.
 #[derive(Debug, Clone)]
 pub(crate) struct WindowScale(Arc<AtomicU64>);
 

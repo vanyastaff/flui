@@ -552,7 +552,7 @@ fn sample_state(
             // No native window (terminated, or not yet made) is no drawable area.
             metrics: flui_foundation::geometry::WindowMetrics::try_new(
                 Size::new(width, height),
-                scale.get(),
+                scale,
             )
             .ok(),
             brightness: kept.appearance,

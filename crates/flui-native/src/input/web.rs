@@ -504,6 +504,7 @@ pub(crate) mod events {
             canvas: &web_sys::HtmlCanvasElement,
             delivery: &Arc<WindowDelivery>,
             latency: flui_platform::InputLatency,
+            pixel_ratio: Rc<dyn Fn() -> DevicePixelRatio>,
             registration: &mut dyn CanvasRegistration,
         ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError> {
             let accepting = registration.accepting();
@@ -551,7 +552,7 @@ pub(crate) mod events {
             register_keyboard_events(canvas, &keys, registration)?;
             register_loss_events(canvas, &loss, registration)?;
             register_hover_events(canvas, delivery, registration)?;
-            register_wheel_events(canvas, delivery, &pinch, registration)?;
+            register_wheel_events(canvas, delivery, &pinch, pixel_ratio, registration)?;
             register_gesture_events(canvas, &pinch, registration)?;
             register_context_menu(canvas, &menu, registration)?;
             Ok(keys)
@@ -1188,6 +1189,7 @@ pub(crate) mod events {
         canvas: &web_sys::HtmlCanvasElement,
         delivery: &Arc<WindowDelivery>,
         pinch: &Rc<Pinch>,
+        pixel_ratio: Rc<dyn Fn() -> DevicePixelRatio>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         let timer = {
@@ -1216,12 +1218,7 @@ pub(crate) mod events {
                     mode: we.delta_mode(),
                     dx: we.delta_x(),
                     dy: we.delta_y(),
-                    // A ratio no screen has reads as the base ratio, the
-                    // hosts' rule (`display::scale`); the canvas's own read of
-                    // the ratio reports the refusal, so this one does not.
-                    scale: web_sys::window()
-                        .and_then(|window| DevicePixelRatio::try_new(window.device_pixel_ratio()))
-                        .unwrap_or(DevicePixelRatio::ONE),
+                    scale: pixel_ratio(),
                     time: event_time(we.time_stamp()),
                 };
                 let ended = {

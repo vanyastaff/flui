@@ -2154,7 +2154,7 @@ impl MacOSWindow {
             (
                 state.display,
                 state.normal,
-                state.scale_factor.get(),
+                state.scale_factor,
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
                 state.frame,

@@ -102,7 +102,7 @@ impl WindowContext {
         if increments.is_none() && aspect.is_none() {
             return false;
         }
-        let scale = self.scale.scale();
+        let scale = self.scale.ratio().get();
         let device = |logical: f64| {
             checked_logical_to_device(logical, scale)
                 .unwrap_or(0)

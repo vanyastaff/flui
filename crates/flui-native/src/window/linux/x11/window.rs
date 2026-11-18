@@ -897,7 +897,7 @@ impl X11Window {
         {
             windows.frame_inset.record(frame.added());
         }
-        let metrics = WindowMetrics::try_new(read.content, scale.get()).ok();
+        let metrics = WindowMetrics::try_new(read.content, scale).ok();
         Sample::read(geometry, |state| {
             let state = state
                 .with_mode(mode)

@@ -353,7 +353,8 @@ pub enum SystemControls {
 pub struct WindowMetrics {
     /// The drawable area in device pixels: width and height.
     pub physical: [i32; 2],
-    /// Device pixels per logical pixel.
+    /// Device pixels per logical pixel, within `1/32..=32`: the range a screen can
+    /// have, and a reader refuses a row outside it.
     pub scale: f64,
 }
 
