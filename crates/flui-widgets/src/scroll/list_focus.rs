@@ -768,7 +768,7 @@ impl ViewState<FocusableList> for FocusableListState {
                 configuration.set_semantics_boundary(true);
                 configuration.set_role(SemanticsRole::List);
                 if let Some(label) = &view.config.empty_list_label {
-                    configuration.set_label(label.to_string());
+                    configuration.set_label(label);
                 }
             }
             let child = AnchoredSliver::new(
@@ -792,7 +792,7 @@ impl ViewState<FocusableList> for FocusableListState {
         if empty {
             list = list.container(true).role(SemanticsRole::List);
             if let Some(label) = &view.config.empty_list_label {
-                list = list.label(label.to_string());
+                list = list.label(label);
             }
         }
         list.child(

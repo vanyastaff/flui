@@ -377,7 +377,7 @@ fn menu_row(
     Semantics::new()
         .container(true)
         .role(SemanticsRole::MenuItem)
-        .label(label.to_owned())
+        .label(label)
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)

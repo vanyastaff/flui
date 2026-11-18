@@ -541,7 +541,7 @@ fn tray_buttons(
         let (controller, motion) = (controller.clone(), Rc::clone(motion));
         let pressed = RawButton::new(
             Semantics::new()
-                .label(action.command.label().to_owned())
+                .label(action.command.label())
                 .child(ExcludeSemantics::new().child(Center::new().child(action.content.clone()))),
         )
         .on_pressed(move |ctx| {
