@@ -197,7 +197,8 @@ impl HelloReply {
 }
 
 vocabulary! {
-    /// Where OS input runs, so it cannot reach the user's own session (R14b).
+    /// Where OS input runs, so it cannot reach the user's own session (ADR-0238 §5): a session
+    /// and its report name the mode.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(
         feature = "serde",

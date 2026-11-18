@@ -78,6 +78,15 @@ pub(super) static CLASSES: LazyLock<Vec<Class>> = LazyLock::new(|| {
             not_after_dashes: false,
         },
         Class {
+            name: "spec-requirement",
+            // a spec's requirement cited in parentheses: R or RS, a number and an optional letter;
+            // a bare R and a number is too often a register, a paragraph's rule or a test case
+            prose: regex(r"\((?:R|RS)\d+[a-z]?\)"),
+            markdown: None,
+            ident: None,
+            not_after_dashes: false,
+        },
+        Class {
             name: "tracker-h",
             prose: regex(r"\bH\d+\b"),
             // the roadmap's horizons are named with the low numbers

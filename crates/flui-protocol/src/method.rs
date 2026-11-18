@@ -57,7 +57,7 @@ vocabulary! {
 
 vocabulary! {
     /// Where MCP lists a method: the core set by default, or a capability group the client
-    /// enables with `--caps` (R28a). Every method stays callable; the tier only decides what
+    /// enables with `--caps` (ADR-0238 §9). Every method stays callable; the tier only decides what
     /// a model is shown.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(
@@ -94,7 +94,7 @@ vocabulary! {
     }
 }
 
-/// The most methods [`Tier::Core`] may hold (R28a).
+/// The most methods [`Tier::Core`] may hold: the set MCP lists by default (ADR-0238 §9).
 pub const MAX_CORE: usize = 13;
 
 mod sealed {

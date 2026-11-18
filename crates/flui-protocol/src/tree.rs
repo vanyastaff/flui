@@ -203,7 +203,8 @@ impl schemars::JsonSchema for ElementRef {
 }
 
 /// A published revision of a window's semantics tree: it grows by one at every publish that
-/// changed the tree, so two readings compare by revision.
+/// changed the tree, so two readings compare by revision. Only the tree's owner advances it,
+/// with [`next`](Self::next); a reader compares what it was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[cfg_attr(
     feature = "serde",
@@ -211,7 +212,32 @@ impl schemars::JsonSchema for ElementRef {
     serde(transparent)
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct TreeRevision(pub u64);
+pub struct TreeRevision(u64);
+
+impl TreeRevision {
+    /// The revision of a tree that has published nothing yet.
+    pub const ZERO: Self = Self(0);
+
+    /// The revision after this one.
+    ///
+    /// # Panics
+    ///
+    /// When the revision space is spent, which a window cannot reach at any publish rate:
+    /// a revision that stopped growing would let two different trees read as one.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self.0.checked_add(1) {
+            Some(next) => Self(next),
+            None => panic!("BUG: a semantics tree's revision space is spent"),
+        }
+    }
+
+    /// The revision's number.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
 
 impl fmt::Display for TreeRevision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
