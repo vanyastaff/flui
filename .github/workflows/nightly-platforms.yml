@@ -7,10 +7,9 @@ name: Nightly platforms
 # this file or the live scenario, never on any other.
 #
 #   desktop — on windows-latest and macos-latest: flui-native's suite
-#             (`cargo xtask platform-test`: Win32 on the run's own desktop,
-#             then the Win32 cases that need the input desktop on the
-#             runner's; AppKit), the GPU readback
-#             suites (`cargo xtask gpu-test`) on Direct3D 12, which a runner
+#             (Win32 on the run's own desktop, then the Win32 cases that
+#             need the input desktop on the runner's; AppKit), the GPU
+#             readback suites on Direct3D 12, which a runner
 #             without a GPU answers with WARP (ADR-0244 §1), and on Metal, and
 #             the counter and acceptance scenarios on the desktop.
 #   linux   — the counter and acceptance scenarios on the native X11 host
@@ -31,8 +30,8 @@ name: Nightly platforms
 # `the_acceptance_app_builds_and_answers_on_the_desktop`, which nextest runs first with a
 # build's budget (.config/nextest.toml), so the scenario's budget covers only driving the app.
 #
-# Each leg runs the local command, so a run here and one on a developer's
-# machine cannot drift. A row of crates/flui-native/platform-parity.toml that
+# Each leg's commands are the ones a developer runs on that host
+# (docs/testing.md). A row of crates/flui-native/platform-parity.toml that
 # one of these runs holds names the run in its `nightly` table, and the
 # document marks that cell as passed on a runner.
 #
@@ -102,8 +101,22 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo xtask platform-test
-        run: cargo xtask platform-test
+      # flui-native's suite with default features, then with every feature
+      # (the test kits and the native capture are off by default). The
+      # compiler guards (group `trybuild`) run on Linux in ci.yml. On macOS a
+      # bare test process cannot own an AppKit run loop: `FLUI_HEADLESS`
+      # routes the platform to the headless one, the backend's own unit tests
+      # still run, and the window-loop tests keep their macOS `ignore`.
+      - name: cargo nextest run -p flui-native (default, then all features)
+        env:
+          FLUI_HEADLESS: ${{ matrix.os == 'macos-latest' && '1' || '' }}
+        run: |
+          status=0
+          for features in "" --all-features; do
+            cargo nextest run -p flui-native --locked --no-fail-fast ${features:+"$features"} \
+              -E 'not (group(trybuild))' || status=1
+          done
+          exit "$status"
 
       # On Windows the suite above ran on the run's own desktop (ADR-0355).
       # The cases that need the desktop taking input (the foreground, the
@@ -120,12 +133,20 @@ jobs:
           cargo nextest run -p flui-native --locked --all-features --no-fail-fast
           -E 'test(=contract::test_window_lifecycle_contract) | test(/^windows_foreground::/) | test(/^windows_test_desktop::/) | test(=drag::windows::tests::ole_drag_and_drop_on_real_windows)'
 
-      # `FLUI_REQUIRE_GPU` (set by the task) turns a missing adapter into a
-      # failure. A Windows runner has no GPU, so Direct3D 12 answers with
-      # WARP, the fallback ADR-0244 §1 names.
-      - name: cargo xtask gpu-test --backend ${{ matrix.gpu }}
+      # The GPU readback suites, as ci.yml's `test` job runs them on Linux.
+      # `FLUI_REQUIRE_GPU` turns a missing adapter into a failure. A Windows
+      # runner has no GPU, so Direct3D 12 answers with WARP, the fallback
+      # ADR-0244 §1 names.
+      - name: GPU readbacks on ${{ matrix.gpu }}
         if: ${{ !cancelled() }}
-        run: cargo xtask gpu-test --backend ${{ matrix.gpu }}
+        env:
+          FLUI_REQUIRE_GPU: "1"
+          WGPU_BACKEND: ${{ matrix.gpu }}
+        run: |
+          cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation \
+            --locked --no-fail-fast --test-threads 1
+          cargo nextest run -p flui --no-default-features --run-ignored all \
+            --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
 
       # The scenario's app builds offline from the workspace's lockfile.
       - name: cargo fetch

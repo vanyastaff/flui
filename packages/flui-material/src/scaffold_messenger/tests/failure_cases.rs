@@ -76,7 +76,7 @@ impl MountedProbe {
 }
 
 fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize) {
-    let (_harness, handle) = mounted_handle();
+    let (_harness, handle, _driver) = mounted_handle();
     let armed = Arc::new(AtomicBool::new(false));
     let forward_calls = Arc::new(AtomicUsize::new(0));
     let fanout_calls = Arc::new(AtomicUsize::new(0));
@@ -244,7 +244,7 @@ fn a_second_display_timer_retires_the_first() {
         }
     }
 
-    let (mut harness, handle) = mounted_handle();
+    let (mut harness, handle, driver) = mounted_handle();
     let closed = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&closed);
     handle
@@ -282,20 +282,21 @@ fn a_second_display_timer_retires_the_first() {
         .forget();
     let seats = registry.len();
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(400)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(400)));
     assert!((first.value() - 0.5).abs() < 1e-9);
     let canceled = Rc::new(Cell::new(0));
     let seats_at_cancel = Rc::new(Cell::new(None));
     first_run.when_complete_or_cancel({
         let canceled = Rc::clone(&canceled);
         let seats_at_cancel = Rc::clone(&seats_at_cancel);
+        let driver = Rc::clone(&driver);
         let registry = registry.clone();
         let tick = clock.frame(Duration::from_millis(400));
         move |outcome| {
             assert!(outcome.is_err());
             seats_at_cancel.set(Some(registry.len()));
-            registry.tick_all(&tick);
+            driver.tick_all(&tick);
             canceled.set(canceled.get() + 1);
         }
     });
@@ -333,17 +334,17 @@ fn a_second_display_timer_retires_the_first() {
         seats,
         "replacement retains one display registration"
     );
-    registry.tick_all(&clock.frame(Duration::from_millis(400)));
-    registry.tick_all(&clock.frame(Duration::from_millis(800)));
+    driver.tick_all(&clock.frame(Duration::from_millis(400)));
+    driver.tick_all(&clock.frame(Duration::from_millis(800)));
     harness.tick();
     assert!(
         closed.borrow().is_empty(),
         "the retired timer's old deadline cannot close the entry"
     );
-    registry.tick_all(&clock.frame(Duration::from_millis(1200)));
+    driver.tick_all(&clock.frame(Duration::from_millis(1200)));
     harness.tick();
-    registry.tick_all(&clock.frame(Duration::from_millis(1200)));
-    registry.tick_all(&clock.frame(Duration::from_millis(1450)));
+    driver.tick_all(&clock.frame(Duration::from_millis(1200)));
+    driver.tick_all(&clock.frame(Duration::from_millis(1450)));
     // The registry is ticked by hand, outside a frame, so the frame the
     // closing callback runs after is asked for, as a ticked frame would run.
     harness
@@ -352,7 +353,7 @@ fn a_second_display_timer_retires_the_first() {
         .expect("the messenger's presentation is alive");
     harness.tick();
     assert_eq!(&*closed.borrow(), &[SnackBarClosedReason::Timeout]);
-    registry.tick_all(&clock.frame(Duration::from_secs(3)));
+    driver.tick_all(&clock.frame(Duration::from_secs(3)));
     harness.tick();
     assert_eq!(
         &*closed.borrow(),

@@ -7,6 +7,7 @@
 // Scalar round-trip assertions use exactly representable f64 values.
 // Color conversion has its own representation and precision contract.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{Keyframes, Linear, TwoWayConverter};
 use flui_foundation::geometry::Lerp;
 use flui_foundation::geometry::Offset;
@@ -84,10 +85,11 @@ fn nested_fields_keep_their_interpolation_contracts() {
 }
 
 fn nested_values_retarget_on_one_registered_motion() {
-    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SharedCurve, Vsync};
+    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SharedCurve};
     use std::time::Duration;
 
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let mut owner = AnimatedValue::try_new(
         NestedAppearance(
@@ -113,8 +115,8 @@ fn nested_values_retarget_on_one_registered_motion() {
             1.0,
         ))
         .expect("first nested motion");
-    vsync.tick_all(&clock.frame(Duration::ZERO));
-    vsync.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
     let seam = (owner.value(), owner.velocity());
     assert!(seam.0.0.position.dx > 0.0 && seam.0.0.position.dy > 0.0);
     assert!(seam.0.0.color.red_f32() >= 253.0 / 255.0 && seam.0.0.color.blue_f32() <= 2.0 / 255.0);
@@ -134,7 +136,7 @@ fn nested_values_retarget_on_one_registered_motion() {
     assert_eq!(owner.velocity(), seam.1);
     // A one-microsecond difference isolates the inherited derivative from
     // the new segment's acceleration toward its opposite target.
-    vsync.tick_all(&clock.frame(Duration::from_micros(500_001)));
+    driver.tick_all(&clock.frame(Duration::from_micros(500_001)));
     let next = owner.value();
     for (delta, velocity) in [
         (next.0.position.dx - seam.0.0.position.dx, seam.1[0]),
@@ -146,7 +148,7 @@ fn nested_values_retarget_on_one_registered_motion() {
             delta / 1e-6
         );
     }
-    vsync.tick_all(&clock.frame(Duration::from_secs(10)));
+    driver.tick_all(&clock.frame(Duration::from_secs(10)));
     assert!(second.is_complete());
     let settled = owner.value();
     assert_eq!(settled.0.position, Offset::new(-20.0, -40.0));
@@ -155,10 +157,11 @@ fn nested_values_retarget_on_one_registered_motion() {
 }
 
 fn nested_springs_keep_each_fields_rest_units() {
-    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SpringDescription, Vsync};
+    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SpringDescription};
     use std::time::Duration;
 
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut clock = MotionClock::new();
     let motion = MotionSpec::Spring(
         SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
@@ -188,9 +191,9 @@ fn nested_springs_keep_each_fields_rest_units() {
             0.005,
         ))
         .expect("finite target");
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     for millis in (10..=5000).step_by(10) {
-        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        driver.tick_all(&clock.frame(Duration::from_millis(millis)));
         if geometry_run.is_complete() {
             assert!(
                 run.is_complete(),

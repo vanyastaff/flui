@@ -132,9 +132,10 @@ mod harness_snapshot;
 
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::SharedCurve;
 use flui_animation::{
-    Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
+    Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, curves,
 };
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
@@ -5848,7 +5849,7 @@ fn harness_aligning_boxes_saturate_an_overflowing_dry_baseline() {
     // Offsets the child by `f64::MAX` along y over any free space.
     let extreme = Alignment::new(0.0, f64::MAX);
     let tight = BoxConstraints::tight(Size::new(100.0, 100.0));
-    let (owner, _registry, _clock) = animated_size_motion();
+    let (owner, _driver, _clock) = animated_size_motion();
     let rows: [(&str, TreeNode, BoxConstraints); 6] = [
         ("center", box_node(RenderCenter::new()), loose(f64::MAX)),
         ("align", box_node(RenderAlign::new(extreme)), loose(200.0)),
@@ -12483,28 +12484,28 @@ fn harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline() {
 //
 // Every test below owns the `SizeMotion` (as the `AnimatedSize` view would),
 // registered with its own `Vsync`, and drives it across frames with
-// `Vsync::tick_all` at deterministic virtual times, with no `thread::sleep`.
+// `VsyncDriver::tick_all` at deterministic virtual times, with no `thread::sleep`.
 // The first tick of a run anchors its epoch. `run.pump()` only re-runs the
 // render pipeline; it does not itself advance the run, so a
 // value-listener-driven `mark_needs_layout` (buffered by `attach`) is drained
 // on the very next `pump()`/`run_frame()` after a tick.
 
-/// A linear 100 ms size owner and the registry and clock that drive it.
-fn animated_size_motion() -> (SizeMotion, Vsync, MotionClock) {
-    let registry = Vsync::new();
+/// A linear 100 ms size owner and the driver and clock that drive it.
+fn animated_size_motion() -> (SizeMotion, VsyncDriver, MotionClock) {
+    let driver = VsyncDriver::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_millis(100),
         curve: SharedCurve::new(curves::LINEAR),
     };
     (
-        SizeMotion::new(motion, Some(&registry)),
-        registry,
+        SizeMotion::new(motion, Some(driver.vsync())),
+        driver,
         MotionClock::new(),
     )
 }
 
-fn tick_size(registry: &Vsync, clock: &mut MotionClock, millis: u64) {
-    registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+fn tick_size(driver: &VsyncDriver, clock: &mut MotionClock, millis: u64) {
+    driver.tick_all(&clock.frame(Duration::from_millis(millis)));
 }
 
 fn assert_size_approx(actual: Size, expected: Size, eps: f64, what: &str) {
@@ -12516,7 +12517,7 @@ fn assert_size_approx(actual: Size, expected: Size, eps: f64, what: &str) {
 }
 
 fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
-    let (size, registry, mut clock) = animated_size_motion();
+    let (size, driver, mut clock) = animated_size_motion();
     let ro = RenderAnimatedSize::new(size.handle(), Alignment::CENTER, Clip::HardEdge);
 
     let mut run = RenderTester::mount(
@@ -12546,8 +12547,8 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     // to the target. A linear run from rest starts and arrives with zero
     // velocity (the `flui_animation::MotionSpec` curve segment), which for a
     // linear curve is smoothstep: 10 + 40 * (3t^2 - 2t^3).
-    tick_size(&registry, &mut clock, 0);
-    tick_size(&registry, &mut clock, 25); // 25ms of 100ms => t=0.25
+    tick_size(&driver, &mut clock, 0);
+    tick_size(&driver, &mut clock, 25); // 25ms of 100ms => t=0.25
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -12556,7 +12557,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.25",
     );
 
-    tick_size(&registry, &mut clock, 50); // t=0.5
+    tick_size(&driver, &mut clock, 50); // t=0.5
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -12565,7 +12566,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.5",
     );
 
-    tick_size(&registry, &mut clock, 75); // t=0.75
+    tick_size(&driver, &mut clock, 75); // t=0.75
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -12574,7 +12575,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.75",
     );
 
-    tick_size(&registry, &mut clock, 100); // t=1.0, run completes
+    tick_size(&driver, &mut clock, 100); // t=1.0, run completes
     run.pump();
     assert_eq!(
         run.box_geometry(run.root()),
@@ -12584,7 +12585,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
 }
 
 fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() {
-    let (size, registry, mut clock) = animated_size_motion();
+    let (size, driver, mut clock) = animated_size_motion();
     let ro = RenderAnimatedSize::new(size.handle(), Alignment::CENTER, Clip::HardEdge);
 
     let mut run = RenderTester::mount(
@@ -12604,8 +12605,8 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
         );
     });
     run.pump();
-    tick_size(&registry, &mut clock, 0);
-    tick_size(&registry, &mut clock, 50); // t=0.5 of the 10->50 span
+    tick_size(&driver, &mut clock, 0);
+    tick_size(&driver, &mut clock, 50); // t=0.5 of the 10->50 span
     run.pump();
     let mid_flight_size = run.box_geometry(run.root());
     assert_size_approx(
@@ -12640,7 +12641,7 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
 /// showing the last size, with the registration withdrawn; a later resize
 /// finds no owner and neither panics nor moves.
 fn harness_render_animated_size_survives_its_owner_released_on_completion() {
-    let (size, registry, mut clock) = animated_size_motion();
+    let (size, driver, mut clock) = animated_size_motion();
     let handle = size.handle();
     let owner = Rc::new(std::cell::RefCell::new(Some(size)));
     let completions = Rc::new(Cell::new(0));
@@ -12671,11 +12672,14 @@ fn harness_render_animated_size_survives_its_owner_released_on_completion() {
         let _ = b.set_preferred_size(Size::new(50.0, 50.0));
     });
     run.pump();
-    tick_size(&registry, &mut clock, 0);
-    tick_size(&registry, &mut clock, 100);
+    tick_size(&driver, &mut clock, 0);
+    tick_size(&driver, &mut clock, 100);
     assert_eq!(completions.get(), 1, "the run completed once");
     assert!(owner.borrow().is_none(), "the hook released the owner");
-    assert!(registry.is_empty(), "releasing the owner withdrew its seat");
+    assert!(
+        driver.vsync().is_empty(),
+        "releasing the owner withdrew its seat"
+    );
     run.pump();
     assert_eq!(run.box_geometry(run.root()), Size::new(50.0, 50.0));
 
@@ -12693,7 +12697,7 @@ fn harness_render_animated_size_survives_its_owner_released_on_completion() {
 /// Releasing the owner mid-resize freezes the shown size; dry layout reports
 /// that frozen size, as real layout does, not the child's.
 fn harness_render_animated_size_dry_layout_after_mid_flight_release() {
-    let (size, registry, mut clock) = animated_size_motion();
+    let (size, driver, mut clock) = animated_size_motion();
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedSize::new(
             size.handle(),
@@ -12708,8 +12712,8 @@ fn harness_render_animated_size_dry_layout_after_mid_flight_release() {
         let _ = b.set_preferred_size(Size::new(50.0, 50.0));
     });
     run.pump();
-    tick_size(&registry, &mut clock, 0);
-    tick_size(&registry, &mut clock, 50);
+    tick_size(&driver, &mut clock, 0);
+    tick_size(&driver, &mut clock, 50);
     run.pump();
     drop(size);
     run.pump();
@@ -12726,7 +12730,7 @@ fn harness_render_animated_size_dry_layout_after_mid_flight_release() {
 /// A childless box at rest does not keep itself busy: settled frames are
 /// idle instead of re-snapping, re-marking layout and requesting frames.
 fn harness_render_animated_size_rests_without_a_frame_loop() {
-    let (size, _registry, _clock) = animated_size_motion();
+    let (size, _driver, _clock) = animated_size_motion();
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedSize::new(
             size.handle(),
@@ -12763,8 +12767,8 @@ fn armed_motion() -> (MotionSpec, Arc<std::sync::atomic::AtomicBool>) {
 }
 
 /// Mounts a box whose 10 -> 50 resize is a quarter through its linear run.
-fn animated_size_mid_flight() -> (SizeMotion, Vsync, MotionClock, FrameRun) {
-    let (size, registry, mut clock) = animated_size_motion();
+fn animated_size_mid_flight() -> (SizeMotion, VsyncDriver, MotionClock, FrameRun) {
+    let (size, driver, mut clock) = animated_size_motion();
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedSize::new(
             size.handle(),
@@ -12779,10 +12783,10 @@ fn animated_size_mid_flight() -> (SizeMotion, Vsync, MotionClock, FrameRun) {
         let _ = b.set_preferred_size(Size::new(50.0, 50.0));
     });
     run.pump();
-    tick_size(&registry, &mut clock, 0);
-    tick_size(&registry, &mut clock, 25);
+    tick_size(&driver, &mut clock, 0);
+    tick_size(&driver, &mut clock, 25);
     run.pump();
-    (size, registry, clock, run)
+    (size, driver, clock, run)
 }
 
 /// Pumps a frame whose layout is expected to fail with a contained panic: the
@@ -12804,7 +12808,7 @@ fn relayout_animated_size(run: &mut FrameRun) {
 /// A curve that panics while the owner is taken out for a motion change
 /// leaves the owner in place: the next resize still animates.
 fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
-    let (mut size, registry, mut clock, mut run) = animated_size_mid_flight();
+    let (mut size, driver, mut clock, mut run) = animated_size_mid_flight();
     let (motion, armed) = armed_motion();
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(size.set_motion(motion));
@@ -12814,7 +12818,7 @@ fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
         !armed.load(std::sync::atomic::Ordering::SeqCst),
         "layout evaluated the armed curve"
     );
-    tick_size(&registry, &mut clock, 1_000);
+    tick_size(&driver, &mut clock, 1_000);
     run.pump();
     let rested = run.box_geometry(run.root());
     run.update::<RenderColoredBox>(run.id("child"), |b| {
@@ -12822,7 +12826,7 @@ fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
     });
     run.pump();
     // The run continues the value's clock from its last frame at 1 s.
-    tick_size(&registry, &mut clock, 1_050);
+    tick_size(&driver, &mut clock, 1_050);
     run.pump();
     let moving = run.box_geometry(run.root());
     assert!(
@@ -12834,7 +12838,7 @@ fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
 /// A motion change refused by a panicking curve is not recorded as applied:
 /// the next layout installs it.
 fn harness_render_animated_size_retries_a_refused_motion() {
-    let (mut size, registry, mut clock, mut run) = animated_size_mid_flight();
+    let (mut size, driver, mut clock, mut run) = animated_size_mid_flight();
     let (motion, armed) = armed_motion();
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(size.set_motion(motion));
@@ -12842,9 +12846,9 @@ fn harness_render_animated_size_retries_a_refused_motion() {
     pump_failing_layout(&mut run);
     relayout_animated_size(&mut run);
     run.pump();
-    tick_size(&registry, &mut clock, 200);
+    tick_size(&driver, &mut clock, 200);
     assert!(
-        registry.has_running(),
+        driver.vsync().has_running(),
         "the one-second motion replaced the 100 ms run"
     );
 }
@@ -12853,9 +12857,9 @@ fn harness_render_animated_size_retries_a_refused_motion() {
 /// start that resize at the next layout instead of believing it already did.
 fn harness_render_animated_size_retries_a_resize_whose_curve_panicked() {
     let (motion, armed) = armed_motion();
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
     let mut clock = MotionClock::new();
-    let size = SizeMotion::new(motion, Some(&registry));
+    let size = SizeMotion::new(motion, Some(driver.vsync()));
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedSize::new(
             size.handle(),
@@ -12877,8 +12881,8 @@ fn harness_render_animated_size_retries_a_resize_whose_curve_panicked() {
     );
     relayout_animated_size(&mut run);
     run.pump();
-    tick_size(&registry, &mut clock, 0);
-    tick_size(&registry, &mut clock, 500);
+    tick_size(&driver, &mut clock, 0);
+    tick_size(&driver, &mut clock, 500);
     run.pump();
     let shown = run.box_geometry(run.root());
     assert!(

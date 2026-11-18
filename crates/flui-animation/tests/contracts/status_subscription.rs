@@ -1,3 +1,4 @@
+use flui_animation::__runtime::VsyncDriver;
 use flui_foundation::Subscription;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -10,7 +11,8 @@ use flui_animation::{
 use flui_foundation::{Listenable, ListenerCallback, ListenerId, Notifier};
 
 fn dropping_one_subscription_preserves_independent_sources_and_channels() {
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let a = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let b = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let a_calls = Rc::new(Cell::new(0));
@@ -32,8 +34,8 @@ fn dropping_one_subscription_preserves_independent_sources_and_channels() {
     let _a_run = a.controller().forward().unwrap();
     let _b_run = b.controller().forward().unwrap();
     let mut clock = MotionClock::new();
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!(a_calls.get(), 0);
     assert_eq!(b_calls.get(), 2);
     assert!(
@@ -595,7 +597,8 @@ fn owners_deliver_through_both_subscription_forms() {
         let _run = controller.reverse().unwrap();
         assert_eq!(calls.get(), 1, "controller withdraws");
 
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let mut value = flui_animation::AnimatedValue::try_new(
             0.0_f64,
@@ -617,8 +620,8 @@ fn owners_deliver_through_both_subscription_forms() {
             })
         });
         let _run = value.animate_to(1.0).unwrap();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_secs(2)));
         assert_eq!(settled.get(), 1, "typed value view delivers its settlement");
         drop(view_guard);
 
