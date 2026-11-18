@@ -47,9 +47,10 @@ pub struct PipelineCounters {
     /// chunks, pushed effects, and the effects a composited-layer update
     /// rebuilds in a republished content.
     pub layers_produced: u64,
-    /// Entries a composited-layer update carried over unchanged into the
-    /// content it republishes. A clean boundary emits nothing and counts
-    /// nothing.
+    /// Entries a pass carried over unchanged into a content it republishes:
+    /// the chunks a repaint kept for the render objects that owed no paint
+    /// (ADR-0304 §2), and the entries a composited-layer update shares. A
+    /// clean boundary emits nothing and counts nothing.
     pub layers_reused: u64,
     /// Operations the patches paint buffered: publishes, placements and
     /// retirements (ADR-0304 §3).
