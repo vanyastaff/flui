@@ -2099,6 +2099,12 @@ impl crate::host_window::CoreHostWindow for X11Window {
 }
 
 impl HostWindow for X11Window {
+    /// Without a compositing manager the server keeps no image of an obscured
+    /// window, and under one a covering is not told.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
+
     /// The window's AT-SPI bridge, which announced the window on the bus as
     /// it opened.
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {

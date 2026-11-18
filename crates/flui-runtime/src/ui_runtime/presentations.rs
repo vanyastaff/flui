@@ -187,6 +187,9 @@ impl UiRuntime {
         let unknown = flui_platform::SystemPreferences::default();
         presentation.set_motion_override(self.motion_override.get());
         presentation.set_error_view_builder(self.error_view_builder.get());
+        // A window installed covered owes its surface as one covered later does, in this
+        // runtime's session.
+        presentation.follow_sight(self.session.get(), presentation.clock().now());
         super::preferences::publish(
             &presentation,
             snapshot
@@ -661,7 +664,7 @@ impl UiRuntime {
         let shown_again = presentation.clock().is_hidden() && !hidden;
         presentation.clock().set_hidden(hidden);
         // What the window owes its surface while unseen is read from the state that made it so.
-        presentation.follow_sight(self.session_shown.get(), presentation.clock().now());
+        presentation.follow_sight(self.session.get(), presentation.clock().now());
         if shown_again {
             // A withdrawal of its surface from here on is a new one, ridden out at the display
             // rate once any dropped-frame wait already running ends (ADR-0335 §2).

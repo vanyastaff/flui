@@ -4,8 +4,8 @@
 //! owed frame once it has been quiet a while, so the surface shown on
 //! uncovering holds the content of then, not of before the covering; elsewhere
 //! (no covering told, a lock, a background app) it draws nothing until it is
-//! seen. An owed frame the host does not run, or the surface refuses, is not
-//! asked for again (ADR-0357).
+//! seen. An owed frame stays due until it runs, however late its wake; the
+//! surface refusing it ends the owing until the window is seen (ADR-0357).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -333,24 +333,25 @@ fn a_covered_window_owes_by_its_sight_on_every_snapshot() {
     assert_eq!(painted.load(Ordering::SeqCst), 2, "with the new content");
 }
 
-/// An owed frame the host does not run when it comes due (it holds the
-/// window's frames, as Wayland does a suspended toplevel's) is not asked for
-/// again: past its grace no deadline brings the loop back, however long the
-/// window stays covered, until its sight changes. Fails when a past due time
-/// stays the wake deadline: the loop is asked to wake at once, forever.
+/// An owed frame stays due until it runs, however late the host serves its
+/// wake (a timer fired late, an application the system throttles while it is
+/// covered): the late wake draws it with the new content. Fails when an owed
+/// frame lapses after a wall-time grace: the late wake takes a background turn
+/// and the uncovering shows the content of before the covering.
 #[test]
-fn an_owed_frame_the_host_does_not_run_is_not_asked_for_again() {
-    let (host, _painted) = covered_with_a_change();
+fn a_late_wake_still_draws_the_owed_frame() {
+    let (mut host, painted) = covered_with_a_change();
     let wait = host
         .time_to_next_frame()
         .expect("the covered window owes its frame");
-    // The host runs no frame of the window through its time and long after.
-    host.advance(wait + Duration::from_secs(60));
+    let before = host.sink().submits();
+    let _ = host.pump(wait + Duration::from_millis(150));
     assert_eq!(
-        host.time_to_next_frame(),
-        None,
-        "a frame the host held is not asked for again"
+        host.sink().submits() - before,
+        1,
+        "the owed frame runs late"
     );
+    assert_eq!(painted.load(Ordering::SeqCst), 2, "with the new content");
 }
 
 /// An owed frame the surface refuses (it withdraws the window's surface) ends
@@ -385,21 +386,63 @@ fn an_owed_frame_the_surface_refuses_is_not_drawn_again() {
 
 /// A covered window in a locked or sleeping session owes nothing: a lock
 /// covers every window, and a changing window would otherwise draw once a
-/// period until the session unlocks. Unlocked, it owes its frame again. Fails
-/// when the session's lock does not reach the owing.
+/// period until the session unlocks. The lock and the sleep are apart: a lock
+/// still up when the machine wakes keeps the window owing nothing. The rows
+/// differ in the notices the host delivers; once the session shows windows
+/// again, the window owes its frame. Fails when the session's notices do not
+/// reach the owing (every row but the last two), or when one flag holds both,
+/// so a wake reads as an unlock and an unlock as a wake (the third and the
+/// fourth).
 #[test]
-fn a_covered_window_owes_nothing_while_its_session_is_locked() {
+fn a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep() {
+    use SystemNotice::{SessionLocked, SessionUnlocked, Sleep, Wake};
+    // (case, the notices, whether the window then owes its frame)
+    let cases: [(&str, &[SystemNotice], bool); 6] = [
+        ("locked", &[SessionLocked], false),
+        ("asleep", &[Sleep], false),
+        (
+            "locked, asleep, awake",
+            &[SessionLocked, Sleep, Wake],
+            false,
+        ),
+        (
+            "asleep, locked, unlocked",
+            &[Sleep, SessionLocked, SessionUnlocked],
+            false,
+        ),
+        ("locked, unlocked", &[SessionLocked, SessionUnlocked], true),
+        (
+            "locked, asleep, awake, unlocked",
+            &[SessionLocked, Sleep, Wake, SessionUnlocked],
+            true,
+        ),
+    ];
+    let failed: Vec<&str> = cases
+        .iter()
+        .filter(|(name, notices, owes)| {
+            std::panic::catch_unwind(|| session_case(name, notices, *owes)).is_err()
+        })
+        .map(|(name, ..)| *name)
+        .collect();
+    assert!(failed.is_empty(), "failing cases: {failed:?}");
+}
+
+fn session_case(name: &str, notices: &[SystemNotice], owes: bool) {
     let (mut host, painted) = covered_with_a_change();
-    host.notify(SystemNotice::SessionLocked);
-    assert_eq!(host.time_to_next_frame(), None, "locked, nothing is owed");
+    for notice in notices {
+        host.notify(*notice);
+    }
     let before = host.sink().submits();
-    let _ = host.pump(Duration::from_secs(5));
-    assert_eq!(host.sink().submits(), before, "and nothing is drawn");
-    host.notify(SystemNotice::SessionUnlocked);
-    let wait = host
-        .time_to_next_frame()
-        .expect("unlocked, the covered window owes its frame again");
-    let _ = host.pump(wait);
-    assert_eq!(host.sink().submits() - before, 1, "one owed frame");
-    assert_eq!(painted.load(Ordering::SeqCst), 2);
+    match host.time_to_next_frame() {
+        Some(wait) if owes => {
+            let _ = host.pump(wait);
+            assert_eq!(host.sink().submits() - before, 1, "{name}: one owed frame");
+            assert_eq!(painted.load(Ordering::SeqCst), 2, "{name}: the new content");
+        }
+        None if !owes => {
+            let _ = host.pump(Duration::from_secs(5));
+            assert_eq!(host.sink().submits(), before, "{name}: nothing is drawn");
+        }
+        other => panic!("{name}: owes {owes}, the next frame is {other:?}"),
+    }
 }

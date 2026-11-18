@@ -429,7 +429,7 @@ impl UiRuntime {
         // minimized, restored, hidden or covered while it stays unseen changes
         // no visibility (ADR-0357).
         if let Some(presentation) = self.presentations.get(id) {
-            presentation.follow_sight(self.session_shown.get(), presentation.clock().now());
+            presentation.follow_sight(self.session.get(), presentation.clock().now());
         }
         let Some(window) = self
             .presentations
@@ -474,20 +474,11 @@ impl UiRuntime {
             });
         }
         // A locked or sleeping session shows no window, so no covered window
-        // owes its surface a frame until it unlocks or wakes (ADR-0357).
-        let session_shown = match notice {
-            flui_platform::HostNotice::SessionLocked | flui_platform::HostNotice::Sleep => {
-                Some(false)
-            }
-            flui_platform::HostNotice::SessionUnlocked | flui_platform::HostNotice::Wake => {
-                Some(true)
-            }
-            _ => None,
-        };
-        if let Some(shown) = session_shown {
-            self.session_shown.set(shown);
+        // owes its surface a frame while either holds (ADR-0357).
+        if let Some(session) = self.session.get().after(notice) {
+            self.session.set(session);
             for presentation in self.presentations.iter() {
-                presentation.follow_sight(shown, presentation.clock().now());
+                presentation.follow_sight(session, presentation.clock().now());
             }
         }
         let sources: Vec<_> = self

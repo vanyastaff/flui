@@ -162,10 +162,8 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// by AppKit's compositor; discarded or never drawn on every other host
     /// (X11 without a compositing manager keeps no image, a suspended Wayland
     /// toplevel's frames are held, and Win32, mobile and the Web tell no
-    /// covering).
-    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
-        flui_platform::OccludedSurface::Discarded
-    }
+    /// covering). Every host names its own.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface;
 
     /// This window as its host's own type, which the crate's OS extensions
     /// (`WindowsWindowExt`, `MacOSWindowExt`) downcast to: a window of another

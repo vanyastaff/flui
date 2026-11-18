@@ -359,10 +359,10 @@ pub struct UiRuntime {
     /// Set once by the runner from `AppConfig`; a shared-UI runtime secondary
     /// presentation inherits this existing UI runtime policy.
     frame_failure_detail: Cell<FrameFailureDetail>,
-    /// Whether the user's session shows windows, as the host's notices last
-    /// said: false from a lock or the machine's sleep until the unlock or the
-    /// wake. A covered window owes its surface no frame while it is false.
-    session_shown: Cell<bool>,
+    /// Whether the user's session is locked and whether the machine sleeps, as
+    /// the host's notices last said, apart: a covered window owes its surface
+    /// no frame while either holds (ADR-0357).
+    session: Cell<crate::occluded_frame::Session>,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,

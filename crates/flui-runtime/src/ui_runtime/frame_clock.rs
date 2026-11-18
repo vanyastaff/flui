@@ -146,7 +146,11 @@ impl UiRuntime {
     }
 
     pub(super) fn request_redraw_for(&self, presentation: &PresentationState) {
-        self.needs_redraw.store(true, Ordering::Relaxed);
+        // A presentation that cannot be seen asks for no frame: its mark waits for it to be seen
+        // (`set_presentation_hidden`) or for the frame it owes a kept surface (ADR-0357).
+        if !presentation.clock().is_hidden() {
+            self.needs_redraw.store(true, Ordering::Relaxed);
+        }
         presentation.mark_redraw_pending();
         // The flags alone are inert while the event loop is parked: nothing
         // converts them into a frame until SOMETHING pokes the platform.

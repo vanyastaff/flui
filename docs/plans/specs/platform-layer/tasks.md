@@ -8706,20 +8706,28 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   (видимо, не свёрнуто, работает, `occluded`, `reports_occlusion` доступна), хост хранит последний
   кадр перекрытого окна (`OccludedSurface::Kept`, хост называет его через `PresentationWindow`:
   только AppKit; X11 без композитного менеджера образа не хранит, Wayland держит кадры
-  приостановленного окна) и сеанс показывает окна (нет `SessionLocked`/`Sleep` без последующего
-  `SessionUnlocked`/`Wake`). После `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше
-  повтора отброшенного кадра, окно рисует один кадр через `FrameClock::grant_hidden_frame`; срок —
-  в `next_wake`, раннеры и headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или
-  долг наступил). Долг пересчитывается на каждом снимке окна, крае видимости и уведомлении сеанса
-  (`follow_sight`); срок, не исполненный за `OCCLUDED_FRAME_GRACE`, больше не просится до смены
-  вида окна; отказанный или отброшенный поверхностью долг кончает долг до показа. Насос AppKit
-  (`WakePump`) взводится после каждого хода владельца, чтобы срок без запроса перерисовки дошёл до
-  кадра. Тесты (`flui-testing`, `occluded_window`): `an_occluded_window_draws_its_change_in_exactly_one_frame`
-  (четыре строки), `a_covered_window_owes_by_its_sight_on_every_snapshot`,
-  `an_owed_frame_the_host_does_not_run_is_not_asked_for_again`,
+  приостановленного окна) и сеанс показывает окна (блокировка и сон машины — два флага
+  `occluded_frame::Session`, так что блокировка, пережившая сон, остаётся). После
+  `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше повтора отброшенного кадра, окно
+  рисует один кадр через `FrameClock::grant_hidden_frame`; срок — в `next_wake`, раннеры и
+  headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
+  остаётся должным, пока не исполнится, как бы поздно ни пришло пробуждение; удержание (отсрочка,
+  подготовка текста) его не снимает, а при полном приёмнике срок не просится (будит
+  урегулирование); следующая тишина начинается только с исполненного кадра. Долг пересчитывается
+  на каждом снимке окна, крае видимости и уведомлении сеанса (`follow_sight`); долг кончает отказ
+  или сброс поверхностью именно кадра, нарисованного невидимым (`PendingFrame::drawn_unseen`), а не
+  любого урегулирования. Запрос перерисовки и повтор отброшенного кадра невидимой презентации не
+  поднимают флаг перерисовки и не будят хост. Насос AppKit (`WakePump::after_owner_turn`) после
+  хода владельца один раз смотрит срок и планирует тик только при нём. Тесты (`flui-testing`,
+  `occluded_window`): `an_occluded_window_draws_its_change_in_exactly_one_frame` (четыре строки),
+  `a_covered_window_owes_by_its_sight_on_every_snapshot`, `a_late_wake_still_draws_the_owed_frame`,
   `an_owed_frame_the_surface_refuses_is_not_drawn_again`,
-  `a_covered_window_owes_nothing_while_its_session_is_locked`; каждый падает со своим откатом
-  (пересчёт на снимке, отсрочка, отказ, уведомление сеанса, долг в `runs_frames`). X11
+  `a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep` (шесть строк);
+  (`flui-runtime`, `occluded_frame`) `a_hidden_window_raises_no_redraw_flag`,
+  `an_owed_frame_is_refused_by_its_own_settlement_only`, `a_hold_leaves_the_owed_frame_due`;
+  каждый падает со своим откатом (пересчёт на снимке, отсрочка по времени, отказ, флаги сеанса,
+  отказ по любому урегулированию, тишина с удержанной попытки, флаг перерисовки, долг в
+  `runs_frames`). X11
   (`window/linux/x11/window/compositing.rs`): XFixes `SelectSelectionInput` на
   `_NET_WM_CM_S<n>` (смена владельца, уничтожение окна, уход клиента) перечитывает поддержку;
   тест `a_compositing_manager_that_goes_gives_the_covering_report_back` под Xvfb и openbox с

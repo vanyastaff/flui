@@ -1862,6 +1862,11 @@ impl crate::host_window::CoreHostWindow for IOSWindow {
 }
 
 impl crate::host_window::HostWindow for IOSWindow {
+    /// A scene in the background may not draw, and UIKit tells no covering.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
+
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.facets.accessibility) as _)
     }
