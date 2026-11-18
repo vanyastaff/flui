@@ -375,6 +375,17 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
     ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
         std::sync::Arc::new(crate::display_connection::PointerlessDisplay::Windows)
     }
+
+    /// A wait that serves the messages a raster thread's DXGI calls send to
+    /// the windows' thread (ADR-0305 §9); none when the system refused its
+    /// event, which is logged.
+    fn owner_wait(
+        _: &WindowsLoop,
+        _: &WindowSet,
+    ) -> Option<std::sync::Arc<dyn flui_platform::OwnerWait>> {
+        super::sent_messages::SentMessageWait::try_new()
+            .map(|wait| std::sync::Arc::new(wait) as std::sync::Arc<dyn flui_platform::OwnerWait>)
+    }
 }
 
 /// DPI constants

@@ -137,6 +137,7 @@ mod launch_key;
 mod locale;
 mod opened;
 pub mod os_options;
+mod owner_wait;
 mod placement;
 mod platform_window;
 pub mod pointer;
@@ -194,6 +195,7 @@ pub use locale::{InvalidLocale, Locale};
 pub use opened::{
     Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
 };
+pub use owner_wait::OwnerWait;
 pub use placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use preferences::{
