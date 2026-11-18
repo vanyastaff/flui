@@ -445,6 +445,8 @@ pub enum FailureKind {
     NoReading,
     /// Two events are not as far apart as the readings they came from.
     Interval,
+    /// An event's time precedes the time of an event before it.
+    OutOfOrder,
     /// The backend's output broke the row's rule.
     Output,
     /// The row panicked, in the backend or in the table.
@@ -452,8 +454,44 @@ pub enum FailureKind {
 }
 
 impl RowFailure {
-    pub(crate) fn new(kind: FailureKind, message: String) -> Self {
-        Self { kind, message }
+    /// [`FailureKind::NoReading`].
+    pub(crate) const fn no_reading(message: String) -> Self {
+        Self {
+            kind: FailureKind::NoReading,
+            message,
+        }
+    }
+
+    /// [`FailureKind::Interval`].
+    pub(crate) const fn interval(message: String) -> Self {
+        Self {
+            kind: FailureKind::Interval,
+            message,
+        }
+    }
+
+    /// [`FailureKind::OutOfOrder`].
+    pub(crate) const fn out_of_order(message: String) -> Self {
+        Self {
+            kind: FailureKind::OutOfOrder,
+            message,
+        }
+    }
+
+    /// [`FailureKind::Output`].
+    pub(crate) const fn output(message: String) -> Self {
+        Self {
+            kind: FailureKind::Output,
+            message,
+        }
+    }
+
+    /// [`FailureKind::Panicked`].
+    const fn panicked(message: String) -> Self {
+        Self {
+            kind: FailureKind::Panicked,
+            message,
+        }
     }
 
     /// This failure, its message told what it concerns.
@@ -462,13 +500,6 @@ impl RowFailure {
             message: format!("{what}: {}", self.message),
             ..self
         }
-    }
-}
-
-/// The table's own messages are about the backend's output.
-impl From<String> for RowFailure {
-    fn from(message: String) -> Self {
-        Self::new(FailureKind::Output, message)
     }
 }
 
@@ -523,10 +554,7 @@ pub fn run_backend_conformance<B: BackendUnderTest>(backend: &mut B) -> Conforma
                     // The table owns the caught opaque payload; an aggregate's
                     // Drop may panic before any catch regains control.
                     flui_foundation::panic::discard_payload(payload);
-                    RowOutcome::Failed(RowFailure::new(
-                        FailureKind::Panicked,
-                        format!("panicked: {text}"),
-                    ))
+                    RowOutcome::Failed(RowFailure::panicked(format!("panicked: {text}")))
                 }
             };
             (row.name, row.group, outcome)

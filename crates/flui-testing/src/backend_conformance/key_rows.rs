@@ -9,7 +9,7 @@ use flui_platform::keyboard::{ImeComposition, Key, KeyPress, KeyState, Modifiers
 use flui_runtime::HostInput;
 
 use super::rows::Outcome;
-use super::{BackendUnderTest, KeyStep, RowOutcome, Stamp, Step, StepKey};
+use super::{BackendUnderTest, KeyStep, RowFailure, RowOutcome, Stamp, Step, StepKey};
 
 const NO_KEYBOARD: RowOutcome =
     RowOutcome::NotApplicable("the backend has no shared keyboard decoder");
@@ -38,22 +38,22 @@ pub(super) fn menu_keys_arrive_as_the_bindings_name_them<B: BackendUnderTest>(
             .collect();
         for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             let Some(event) = events.iter().find(|event| event.state == state) else {
-                return Err(format!("{key:?}: no {state:?} event among {events:?}").into());
+                return Err(RowFailure::output(format!(
+                    "{key:?}: no {state:?} event among {events:?}"
+                )));
             };
             if event.key != Key::Named(expected) {
-                return Err(format!(
+                return Err(RowFailure::output(format!(
                     "{key:?}: {state:?} arrived as {:?}, not {expected:?}",
                     event.key
-                )
-                .into());
+                )));
             }
             if event.modifiers.contains(Modifiers::SHIFT) != shift {
-                return Err(format!(
+                return Err(RowFailure::output(format!(
                     "{key:?}: {state:?} carried {:?} with Shift {}",
                     event.modifiers,
                     if shift { "held" } else { "up" }
-                )
-                .into());
+                )));
             }
         }
     }
@@ -87,14 +87,15 @@ pub(super) fn a_key_during_composition_is_the_input_methods<B: BackendUnderTest>
         .collect();
     for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let Some(event) = events.iter().find(|event| event.state == state) else {
-            return Err(format!("no {state:?} event among {events:?}").into());
+            return Err(RowFailure::output(format!(
+                "no {state:?} event among {events:?}"
+            )));
         };
         if event.composition != ImeComposition::Active {
-            return Err(format!(
+            return Err(RowFailure::output(format!(
                 "Escape {state:?} during a composition arrived as {:?}, not the input method's",
                 event.composition
-            )
-            .into());
+            )));
         }
     }
     Ok(RowOutcome::Held)

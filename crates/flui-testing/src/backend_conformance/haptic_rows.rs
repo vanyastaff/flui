@@ -10,7 +10,7 @@ use flui_platform::haptics::{
 use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
 
 use super::rows::Outcome;
-use super::{BackendUnderTest, RowOutcome};
+use super::{BackendUnderTest, RowFailure, RowOutcome};
 
 const NO_ACTUATOR: RowOutcome = RowOutcome::NotApplicable("the backend has no haptic actuator");
 
@@ -45,13 +45,17 @@ pub(super) fn a_backend_never_queues<B: BackendUnderTest>(backend: &mut B) -> Ou
         let request = HapticRequest::new(timing);
         for kind in HapticFeedback::ALL {
             if let HapticOutcome::Queued(_) = haptics.perform_with(kind, &request) {
-                return Err(format!("{kind:?} at {timing:?} was queued by the backend").into());
+                return Err(RowFailure::output(format!(
+                    "{kind:?} at {timing:?} was queued by the backend"
+                )));
             }
         }
         if let HapticOutcome::Queued(_) =
             haptics.play(&taps(), HapticFeedback::LightImpact, &request)
         {
-            return Err(format!("a pattern at {timing:?} was queued by the backend").into());
+            return Err(RowFailure::output(format!(
+                "a pattern at {timing:?} was queued by the backend"
+            )));
         }
     }
     Ok(RowOutcome::Held)
@@ -72,7 +76,7 @@ pub(super) fn semantic_feedback_reports_a_tier_one_outcome<B: BackendUnderTest>(
             outcome,
             HapticOutcome::Submitted | HapticOutcome::Approximated | HapticOutcome::Unsupported(_)
         ) {
-            return Err(format!("{kind:?} reported {outcome:?}").into());
+            return Err(RowFailure::output(format!("{kind:?} reported {outcome:?}")));
         }
     }
     let outcome = haptics.play(
@@ -81,7 +85,9 @@ pub(super) fn semantic_feedback_reports_a_tier_one_outcome<B: BackendUnderTest>(
         &HapticRequest::default(),
     );
     if outcome == HapticOutcome::Suppressed {
-        return Err("a pattern was suppressed by the backend".to_owned().into());
+        return Err(RowFailure::output(
+            "a pattern was suppressed by the backend".to_owned(),
+        ));
     }
     Ok(RowOutcome::Held)
 }
@@ -101,16 +107,17 @@ pub(super) fn a_stale_source_plays_on_the_window_actuator<B: BackendUnderTest>(
         let expected = haptics.perform_with(kind, &window);
         let actual = haptics.perform_with(kind, &stale);
         if actual != expected {
-            return Err(format!("{kind:?} from a stale source reported {actual:?}, the window's actuator {expected:?}").into());
+            return Err(RowFailure::output(format!(
+                "{kind:?} from a stale source reported {actual:?}, the window's actuator {expected:?}"
+            )));
         }
     }
     let expected = haptics.play(&taps(), HapticFeedback::Drop, &window);
     let actual = haptics.play(&taps(), HapticFeedback::Drop, &stale);
     if actual != expected {
-        return Err(format!(
+        return Err(RowFailure::output(format!(
             "a pattern from a stale source reported {actual:?}, the window's actuator {expected:?}"
-        )
-        .into());
+        )));
     }
     Ok(RowOutcome::Held)
 }
@@ -126,11 +133,10 @@ pub(super) fn capabilities_match_what_plays<B: BackendUnderTest>(backend: &mut B
     let request = HapticRequest::default();
     let feedback = haptics.perform_with(HapticFeedback::SelectionClick, &request);
     if capabilities.feedback == feedback.unsupported().is_some() {
-        return Err(format!(
+        return Err(RowFailure::output(format!(
             "claims feedback {} but a selection click reported {feedback:?}",
             capabilities.feedback
-        )
-        .into());
+        )));
     }
     let pattern = haptics.play(&taps(), HapticFeedback::SelectionClick, &request);
     let expected = match (capabilities.feedback, capabilities.patterns) {
@@ -141,11 +147,10 @@ pub(super) fn capabilities_match_what_plays<B: BackendUnderTest>(backend: &mut B
         (true, _) => HapticOutcome::FellBack,
     };
     if pattern != expected {
-        return Err(format!(
+        return Err(RowFailure::output(format!(
             "claims {:?} patterns but two taps reported {pattern:?}",
             capabilities.patterns
-        )
-        .into());
+        )));
     }
     Ok(RowOutcome::Held)
 }

@@ -28,8 +28,8 @@ use super::key_rows::{
     a_key_during_composition_is_the_input_methods, menu_keys_arrive_as_the_bindings_name_them,
 };
 use super::{
-    BackendUnderTest, ContactAction, ContactStep, FailureKind, PanStep, PinchChange, PinchStep,
-    RowFailure, RowGroup, RowOutcome, Stamp, Step, StepPhase,
+    BackendUnderTest, ContactAction, ContactStep, PanStep, PinchChange, PinchStep, RowFailure,
+    RowGroup, RowOutcome, Stamp, Step, StepPhase,
 };
 
 pub(super) struct Row<B> {
@@ -189,20 +189,16 @@ fn feed<B: BackendUnderTest>(
     let mut events = Vec::new();
     for step in steps {
         let reading = backend.reading(*step).ok_or_else(|| {
-            RowFailure::new(
-                FailureKind::NoReading,
-                format!("the backend has no reading for {step:?}"),
-            )
+            RowFailure::no_reading(format!("the backend has no reading for {step:?}"))
         })?;
         for input in backend.decode(reading) {
             if let HostInput::Platform(PlatformInput::Pointer(event)) = input {
                 if let PointerEvent::Cancel(cancel) = &event
                     && cancel.reason == CancelReason::Claimed
                 {
-                    return Err(format!(
+                    return Err(RowFailure::output(format!(
                         "{step:?} cancelled its contact as Claimed, which only the arena may"
-                    )
-                    .into());
+                    )));
                 }
                 events.push(event);
             }
@@ -260,29 +256,31 @@ fn time_of(event: &PointerEvent) -> Option<Duration> {
 }
 
 /// The times of the sequence events, in order.
-fn times(events: &[PointerEvent]) -> Result<Vec<Duration>, String> {
+fn times(events: &[PointerEvent]) -> Result<Vec<Duration>, RowFailure> {
     sequence(events)
         .into_iter()
-        .map(|event| time_of(event).ok_or_else(|| format!("{event:?} carries no time")))
+        .map(|event| {
+            time_of(event).ok_or_else(|| RowFailure::output(format!("{event:?} carries no time")))
+        })
         .collect()
 }
 
-/// `later - earlier` must be `expected` within `tolerance`.
+/// `later - earlier` must be `expected` within `tolerance`: a `later` before
+/// `earlier` is out of order, one at another distance a wrong interval.
 fn interval(
     earlier: Duration,
     later: Duration,
     expected: Duration,
     tolerance: Duration,
 ) -> Result<(), RowFailure> {
-    let failure = |message| RowFailure::new(FailureKind::Interval, message);
     let Some(actual) = later.checked_sub(earlier) else {
-        return Err(failure(format!(
+        return Err(RowFailure::out_of_order(format!(
             "{later:?} precedes {earlier:?}; expected {expected:?} after it"
         )));
     };
     let error = actual.abs_diff(expected);
     if error > tolerance {
-        return Err(failure(format!(
+        return Err(RowFailure::interval(format!(
             "events {actual:?} apart; the readings were {expected:?} apart (tolerance {tolerance:?})"
         )));
     }
@@ -314,22 +312,29 @@ fn a_contact_is_one_pointer_from_down_to_up<B: BackendUnderTest>(backend: &mut B
             PointerEvent::Up(up),
         ] = sequence(&events).as_slice()
         else {
-            return Err(format!("{kind:?}: expected Down, Move, Up; got {events:?}").into());
+            return Err(RowFailure::output(format!(
+                "{kind:?}: expected Down, Move, Up; got {events:?}"
+            )));
         };
         if moved.pointer.id != down.pointer.id || up.pointer.id != down.pointer.id {
-            return Err(format!("{kind:?}: one contact changed pointer: {events:?}").into());
+            return Err(RowFailure::output(format!(
+                "{kind:?}: one contact changed pointer: {events:?}"
+            )));
         }
         if down.pointer.kind != kind {
-            return Err(format!("{kind:?}: the pointer reports {:?}", down.pointer.kind).into());
+            return Err(RowFailure::output(format!(
+                "{kind:?}: the pointer reports {:?}",
+                down.pointer.kind
+            )));
         }
         backend.restart();
     }
     if checked {
         HELD
     } else {
-        Err("the backend has neither touch nor mouse contacts"
-            .to_owned()
-            .into())
+        Err(RowFailure::no_reading(
+            "the backend has neither touch nor mouse contacts".to_owned(),
+        ))
     }
 }
 
@@ -356,7 +361,9 @@ fn a_reused_touch_label_is_a_new_pointer<B: BackendUnderTest>(backend: &mut B) -
         .collect();
     match downs.as_slice() {
         [first, second] if first != second => HELD,
-        _ => Err(format!("expected two Downs of different pointers; got {events:?}").into()),
+        _ => Err(RowFailure::output(format!(
+            "expected two Downs of different pointers; got {events:?}"
+        ))),
     }
 }
 
@@ -382,7 +389,9 @@ fn a_second_touch_is_additional<B: BackendUnderTest>(backend: &mut B) -> Outcome
         {
             HELD
         }
-        _ => Err(format!("expected a primary and an additional Down; got {events:?}").into()),
+        _ => Err(RowFailure::output(format!(
+            "expected a primary and an additional Down; got {events:?}"
+        ))),
     }
 }
 
@@ -392,7 +401,9 @@ fn a_named_device_is_announced_before_its_first_contact<B: BackendUnderTest>(
     backend: &mut B,
 ) -> Outcome {
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PEN, PointerKind::Mouse]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let first = Step::Contact(on_device(
         contact(kind, 1, ContactAction::Press, Stamp::coarse(ms(10))),
@@ -408,9 +419,9 @@ fn a_named_device_is_announced_before_its_first_contact<B: BackendUnderTest>(
             PointerEvent::Down(down),
             ..,
         ] if down.pointer.device == Some(added.device) => HELD,
-        _ => {
-            Err(format!("expected DeviceAdded, then a Down carrying its id; got {events:?}").into())
-        }
+        _ => Err(RowFailure::output(format!(
+            "expected DeviceAdded, then a Down carrying its id; got {events:?}"
+        ))),
     }
 }
 
@@ -419,7 +430,9 @@ fn a_named_device_is_announced_before_its_first_contact<B: BackendUnderTest>(
 /// Event times are as far apart as the readings were.
 fn event_times_follow_the_reading_clock<B: BackendUnderTest>(backend: &mut B) -> Outcome {
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PointerKind::Mouse, PEN]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let tolerance = backend.clock().resolution;
     let events = feed(
@@ -431,7 +444,9 @@ fn event_times_follow_the_reading_clock<B: BackendUnderTest>(backend: &mut B) ->
         ],
     )?;
     let [down, moved, up] = times(&events)?[..] else {
-        return Err(format!("expected Down, Move, Up; got {events:?}").into());
+        return Err(RowFailure::output(format!(
+            "expected Down, Move, Up; got {events:?}"
+        )));
     };
     interval(down, moved, ms(8), tolerance)?;
     interval(down, up, ms(20), tolerance)?;
@@ -442,7 +457,9 @@ fn event_times_follow_the_reading_clock<B: BackendUnderTest>(backend: &mut B) ->
 /// time back.
 fn event_times_never_go_back<B: BackendUnderTest>(backend: &mut B) -> Outcome {
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PointerKind::Mouse, PEN]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let events = feed(
         backend,
@@ -454,12 +471,16 @@ fn event_times_never_go_back<B: BackendUnderTest>(backend: &mut B) -> Outcome {
     )?;
     let times = times(&events)?;
     if times.len() != 3 {
-        return Err(format!("expected Down, Move, Up; got {events:?}").into());
+        return Err(RowFailure::output(format!(
+            "expected Down, Move, Up; got {events:?}"
+        )));
     }
     if times.windows(2).all(|pair| pair[0] <= pair[1]) {
         HELD
     } else {
-        Err(format!("event times went back: {times:?}").into())
+        Err(RowFailure::out_of_order(format!(
+            "event times went back: {times:?}"
+        )))
     }
 }
 
@@ -473,7 +494,9 @@ fn the_coarse_clock_wraps_forward<B: BackendUnderTest>(backend: &mut B) -> Outco
         ));
     };
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PointerKind::Mouse, PEN]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let events = feed(
         backend,
@@ -483,7 +506,9 @@ fn the_coarse_clock_wraps_forward<B: BackendUnderTest>(backend: &mut B) -> Outco
         ],
     )?;
     let [down, moved] = times(&events)?[..] else {
-        return Err(format!("expected Down, Move; got {events:?}").into());
+        return Err(RowFailure::output(format!(
+            "expected Down, Move; got {events:?}"
+        )));
     };
     interval(down, moved, ms(5), clock.resolution)?;
     HELD
@@ -498,7 +523,9 @@ fn precise_readings_are_stamped_from_the_counter<B: BackendUnderTest>(backend: &
         ));
     };
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PEN, PointerKind::Mouse]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let events = feed(
         backend,
@@ -508,7 +535,9 @@ fn precise_readings_are_stamped_from_the_counter<B: BackendUnderTest>(backend: &
         ],
     )?;
     let [down, moved] = times(&events)?[..] else {
-        return Err(format!("expected Down, Move; got {events:?}").into());
+        return Err(RowFailure::output(format!(
+            "expected Down, Move; got {events:?}"
+        )));
     };
     interval(down, moved, us(600), counter)?;
     HELD
@@ -524,7 +553,9 @@ fn a_sequence_keeps_the_clock_it_started_on<B: BackendUnderTest>(backend: &mut B
         ));
     };
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PEN, PointerKind::Mouse]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let events = feed(
         backend,
@@ -534,7 +565,9 @@ fn a_sequence_keeps_the_clock_it_started_on<B: BackendUnderTest>(backend: &mut B
         ],
     )?;
     let [down, moved] = times(&events)?[..] else {
-        return Err(format!("expected Down, Move; got {events:?}").into());
+        return Err(RowFailure::output(format!(
+            "expected Down, Move; got {events:?}"
+        )));
     };
     // Both on the coarse stamp: whole coarse ticks apart.
     interval(down, moved, ms(2), counter)?;
@@ -553,7 +586,9 @@ fn a_device_whose_reading_lacked_the_counter_stays_coarse<B: BackendUnderTest>(
         ));
     };
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PEN, PointerKind::Mouse]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let step = |device, label, action, at| {
         Step::Contact(on_device(contact(kind, label, action, at), device))
@@ -576,10 +611,9 @@ fn a_device_whose_reading_lacked_the_counter_stays_coarse<B: BackendUnderTest>(
         ],
     )?;
     let [_, _, coarse_down, coarse_move, fresh_down, fresh_move] = times(&events)?[..] else {
-        return Err(format!(
+        return Err(RowFailure::output(format!(
             "expected two sequences of the first device and one of the second; got {events:?}"
-        )
-        .into());
+        )));
     };
     interval(coarse_down, coarse_move, Duration::ZERO, counter)
         .map_err(|failure| failure.about("the device that lacked the counter"))?;
@@ -614,10 +648,15 @@ fn two_finger_pan_is_phased_scroll_on_every_backend<B: BackendUnderTest>(
     let mut phases = Vec::new();
     for event in sequence(&events) {
         let PointerEvent::Scroll(scroll) = event else {
-            return Err(format!("a two-finger pan emitted {event:?}").into());
+            return Err(RowFailure::output(format!(
+                "a two-finger pan emitted {event:?}"
+            )));
         };
         if scroll.precision != ScrollPrecision::Precise {
-            return Err(format!("a two-finger pan scrolled {:?}", scroll.precision).into());
+            return Err(RowFailure::output(format!(
+                "a two-finger pan scrolled {:?}",
+                scroll.precision
+            )));
         }
         phases.push(scroll.phase);
     }
@@ -633,7 +672,9 @@ fn two_finger_pan_is_phased_scroll_on_every_backend<B: BackendUnderTest>(
     if phases == expected {
         HELD
     } else {
-        Err(format!("scroll phases {phases:?}, expected {expected:?}").into())
+        Err(RowFailure::output(format!(
+            "scroll phases {phases:?}, expected {expected:?}"
+        )))
     }
 }
 
@@ -689,7 +730,7 @@ fn pan_zoom_carries_only_scale_and_rotation<B: BackendUnderTest>(backend: &mut B
     let mut seen = Vec::new();
     for event in sequence(&events) {
         let PointerEvent::PanZoom(gesture) = event else {
-            return Err(format!("a pinch emitted {event:?}").into());
+            return Err(RowFailure::output(format!("a pinch emitted {event:?}")));
         };
         let position = gesture.position.get();
         seen.push(match gesture.phase {
@@ -715,7 +756,9 @@ fn pan_zoom_carries_only_scale_and_rotation<B: BackendUnderTest>(backend: &mut B
     if seen == expected {
         HELD
     } else {
-        Err(format!("gesture {seen:?}, expected {expected:?}").into())
+        Err(RowFailure::output(format!(
+            "gesture {seen:?}, expected {expected:?}"
+        )))
     }
 }
 
@@ -728,7 +771,9 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input<B: BackendUnderTe
     backend: &mut B,
 ) -> Outcome {
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PointerKind::Mouse, PEN]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let broken = |label, action, at| Step::Undecodable(contact(kind, label, action, at));
     let events = feed(
@@ -739,14 +784,15 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input<B: BackendUnderTe
         ],
     )?;
     let [PointerEvent::Down(down), PointerEvent::Cancel(cancel)] = sequence(&events)[..] else {
-        return Err(format!("expected Down then one Cancel; got {events:?}").into());
+        return Err(RowFailure::output(format!(
+            "expected Down then one Cancel; got {events:?}"
+        )));
     };
     if cancel.pointer.id != down.pointer.id || cancel.reason != CancelReason::InvalidInput {
-        return Err(format!(
+        return Err(RowFailure::output(format!(
             "the contact ended as {:?} of {:?}, expected InvalidInput of {:?}",
             cancel.reason, cancel.pointer.id, down.pointer.id
-        )
-        .into());
+        )));
     }
     let orphans = feed(
         backend,
@@ -758,7 +804,9 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input<B: BackendUnderTe
     if sequence(&orphans).is_empty() {
         HELD
     } else {
-        Err(format!("readings of no open contact emitted {orphans:?}").into())
+        Err(RowFailure::output(format!(
+            "readings of no open contact emitted {orphans:?}"
+        )))
     }
 }
 
@@ -775,13 +823,12 @@ fn delivered_as_claimed<B: BackendUnderTest>(
     let has_path = supports(backend, step);
     match (availability, has_path) {
         (Availability::Unavailable, false) => HELD,
-        (Availability::Unavailable, true) => {
-            Err(format!("claims Unavailable, yet has a reading for {step:?}").into())
-        }
-        (_, false) => Err(RowFailure::new(
-            FailureKind::NoReading,
-            format!("claims {availability:?}, yet has no reading for {step:?}"),
-        )),
+        (Availability::Unavailable, true) => Err(RowFailure::output(format!(
+            "claims Unavailable, yet has a reading for {step:?}"
+        ))),
+        (_, false) => Err(RowFailure::no_reading(format!(
+            "claims {availability:?}, yet has no reading for {step:?}"
+        ))),
         (_, true) => {
             let events = feed(backend, &[step])?;
             if sequence(&events)
@@ -790,7 +837,9 @@ fn delivered_as_claimed<B: BackendUnderTest>(
             {
                 HELD
             } else {
-                Err(format!("claims {availability:?}, yet {step:?} delivered {events:?}").into())
+                Err(RowFailure::output(format!(
+                    "claims {availability:?}, yet {step:?} delivered {events:?}"
+                )))
             }
         }
     }
@@ -846,7 +895,9 @@ fn trackpad_gestures_are_delivered_as_claimed<B: BackendUnderTest>(backend: &mut
 /// builds its cancels outside that decoder.
 fn no_backend_cancels_a_contact_as_claimed<B: BackendUnderTest>(backend: &mut B) -> Outcome {
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PEN, PointerKind::Mouse]) else {
-        return Err("the backend has no pointer contacts".to_owned().into());
+        return Err(RowFailure::no_reading(
+            "the backend has no pointer contacts".to_owned(),
+        ));
     };
     let events = feed(
         backend,
@@ -862,6 +913,29 @@ fn no_backend_cancels_a_contact_as_claimed<B: BackendUnderTest>(backend: &mut B)
     )?;
     match sequence(&events).as_slice() {
         [PointerEvent::Down(_), PointerEvent::Cancel(_)] => HELD,
-        _ => Err(format!("expected Down then one Cancel; got {events:?}").into()),
+        _ => Err(RowFailure::output(format!(
+            "expected Down then one Cancel; got {events:?}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{interval, ms};
+    use crate::backend_conformance::FailureKind;
+
+    /// A pair whose later event comes first is out of order, never a wrong
+    /// interval: a row that expects a wrong interval does not pass a time that
+    /// went back.
+    #[test]
+    fn a_pair_that_went_back_is_out_of_order_and_one_off_its_spacing_a_wrong_interval() {
+        let kind = |earlier, later| {
+            interval(ms(earlier), ms(later), ms(5), ms(1))
+                .err()
+                .map(|failure| failure.kind)
+        };
+        assert_eq!(kind(10, 15), None, "the readings' spacing");
+        assert_eq!(kind(10, 30), Some(FailureKind::Interval));
+        assert_eq!(kind(10, 4), Some(FailureKind::OutOfOrder));
     }
 }

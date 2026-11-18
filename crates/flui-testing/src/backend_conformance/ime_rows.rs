@@ -17,9 +17,7 @@ use flui_platform::text_store::{
 };
 
 use super::rows::Outcome;
-use super::{
-    BackendUnderTest, CompositionStep, FailureKind, RowFailure, RowOutcome, Step, TextInputPath,
-};
+use super::{BackendUnderTest, CompositionStep, RowFailure, RowOutcome, Step, TextInputPath};
 
 /// The field every composition starts in: two characters, the caret after
 /// them.
@@ -212,17 +210,16 @@ fn compose<B: BackendUnderTest>(
     ) in steps
     {
         let Some(reading) = backend.reading(Step::Composition(step)) else {
-            return Err(RowFailure::new(
-                FailureKind::NoReading,
-                format!("{step:?}: the focused path has no reading for it"),
-            ));
+            return Err(RowFailure::no_reading(format!(
+                "{step:?}: the focused path has no reading for it"
+            )));
         };
         let before = edits.get();
         let inputs = backend.decode(reading).count();
         if inputs != 0 {
-            return Err(
-                format!("{step:?}: decoded into {inputs} inputs, not edits of the field").into(),
-            );
+            return Err(RowFailure::output(format!(
+                "{step:?}: decoded into {inputs} inputs, not edits of the field"
+            )));
         }
         let expected = Field {
             text: text.to_owned(),
@@ -231,11 +228,15 @@ fn compose<B: BackendUnderTest>(
         };
         let got = held(&store);
         if got != expected {
-            return Err(format!("{step:?}: the field holds {got:?}, not {expected:?}").into());
+            return Err(RowFailure::output(format!(
+                "{step:?}: the field holds {got:?}, not {expected:?}"
+            )));
         }
         let ran = edits.get() - before;
         if one_session && ran != 1 {
-            return Err(format!("{step:?}: reached the field in {ran} edits, not one").into());
+            return Err(RowFailure::output(format!(
+                "{step:?}: reached the field in {ran} edits, not one"
+            )));
         }
     }
     Ok(RowOutcome::Held)

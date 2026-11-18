@@ -65,7 +65,10 @@ enum Unexercised {
 
 /// The rows the real window does not exercise, each with what it reports and
 /// the reason. A row that reports otherwise fails the case: the entry is then
-/// stale and goes. Every other row holds on input the window delivered.
+/// stale and goes. A `HoldsWithoutInput` entry is the exception: a row that
+/// starts to take input from the window still holds, so that entry cannot be
+/// found stale, and goes when the row is made to take the window's input.
+/// Every other row holds on input the window delivered.
 const UNEXERCISED: &[(&str, Unexercised, &str)] = &[
     (
         "a_reused_touch_label_is_a_new_pointer",
@@ -147,6 +150,43 @@ const UNEXERCISED: &[(&str, Unexercised, &str)] = &[
         Unexercised::Fails(FailureKind::NoReading),
         "Xvfb announces XInput 2.4, so the window claims touchpad gestures, but only a touchpad's \
          input driver sends them; the decoder holds the row",
+    ),
+    (
+        "outgoing_drag_is_delivered_as_claimed",
+        Unexercised::HoldsWithoutInput,
+        "the row compares the window's capability snapshot with its drag source; no drag runs",
+    ),
+    (
+        "a_drag_source_starts_when_the_backend_declares",
+        Unexercised::HoldsWithoutInput,
+        "the row compares the window's drag source's timing with the one declared; no drag runs \
+         (`x11_input`'s XTest drags run XDND sessions)",
+    ),
+    (
+        "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
+        Unexercised::HoldsWithoutInput,
+        "the row plans a session from the drag source's timing; no pointer leaves the window \
+         (`an_xtest_drag_from_the_window_drops_on_another_client` does)",
+    ),
+    (
+        "a_backend_never_queues",
+        Unexercised::HoldsWithoutInput,
+        "the row asks the window's actuator, which no input reaches; an X11 window has none",
+    ),
+    (
+        "semantic_feedback_reports_a_tier_one_outcome",
+        Unexercised::HoldsWithoutInput,
+        "the row asks the window's actuator, which no input reaches; an X11 window has none",
+    ),
+    (
+        "a_stale_source_plays_on_the_window_actuator",
+        Unexercised::HoldsWithoutInput,
+        "the row asks the window's actuator, which no input reaches; an X11 window has none",
+    ),
+    (
+        "capabilities_match_what_plays",
+        Unexercised::HoldsWithoutInput,
+        "the row asks the window's actuator, which no input reaches; an X11 window has none",
     ),
     (
         "an_at_start_backend_never_escalates_mid_drag",
@@ -361,6 +401,8 @@ impl X11Window {
     /// the drop removes it whatever fails after.
     fn add_master(&mut self, device: u32) -> u16 {
         let name = format!("device {device}").into_bytes();
+        // The server names a master pointer after the name it was added by.
+        let pointer_name = [name.as_slice(), b" pointer"].concat();
         // The lengths are in 4-byte units: the header and the fields, then
         // the name, padded.
         let len = 2 + u16::try_from(name.len().div_ceil(4)).expect("a short name");
@@ -377,23 +419,33 @@ impl X11Window {
             .check()
             .expect("the server adds a master pointer");
         // The check's round trip came back after the change's event, so the
-        // event is queued: the master pointer it adds is the new one.
-        let mut added = None;
+        // event is queued. Another client may have added a master pointer in
+        // the meantime: the one added here is the one of this name.
+        let mut added = Vec::new();
         while let Some(event) = self.xtest.poll_for_event().expect("the connection") {
             if let x11rb::protocol::Event::XinputHierarchy(change) = event {
-                added = added.or_else(|| {
+                added.extend(
                     change
                         .infos
                         .iter()
-                        .find(|info| {
+                        .filter(|info| {
                             info.flags.contains(xinput::HierarchyMask::MASTER_ADDED)
                                 && info.type_ == xinput::DeviceType::MASTER_POINTER
                         })
-                        .map(|info| info.deviceid)
-                });
+                        .map(|info| info.deviceid),
+                );
             }
         }
-        let master = added.expect("the server names the master pointer it added");
+        let master = added
+            .into_iter()
+            .find(|id| {
+                self.xtest
+                    .xinput_xi_query_device(*id)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|reply| reply.infos.iter().any(|info| info.name == pointer_name))
+            })
+            .expect("the server names the master pointer it added");
         self.masters.insert(device, master);
         master
     }
