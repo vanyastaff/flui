@@ -26,8 +26,9 @@ expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
              app's state. FLUI follows these in place: `ConfigChanged` reads the
              window, the displays, night mode, text sizing and preferences
              again, and a keyboard or navigation device only delivers input.
-             A language change still recreates it: the host does not follow
-             the locale yet. `fontWeightAdjustment` needs an API 31 or later
+             A language or layout-direction change reaches the host the same
+             way: it reads the languages again and the font fallback follows the
+             first of them. `fontWeightAdjustment` needs an API 31 or later
              platform to link. `singleTop`: a new intent reaches the running
              Activity at the top of its task; one that starts the Activity in
              another application's task is forwarded to the application's own
@@ -36,7 +37,7 @@ expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
             android:name="dev.flui.platform.FluiActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|keyboard|keyboardHidden|navigation"
             android:label="R&amp;D &lt;Notes&gt;">
             <meta-data
                 android:name="android.app.lib_name"
