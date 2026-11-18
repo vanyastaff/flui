@@ -107,8 +107,11 @@ public final class FluiView extends View {
     static native boolean nativePerformAction(long handle, View host, int virtualViewId,
             int action, Bundle arguments);
 
-    /** No accessibility service is enabled: the semantics tree ends until one asks again. */
-    static native void nativeAccessibilityStopped(long handle);
+    /**
+     * Whether any accessibility service is enabled: the semantics tree is built
+     * only while one is.
+     */
+    static native void nativeAccessibilityServices(long handle, boolean enabled);
 
     /**
      * The secure, system and global settings behind FLUI's preferences:
@@ -221,17 +224,18 @@ public final class FluiView extends View {
     }
 
     /**
-     * The services enabled may have changed. The manager is asked now rather
-     * than the notice believed, so a notice that arrives after the state moved
-     * on cannot end the tree of a service still running. With none enabled,
-     * nobody can read the tree, and the native side ends it; a service enabled
-     * again starts it with its first question to the node provider. Touch
-     * exploration alone is not asked: other services read the tree without it.
+     * The services enabled may have changed: tell the native side whether any
+     * is. The manager is asked now rather than the notice believed, so a
+     * notice that arrives after the state moved on cannot end the tree of a
+     * service still running, nor start one for a service gone. The native
+     * side builds the tree only while one is enabled, starting it with a
+     * service's first question to the node provider. Touch exploration alone
+     * is not asked: other services read the tree without it.
      */
     void servicesChanged() {
         long handle = this.handle;
-        if (handle != 0 && accessibility != null && !accessibility.isEnabled()) {
-            nativeAccessibilityStopped(handle);
+        if (handle != 0) {
+            nativeAccessibilityServices(handle, accessibility != null && accessibility.isEnabled());
         }
     }
 
@@ -1223,12 +1227,15 @@ public final class FluiView extends View {
     /**
      * Install the accessibility delegate or take it out: the native side calls
      * this once the window's accessibility bridge exists, and again when it
-     * goes away. A view without one answers as a plain view.
+     * goes away. A view without one answers as a plain view. A new bridge is
+     * told at once whether any service is enabled, since the report made as
+     * the view entered the window reached no bridge.
      */
     public void provideNodes(boolean provide) {
         if (provide) {
             nodes = new Nodes();
             setAccessibilityDelegate(new NodesDelegate());
+            servicesChanged();
         } else {
             nodes = null;
             setAccessibilityDelegate(null);

@@ -16,7 +16,8 @@
 //! - `web`: a parallel ARIA DOM over the canvas, which the browser's own
 //!   accessibility tree reads (ADR-0255 decision 18), with no AccessKit
 //!   adapter under it;
-//! - `headless`: `FakeAccessibility`, which counts what was published while active.
+//! - `headless`: `FakeAccessibility`, which counts what a window sent and what
+//!   of it was published while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it
 //! out, and each compiles wherever a host of its operating system does
@@ -103,11 +104,10 @@ mod tests {
 
     /// The tree ends when the last assistive technology leaves, on every host
     /// whose platform says so: an activated bridge whose platform entry for
-    /// that runs drops its retained tree, tells the composition root once, and
-    /// a repeated notice tells nobody. A host whose platform never says so
-    /// has no entry, and its column of the parity row says ❌. Red-check:
-    /// leave the Android stop out of the TalkBack row's entry (the bridge
-    /// stays active).
+    /// that runs drops its retained tree and tells the composition root. A
+    /// host whose platform does not tell FLUI has no entry, and its column of
+    /// the parity row says ❌. Red-check: leave the Android stop out of the
+    /// TalkBack row's entry (the bridge stays active).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens() {
@@ -158,7 +158,7 @@ mod tests {
                 &["android"],
                 Some(|shared| {
                     super::provided_tree::ProvidedTree::<NoTree>::new(Arc::clone(shared))
-                        .services_stopped();
+                        .services_changed(false);
                 }),
             ),
             ("the Web's ARIA mirror", &["web"], None),
@@ -190,7 +190,6 @@ mod tests {
                 focus: accesskit::NodeId(1),
             });
             let _ = Activation(Arc::clone(&shared)).request_initial_tree();
-            stop(&shared);
             stop(&shared);
             assert!(!shared.is_active(), "{adapter}: the bridge stays active");
             assert!(

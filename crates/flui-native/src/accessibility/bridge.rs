@@ -13,7 +13,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 #[cfg(not(target_arch = "wasm32"))]
 use accesskit::{ActionHandler, ActivationHandler};
@@ -93,29 +93,54 @@ impl ActionHandler for Action {
     }
 }
 
-/// Puts the active flag back when the listener told of a change panics, so
-/// the flag never says the composition root heard what it did not.
+/// Whether assistive technology is attached to a bridge, as the bridge last
+/// told the composition root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Attachment {
+    /// No assistive technology asked yet.
+    NotYet = 0,
+    /// Assistive technology asked, and none left since.
+    Attached = 1,
+    /// The last one left.
+    Ended = 2,
+}
+
+impl Attachment {
+    fn from_u8(raw: u8) -> Self {
+        match raw {
+            1 => Self::Attached,
+            2 => Self::Ended,
+            _ => Self::NotYet,
+        }
+    }
+}
+
+/// Puts the attachment back when the listener told of a change panics, so
+/// the bridge never says the composition root heard what it did not.
 struct RestoreOnUnwind<'a> {
-    flag: &'a AtomicBool,
-    previous: bool,
+    attachment: &'a AtomicU8,
+    previous: Attachment,
 }
 
 impl Drop for RestoreOnUnwind<'_> {
     fn drop(&mut self) {
-        self.flag.store(self.previous, Ordering::SeqCst);
+        self.attachment.store(self.previous as u8, Ordering::SeqCst);
     }
 }
 
 /// The adapter-side shared state: activation, retention, listeners.
 #[derive(Default)]
 pub(crate) struct BridgeShared {
-    /// Whether assistive technology is currently attached.
-    active: AtomicBool,
+    /// The [`Attachment`], as its `u8`.
+    attachment: AtomicU8,
     /// The most recent **self-contained** update (one carrying
     /// [`TreeUpdate::tree`] metadata — the producer's promise that it stands
     /// alone), kept so a late activation can be answered immediately rather
     /// than showing an empty application until the next frame happens to
-    /// dirty something.
+    /// dirty something. Nothing is kept once the last assistive technology
+    /// left ([`Attachment::Ended`]): the attachment changes under this lock,
+    /// so a publish racing the end keeps nothing either.
     ///
     /// Incremental updates (`tree: None`) are deliberately not retained:
     /// applied in isolation they describe a handful of changed nodes, and
@@ -169,25 +194,74 @@ impl BridgeShared {
 
     /// Mark the attachment state and tell the composition root.
     ///
-    /// The flag is stored **before** the listener runs: the listener's
+    /// The state is stored **before** the listener runs: the listener's
     /// natural response to "attached" is to enable semantics and publish,
-    /// and a publish that consulted a stale `false` would be dropped by the
-    /// adapter it was meant to initialize.
+    /// and a publish that consulted a stale state would be dropped by the
+    /// adapter it was meant to initialize. Telling `false` is
+    /// [`Self::deactivate`]'s.
+    pub(crate) fn notify_activation(&self, active: bool) {
+        let to = if active {
+            Attachment::Attached
+        } else {
+            Attachment::Ended
+        };
+        let previous = Attachment::from_u8(self.attachment.swap(to as u8, Ordering::SeqCst));
+        self.tell(active, previous);
+    }
+
+    /// The last assistive technology left: the bridge is marked so, then the
+    /// retained tree dropped (under one lock, so a publish racing this keeps
+    /// nothing), then the composition root, which stops building the tree, is
+    /// told.
+    ///
+    /// The root is told on every call, whatever the bridge's state: a root
+    /// whose listener committed part of an activation before it panicked
+    /// (the bridge then reads inactive) still holds that part, and only a
+    /// `false` takes it back. The root's listener takes a repeated `false` as
+    /// it took the first.
+    #[cfg(any(
+        target_os = "ios",
+        target_os = "android",
+        linux_host,
+        all(test, not(target_arch = "wasm32"))
+    ))]
+    pub(crate) fn deactivate(&self) {
+        let (previous, retained) = {
+            let mut latest = self.latest.lock();
+            let previous = self
+                .attachment
+                .swap(Attachment::Ended as u8, Ordering::SeqCst);
+            (Attachment::from_u8(previous), latest.take())
+        };
+        drop(retained);
+        self.tell(false, previous);
+    }
+
+    /// Ask the composition root for the whole tree again, as on an
+    /// activation, while assistive technology is attached: the adapter holds
+    /// a placeholder and can take no fragment.
+    #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+    pub(crate) fn request_whole_tree(&self) {
+        if self.is_active() {
+            self.notify_activation(true);
+        }
+    }
+
+    /// Tell the listener `active`, after the state was stored.
     ///
     /// The listener is cloned out of its lock, then called — a listener
     /// re-entering the adapter (publishing is the expected re-entry) would
     /// deadlock against a held guard. Same discipline as the semantics
     /// owner's callback dispatch.
     ///
-    /// A listener that panics leaves the flag as it was before the call: the
-    /// composition root did not take in the change, and an adapter that
-    /// asks again finds the state that makes it tell the root again.
-    pub(crate) fn notify_activation(&self, active: bool) {
-        let previous = self.active.swap(active, Ordering::SeqCst);
+    /// A listener that panics leaves the state as it was before the call:
+    /// the composition root did not take in the whole change, and an adapter
+    /// that asks again finds the state that makes it tell the root again.
+    fn tell(&self, active: bool, previous: Attachment) {
         let listener = self.activation_listener.lock().clone();
         if let Some(listener) = listener {
             let restore = RestoreOnUnwind {
-                flag: &self.active,
+                attachment: &self.attachment,
                 previous,
             };
             listener(active);
@@ -196,27 +270,6 @@ impl BridgeShared {
                 reason = "disarms the restore guard once the listener returned"
             )]
             std::mem::forget(restore);
-        }
-    }
-
-    /// The last assistive technology left: the retained tree is dropped, and
-    /// the composition root, which stops building the tree, is told once.
-    ///
-    /// Both are committed before the listener runs ([`Self::notify_activation`]).
-    /// A notice that finds the bridge inactive (a repeated one, or one after an
-    /// activation whose listener panicked, which the root never heard) tells
-    /// nobody: the root hears each change of state once.
-    #[cfg(any(
-        target_os = "ios",
-        target_os = "android",
-        linux_host,
-        all(test, not(target_arch = "wasm32"))
-    ))]
-    pub(crate) fn deactivate(&self) {
-        let retained = self.latest.lock().take();
-        drop(retained);
-        if self.is_active() {
-            self.notify_activation(false);
         }
     }
 
@@ -277,7 +330,10 @@ impl BridgeShared {
     )]
     pub(crate) fn publish(&self, update: TreeUpdate) -> Option<TreeUpdate> {
         if update.tree.is_some() {
-            *self.latest.lock() = Some(update.clone());
+            let mut latest = self.latest.lock();
+            if self.attachment() != Attachment::Ended {
+                *latest = Some(update.clone());
+            }
         }
         // The web host has no adapter that calls into an activation.
         #[cfg(not(target_arch = "wasm32"))]
@@ -295,7 +351,11 @@ impl BridgeShared {
 
     /// Whether assistive technology is currently attached.
     pub(crate) fn is_active(&self) -> bool {
-        self.active.load(Ordering::SeqCst)
+        self.attachment() == Attachment::Attached
+    }
+
+    fn attachment(&self) -> Attachment {
+        Attachment::from_u8(self.attachment.load(Ordering::SeqCst))
     }
 
     /// Register the attach/detach listener, replacing any previous one.
@@ -431,6 +491,49 @@ mod activation_tests {
             .publish(tree("later"))
             .expect("a publish after the activation reaches the adapter");
         assert_eq!(label(&after), Some("later"));
+    }
+
+    /// A root whose listener turned semantics on and then panicked holds
+    /// what it committed while the bridge reads inactive: the deactivation
+    /// still tells it, and it turns semantics off. Red-check: tell only an
+    /// active bridge (the root keeps building).
+    #[test]
+    fn a_deactivation_reaches_a_root_that_half_took_the_activation() {
+        let shared = Arc::new(BridgeShared::new());
+        let building = Arc::new(Mutex::new(false));
+        let root = Arc::clone(&building);
+        shared.set_activation_listener(Arc::new(move |active| {
+            *root.lock() = active;
+            assert!(
+                !active,
+                "the root's wake failed after it turned semantics on"
+            );
+        }));
+        // The activation's entry contains the panic and answers no tree.
+        assert!(
+            Activation(Arc::clone(&shared))
+                .request_initial_tree()
+                .is_none()
+        );
+        assert!(!shared.is_active() && *building.lock());
+
+        shared.deactivate();
+        assert!(!*building.lock(), "the root stopped building");
+    }
+
+    /// Nothing is retained once the last assistive technology left, a whole
+    /// tree published after the end included, so no tree outlives it; a tree
+    /// published before any activation still answers the first one.
+    /// Red-check: retain whatever the attachment.
+    #[test]
+    fn nothing_is_retained_after_the_last_assistive_technology_left() {
+        let shared = Arc::new(BridgeShared::new());
+        let _ = shared.publish(tree("before"));
+        assert_eq!(shared.retained().as_ref().and_then(label), Some("before"));
+        let _ = Activation(Arc::clone(&shared)).request_initial_tree();
+        shared.deactivate();
+        let _ = shared.publish(tree("racing the end"));
+        assert!(shared.retained().is_none());
     }
 
     /// The activation marks only its own thread: a publish another thread

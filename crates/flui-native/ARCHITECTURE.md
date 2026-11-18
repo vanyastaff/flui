@@ -627,21 +627,38 @@ trait depends on `flui-platform` instead.
   adapter starts it on the first question a client asks. Where the platform
   says the last one left (AT-SPI's screen-reader state, UIKit's
   assistive-technology status, Android's `AccessibilityManager.isEnabled()`
-  turning false), `BridgeShared::deactivate` drops the retained tree and
-  tells the composition root once, which drops its semantics owner and
-  builds no update until a client asks again; then the whole tree is built
-  once. Android asks the manager when its `AccessibilityStateChangeListener`
-  fires instead of trusting the notice's argument, and treats touch
-  exploration ending as no stop, since other services read the tree without
-  it; `ProvidedTree::services_stopped` resets the adapter before the root is
-  told, outside its borrow, and a stop that arrives while a call is inside
-  the adapter takes effect as that call returns. UI Automation,
-  NSAccessibility and the browser never say a client left: a window there
-  builds its tree for its life once asked. Tests:
-  `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`
+  turning false), `BridgeShared::deactivate` marks the bridge ended, drops
+  the retained tree under the same lock (a whole tree published after the
+  end is not kept) and tells the composition root, whatever the bridge's
+  state: a root whose listener panicked part way through an activation
+  holds what it committed, and only a `false` takes it back. The root drops
+  its semantics owner and builds no update until a client asks again; then
+  the whole tree is built once.
+
+  On Android the fact that a service is enabled has one writer:
+  `ProvidedTree::services_changed`, which `FluiView` calls with the
+  manager's present answer when its `AccessibilityStateChangeListener`
+  fires, as it enters the window and as the bridge arrives (the notice's
+  argument is not trusted). Touch exploration ending is no stop, since
+  Switch Access and Select to Speak read the tree without it. While no
+  service is enabled, the adapter's activation handler (`ServiceActivation`)
+  answers no tree and tells nobody, so a question from anything else
+  (Assist structure, the autofill framework's compatibility mode, a hover
+  posted before the report) is answered from a placeholder, which is dropped
+  before the call returns. The adapter is reset before the root is told,
+  outside its borrow, and a stop that arrives while a call is inside the
+  adapter takes effect as that call returns. A placeholder takes only a
+  whole tree: a fragment reaching one is dropped and the root asked for the
+  whole tree again (`BridgeShared::request_whole_tree`). UI Automation,
+  NSAccessibility and the browser are not read for a departure: a window
+  there builds its tree for its life once asked
+  ([gaps](../../docs/gaps.md#a-windows-or-macos-window-builds-its-accessibility-tree-for-its-life)).
+  Tests: `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`
   (the per-host table, held to the parity row),
   `the_last_service_stopping_ends_the_tree_and_tells_the_root_once`,
-  `a_stop_during_a_call_into_the_adapter_ends_the_tree_as_the_call_returns`,
+  `a_hover_posted_before_the_last_service_stopped_starts_nothing`,
+  `a_fragment_never_reaches_a_placeholder`,
+  `a_deactivation_reaches_a_root_that_half_took_the_activation`,
   `semantics_stop_with_the_last_listener_and_restart_whole` (flui-runtime).
 
   Every adapter publishes through `BridgeShared::publish`, which retains a

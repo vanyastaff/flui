@@ -659,7 +659,9 @@ fn absent_claims(parity: &Parity, column: &str, absent: &[Position]) -> Vec<Stri
 
 /// The mark the committed source gives the row `row_id` on the environment
 /// `column`, for a table test that holds a host's code to what its column
-/// says; `None` when there is no such row or column.
+/// says; `None` when there is no such row or column. The accessibility table
+/// that reads it holds AccessKit adapters, which wasm32 has none of.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn source_mark(row_id: &str, column: &str) -> Option<Mark> {
     let parity = parse_checked(SOURCE);
     let (_, row) = parity.rows().find(|(_, row)| row.id == row_id)?;

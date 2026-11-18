@@ -27,15 +27,18 @@
 //!
 //! # While a service listens
 //!
-//! The tree starts on a service's first question through the node provider
-//! and ends when `FluiView`'s accessibility-state listener finds no service
-//! enabled (`AccessibilityManager.isEnabled()`), which reaches
-//! [`ViewAccessibility::services_stopped`]: the adapter drops its tree and
-//! the composition root, told on the main thread with nothing borrowed,
-//! stops building it, so a publish posts nothing. The next question starts
-//! it again ([`ProvidedTree`]). Touch exploration ending is not a stop:
-//! another service (Switch Access, Select to Speak, an autofill service)
-//! still reads the tree without it.
+//! `FluiView` reports whether any accessibility service is enabled
+//! (`AccessibilityManager.isEnabled()`, asked as its accessibility-state
+//! listener fires, as the view enters the window and as the bridge arrives),
+//! which reaches [`ViewAccessibility::services_changed`]. While one is, a
+//! service's first question through the node provider starts the tree; when
+//! none is, the adapter drops its tree and the composition root, told on the
+//! main thread with nothing borrowed, stops building it, so a publish posts
+//! nothing. A question while none is enabled (Assist structure, the autofill
+//! framework's compatibility mode, a hover posted before the report) is
+//! answered from a placeholder and starts nothing ([`ProvidedTree`]). Touch
+//! exploration ending is not a stop: another service (Switch Access, Select
+//! to Speak) still reads the tree without it.
 //!
 //! # Explore by touch
 //!
@@ -119,16 +122,14 @@ impl NodeProvider {
     /// Run `f` with the adapter, or answer `None` when a call on this thread
     /// is already inside it. Java main thread.
     fn with<R>(&self, f: impl FnOnce(&mut Provided<Adapter>) -> R) -> Option<R> {
-        match self.tree()?.with(f) {
-            Ok(answer) => Some(answer),
-            Err(Busy) => {
-                tracing::warn!(
-                    target: "flui_native::android",
-                    "TalkBack re-entered the node provider while a call was inside the adapter"
-                );
-                None
-            }
+        let answer = self.tree()?.with(f);
+        if answer == Err(Busy) {
+            tracing::warn!(
+                target: "flui_native::android",
+                "TalkBack re-entered the node provider while a call was inside the adapter"
+            );
         }
+        answer.ok()
     }
 
     /// Run `f` with the adapter; then, with the adapter free, raise the
@@ -150,13 +151,14 @@ impl NodeProvider {
         let Some(tree) = self.tree() else {
             return;
         };
-        match tree.apply(update) {
-            Ok(events) => raise(env, host, events),
-            Err(Busy) => tracing::warn!(
+        let Ok(events) = tree.apply(update) else {
+            tracing::warn!(
                 target: "flui_native::android",
                 "an update reached the adapter while a call was inside it and was dropped"
-            ),
-        }
+            );
+            return;
+        };
+        raise(env, host, events);
     }
 
     /// Hand the adapter one touch-exploration hover. Java main thread.
@@ -346,10 +348,9 @@ impl ViewAccessibility for NodeProvider {
         }
     }
 
-    /// A tree no call made yet never started, and is left unmade.
-    fn services_stopped(&self) {
-        if let Some(tree) = self.tree.get().and_then(OwnerSlot::cloned) {
-            tree.services_stopped();
+    fn services_changed(&self, enabled: bool) {
+        if let Some(tree) = self.tree() {
+            tree.services_changed(enabled);
         }
     }
 
