@@ -615,14 +615,21 @@ impl LaidOut {
     }
 
     /// End the session the tree runs in, as the operating system does at log
-    /// off or shut down once the session is ending, in a runner's order: the
-    /// session-ended notice, then the presentation commits its composition
-    /// and closes past every hold
-    /// ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd) can
-    /// no longer be refused once the session is ending), then what the
-    /// documents published is written.
+    /// off or shut down once the session is ending, through the steps a
+    /// runner answers it with ([`HeadlessHost::end_session`](crate::HeadlessHost::end_session)):
+    /// the session-ended notice, then the presentation hears `Detached`, what
+    /// the documents published is written, and the window closes past every
+    /// hold ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd)
+    /// can no longer be refused once the session is ending).
+    ///
+    /// # Panics
+    ///
+    /// As [`HeadlessHost::end_session`](crate::HeadlessHost::end_session).
     pub fn end_session(&mut self) {
-        self.host.ui_runtime_mut().end_session_now();
+        let _answer = self
+            .host
+            .ui_runtime_mut()
+            .end_session(flui_platform::SessionEndPhase::Ending);
     }
 
     /// Deliver an accessibility action to the node it addresses, as a platform

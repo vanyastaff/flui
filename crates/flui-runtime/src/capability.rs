@@ -36,6 +36,10 @@ use flui_platform::{
 use flui_view::CapabilitySource;
 use parking_lot::Mutex;
 
+mod built_ins;
+
+pub use built_ins::BuiltIns;
+
 /// Which registration a provider came from, in precedence order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]

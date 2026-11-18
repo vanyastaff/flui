@@ -326,8 +326,8 @@ pub fn window_handle(
 /// window took the close and failed it.
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
-) -> Result<(), crate::app::close_request::CloseRequestError> {
-    use crate::app::close_request::CloseRequestError;
+) -> Result<(), crate::app::CloseRequestError> {
+    use crate::app::CloseRequestError;
 
     // Read whether this thread hosts a loop and its router in ONE visit,
     // then leave the thread-local: `WindowCommand::Close` fires the window's

@@ -169,18 +169,16 @@ impl FrameDriver {
         // now let through is queued for the window, which closes after the
         // frame, outside this runtime's lease. A host busy elsewhere leaves
         // the settle owed for the next turn, so no released close is lost.
-        //
-        // A due quit (`CloseReason::Program`) closes no window: it is this
-        // presentation's consent to the quit the application deferred, and a
-        // declined one cancels that quit. A window close carried out consents
-        // too, since the window is gone either way.
-        let ui_runtime_id = runtime.id();
-        let address = |presentation_id| PresentationAddress {
-            ui_runtime_id,
-            presentation_id,
-        };
+        // What each settled close asks is `settled_steps`'s.
         if let Some(queues) = window_commands() {
+            use flui_runtime::owner_turn::SettledStep;
+
             let settled = runtime.settle_close_guards();
+            let session_end = super::host::APP_RUNTIME.with(|slot| {
+                slot.try_borrow()
+                    .map_or_default(|state| Rc::clone(&state.session_end))
+            });
+            // Only the desktop runner's application asks for a quit.
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -191,33 +189,34 @@ impl FrameDriver {
                     .ok()
                     .and_then(|state| state.main_ingress.clone())
             });
-            for (presentation_id, reason) in settled.due {
-                if reason != flui_view::CloseReason::Program {
-                    // A window that closes no longer holds the session end it
-                    // refused, whichever record its guard carried out: an
-                    // earlier user close consumes the session end's too.
-                    super::host::release_session_end_refusal(address(presentation_id));
-                    queues.close_due(address(presentation_id));
-                }
-                #[cfg(all(
-                    not(target_os = "android"),
-                    not(target_os = "ios"),
-                    not(target_arch = "wasm32")
-                ))]
-                if let Some(ingress) = &ingress {
-                    ingress.quit_consented(address(presentation_id));
-                }
-            }
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            if let Some(ingress) = &ingress {
-                for (presentation_id, reason) in settled.declined {
-                    if reason == flui_view::CloseReason::Program {
-                        ingress.quit_declined(address(presentation_id));
+            for step in flui_runtime::owner_turn::settled_steps(settled, runtime.id(), &session_end)
+            {
+                match step {
+                    SettledStep::Close(address) => queues.close_due(address),
+                    #[cfg(all(
+                        not(target_os = "android"),
+                        not(target_os = "ios"),
+                        not(target_arch = "wasm32")
+                    ))]
+                    SettledStep::QuitConsented(address) => {
+                        if let Some(ingress) = &ingress {
+                            ingress.quit_consented(address);
+                        }
                     }
+                    #[cfg(all(
+                        not(target_os = "android"),
+                        not(target_os = "ios"),
+                        not(target_arch = "wasm32")
+                    ))]
+                    SettledStep::QuitDeclined(address) => {
+                        if let Some(ingress) = &ingress {
+                            ingress.quit_declined(address);
+                        }
+                    }
+                    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+                    SettledStep::QuitConsented(_) | SettledStep::QuitDeclined(_) => {}
+                    // A step added later asks nothing of this host.
+                    _ => {}
                 }
             }
         }

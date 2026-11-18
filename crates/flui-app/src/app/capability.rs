@@ -24,7 +24,7 @@ use flui_platform::{
 };
 
 use super::clipboard_expiry::ClipboardExpiries;
-use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
+use flui_runtime::capability::{BuiltIns, CapabilityConflict, CapabilityRegistry};
 use flui_runtime::execution::ExecutionServices;
 use flui_view::background::{Background, BackgroundCapability};
 use flui_view::persist::{StorageCapability, StorageHandle};
@@ -80,14 +80,11 @@ impl AppCapabilities {
         self,
         slots: &CapabilitySlots,
     ) -> Result<CapabilityRegistry, CapabilityConflict> {
-        let mut builder = CapabilityRegistry::builder()
-            .overrides(self.overrides)
-            .built_ins(built_ins(slots))
-            .host(slots.host.clone());
-        for plugin in &self.plugins {
-            builder = builder.plugin(plugin.as_ref());
-        }
-        builder.build()
+        built_ins(slots).compose(
+            self.overrides,
+            slots.host.clone(),
+            self.plugins.iter().map(AsRef::as_ref),
+        )
     }
 }
 
@@ -102,39 +99,41 @@ impl std::fmt::Debug for AppCapabilities {
 
 /// The registry a run with no override and no plugin has.
 pub(crate) fn built_in_registry(slots: &CapabilitySlots) -> CapabilityRegistry {
-    CapabilityRegistry::builder()
-        .built_ins(built_ins(slots))
-        .host(slots.host.clone())
-        .build()
+    built_ins(slots)
+        .compose(CapabilityRegistrar::new(), slots.host.clone(), [])
         .expect("BUG: the built-in providers name each capability once")
 }
 
-/// The providers this crate ships.
-fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
-    let mut registrar = CapabilityRegistrar::new();
-    registrar.provide::<BackgroundCapability>(HostBackground {
-        slot: Rc::clone(&slots.execution),
-    });
-    #[cfg(feature = "http")]
-    registrar.provide::<flui_platform::http::HttpCapability>(super::http_host::HostHttp::new(
-        Rc::clone(&slots.execution),
-    ));
-    registrar.provide::<StorageCapability>(HostStorageProvider {
-        slot: slots.storage.clone(),
-    });
-    registrar.provide::<ClipboardCapability>(PlatformClipboard {
-        slot: Rc::clone(&slots.clipboard),
-    });
-    // The primary selection is X11's and Wayland's alone.
-    #[cfg(target_os = "linux")]
-    registrar.provide::<PrimarySelectionCapability>(PlatformPrimarySelection {
+/// The providers this crate ships, on the platform it was built for.
+fn built_ins(slots: &CapabilitySlots) -> BuiltIns {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the runner ships the built-ins of the platform it was built for"
+    )]
+    let platform = flui_platform::TargetPlatform::current();
+    let built_ins = BuiltIns::new(
+        platform,
+        PlatformClipboard {
+            slot: Rc::clone(&slots.clipboard),
+        },
+        HostBackground {
+            slot: Rc::clone(&slots.execution),
+        },
+        HostStorageProvider {
+            slot: slots.storage.clone(),
+        },
+    )
+    .primary_selection(PlatformPrimarySelection {
         slot: Rc::clone(&slots.primary_selection),
     });
+    #[cfg(feature = "http")]
+    let built_ins = built_ins.http(super::http_host::HostHttp::new(Rc::clone(&slots.execution)));
     // The escape hatch from a widget: its window as the core host hands it out.
     #[cfg(feature = "native")]
-    registrar
-        .provide::<super::native_window::NativeWindowCapability>(super::native_window::provide);
-    registrar
+    let built_ins = built_ins.host_specific::<super::native_window::NativeWindowCapability>(
+        super::native_window::provide,
+    );
+    built_ins
 }
 
 /// The built-in clipboard: the owner platform's, while one is installed.
@@ -212,25 +211,14 @@ pub(crate) struct CapabilitySlots {
     pub(crate) storage: StorageSlot,
     pub(crate) execution: ExecutionSlot,
     pub(crate) clipboard: ClipboardSlot,
-    #[cfg_attr(
-        not(target_os = "linux"),
-        expect(
-            dead_code,
-            reason = "only the Linux hosts register a primary selection"
-        )
-    )]
     pub(crate) primary_selection: PrimarySelectionSlot,
     /// What the installed platform offers providers beyond the window.
     pub(crate) host: flui_platform::capability::HostBridge,
 }
 
 /// The built-in primary selection: the owner platform's, on the platforms
-/// that have one. Elsewhere nothing registers it, and an acquisition is
-/// refused as not registered.
-#[cfg_attr(
-    not(target_os = "linux"),
-    expect(dead_code, reason = "only the Linux hosts have a primary selection")
-)]
+/// that have one ([`BuiltIns::primary_selection`]). Elsewhere nothing
+/// registers it, and an acquisition is refused as not registered.
 struct PlatformPrimarySelection {
     slot: PrimarySelectionSlot,
 }

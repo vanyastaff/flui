@@ -1,5 +1,7 @@
 //! Per-window close-request veto — the application's answer to "may this
-//! window close?".
+//! window close?" — asked the same way by every host: a runner's window
+//! routes and `flui-testing`'s headless host register their presentations
+//! here and ask the router, so a headless test proves what a runner does.
 //!
 //! # The seam this fills
 //!
@@ -8,9 +10,7 @@
 //! synchronously when the *user* asks a window to close, and a
 //! [`KeepOpen`](flui_platform::CloseDecision::KeepOpen) answer stops the
 //! close before anything else in the arm runs — no `closed`, no UI runtime
-//! teardown, no exit-policy consultation. Until this module existed every
-//! `flui-app` window answered `Close`, so the mechanism shipped and no
-//! application could reach it.
+//! teardown, no exit-policy consultation.
 //!
 //! # Presentation-addressed, because the question is per window
 //!
@@ -24,11 +24,10 @@
 //!
 //! # Not the keep-alive veto
 //!
-//! [`ExitPolicy`](crate::ExitPolicy) plus
-//! [`ServiceLifetime::KeepsAppAlive`](crate::ServiceLifetime::KeepsAppAlive)
-//! answer a *different*, strictly later question: now that every window is
-//! gone, may the **process** exit? The two never compete, and the order is
-//! fixed by causality rather than by a choice made here — see
+//! `flui-app`'s `ExitPolicy` plus `ServiceLifetime::KeepsAppAlive` answer a
+//! *different*, strictly later question: now that every window is gone, may
+//! the **process** exit? The two never compete, and the order is fixed by
+//! causality rather than by a choice made here — see
 //! [`CloseRequestRouter::consult`]'s own doc.
 //!
 //! # A veto is recorded, never timed
@@ -49,23 +48,21 @@
 //! `windowShouldClose:`, Win32's `WM_CLOSE`, GTK's `delete-event`, Qt's
 //! `closeEvent` all leave that wait unbounded.
 //! What the application owes instead is the means to finish the close, and
-//! it is handed that up front:
-//! [`request_presentation_close`](crate::request_presentation_close) closes
-//! the window once the work is done.
+//! it is handed that up front: `flui-app`'s `request_presentation_close`
+//! closes the window once the work is done.
 //!
 //! The `deadline -> flush -> termination` leg is a different
 //! question — how long teardown may take *after* a close is agreed — and
-//! belongs with journaled state, not here.
+//! belongs to the session end ([`SessionEnd`](super::SessionEnd)), not here.
 //!
 //! # Where a handler comes from, and where it is asked
 //!
-//! A handler is registered through
-//! [`AppConfig::close_request_handler`](crate::AppConfig::close_request_handler),
-//! the same embedder-facing route
-//! [`FrameFailureHandler`](crate::FrameFailureHandler) and
-//! [`ExitPolicy`](crate::ExitPolicy) take. A widget declares its own
-//! unsaved work through the presentation's close guard, which this router
-//! asks before the handler.
+//! An application registers a handler through `flui-app`'s
+//! `AppConfig::close_request_handler`, the same embedder-facing route
+//! [`FrameFailureHandler`](crate::frame_failure::FrameFailureHandler) takes,
+//! and a headless test through `flui-testing`'s `TestWindow`. A widget
+//! declares its own unsaved work through the presentation's close guard,
+//! which this router asks before the handler.
 //!
 //! No code path in the web or Android backend asks a window's handler
 //! `close_requested`: neither system lets the application refuse a close,
@@ -87,7 +84,7 @@ use flui_foundation::panic::payload_text;
 use flui_platform::PlatformWindow;
 
 use flui_platform::CommandRefusal;
-pub use flui_view::CloseReason;
+use flui_view::CloseReason;
 
 // ============================================================================
 // The question, and the answer
@@ -111,17 +108,14 @@ impl CloseRequest {
     /// asked to close.
     ///
     /// Store this if the answer is [`CloseResponse::KeepOpen`]: it is the
-    /// address
-    /// [`request_presentation_close`](crate::request_presentation_close)
-    /// takes to finish the close later.
+    /// address `request_presentation_close` takes to finish the close later.
     #[must_use]
     pub fn address(&self) -> PresentationAddress {
         self.address
     }
 
     /// Why the close was requested: by the user, by the application's own
-    /// code quitting ([`AppHandle::request_quit`](crate::AppHandle::request_quit)),
-    /// or by the session ending.
+    /// code quitting (`AppHandle::request_quit`), or by the session ending.
     #[must_use]
     pub fn reason(&self) -> CloseReason {
         self.reason
@@ -148,23 +142,20 @@ pub enum CloseResponse {
     /// carries the close out, `stay_open` withdraws it. Nothing times out:
     /// the record waits for that decision. An application that answered
     /// this way in order to finish work may instead call
-    /// [`request_presentation_close`](crate::request_presentation_close)
-    /// when the work is done. The next close request is put to the handler
-    /// afresh.
+    /// `request_presentation_close` when the work is done. The next close
+    /// request is put to the handler afresh.
     ///
     /// A quit ([`CloseReason::Program`]) this answer refuses is deferred
-    /// until the record is resolved; see
-    /// [`AppHandle::request_quit`](crate::AppHandle::request_quit).
+    /// until the record is resolved ([`QuitRequest`](super::QuitRequest)).
     KeepOpen,
 }
 
 /// An embedder-registered callback deciding whether one presentation's
 /// window may close.
 ///
-/// Register via
-/// [`AppConfig::close_request_handler`](crate::AppConfig::close_request_handler);
-/// each window opened with that config registers it for its own
-/// presentation.
+/// Register via `AppConfig::close_request_handler` (or a headless test's
+/// `TestWindow::close_request_handler`); each window opened with that config
+/// registers it for its own presentation.
 ///
 /// # Contract
 ///
@@ -281,21 +272,21 @@ struct PresentationCloseEntry {
     guard: Option<flui_view::__runtime::CloseGuardSource>,
 }
 
-/// Loop-scoped registry of per-presentation close-request handlers.
+/// A host's registry of per-presentation close-request handlers and close
+/// guards, which every close, quit and session-end question is put to.
 ///
-/// Held by the loop's native bindings in an `Rc`, so the close-request
-/// route each window is opened with holds its own clone and answers
-/// **without** re-entering the `APP_RUNTIME` thread-local at all. That
-/// matters: a close request can arrive while a UI runtime is checked out
-/// for dispatch, and a router reached through the UI runtime would then
-/// have to fail closed on a bookkeeping detail the application never asked
-/// about.
+/// A runner holds one for its loop in an `Rc`, so the close-request route
+/// each window is opened with holds its own clone and answers **without**
+/// re-entering the runner's loop state: a close request can arrive while a
+/// UI runtime is checked out for dispatch, and a router reached through the
+/// UI runtime would then have to fail closed on a bookkeeping detail the
+/// application never asked about. A headless host holds one beside its UI
+/// runtime.
 ///
-/// Deliberately not a second window authority:
-/// [`WindowRegistry`](super::window_registry::WindowRegistry) owns the
-/// native-key-to-[`PresentationAddress`] map and holds no window value,
-/// while this keys on the address itself and carries the handler plus a
-/// *weak* window. Nothing here names, accepts, or resolves a native window
+/// Deliberately not a second window authority: a runner's window registry
+/// owns the native-key-to-[`PresentationAddress`] map and holds no window
+/// value, while this keys on the address itself and carries the handler plus
+/// a *weak* window. Nothing here names, accepts, or resolves a native window
 /// key — the address is the only identity this module knows.
 ///
 /// The table is borrowed only inside this type's methods, and no method
@@ -304,23 +295,19 @@ struct PresentationCloseEntry {
 /// run after the borrow ends. A handler that re-enters the router finds the
 /// table free.
 #[derive(Default)]
-pub(crate) struct CloseRequestRouter {
+pub struct CloseRequestRouter {
     entries: RefCell<Vec<PresentationCloseEntry>>,
 }
 
 /// An unpublished handler and weak native window, prepared outside all guards.
-pub(crate) struct PreparedCloseRequest(PresentationCloseEntry);
+pub struct PreparedCloseRequest(PresentationCloseEntry);
 
 impl PreparedCloseRequest {
-    #[cfg(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    ))]
-    pub(crate) fn new(
+    /// The registration of the presentation at `address`, drawn in `window`,
+    /// whose close requests `handler` answers (none: every close the guard
+    /// lets through goes ahead).
+    #[must_use]
+    pub fn new(
         address: PresentationAddress,
         window: &std::rc::Rc<dyn PlatformWindow>,
         handler: Option<CloseRequestHandler>,
@@ -335,15 +322,8 @@ impl PreparedCloseRequest {
 
     /// Answer the window's close requests with the presentation's close guard
     /// first: a close its holds refuse is recorded and kept open.
-    #[cfg(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    ))]
-    pub(crate) fn guard(mut self, guard: flui_view::__runtime::CloseGuardSource) -> Self {
+    #[must_use]
+    pub fn guard(mut self, guard: flui_view::__runtime::CloseGuardSource) -> Self {
         self.0.guard = Some(guard);
         self
     }
@@ -355,10 +335,27 @@ impl PreparedCloseRequest {
 /// the reservation and the publication finds the table busy. The native
 /// bindings publish it in the same call, with no code of another owner in
 /// between.
-pub(crate) struct ClosePublication<'a>(&'a CloseRequestRouter);
+pub struct ClosePublication<'a>(&'a CloseRequestRouter);
+
+impl std::fmt::Debug for PreparedCloseRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedCloseRequest")
+            .field("address", &self.0.address)
+            .field("handler", &self.0.handler.is_some())
+            .field("guard", &self.0.guard.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ClosePublication<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosePublication").finish_non_exhaustive()
+    }
+}
 
 impl ClosePublication<'_> {
-    pub(crate) fn publish(self, prepared: PreparedCloseRequest) {
+    /// Add the reserved registration to the router.
+    pub fn publish(self, prepared: PreparedCloseRequest) {
         self.0.entries.borrow_mut().push(prepared.0);
     }
 }
@@ -374,10 +371,8 @@ impl std::fmt::Debug for CloseRequestRouter {
 impl CloseRequestRouter {
     /// Reserve `prepared`'s address and room for its entry; `None` when the
     /// address already has one.
-    pub(crate) fn publication(
-        &self,
-        prepared: &PreparedCloseRequest,
-    ) -> Option<ClosePublication<'_>> {
+    #[must_use]
+    pub fn publication(&self, prepared: &PreparedCloseRequest) -> Option<ClosePublication<'_>> {
         let mut entries = self.entries.borrow_mut();
         if entries
             .iter()
@@ -389,12 +384,13 @@ impl CloseRequestRouter {
         Some(ClosePublication(self))
     }
     /// An empty router.
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Remove the entry and return its handler for retirement outside host borrows.
-    pub(crate) fn take(&self, address: PresentationAddress) -> Option<CloseRequestHandler> {
+    pub fn take(&self, address: PresentationAddress) -> Option<CloseRequestHandler> {
         let removed = {
             let mut entries = self.entries.borrow_mut();
             let index = entries.iter().position(|entry| entry.address == address)?;
@@ -409,9 +405,9 @@ impl CloseRequestRouter {
     /// or a bootstrap that fails after a window is wired but before its
     /// UI runtime is installed, both leave this loop with registrations no
     /// per-UI runtime teardown ever names. Since a second `Platform::run` on the
-    /// same thread reuses this `AppRuntime`, those would otherwise be
+    /// same thread reuses the runner's loop state, those would otherwise be
     /// consulted by the NEXT loop's windows.
-    pub(crate) fn take_all(&self) -> Vec<CloseRequestHandler> {
+    pub fn take_all(&self) -> Vec<CloseRequestHandler> {
         let removed = self.entries.take();
         removed
             .into_iter()
@@ -447,11 +443,7 @@ impl CloseRequestRouter {
     /// [`CloseRequest::reason`], and its [`CloseResponse::KeepOpen`] records
     /// the close on the guard. A handler that panics keeps the window open
     /// and records nothing: a panic is no answer to wait on.
-    pub(crate) fn consult(
-        &self,
-        address: PresentationAddress,
-        reason: CloseReason,
-    ) -> CloseResponse {
+    pub fn consult(&self, address: PresentationAddress, reason: CloseReason) -> CloseResponse {
         let Some((handler, guard)) = self.answerers(address) else {
             return CloseResponse::Close;
         };
@@ -495,7 +487,7 @@ impl CloseRequestRouter {
     /// [`CloseResponse::KeepOpen`] records the close on the guard; a hold for
     /// work never refuses a session end, a hold for a decision does. A handler
     /// that panics keeps the window open and records nothing.
-    pub(crate) fn consult_session_end(&self, address: PresentationAddress) -> CloseResponse {
+    pub fn consult_session_end(&self, address: PresentationAddress) -> CloseResponse {
         let reason = CloseReason::SessionEnd;
         let Some((handler, guard)) = self.answerers(address) else {
             return CloseResponse::Close;
@@ -563,7 +555,8 @@ impl CloseRequestRouter {
     }
 
     /// Every registered presentation, in registration order.
-    pub(crate) fn addresses(&self) -> Vec<PresentationAddress> {
+    #[must_use]
+    pub fn addresses(&self) -> Vec<PresentationAddress> {
         self.entries
             .borrow()
             .iter()
@@ -574,24 +567,17 @@ impl CloseRequestRouter {
     /// Withdraw the close recorded for `reason` on the guard of the
     /// presentation at `address`, if one is: the platform cancelled it, as a
     /// cancelled log-off does. Closes recorded for other reasons stay.
-    pub(crate) fn withdraw(&self, address: PresentationAddress, reason: CloseReason) {
+    pub fn withdraw(&self, address: PresentationAddress, reason: CloseReason) {
         if let Some(guard) = self.guard_of(address) {
             guard.withdraw(reason);
         }
     }
 
-    #[cfg(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    ))]
     /// Whether the guard of the presentation at `address` has a close for
     /// `reason` recorded and waiting. `false` for a presentation without a
     /// guard and for one no longer registered.
-    pub(crate) fn is_recorded(&self, address: PresentationAddress, reason: CloseReason) -> bool {
+    #[must_use]
+    pub fn is_recorded(&self, address: PresentationAddress, reason: CloseReason) -> bool {
         self.guard_of(address)
             .is_some_and(|guard| guard.is_recorded(reason))
     }
@@ -606,18 +592,22 @@ impl CloseRequestRouter {
     /// real close** (headless, Win32, AppKit, X11, Wayland); a window that
     /// refuses it (Android) answers [`CloseRequestError::Refused`]. The
     /// headless double runs `on_close` synchronously inside the command. See
-    /// [`request_presentation_close`](crate::request_presentation_close)
-    /// for the per-backend statement.
+    /// `flui-app`'s `request_presentation_close` for the per-backend
+    /// statement.
     /// Bypassing the handler is the point — every backend's own
     /// `WindowCommand::Close` bypasses its native close-request path for
     /// the same reason (AppKit's `-close` does not send
     /// `windowShouldClose:`; Win32's `DestroyWindow` does not send
     /// `WM_CLOSE`), because asking again would either loop forever or
     /// require the application to track "I am the one closing this".
-    pub(crate) fn request_close(
-        &self,
-        address: PresentationAddress,
-    ) -> Result<(), CloseRequestError> {
+    ///
+    /// # Errors
+    ///
+    /// [`CloseRequestError::UnknownPresentation`] for an address with no
+    /// registration, [`CloseRequestError::WindowGone`] once its window is
+    /// gone, and [`CloseRequestError::Refused`] or
+    /// [`CloseRequestError::Failed`] with the window's answer to the close.
+    pub fn request_close(&self, address: PresentationAddress) -> Result<(), CloseRequestError> {
         let window = {
             let entries = self.entries.borrow();
             let entry = entries
@@ -630,8 +620,8 @@ impl CloseRequestRouter {
                 .ok_or(CloseRequestError::WindowGone { address })?
         };
         // With the table free: closing fires the window's own `on_close`,
-        // which re-enters flui-app (`close_this_window`) and may re-enter
-        // this router.
+        // which re-enters the host (a runner's `close_this_window`) and may
+        // re-enter this router.
         flui_platform::WindowCommand::Close
             .admit_and_apply(&*window)
             .map_err(|refusal| match refusal {
@@ -648,7 +638,7 @@ mod tests {
     use flui_foundation::{PresentationId, UiRuntimeId};
 
     use super::*;
-    use crate::app::window_test_support::TestWindow;
+    use crate::testing::TestWindow;
 
     // What replaced the run-time thread checks: neither the router nor a
     // handler can reach another thread.

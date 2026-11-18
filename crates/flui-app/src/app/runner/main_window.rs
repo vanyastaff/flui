@@ -611,9 +611,6 @@ pub(super) fn drive_main_window() {
 /// handler. A presentation the deferred quit waits on and that is gone
 /// consents. Runs on the owner's turn, outside every runtime lease.
 pub(super) fn drive_program_quit() {
-    use crate::app::application_control::QuitAnswer;
-    use crate::app::{CloseReason, CloseResponse};
-
     let Some((ingress, router)) = APP_RUNTIME.with(|slot| {
         let runtime = slot.borrow();
         runtime
@@ -624,33 +621,13 @@ pub(super) fn drive_program_quit() {
         return;
     };
     let registered = router.addresses();
-    for address in ingress.quit_waiting() {
-        if !registered.contains(&address) {
-            ingress.quit_consented(address);
-        }
-    }
+    ingress.quit_forget_gone(&registered);
     if !ingress.begin_quit_consult() {
         return;
     }
     // The router contains every handler's panic, so the consultation always
-    // ends with an answer; asking every presentation, not only up to the
-    // first refusal, records the close on each one that refuses.
-    let mut waiting = Vec::new();
-    let mut cancelled = false;
-    for address in registered {
-        if router.consult(address, CloseReason::Program) == CloseResponse::KeepOpen {
-            if router.is_recorded(address, CloseReason::Program) {
-                waiting.push(address);
-            } else {
-                cancelled = true;
-            }
-        }
-    }
-    ingress.finish_quit_consult(if cancelled {
-        QuitAnswer::Cancelled
-    } else {
-        QuitAnswer::Waiting(waiting)
-    });
+    // ends with an answer.
+    ingress.finish_quit_consult(flui_runtime::owner_turn::ask_quit(&router, registered));
 }
 
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {

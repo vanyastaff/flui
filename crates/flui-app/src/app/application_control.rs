@@ -1,6 +1,7 @@
 //! Closed cross-thread application commands. UI factories never enter this state.
 use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, PresentationAddress, claim_slot};
 use flui_native::PlatformProxy;
+use flui_runtime::owner_turn::{QuitAnswer, QuitRequest, QuitVerdict};
 use parking_lot::Mutex;
 use std::{
     future::Future,
@@ -108,31 +109,11 @@ enum Phase {
     Quitting,
     Closed,
 }
-/// A quit the application asked for through [`AppHandle::request_quit`],
-/// until the owner commits it or it is cancelled.
-#[derive(Debug, Default, PartialEq, Eq)]
-enum QuitAsk {
-    #[default]
-    None,
-    /// The owner asks every presentation on its next turn.
-    Asked,
-    /// The owner is asking now.
-    Consulting,
-    /// Presentations refused, each recording the close on its guard; the
-    /// quit waits for each record to be carried out.
-    Deferred(Vec<PresentationAddress>),
-}
-/// What the presentations answered a quit the application asked for.
-pub(crate) enum QuitAnswer {
-    /// A refusal recorded nothing to wait on: the quit is cancelled.
-    Cancelled,
-    /// The presentations whose recorded close the quit waits on; none, and
-    /// the quit goes ahead.
-    Waiting(Vec<PresentationAddress>),
-}
 struct State {
     phase: Phase,
-    quit: QuitAsk,
+    /// A quit the application or the platform asked for, until the owner
+    /// commits it or it is cancelled.
+    quit: QuitRequest,
     intent: bool,
     /// A reopen asked while a quit was asked, consulted or deferred: shown
     /// once the quit is abandoned, dropped once it commits.
@@ -193,7 +174,7 @@ impl AppHandle {
             Phase::Accepting => {}
         }
         self.ingress.proxy.wake().map_err(control_error)?;
-        state.quit = QuitAsk::Asked;
+        state.quit.ask();
         Ok(())
     }
     /// Ask every window whose GPU device rebuild was given up to try again
@@ -318,7 +299,7 @@ impl Ingress {
             proxy,
             state: Mutex::new(State {
                 phase: Phase::Accepting,
-                quit: QuitAsk::None,
+                quit: QuitRequest::new(),
                 intent: startup_open,
                 reopen_after_quit: false,
                 failed_openings: 0,
@@ -378,7 +359,7 @@ impl Ingress {
         if state.phase != Phase::Accepting {
             return false;
         }
-        if !matches!(state.quit, QuitAsk::None) {
+        if state.quit.is_pending() {
             state.reopen_after_quit = true;
             return true;
         }
@@ -423,7 +404,6 @@ impl Ingress {
     /// The quit was abandoned: show the main window a reopen asked for while
     /// it was pending.
     fn quit_abandoned(mut state: parking_lot::MutexGuard<'_, State>, proxy: &PlatformProxy) {
-        state.quit = QuitAsk::None;
         if std::mem::take(&mut state.reopen_after_quit) {
             Self::show_for_reopen(state, proxy);
         }
@@ -588,87 +568,66 @@ impl Ingress {
 
     fn commit_quit(state: &mut State, proxy: &PlatformProxy) -> Result<(), AppControlError> {
         state.phase = Phase::Quitting;
-        state.quit = QuitAsk::None;
+        state.quit.clear();
         state.reopen_after_quit = false;
         proxy.request_quit().map_err(control_error)
+    }
+
+    /// Carry out what a change of the quit asks: commit it, or show the main
+    /// window a reopen asked for while it was pending.
+    fn follow_quit(&self, mut state: parking_lot::MutexGuard<'_, State>, verdict: QuitVerdict) {
+        match verdict {
+            QuitVerdict::Commit => {
+                if let Err(error) = Self::commit_quit(&mut state, &self.proxy) {
+                    drop(state);
+                    tracing::error!(%error, "quit notification failed");
+                }
+            }
+            QuitVerdict::Abandoned => Self::quit_abandoned(state, &self.proxy),
+            // Nothing for the owner to do; a verdict added later asks
+            // nothing of this host either.
+            QuitVerdict::Unchanged | QuitVerdict::Deferred | _ => {}
+        }
     }
 
     /// Start the owner's consultation of a quit the application asked for:
     /// `true` when one is asked and nothing has fenced the application yet.
     pub(crate) fn begin_quit_consult(&self) -> bool {
         let mut state = self.state.lock();
-        if state.phase != Phase::Accepting || state.quit != QuitAsk::Asked {
-            return false;
-        }
-        state.quit = QuitAsk::Consulting;
-        true
+        state.phase == Phase::Accepting && state.quit.begin_consult()
     }
 
     /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
-    /// started with what the presentations answered. A quit asked again
-    /// while they were asked stays asked for the next turn.
+    /// started with what the presentations answered
+    /// ([`QuitRequest::finish_consult`]).
     pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) {
         let mut state = self.state.lock();
-        if state.quit != QuitAsk::Consulting {
-            return;
-        }
-        match answer {
-            QuitAnswer::Cancelled => {
-                Self::quit_abandoned(state, &self.proxy);
-                tracing::info!(
-                    "a presentation refused the quit without recording it; quit cancelled"
-                );
-            }
-            QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
-                state.quit = QuitAsk::Deferred(waiting);
-            }
-            QuitAnswer::Waiting(_) => {
-                if let Err(error) = Self::commit_quit(&mut state, &self.proxy) {
-                    drop(state);
-                    tracing::error!(%error, "quit notification failed");
-                }
-            }
-        }
+        let verdict = state.quit.finish_consult(answer);
+        self.follow_quit(state, verdict);
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its
-    /// recorded close was carried out, or it is gone. The quit goes ahead
-    /// once no presentation is left to wait on.
+    /// recorded close was carried out ([`QuitRequest::consented`]).
     pub(crate) fn quit_consented(&self, address: PresentationAddress) {
         let mut state = self.state.lock();
-        let QuitAsk::Deferred(waiting) = &mut state.quit else {
-            return;
-        };
-        waiting.retain(|waited| *waited != address);
-        if waiting.is_empty()
-            && let Err(error) = Self::commit_quit(&mut state, &self.proxy)
-        {
-            drop(state);
-            tracing::error!(%error, "deferred quit notification failed");
-        }
+        let verdict = state.quit.consented(address);
+        self.follow_quit(state, verdict);
+    }
+
+    /// Every presentation the deferred quit waits on and that `registered`
+    /// no longer holds consents ([`QuitRequest::forget_gone`]).
+    pub(crate) fn quit_forget_gone(&self, registered: &[PresentationAddress]) {
+        let mut state = self.state.lock();
+        let verdict = state.quit.forget_gone(registered);
+        self.follow_quit(state, verdict);
     }
 
     /// The presentation at `address` kept itself open: the deferred quit it
-    /// was waited on for is cancelled.
+    /// was waited on for is cancelled ([`QuitRequest::declined`]).
     pub(crate) fn quit_declined(&self, address: PresentationAddress) {
-        let state = self.state.lock();
-        if let QuitAsk::Deferred(waiting) = &state.quit
-            && waiting.contains(&address)
-        {
-            Self::quit_abandoned(state, &self.proxy);
-            tracing::info!(
-                ?address,
-                "a presentation stayed open; deferred quit cancelled"
-            );
-        }
-    }
-
-    /// The presentations a deferred quit still waits on.
-    pub(crate) fn quit_waiting(&self) -> Vec<PresentationAddress> {
-        match &self.state.lock().quit {
-            QuitAsk::Deferred(waiting) => waiting.clone(),
-            QuitAsk::None | QuitAsk::Asked | QuitAsk::Consulting => Vec::new(),
-        }
+        let mut state = self.state.lock();
+        let verdict = state.quit.declined(address);
+        self.follow_quit(state, verdict);
     }
 
     pub(crate) fn try_auto_quit(&self) -> bool {
