@@ -160,7 +160,8 @@ a relative path the system's contract excludes is `MalformedAnswer`.
 The `macos` module provides every service but the jump list, which macOS has no form of (the
 Dock menu is the application delegate's, the host's). Each provider's rules (what a request
 becomes, what an answer means) are functions of its file over plain values, compiled and tested on
-every host (`macos::*::tests`); the AppKit, Foundation, ServiceManagement and Carbon calls are the
+every host (`macos::*::tests`, and `apple::*::tests` for what iOS shares); the AppKit, Foundation,
+ServiceManagement and Carbon calls are the
 file's `macos`-only `appkit` module, checked by CI's macOS type-check. The owed Mac runs are in the
 parity rows.
 
@@ -171,7 +172,7 @@ Threads:
   `MainThreadMarker`, and a runtime whose owner thread is not the main thread (the headless host)
   is refused them with `NotYetOnThisHost` before AppKit is touched.
 - **Work that touches the file system or waits on a daemon runs on a global dispatch queue**
-  (`macos::queue::WorkQueue`): the launcher, the share picker's file check, the login item and the
+  (`apple::queue::WorkQueue`): the launcher, the share picker's file check, the login item and the
   user's folders, at most `WorkQueue::MAX_IN_FLIGHT` per runtime; a request past that answers its
   refusal with `Unavailable`, and a work item gives its place back on every exit. No file system
   call runs on the main thread (ADR-0360 §2).
@@ -181,16 +182,18 @@ Every block, work item, Objective-C method and Carbon handler the system calls i
 check) keeps its ivars in `ContainedIvars`, as in
 `flui-native`.
 
-A feature newer than the floor is behind a gate of `macos::version` (ADR-0244 §4): a marker with its
+A feature newer than the floor is behind a gate of `apple::version` (ADR-0244 §4): a marker with its
 `SINCE`, a `Since` proof the call takes, and a compile error for a gate at or below the floor, which
-`macos/floor.rs` states, generated from `platform-support.toml` by `cargo xtask platform-floor`. The
-floor is 10.13 on x86_64 and 11.0 on arm64, so a gate between them exists on x86_64 only. A class
+`apple/floor.rs` states, generated from `platform-support.toml` by `cargo xtask platform-floor`. The
+floor is 10.13 on x86_64 and 11.0 on arm64, so a gate between them exists on x86_64 only. macOS and
+iOS each have a version type and a floor of their own, so a gate written for one is never asked of
+the other. A class
 above the floor is looked up at run time, never linked: `UTType` (macOS 11, in a framework 10.15
 lacks) through `AnyClass::get`, `SMAppService` (macOS 13) through objc2's lookup behind the proof.
 
 A dialog and the alert are sheets on the acquiring widget's window (`beginSheetModalForWindow:`),
 and a window with no AppKit window answers `NoWindow`. The sheet's completion handler and the
-dialog's hold share the caller's resolver (`macos::sheet::Pending`): the first to come takes it, so
+dialog's hold share the caller's resolver (`apple::modal::Pending`): the first to come takes it, so
 a hold dropped while the sheet is up (the caller let go, the window closed, the runtime retired)
 ends the sheet (`endSheet:returnCode:`), and the handler that ending runs answers nobody
 (ADR-0344). A filter is what the panel allows: from macOS 11 its content types (an extension the
@@ -269,6 +272,93 @@ A user folder is `URLsForDirectory:inDomains:` in the user's domain (Movies for 
 the public share; there is no templates folder), the home folder `homeDirectoryForCurrentUser`; a
 folder the user does not have answers none. The system information is `NSProcessInfo`'s version,
 read once per runtime, and the machine's processor, Arm64 for a process Rosetta translates.
+
+## iOS (`ios`)
+
+The `ios` module provides the launcher's links, the file dialogs, the message box, the share sheet,
+the user's folders and the system information. iOS has no form of opening a document in a default
+application, of revealing or trashing a file, of starting at login, of a shortcut heard while
+another application is in front or of a jump list: those answer `NotOnThisPlatform`. Its form of
+the launcher entry is the count on the application's icon, which needs the user's permission for
+notifications and is not built: `NotYetOnThisHost`. Foundation's side of a provider is the `apple`
+module, shared with macOS (the work queue, the version gate, the content types, a share's items,
+the folders, the system information); each provider's rules are functions over plain values,
+tested on every host (`ios::*::tests`, `apple::*::tests`), and the UIKit calls are the file's
+`ios`-only `uikit` module, checked by CI's iOS type-check. The owed Simulator runs are in the
+parity rows.
+
+Threads, as on macOS: UIKit runs on the main thread, and a runtime whose owner thread is another
+one is refused the launcher, the dialogs, the message box, the share sheet and the system
+information with `NotYetOnThisHost`; judging and reading a picked document, writing the file a
+save exports, checking a shared file and naming a folder run on `apple::queue::WorkQueue`. Every
+block, delegate method and work item is one call of `os_entry`, and the picker's delegate keeps
+its ivars in `ContainedIvars`.
+
+A picker, an alert and a share sheet are presented from the requesting window's root view
+controller, or from the controller it presents on top, as deep as that chain goes
+(`ios::presenter`); a window with no UIKit window answers `NoWindow`. UIKit presents only from a
+controller that presents nothing and whose presented controller is not leaving, and otherwise
+presents nothing and calls nobody. A request that finds a controller of the chain being dismissed
+(a dialog asked for in another's answer, whose controller is still animating away) waits for that
+transition to end (`transitionCoordinator`) and looks at the chain again, at most
+`MAX_DISMISSALS_AWAITED` times; a chain that does not settle, or a dismissal with no transition to
+hear the end of, answers `Busy` (the share sheet `Unavailable`), and a request whose dialog ended
+or whose window closed while it waited presents nothing. Every presentation is checked right
+after it was asked for, so one UIKit did not take answers `Busy` at once. Whatever is presented
+with a popover (an iPad's share sheet) has it anchored in the middle of the presenter's view, with
+no arrow, since a request names no control to point at and an unanchored popover raises an
+exception. The anchor, and the presentation's delegate, are set once UIKit took the controller:
+asking a controller that is never presented for its presentation makes one that keeps it alive
+for good, so after a refusal nothing of the presentation keeps what the request made. A
+controller is dismissed through the controller that presents it: asked of a controller that
+itself presents another (a share sheet over a picker), UIKit takes down only what is above it.
+UIKit reports a controller it cannot make or present by raising an Objective-C exception, which
+would end the process from inside a widget's call: each call that makes, presents or dismisses a
+controller runs where the exception is caught (`ios::presenter::guarded`), which logs its name and
+reason and answers `SystemFailure::MalformedAnswer`, and an initializer that answers no picker
+answers the same.
+
+UIKit tells nobody when other code dismisses a presented controller, so the controller owns what
+answers it: an alert its actions' handlers, a picker its delegate, held as an associated object
+since its delegate property is weak. They hold the caller's resolver, and the dialog's hold keeps
+only weak references (`apple::modal::WeakPending`), so the hold dismisses a controller still up
+(the caller let go, the window closed, the runtime retired) and takes the resolver first, and a
+controller UIKit releases unanswered drops the resolver with its handlers: the caller's completion
+ends `ProviderDropped` and the window is free, instead of busy for good. A picker answers once: a
+pick, a cancel, or a swipe that dismisses it (its own delegate and its presentation's both report
+an end, and the first takes the caller), which is a cancel. A handler takes what it holds of the
+caller out of its block when it runs, so that is dropped inside the panic boundary and not when
+UIKit disposes of the block.
+
+An open is `UIDocumentPickerViewController` opening documents in place, filtered by content type
+as on macOS from iOS 14 (`UTType`, looked up at run time; a type the application's bundle declares
+is found by its extension, ADR-0361); below it an open without filters shows every document and
+one with filters answers `NotOnThisDevice`. The picker shows no title and no accept label. Nothing
+is read, and nothing downloaded, for an answer the request will not get: under the picks'
+security-scoped access, which is started before a document is judged and stopped after it is
+read, every pick is first held to the contract's rule, by its name and then its type's conformance
+to a MIME pattern's (`NotInFilter`), and the sizes the system declares for the picks, which it
+knows of a document still in the cloud, are summed against the request's `max_bytes`
+(`TooLarge`). Only then is each read through `NSFileCoordinator`, which downloads a file a
+provider keeps in the cloud, and bounded again by the size its opened file reports. A folder
+dialog answers `NotYetOnThisHost`. A save exports: its contents are written to a file of the
+request's name (the suggested name, or `Untitled`, with the first filter's extension when it has
+none) in a folder of its own in the temporary directory, the picker moves that file where the
+user chose, and the folder is removed when the export ends, whichever way, a picker UIKit did not
+take included; a save without contents answers `NotOnThisPlatform`.
+
+The message box is a `UIAlertController` in the alert style, which no tap and no swipe dismisses:
+the title its title, the message its message, the default button the preferred action (bold, and
+Return's), and the button closing the box means (OK alone, or Cancel) the cancel-style action
+(Escape's); a Yes or No box has none. The labels are English and the level is not shown. The
+share sheet is `UIActivityViewController`, handed the same items as on macOS once the files were
+checked, dismissed when its window closes while it is up; it shows no title. A link goes to
+`UIApplication` `openURL:options:completionHandler:` as written, and a completion that reports no
+application took it is `NoHandler`; `canOpenURL:` is not asked, since it answers only for schemes
+the application lists in `LSApplicationQueriesSchemes`. A user folder is the application
+container's (every iOS application is sandboxed): the home folder `NSHomeDirectory`, Documents the
+container's, and the folders a container does not hold none. The system's name is the device's
+(`UIDevice` `systemName`: iOS, or iPadOS on an iPad).
 
 ## Linux (`portal`)
 
@@ -402,15 +492,16 @@ public share. **The system information** is the system properties' release and A
 
 - A pick is a `PickedFile`, not a path, because not every system answers one; `PickedFile::form`
   says which it is (`PickedForm`). A desktop dialog answers where the file is (`Path`); a browser
-  answers a file a page may read but never a path, and Android's picker a content URI, which the
-  pick carries as its name and contents (`Contents`), read when the dialog answers (the checks
-  such a host makes are one set of rules, `dialog::handed_over`); a save handed to the browser as a download
+  answers a file a page may read but never a path, iOS a document the application may reach only
+  while it holds the access its picker granted, and Android's picker a content URI, so there a
+  pick carries its name and contents (`Contents`), read when the dialog answers (the checks such a
+  host makes are one set of rules, `dialog::handed_over`); a save handed to the browser as a download
   is `Download`, whose place and fate the browser does not report (it may be cancelled, blocked or
   renamed), so it carries the name it was offered under and no contents. Reading is bounded by the
   request (`OpenRequest::max_bytes`, by default `TransferLimits`' default, a drop's bound): the
   picks' declared sizes are checked before a byte is read and the bytes read are counted again,
-  and more is `DialogError::TooLarge`. Each file is copied once, from the browser's buffer into the
-  pick's own.
+  and more is `DialogError::TooLarge`. Each file is copied once, from the browser's buffer or the
+  document into the pick's own.
 - Every pick is held to the request's filters, and one that matches none refuses the whole answer
   with `DialogError::NotInFilter`: the answer is what the user chose, and it is not what the
   request asked for. A pick's name is the handle's to check, for every backend (`FileDialogs::open`):
@@ -419,15 +510,18 @@ public share. **The system information** is the system properties' release and A
   offers every file beside them). The handle cannot tell a file's type, so it checks a request
   whose filters name extensions only, and a backend that mapped a MIME pattern judges the pick by
   its type (`FileFilter::matches` with the browser's type on the web and the provider's on Android,
-  type conformance on macOS).
+  type conformance on macOS and iOS). An iOS or Android pick is judged before it is read, so one
+  the filters do not mean is never read.
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
-  the system gives a page no file to write later. The handle writes them to a path the user
-  chose on a thread of its own, into a new file beside it that is synced and renamed over it, so a
+  the system hands over no file to write later (a page, iOS). The handle writes them to a path the
+  user chose on a thread of its own, into a new file beside it that is synced and renamed over it, so a
   failed write leaves the chosen file as it was, and answers once they are written (a failed write
   answers the system's code); a backend that hands over no path writes them itself and answers the
   file it wrote. Once the user has chosen, the write completes even if the caller let the dialog
-  go, on every host. A save without contents answers where to save, and on the web and on Android,
-  which have no path to answer, is refused with `NotOnThisPlatform`.
+  go, on every host. A save without contents answers where to save, and on the web, iOS and
+  Android, which have no path to answer, is refused with `NotOnThisPlatform`. Access to a pick
+  that outlasts the process (a security-scoped bookmark on macOS and iOS, a persisted URI grant on
+  Android) is not built: [`docs/gaps.md`](../../docs/gaps.md).
 
 ## The web providers (`web`)
 
@@ -518,8 +612,10 @@ public share. **The system information** is the system properties' release and A
   `win32::dialogs::tests` run the dialog thread and its dismissal window with a stand-in dialog.
 - `tests/portal.rs` and `tests/portal_services.rs` (Linux): the portal providers against a
   stand-in portal on a private bus.
-- `macos::*::tests` (every host): each macOS provider's rules as a model, with the system's answers
-  as inputs and `testing::owner::TestOwner`'s turns; the AppKit calls compile only for macOS.
+- `macos::*::tests`, `ios::*::tests` and `apple::*::tests` (every host): each macOS and iOS
+  provider's rules as a model, with the system's answers
+  as inputs and `testing::owner::TestOwner`'s turns; the AppKit calls compile only for macOS, the
+  UIKit calls only for iOS.
 - `android::*::tests` (every host): each Android provider's rules, and in `android::documents::tests`
   the file dialogs from a request to its answer over the kit's stand-in Activity and picker
   (`testing::android`): the Activity's refusals, a dialog let go, a save that completes, an earlier

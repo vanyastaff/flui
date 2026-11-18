@@ -1,15 +1,17 @@
-//! Typography types for text rendering and styling.
-//!
-//! This module provides comprehensive types for text styling, alignment,
-//! decoration, metrics, and spans.
+//! Typography values: text styles, alignment, baselines, decoration, metrics
+//! and the inline span tree a `TextPainter` lays out.
 
-pub mod text_alignment;
-pub mod text_decoration;
-pub mod text_metrics;
-pub mod text_spans;
-pub mod text_style;
+mod font_settings;
+mod text_alignment;
+mod text_baseline;
+mod text_decoration;
+mod text_metrics;
+mod text_spans;
+mod text_style;
 
+pub use font_settings::*;
 pub use text_alignment::*;
+pub use text_baseline::*;
 pub use text_decoration::*;
 pub use text_metrics::*;
 pub use text_spans::*;

@@ -6,9 +6,9 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use flui_animation::{ConstantAnimation, MotionOverride, Vsync};
+use flui_foundation::TextDirection;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
-use flui_painting::{DrawOp, PaintStyle};
+use flui_painting::{DrawOp, paint::PaintStyle};
 use flui_rendering::layer::Layer;
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::environment::VsyncScope;

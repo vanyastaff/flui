@@ -10,7 +10,7 @@ use crate::{command_ir::spans_within, replay::clip::MaskFootprint};
 struct QuadReplayState {
     scissor: Option<(u32, u32, u32, u32)>,
     secondary: Option<u8>,
-    gradient_pipeline: Option<(GradientKind, flui_painting::BlendMode)>,
+    gradient_pipeline: Option<(GradientKind, flui_painting::paint::BlendMode)>,
     vertex_slot: Option<usize>,
     /// Slot 0 and the index buffer hold a gradient mesh, not the unit quad.
     mesh_bound: bool,

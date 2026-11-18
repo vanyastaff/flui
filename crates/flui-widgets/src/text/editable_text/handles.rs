@@ -13,6 +13,7 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable};
@@ -20,7 +21,7 @@ use flui_interaction::HapticsHandle;
 use flui_interaction::{
     GestureEndReason, GestureRecognizer, LongPressGestureRecognizer, PointerKindSet,
 };
-use flui_painting::typography::{TextDirection, TextPosition};
+use flui_painting::typography::TextPosition;
 use flui_platform::TargetPlatform;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;

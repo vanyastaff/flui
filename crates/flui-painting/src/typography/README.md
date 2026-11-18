@@ -9,13 +9,16 @@ font faces in [`fonts`](../fonts.rs).
 
 | Module | Types |
 |--------|-------|
-| `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle`, `FontFeature`, `FontVariation` |
+| `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle` |
+| `font_settings` | `FontFeature`, `FontVariation`, `OpenTypeTag` |
 | `text_spans` | `InlineSpan`, `TextSpan`, `TextLink`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment` |
-| `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextDirection`, `TextAffinity` |
+| `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextAffinity` |
+| `text_baseline` | `TextBaseline` |
 | `text_decoration` | `TextDecoration`, `TextDecorationLines`, `TextDecorationStyle`, `DecorationThickness`, `TextOverflow`, `TextWidthBasis`, `TextHeightBehavior`, `TextLeadingDistribution` |
 | `text_metrics` | `TextPosition`, `TextRange`, `TextBox`, `GlyphInfo`, `LineMetrics` |
 
-Every item is re-exported at `flui_painting::typography`.
+The files are private: every item has the one path `flui_painting::typography::<Item>`. Text
+direction is `flui_foundation::TextDirection`.
 
 ## Styling text
 
@@ -42,9 +45,17 @@ a field shaping does not read (background, shadows, decoration) differs.
 
 ## Font weights
 
-`FontWeight::W100` through `FontWeight::W900`, with `FontWeight::NORMAL` (`W400`) and
-`FontWeight::BOLD` (`W700`). `FontWeight::from_css` maps a numeric CSS weight to the nearest
-variant; `value()` returns it back.
+`FontWeight` is any CSS weight from 1 to 1000 (`FontWeight::try_new`), with `FontWeight::W100`
+through `FontWeight::W900`, `NORMAL` (`W400`) and `BOLD` (`W700`) naming the standard steps. A
+static font answers with its nearest face; a variable font draws the weight itself, so an
+animated weight passes through every weight between its ends.
+
+## OpenType settings
+
+`FontFeature` switches a feature and `FontVariation` places a variable-font axis, each named by
+an `OpenTypeTag`: four printable ASCII bytes, checked when the tag is built
+(`OpenTypeTag::new(*b"smcp")`, or `OpenTypeTag::try_new` for text), so a setting the shaper
+would refuse never reaches it.
 
 ## Registering fonts
 
@@ -55,7 +66,7 @@ its text out again on its next frame:
 
 ```rust
 let bytes = std::fs::read("assets/fonts/MyFont.ttf")?;
-flui::register_font(&bytes)?; // FontRegistrationError if no face parses
+flui::register_font(bytes)?; // FontRegistrationError if no face parses
 ```
 
 Below the app, `FontCollection::register_font` is the same door for a collection a caller built

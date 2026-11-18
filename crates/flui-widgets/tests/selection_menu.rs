@@ -10,9 +10,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_interaction::focus::FocusNode;
-use flui_painting::typography::{TextDirection, TextStyle};
+use flui_painting::typography::TextStyle;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;

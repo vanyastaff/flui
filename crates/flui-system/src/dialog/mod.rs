@@ -13,7 +13,7 @@
 //! the [`DialogHold`] its backend gave for it, and frees the window for the
 //! next one.
 
-#[cfg(any(test, target_arch = "wasm32", target_os = "android"))]
+#[cfg(any(test, target_arch = "wasm32", target_os = "android", target_os = "ios"))]
 pub(crate) mod handed_over;
 mod message;
 mod request;
@@ -39,9 +39,10 @@ pub use request::{
     FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
     SaveLocation, SaveRequest,
 };
-// The macOS panel's delegate holds each item it shows to the same name rule.
-#[cfg(any(target_os = "macos", test))]
-pub(crate) use request::name_ends_in;
+// What a provider that names a save's file itself, or hands over a pick's
+// contents, decides the same way on the web, on iOS and on Android.
+#[cfg(any(target_arch = "wasm32", target_os = "ios", test))]
+pub(crate) use handed_over::{admit_read, save_file_name};
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
@@ -92,7 +93,7 @@ pub enum DialogError {
     NotInFilter,
     /// The picks hold more than the request's
     /// [`max_bytes`](OpenRequest::max_bytes), on a system that hands over a
-    /// pick's contents (a browser). Nothing was read past the check.
+    /// pick's contents (a browser, iOS). Nothing was read past the check.
     #[error("the picks hold {actual} bytes, more than the {limit} the request reads")]
     TooLarge {
         /// The picks' size, as the system declared it or as far as it was
@@ -454,7 +455,8 @@ impl FileDialogs {
     /// answers [`SystemFailure::MalformedAnswer`].
     ///
     /// A request that carries [`contents`](SaveRequest::contents) answers
-    /// once they are written: a backend that hands over no path (a browser)
+    /// once they are written: a backend that hands over no path (a browser,
+    /// iOS's document picker)
     /// writes them itself and answers the file it wrote; to a path the user
     /// chose, the handle writes them on a thread of its own, since no file
     /// system call runs on the owner thread (ADR-0360 §2), and a failed
@@ -505,7 +507,7 @@ impl FileDialogs {
                     Some(path) => {
                         write_file(&completions, path.to_path_buf(), contents, location, caller);
                     }
-                    // The backend wrote the contents itself (a browser).
+                    // The backend wrote the contents itself (a browser, iOS).
                     None => {
                         // A retired owner has nobody left to answer.
                         let _ = caller.resolve(Ok(Some(location)));

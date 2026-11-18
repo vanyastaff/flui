@@ -60,7 +60,7 @@ use crate::scroll::ScrollView;
 use crate::{
     AnimatedBuilder, DecoratedBox, DefaultFocusRingStyle, Opacity, PhysicalModel, Transform,
 };
-use flui_painting::typography::TextDirection;
+use flui_foundation::TextDirection;
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::keyboard::NamedKey;
 use flui_rendering::hit_testing::HitTestBehavior;

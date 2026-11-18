@@ -7,10 +7,9 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
-use flui_painting::typography::{
-    TextAffinity, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
-};
+use flui_painting::typography::{TextAffinity, TextAlign, TextPosition, TextSpan, TextStyle};
 use flui_painting::{Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter};
 
 const SIZE: f64 = 32.0;

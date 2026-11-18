@@ -7,9 +7,10 @@
 //! recognises the screen again only through the object it holds.
 //!
 //! The pure half, which every host compiles and tests, is how a screen is keyed
-//! and placed ([`screen`]) and the iOS display link's frame-rate rules
+//! and placed ([`screen`]), the period a macOS screen paces at
+//! (`screen_cadence`) and the iOS display link's frame-rate rules
 //! (`link_rate`). A macOS mode's rate and a link's tick become a period by
-//! the one constructor in `display::source`.
+//! the contract's constructors.
 
 #[cfg(target_os = "ios")]
 pub(crate) mod ios;
@@ -507,6 +508,384 @@ pub(crate) mod screen {
             assert_eq!(ledger.number_of(&refused), None);
             // A screen already held still resolves after the counter is used up.
             assert_eq!(ledger.number_of(&last), Some(u64::MAX));
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[forbid(unsafe_code)]
+pub(crate) mod screen_cadence {
+    //! The refresh period a macOS screen paces at.
+    //!
+    //! Three reports decide it. The rate of the display's current mode
+    //! (`CGDisplayModeGetRefreshRate`) is the period where it names a
+    //! cadence. CoreGraphics reports 0 Hz for a mode it cannot describe,
+    //! which some built-in panels are in; the nominal period of a display
+    //! link on that display
+    //! (`CVDisplayLinkGetNominalOutputVideoRefreshPeriod`) stands in for it.
+    //! And under Low Power Mode a built-in panel refreshes no faster than
+    //! 60 Hz while its mode and its display link still say 120, so its period
+    //! is held at 1/60 s or longer: frames produced at the mode's rate would
+    //! only queue behind the panel.
+
+    use flui_platform::RefreshPeriod;
+
+    use crate::version::gate::{Gate, apple::MacOSVersion};
+
+    /// The rate Low Power Mode holds a built-in panel to, in hertz.
+    const LOW_POWER_HERTZ: f64 = 60.0;
+
+    /// Whether a display is the machine's own panel (`CGDisplayIsBuiltin`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Panel {
+        /// The panel built into the machine.
+        BuiltIn,
+        /// A monitor attached to it.
+        External,
+    }
+
+    /// Whether the system is saving power
+    /// (`NSProcessInfo.isLowPowerModeEnabled`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum PowerMode {
+        /// Low Power Mode is off, or the system has none.
+        Normal,
+        /// Low Power Mode is on.
+        LowPower,
+    }
+
+    /// `NSProcessInfo.isLowPowerModeEnabled` and
+    /// `NSProcessInfoPowerStateDidChangeNotification` (macOS 12). Before them
+    /// the system has no Low Power Mode, and a screen paces at what its mode
+    /// says.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ProcessPowerState;
+
+    impl Gate for ProcessPowerState {
+        type Version = MacOSVersion;
+        const SINCE: u64 = MacOSVersion::new(12, 0, 0).rank();
+    }
+
+    /// A `CVTime`, laid out as CoreVideo returns it: `time_value / time_scale`
+    /// seconds.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct CvTime {
+        pub(crate) time_value: i64,
+        pub(crate) time_scale: i32,
+        pub(crate) flags: i32,
+    }
+
+    impl CvTime {
+        /// `kCVTimeIsIndefinite`: CoreVideo does not know the time.
+        const INDEFINITE: i32 = 1;
+
+        /// The refresh period this time is, read as the time between two
+        /// refreshes; `None` for an indefinite time, a value or scale that is
+        /// zero or negative, and a period no [`RefreshPeriod`] holds.
+        fn refresh_period(self) -> Option<RefreshPeriod> {
+            if self.flags & Self::INDEFINITE != 0 {
+                return None;
+            }
+            // `time_value / time_scale` seconds between refreshes is
+            // `time_scale / time_value` hertz, which the contract's rational
+            // constructor divides in integers (1001/60000 s stays exact).
+            RefreshPeriod::from_ratio(
+                u32::try_from(self.time_scale).ok()?,
+                u32::try_from(self.time_value).ok()?,
+            )
+            .ok()
+        }
+    }
+
+    /// The refresh period of a screen on a `panel` whose current mode reports
+    /// `mode_hertz` (`None` for a display with no mode to read), under
+    /// `power`.
+    ///
+    /// The mode's rate where it names a cadence; otherwise `link_nominal`,
+    /// the nominal period of a display link on the display, which is asked
+    /// only then; `None` when neither names one. A built-in panel under Low
+    /// Power Mode has the period of 60 Hz when its own is shorter, and keeps
+    /// a longer one.
+    pub(crate) fn refresh_period(
+        mode_hertz: Option<f64>,
+        link_nominal: impl FnOnce() -> Option<CvTime>,
+        panel: Panel,
+        power: PowerMode,
+    ) -> Option<RefreshPeriod> {
+        let reported = mode_hertz
+            .and_then(|hertz| RefreshPeriod::from_hz(hertz).ok())
+            .or_else(|| link_nominal()?.refresh_period())?;
+        Some(match (panel, power) {
+            (Panel::BuiltIn, PowerMode::LowPower) => {
+                // By the constructor a mode's rate takes, so a panel whose
+                // mode says 60 Hz keeps its period to the nanosecond.
+                let low_power_period = RefreshPeriod::from_hz(LOW_POWER_HERTZ)
+                    .expect("BUG: 60 Hz is a cadence a RefreshPeriod holds");
+                reported.max(low_power_period)
+            }
+            (Panel::BuiltIn, PowerMode::Normal) | (Panel::External, _) => reported,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_platform::RefreshPeriod;
+
+        use super::{CvTime, Panel, PowerMode, ProcessPowerState, refresh_period};
+        use crate::version::gate::apple::MacOSVersion;
+
+        fn hertz(rate: f64) -> RefreshPeriod {
+            RefreshPeriod::from_hz(rate).expect("BUG: a test rate describes a cadence")
+        }
+
+        const fn link(time_value: i64, time_scale: i32) -> CvTime {
+            CvTime {
+                time_value,
+                time_scale,
+                flags: 0,
+            }
+        }
+
+        /// Each row: the mode's rate, the display link's nominal period, the
+        /// panel, the power mode, and the period the screen paces at.
+        #[test]
+        fn a_macos_screen_paces_at_its_mode_its_link_or_the_low_power_rate() {
+            use Panel::{BuiltIn, External};
+            use PowerMode::{LowPower, Normal};
+
+            let rows = [
+                (
+                    "a ProMotion panel",
+                    Some(120.0),
+                    None,
+                    BuiltIn,
+                    Normal,
+                    Some(hertz(120.0)),
+                ),
+                (
+                    "a ProMotion panel under Low Power Mode is held at 60 Hz",
+                    Some(120.0),
+                    None,
+                    BuiltIn,
+                    LowPower,
+                    Some(hertz(60.0)),
+                ),
+                (
+                    "an external monitor is not held under Low Power Mode",
+                    Some(120.0),
+                    None,
+                    External,
+                    LowPower,
+                    Some(hertz(120.0)),
+                ),
+                (
+                    "a 60 Hz panel under Low Power Mode keeps its period",
+                    Some(60.0),
+                    None,
+                    BuiltIn,
+                    LowPower,
+                    Some(hertz(60.0)),
+                ),
+                (
+                    "a panel slower than 60 Hz under Low Power Mode keeps its period",
+                    Some(48.0),
+                    None,
+                    BuiltIn,
+                    LowPower,
+                    Some(hertz(48.0)),
+                ),
+                (
+                    "a mode that reports 0 Hz takes the link's nominal period",
+                    Some(0.0),
+                    Some(link(1001, 60_000)),
+                    External,
+                    Normal,
+                    RefreshPeriod::from_ratio(60_000, 1001).ok(),
+                ),
+                (
+                    "a display with no mode takes the link's nominal period",
+                    None,
+                    Some(link(1, 100)),
+                    External,
+                    Normal,
+                    RefreshPeriod::from_ratio(100, 1).ok(),
+                ),
+                (
+                    "a 0 Hz built-in panel under Low Power Mode is held at 60 Hz",
+                    Some(0.0),
+                    Some(link(1, 120)),
+                    BuiltIn,
+                    LowPower,
+                    Some(hertz(60.0)),
+                ),
+                (
+                    "a mode that reports 0 Hz and no link has no period",
+                    Some(0.0),
+                    None,
+                    BuiltIn,
+                    Normal,
+                    None,
+                ),
+                (
+                    "no period is not held at 60 Hz either",
+                    Some(0.0),
+                    None,
+                    BuiltIn,
+                    LowPower,
+                    None,
+                ),
+                (
+                    "an indefinite nominal period is none",
+                    Some(0.0),
+                    Some(CvTime {
+                        time_value: 1,
+                        time_scale: 60,
+                        flags: 1,
+                    }),
+                    External,
+                    Normal,
+                    None,
+                ),
+                (
+                    "a nominal period with no scale is none",
+                    Some(0.0),
+                    Some(link(1, 0)),
+                    External,
+                    Normal,
+                    None,
+                ),
+                (
+                    "a nominal period of zero is none",
+                    Some(0.0),
+                    Some(link(0, 60)),
+                    External,
+                    Normal,
+                    None,
+                ),
+                (
+                    "a negative nominal period is none",
+                    Some(0.0),
+                    Some(link(-1, 60)),
+                    External,
+                    Normal,
+                    None,
+                ),
+                (
+                    "a nominal period longer than a second is none",
+                    Some(0.0),
+                    Some(link(i64::MAX, 1)),
+                    External,
+                    Normal,
+                    None,
+                ),
+                (
+                    "a rate that is no number takes the link's nominal period",
+                    Some(f64::NAN),
+                    Some(link(1, 60)),
+                    External,
+                    Normal,
+                    RefreshPeriod::from_ratio(60, 1).ok(),
+                ),
+            ];
+            for (case, mode_hertz, nominal, panel, power, expected) in rows {
+                assert_eq!(
+                    refresh_period(mode_hertz, || nominal, panel, power),
+                    expected,
+                    "{case}"
+                );
+            }
+        }
+
+        /// A display link is made only for a mode that names no cadence.
+        #[test]
+        fn a_mode_with_a_rate_asks_no_display_link() {
+            let mut asked = false;
+            let period = refresh_period(
+                Some(120.0),
+                || {
+                    asked = true;
+                    Some(link(1, 60))
+                },
+                Panel::External,
+                PowerMode::Normal,
+            );
+            assert_eq!(period, Some(hertz(120.0)));
+            assert!(!asked, "the mode named its rate");
+        }
+
+        /// What the power-state notification does to the display source
+        /// (mark it stale) reaches a consumer as a new revision when Low
+        /// Power Mode changed a period, and as none when it changed nothing;
+        /// a source nothing marked stale is not read again.
+        #[test]
+        fn a_power_mode_change_is_a_new_display_revision_only_where_the_period_changed() {
+            use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+            use flui_platform::{DisplayDescription, DisplayKey};
+
+            use crate::display::source::DisplaySource;
+
+            for (panel, period_under_low_power, changes) in [
+                (Panel::BuiltIn, hertz(60.0), true),
+                (Panel::External, hertz(120.0), false),
+            ] {
+                let source = DisplaySource::new();
+                let id = source
+                    .mint(&DisplayKey::MacosUuid([7; 16]))
+                    .expect("ids are not exhausted");
+                let read = |power| {
+                    source
+                        .snapshot_with(|| {
+                            let extent = Bounds::new(Point::new(0, 0), Size::new(3024, 1964));
+                            let mut display = DisplayDescription::from_device(
+                                id,
+                                "panel",
+                                extent,
+                                extent,
+                                DevicePixelRatio::try_new(2.0).expect("a positive ratio"),
+                            )
+                            .expect("a display with an area");
+                            display.refresh_period =
+                                refresh_period(Some(120.0), || None, panel, power);
+                            Ok(vec![display])
+                        })
+                        .expect("revisions are not exhausted")
+                };
+                let period_of = |snapshot: &flui_platform::DisplaySnapshot| {
+                    snapshot.get(id).and_then(|display| display.refresh_period)
+                };
+                let normal = read(PowerMode::Normal);
+                assert_eq!(period_of(&normal), Some(hertz(120.0)), "{panel:?}");
+                let unmarked = read(PowerMode::LowPower);
+                assert_eq!(
+                    unmarked.revision(),
+                    normal.revision(),
+                    "{panel:?}: nothing marked the source stale"
+                );
+                source.invalidate();
+                let low_power = read(PowerMode::LowPower);
+                assert_eq!(
+                    period_of(&low_power),
+                    Some(period_under_low_power),
+                    "{panel:?}"
+                );
+                assert_eq!(
+                    low_power.revision() != normal.revision(),
+                    changes,
+                    "{panel:?}: a revision for a changed period, none for the same one"
+                );
+            }
+        }
+
+        #[test]
+        fn process_power_state_gate_table() {
+            let failures = crate::version::gate::testing::row::<ProcessPowerState>(
+                "ProcessPowerState",
+                MacOSVersion::new(11, 99, 99),
+                MacOSVersion::new(12, 0, 0),
+                MacOSVersion::UNKNOWN,
+            );
+            assert!(failures.is_empty(), "{failures:#?}");
         }
     }
 }

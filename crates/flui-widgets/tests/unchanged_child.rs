@@ -8,7 +8,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_painting::typography::TextDirection;
+use flui_foundation::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{Directionality, SizedBox};

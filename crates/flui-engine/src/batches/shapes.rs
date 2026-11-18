@@ -1,7 +1,7 @@
 //! Primitive shape record methods: rect, rrect, circle, oval, drrect, arc.
 
 use flui_foundation::geometry::{Point, RRect, Rect};
-use flui_painting::{BlendMode, Paint, PaintStyle};
+use flui_painting::{paint::BlendMode, paint::Paint, paint::PaintStyle};
 
 use super::{
     super::{

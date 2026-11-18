@@ -1,9 +1,10 @@
 //! The rules of a pick its system hands over without a path: a browser's
-//! file, an Android document. The provider reads the pick's contents itself,
-//! so the checks a path would leave to the application are made here, one
-//! rule for every such host: the picks are held to the request's filters by
-//! name and type, their size is bounded before a byte is read and again as
-//! the bytes arrive, and a save's file is named after the first filter.
+//! file, an Android document, an iOS document read under its scoped access.
+//! The provider reads the pick's contents itself, so the checks a path would
+//! leave to the application are made here, one rule for every such host: the
+//! picks are held to the request's filters by name and type, their size is
+//! bounded before a byte is read and again as the bytes arrive, and a save's
+//! file is named after the first filter.
 
 use super::{DialogError, FileFilter};
 
@@ -11,6 +12,7 @@ use super::{DialogError, FileFilter};
 /// the request's `filters`: every pick must match one where there are any
 /// ([`FileFilter::matches`]), since such a system's picker only suggests
 /// them (ADR-0360 §4); [`DialogError::NotInFilter`] otherwise.
+#[cfg(any(test, target_arch = "wasm32", target_os = "android"))]
 pub(crate) fn admit_picks<'a>(
     picks: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     filters: &[FileFilter],
@@ -32,6 +34,7 @@ pub(crate) fn admit_picks<'a>(
 /// them, refused past `limit` before anything is read. A size declared
 /// wrongly, or not at all (counted as nothing), is caught by the bytes
 /// actually read ([`admit_read`]).
+#[cfg(any(test, target_arch = "wasm32", target_os = "android"))]
 pub(crate) fn admit_declared(
     sizes: impl IntoIterator<Item = u64>,
     limit: u64,
@@ -40,7 +43,11 @@ pub(crate) fn admit_declared(
     admit_read(total, limit).map(|()| total)
 }
 
-/// Refuse `read` bytes past `limit` with [`DialogError::TooLarge`].
+/// Refuse `read` bytes of picks past `limit`, an open's
+/// [`max_bytes`](super::OpenRequest::max_bytes), with
+/// [`DialogError::TooLarge`]: what a provider that hands over a pick's
+/// contents checks before it reads, by the sizes the system declares, and
+/// again by the bytes it read.
 pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), DialogError> {
     if read > limit {
         Err(DialogError::TooLarge {
@@ -50,6 +57,20 @@ pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), DialogError> {
     } else {
         Ok(())
     }
+}
+
+/// The name a save's file is given where the provider names it from the
+/// request rather than from what the user typed into a dialog (a browser's
+/// save picker or download, an export to iOS's Files): `suggested`, or
+/// `unnamed` when there is none, [named after the first
+/// filter](named_after_first_filter).
+#[cfg(any(test, target_arch = "wasm32", target_os = "ios"))]
+pub(crate) fn save_file_name(
+    suggested: Option<&str>,
+    filters: &[FileFilter],
+    unnamed: &str,
+) -> String {
+    named_after_first_filter(suggested.unwrap_or(unnamed), filters)
 }
 
 /// `name` with the first filter's first extension added when it has none,

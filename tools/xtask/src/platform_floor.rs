@@ -23,8 +23,8 @@ pub(crate) const SOURCE: &str = "platform-support.toml";
 const PLATFORM_OUTPUT: &str = "crates/flui-native/src/version/floor.rs";
 /// The Rust source holding the floors `flui-cli` packages with.
 const CLI_OUTPUT: &str = "crates/flui-cli/src/build/platform_floor.rs";
-/// The Rust source holding the macOS floor `flui-system`'s gates compile against.
-const SYSTEM_OUTPUT: &str = "crates/flui-system/src/macos/floor.rs";
+/// The Rust source holding the Apple floors `flui-system`'s gates compile against.
+const SYSTEM_OUTPUT: &str = "crates/flui-system/src/apple/floor.rs";
 /// The version map.
 const MAP_OUTPUT: &str = "docs/version-map.md";
 /// The Gradle properties `flui platform add android` scaffolds; the scaffolded
@@ -223,22 +223,27 @@ fn generate(floors: &Floors) -> Files {
     ]
 }
 
-/// The macOS floor of `flui-system`, a capability crate that cannot reach `flui-native`'s:
-/// its module is built for macOS and for tests only.
+/// The Apple floors of `flui-system`, a capability crate that cannot reach `flui-native`'s:
+/// each is built for its system and for the tests of the module that holds the gates.
 fn system_source(floors: &Floors) -> String {
+    let (major, minor, patch) = dotted(&floors.ios.version);
     let (arm_major, arm_minor, arm_patch) = dotted(&floors.macos.aarch64);
     let (intel_major, intel_minor, intel_patch) = dotted(&floors.macos.x86_64);
     format!(
         "{GENERATED_HEADER}\n\
-         //! The macOS floors this crate compiles in (ADR-0244); `macos::version` refuses a gate at\n\
-         //! or below them.\n\
+         //! The Apple floors this crate compiles in (ADR-0244); `apple::version` refuses a gate at\n\
+         //! or below its system's.\n\
+         \n\
+         /// The lowest iOS version FLUI supports, as (major, minor, patch).\n\
+         #[cfg(any(target_os = \"ios\", test))]\n\
+         pub(crate) const IOS_FLOOR: (u32, u32, u32) = ({major}, {minor}, {patch});\n\
          \n\
          /// The lowest macOS version FLUI supports on arm64, as (major, minor, patch).\n\
-         #[cfg(target_arch = \"aarch64\")]\n\
+         #[cfg(all(any(target_os = \"macos\", test), target_arch = \"aarch64\"))]\n\
          pub(crate) const MACOS_FLOOR: (u32, u32, u32) = ({arm_major}, {arm_minor}, {arm_patch});\n\
          \n\
          /// The lowest macOS version FLUI supports on x86_64, as (major, minor, patch).\n\
-         #[cfg(not(target_arch = \"aarch64\"))]\n\
+         #[cfg(all(any(target_os = \"macos\", test), not(target_arch = \"aarch64\")))]\n\
          pub(crate) const MACOS_FLOOR: (u32, u32, u32) = ({intel_major}, {intel_minor}, {intel_patch});\n"
     )
 }
@@ -497,7 +502,7 @@ mod tests {
 
     fn a_planted_drift_in_each_generated_file_is_reported() {
         // Each file's plant changes a floor it states: the Android API level, or the
-        // macOS floor in the file that states only that one.
+        // arm64 macOS floor in the file that states the Apple floors alone.
         for (path, floor, drifted) in [
             (PLATFORM_OUTPUT, "23", "24"),
             (CLI_OUTPUT, "23", "24"),

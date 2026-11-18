@@ -18,13 +18,13 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::LocalPayloadTarget;
 use flui_interaction::drag::{
     DragAndDrop, DragIdentity, DragPoint, DragView, DropReceiver, DropReceiverSlot, SpringLoading,
 };
 use flui_objects::RenderMetaData;
-use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::{DropFeedback, TransferActions};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;

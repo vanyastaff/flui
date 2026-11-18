@@ -830,7 +830,7 @@ impl CustomPainter for IndicationPainter {
             return;
         }
         canvas.save();
-        canvas.clip_rrect_ext(
+        canvas.clip_rrect_with(
             self.shape.to_rrect(size),
             ClipOp::Intersect,
             Clip::AntiAlias,

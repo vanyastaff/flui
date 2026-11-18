@@ -3,10 +3,10 @@
 
 use std::fmt;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_painting::paint::Clip;
-use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::view::{
@@ -382,7 +382,7 @@ generic_render_view_element!(ShrinkWrappingViewport);
 #[cfg(test)]
 mod tests {
     use super::cross_axis_direction;
-    use flui_painting::typography::TextDirection;
+    use flui_foundation::TextDirection;
     use flui_rendering::constraints::AxisDirection;
 
     /// The cross-axis direction matrix: a horizontal scroll axis lays its cross

@@ -1,7 +1,7 @@
 //! [`GlobalWidgetsLocalizations`] — direction-aware widgets localizations
 //! for any locale.
 
-use flui_painting::typography::TextDirection;
+use flui_foundation::TextDirection;
 use flui_platform::Locale;
 
 use super::{

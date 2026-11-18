@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_painting::parley_text::ParagraphSpec;
-use flui_painting::typography::TextDirection;
 use flui_painting::{FontCollection, TextContext};
 
 use wasm_bindgen::prelude::*;
@@ -342,7 +342,7 @@ fn draw_all_demos(
 // ============================================================
 
 use flui_foundation::geometry::{Offset, Point, RRect, Rect};
-use flui_painting::paint::{Paint, Shader, path::Path};
+use flui_painting::paint::{Paint, Path, Shader};
 use flui_painting::styling::Color;
 
 /// Draws `label` with its top-left at `at`, shaped on `text` in one style.

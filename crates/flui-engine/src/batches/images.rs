@@ -10,7 +10,8 @@ use super::{
 };
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::{
-    BlendMode, Paint,
+    paint::BlendMode,
+    paint::Paint,
     paint::{ColorFilter, Image, ImageRepeat},
     styling::Color,
 };

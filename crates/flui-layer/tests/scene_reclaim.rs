@@ -14,7 +14,7 @@ use flui_layer::{
     Layer, Placement, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
 };
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, DisplayList, Paint};
+use flui_painting::{Canvas, DisplayList, paint::Paint};
 
 const SURFACE: SurfaceKey = SurfaceKey {
     size: (800, 600),

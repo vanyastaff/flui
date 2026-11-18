@@ -5,7 +5,7 @@
 //! columns.
 //!
 //! [`TableBorder::border_radius`] rounds the outer border only when it is
-//! uniform; see `flui_painting::paint_table_border`.
+//! uniform; see `TableBorder::paint`.
 
 use crate::styling::{BorderRadius, BorderRadiusExt, BorderSide};
 
@@ -130,9 +130,9 @@ impl TableBorder {
 
     /// The outer four sides (`top`/`right`/`bottom`/`left`) as a plain
     /// [`Border`](crate::styling::Border), for reuse by the shared
-    /// outer-border paint routine (`flui_painting::paint_table_border`
+    /// outer-border paint routine (`TableBorder::paint`
     /// delegates the outer edge to the same uniform/non-uniform logic
-    /// `paint_box_decoration`'s border already uses).
+    /// `BoxDecoration::paint`'s border already uses).
     #[must_use]
     pub fn outer_border(&self) -> crate::styling::Border {
         crate::styling::Border {

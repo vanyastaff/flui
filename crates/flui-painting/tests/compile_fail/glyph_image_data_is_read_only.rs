@@ -1,4 +1,4 @@
-use flui_painting::{GlyphContent, GlyphImage};
+use flui_painting::glyphs::{GlyphContent, GlyphImage};
 
 fn main() {
     let mut image = GlyphImage::try_new(0, 0, 1, 1, GlyphContent::Mask, vec![255])

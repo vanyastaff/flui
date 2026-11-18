@@ -275,7 +275,7 @@ pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
 }
 
 pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     let alpha = |laid: &LaidOut| {
         laid.draw_ops()
             .into_iter()

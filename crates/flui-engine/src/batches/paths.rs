@@ -1,8 +1,8 @@
 //! Path, vertices, line, and shadow record methods: draw_path, draw_vertices, line, draw_shadow.
 
 use flui_foundation::geometry::{Offset, Point, Rect};
-use flui_painting::{BlendMode, Paint, PaintStyle};
-use flui_painting::{paint::path::Path, styling::Color};
+use flui_painting::{paint::BlendMode, paint::Paint, paint::PaintStyle};
+use flui_painting::{paint::Path, styling::Color};
 
 use super::{
     super::{

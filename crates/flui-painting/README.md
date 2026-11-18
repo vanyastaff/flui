@@ -4,7 +4,7 @@ Records 2D drawing into a `DisplayList` and shapes text with Parley.
 Nothing is rasterised here — `flui-engine` replays the list on the GPU.
 
 ```rust
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 use flui_foundation::geometry::Rect;
 use flui_painting::styling::Color;
 
@@ -28,8 +28,8 @@ let list = canvas.finish(); // Save, DrawRect, Restore
   the queries read one Parley layout, shaped through the UI runtime's
   `TextContext`. A face an app registers (`flui::register_font`, through the
   app's `FontCollection`) reaches all three alike.
-- `paint_box_decoration`, `paint_table_border` — the
-  decoration painters.
+- `BoxDecoration::paint` and `TableBorder::paint` (in `styling`): a
+  decoration value records itself into a canvas.
 
 The crate owns the paint, style and text values:
 
@@ -37,8 +37,11 @@ The crate owns the paint, style and text values:
   tight bounds), `Shader`, `BlendMode`, `Clip`, images and effects;
 - `styling` — `Color` (`Color::lerp` interpolates in premultiplied Oklab), borders,
   `BorderRadius`, `BoxDecoration`, gradients and shadows;
-- `typography` — `TextStyle`, `FontWeight`, spans, alignment and metrics;
-- at the root, `Alignment`, `BoxFit`, `BoxShape` and `TextBaseline`.
+- `typography` — `TextStyle`, `FontWeight`, `TextBaseline`, spans, alignment and metrics;
+- `glyphs` — the rasterizer seam the engine draws glyph runs through;
+- at the root, `Alignment`, `BoxFit`, `BoxShape` and `FittedSizes`.
+
+Each item has that one path; the files behind the modules are private.
 
 Geometry values (`Point`, `Offset`, `Size`, `Rect`, `RRect`, `Matrix4`) come
 from `flui_foundation::geometry`; lengths are `f64` logical pixels.

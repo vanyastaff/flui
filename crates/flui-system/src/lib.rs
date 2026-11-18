@@ -21,8 +21,14 @@
 //! An application registers [`SystemPlugin`]; a scenario registers
 //! `testing::ScriptedSystem` instead (feature `testing`).
 //!
-//! Windows provides every service, macOS every one but the jump list.
-//! Linux reaches the launcher, the file
+//! Windows provides every service, macOS every one but the jump list. iOS
+//! opens links, picks and exports documents, shows a message box and the
+//! share sheet, and names the application's folders and the system through
+//! UIKit and Foundation; it refuses what it has no form of (opening a file
+//! in a default application, revealing and trashing one, autostart, global
+//! shortcuts, the jump list) with `UnsupportedReason::NotOnThisPlatform`,
+//! and the launcher entry, whose form there is the icon's badge, with
+//! `NotYetOnThisHost`. Linux reaches the launcher, the file
 //! dialogs, autostart and the global shortcuts through the XDG desktop
 //! portal on the session bus, the launcher entry through its session-bus
 //! signal, and the user folders through the XDG user directories; it
@@ -43,13 +49,23 @@
 
 #[cfg(any(target_os = "android", test))]
 mod android;
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+mod apple;
 pub mod autostart;
 pub mod dialog;
+#[cfg(any(target_os = "ios", test))]
+mod ios;
 pub mod jump_list;
 #[cfg(any(target_os = "macos", test))]
 mod macos;
 pub mod os;
-#[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -68,9 +84,9 @@ use flui_platform::capability::{CapabilityRegistrar, Plugin};
 
 /// The system services' providers for the platform the application runs on:
 /// the Windows shell on Windows, AppKit and the system frameworks on macOS,
-/// the XDG desktop portal on Linux, the Activity's `Intent`s and document
-/// pickers on Android, the browser on the web, and a refusal for what a
-/// platform's provider does not have.
+/// UIKit and Foundation on iOS, the XDG desktop portal on Linux, the
+/// Activity's `Intent`s and document pickers on Android, the browser on the
+/// web, and a refusal for what a platform's provider does not have.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct SystemPlugin;
@@ -89,6 +105,8 @@ impl Plugin for SystemPlugin {
         win32::register(registrar);
         #[cfg(target_os = "macos")]
         macos::register(registrar);
+        #[cfg(target_os = "ios")]
+        ios::register(registrar);
         #[cfg(target_os = "linux")]
         portal::register(registrar, None, None);
         #[cfg(target_os = "android")]
@@ -123,7 +141,20 @@ mod refusals {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
+    /// iOS has no form of autostart, of a shortcut heard while another
+    /// application is in front or of a jump list. Its form of the launcher
+    /// entry, the count on the application's icon, needs the user's
+    /// permission for notifications, which no provider asks for yet.
+    #[cfg(target_os = "ios")]
+    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
+        let never = UnsupportedReason::NotOnThisPlatform;
+        refuse::<crate::autostart::AutostartCapability>(registrar, never);
+        refuse::<crate::shortcuts::GlobalShortcutCapability>(registrar, never);
+        refuse::<crate::jump_list::JumpListCapability>(registrar, never);
+        refuse::<crate::taskbar::TaskbarCapability>(registrar, UnsupportedReason::NotYetOnThisHost);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         let not_yet = UnsupportedReason::NotYetOnThisHost;
         // The portal's registration provides the rest on Linux, and refuses

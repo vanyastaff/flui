@@ -8,9 +8,11 @@ use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
 
 // A browser's file is handed over without a path: the picks' filter check
 // and the bound on what is read are the rules of every such host.
-use crate::dialog::handed_over::{admit_declared, named_after_first_filter};
-pub(crate) use crate::dialog::handed_over::{admit_picks, admit_read};
-use crate::dialog::{DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons};
+use crate::dialog::handed_over::admit_declared;
+pub(crate) use crate::dialog::handed_over::admit_picks;
+use crate::dialog::{
+    DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons, save_file_name,
+};
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
 /// The longest extension, with its leading `.`, the File System Access API
@@ -111,11 +113,10 @@ fn is_picker_extension(dotted: &str) -> bool {
 }
 
 /// The name a save's file is given: the suggested name, or
-/// [`UNNAMED_DOWNLOAD`], with the first filter's first extension added when
-/// the name has none, as a desktop save dialog names a typed file after the
-/// selected filter.
+/// [`UNNAMED_DOWNLOAD`], named after the first filter as
+/// `dialog::save_file_name` says.
 pub(crate) fn save_name(suggested: Option<&str>, filters: &[FileFilter]) -> String {
-    named_after_first_filter(suggested.unwrap_or(UNNAMED_DOWNLOAD), filters)
+    save_file_name(suggested, filters, UNNAMED_DOWNLOAD)
 }
 
 /// The type a download's blob carries: the first concrete MIME type of the
@@ -337,6 +338,7 @@ pub(crate) fn box_holds_escape(buttons: MessageButtons) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialog::handed_over::admit_read;
 
     #[test]
     fn a_share_rejection_is_not_reported_retryable_lasting_or_the_browsers_failure() {

@@ -10,11 +10,12 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_painting::testing::{
     collection_holds, host_chain_covers, host_covers, host_family_names, host_sans_serif_family,
 };
-use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 use flui_painting::{
     Canvas, DrawOp, FontCollection, HostFonts, ShapedParagraph, TextContext, TextPainter,
 };

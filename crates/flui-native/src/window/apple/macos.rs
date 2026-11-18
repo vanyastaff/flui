@@ -62,8 +62,9 @@ use flui_platform::{
 
 use crate::window::apple::geometry::{
     frame::{
-        cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
-        content_limits_of_constraints, desktop_point, position_on, top_left_of_frame,
+        ScreenSafeArea, cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point,
+        constraints_of_content_limits, content_limits_of_constraints, desktop_point, position_on,
+        safe_area_on_screen, top_left_of_frame,
     },
     mode::{
         ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WaitEndRead, WindowFlags,
@@ -726,6 +727,8 @@ impl MacOSWindow {
             owner_is_main,
         };
         ns_window.setContentView(Some(&content_view));
+        // The scale the window's metrics, and so its drawables, are sized by.
+        content_view::set_layer_contents_scale(&content_view, scale);
 
         // Made once the content view is installed: the bridge subclasses
         // it for VoiceOver, on the main thread, and the window's teardown
@@ -1496,6 +1499,17 @@ fn level_of(level: objc2_app_kit::NSWindowLevel) -> WindowLevel {
     }
 }
 
+/// The bands of `screen` its camera housing takes (`safeAreaInsets`), in
+/// points in from each edge; all zero on a screen that has none. The proof
+/// says the running AppKit answers the message.
+fn unsafe_edges_of(
+    screen: &NSScreen,
+    _: crate::version::gate::Since<ScreenSafeArea>,
+) -> flui_foundation::geometry::EdgeInsets {
+    let insets = screen.safeAreaInsets();
+    flui_foundation::geometry::EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left)
+}
+
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         self.id
@@ -2183,6 +2197,7 @@ impl MacOSWindow {
                 heading,
                 appkit_window_capabilities(self.presentation),
             );
+            let insets = self.insets_of_content(content);
             Sample::read(geometry, |state| {
                 let state = state
                     .with_mode(mode)
@@ -2205,9 +2220,8 @@ impl MacOSWindow {
                     )
                     .ok(),
                     brightness: appearance,
-                    // A desktop window has no safe area and AppKit never
-                    // suspends one.
-                    insets: flui_platform::WindowInsets::ZERO,
+                    insets,
+                    // AppKit never suspends a window.
                     execution: flui_platform::WindowExecutionState::Running,
                     // Covered or on another space.
                     occluded: !occlusion_visible,
@@ -2230,6 +2244,38 @@ impl MacOSWindow {
                 .onto(state)
             })
         }
+    }
+
+    /// The insets of a window whose content AppKit reports at `content`: the
+    /// part of it under the camera housing of the screen it is on
+    /// ([`safe_area_on_screen`]), which is its whole safe area; a Mac has no
+    /// soft keyboard and no gesture edges.
+    ///
+    /// Read from the screen at every sample, with the content rectangle it is
+    /// measured against: the window is sampled when it is resized or moved,
+    /// changes screen or backing scale, and ends a full-screen transition,
+    /// which are the changes that move it under the housing or out from under
+    /// it. No inset before macOS 12, which reports none, nor for a window on
+    /// no screen.
+    fn insets_of_content(&self, content: NSRect) -> flui_platform::WindowInsets {
+        let Some(reports_safe_area) = self
+            .displays
+            .get()
+            .and_then(|displays| displays.version().since::<ScreenSafeArea>())
+        else {
+            return flui_platform::WindowInsets::ZERO;
+        };
+        let Some(screen) = self.ns_window.screen() else {
+            return flui_platform::WindowInsets::ZERO;
+        };
+        let safe_area = safe_area_on_screen(
+            crate::owner::apple::macos::bounds_of(content),
+            crate::owner::apple::macos::bounds_of(screen.frame()),
+            unsafe_edges_of(&screen, reports_safe_area),
+        );
+        flui_platform::WindowInsets::ZERO
+            .try_with_safe_area(safe_area)
+            .expect("BUG: `safe_area_on_screen` answers lengths that are finite and not negative")
     }
 
     /// What AppKit says about the window's mode, as flags.
