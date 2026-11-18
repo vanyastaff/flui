@@ -186,14 +186,20 @@ chunk that stayed one fragment of the open segment: no external texture, no
 draw item, layer or clip of its own, every glyph it asked for placed, recorded
 Ok under a finite affine transform whose translation is below 2^23.
 `RecordingKey` holds the chunk's `ContentVersion`, the transform's bits
-(`RasterKey`, the whole translation, so a moved chunk records again), what the
-IR bakes from outside the chunk (`AmbientKey`: the scissor relative to the
-whole-pixel translation or `Covers`, the inherited opacity, and the target's
-size, which a fill of the whole target records) and the painter's
-`ResourceEpoch`. A recording holds no clip chain, scissor or absolute offset:
-the splice gives it the entry's clip and scissor, rebases every arena offset
-onto the segment as it stands, runs the merge rules on its first element only,
-and charges the frame's `RecordingBudget`. Whatever moves texels a recording
+(`RasterKey`: the linear part and the fraction of the translation, so a chunk
+moved by a fraction of a pixel records again), what the IR bakes from outside
+the chunk (`AmbientKey`: the scissor relative to the chunk's `PixelOrigin` or
+`Covers`, the inherited opacity, and the target's size, which a fill of the
+whole target records) and the painter's `ResourceEpoch`. The whole pixels of
+the translation are the `PixelOrigin` a recording keeps: a chunk moved by whole
+device pixels hits, and the splice adds the difference to every device
+position the recording holds (`pixel_shift.rs`, one exhaustive destructure per
+instance type and for tessellated vertices). A scissor that cuts the chunk
+moves with it only when its clip does, so a chunk moved under a fixed clip that
+cuts it records again. A recording holds no clip chain or scissor: the splice
+gives it the entry's clip and scissor, rebases every arena offset onto the
+segment as it stands, runs the merge rules on its first element only, and
+charges the frame's `RecordingBudget`. Whatever moves texels a recording
 names (a glyph slot evicted or dropped, a glyph-atlas reset, a font-source
 switch, an image evicted, the image atlas reset, a reclaim) advances the epoch,
 which drops every entry, as a raster panic does (ADR-0304 §10). The target
