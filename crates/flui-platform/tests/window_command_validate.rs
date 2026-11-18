@@ -6,11 +6,11 @@ use flui_platform::{
     AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, AspectRatio, Availability,
     Brightness, CapabilityAbsence, CapabilityParts, ControlsOffset, CursorGrab, DisplayId,
     DisplayKey, DisplayRegistry, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
-    SizeConstraints, SystemControls, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFocus, WindowFrame,
-    WindowGeometry, WindowInsets, WindowInteraction, WindowLevel, WindowMaterial, WindowMode,
-    WindowOption, WindowOptions, WindowPosition, WindowRevision, WindowRevisionExhausted,
-    WindowState,
+    KeyboardPlacement, SizeConstraints, SystemControls, Unsupported, UnsupportedReason,
+    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
+    WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowInteraction, WindowLevel,
+    WindowMaterial, WindowMode, WindowOption, WindowOptions, WindowPosition, WindowRevision,
+    WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -841,8 +841,10 @@ fn each_window_fact_advances_the_revision() {
             "keyboard",
             base_state().with_insets(
                 WindowInsets::ZERO.with_keyboard(
-                    KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
-                        .expect("a finite keyboard inset"),
+                    KeyboardInset::try_at_rest(KeyboardPlacement::Docked {
+                        inset: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
+                    })
+                    .expect("a finite keyboard inset"),
                 ),
             ),
         ),

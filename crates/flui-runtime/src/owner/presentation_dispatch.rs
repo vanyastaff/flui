@@ -295,12 +295,15 @@ impl PendingWindowState {
                     if let Some(insets) = self.insets {
                         data.view_padding = insets.safe_area();
                         data.system_gesture_insets = insets.system_gestures();
-                        // A moving keyboard is sampled by each frame at its
-                        // vsync (ADR-0277 §3); one at rest is its target.
+                        // A moving keyboard's inset is sampled by each frame at
+                        // its vsync (ADR-0277 §3); one at rest is its target. A
+                        // floating keyboard's frame is where it comes to rest,
+                        // written at once (ADR-0371).
                         let keyboard = insets.keyboard();
                         if keyboard.motion().is_none() {
                             data.view_insets = keyboard.target();
                         }
+                        data.floating_keyboard = keyboard.floating_frame();
                     }
                     if let Some(brightness) = self.brightness {
                         data.platform_brightness = brightness;

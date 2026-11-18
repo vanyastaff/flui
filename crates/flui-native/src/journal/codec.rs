@@ -37,11 +37,11 @@ use flui_platform::text_store::TextStore;
 use flui_platform::{
     AppTitleBar, Brightness, CapabilityAbsence, CloseDecision, ColorGamut, ControlsOffset,
     CursorGrab, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId,
-    DisplayParts, Headroom, ImeEvent, InsetCurve, InsetMotion, KeyboardInset, MemoryPressureLevel,
-    PlatformInput, RefreshPeriod, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
-    WindowInsets, WindowInteraction, WindowLevel, WindowMode, WindowPosition, WindowState,
-    WindowStateParts,
+    DisplayParts, Headroom, ImeEvent, InsetCurve, InsetMotion, KeyboardInset, KeyboardPlacement,
+    MemoryPressureLevel, PlatformInput, RefreshPeriod, SessionEndPhase, SizeConstraints,
+    SystemControls, SystemNotice, SystemPreferences, WindowExecutionState, WindowExtent,
+    WindowFrame, WindowGeometry, WindowInsets, WindowInteraction, WindowLevel, WindowMode,
+    WindowPosition, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2531,18 +2531,39 @@ fn keyboard_to_wire(keyboard: KeyboardInset) -> DtoResult<Option<wire::KeyboardI
             })
         })
         .transpose()?;
+    let floating = match keyboard.placement() {
+        KeyboardPlacement::Floating { frame } => {
+            Some([frame.left(), frame.top(), frame.width(), frame.height()])
+        }
+        KeyboardPlacement::Hidden | KeyboardPlacement::Docked { .. } => None,
+        _ => return Err(DtoError::Unmirrored("KeyboardPlacement")),
+    };
     Ok(Some(wire::KeyboardInset {
         target: edges_to_wire(keyboard.target()),
         motion,
+        floating,
     }))
 }
 
-/// The keyboard `wire` describes, validated as its types validate it.
+/// The keyboard `wire` describes, validated as its types validate it: a
+/// floating keyboard covers no edge, so one that names an inset as well is
+/// refused.
 fn keyboard_from_wire(wire: wire::KeyboardInset) -> DtoResult<KeyboardInset> {
     let target = edges_from_wire(wire.target);
     let refused = |error: flui_platform::InvalidInsets| invalid(format!("keyboard inset: {error}"));
+    let placement = match wire.floating {
+        Some(_) if target != EdgeInsets::ZERO => {
+            return Err(invalid(
+                "keyboard inset: a floating keyboard with a docked inset",
+            ));
+        }
+        Some([x, y, width, height]) => KeyboardPlacement::Floating {
+            frame: Rect::from_xywh(x, y, width, height),
+        },
+        None => KeyboardPlacement::Docked { inset: target },
+    };
     let Some(motion) = wire.motion else {
-        return KeyboardInset::try_at_rest(target).map_err(refused);
+        return KeyboardInset::try_at_rest(placement).map_err(refused);
     };
     let curve = match motion.curve {
         wire::InsetCurve::Linear => InsetCurve::Linear,
@@ -2559,7 +2580,7 @@ fn keyboard_from_wire(wire: wire::KeyboardInset) -> DtoResult<KeyboardInset> {
         curve,
     )
     .map_err(refused)?;
-    KeyboardInset::try_moving(target, motion).map_err(refused)
+    KeyboardInset::try_moving(placement, motion).map_err(refused)
 }
 
 /// The snapshot `wire` describes, validated as its types validate it.

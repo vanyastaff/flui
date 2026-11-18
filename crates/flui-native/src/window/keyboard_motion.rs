@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets};
-use flui_platform::{EventTime, InsetCurve, InsetMotion, KeyboardInset};
+use flui_platform::{EventTime, InsetCurve, InsetMotion, KeyboardInset, KeyboardPlacement};
 
 /// The fractions of time at which `FluiView` reads the interpolator, in the
 /// order its values arrive (`KeyboardMotion.PROBES` in `FluiView.java`).
@@ -124,7 +124,7 @@ impl KeyboardMotion {
             target.left,
         );
         let motion = InsetMotion::try_new(from, self.start, self.duration, self.curve).ok()?;
-        KeyboardInset::try_moving(target, motion).ok()
+        KeyboardInset::try_moving(KeyboardPlacement::Docked { inset: target }, motion).ok()
     }
 }
 

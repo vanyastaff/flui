@@ -4,6 +4,9 @@
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0371](ADR-0371-a-window-publishes-where-the-keyboard-rests-and-the-layout-decides.md)
+  for `KeyboardInset` in §1 (its target becomes a placement), what applying a keyboard writes
+  in §3, the iOS keyboard cell of §4 and `HeadlessHost::move_keyboard`'s target in §5
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) (where each host reads its insets;
   this record is the contract those producers publish into),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (one frame transaction: a frame

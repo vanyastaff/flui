@@ -2229,22 +2229,22 @@ impl HeadlessHost {
         );
     }
 
-    /// Start moving `window`'s keyboard to `target` now, over `duration` on
-    /// `curve`, as a host reports a keyboard that begins to show or hide: the
-    /// motion starts where the keyboard is at this instant, and the safe area
-    /// and system gesture regions stay as they were. Returns the keyboard as
-    /// reported, whose [`at`](flui_platform::KeyboardInset::at) names the
-    /// occlusion each later frame lays out with.
+    /// Start moving `window`'s keyboard to `placement` now, over `duration`
+    /// on `curve`, as a host reports a keyboard that begins to show, hide,
+    /// undock or dock: the inset moves from where it is at this instant, and
+    /// the safe area and system gesture regions stay as they were. Returns
+    /// the keyboard as reported, whose [`at`](flui_platform::KeyboardInset::at)
+    /// names the inset each later frame lays out with.
     ///
     /// # Panics
     ///
     /// If `window` was not opened by this host, or the motion is invalid: a
-    /// negative or non-finite `target`, a zero `duration`, or an invalid
-    /// `curve`.
+    /// placement [`KeyboardInset::try_moving`](flui_platform::KeyboardInset::try_moving)
+    /// refuses, a zero `duration`, or an invalid `curve`.
     pub fn move_keyboard(
         &self,
         window: HeadlessWindowId,
-        target: flui_foundation::geometry::EdgeInsets,
+        placement: flui_platform::KeyboardPlacement,
         duration: Duration,
         curve: flui_platform::InsetCurve,
     ) -> flui_platform::KeyboardInset {
@@ -2253,8 +2253,8 @@ impl HeadlessHost {
         let motion =
             flui_platform::InsetMotion::try_new(insets.keyboard().at(now), now, duration, curve)
                 .expect("a keyboard motion with a duration and a valid curve");
-        let keyboard = flui_platform::KeyboardInset::try_moving(target, motion)
-            .expect("a keyboard target that is finite and not negative");
+        let keyboard = flui_platform::KeyboardInset::try_moving(placement, motion)
+            .expect("a keyboard placement that is finite, not negative and not empty");
         self.set_window_insets(window, insets.with_keyboard(keyboard));
         keyboard
     }

@@ -143,6 +143,11 @@ export function moveVirtualKeyboard(top) {
     keyboard.boundingRect = { x: 0, y: top, width: 300, height: 150 - top };
     keyboard.dispatchEvent(new Event('geometrychange'));
 }
+// The virtual keyboard's rectangle anywhere in the layout viewport.
+export function placeVirtualKeyboard(x, y, width, height) {
+    keyboard.boundingRect = { x, y, width, height };
+    keyboard.dispatchEvent(new Event('geometrychange'));
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = watchPage)]
@@ -173,6 +178,8 @@ extern "C" {
     fn keyboard_overlays_content() -> bool;
     #[wasm_bindgen(js_name = moveVirtualKeyboard)]
     fn move_virtual_keyboard(top: f64);
+    #[wasm_bindgen(js_name = placeVirtualKeyboard)]
+    fn place_virtual_keyboard(x: f64, y: f64, width: f64, height: f64);
     #[wasm_bindgen(js_name = scrollCanvasTo)]
     fn scroll_canvas_to(top: f64);
     #[wasm_bindgen(js_name = scaleCanvas)]
@@ -575,6 +582,22 @@ async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
     // keyboard leaves whole.
     set_visual_viewport(70.0, 1.0);
     assert_eq!(keyboard().target().bottom, 50.0);
+    // A rectangle that ends above the layout viewport's bottom floats: it
+    // covers no edge, and its frame goes out in the window's logical pixels
+    // however large the canvas is drawn.
+    let floating =
+        |x: f64, y: f64, width: f64, height: f64| flui_platform::KeyboardPlacement::Floating {
+            frame: flui_foundation::geometry::Rect::from_xywh(x, y, width, height),
+        };
+    place_virtual_keyboard(40.0, 10.0, 100.0, 30.0);
+    assert_eq!(keyboard().placement(), floating(40.0, 10.0, 100.0, 30.0));
+    assert_eq!(
+        keyboard().target(),
+        flui_foundation::geometry::EdgeInsets::ZERO
+    );
+    scale_canvas(0.5);
+    assert_eq!(keyboard().placement(), floating(80.0, 20.0, 200.0, 60.0));
+    scale_canvas(1.0);
     move_virtual_keyboard(150.0);
     assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
     // The page gets its own setting back once the window goes.

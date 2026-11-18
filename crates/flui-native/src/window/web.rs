@@ -49,7 +49,9 @@ use crate::owner::web::{
 
 mod root;
 
-use crate::window::keyboard::page::{overlaid_keyboard, viewport_keyboard, virtual_keyboard};
+use crate::window::keyboard::page::{
+    layout_bottom, overlaid_keyboard, viewport_keyboard, virtual_keyboard,
+};
 
 use root::PageRoot;
 
@@ -222,40 +224,51 @@ fn sample_state(
 /// Firefox). A page zoomed in by a pinch has a smaller
 /// visual viewport with no keyboard, so it reports none; a keyboard that
 /// resizes the layout viewport resizes the canvas instead and covers none of
-/// it. The occlusion is in the logical pixels of a window `logical_height`
-/// tall, whatever transform scales the canvas on screen.
+/// it. Where the keyboard rests is `keyboard::placement`'s rule, shared with
+/// iOS: a docked keyboard's rectangle reaches the layout viewport's bottom,
+/// or the canvas's where the canvas ends above it, and one that ends above
+/// that floats. The keyboard is in the logical pixels of a window
+/// `logical_height` tall, whatever transform scales the canvas on screen.
 fn keyboard_over(
     canvas: &web_sys::HtmlCanvasElement,
     logical_height: f64,
 ) -> flui_platform::KeyboardInset {
-    let Some(frame) = web_sys::window().and_then(|window| {
-        overlaid_keyboard(&window).or_else(|| viewport_keyboard(&window))
-    })
-    // A keyboard with no area covers nothing, and the canvas is not laid out
-    // again to say so.
-    .filter(|frame| frame.width > 0.0 && frame.height > 0.0) else {
-        return flui_platform::KeyboardInset::HIDDEN;
+    let hidden = flui_platform::KeyboardInset::HIDDEN;
+    let Some(window) = web_sys::window() else {
+        return hidden;
     };
-    // Both frames are in client coordinates: into the canvas's.
+    let Some(frame) = overlaid_keyboard(&window)
+        .or_else(|| viewport_keyboard(&window))
+        // A keyboard with no area covers nothing, and the canvas is not
+        // laid out again to say so.
+        .filter(|frame| frame.width > 0.0 && frame.height > 0.0)
+    else {
+        return hidden;
+    };
     let bounds = canvas.get_bounding_client_rect();
-    let target = crate::window::keyboard::occlusion(
-        Size::new(bounds.width(), bounds.height()),
-        crate::window::keyboard::Frame {
-            x: frame.x - bounds.left(),
-            y: frame.y - bounds.top(),
-            ..frame
-        },
-    );
     // The box a transform scales is measured scaled, and the window's size
-    // is not: the occlusion goes out in the window's logical pixels.
+    // is not: the keyboard goes out in the window's logical pixels.
     let scale = logical_height / bounds.height();
-    let target = if scale.is_finite() && scale > 0.0 {
-        flui_foundation::geometry::EdgeInsets::new(0.0, 0.0, target.bottom * scale, 0.0)
-    } else {
-        flui_foundation::geometry::EdgeInsets::ZERO
-    };
-    flui_platform::KeyboardInset::try_at_rest(target)
-        .unwrap_or(flui_platform::KeyboardInset::HIDDEN)
+    if !(scale.is_finite() && scale > 0.0) {
+        return hidden;
+    }
+    // The frames are in client coordinates: into the canvas's, in logical
+    // pixels.
+    let across = |client: f64| (client - bounds.left()) * scale;
+    let down = |client: f64| (client - bounds.top()) * scale;
+    let canvas_bottom = bounds.top() + bounds.height();
+    let floor = layout_bottom(&window).map_or(canvas_bottom, |layout| layout.min(canvas_bottom));
+    let placement = crate::window::keyboard::placement(
+        Size::new(bounds.width() * scale, logical_height),
+        crate::window::keyboard::Frame {
+            x: across(frame.x),
+            y: down(frame.y),
+            width: frame.width * scale,
+            height: frame.height * scale,
+        },
+        down(floor),
+    );
+    flui_platform::KeyboardInset::try_at_rest(placement).unwrap_or(hidden)
 }
 
 /// The safe area of `canvas`, a window `logical` in size: the bands of the

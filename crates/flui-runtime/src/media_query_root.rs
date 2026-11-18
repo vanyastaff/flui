@@ -78,6 +78,7 @@ impl MediaQuerySource {
                     .keyboard()
                     .motion()
                     .map_or(snapshot.insets.keyboard().target(), |motion| motion.from()),
+                floating_keyboard: snapshot.insets.keyboard().floating_frame(),
                 system_gesture_insets: snapshot.insets.system_gestures(),
                 ..MediaQueryData::default()
             }),

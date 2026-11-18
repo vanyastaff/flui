@@ -14,8 +14,9 @@
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
-//! `padding`, `view_insets`, `system_gesture_insets`, `platform_brightness`, `high_contrast`,
-//! `preferred_locales`, `regional_formats`, `motion`, `accent_color`, `scroll_bars` —
+//! `padding`, `view_insets`, `floating_keyboard`, `system_gesture_insets`,
+//! `platform_brightness`, `high_contrast`, `preferred_locales`, `regional_formats`, `motion`,
+//! `accent_color`, `scroll_bars` —
 //! presentation and preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
@@ -34,7 +35,7 @@ use std::sync::Arc;
 pub use focus_tree_root::{FocusTreeRoot, FocusTreeRootState};
 
 use flui_animation::{MotionPolicy, Vsync};
-use flui_foundation::geometry::{EdgeInsets, Edges, Size};
+use flui_foundation::geometry::{EdgeInsets, Edges, Rect, Size};
 use flui_interaction::gesture::{GestureArena, SweepModel};
 use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_painting::TextSizing;
@@ -68,6 +69,7 @@ use crate::{FieldMask, impl_inherited_view};
 /// - [`view_padding`](Self::view_padding)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
+/// - [`floating_keyboard`](Self::floating_keyboard)
 /// - [`system_gesture_insets`](Self::system_gesture_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
@@ -105,11 +107,19 @@ pub struct MediaQueryData {
     pub view_padding: EdgeInsets,
 
     /// Insets occupied by system UI that fully obscures part of the window,
-    /// such as the software keyboard when it is visible. Unlike
+    /// such as the software keyboard when it is docked. Unlike
     /// [`padding`](Self::padding), these areas are hidden, not just reserved.
-    /// While the keyboard moves, each frame carries its occlusion at that
+    /// While the keyboard moves, each frame carries its inset at that
     /// frame's time.
     pub view_insets: EdgeInsets,
+
+    /// The soft keyboard floating over the window (an iPad's floating,
+    /// undocked or split keyboard), its frame in logical pixels in the
+    /// window's content coordinates; `None` while no keyboard floats
+    /// (ADR-0371). A floating keyboard covers no edge, so it is not in
+    /// [`view_insets`](Self::view_insets): a widget that must stay in view (a
+    /// focused field, a toolbar) reads this and moves out from under it.
+    pub floating_keyboard: Option<Rect>,
 
     /// Edges where a system gesture (back, home, the notification shade)
     /// takes precedence over the application's own drag: a horizontal drag or
@@ -166,6 +176,7 @@ impl Default for MediaQueryData {
             font_weight_adjustment: 0,
             view_padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
+            floating_keyboard: None,
             system_gesture_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,

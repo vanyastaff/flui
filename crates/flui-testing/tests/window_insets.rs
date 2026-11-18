@@ -1,14 +1,15 @@
 //! What covers a window reaches its presentation's `MediaQuery`: the safe
 //! area as `view_padding`, the system gesture regions as
-//! `system_gesture_insets`, and a moving keyboard as `view_insets` sampled at
-//! each frame's time until it settles, after which no frame is asked for.
+//! `system_gesture_insets`, a docked keyboard as `view_insets` sampled at each
+//! frame's time until it settles, after which no frame is asked for, and a
+//! floating keyboard as `floating_keyboard`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::EdgeInsets;
-use flui_platform::{EventTime, InsetCurve, KeyboardInset, WindowInsets};
+use flui_foundation::geometry::{EdgeInsets, Rect};
+use flui_platform::{EventTime, InsetCurve, KeyboardInset, KeyboardPlacement, WindowInsets};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_widgets::SizedBox;
@@ -62,7 +63,7 @@ pub(crate) fn a_keyboard_motion_lays_out_each_frame_at_its_time() {
     let target = EdgeInsets::new(0.0, 0.0, 336.0, 0.0);
     let keyboard = host.move_keyboard(
         host.primary_window(),
-        target,
+        KeyboardPlacement::Docked { inset: target },
         Duration::from_millis(250),
         InsetCurve::SystemKeyboard,
     );
@@ -112,7 +113,8 @@ pub(crate) fn reported_insets_reach_their_media_query_fields() {
         host.primary_window(),
         WindowInsets::try_new(
             safe_area,
-            KeyboardInset::try_at_rest(keyboard).expect("a valid keyboard"),
+            KeyboardInset::try_at_rest(KeyboardPlacement::Docked { inset: keyboard })
+                .expect("a valid keyboard"),
             gestures,
         )
         .expect("valid insets"),
@@ -127,4 +129,51 @@ pub(crate) fn reported_insets_reach_their_media_query_fields() {
         None,
         "a keyboard at rest asks for no frame"
     );
+}
+
+/// A keyboard that comes to float over the window publishes its frame as the
+/// `MediaQuery`'s floating keyboard and moves its inset to none, so the
+/// layout keeps its height; hiding it clears the frame.
+pub(crate) fn a_floating_keyboard_reaches_the_media_query_as_a_frame() {
+    let (mut host, seen) = reading_host();
+    let docked = EdgeInsets::new(0.0, 0.0, 291.0, 0.0);
+    host.set_window_insets(
+        host.primary_window(),
+        WindowInsets::ZERO.with_keyboard(
+            KeyboardInset::try_at_rest(KeyboardPlacement::Docked { inset: docked })
+                .expect("a valid keyboard"),
+        ),
+    );
+    let _ = host.pump(FRAME);
+    assert_eq!(latest(&seen).view_insets, docked);
+    assert_eq!(latest(&seen).floating_keyboard, None);
+
+    let frame = Rect::from_xywh(40.0, 300.0, 320.0, 240.0);
+    let keyboard = host.move_keyboard(
+        host.primary_window(),
+        KeyboardPlacement::Floating { frame },
+        Duration::from_millis(250),
+        InsetCurve::SystemKeyboard,
+    );
+    let _ = host.pump(FRAME);
+    let undocking = latest(&seen);
+    assert_eq!(
+        undocking.floating_keyboard,
+        Some(frame),
+        "the frame is published when the keyboard is reported"
+    );
+    assert_eq!(undocking.view_insets, keyboard.at(now(&host)));
+    let end = keyboard.settles_at().expect("a moving keyboard settles");
+    while now(&host) < end {
+        let _ = host.pump(FRAME);
+    }
+    assert_eq!(
+        latest(&seen).view_insets,
+        EdgeInsets::ZERO,
+        "a floating keyboard covers no edge"
+    );
+
+    host.set_window_insets(host.primary_window(), WindowInsets::ZERO);
+    let _ = host.pump(FRAME);
+    assert_eq!(latest(&seen).floating_keyboard, None);
 }

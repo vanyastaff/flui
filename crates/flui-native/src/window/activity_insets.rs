@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Size};
-use flui_platform::{KeyboardInset, WindowInsets};
+use flui_platform::{KeyboardInset, KeyboardPlacement, WindowInsets};
 
 use crate::window::keyboard_motion::KeyboardMotion;
 
@@ -58,7 +58,7 @@ impl Sample {
             motion.keyboard(target, self.keyboard[2].clamp(0, size.height), scale)
         }) {
             Some(moving) => moving,
-            None => KeyboardInset::try_at_rest(target).ok()?,
+            None => KeyboardInset::try_at_rest(KeyboardPlacement::Docked { inset: target }).ok()?,
         };
         WindowInsets::try_new(
             logical(self.safe_area),
@@ -100,8 +100,10 @@ mod tests {
         );
         assert_eq!(
             insets.keyboard(),
-            KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 320.0, 0.0))
-                .expect("a valid keyboard"),
+            KeyboardInset::try_at_rest(KeyboardPlacement::Docked {
+                inset: EdgeInsets::new(0.0, 0.0, 320.0, 0.0),
+            })
+            .expect("a valid keyboard"),
             "a keyboard sampled from the insets is at rest"
         );
         assert_eq!(

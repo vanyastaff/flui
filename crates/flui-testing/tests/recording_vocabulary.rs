@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{
-    DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Size, WindowMetrics,
+    DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Rect, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
 use flui_platform::Availability;
@@ -32,11 +32,11 @@ use flui_platform::pointer::{
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
-    InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride, RegionalFormats,
-    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor, SystemPreferences,
-    TextWeightPreference, Weekday, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
-    WindowInsets,
+    InsetMotion, KeyboardInset, KeyboardPlacement, Locale, MeasurementSystem, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride,
+    RegionalFormats, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor,
+    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
@@ -446,24 +446,37 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("WindowObservation", "Snapshot") => one(execution(WindowExecutionState::Running)),
         ("WindowObservation", "Hover") => one(window(WindowObservation::Hover(true))),
         ("WindowObservation", "Moved") => one(window(WindowObservation::Moved)),
-        ("WindowObservation", "Insets") => one(window(WindowObservation::Insets(
-            WindowInsets::try_new(
-                EdgeInsets::new(44.0, 0.0, 34.0, 0.5),
-                KeyboardInset::try_moving(
-                    EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
-                    InsetMotion::try_new(
-                        EdgeInsets::ZERO,
-                        EventTime::from_nanos(1_000_000),
-                        Duration::from_millis(250),
-                        InsetCurve::SystemKeyboard,
+        ("WindowObservation", "Insets") => Some(vec![
+            window(WindowObservation::Insets(
+                WindowInsets::try_new(
+                    EdgeInsets::new(44.0, 0.0, 34.0, 0.5),
+                    KeyboardInset::try_moving(
+                        KeyboardPlacement::Docked {
+                            inset: EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
+                        },
+                        InsetMotion::try_new(
+                            EdgeInsets::ZERO,
+                            EventTime::from_nanos(1_000_000),
+                            Duration::from_millis(250),
+                            InsetCurve::SystemKeyboard,
+                        )
+                        .expect("a valid motion"),
                     )
-                    .expect("a valid motion"),
+                    .expect("a valid keyboard"),
+                    EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
                 )
-                .expect("a valid keyboard"),
-                EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
-            )
-            .expect("valid insets"),
-        ))),
+                .expect("valid insets"),
+            )),
+            // A floating keyboard keeps its frame and names no inset.
+            window(WindowObservation::Insets(
+                WindowInsets::ZERO.with_keyboard(
+                    KeyboardInset::try_at_rest(KeyboardPlacement::Floating {
+                        frame: Rect::from_xywh(40.0, 300.0, 320.0, 260.0),
+                    })
+                    .expect("a valid keyboard"),
+                ),
+            )),
+        ]),
         ("WindowObservation", "Brightness") => {
             one(window(WindowObservation::Brightness(Brightness::Dark)))
         }

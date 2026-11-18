@@ -1,13 +1,15 @@
 //! The soft keyboard over a window, from the frame its platform reports in
-//! the window's coordinates (ADR-0277 §4): UIKit's
-//! `UIKeyboardWillChangeFrameNotification`, which also carries the
-//! animation's duration and `UIViewAnimationCurve`, and a browser's visual
-//! viewport or `navigator.virtualKeyboard`.
+//! the window's coordinates (ADR-0277 §4, ADR-0371): UIKit's
+//! `UIKeyboardWillChangeFrameNotification`, `UIKeyboardWillShowNotification`
+//! and `UIKeyboardWillHideNotification`, which also carry the animation's
+//! duration and `UIViewAnimationCurve`, and a browser's visual viewport or
+//! `navigator.virtualKeyboard`.
 
 #[cfg(any(target_os = "ios", test))]
 use std::time::Duration;
 
-use flui_foundation::geometry::{EdgeInsets, Size};
+use flui_foundation::geometry::{EdgeInsets, Rect, Size};
+use flui_platform::KeyboardPlacement;
 #[cfg(any(target_os = "ios", test))]
 use flui_platform::{EventTime, InsetCurve, InsetMotion, KeyboardInset};
 
@@ -20,12 +22,36 @@ pub(crate) struct Frame {
     pub(crate) height: f64,
 }
 
-/// How much of a view `view` in size the keyboard at `frame` covers at the
-/// bottom: from the keyboard's top to the view's bottom where the two
-/// overlap, nothing for a keyboard off screen, beside the view or floating
-/// clear of it, and nothing for a frame that is no number.
+#[cfg(any(target_os = "ios", test))]
+impl Frame {
+    /// UIKit's `CGRectZero`: the end frame it sends while the user drags a
+    /// floating keyboard, which says nothing of where the keyboard ends up.
+    const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    };
+}
+
+/// Where the keyboard at `frame` rests over a view `view` in size, `floor`
+/// being the bottom a docked keyboard reaches in the view's coordinates: the
+/// view's own bottom on iOS (an iPad reports a Slide Over window's keyboard
+/// ending at the window's bottom); on the Web the layout viewport's bottom,
+/// or the canvas's where it ends above that (a canvas taller than the layout
+/// viewport goes on below a docked keyboard). The keyboard is
+///
+/// - hidden for a frame that is no number, has no area, or overlaps the view
+///   nowhere (off screen, or beside the view in an iPad's Split View);
+/// - floating for one whose bottom lies above `floor` (an iPad's floating,
+///   undocked or split keyboard, or a shortcuts bar dragged up): it covers
+///   what lies under its frame and no edge;
+/// - docked otherwise, covering the view from the keyboard's top down.
+///
+/// The bottoms are compared rounded to the point, since a keyboard extension
+/// can report a docked frame a fraction of a point off.
 #[must_use]
-pub(crate) fn occlusion(view: Size<f64>, frame: Frame) -> EdgeInsets {
+pub(crate) fn placement(view: Size<f64>, frame: Frame, floor: f64) -> KeyboardPlacement {
     let finite = [
         frame.x,
         frame.y,
@@ -33,6 +59,7 @@ pub(crate) fn occlusion(view: Size<f64>, frame: Frame) -> EdgeInsets {
         frame.height,
         view.width,
         view.height,
+        floor,
     ]
     .iter()
     .all(|value| value.is_finite());
@@ -41,9 +68,16 @@ pub(crate) fn occlusion(view: Size<f64>, frame: Frame) -> EdgeInsets {
         && frame.y < view.height
         && frame.y + frame.height > 0.0;
     if !finite || !overlaps || frame.width <= 0.0 || frame.height <= 0.0 {
-        return EdgeInsets::ZERO;
+        return KeyboardPlacement::Hidden;
     }
-    EdgeInsets::new(0.0, 0.0, (view.height - frame.y.max(0.0)).max(0.0), 0.0)
+    if (frame.y + frame.height).round() < floor.round() {
+        return KeyboardPlacement::Floating {
+            frame: Rect::from_xywh(frame.x, frame.y, frame.width, frame.height),
+        };
+    }
+    KeyboardPlacement::Docked {
+        inset: EdgeInsets::new(0.0, 0.0, (view.height - frame.y.max(0.0)).max(0.0), 0.0),
+    }
 }
 
 #[cfg(any(target_os = "ios", test))]
@@ -81,8 +115,8 @@ pub(crate) fn curve_of(raw: isize) -> InsetCurve {
 }
 
 #[cfg(any(target_os = "ios", test))]
-/// One change of the keyboard's frame as UIKit announced it: where the
-/// keyboard was when it began, when that was, and how it moves.
+/// One change of the keyboard as UIKit announced it: where its inset was
+/// when it began, when that was, and how it moves.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Change {
     pub(crate) from: EdgeInsets,
@@ -94,12 +128,13 @@ pub(crate) struct Change {
 
 #[cfg(any(target_os = "ios", test))]
 impl Change {
-    /// The keyboard that covers `target` once this change ends: moving
-    /// toward it while the change lasts, at rest for a change with no
-    /// duration (a keyboard that appears without animation) or one that
-    /// does not make a valid motion.
+    /// The keyboard at `placement` once this change ends: its inset moving
+    /// there while the change lasts, at rest for a change with no duration
+    /// (a keyboard that appears without animation) or one that does not
+    /// make a valid motion. `None` for a placement the platform's types
+    /// refuse.
     #[must_use]
-    pub(crate) fn keyboard(self, target: EdgeInsets) -> Option<KeyboardInset> {
+    pub(crate) fn keyboard(self, placement: KeyboardPlacement) -> Option<KeyboardInset> {
         let duration = Duration::try_from_secs_f64(self.seconds)
             .ok()
             .filter(|duration| !duration.is_zero());
@@ -107,8 +142,84 @@ impl Change {
             .and_then(|duration| {
                 InsetMotion::try_new(self.from, self.start, duration, self.curve).ok()
             })
-            .and_then(|motion| KeyboardInset::try_moving(target, motion).ok());
-        moving.or_else(|| KeyboardInset::try_at_rest(target).ok())
+            .and_then(|motion| KeyboardInset::try_moving(placement, motion).ok());
+        moving.or_else(|| KeyboardInset::try_at_rest(placement).ok())
+    }
+}
+
+#[cfg(any(target_os = "ios", test))]
+/// Which of UIKit's keyboard notifications a [`Note`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Notice {
+    /// `UIKeyboardWillChangeFrameNotification`: the keyboard moves to its end
+    /// frame.
+    FrameChange,
+    /// `UIKeyboardWillShowNotification`: the keyboard comes to its end frame.
+    /// UIKit's zero frame here is a shortcuts bar dropped where the user
+    /// dragged it: it floats, and UIKit does not say where.
+    Show,
+    /// `UIKeyboardWillHideNotification`, which UIKit posts after the hide's
+    /// frame change: the keyboard leaves the content, whatever its end frame
+    /// says (one not yet fully off screen is a hide all the same).
+    Hide,
+}
+
+#[cfg(any(target_os = "ios", test))]
+/// A keyboard notification as a view keeps it: which one, its end frame in
+/// screen coordinates if it carried one, and the change it starts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Note {
+    pub(crate) notice: Notice,
+    /// `UIKeyboardFrameEndUserInfoKey`.
+    pub(crate) end: Option<Frame>,
+    pub(crate) change: Change,
+}
+
+#[cfg(any(target_os = "ios", test))]
+impl Note {
+    /// The note a view keeps once this one arrives after `previous`: this
+    /// one, unless it says nothing of where the keyboard ends up, and then
+    /// the previous note stands. A hide always says. A frame change or a show
+    /// that names no end frame is not the keyboard's. A frame change that
+    /// names UIKit's zero frame is the one it sends while the user drags a
+    /// floating keyboard. A show that names the end frame of the frame
+    /// change standing is the second notice of one show, and its motion is
+    /// already under way.
+    #[must_use]
+    pub(crate) fn after(self, previous: Option<Self>) -> Option<Self> {
+        let says_nothing = match (self.notice, self.end) {
+            (Notice::Hide, _) => false,
+            (Notice::FrameChange | Notice::Show, None) => true,
+            (Notice::FrameChange, Some(end)) => end == Frame::ZERO,
+            (Notice::Show, Some(_)) => previous.is_some_and(|standing| {
+                standing.notice != Notice::Hide && standing.end == self.end
+            }),
+        };
+        if says_nothing { previous } else { Some(self) }
+    }
+
+    /// The keyboard this note puts over a view `view` in size, `to_view`
+    /// taking its end frame from screen coordinates into the view's: hidden
+    /// for a hide, the end frame's [`placement`] for a frame change or a
+    /// show. A show with UIKit's zero frame is a keyboard that floats where
+    /// UIKit does not say: it covers no edge and has no frame to publish, so
+    /// its placement is hidden, as any frame with no area is. `None` for a
+    /// placement the platform's types refuse.
+    #[must_use]
+    pub(crate) fn keyboard(
+        self,
+        view: Size<f64>,
+        to_view: impl FnOnce(Frame) -> Frame,
+    ) -> Option<KeyboardInset> {
+        let placement = match (self.notice, self.end) {
+            (Notice::FrameChange | Notice::Show, Some(end)) => {
+                placement(view, to_view(end), view.height)
+            }
+            (Notice::Hide, _) | (Notice::FrameChange | Notice::Show, None) => {
+                KeyboardPlacement::Hidden
+            }
+        };
+        self.change.keyboard(placement)
     }
 }
 
@@ -170,6 +281,24 @@ pub(crate) mod page {
         })
     }
 
+    /// The layout viewport's bottom in client coordinates, which a docked
+    /// keyboard's rectangle reaches: the smaller of the root element's client
+    /// height and the window's inner height, whichever the page has. Quirks
+    /// mode makes the first the document's height, and a horizontal scroll
+    /// bar makes the second longer than the viewport's content; the smaller
+    /// one never reads a docked keyboard as floating.
+    pub(crate) fn layout_bottom(window: &web_sys::Window) -> Option<f64> {
+        let root = window
+            .document()
+            .and_then(|document| document.document_element())
+            .map(|root| f64::from(root.client_height()));
+        let inner = window.inner_height().ok().and_then(|inner| inner.as_f64());
+        match (root, inner) {
+            (Some(root), Some(inner)) => Some(root.min(inner)),
+            (bottom, None) | (None, bottom) => bottom,
+        }
+    }
+
     /// What the page knows of its soft keyboard now.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum KeyboardState {
@@ -216,20 +345,161 @@ mod tests {
         }
     }
 
+    fn docked(bottom: f64) -> KeyboardPlacement {
+        KeyboardPlacement::Docked {
+            inset: EdgeInsets::new(0.0, 0.0, bottom, 0.0),
+        }
+    }
+
     #[test]
-    fn the_keyboard_covers_the_bottom_it_overlaps() {
-        let bottom = |frame| occlusion(VIEW, frame).bottom;
-        // Docked at the bottom.
-        assert_eq!(bottom(frame(0.0, 508.0, 390.0, 336.0)), 336.0);
-        // Hidden: its end frame lies below the screen.
-        assert_eq!(bottom(frame(0.0, 844.0, 390.0, 336.0)), 0.0);
-        // Beside a Split View window.
-        assert_eq!(bottom(frame(400.0, 508.0, 390.0, 336.0)), 0.0);
-        // Taller than the view, from above it.
-        assert_eq!(bottom(frame(0.0, -10.0, 390.0, 900.0)), 844.0);
-        // Nothing for frames that are no number or have no area.
-        assert_eq!(bottom(frame(f64::NAN, 508.0, 390.0, 336.0)), 0.0);
-        assert_eq!(bottom(frame(0.0, 508.0, 0.0, 336.0)), 0.0);
+    fn a_frame_names_where_the_keyboard_rests() {
+        let floating = frame(40.0, 300.0, 310.0, 260.0);
+        let rows = [
+            (
+                "docked at the bottom",
+                frame(0.0, 508.0, 390.0, 336.0),
+                docked(336.0),
+            ),
+            (
+                "docked, its bottom a fraction of a point above the view's",
+                frame(0.0, 508.0, 390.0, 335.7),
+                docked(336.0),
+            ),
+            (
+                "taller than the view, from above it",
+                frame(0.0, -10.0, 390.0, 900.0),
+                docked(844.0),
+            ),
+            (
+                "a frame whose bottom is above the view's bottom floats and covers no edge",
+                floating,
+                KeyboardPlacement::Floating {
+                    frame: Rect::from_xywh(40.0, 300.0, 310.0, 260.0),
+                },
+            ),
+            (
+                "below the screen",
+                frame(0.0, 844.0, 390.0, 336.0),
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "beside a Split View window",
+                frame(400.0, 508.0, 390.0, 336.0),
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "no number",
+                frame(f64::NAN, 508.0, 390.0, 336.0),
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "no area",
+                frame(0.0, 508.0, 0.0, 336.0),
+                KeyboardPlacement::Hidden,
+            ),
+        ];
+        for (case, frame, expected) in rows {
+            assert_eq!(placement(VIEW, frame, VIEW.height), expected, "{case}");
+        }
+        // A canvas that goes on below the page's visible bottom, where the
+        // keyboard docks: covered from the keyboard's top down.
+        assert_eq!(
+            placement(VIEW, frame(0.0, 300.0, 390.0, 300.0), 600.0),
+            docked(544.0),
+            "docked at the floor of a taller view"
+        );
+    }
+
+    #[test]
+    fn a_notice_keeps_or_replaces_the_keyboard() {
+        let change = Change {
+            from: EdgeInsets::ZERO,
+            start: EventTime::from_nanos(1_000),
+            seconds: 0.0,
+            curve: InsetCurve::SystemKeyboard,
+        };
+        let note = |notice, end| Note {
+            notice,
+            end,
+            change,
+        };
+        let shown = note(Notice::FrameChange, Some(frame(0.0, 508.0, 390.0, 336.0)));
+        let rows = [
+            (
+                "a zero frame while a floating keyboard is dragged keeps the inset",
+                note(Notice::FrameChange, Some(Frame::ZERO)),
+                docked(336.0),
+            ),
+            (
+                "a change with no end frame keeps the inset",
+                note(Notice::FrameChange, None),
+                docked(336.0),
+            ),
+            (
+                "a later frame replaces it",
+                note(Notice::FrameChange, Some(frame(0.0, 544.0, 390.0, 300.0))),
+                docked(300.0),
+            ),
+            (
+                "a show with no end frame keeps the inset",
+                note(Notice::Show, None),
+                docked(336.0),
+            ),
+            (
+                "a show at another frame replaces it",
+                note(Notice::Show, Some(frame(0.0, 544.0, 390.0, 300.0))),
+                docked(300.0),
+            ),
+            (
+                "a show with a zero frame is a shortcuts bar dropped floating: no inset",
+                note(Notice::Show, Some(Frame::ZERO)),
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "a hide notification is hidden with its frame still on screen",
+                note(Notice::Hide, Some(frame(0.0, 600.0, 390.0, 336.0))),
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "a hide notification is hidden with a zero frame",
+                note(Notice::Hide, Some(Frame::ZERO)),
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "a hide notification is hidden with no frame",
+                note(Notice::Hide, None),
+                KeyboardPlacement::Hidden,
+            ),
+        ];
+        for (case, arriving, expected) in rows {
+            let kept = arriving.after(Some(shown)).expect("a note is kept");
+            let keyboard = kept
+                .keyboard(VIEW, |end| end)
+                .expect("a placement the platform takes");
+            assert_eq!(keyboard.placement(), expected, "{case}");
+        }
+        assert_eq!(
+            note(Notice::FrameChange, Some(Frame::ZERO)).after(None),
+            None,
+            "a zero frame before any other is no keyboard"
+        );
+
+        // The show UIKit posts after a frame change names the same end
+        // frame: the motion the frame change started is not started again.
+        let later = Change {
+            start: EventTime::from_nanos(2_000),
+            ..change
+        };
+        let second = Note {
+            notice: Notice::Show,
+            end: shown.end,
+            change: later,
+        };
+        assert_eq!(second.after(Some(shown)), Some(shown));
+        // After a hide the same frame is a keyboard that comes back.
+        let hidden = note(Notice::Hide, shown.end);
+        assert_eq!(second.after(Some(hidden)), Some(second));
+        assert_eq!(second.after(None), Some(second));
     }
 
     #[test]
@@ -257,7 +527,9 @@ mod tests {
             seconds: 0.25,
             curve: InsetCurve::SystemKeyboard,
         };
-        let keyboard = change.keyboard(target).expect("a valid keyboard");
+        let keyboard = change
+            .keyboard(KeyboardPlacement::Docked { inset: target })
+            .expect("a valid keyboard");
         let motion = keyboard.motion().expect("a keyboard in motion");
         assert_eq!(motion.from(), EdgeInsets::ZERO);
         assert_eq!(motion.duration(), Duration::from_millis(250));
@@ -269,7 +541,7 @@ mod tests {
         // No duration, or one that is no number: at rest at the target.
         for seconds in [0.0, f64::NAN, -1.0] {
             let rest = Change { seconds, ..change }
-                .keyboard(target)
+                .keyboard(KeyboardPlacement::Docked { inset: target })
                 .expect("a valid keyboard");
             assert_eq!(rest.motion(), None, "{seconds}");
             assert_eq!(rest.target(), target);

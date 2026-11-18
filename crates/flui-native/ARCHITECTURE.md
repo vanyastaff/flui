@@ -1877,7 +1877,7 @@ unsafe that the canvas lies under. The text-input host's padding is those
 `window::safe_area::within` intersects them with the canvas's box in the
 layout viewport (the window's `innerWidth`×`innerHeight`, which quirks mode
 does not change) and scales them into the window's logical pixels, as the
-keyboard's occlusion is. The bands are zero unless the page covers the display
+keyboard's inset and floating frame are. The bands are zero unless the page covers the display
 (`viewport-fit=cover`, which the page `flui build` writes asks for). They are
 read once and kept (`HostSlots::unsafe_edges`), since reading them is a style
 recalculation every state sample would pay, and read again after a window
@@ -4225,6 +4225,24 @@ consumer before UIKit connections. A stable logical view backs a session; native
 windows/controllers and display links belong to individual attachments. A
 reversible disconnect retains the logical owner but denies new raw handles.
 Terminal close fences callbacks and retires the attachment before disposal.
+
+An attachment's display link is added to the main run loop in
+`NSRunLoopCommonModes`. The run loop `UIApplicationMain` drives leaves its
+default mode for `UITrackingRunLoopMode` while UIKit tracks a touch (a native
+scroll view or control, an edit menu, an interactive keyboard dismissal), and
+a link in the default mode alone would deliver no frame until
+the tracking ends; the owner's wakes already run there, since the GCD main
+queue is served in the common modes.
+
+The view observes `UIKeyboardWillChangeFrameNotification`,
+`UIKeyboardWillShowNotification` and `UIKeyboardWillHideNotification` and keeps
+one of them standing (`window::keyboard::Note`), its end frame in screen
+coordinates; each metrics sample converts that frame into the view as it lies
+then and publishes the keyboard's placement (ADR-0371). Which notification
+replaces the standing one is `Note::after`'s rule and which placement a frame
+names is `window::keyboard::placement`'s, both pure and tested on every host
+(`a_notice_keeps_or_replaces_the_keyboard`,
+`a_frame_names_where_the_keyboard_rests`).
 
 `MainThreadBound` protects native storage. Final worker drops enqueue retirement
 on main rather than synchronously waiting for it. Plain cached metrics remain

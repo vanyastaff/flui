@@ -1145,6 +1145,107 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
     }
 }
 
+/// A snapshot's keyboard is written with the inset a docked one covers or the
+/// frame a floating one has, reads back as the placement it was, moving or
+/// at rest, and replays; a row that names both an inset and a floating frame
+/// is refused, since a floating keyboard covers no edge.
+fn keyboard_placements_keep_their_wire_values_and_replay() {
+    use std::time::Duration;
+
+    use flui_foundation::geometry::{EdgeInsets, Rect};
+    use flui_native::journal::codec::{Backend, Header, Stream};
+    use flui_platform::{
+        EventTime, InsetCurve, InsetMotion, KeyboardInset, KeyboardPlacement, PlatformWindow as _,
+        WindowInsets,
+    };
+
+    let docked = KeyboardPlacement::Docked {
+        inset: EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
+    };
+    let floating = KeyboardPlacement::Floating {
+        frame: Rect::from_xywh(40.0, 300.0, 320.0, 260.0),
+    };
+    let undocking = InsetMotion::try_new(
+        EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
+        EventTime::from_nanos(1_000_000),
+        Duration::from_millis(250),
+        InsetCurve::SystemKeyboard,
+    )
+    .expect("a valid motion");
+    let cases = [
+        (
+            KeyboardInset::try_at_rest(docked).expect("a docked keyboard"),
+            serde_json::json!({"target": [0.0, 0.0, 336.0, 0.0]}),
+        ),
+        (
+            KeyboardInset::try_at_rest(floating).expect("a floating keyboard"),
+            serde_json::json!({
+                "target": [0.0, 0.0, 0.0, 0.0],
+                "floating": [40.0, 300.0, 320.0, 260.0],
+            }),
+        ),
+        (
+            KeyboardInset::try_moving(floating, undocking).expect("a keyboard that undocks"),
+            serde_json::json!({
+                "target": [0.0, 0.0, 0.0, 0.0],
+                "motion": {
+                    "from": [0.0, 0.0, 336.0, 0.0],
+                    "start_ns": 1_000_000,
+                    "duration_ns": 250_000_000,
+                    "curve": {"curve": "system_keyboard"},
+                },
+                "floating": [40.0, 300.0, 320.0, 260.0],
+            }),
+        ),
+    ];
+    let recorded = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (window, _) = headless_window(&recorded);
+    let mut recording = NativeRecording {
+        header: Header::for_stream(Backend::Headless, Stream::WindowState),
+        rows: Vec::new(),
+    };
+    for (keyboard, _) in &cases {
+        window.simulate_insets(WindowInsets::ZERO.with_keyboard(*keyboard));
+        assert_eq!(window.state().insets.keyboard(), *keyboard);
+        recording.rows.push(Row::State {
+            state: RecordedWindowState::of(window.state()),
+            redacted: false,
+        });
+    }
+    let mut written = Vec::new();
+    recording.write(&mut written).expect("snapshots write");
+    let written = String::from_utf8(written).expect("JSON Lines are UTF-8");
+    let lines = written.lines().skip(1).collect::<Vec<_>>();
+    assert_eq!(lines.len(), cases.len());
+    for (line, (_, expected)) in lines.iter().zip(&cases) {
+        let row: serde_json::Value = serde_json::from_str(line).expect("a JSON row");
+        assert_eq!(&row["state"]["keyboard"], expected);
+    }
+
+    let decoded = NativeRecording::read(written.as_bytes()).expect("snapshots read");
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (replay_window, _) = headless_window(&owner);
+    let labels = Labels::default();
+    let mut target = WindowStateTarget::new(replay_window, &labels);
+    whole(decoded.replay_into(&mut target).expect("snapshots replay"));
+    assert_eq!(
+        target
+            .published
+            .iter()
+            .map(|state| state.insets.keyboard())
+            .collect::<Vec<_>>(),
+        cases.map(|(keyboard, _)| keyboard)
+    );
+
+    let at_rest = r#""target":[0.0,0.0,0.0,0.0],"floating""#;
+    assert!(written.contains(at_rest));
+    let contradictory = written.replacen(at_rest, r#""target":[0.0,0.0,336.0,0.0],"floating""#, 1);
+    assert!(matches!(
+        NativeRecording::read(contradictory.as_bytes()),
+        Err(CodecError::Invalid { line: 3, .. })
+    ));
+}
+
 /// A row the replay does not reproduce stops it with an error naming the
 /// row and its line, never a skipped row: an application stream replayed as
 /// a registry's, a registry's into a host's events, and a redacted input
@@ -1356,7 +1457,7 @@ fn a_store_focus_keeps_every_field_of_its_status() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 14] = [
+pub(super) const CASES: [(&str, fn()); 15] = [
     (
         "a_store_focus_keeps_every_field_of_its_status",
         a_store_focus_keeps_every_field_of_its_status,
@@ -1384,6 +1485,10 @@ pub(super) const CASES: [(&str, fn()); 14] = [
     (
         "app_title_bar_snapshots_keep_their_wire_values_and_replay",
         app_title_bar_snapshots_keep_their_wire_values_and_replay,
+    ),
+    (
+        "keyboard_placements_keep_their_wire_values_and_replay",
+        keyboard_placements_keep_their_wire_values_and_replay,
     ),
     (
         "app_recordings_replay_on_the_headless_host",
