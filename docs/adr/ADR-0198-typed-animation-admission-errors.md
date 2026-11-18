@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-11
 - **Supersedes:** [ADR-0186](ADR-0186-typed-animation-rest-thresholds.md), its threshold-error variant only; converter ownership and rest distances remain unchanged.
-- **Superseded-by:** [ADR-0380](ADR-0380-animation-errors-are-not-serialized.md) for the serde wire format only; the typed causes stand.
+- **Superseded-by:** [ADR-0381](ADR-0381-animation-errors-are-not-serialized.md) for the serde wire format only; the typed causes stand.
 - **Related:** [ADR-0177](ADR-0177-controller-ordered-delivery.md), [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0197](ADR-0197-explicit-animation-completion.md).
 
 ## Context

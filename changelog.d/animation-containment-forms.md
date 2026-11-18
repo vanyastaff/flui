@@ -10,4 +10,4 @@
 
 - `impl Curve for Arc<C>`: pass the curve itself, or an `Rc<dyn Curve>`.
 - The serde implementations of `AnimationError`, `AnimationInput`, `RangeDefect`,
-  `SimulationError` and `SimulationParameter`, and their `NaN`/`Infinity` wire tokens (ADR-0380).
+  `SimulationError` and `SimulationParameter`, and their `NaN`/`Infinity` wire tokens (ADR-0381).

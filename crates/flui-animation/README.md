@@ -831,7 +831,7 @@ bound. A refused operation preserves the installed run, its displayed value
 and its original future. [ADR-0198](../../docs/adr/ADR-0198-typed-animation-admission-errors.md)
 records the input, range and physical-construction error boundaries.
 
-Error types are not serialized ([ADR-0380](../../docs/adr/ADR-0380-animation-errors-are-not-serialized.md)):
+Error types are not serialized ([ADR-0381](../../docs/adr/ADR-0381-animation-errors-are-not-serialized.md)):
 a refusal is matched where it happens or converted at the application's own
 boundary.
 

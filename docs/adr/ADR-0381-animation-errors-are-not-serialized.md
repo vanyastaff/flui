@@ -1,4 +1,4 @@
-# ADR-0380: Animation errors are not serialized
+# ADR-0381: Animation errors are not serialized
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18
