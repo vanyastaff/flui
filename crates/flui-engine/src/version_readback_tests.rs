@@ -2351,16 +2351,22 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
             (15.0, 17.0),
         ),
         row(
-            "a shadow and an arc",
+            "two shadows and an arc",
             |canvas| {
                 let mut path = Path::new();
                 path.add_rect(Rect::from_xywh(4.0, 4.0, 20.0, 12.0));
                 canvas.draw_shadow(&path, Color::BLACK, 4.0);
+                // A rounded rect takes the analytic shadow instance.
+                let rounded = Path::from_rrect(RRect::from_rect_and_radius(
+                    Rect::from_xywh(4.0, 24.0, 20.0, 12.0),
+                    Radius::circular(3.0),
+                ));
+                canvas.draw_shadow(&rounded, Color::BLACK, 4.0);
                 canvas.draw_arc(
                     Rect::from_xywh(30.0, 0.0, 20.0, 20.0),
                     0.0,
                     2.0,
-                    false,
+                    true,
                     &Paint::fill(Color::GREEN),
                 );
             },
@@ -2551,6 +2557,15 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         );
         let cached_two = full_frame(&mut cached, &two, FullReason::FirstFrame);
         let recorded_two = full_frame(&mut recorded, &two, FullReason::DamageOff);
+        eprintln!(
+            "ROW {row}: hits={} ir={} px={}",
+            cached_two.counters.recording_cache_hits,
+            cached_two.ir == recorded_two.ir,
+            pixels_differing(&cached_two.pixels, &recorded_two.pixels)
+        );
+        if std::env::var_os("ROWS").is_some() {
+            continue;
+        }
         assert_eq!(
             (
                 cached_two.counters.chunks_recorded,
