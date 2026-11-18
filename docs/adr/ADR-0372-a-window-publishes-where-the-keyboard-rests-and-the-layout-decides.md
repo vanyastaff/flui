@@ -1,4 +1,4 @@
-# ADR-0371: A window publishes where the keyboard rests, and the layout decides
+# ADR-0372: A window publishes where the keyboard rests, and the layout decides
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18

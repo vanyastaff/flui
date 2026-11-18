@@ -105,7 +105,7 @@ impl Default for WindowInsets {
     }
 }
 
-/// Where the soft keyboard rests over the window's content (ADR-0371), in
+/// Where the soft keyboard rests over the window's content (ADR-0372), in
 /// logical pixels relative to the content area. The host tells the three
 /// apart; the layout decides what each means for it.
 #[derive(Debug, Clone, Copy, PartialEq)]

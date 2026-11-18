@@ -116,7 +116,7 @@ pub struct MediaQueryData {
     /// The soft keyboard floating over the window (an iPad's floating,
     /// undocked or split keyboard), its frame in logical pixels in the
     /// window's content coordinates; `None` while no keyboard floats
-    /// (ADR-0371). A floating keyboard covers no edge, so it is not in
+    /// (ADR-0372). A floating keyboard covers no edge, so it is not in
     /// [`view_insets`](Self::view_insets): a widget that must stay in view (a
     /// focused field, a toolbar) reads this and moves out from under it.
     pub floating_keyboard: Option<Rect>,

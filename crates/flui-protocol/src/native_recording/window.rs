@@ -501,7 +501,7 @@ fn is_zero_insets(insets: &[f64; 4]) -> bool {
 }
 
 /// Where the soft keyboard rests over a window, and how the inset it covers
-/// gets there (ADR-0371).
+/// gets there (ADR-0372).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

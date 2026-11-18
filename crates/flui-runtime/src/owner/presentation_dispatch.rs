@@ -298,7 +298,7 @@ impl PendingWindowState {
                         // A moving keyboard's inset is sampled by each frame at
                         // its vsync (ADR-0277 §3); one at rest is its target. A
                         // floating keyboard's frame is where it comes to rest,
-                        // written at once (ADR-0371).
+                        // written at once (ADR-0372).
                         let keyboard = insets.keyboard();
                         if keyboard.motion().is_none() {
                             data.view_insets = keyboard.target();

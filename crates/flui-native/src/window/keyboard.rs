@@ -1,5 +1,5 @@
 //! The soft keyboard over a window, from the frame its platform reports in
-//! the window's coordinates (ADR-0277 §4, ADR-0371): UIKit's
+//! the window's coordinates (ADR-0277 §4, ADR-0372): UIKit's
 //! `UIKeyboardWillChangeFrameNotification`, `UIKeyboardWillShowNotification`
 //! and `UIKeyboardWillHideNotification`, which also carry the animation's
 //! duration and `UIViewAnimationCurve`, and a browser's visual viewport or

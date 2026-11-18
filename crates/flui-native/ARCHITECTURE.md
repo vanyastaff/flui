@@ -4238,7 +4238,7 @@ The view observes `UIKeyboardWillChangeFrameNotification`,
 `UIKeyboardWillShowNotification` and `UIKeyboardWillHideNotification` and keeps
 one of them standing (`window::keyboard::Note`), its end frame in screen
 coordinates; each metrics sample converts that frame into the view as it lies
-then and publishes the keyboard's placement (ADR-0371). Which notification
+then and publishes the keyboard's placement (ADR-0372). Which notification
 replaces the standing one is `Note::replacing`'s rule and which placement a frame
 names is `window::keyboard::placement`'s, both pure and tested on every host
 (`a_notice_keeps_or_replaces_the_keyboard`,
