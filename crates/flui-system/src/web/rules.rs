@@ -1,11 +1,13 @@
 //! What the web providers decide without a page: how a dialog's filters
 //! become the browser's, what a download is named, where a launched URI
-//! goes, and what a browser's exception means. Kept apart from the DOM so
-//! the rules are tested on every host.
+//! goes, which answer a message box's button is, and what a browser's
+//! exception means. Kept apart from the DOM so the rules are tested on every
+//! host.
 
 use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
 
-use crate::dialog::{DialogError, FileDialogCapability, FileFilter};
+use crate::dialog::{DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons};
+use crate::share::{ShareCapability, ShareError, ShareResult};
 
 /// The longest extension, with its leading `.`, the File System Access API
 /// takes: Chromium refuses a longer one with a `TypeError`
@@ -270,9 +272,145 @@ pub(crate) fn launch_route(scheme: &str) -> LaunchRoute {
     }
 }
 
+/// What a share's rejection means: the user closing the share sheet
+/// (`AbortError`) is not reported, as on every system that does not tell
+/// (`ShareResult`); a refusal for want of a gesture or of an allowed
+/// document is [`Unavailable`](UnsupportedReason::Unavailable), as the
+/// provider's own check answers it; anything else is the failure the
+/// browser named.
+pub(crate) fn share_rejection(exception: BrowserException) -> ShareResult {
+    match exception {
+        BrowserException::Abort => Ok(()),
+        refusal if is_activation_refusal(refusal) => Err(ShareError::Unsupported(
+            Unsupported::of::<ShareCapability>(UnsupportedReason::Unavailable),
+        )),
+        other => Err(ShareError::Failed(other.into())),
+    }
+}
+
+/// A message box button: the answer it gives, the value its `<button>`
+/// returns to the `<dialog>`, and its label.
+pub(crate) struct BoxButton {
+    pub(crate) answer: MessageAnswer,
+    pub(crate) value: &'static str,
+    pub(crate) label: &'static str,
+}
+
+const OK: BoxButton = BoxButton {
+    answer: MessageAnswer::Ok,
+    value: "ok",
+    label: "OK",
+};
+const CANCEL: BoxButton = BoxButton {
+    answer: MessageAnswer::Cancel,
+    value: "cancel",
+    label: "Cancel",
+};
+const YES: BoxButton = BoxButton {
+    answer: MessageAnswer::Yes,
+    value: "yes",
+    label: "Yes",
+};
+const NO: BoxButton = BoxButton {
+    answer: MessageAnswer::No,
+    value: "no",
+    label: "No",
+};
+
+/// The buttons a box of `buttons` shows, in order; the first takes focus.
+pub(crate) fn box_buttons(buttons: MessageButtons) -> &'static [BoxButton] {
+    match buttons {
+        MessageButtons::OkCancel => &[OK, CANCEL],
+        MessageButtons::YesNo => &[YES, NO],
+        MessageButtons::YesNoCancel => &[YES, NO, CANCEL],
+        MessageButtons::Ok => &[OK],
+    }
+}
+
+/// The answer a box of `buttons` gives when its `<dialog>` closes with
+/// `value` as its `returnValue`: the button's, or, closed without one (the
+/// Escape key, the page closing it), what closing means for the buttons.
+/// `None` for a box with no way out but an answer ([`MessageButtons::YesNo`]),
+/// which is shown again.
+pub(crate) fn box_answer(buttons: MessageButtons, value: &str) -> Option<MessageAnswer> {
+    let shown = box_buttons(buttons);
+    if let Some(button) = shown.iter().find(|button| button.value == value) {
+        return Some(button.answer);
+    }
+    if shown
+        .iter()
+        .any(|button| button.answer == MessageAnswer::Cancel)
+    {
+        Some(MessageAnswer::Cancel)
+    } else if shown
+        .iter()
+        .all(|button| button.answer == MessageAnswer::Ok)
+    {
+        Some(MessageAnswer::Ok)
+    } else {
+        None
+    }
+}
+
+/// Whether a box of `buttons` keeps the Escape key from closing it: one
+/// with no way out but an answer.
+pub(crate) fn box_holds_escape(buttons: MessageButtons) -> bool {
+    box_answer(buttons, "").is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dismissed_share_sheet_is_not_reported_and_a_refused_gesture_is_one_answer() {
+        assert_eq!(share_rejection(BrowserException::Abort), Ok(()));
+        for refusal in [BrowserException::NotAllowed, BrowserException::Security] {
+            assert_eq!(
+                share_rejection(refusal),
+                Err(ShareError::Unsupported(Unsupported::of::<ShareCapability>(
+                    UnsupportedReason::Unavailable
+                ))),
+                "{refusal}"
+            );
+        }
+        assert_eq!(
+            share_rejection(BrowserException::Data),
+            Err(ShareError::Failed(BrowserException::Data.into()))
+        );
+    }
+
+    #[test]
+    fn a_closed_box_answers_what_closing_means_for_its_buttons() {
+        let cases = [
+            (MessageButtons::Ok, "ok", Some(MessageAnswer::Ok)),
+            (MessageButtons::Ok, "", Some(MessageAnswer::Ok)),
+            (MessageButtons::OkCancel, "ok", Some(MessageAnswer::Ok)),
+            (MessageButtons::OkCancel, "", Some(MessageAnswer::Cancel)),
+            (MessageButtons::YesNo, "yes", Some(MessageAnswer::Yes)),
+            (MessageButtons::YesNo, "no", Some(MessageAnswer::No)),
+            (MessageButtons::YesNo, "", None),
+            (MessageButtons::YesNo, "cancel", None),
+            (MessageButtons::YesNoCancel, "no", Some(MessageAnswer::No)),
+            (MessageButtons::YesNoCancel, "", Some(MessageAnswer::Cancel)),
+            (MessageButtons::Ok, "yes", Some(MessageAnswer::Ok)),
+        ];
+        for (buttons, value, answer) in cases {
+            assert_eq!(box_answer(buttons, value), answer, "{buttons:?} {value:?}");
+            if let Some(answer) = answer {
+                assert!(buttons.admits(answer), "{buttons:?} admits {answer:?}");
+            }
+        }
+        assert!(box_holds_escape(MessageButtons::YesNo));
+        assert!(!box_holds_escape(MessageButtons::YesNoCancel));
+        assert_eq!(
+            box_buttons(MessageButtons::YesNoCancel)
+                .iter()
+                .map(|button| button.label)
+                .collect::<Vec<&str>>(),
+            ["Yes", "No", "Cancel"]
+        );
+    }
 
     fn images() -> FileFilter {
         FileFilter::new("Images")

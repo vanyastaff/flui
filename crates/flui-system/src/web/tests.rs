@@ -13,8 +13,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use flui_platform::capability::{
-    Abandoned, Completion, CompletionSource, HostBridge, OwnerJob, OwnerPoster, OwnerScope,
-    PendingCompletions, ProviderContext, RuntimeLocals, WindowCloser, WindowRef,
+    Abandoned, Capability, CapabilityRegistrar, Completion, CompletionSource, HostBridge, OwnerJob,
+    OwnerPoster, OwnerScope, PendingCompletions, Plugin as _, ProviderContext, RuntimeLocals,
+    WindowCloser, WindowRef,
 };
 use flui_platform::drag::PlatformDragSource;
 use flui_platform::haptics::PlatformHaptics;
@@ -36,17 +37,27 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{Element, Event, EventInit, HtmlCanvasElement, HtmlInputElement};
+use web_sys::{Element, Event, EventInit, HtmlCanvasElement, HtmlDialogElement, HtmlInputElement};
 
 use super::badge::WebBadge;
 use super::dialogs::{PagePicker, WebDialogs};
 use super::launcher::WebLauncher;
+use super::message_box::WebMessageBoxes;
 use super::page::{Activation, Page};
+use super::share::WebShare;
+use crate::autostart::AutostartCapability;
+use crate::dialog::MessageBoxCapability;
 use crate::dialog::{
-    Dialog, DialogError, FileDialogCapability, FileDialogs, FileFilter, OpenRequest, PickedForm,
+    Dialog, DialogError, FileDialogCapability, FileDialogs, FileFilter, MessageAnswer,
+    MessageBoxRequest, MessageBoxes, MessageButtons, MessageLevel, OpenRequest, PickedForm,
     SaveRequest,
 };
+use crate::jump_list::JumpListCapability;
+use crate::os::OsCapability;
+use crate::share::{Share, ShareCapability, ShareError, ShareRequest};
+use crate::shortcuts::GlobalShortcutCapability;
 use crate::taskbar::{EntryState, Honoured, Progress, TaskbarEntry};
+use crate::user_dirs::UserDirCapability;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -1124,4 +1135,372 @@ fn a_browser_without_the_badging_api_has_no_entry() {
             UnsupportedReason::NotOnThisDevice
         ))
     );
+}
+
+fn message_boxes(owner: &TestOwner, window: &CanvasWindow) -> MessageBoxes {
+    MessageBoxes::try_new(
+        WebMessageBoxes::new(window.page(true)),
+        &owner.ctx(&window.window),
+    )
+    .expect("a window has message boxes")
+}
+
+fn the_box(window: &CanvasWindow) -> HtmlDialogElement {
+    window
+        .find("dialog")
+        .expect("the box is on the page")
+        .unchecked_into::<HtmlDialogElement>()
+}
+
+#[wasm_bindgen_test]
+async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let answered = land(
+        message_boxes(&owner, &window).show(
+            MessageBoxRequest::new("Save the changes?\nThey are lost otherwise.")
+                .title("Unsaved changes")
+                .level(MessageLevel::Warning)
+                .buttons(MessageButtons::YesNoCancel),
+        ),
+    );
+    let dialog = the_box(&window);
+    assert!(dialog.open(), "the box is shown");
+    assert_eq!(dialog.get_attribute("role").as_deref(), Some("alertdialog"));
+    assert_eq!(
+        dialog.get_attribute("aria-label").as_deref(),
+        Some("Unsaved changes")
+    );
+    let labels: Vec<String> = (0..3)
+        .filter_map(|at| {
+            dialog
+                .query_selector_all("button")
+                .ok()?
+                .get(at)?
+                .text_content()
+        })
+        .collect();
+    assert_eq!(labels, ["Yes", "No", "Cancel"]);
+
+    dialog
+        .query_selector("button[value=no]")
+        .ok()
+        .flatten()
+        .expect("a No button")
+        .unchecked_into::<web_sys::HtmlElement>()
+        .click();
+    owner.until_landed(&answered).await;
+
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(MessageAnswer::No))));
+    assert!(window.find("dialog").is_none(), "the box left the page");
+}
+
+#[wasm_bindgen_test]
+async fn a_box_closed_without_a_button_answers_what_closing_means() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let boxes = message_boxes(&owner, &window);
+    let cancelled =
+        land(boxes.show(MessageBoxRequest::new("Go on?").buttons(MessageButtons::OkCancel)));
+    let dialog = the_box(&window);
+    assert!(
+        dispatch(&dialog, "cancel", true),
+        "Escape may close a box that can be cancelled"
+    );
+    dialog.close();
+    owner.until_landed(&cancelled).await;
+    assert_eq!(*cancelled.borrow(), Some(Ok(Ok(MessageAnswer::Cancel))));
+}
+
+#[wasm_bindgen_test]
+async fn a_yes_or_no_box_stays_until_one_is_chosen() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let boxes = message_boxes(&owner, &window);
+    let answered =
+        land(boxes.show(MessageBoxRequest::new("Replace it?").buttons(MessageButtons::YesNo)));
+    let dialog = the_box(&window);
+    assert!(
+        !dispatch(&dialog, "cancel", true),
+        "Escape does not close a box with no way out but an answer"
+    );
+    dialog.close();
+    owner.settle().await;
+    assert_eq!(*answered.borrow(), None, "closing is no answer");
+    assert!(dialog.open(), "the box is shown again");
+
+    dialog
+        .query_selector("button[value=yes]")
+        .ok()
+        .flatten()
+        .expect("a Yes button")
+        .unchecked_into::<web_sys::HtmlElement>()
+        .click();
+    owner.until_landed(&answered).await;
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(MessageAnswer::Yes))));
+}
+
+#[wasm_bindgen_test]
+fn a_dropped_box_is_closed_and_taken_down() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let shown = message_boxes(&owner, &window).show(MessageBoxRequest::new("Working…"));
+    assert!(the_box(&window).open());
+    drop(shown);
+    assert!(window.find("dialog").is_none());
+}
+
+fn share(owner: &TestOwner, window: &CanvasWindow, active: bool) -> Share {
+    Share::try_new(
+        WebShare::new(window.page(active)),
+        &owner.ctx(&window.window),
+    )
+    .expect("a window has a share sheet")
+}
+
+#[wasm_bindgen_test]
+async fn a_share_reaches_the_web_share_api_and_a_dismissed_sheet_is_not_reported() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let shared: Rc<RefCell<Vec<(Option<String>, Option<String>)>>> = Rc::default();
+    let seen = Rc::clone(&shared);
+    let answers: Rc<RefCell<Vec<Option<&'static str>>>> = Rc::new(RefCell::new(vec![
+        Some("NotAllowedError"),
+        Some("AbortError"),
+        None,
+    ]));
+    let next = Rc::clone(&answers);
+    let stand_in = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |data: JsValue| {
+        let read = |name: &str| {
+            Reflect::get(&data, &JsValue::from_str(name))
+                .ok()
+                .and_then(|value| value.as_string())
+        };
+        seen.borrow_mut().push((read("text"), read("url")));
+        match next.borrow_mut().pop().flatten() {
+            None => Promise::resolve(&JsValue::UNDEFINED).into(),
+            Some(name) => {
+                let error = js_sys::Error::new("refused");
+                error.set_name(name);
+                Promise::reject(&error).into()
+            }
+        }
+    });
+    let navigator: JsValue = web_sys::window()
+        .expect("the test runs in a page")
+        .navigator()
+        .into();
+    let _replaced = Replaced::new(&navigator, "share", stand_in.as_ref());
+    let share = share(&owner, &window, true);
+    let request = || {
+        ShareRequest::new()
+            .text("Look")
+            .uri(ExternalUri::try_new("https://example.org/", &[Scheme::HTTPS]).expect("a link"))
+    };
+
+    let done = landed(share.share(request()));
+    owner.until_landed(&done).await;
+    let dismissed = landed(share.share(request()));
+    owner.until_landed(&dismissed).await;
+    let refused = landed(share.share(request()));
+    owner.until_landed(&refused).await;
+
+    assert_eq!(*done.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(*dismissed.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(
+        *refused.borrow(),
+        Some(Ok(Err(ShareError::Unsupported(Unsupported::of::<
+            ShareCapability,
+        >(
+            UnsupportedReason::Unavailable
+        ))))),
+        "the browser's refusal of the gesture is the provider's own answer"
+    );
+    assert_eq!(
+        shared.borrow()[0],
+        (
+            Some("Look".to_owned()),
+            Some("https://example.org/".to_owned())
+        )
+    );
+}
+
+#[wasm_bindgen_test]
+async fn a_share_of_files_or_outside_a_gesture_is_refused_before_the_browser_is_asked() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let files =
+        landed(share(&owner, &window, true).share(ShareRequest::new().file("/home/me/a.txt")));
+    let outside = landed(share(&owner, &window, false).share(ShareRequest::new().text("Look")));
+    owner.until_landed(&outside).await;
+    let refused = |reason| {
+        Some(Ok(Err(ShareError::Unsupported(Unsupported::of::<
+            ShareCapability,
+        >(reason)))))
+    };
+    assert_eq!(
+        *files.borrow(),
+        refused(UnsupportedReason::NotOnThisPlatform)
+    );
+    assert_eq!(*outside.borrow(), refused(UnsupportedReason::Unavailable));
+}
+
+#[wasm_bindgen_test]
+async fn a_browser_without_web_share_has_no_share_sheet() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let navigator: JsValue = web_sys::window()
+        .expect("the test runs in a page")
+        .navigator()
+        .into();
+    // Hide the API where the browser has it, as a browser without it is.
+    let _replaced = Replaced::new(&navigator, "share", &JsValue::UNDEFINED);
+    let answer = landed(share(&owner, &window, true).share(ShareRequest::new().text("Look")));
+    owner.until_landed(&answer).await;
+    assert_eq!(
+        *answer.borrow(),
+        Some(Ok(Err(ShareError::Unsupported(Unsupported::of::<
+            ShareCapability,
+        >(
+            UnsupportedReason::NotOnThisDevice
+        )))))
+    );
+}
+
+/// The handle `SystemPlugin` registers for `C` on a page, acquired in
+/// `window` of `owner`'s runtime: what an application gets through the seam.
+fn system_handle<C: Capability>(
+    owner: &TestOwner,
+    window: &WindowRef,
+) -> Result<C::Handle, Unsupported> {
+    let mut registrar = CapabilityRegistrar::new();
+    crate::SystemPlugin::new().register(&mut registrar);
+    let entry = registrar
+        .into_entries()
+        .into_iter()
+        .find(|entry| entry.capability() == std::any::TypeId::of::<C>())
+        .expect("the plugin registers every service");
+    entry.provide(&owner.ctx(window)).map(|handle| {
+        *handle
+            .downcast::<C::Handle>()
+            .expect("a provider hands out its capability's handle")
+    })
+}
+
+/// A window of `owner`'s runtime whose handle names no canvas, as a
+/// headless window's does not, open while the returned host and closer live.
+fn canvasless_window(owner: &TestOwner) -> (WindowRef, Rc<dyn PlatformWindow>, WindowCloser) {
+    let (closer, lifetime) = WindowCloser::new();
+    let host: Rc<dyn PlatformWindow> = Rc::new(CanvasHostWindow {
+        id: owner
+            .windows
+            .next()
+            .expect("a test opens far fewer windows than ids"),
+        target: Arc::new(CanvasTarget(0)),
+    });
+    (WindowRef::new(&host, lifetime), host, closer)
+}
+
+/// What a page's acquisition of `C` answers: provided, or refused for
+/// this reason.
+fn acquisition<C: Capability>(
+    owner: &TestOwner,
+    window: &WindowRef,
+) -> Result<(), UnsupportedReason> {
+    system_handle::<C>(owner, window)
+        .map(|_| ())
+        .map_err(|refusal| refusal.reason)
+}
+
+/// The rows of the crate's conformance table (`tests/conformance.rs`) for
+/// the page's own providers, through `SystemPlugin`'s registration: that
+/// table runs on the headless host, whose windows are no canvases and
+/// whose harness waits on threads, so the web subject runs here, in a
+/// browser, with canvas windows.
+#[wasm_bindgen_test]
+async fn the_web_providers_keep_the_system_services_contract() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let page = &window.window;
+
+    // Each service is provided, or refused for a lasting reason.
+    assert_eq!(acquisition::<LauncherCapability>(&owner, page), Ok(()));
+    assert_eq!(acquisition::<FileDialogCapability>(&owner, page), Ok(()));
+    assert_eq!(acquisition::<MessageBoxCapability>(&owner, page), Ok(()));
+    assert_eq!(acquisition::<ShareCapability>(&owner, page), Ok(()));
+    assert!(
+        matches!(
+            acquisition::<crate::taskbar::TaskbarCapability>(&owner, page),
+            Ok(()) | Err(UnsupportedReason::NotOnThisDevice)
+        ),
+        "the badge is there where the browser has the Badging API"
+    );
+    let not_a_page = Err(UnsupportedReason::NotOnThisPlatform);
+    assert_eq!(acquisition::<AutostartCapability>(&owner, page), not_a_page);
+    assert_eq!(
+        acquisition::<GlobalShortcutCapability>(&owner, page),
+        not_a_page
+    );
+    assert_eq!(acquisition::<UserDirCapability>(&owner, page), not_a_page);
+    assert_eq!(acquisition::<JumpListCapability>(&owner, page), not_a_page);
+    assert_eq!(acquisition::<OsCapability>(&owner, page), not_a_page);
+
+    // A window that is not a canvas has no page.
+    let (canvasless, _host, _closer) = canvasless_window(&owner);
+    for refused in [
+        acquisition::<LauncherCapability>(&owner, &canvasless),
+        acquisition::<FileDialogCapability>(&owner, &canvasless),
+        acquisition::<MessageBoxCapability>(&owner, &canvasless),
+        acquisition::<ShareCapability>(&owner, &canvasless),
+    ] {
+        assert_eq!(refused, Err(UnsupportedReason::NoWindow));
+    }
+
+    // A refusal the seam owes settles at an owner turn, never inside the
+    // call, and a malformed request is refused without asking the browser.
+    let launcher = system_handle::<LauncherCapability>(&owner, page).expect("a launcher");
+    let relative = landed(launcher.open_path(Path::new("relative.pdf")));
+    assert!(relative.borrow().is_none(), "never inside the call");
+    let dialogs = system_handle::<FileDialogCapability>(&owner, page).expect("dialogs");
+    let boxes = system_handle::<MessageBoxCapability>(&owner, page).expect("message boxes");
+    let share = system_handle::<ShareCapability>(&owner, page).expect("a share sheet");
+    let misnamed = land(dialogs.save(SaveRequest::new().suggested_name("dir/name")));
+    let empty_box = land(boxes.show(MessageBoxRequest::new("")));
+    let empty_share = landed(share.share(ShareRequest::new()));
+    owner.until_landed(&empty_share).await;
+    assert_eq!(*relative.borrow(), Some(Ok(Err(LaunchError::RelativePath))));
+    assert_eq!(
+        *misnamed.borrow(),
+        Some(Ok(Err(DialogError::InvalidRequest(
+            crate::dialog::MalformedRequest::SuggestedName
+        ))))
+    );
+    assert_eq!(
+        *empty_box.borrow(),
+        Some(Ok(Err(DialogError::InvalidRequest(
+            crate::dialog::MalformedRequest::EmptyMessage
+        ))))
+    );
+    assert_eq!(
+        *empty_share.borrow(),
+        Some(Ok(Err(ShareError::InvalidRequest(
+            crate::share::MalformedShare::Empty
+        ))))
+    );
+    assert!(
+        window.find("dialog, input, a").is_none(),
+        "nothing was shown"
+    );
+
+    // The handles of a closed window answer that it closed, and never ask
+    // the browser.
+    window.closer.close();
+    let opened = land(dialogs.open(OpenRequest::files()));
+    let shown = land(boxes.show(MessageBoxRequest::new("Saved")));
+    let shared = landed(share.share(ShareRequest::new().text("x")));
+    owner.until_landed(&shared).await;
+    assert_eq!(*opened.borrow(), Some(Ok(Err(DialogError::WindowClosed))));
+    assert_eq!(*shown.borrow(), Some(Ok(Err(DialogError::WindowClosed))));
+    assert_eq!(*shared.borrow(), Some(Ok(Err(ShareError::WindowClosed))));
+    assert!(window.find("dialog, input").is_none(), "nothing was shown");
 }

@@ -129,8 +129,14 @@ mod tests;
 
 use scan::{BOUNDARY_MODULE, Kind, Verdict};
 
-/// The crate whose entries the gate reads: its library root.
-const ROOT: &str = "crates/flui-native/src/lib.rs";
+/// The crates whose entries the gate reads, by library root: the core host,
+/// and the capability crate whose Windows providers own window procedures
+/// and WinRT delegates. Each holds its own `owner::panic_boundary::os_entry`
+/// under the same rule.
+const ROOTS: [&str; 2] = [
+    "crates/flui-native/src/lib.rs",
+    "crates/flui-system/src/lib.rs",
+];
 
 /// Arguments for `cargo xtask panic-boundary`.
 #[derive(Debug, clap::Args)]
@@ -149,21 +155,32 @@ pub(crate) fn panic_boundary(args: &PanicBoundaryArgs) -> anyhow::Result<ExitCod
     if args.self_test {
         return Ok(self_test());
     }
-    let report = check(&Disk(util::repo_root()), ROOT)?;
-    if args.list {
-        for entry in &report.entries {
-            println!("{entry}");
+    let mut failed = false;
+    for root in ROOTS {
+        let report = check(&Disk(util::repo_root()), root)?;
+        if args.list {
+            for entry in &report.entries {
+                println!("{entry}");
+            }
+        }
+        if report.findings.is_empty() {
+            println!("panic-boundary: {root}: {}", report.summary());
+            continue;
+        }
+        failed = true;
+        eprintln!(
+            "panic-boundary: {root}: {} problem(s)",
+            report.findings.len()
+        );
+        for finding in &report.findings {
+            eprintln!("  - {finding}");
         }
     }
-    if report.findings.is_empty() {
-        println!("panic-boundary: {}", report.summary());
-        return Ok(ExitCode::SUCCESS);
-    }
-    eprintln!("panic-boundary: {} problem(s)", report.findings.len());
-    for finding in &report.findings {
-        eprintln!("  - {finding}");
-    }
-    Ok(ExitCode::FAILURE)
+    Ok(if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// What is wrong with an entry or an item.

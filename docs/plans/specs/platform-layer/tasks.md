@@ -5447,28 +5447,91 @@ GPU-память простаивающего или невидимого окн
   лаунчера — тест `flui-system`. Тесты `flui-system` теперь берут абсолютные пути через
   `temp_dir`: `/srv/…` и `/home` относительны на Windows, и два теста там падали. Примитив вне
   фичи недоступен (модуль за `cfg(feature = "scripted")`). Запуски на устройствах не нужны.
-- [ ] **LY57** (не закрыта: крейт, плагин и две возможности на `main`; провайдеров Windows,
-  остальных служб и общей conformance-таблицы нет) — #2150 (`9450db8e1`), портал Linux #2158,
-  `Unsupported` в ошибках запуска и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт —
-  `crates/flui-system`, ярус `pkg`, kind `capability`.
-  `SystemPlugin` объявлен в `[package.metadata.flui.capability]`; фасад публикует крейт как
-  `flui::services::system` за фичей `system`, выключенной по умолчанию. Возможности: файловые
-  диалоги (`FileDialogCapability`, `FileDialogs`, модальны окну виджета, один на окно) и запуск
-  (`LauncherCapability`, `Launcher` в контракте, `flui_platform::launch`: URI, открыть путь,
-  reveal, trash). Двойники `ScriptedLauncher` и `ScriptedFileDialogs` (их плагин `ScriptedSystem`,
-  `ScriptedSystem::on`) построены на сценарном примитиве LY54. Вне Linux плагин
-  регистрирует отказ `NotYetOnThisHost`. Тесты (`crates/flui-system/tests/`):
-  `the_declared_plugin_is_the_crates_default_plugin`;
-  `a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn`,
-  `each_path_request_reaches_the_system_and_carries_its_answer`,
-  `the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere` (`launcher.rs`);
-  `an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks`,
-  `a_window_shows_one_dialog_at_a_time`, `a_dialog_error_carries_its_unsupported`
-  (`dialogs.rs`). Остаётся: провайдеры Windows и прогон против реальной ОС (`prompt_for_*` и OLE
-  по-прежнему в `crates/flui-native/src/owner/windows.rs`); возможности share, message box,
-  автозапуска, глобальных сочетаний, прогресса и значка, jump list, путей и сведений об ОС;
-  conformance-таблица против симулятора. Плагин доходит до приложения, только если оно включит
-  фичу `system` и зарегистрирует его: в репозитории регистрацию показывает лишь `flui add`.
+- [x] **LY57** (закрыта веткой `system/windows-providers`: провайдеры Windows всех служб, message
+  box, share, jump list и сведения об ОС, общая conformance-таблица; прогоны на рабочем столе —
+  заметки строк parity) — #2150 (`9450db8e1`), портал Linux #2158, `Unsupported` в ошибках запуска
+  и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт — `crates/flui-system`, ярус `pkg`,
+  kind `capability`; `SystemPlugin` объявлен в `[package.metadata.flui.capability]`, фасад
+  публикует крейт как `flui::services::system` за фичей `system`. Правила крейта — его
+  `ARCHITECTURE.md`. Службы: запуск (`Launcher` контракта), файловые диалоги и message box
+  (`FileDialogs`, `MessageBoxes`: общая таблица «один диалог на окно», `Dialog` живёт, пока его
+  держат, ADR-0344), `Share`, `JumpList`, `Os` (сведения об ОС) — контракты этой ветки;
+  автозапуск, глобальные сочетания, запись лаунчера и папки пользователя — контракты LY59
+  (`Autostart`, `GlobalShortcuts`, `TaskbarEntry`, `UserDirs`), к которым ветка добавила
+  `ShortcutError::Exhausted`; свои дубли (`LaunchAtLogin`, `Shortcut`/`ShortcutRegistration`,
+  `Taskbar` окна, папки в `Os`) удалены при слиянии с LY59. Правила — в handle: искажённый запрос
+  отказывается до бэкенда (`MalformedRequest::Text`/`EmptyMessage`, `MalformedShare`,
+  `MalformedTask`), закрытое окно — `WindowClosed` без обращения к системе, ответ вне запроса —
+  `MalformedAnswer`. Заголовок и подпись кнопки файлового диалога длиннее `MAX_TEXT_LEN` или с
+  управляющим символом отказываются на всех хостах. `flui_platform::launch::is_local_path` — общее
+  правило локальности запуска и share. Двойники всех служб — `testing::ScriptedSystem::on`.
+  Windows (`win32`): модальный диалог — на своём потоке в STA, владелец — окно виджета (главный
+  цикл владельца продолжает кадры), закрытие — через окно отмены потока (`IFileDialog::Close`,
+  `EndDialog`); фильтры — `*.ext`, MIME отказывается `NotOnThisPlatform`, `SetDefaultExtension` и
+  `GetFileTypeIndex`; запуск, автозапуск (`Run`, выбор пользователя в `StartupApproved\Run` не
+  перезаписывается: включение выключенной им записи отвечает `Disabled`), jump list и папки
+  (`SHGetKnownFolderPath`) — поток на запрос в STA, не больше `threads::MAX_IN_FLIGHT` на runtime;
+  URI — `ShellExecuteExW` с `open` без класса схемы (выбор пользователя), однобуквенная схема
+  отказывается; документ — `CreateFileW`, `GetFinalPathNameByHandleW`, пол `runs_when_opened` и
+  `AssocIsDangerous`, затем открытие по итоговому имени; reveal — `SHOpenFolderAndSelectItems`;
+  trash — `IFileOperation` с `FOFX_RECYCLEONDELETE` и `FOF_WANTNUKEWARNING`; share, горячие
+  клавиши (`RegisterHotKey` на своём message-only окне; сочетание связывается с предпочтённым
+  триггером или выпадает из `Bound`; только нажатия — `WM_HOTKEY` не сообщает отпускание) и запись
+  лаунчера (`ITaskbarList3` на кнопках окон, где её получили; сабклассинг ради
+  `TaskbarButtonCreated`, `SetWindowSubclass` по ординалу: `comctl32.dll` 5.82 экспортирует его
+  только по ординалу) — на потоке владельца. Linux: message box, share и jump list —
+  `NotOnThisPlatform` в регистрации портала; сведения об ОС — `NotYetOnThisHost`.
+  Тесты (`crates/flui-system/tests/`): таблица `every_provider_keeps_the_system_services_contract`
+  (`conformance.rs`; каждая служба против двойников и против `SystemPlugin` хоста; на Windows
+  прочитала сведения об ОС и домашнюю папку с реальной системы); `shell_services.rs`:
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`,
+  `a_message_box_ends_with_its_window`,
+  `a_share_reaches_its_windows_sheet_and_a_malformed_one_is_refused_without_asking`,
+  `a_jump_list_is_refused_without_asking_when_its_tasks_are_malformed`,
+  `the_os_is_what_its_system_says`; строки текста в
+  `a_malformed_request_is_refused_without_showing_a_dialog`;
+  `the_system_plugin_provides_the_shell_on_windows_the_portal_on_linux_and_refuses_elsewhere`
+  (строка на каждую службу и ОС). Модули Windows (`win32::*::tests`):
+  `a_dialog_answers_from_its_thread_at_an_owner_turn`,
+  `a_dropped_dialog_is_closed_on_its_thread_and_frees_the_window`,
+  `a_dialog_ends_with_its_window_and_is_closed_on_its_thread`,
+  `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`,
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`,
+  `enabling_writes_the_quoted_executable_and_the_users_choice_stands`,
+  `an_autostart_request_is_answered_from_a_shell_thread_through_the_handle`,
+  `a_binding_hears_what_was_bound_then_each_press_until_it_drops`,
+  `a_chord_another_application_holds_is_left_out`,
+  `a_button_made_late_or_again_shows_the_entry_last_set`,
+  `the_entry_is_shown_on_every_window_it_was_acquired_in`,
+  `a_folder_is_found_on_a_shell_thread_and_answered_as_the_system_said`,
+  `an_argument_is_quoted_as_the_command_line_splitter_reads_it_back`,
+  `a_runtime_runs_a_bounded_number_of_shell_requests_and_frees_each_place` и таблицы
+  отображений. С откатами: без проверки заголовка и подписи падает
+  `a_malformed_request_is_refused_without_showing_a_dialog`; без `MessageButtons::admits` —
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`; с ответом
+  отменённого диалога — `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`;
+  с судом по данному пути вместо итогового —
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`. После независимого
+  чтения: удержание файла читает данные и не разделяет удаление
+  (`a_held_file_cannot_be_renamed_until_it_is_let_go`, красный при открытии только атрибутов);
+  итоговое имя вне локального диска — `NotLocal`
+  (`a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led`); стадия диалога уходит из
+  `Showing` на любом выходе, паника включена
+  (`a_dialog_whose_code_panics_ends_before_its_window_goes_and_a_later_drop_posts_nothing`); окно
+  держит один поток диалога, пока тот не вышел
+  (`a_window_takes_no_new_dialog_until_the_dismissed_one_has_left_its_thread`); id горячих клавиш
+  не переиспользуются, `ShortcutError::Exhausted`
+  (`a_press_queued_for_a_dropped_binding_never_reaches_the_binding_after_it`,
+  `a_runtime_that_numbered_every_hot_key_ends_the_next_binding_for_good`); каждая точка входа ОС —
+  через `owner::panic_boundary::os_entry`, `xtask panic-boundary` читает и `flui-system`; запрос
+  дольше `ShellThreads::ABANDON_AFTER` бросается со своим отказом
+  (`a_request_past_its_deadline_is_abandoned_its_caller_refused_and_its_place_reclaimed`). Каждый
+  из этих тестов красный с откатом своей правки. Не запускалось: ни один настоящий диалог,
+  запуск, горячая клавиша, запись автозапуска, изменение панели задач, jump list или share на
+  рабочем столе — owed в заметках строк parity (System services, Dock menu/jump list); macOS,
+  iOS, Android, wasm не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`,
+  `reveal_path`, `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в
+  `docs/gaps.md`.
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
@@ -5511,15 +5574,14 @@ GPU-память простаивающего или невидимого окн
   `zxdg_exporter_v2` добавлен): `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends`,
   `a_compositor_without_an_exporter_names_no_portal_parent`; под sway —
   `a_portal_parent_names_the_window_while_its_request_holds_the_export`. Message box и share:
-  портала нет ни для того, ни для другого, контракта ещё нет; их контракт и отказ Linux
-  `NotOnThisPlatform` приходят с первым провайдером (LY57/LY60), как говорит
-  `crates/flui-system/ARCHITECTURE.md`. Общая conformance-таблица — за LY57. Прогоны против
+  портала нет ни для того, ни для другого; их контракт пришёл с провайдером Windows (LY57), и
+  регистрация портала отказывает в них `NotOnThisPlatform`. Общая conformance-таблица — LY57.
+  Прогоны против
   порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
   «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
   shortcuts», «Launch at login», «User folders».
-- [ ] **LY60** (не закрыта: запуск, файловые диалоги и значок сделаны веткой
-  `system/web-providers` (#2765); message box, share и jump list ждут своих контрактов из LY57,
-  диалог папок остаётся; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
+- [ ] **LY60** (не закрыта: все службы сделаны веткой `system/web-providers` (#2765), остаётся
+  диалог папок; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
   `crates/flui-system/src/web/`, правила — раздел «The web providers» в
   `crates/flui-system/ARCHITECTURE.md`. Страница достаётся через окно виджета: канвас, на который
   указывает `WebCanvasWindowHandle` его `WindowRef` (`web::page::Page`), не через глобальные
@@ -5542,8 +5604,14 @@ GPU-память простаивающего или невидимого окн
   `Unavailable`), `opener` обрезан, страница открыта ссылкой этого контекста с `rel=noreferrer`;
   прочие разрешённые схемы — ссылкой самой страницы (без выгрузки), `ftp`/`ws`/`wss` —
   `NoHandler`; пути — `NotOnThisPlatform`. Значок (`TaskbarEntry`) — счёт Badging API, без
-  прогресса и без подтверждения; без API — `NotOnThisDevice`. Автозапуск, глобальные сочетания и
-  папки — `NotOnThisPlatform`. На всех хостах: `PickedFile::path` — `Option<&Path>`,
+  прогресса и без подтверждения; без API — `NotOnThisDevice`. Message box — модальный `<dialog>`
+  рядом с канвасом, кнопки по-английски, не `alert`/`confirm` (те держат единственный поток
+  страницы, страница не может их закрыть при сбросе диалога или закрытии окна, ADR-0344, и в них
+  нет «да/нет/отмена»); Escape закрывает с ответом закрытия, «да/нет» его не пропускает и
+  показывается снова. Share — `navigator.share` (заголовок, текст, ссылка) под жестом; без API —
+  `NotOnThisDevice`, файлы — `NotOnThisPlatform`, отказ жеста браузером — `Unavailable`, закрытый
+  лист не сообщается. Автозапуск, глобальные сочетания, папки, jump list и сведения об ОС —
+  `NotOnThisPlatform`. На всех хостах: `PickedFile::path` — `Option<&Path>`,
   `PickedFile::form`/`PickedForm`, `try_from_contents`, `try_download`, `contents`, `file_name`;
   сохранение с содержимым пишет новый файл рядом с выбранным, синхронизирует и переименовывает
   поверх, на своём потоке, и отвечает после записи (сбой — код системы);
@@ -5557,7 +5625,9 @@ GPU-память простаивающего или невидимого окн
   `the_picks_are_refused_past_the_limit_before_they_are_read`,
   `a_picker_ends_cancelled_handed_to_the_input_or_with_one_refusal_of_the_gesture`,
   `a_pick_the_filters_do_not_mean_refuses_the_whole_answer`,
-  `a_page_opens_apart_a_handler_takes_its_scheme_and_a_socket_has_none`);
+  `a_page_opens_apart_a_handler_takes_its_scheme_and_a_socket_has_none`,
+  `a_dismissed_share_sheet_is_not_reported_and_a_refused_gesture_is_one_answer`,
+  `a_closed_box_answers_what_closing_means_for_its_buttons`);
   `a_browser_exception_is_read_from_its_name_and_shown_by_it` во `flui-platform`; через публичный
   API (`tests/dialogs.rs`): `a_save_with_contents_answers_once_they_are_written_where_the_user_chose`,
   `a_save_whose_write_fails_answers_the_systems_failure` (обе красные без записи в handle),
@@ -5575,10 +5645,15 @@ GPU-память простаивающего или невидимого окн
   истёкшем жесте, загрузка на месте отказанного пикера сохранения, запись выбранного файла после
   сброса, загрузка вне жеста (`PickedForm::Download`), сохранение без содержимого, запуск через
   пустой контекст без `opener` и с `rel=noreferrer`, заблокированное окно, ссылка `mailto:`
-  страницы, `wss` — `NoHandler`, значок в замещённый Badging API и браузер без него. Остаётся:
-  message box, share и jump list (контракты придут с LY57), диалог папок (`NotYetOnThisHost`:
-  браузер может отдать папку, но выбор не несёт её дерево), записан в `docs/gaps.md`;
-  conformance-таблица на wasm32 не идёт (окна headless-хоста — не канвасы).
+  страницы, `wss` — `NoHandler`, значок в замещённый Badging API и браузер без него, message box
+  по кнопкам, Escape и «да/нет», сброшенный box, share в замещённый `navigator.share` и браузер
+  без него; строки conformance-таблицы для страницы —
+  `the_web_providers_keep_the_system_services_contract` (через регистрацию `SystemPlugin`: каждая
+  служба выдана или отказана по долгой причине, окно не-канвас — `NoWindow`, отказ шва на ходу
+  владельца, искажённый запрос без браузера, закрытое окно); сама таблица `tests/conformance.rs`
+  идёт на headless-хосте, чьи окна — не канвасы, а обвязка ждёт потоки, поэтому на wasm32 не
+  запускается. Остаётся: диалог папок (`NotYetOnThisHost`: браузер может отдать папку, но выбор не
+  несёт её дерево), записан в `docs/gaps.md`.
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который

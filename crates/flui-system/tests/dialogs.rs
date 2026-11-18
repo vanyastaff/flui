@@ -15,8 +15,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, MalformedRequest, OpenRequest, OpenResult, PickedFile, PickedForm, Picks,
-    SaveLocation, SaveRequest, SaveResult,
+    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult, PickedFile, PickedForm,
+    Picks, SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -467,6 +467,19 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
             OpenRequest::files().directory("relative/dir"),
             MalformedRequest::RelativeDirectory,
         ),
+        // Windows would show a title up to its NUL; D-Bus refuses one.
+        (
+            OpenRequest::files().title("Open\0 secretly"),
+            MalformedRequest::Text,
+        ),
+        (
+            OpenRequest::files().accept_label("Two\nlines"),
+            MalformedRequest::Text,
+        ),
+        (
+            OpenRequest::files().title("t".repeat(MAX_TEXT_LEN + 1)),
+            MalformedRequest::Text,
+        ),
     ];
     let saves = [
         (
@@ -492,6 +505,10 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         (
             SaveRequest::new().directory("relative"),
             MalformedRequest::RelativeDirectory,
+        ),
+        (
+            SaveRequest::new().title("Save\u{7}"),
+            MalformedRequest::Text,
         ),
     ];
     let open_answers = opens.map(|(request, malformed)| (land(handle.open(request)), malformed));

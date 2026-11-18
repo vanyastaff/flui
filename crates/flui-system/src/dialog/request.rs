@@ -7,6 +7,36 @@ use std::sync::Arc;
 
 use flui_platform::data_transfer::TransferLimits;
 
+/// The longest title, button label or message a dialog shows, in bytes.
+///
+/// Checked with the rest of a request, before the system is asked, so one
+/// limit holds on every host: Windows takes text up to its first NUL and
+/// D-Bus refuses one, so a NUL in any of them is refused as well.
+pub const MAX_TEXT_LEN: usize = 4096;
+
+/// Whether `text` is a line a dialog can show as written: at most
+/// [`MAX_TEXT_LEN`] bytes and no control character (a title, a label).
+pub(super) fn is_line(text: &str) -> bool {
+    text.len() <= MAX_TEXT_LEN && !text.chars().any(char::is_control)
+}
+
+/// Whether `text` is a body a dialog can show as written: at most
+/// [`MAX_TEXT_LEN`] bytes and no NUL; line breaks are kept.
+pub(super) fn is_body(text: &str) -> bool {
+    text.len() <= MAX_TEXT_LEN && !text.contains('\0')
+}
+
+/// The first title or label of a request that is not a line.
+fn check_lines<'a>(
+    lines: impl IntoIterator<Item = Option<&'a str>>,
+) -> Result<(), MalformedRequest> {
+    if lines.into_iter().flatten().all(is_line) {
+        Ok(())
+    } else {
+        Err(MalformedRequest::Text)
+    }
+}
+
 /// A named set of files an open or save dialog offers to filter by: "Images"
 /// with `png` and `jpg`.
 ///
@@ -270,6 +300,14 @@ pub enum MalformedRequest {
     /// The folder the dialog opens in is relative.
     #[error("the dialog's folder is not absolute")]
     RelativeDirectory,
+    /// A title or a button label is longer than [`MAX_TEXT_LEN`] or holds a
+    /// control character, or a message is longer than [`MAX_TEXT_LEN`] or
+    /// holds a NUL: a host would cut it short or refuse it.
+    #[error("a title, label or message cannot be shown as written")]
+    Text,
+    /// A message box has no message to show.
+    #[error("the message box has no message")]
+    EmptyMessage,
 }
 
 /// What an open dialog picks.
@@ -393,6 +431,7 @@ impl OpenRequest {
             return Err(MalformedRequest::FiltersOnFolders);
         }
         check_filters(&self.filters)?;
+        check_lines([self.title.as_deref(), self.accept_label.as_deref()])?;
         check_directory(self.directory.as_deref())
     }
 }
@@ -487,6 +526,7 @@ impl SaveRequest {
         if !self.suggested_name.as_deref().is_none_or(is_file_name) {
             return Err(MalformedRequest::SuggestedName);
         }
+        check_lines([self.title.as_deref(), self.accept_label.as_deref()])?;
         check_directory(self.directory.as_deref())
     }
 }
