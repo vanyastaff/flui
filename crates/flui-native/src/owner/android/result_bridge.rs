@@ -17,7 +17,8 @@
 //! takes the same road: posted through [`main_thread::post`], refused with
 //! `HandOffFailed` when the main thread has not taken it within
 //! `HAND_OFF_LIMIT` (it then never runs), with `ActivityEnded` once the
-//! Activity ends, and with `TooMuchPosted` past `MAX_POSTED_WORK`.
+//! Activity ends, and with `TooMuchPosted` past `MAX_POSTED_WORK`, an answer held
+//! until a place frees (`posted_work`).
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
@@ -43,7 +44,7 @@ use super::activity_results::{
 };
 use super::java_host::host_class;
 use super::main_thread::{self, PostFailure};
-use super::posted_work::PostedQueue;
+use super::posted_work::{Admitted, PostedQueue, refuse_unrun, take_and_run};
 use crate::PlatformError;
 use crate::owner::signal::OwnerSignal;
 
@@ -181,6 +182,10 @@ impl ResultBridge {
         // past the limit it is refused, and will not run.
         let overdue_work = self.posted.borrow_mut().take_overdue(now);
         Self::refuse_all(overdue_work, MainThreadRefused::HandOffFailed);
+        // Refusals held for want of room go out once a place is free, so the
+        // provider that posts again finds room.
+        let room = self.posted.borrow_mut().take_room_refusals();
+        Self::refuse_all(room, MainThreadRefused::TooMuchPosted);
         let (overdue, delivery) = self.router.borrow_mut().overdue(now);
         delivery.deliver();
         for token in overdue {
@@ -470,8 +475,10 @@ impl ActivityBridge for ResultBridge {
         // The borrow ends before a refusal settles anything.
         let admitted = self.posted.borrow_mut().admit(work, Instant::now());
         let slot = match admitted {
-            Ok(slot) => slot,
-            Err(work) => {
+            Admitted::Posted(slot) => slot,
+            // Refused once a place frees (`answer`).
+            Admitted::Deferred => return,
+            Admitted::Refused(work) => {
                 work.refuse(MainThreadRefused::TooMuchPosted);
                 return;
             }
@@ -482,25 +489,16 @@ impl ActivityBridge for ResultBridge {
             &self.app,
             "flui_platform::capability::Activity::on_main_thread",
             move || {
-                // Taken first: the owner no longer refuses it at the deadline.
-                let Some(work) = on_main.lock().take() else {
-                    return Ok(());
-                };
-                let mut unrun = Some(work);
-                let lent = with_activity(&app, |env, activity| {
-                    if let (Some(lent), Some(work)) = (frame(env, activity), unrun.take()) {
-                        work.run(lent);
-                    }
-                    if env.exception_check() {
-                        env.exception_clear();
-                    }
-                    Ok(())
-                });
-                // A thread that could not reach the Activity ran nothing.
-                if let Some(work) = unrun {
-                    work.refuse(MainThreadRefused::HandOffFailed);
-                }
-                lent.map_err(|error| error.to_string())
+                take_and_run(&on_main, |run| {
+                    with_activity(&app, |env, activity| {
+                        run(frame(env, activity));
+                        if env.exception_check() {
+                            env.exception_clear();
+                        }
+                        Ok(())
+                    })
+                    .map_err(|error| error.to_string())
+                })
             },
             move |failure: PostFailure| {
                 tracing::warn!(
@@ -508,13 +506,9 @@ impl ActivityBridge for ResultBridge {
                     ?failure,
                     "a provider's work for the Java main thread did not finish"
                 );
-                // Still in its slot when the closure was dropped unrun; a
-                // panic inside the work consumed it, and its provider hears
-                // `ProviderDropped`.
-                let work = on_failure.lock().take();
-                if let Some(work) = work {
-                    work.refuse(MainThreadRefused::HandOffFailed);
-                }
+                // A work that panicked consumed itself, and its provider
+                // hears `ProviderDropped`.
+                refuse_unrun(&on_failure);
             },
         );
     }

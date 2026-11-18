@@ -346,6 +346,16 @@ mod tests {
             start_result(StartAnswer::TooManyOffered),
             Err(ShareError::Failed(SystemFailure::Os(24)))
         );
+        assert_eq!(
+            StartAnswer::of_offer_exception(true),
+            StartAnswer::TooManyOffered,
+            "`offer`'s IllegalStateException is the provider full"
+        );
+        assert_eq!(
+            StartAnswer::of_offer_exception(false),
+            StartAnswer::Failed,
+            "any other exception of `offer` is a failure"
+        );
         for (answer, keeps) in [
             (StartAnswer::Started, true),
             (StartAnswer::NoHandler, false),

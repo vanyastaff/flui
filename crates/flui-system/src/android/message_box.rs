@@ -179,8 +179,10 @@ pub(crate) type Dismissal = std::rc::Rc<dyn Fn() -> Box<dyn FnOnce(JniFrame) + S
 /// Post the dismissal `make` builds until the host runs it, or the Activity
 /// ends (which takes the box's window with it). A dropped box's dismissal is
 /// owed to its caller (ADR-0344): a refusal (`TooMuchPosted`,
-/// `HandOffFailed`) is tried again at the owner turn its answer arrives on,
-/// and logged once, so no box stays up answering nobody.
+/// `HandOffFailed`) is tried again when it arrives, and logged once, so no
+/// box stays up answering nobody. The retry does not spin: the host answers
+/// `TooMuchPosted` once a place has freed and `HandOffFailed` at its
+/// deadline.
 pub(crate) fn dismiss_until_landed(
     activity: &Activity,
     completions: &CompletionSource,

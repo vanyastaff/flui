@@ -37,13 +37,14 @@ import java.util.Map;
  * own {@link ProviderInfo} when Android attaches it, so a build that suffixes the application
  * id serves under the suffixed one.
  *
- * <p>An offer ends at the first of: its grantee's first {@link #openFile} returning a
- * descriptor (the grantee keeps reading its own descriptor, and a second open is refused); the
- * library withdrawing it ({@link #withdraw}: the start it was made for failed, so no grant
- * reaches it); or {@link #OFFER_LIFETIME_MS} passing with neither (a share whose chooser the
- * user dismissed, which Android does not report). At most {@link #MAX_OFFERED} offers are
- * served at once; another is refused ({@link IllegalStateException}, from {@link #offer} only)
- * rather than replacing one whose grant may be in use.
+ * <p>An offer is served, opened and queried as often as its grantee asks, until the first of:
+ * the library withdrawing it ({@link #withdraw}: the start it was made for failed, so no grant
+ * reaches it), or {@link #OFFER_LIFETIME_MS} passing (which is also what ends the offers of a
+ * share whose chooser the user dismissed, since Android does not report a dismissal). A
+ * grantee that opened the document keeps reading its own descriptor after that. At most
+ * {@link #MAX_OFFERED} offers are served at once; another is refused
+ * ({@link IllegalStateException}, from {@link #offer} only) rather than replacing one whose
+ * grant may be in use.
  *
  * <p>Android instantiates a content provider by the class name its manifest states, so this
  * is a class of the application's dex; the library calls {@link #authority}, {@link #offer}
@@ -54,10 +55,10 @@ public final class FluiDocuments extends ContentProvider {
     static final int MAX_OFFERED = 128;
 
     /**
-     * How long an offer nobody opened is served after it was made, in milliseconds: five
-     * minutes, time for a target the user picked to open what it was handed.
+     * How long an offer is served after it was made, in milliseconds: ten minutes, time for the
+     * application the user picked to open, and open again, what it was handed.
      */
-    static final long OFFER_LIFETIME_MS = 5L * 60L * 1000L;
+    static final long OFFER_LIFETIME_MS = 10L * 60L * 1000L;
 
     private static final String TAG = "FluiDocuments";
 
@@ -216,8 +217,9 @@ public final class FluiDocuments extends ContentProvider {
 
     /**
      * A descriptor of its own for the reader: the offered file opened again through the
-     * descriptor that holds it, so the reader has its own position and never reads what the
-     * path names by now. The offer ends once it handed one out.
+     * descriptor that holds it, so each reader has its own position and none reads what the
+     * path names by now. An open does not end the offer: the share sheet opens an image for its
+     * thumbnail before the chosen application does, and a viewer may open a document twice.
      */
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
@@ -228,11 +230,9 @@ public final class FluiDocuments extends ContentProvider {
         if (document == null) {
             throw new FileNotFoundException("no document is offered under this URI");
         }
-        ParcelFileDescriptor opened = ParcelFileDescriptor.open(
+        return ParcelFileDescriptor.open(
                 new File("/proc/self/fd/" + document.descriptor.getFd()),
                 ParcelFileDescriptor.MODE_READ_ONLY);
-        withdraw(uri);
-        return opened;
     }
 
     @Override

@@ -7,7 +7,8 @@
 //! user picks in the chooser. Every offer a start made is withdrawn when the
 //! start did not happen (`StartAnswer::keeps_offers`), whether building its
 //! `Intent` threw or Android refused it; an offer of a start that happened
-//! ends at its grantee's first open, or at `FluiDocuments.OFFER_LIFETIME_MS`.
+//! is served, to as many opens as its grantee makes, until
+//! `FluiDocuments.OFFER_LIFETIME_MS`.
 
 use std::fs::File;
 use std::os::fd::AsRawFd as _;
@@ -24,18 +25,14 @@ use super::{Java, in_frame, is_a, nullable, put_string, string_array, thrown, wi
 /// `Intent.FLAG_GRANT_READ_URI_PERMISSION`.
 const GRANT_READ: i32 = 1;
 
-/// Why an `Intent` that hands over files was not built.
-enum IntentError {
-    /// `FluiDocuments.offer` refused one more document: it serves as many as
-    /// it keeps.
-    TooManyOffered,
-    /// A JNI call failed; a Java exception it left was taken off the thread.
-    Jni,
-}
+/// Why an `Intent` that hands over files was not built: the answer its start
+/// gives instead (`StartAnswer::of_offer_exception` for `offer`'s own
+/// exception, `Failed` for any other failed JNI call).
+struct IntentError(StartAnswer);
 
 impl From<jni::errors::Error> for IntentError {
     fn from(_: jni::errors::Error) -> Self {
-        Self::Jni
+        Self(StartAnswer::Failed)
     }
 }
 
@@ -53,10 +50,9 @@ fn start_activity(
 ) -> StartAnswer {
     let intent = match intent {
         Ok(intent) => intent,
-        Err(IntentError::TooManyOffered) => return StartAnswer::TooManyOffered,
-        Err(IntentError::Jni) => {
+        Err(IntentError(answer)) => {
             env.exception_clear();
-            return StartAnswer::Failed;
+            return answer;
         }
     };
     let started = env
@@ -121,11 +117,7 @@ impl Java {
                 let full = thrown(env).is_some_and(|exception| {
                     is_a(env, &exception, jni_str!("java/lang/IllegalStateException"))
                 });
-                return Err(if full {
-                    IntentError::TooManyOffered
-                } else {
-                    IntentError::Jni
-                });
+                return Err(IntentError(StartAnswer::of_offer_exception(full)));
             }
             Err(error) => return Err(error.into()),
         };
@@ -238,31 +230,28 @@ impl Java {
                 jni_sig!("(Landroid/net/Uri;)V"),
                 &[JValue::Object(&uri)],
             )?;
-            match clip {
-                Some(clip) => {
-                    env.call_method(
-                        clip.as_obj(),
-                        jni_str!("addItem"),
-                        jni_sig!("(Landroid/content/ClipData$Item;)V"),
-                        &[JValue::Object(&item)],
-                    )?;
-                }
-                None => {
-                    let label = env.new_string("")?;
-                    let clip_types = string_array(env, &[&mime_type])?;
-                    let made = env.new_object(
-                        jni_str!("android/content/ClipData"),
-                        jni_sig!(
-                            "(Ljava/lang/CharSequence;[Ljava/lang/String;Landroid/content/ClipData$Item;)V"
-                        ),
-                        &[
-                            JValue::Object(&label),
-                            JValue::Object(&clip_types),
-                            JValue::Object(&item),
-                        ],
-                    )?;
-                    *clip = Some(env.new_global_ref(&made)?);
-                }
+            if let Some(clip) = clip {
+                env.call_method(
+                    clip.as_obj(),
+                    jni_str!("addItem"),
+                    jni_sig!("(Landroid/content/ClipData$Item;)V"),
+                    &[JValue::Object(&item)],
+                )?;
+            } else {
+                let label = env.new_string("")?;
+                let clip_types = string_array(env, &[&mime_type])?;
+                let made = env.new_object(
+                    jni_str!("android/content/ClipData"),
+                    jni_sig!(
+                        "(Ljava/lang/CharSequence;[Ljava/lang/String;Landroid/content/ClipData$Item;)V"
+                    ),
+                    &[
+                        JValue::Object(&label),
+                        JValue::Object(&clip_types),
+                        JValue::Object(&item),
+                    ],
+                )?;
+                *clip = Some(env.new_global_ref(&made)?);
             }
             if alone {
                 let stream = env.new_string("android.intent.extra.STREAM")?;

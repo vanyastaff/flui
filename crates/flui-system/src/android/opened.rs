@@ -66,9 +66,11 @@ pub(crate) fn open(path: &std::path::Path) -> std::io::Result<Opened> {
 
 /// What the open `file` holds, by its `fstat`, and the name it ends at.
 ///
-/// A file with no link left (unlinked after the open) is
-/// [`Held::Unlinked`]: the kernel then names it `<name> (deleted)`, which no
-/// rule about names can judge, so the `fstat` already made decides.
+/// The name is read first and the `fstat` after it, so a file unlinked at
+/// any point before the `fstat` counts no link and is [`Held::Unlinked`],
+/// whatever name was read: the kernel names such a file `<name> (deleted)`,
+/// which no rule about names can judge. One unlinked after the `fstat` was
+/// still named by its link when the name was read.
 ///
 /// # Errors
 ///
@@ -78,6 +80,7 @@ pub(crate) fn examine(file: std::fs::File) -> std::io::Result<Opened> {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::MetadataExt as _;
 
+    let final_name = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
     let metadata = file.metadata()?;
     let kind = metadata.file_type();
     let held = if metadata.nlink() == 0 {
@@ -89,7 +92,6 @@ pub(crate) fn examine(file: std::fs::File) -> std::io::Result<Opened> {
     } else {
         Held::Other
     };
-    let final_name = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
     Ok(Opened {
         file,
         held,

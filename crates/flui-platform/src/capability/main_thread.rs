@@ -81,8 +81,10 @@ pub enum MainThreadRefused {
     /// The Activity has ended: the work does not run.
     #[error("the Activity has ended")]
     ActivityEnded,
-    /// [`MAX_POSTED_WORK`] pieces of work wait for Android's main thread;
-    /// one must finish first.
+    /// [`MAX_POSTED_WORK`] pieces of work waited for Android's main thread
+    /// when this one was posted. The host answers it once a place has freed
+    /// (or, past as many held answers, at once), so work posted again on
+    /// this answer finds room.
     #[error("as much work waits for Android's main thread as the host holds")]
     TooMuchPosted,
     /// The host could not hand the work over, or Android's main thread did

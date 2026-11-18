@@ -81,6 +81,19 @@ pub(crate) enum StartAnswer {
 }
 
 impl StartAnswer {
+    /// What a start answers when `FluiDocuments.offer` threw while its
+    /// `Intent` was built: `IllegalStateException` (`is_illegal_state`), the
+    /// one exception `offer` throws by contract, is the provider full;
+    /// anything else is a failure. Only `offer`'s own exception is judged
+    /// here, never one `startActivity` threw.
+    pub(crate) const fn of_offer_exception(is_illegal_state: bool) -> Self {
+        if is_illegal_state {
+            Self::TooManyOffered
+        } else {
+            Self::Failed
+        }
+    }
+
     /// Whether the offers made for the start stay served: only a start that
     /// happened hands their grant to anyone. Every other answer withdraws
     /// them at once, so a refused start holds none of `MAX_OFFERED`.

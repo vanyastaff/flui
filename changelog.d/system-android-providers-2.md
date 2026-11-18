@@ -18,10 +18,11 @@
 - `flui_platform::capability::Activity::on_main_thread`: a capability provider's work for Android's
   main thread, run by the host inside its panic boundary and answered through a `Completion`, or
   refused with `MainThreadRefused` (`ActivityEnded`, `TooMuchPosted` past `MAX_POSTED_WORK`,
-  `HandOffFailed`). `ActivityBridge` gains `post`, which a host implements.
+  `HandOffFailed`). `ActivityBridge` gains `post`, which a host implements: it is handed one
+  `PostedWork`, which ends exactly once, run there, refused, or refused when dropped.
 
 ### Changed
 
 - `cargo xtask android-dex` checks and writes the dex of every workspace crate that declares
   `android.dex` and `android.java`, read from `cargo metadata`; `--list` names them, and the
-  `Android dex` workflow runs on any `android/java` tree and uploads what it lists.
+  `Android dex` workflow runs on a change to any Java source or dex and uploads what it lists.
