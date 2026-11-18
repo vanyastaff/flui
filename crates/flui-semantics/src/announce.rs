@@ -204,12 +204,6 @@ impl Announcements {
         }
     }
 
-    /// Queues `message` without requesting a frame: the owner's own path, for
-    /// a caller already inside a frame.
-    pub(crate) fn enqueue(&self, message: &str, urgency: Urgency) {
-        enqueue(&self.queue, message, urgency);
-    }
-
     /// Whether a message waits for delivery.
     pub(crate) fn has_pending(&self) -> bool {
         let queue = self.lock();

@@ -9,8 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    adr_numbers, android_dex, change_scope, changelog, docs_links, fonts, icon_import,
-    key_vocabulary, platform_floor, recording_vocabulary, toolchain, unmounted_tests,
+    adr_numbers, android_dex, changelog, docs_links, fonts, icon_import, key_vocabulary,
+    platform_floor, recording_vocabulary, toolchain, unmounted_tests,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -103,7 +103,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// `--self-test` is not here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 12] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 11] {
     [
         (
             if strict {
@@ -119,9 +119,6 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 12] {
         }),
         ("adr-numbers", |args| {
             adr_numbers::adr_numbers(&parsed(args)?)
-        }),
-        ("paths-filter", |args| {
-            change_scope::paths_filter(&parsed(args)?)
         }),
         // `--package-list`: Cargo's file selection for flui-painting, listed
         // offline, no archive built
@@ -220,7 +217,6 @@ mod tests {
                 "toolchain",
                 "unmounted-tests",
                 "adr-numbers",
-                "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",
                 "key-vocabulary",

@@ -3,7 +3,7 @@
 //! This module provides the SemanticsTree struct for managing the accessibility
 //! tree: slab storage, parent/child links, and the cascading [`SemanticsTree::remove`].
 
-use flui_foundation::{ElementId, SemanticsId};
+use flui_foundation::SemanticsId;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use slab::Slab;
 use smallvec::SmallVec;
@@ -237,16 +237,6 @@ impl SemanticsTree {
             .iter()
             .filter_map(|&id| self.get(id)?.accessibility_id())
             .all(|stable| seen.insert(stable.as_u64()))
-    }
-
-    /// Inserts a SemanticsNode with an associated ElementId.
-    pub fn insert_with_element(
-        &mut self,
-        node: SemanticsNode,
-        element_id: ElementId,
-    ) -> SemanticsId {
-        let node = node.with_element_id(element_id);
-        self.insert(node)
     }
 
     /// Returns a reference to a SemanticsNode.
@@ -739,19 +729,6 @@ impl SemanticsTree {
             .map(|(index, _)| SemanticsId::new(index + 1))
     }
 
-    /// Returns `(id, &SemanticsNode)` pairs for every dirty node.
-    ///
-    /// Lets callers (notably [`crate::owner::SemanticsOwner::flush`]) walk
-    /// dirty nodes in a single pass without an intermediate
-    /// `Vec<SemanticsId>` collect that would force a per-frame heap
-    /// allocation when there is any dirt.
-    pub fn iter_dirty(&self) -> impl Iterator<Item = (SemanticsId, &SemanticsNode)> + '_ {
-        self.nodes
-            .iter()
-            .filter(|(_, node)| node.is_dirty())
-            .map(|(index, node)| (SemanticsId::new(index + 1), node))
-    }
-
     /// Marks a single node as dirty (no-op for a missing id).
     ///
     /// The tree-level entry point for "this node's published payload is
@@ -876,13 +853,6 @@ impl SemanticsTree {
     }
 
     // ========== Iteration ==========
-
-    /// Returns an iterator over all SemanticsIds in the tree.
-    pub fn semantics_ids(&self) -> impl Iterator<Item = SemanticsId> + '_ {
-        self.nodes
-            .iter()
-            .map(|(index, _)| SemanticsId::new(index + 1))
-    }
 
     /// Returns an iterator over all (SemanticsId, &SemanticsNode) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (SemanticsId, &SemanticsNode)> + '_ {

@@ -144,7 +144,7 @@ fn the_identifier_is_exported_unannounced_unmerged_and_no_boundary() {
                 parent.identifier().is_none()
                     && parent
                         .label()
-                        .is_some_and(|label| !label.as_str().contains(IDENTIFIER))
+                        .is_some_and(|label| !label.contains(IDENTIFIER))
             },
         },
         Claim {
