@@ -434,7 +434,7 @@ pub(crate) trait DropTarget {
 
     /// The scale the target reports positions at.
     #[cfg(test)]
-    fn scale(&self) -> f64;
+    fn scale(&self) -> flui_foundation::geometry::DevicePixelRatio;
 }
 
 /// The drag position: the transport the host's [`WindowsHost::drag`] made,

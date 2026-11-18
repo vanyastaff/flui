@@ -698,7 +698,7 @@ impl PresentationState {
 
         let publish_bridge = Arc::downgrade(bridge);
         pipeline.with_mut(|owner| {
-            owner.set_semantics_update_callback(Arc::new(
+            owner.set_semantics_update_callback(Rc::new(
                 move |update: &flui_semantics::TreeUpdate| {
                     if let Some(bridge) = publish_bridge.upgrade() {
                         bridge.publish(update.clone());
@@ -711,7 +711,7 @@ impl PresentationState {
                 == flui_semantics::platform::RouteChangeSupport::Native)
                 .then(|| {
                     let bridge = Arc::downgrade(bridge);
-                    Arc::new(move |change: flui_semantics::platform::RouteChange| {
+                    Rc::new(move |change: flui_semantics::platform::RouteChange| {
                         if let Some(bridge) = bridge.upgrade() {
                             bridge.route_changed(change);
                         }
@@ -1066,7 +1066,7 @@ impl PresentationState {
         // Whether this window's adapter says where the assistive technology's
         // cursor is: a widget that acts on it asks before relying on it.
         let assistive_focus = accessibility.as_ref().map_or(
-            flui_semantics::AssistiveFocusSupport::Unreported,
+            flui_semantics::platform::AssistiveFocusSupport::Unreported,
             |bridge| bridge.assistive_focus_support(),
         );
         widgets.with_build_owner_mut(|owner| {

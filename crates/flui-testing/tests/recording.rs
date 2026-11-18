@@ -480,10 +480,55 @@ fn a_recording_whose_window_scale_no_screen_has_is_refused_on_its_line() {
             ),
         );
         let read = RecordingReader::try_new(&rescaled[..]);
+        let expected: f64 = refused.parse().expect("a number");
         assert!(
-            matches!(&read, Err(RecordingError::Json { line: 1, source }) if source.to_string().contains("scale")),
+            matches!(&read, Err(RecordingError::Ratio { line: 1, ratio }) if *ratio == expected),
             "a window scale of {refused} is refused on the header's line: {read:?}"
         );
+    }
+}
+
+/// A preferences row whose mouse or touch geometry was sampled at a ratio no
+/// screen has is refused with the same typed error on its line.
+#[test]
+fn a_preferences_row_whose_pixel_ratio_no_screen_has_is_refused_on_its_line() {
+    let (bytes, _) = recorded(Privacy::Redact, |host| press(host, 1, 1));
+    let text = std::str::from_utf8(&bytes).expect("utf-8 recording");
+    let header = text.lines().next().expect("a header");
+    let mouse = |ratio: &str| {
+        format!(
+            r#"{{"preferences":{{"revision":1,"gestures":{{"native_mouse_geometry":{{"double_click_area":[4,4],"drag_tolerance":[2,3],"pixel_ratio":{ratio}}}}}}}}}"#
+        )
+    };
+    let touch = |ratio: &str| {
+        format!(
+            r#"{{"preferences":{{"revision":1,"gestures":{{"native_touch_geometry":{{"touch_slop":8,"double_tap_slop":100,"min_fling":50,"max_fling":8000,"pixel_ratio":{ratio}}}}}}}}}"#
+        )
+    };
+    for (case, row) in [
+        ("mouse geometry", &mouse as &dyn Fn(&str) -> String),
+        ("touch geometry", &touch),
+    ] {
+        let taken = format!("{header}\n{}\n", row("1.5"));
+        assert!(
+            RecordingReader::try_new(taken.as_bytes())
+                .expect("header")
+                .all(|row| row.is_ok()),
+            "{case}: a ratio a screen has reads"
+        );
+        for refused in ["64.0", "0.0", "-2.0", "0.015625"] {
+            let text = format!("{header}\n{}\n", row(refused));
+            let expected: f64 = refused.parse().expect("a number");
+            assert!(
+                RecordingReader::try_new(text.as_bytes())
+                    .expect("header")
+                    .any(|row| matches!(
+                        row,
+                        Err(RecordingError::Ratio { line: 2, ratio }) if ratio == expected
+                    )),
+                "{case}: a pixel ratio of {refused} is refused on line 2"
+            );
+        }
     }
 }
 

@@ -32,7 +32,7 @@ pub struct PresentationCapabilities {
     pub announcer: Option<flui_rendering::semantics::Announcer>,
     /// Whether the presentation's accessibility adapter says where the
     /// assistive technology's cursor is. `Unreported` on a headless tree.
-    pub assistive_focus: flui_rendering::semantics::AssistiveFocusSupport,
+    pub assistive_focus: flui_rendering::semantics::platform::AssistiveFocusSupport,
     /// The presentation's haptics host. Widgets acquire it through
     /// `LifecycleContext::haptics`, which applies the enclosing `HapticsMode`.
     pub haptics: Option<flui_interaction::haptics::HapticsHandle>,

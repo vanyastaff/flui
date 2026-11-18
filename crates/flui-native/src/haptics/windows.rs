@@ -537,7 +537,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::EventTime;
     use flui_platform::haptics::{
         HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
@@ -623,7 +623,7 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .at_device(10.0, 10.0, 1.0)
+        .at_device(10.0, 10.0, DevicePixelRatio::ONE)
         .from_device(NativeDevice(0x51));
         decode_into(this.hwnd(), hovering).expect("a valid reading");
         assert_eq!(
@@ -670,7 +670,7 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .at_device(10.0, 10.0, 1.0)
+        .at_device(10.0, 10.0, DevicePixelRatio::ONE)
         .from_device(NativeDevice(0x51));
         decode_into(hwnd, hovering).expect("a valid reading");
 

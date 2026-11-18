@@ -979,7 +979,7 @@ impl DropTarget for RegisteredTarget {
     }
 
     #[cfg(test)]
-    fn scale(&self) -> f64 {
+    fn scale(&self) -> flui_foundation::geometry::DevicePixelRatio {
         self.target.scale()
     }
 }
@@ -1183,7 +1183,9 @@ pub(crate) mod testing {
     }
 
     /// The scale `window`'s drop target reports positions at.
-    pub(crate) fn scale_of(window: WindowRef) -> Option<f64> {
+    pub(crate) fn scale_of(
+        window: WindowRef,
+    ) -> Option<flui_foundation::geometry::DevicePixelRatio> {
         read(window, |target| target.scale())
     }
 }

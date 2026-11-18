@@ -22,10 +22,6 @@ pub enum InvalidMetrics {
         /// Reported logical height.
         height: f64,
     },
-    /// The ratio is outside the range a screen can have
-    /// ([`DevicePixelRatio::MIN`]`..=`[`DevicePixelRatio::MAX`]).
-    #[error("device pixel ratio {0} is outside the range a screen can have")]
-    InvalidScale(f64),
     /// The logical size at the ratio does not fit in device pixels.
     #[error("logical window size {width}x{height} at ratio {scale} overflows device pixels")]
     Overflow {
@@ -43,8 +39,8 @@ pub enum InvalidMetrics {
 /// The device size is the source of truth. The surface is configured from it as it is, and
 /// the logical size layout runs against is derived from it, so the two cannot disagree by a
 /// rounding step the way `logical × scale` truncated back to pixels did. Both extents are at
-/// least one pixel and the ratio is finite and positive; a platform report that cannot make
-/// such a value (a minimised window's zero size, a NaN scale) is not a metrics change and
+/// least one pixel and the ratio is a [`DevicePixelRatio`]; a platform report that cannot make
+/// such a value (a minimised window's zero size) is not a metrics change and
 /// never reaches layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowMetrics {
@@ -53,15 +49,14 @@ pub struct WindowMetrics {
 }
 
 impl WindowMetrics {
-    /// The metrics of a drawable area `physical` device pixels large at `scale`.
+    /// The metrics of a drawable area `physical` device pixels large at `scale`. The ratio is
+    /// a [`DevicePixelRatio`], checked where the host read it, so a logical size over it is
+    /// always finite.
     ///
     /// # Errors
     ///
-    /// [`InvalidMetrics::InvalidScale`] when `scale` is outside the range a screen can have
-    /// (a logical size over a ratio in it is always finite), and
     /// [`InvalidMetrics::EmptyExtent`] when a side is below one pixel.
-    pub fn try_new(physical: DeviceSize, scale: f64) -> Result<Self, InvalidMetrics> {
-        let scale = DevicePixelRatio::try_new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
+    pub fn try_new(physical: DeviceSize, scale: DevicePixelRatio) -> Result<Self, InvalidMetrics> {
         if physical.width < 1 || physical.height < 1 {
             return Err(InvalidMetrics::EmptyExtent {
                 width: physical.width,
@@ -76,12 +71,13 @@ impl WindowMetrics {
     ///
     /// # Errors
     ///
-    /// [`InvalidMetrics::InvalidScale`] for a ratio outside the range a screen can have,
     /// [`InvalidMetrics::NonFiniteSize`] for a size that is not finite,
     /// [`InvalidMetrics::Overflow`] when a side does not fit in device pixels, and
     /// [`InvalidMetrics::EmptyExtent`] when a side rounds to less than a pixel.
-    pub fn from_logical(logical: Size<f64>, scale: f64) -> Result<Self, InvalidMetrics> {
-        let ratio = DevicePixelRatio::try_new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
+    pub fn from_logical(
+        logical: Size<f64>,
+        scale: DevicePixelRatio,
+    ) -> Result<Self, InvalidMetrics> {
         if !(logical.width.is_finite() && logical.height.is_finite()) {
             return Err(InvalidMetrics::NonFiniteSize {
                 width: logical.width,
@@ -89,16 +85,16 @@ impl WindowMetrics {
             });
         }
         let limit = f64::from(i32::MAX);
-        if ratio.to_device(logical.width).abs() >= limit
-            || ratio.to_device(logical.height).abs() >= limit
+        if scale.to_device(logical.width).abs() >= limit
+            || scale.to_device(logical.height).abs() >= limit
         {
             return Err(InvalidMetrics::Overflow {
                 width: logical.width,
                 height: logical.height,
-                scale,
+                scale: scale.get(),
             });
         }
-        Self::try_new(device_size(logical, ratio), scale)
+        Self::try_new(device_size(logical, scale), scale)
     }
 
     /// The drawable area in device pixels, at least one pixel in each extent.

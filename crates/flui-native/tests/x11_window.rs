@@ -729,7 +729,7 @@ mod cases {
             let metrics = geometry.filter(|_| viewable).and_then(|geometry| {
                 WindowMetrics::try_new(
                     Size::new(i32::from(geometry.width), i32::from(geometry.height)),
-                    1.0,
+                    flui_foundation::geometry::DevicePixelRatio::ONE,
                 )
                 .ok()
             });

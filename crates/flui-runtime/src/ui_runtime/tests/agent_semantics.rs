@@ -162,7 +162,7 @@ fn install_node(
 ) {
     let mut node = SemanticsNode::new().with_source_render_id(render_id);
     configure(node.config_mut());
-    let mut owner = SemanticsOwner::new(Arc::new(|_| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_| {}));
     let root = owner.insert(node);
     owner.set_root(Some(root));
     ui_runtime

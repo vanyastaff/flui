@@ -597,8 +597,8 @@ impl flui_semantics::platform::PlatformAccessibility for OwnershipBridge {
         self.delegate.set_action_listener(listener);
     }
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
+        flui_semantics::platform::AssistiveFocusSupport::Unreported
     }
 }
 

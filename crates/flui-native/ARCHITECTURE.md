@@ -742,6 +742,15 @@ trait depends on `flui-platform` instead.
   from the base ratio, so a display's bounds and scale agree
   (`a_scale_no_screen_has_reads_as_the_base_ratio`). A ratio an application
   hands the runtime is refused typed (`UiRuntimeError::PixelRatio`).
+  A pointer reading carries its window's ratio in that type
+  (`NativeReading::scale`, and a wheel's and a touchpad frame's), so the
+  assembly never meets a scale no screen has; a native recording holds the
+  number, and its codec refuses one no screen has on read, as it does a
+  display's scale factor, a window's metrics and the system's mouse and touch
+  geometry (`CodecError::Ratio`,
+  `a_ratio_no_screen_has_is_refused_where_a_recording_holds_it`). The input
+  recording refuses the same rows with `RecordingError::Ratio`, and a
+  `WindowMetrics` is built from a `DevicePixelRatio`, never from a number.
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
@@ -5414,7 +5423,11 @@ contact cancel. Replaying the rows through the same calls reproduces the
 backend's `PlatformInput` on any host, so Linux CI exercises Win32 QPC
 stamping, AppKit and UIKit uptime clocks, Android history batches and DOM
 predictions. The format is the `HostInput` recording's framing (JSON Lines, a
-major version, unknown fields skipped, an unknown variant a typed error); its
+major version, unknown fields skipped, an unknown variant a typed error). A
+writer writes `FORMAT_VERSION`; a reader reads every version from
+`OLDEST_READABLE_VERSION` on whose fields and shapes are the current ones, and
+refuses a row, not the recording, whose value the current version bounds
+tighter (version 4 bounds every ratio to the range a screen can have). Its
 schema is `flui-protocol`'s `native_recording`, which a reader such as the
 driver reads without this crate, and its codec is `journal::codec`
 (`journal/`, a crate-level module, since it names the input feature's model

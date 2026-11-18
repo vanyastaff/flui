@@ -657,7 +657,7 @@ impl AndroidLoop {
                             if explored {
                                 return InputStatus::Handled;
                             }
-                            let events = self.input.motion(&self.app, motion, scale_factor.get());
+                            let events = self.input.motion(&self.app, motion, scale_factor);
                             let mut any_handled = false;
                             self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {

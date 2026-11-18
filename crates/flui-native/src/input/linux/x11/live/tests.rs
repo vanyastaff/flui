@@ -66,7 +66,7 @@ fn target(input: &Rc<X11Input>, window: WindowRef, dropped: &Rc<Cell<bool>>) -> 
     InputTarget {
         window,
         delivery: Arc::new(WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE)),
-        scale: WindowScale::new(1.0),
+        scale: WindowScale::new(flui_foundation::geometry::DevicePixelRatio::ONE),
     }
 }
 

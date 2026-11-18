@@ -2284,7 +2284,8 @@ fn win32_readback(hwnd: HWND) -> Readback {
             .then(|| {
                 WindowMetrics::try_new(
                     Size::new(client.right - client.left, client.bottom - client.top),
-                    f64::from(dpi) / 96.0,
+                    flui_foundation::geometry::DevicePixelRatio::try_new(f64::from(dpi) / 96.0)
+                        .expect("a ratio in range"),
                 )
                 .ok()
             })

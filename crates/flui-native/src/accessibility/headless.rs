@@ -126,8 +126,8 @@ impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
     }
 
     /// The native headless host plays no screen reader; `flui-testing`'s does.
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
+        flui_semantics::platform::AssistiveFocusSupport::Unreported
     }
 }
 

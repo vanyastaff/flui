@@ -1,6 +1,7 @@
 //! Announcements through the owner's two announcer nodes (ADR-0204 §4).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -44,7 +45,7 @@ fn owner_with(
     let failing = Arc::new(AtomicBool::new(false));
     let sink = Arc::clone(&received);
     let fail = Arc::clone(&failing);
-    let mut owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+    let mut owner = SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
         assert!(
             !fail.load(Ordering::SeqCst),
             "the adapter rejects the update"

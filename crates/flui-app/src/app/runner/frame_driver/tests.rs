@@ -1765,7 +1765,7 @@ fn agent_notification_follows_live_native_initialization() {
 fn window_metrics(width: f64, height: f64, scale: f64) -> flui_foundation::geometry::WindowMetrics {
     flui_foundation::geometry::WindowMetrics::from_logical(
         flui_foundation::geometry::Size::new(width, height),
-        scale,
+        flui_foundation::geometry::DevicePixelRatio::try_new(scale).expect("a ratio in range"),
     )
     .expect("valid window metrics")
 }

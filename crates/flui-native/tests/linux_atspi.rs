@@ -34,13 +34,13 @@ mod cases {
     use atspi::proxy::proxy_ext::ProxyExt as _;
     use atspi::{CoordType, Interface, Role, State, zbus};
     use flui_foundation::geometry::{Rect, Size};
-    use flui_foundation::{RenderId, SemanticsId};
+    use flui_foundation::{RenderId, SemanticsId, TextDirection};
     use flui_native::{HostWindow, Platform, WaylandPlatform, X11Platform};
     use flui_platform::WindowOptions;
     use flui_semantics::{
         Announcements, LiveSetting, NumericRange, SemanticsAction, SemanticsConfiguration,
         SemanticsIdentitySource, SemanticsNode, SemanticsOwner, SemanticsRole, TextContent,
-        TextDirection, TextRun, TextRunParts, Toggled, TreeUpdate, Urgency,
+        TextRun, TextRunParts, Toggled, TreeUpdate, Urgency,
     };
     use flui_testing::window_handler::RecordingWindowHandler;
     use futures_lite::future::block_on;
@@ -513,7 +513,7 @@ mod cases {
             let accessibility = window
                 .accessibility()
                 .expect("a Linux window is accessible");
-            let owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+            let owner = SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
                 accessibility.publish(update.clone());
             }));
             let mut fixture = Self {

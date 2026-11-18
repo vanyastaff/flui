@@ -104,7 +104,9 @@ pub(crate) trait HostInput {
 
     /// Listen, in `registration`, for the input of `canvas`, dispatching to
     /// the window's `callbacks`; `latency` picks the event a pointer's
-    /// movement arrives as. What the input keeps of the canvas lives in its
+    /// movement arrives as, and `pixel_ratio` answers the canvas's device
+    /// pixel ratio as the window last read it, checked by the hosts' rule
+    /// (`display::scale`). What the input keeps of the canvas lives in its
     /// listeners, and goes with them.
     ///
     /// # Errors
@@ -114,6 +116,7 @@ pub(crate) trait HostInput {
         canvas: &web_sys::HtmlCanvasElement,
         delivery: &Arc<WindowDelivery>,
         latency: flui_platform::InputLatency,
+        pixel_ratio: Rc<dyn Fn() -> flui_foundation::geometry::DevicePixelRatio>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError>;
 }
