@@ -517,7 +517,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             .unwrap_or_else(BorderSide::none);
 
         // The 4dp top radius rounds the FILL only (`decoration_rrect` in
-        // `flui-painting`'s `paint_box_decoration`) — the non-uniform
+        // `flui-painting`'s ``) — the non-uniform
         // bottom-only border below paints a straight, unrounded line
         // regardless of `border_radius` (`paint_border`'s non-uniform path
         // ignores the rrect), exactly matching `UnderlineInputBorder`'s own

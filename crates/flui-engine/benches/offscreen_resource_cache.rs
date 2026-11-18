@@ -11,7 +11,9 @@ use flui_foundation::geometry::Rect;
 use flui_layer::{
     BackdropFilterLayer, Layer, LayerTree, OffsetLayer, PictureLayer, ShaderMaskLayer,
 };
-use flui_painting::{BlendMode, Canvas, Paint, Shader, paint::ImageFilter, styling::Color};
+use flui_painting::{
+    Canvas, paint::BlendMode, paint::ImageFilter, paint::Paint, paint::Shader, styling::Color,
+};
 use std::hint::black_box;
 
 fn picture(side: u32, split: bool) -> Layer {

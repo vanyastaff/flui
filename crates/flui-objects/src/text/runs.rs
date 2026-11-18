@@ -5,9 +5,10 @@
 
 use std::ops::Range;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_painting::text_boundaries::word_starts;
-use flui_painting::typography::{TextCharacter, TextDirection, TextLineLayout, TextLineRun};
+use flui_painting::typography::{TextCharacter, TextLineLayout, TextLineRun};
 use flui_rendering::semantics::{MAX_RUN_CHARACTERS, TextRun, TextRunError, TextRunParts};
 
 /// The most bytes one character of a run may hold: AccessKit counts a

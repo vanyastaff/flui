@@ -10,6 +10,7 @@
 //! whose colour depends on whether the partial clear ran first.
 
 use flui_foundation::RenderId;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
     BackdropFilterLayer, ContentToken, DamageRegion, Layer, LayerDiffer, LayerNode, LayerTree,
@@ -17,8 +18,8 @@ use flui_layer::{
 };
 use flui_painting::paint::{BlendMode, ImageFilter, Path};
 use flui_painting::styling::Color;
-use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
-use flui_painting::{Canvas, Paint, TextPainter};
+use flui_painting::typography::{TextSpan, TextStyle};
+use flui_painting::{Canvas, TextPainter, paint::Paint};
 
 use crate::damage::FramePlan;
 use crate::headless::RetainedCapture;
@@ -2446,7 +2447,7 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
     use flui_layer::{
         ClipRectLayer, ColorFilterLayer, ImageFilterLayer, OpacityLayer, ShaderMaskLayer,
     };
-    use flui_painting::paint::effects::{ColorAdjustment, ColorMatrix};
+    use flui_painting::paint::{ColorAdjustment, ColorMatrix};
     use flui_painting::paint::{ColorFilter, Shader};
 
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -2869,7 +2870,7 @@ fn a_partial_frame_resolves_clip_coverage_only_inside_its_damage() {
         let paint = |canvas: &mut Canvas| {
             let rrect = RRect::from_rect_circular(window, 32.0);
             for _ in 0..leaves {
-                canvas.clip_rrect_ext(rrect, ClipOp::Intersect, Clip::AntiAlias);
+                canvas.clip_rrect_with(rrect, ClipOp::Intersect, Clip::AntiAlias);
             }
             draw(canvas);
         };

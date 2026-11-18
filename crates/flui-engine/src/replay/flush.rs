@@ -342,7 +342,7 @@ impl GpuReplay {
         // Scissor of the most-recently buffered instance — forwarded when a
         // texture-change forces an early flush.
         let mut active_scissor: ScissorRect = None;
-        let mut active_mode = flui_painting::BlendMode::SrcOver;
+        let mut active_mode = flui_painting::paint::BlendMode::SrcOver;
         let mut active_filter = None;
 
         for draw in pending_images {
@@ -716,7 +716,7 @@ impl GpuReplay {
 
     fn flush_cached_texture_batch(
         &mut self,
-        mode: flui_painting::BlendMode,
+        mode: flui_painting::paint::BlendMode,
         filter: Option<crate::image_source_filter::ImageSourceFilter>,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -759,7 +759,7 @@ impl GpuReplay {
 
     fn flush_texture_batch_with_filter_binding(
         &mut self,
-        mode: flui_painting::BlendMode,
+        mode: flui_painting::paint::BlendMode,
         filter_binding: Option<&wgpu::BindGroup>,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,

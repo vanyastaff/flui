@@ -2,7 +2,7 @@
 //! consumer that enables the `testing` feature.
 //!
 //! ```
-//! use flui_painting::{Paint, testing::record};
+//! use flui_painting::{paint::Paint, testing::record};
 //! use flui_foundation::geometry::Rect;
 //! use flui_painting::styling::Color;
 //!

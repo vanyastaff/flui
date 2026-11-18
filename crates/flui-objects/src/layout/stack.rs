@@ -31,11 +31,11 @@
 //!   painting.
 
 pub use super::stack_fit::StackFit;
+use flui_foundation::TextDirection;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
-use flui_painting::typography::TextDirection;
 
 use flui_rendering::{
     constraints::BoxConstraints,

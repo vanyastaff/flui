@@ -35,7 +35,7 @@ Four facts about the display list before this decision:
    `render_gradient*` took no `Paint` (so no blend mode, no `anti_alias`),
    collapsed the rounded rect to one uniform radius, and skipped the
    painter's transform (it handed `bounds` to the batcher untransformed).
-   `paint_box_decoration` was the only producer; the circle silhouette of
+   `BoxDecoration::paint` was the only producer; the circle silhouette of
    the very same decoration already went through the shader-paint path.
 4. **Serde on the wire.** `DrawCommand`/`DisplayList` derived serde with no
    consumer enabling it, and ADR-0065 put an `Arc<TextLayout>` on the wire
@@ -80,7 +80,7 @@ are deleted. A gradient is `Paint::fill(..).with_shader(shader)` on
 `Rect`/`RRect`/`Circle`, which reaches the engine's one shader-rect
 dispatch (`dispatch_shader`) with the paint's blend mode, its
 `anti_alias`, the painter's transform, and the rounded rect's per-corner
-radii. `paint_box_decoration` records one shader paint for all three
+radii. `BoxDecoration::paint` records one shader paint for all three
 silhouettes.
 
 ### Serde is off the wire

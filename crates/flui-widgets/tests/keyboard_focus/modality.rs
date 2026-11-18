@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_painting::styling::Color;
 use flui_platform::keyboard::{Key, KeyState, NamedKey};
 use flui_testing::{Action, ActionRequest, MouseScript, TreeId};

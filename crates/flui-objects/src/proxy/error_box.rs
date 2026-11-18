@@ -17,11 +17,12 @@
 use std::sync::Arc;
 
 use flui_foundation::Leaf;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::parley_text::ParagraphSpec;
 use flui_painting::styling::Color;
-use flui_painting::typography::{TextDirection, TextStyle};
-use flui_painting::{Paint, ShapedParagraph};
+use flui_painting::typography::TextStyle;
+use flui_painting::{ShapedParagraph, paint::Paint};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,

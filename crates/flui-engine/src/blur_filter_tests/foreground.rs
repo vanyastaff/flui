@@ -11,7 +11,8 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{
-    Canvas, Paint,
+    Canvas,
+    paint::Paint,
     paint::{BlendMode, Clip, Image, ImageFilter, Path, Shader, TileMode},
     styling::Color,
 };
@@ -417,9 +418,10 @@ fn source_paint(c: Case) -> Paint {
 }
 
 fn source_paragraph() -> Arc<flui_painting::ShapedParagraph> {
+    use flui_foundation::TextDirection;
     use flui_painting::{
         TextPainter,
-        typography::{TextDirection, TextSpan, TextStyle},
+        typography::{TextSpan, TextStyle},
     };
     let mut text = TextPainter::new()
         .with_text(TextSpan::new("M").with_style(TextStyle::new().with_font_size(12.0)))

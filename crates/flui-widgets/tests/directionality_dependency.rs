@@ -16,7 +16,7 @@
 //! like the defect -- and applying the fix did not turn it green.
 
 use crate::common::{lay_out, tight};
-use flui_painting::typography::TextDirection;
+use flui_foundation::TextDirection;
 use flui_painting::{Alignment, AlignmentDirectional};
 use flui_rendering::constraints::AxisDirection;
 use flui_widgets::{Align, Column, CrossAxisAlignment, Directionality, SizedBox, Stack, Viewport};

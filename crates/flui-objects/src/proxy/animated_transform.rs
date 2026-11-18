@@ -53,9 +53,9 @@ use std::f64::consts::TAU;
 use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_foundation::{Single, panic::PanicRecovery};
-use flui_painting::typography::TextDirection;
 use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext, PaintContext},

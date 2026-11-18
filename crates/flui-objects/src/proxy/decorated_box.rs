@@ -10,7 +10,7 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::styling::BoxDecoration;
-use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
+use flui_painting::styling::DecorationPaintOptions;
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
@@ -170,10 +170,9 @@ impl RenderBox for RenderDecoratedBox {
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let rect = Self::paint_rect(ctx.size());
         if self.position == DecorationPosition::Background {
-            paint_box_decoration(
+            self.decoration.paint(
                 ctx.canvas(),
                 rect,
-                &self.decoration,
                 DecorationPaintOptions::with_anti_alias(self.anti_alias),
             );
         }
@@ -181,10 +180,9 @@ impl RenderBox for RenderDecoratedBox {
             ctx.paint_child();
         }
         if self.position == DecorationPosition::Foreground {
-            paint_box_decoration(
+            self.decoration.paint(
                 ctx.canvas(),
                 rect,
-                &self.decoration,
                 DecorationPaintOptions::with_anti_alias(self.anti_alias),
             );
         }
@@ -203,10 +201,7 @@ impl RenderBox for RenderDecoratedBox {
         }
         // Self test: the decorated area is hit-opaque within the decoration
         // shape (a Container with a color absorbs taps), excluding cut corners.
-        box_decoration_hit_test(
-            Self::paint_rect(ctx.own_size()),
-            &self.decoration,
-            *ctx.position(),
-        )
+        self.decoration
+            .hit_test(Self::paint_rect(ctx.own_size()), *ctx.position())
     }
 }

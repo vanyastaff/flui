@@ -9,6 +9,7 @@ use std::rc::{Rc, Weak};
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, MotionPolicy,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Rect, Size};
 use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::{FocusManager, FocusNode};
@@ -19,7 +20,6 @@ use flui_painting::Alignment;
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_view::element::{CarouselSliverConfig, SliverCarousel};
 use flui_view::prelude::*;
 use flui_view::{

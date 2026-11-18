@@ -1052,7 +1052,7 @@ impl Color {
 ///
 /// # Examples
 /// ```
-/// use flui_painting::styling::color::srgb_to_linear;
+/// use flui_painting::styling::srgb_to_linear;
 /// assert!((srgb_to_linear(0.0) - 0.0).abs() < 1e-6);
 /// assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
 /// ```
@@ -1076,7 +1076,7 @@ pub fn srgb_to_linear(c: f32) -> f32 {
 ///
 /// # Examples
 /// ```
-/// use flui_painting::styling::color::linear_to_srgb;
+/// use flui_painting::styling::linear_to_srgb;
 /// assert!((linear_to_srgb(0.0) - 0.0).abs() < 1e-6);
 /// assert!((linear_to_srgb(1.0) - 1.0).abs() < 1e-6);
 /// ```

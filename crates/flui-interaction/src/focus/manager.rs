@@ -1748,7 +1748,7 @@ mod tests {
     }
 
     impl crate::focus::FocusTraversalPolicy for ClosingPolicy {
-        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
+        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_foundation::TextDirection) {
             let _ = &self.0;
         }
     }
@@ -1996,7 +1996,7 @@ mod tests {
     }
 
     impl<T> crate::focus::FocusTraversalPolicy for RejectedPolicy<T> {
-        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
+        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_foundation::TextDirection) {
             panic!("closed scope accepted policy")
         }
     }

@@ -23,6 +23,7 @@ use std::ops::Range;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::RenderId;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
@@ -30,7 +31,7 @@ use flui_interaction::{ClipboardCapability, ClipboardHandle, KeyEventResult};
 use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
-use flui_painting::typography::{TextDirection, TextLink};
+use flui_painting::typography::TextLink;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::semantics::{

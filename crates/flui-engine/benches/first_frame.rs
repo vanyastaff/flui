@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use flui_engine::HeadlessRenderer;
 use flui_foundation::geometry::{Point, Rect};
 use flui_layer::{Layer, LayerTree, PictureLayer};
-use flui_painting::{Canvas, Paint, styling::Color};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 
 fn tree() -> LayerTree {
     let mut canvas = Canvas::new();

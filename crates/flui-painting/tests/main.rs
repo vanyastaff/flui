@@ -505,8 +505,8 @@ fn value_contract() {
                 values::sweep_interpolation_keeps_hard_transitions,
             ),
             (
-                "font_weight_from_css_breaks_ties_like_css",
-                values::font_weight_from_css_breaks_ties_like_css,
+                "a_font_weight_is_any_css_weight",
+                values::a_font_weight_is_any_css_weight,
             ),
             (
                 "a_one_sided_focal_point_lerps_to_the_other_center",
@@ -786,7 +786,7 @@ fn text_contract() {
             ("root_word_spacing_reaches_measurement_paint_and_carets", text_painter_unit::root_word_spacing_reaches_measurement_paint_and_carets),
             ("span_word_spacing_reaches_measurement_paint_and_carets", text_painter_unit::span_word_spacing_reaches_measurement_paint_and_carets),
             ("font_features_change_the_measured_and_painted_glyphs", text_painter_unit::font_features_change_the_measured_and_painted_glyphs),
-            ("invalid_font_features_do_not_replace_valid_settings", text_painter_unit::invalid_font_features_do_not_replace_valid_settings),
+            ("an_invalid_open_type_tag_is_refused_when_built", text_painter_unit::an_invalid_open_type_tag_is_refused_when_built),
             ("font_variations_select_the_painted_run_instance", text_painter_unit::font_variations_select_the_painted_run_instance),
             ("text_weight_adjustment_shapes_once_and_restores_authored_weights", text_painter_unit::text_weight_adjustment_shapes_once_and_restores_authored_weights),
             ("invalid_font_variations_do_not_replace_valid_settings", text_painter_unit::invalid_font_variations_do_not_replace_valid_settings),

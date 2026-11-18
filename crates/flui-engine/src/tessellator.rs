@@ -5,7 +5,7 @@
 
 use flui_foundation::geometry::{Point, RRect, Rect};
 use flui_painting::styling::Color;
-use flui_painting::{Paint, StrokeCap, StrokeJoin};
+use flui_painting::{paint::Paint, paint::StrokeCap, paint::StrokeJoin};
 use lyon::{
     path::{FillRule, Path},
     tessellation::{
@@ -325,7 +325,7 @@ impl Tessellator {
     /// filled `SrcOver` shapes); once it has decided to tessellate, the
     /// style must survive the trip.
     fn dispatch_on_style(&mut self, path: &Path, paint: &Paint) -> Result<(Vec<Vertex>, Vec<u32>)> {
-        if paint.style == flui_painting::PaintStyle::Fill {
+        if paint.style == flui_painting::paint::PaintStyle::Fill {
             self.tessellate_fill(path, paint, FillRule::NonZero)
         } else {
             self.tessellate_stroke(path, paint)
@@ -408,7 +408,7 @@ impl Tessellator {
             path_builder.begin(lyon::geom::point(start_x as f32, start_y as f32));
             path_builder.end(false);
             let path = path_builder.build();
-            return if paint.style == flui_painting::PaintStyle::Fill {
+            return if paint.style == flui_painting::paint::PaintStyle::Fill {
                 self.tessellate_fill(&path, paint, FillRule::NonZero)
             } else {
                 self.tessellate_stroke(&path, paint)
@@ -450,7 +450,7 @@ impl Tessellator {
         let path = path_builder.build();
 
         // Use fill or stroke based on paint style
-        if paint.style == flui_painting::PaintStyle::Fill {
+        if paint.style == flui_painting::paint::PaintStyle::Fill {
             // Convex pie/arc segment: fill rule is moot; pass the FLUI default.
             self.tessellate_fill(&path, paint, FillRule::NonZero)
         } else {
@@ -755,10 +755,10 @@ impl Tessellator {
     /// self-intersect or overlap same-winding subpaths, so the winding rule is
     /// observable: `PathFillType::NonZero` (the FLUI default) fills overlaps
     /// solid, `EvenOdd` punches holes. This is the only fill entry point that
-    /// reads [`flui_painting::paint::path::Path::fill_type`].
+    /// reads [`flui_painting::paint::Path::fill_type`].
     pub(crate) fn tessellate_flui_path_fill(
         &mut self,
-        flui_path: &flui_painting::paint::path::Path,
+        flui_path: &flui_painting::paint::Path,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
@@ -768,7 +768,7 @@ impl Tessellator {
     /// Tessellate a FLUI Path (stroked)
     pub(crate) fn tessellate_flui_path_stroke(
         &mut self,
-        flui_path: &flui_painting::paint::path::Path,
+        flui_path: &flui_painting::paint::Path,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
@@ -783,7 +783,7 @@ impl Tessellator {
     /// an invalid pattern falls back to a solid stroke.
     pub(crate) fn tessellate_flui_path_dashed_stroke(
         &mut self,
-        flui_path: &flui_painting::paint::path::Path,
+        flui_path: &flui_painting::paint::Path,
         paint: &Paint,
         dash_pattern: &flui_painting::paint::DashPattern,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
@@ -1037,12 +1037,12 @@ impl IntoLyonPath for Rect<f64> {
     }
 }
 
-impl IntoLyonPath for flui_painting::paint::path::Path {
+impl IntoLyonPath for flui_painting::paint::Path {
     /// The one kurbo-to-lyon adapter (ADR-0098 §7): a FLUI path's elements, whose curves
     /// kurbo built, become a lyon path. It is also the one narrowing point from logical `f64`
     /// path geometry to lyon's `f32` (ADR-0098 §2).
     fn to_lyon_path(&self) -> Path {
-        use flui_painting::paint::path::PathCommand;
+        use flui_painting::paint::PathCommand;
 
         let lyon_point = |p: Point<f64>| lyon::geom::point(p.x as f32, p.y as f32);
 

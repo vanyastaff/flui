@@ -23,7 +23,7 @@ impl super::WgpuPainter {
     pub fn draw_rect(
         &mut self,
         rect: flui_foundation::geometry::Rect<f64>,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::draw_rect: rect={:?}, paint={:?}", rect, paint);
@@ -49,7 +49,7 @@ impl super::WgpuPainter {
     pub fn draw_rrect(
         &mut self,
         rrect: flui_foundation::geometry::RRect,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         let opacity = self.compositor.current_opacity();
         self.batcher.draw_rrect(
@@ -73,7 +73,7 @@ impl super::WgpuPainter {
         &mut self,
         center: flui_foundation::geometry::Point<f64>,
         radius: f32,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -104,7 +104,7 @@ impl super::WgpuPainter {
     pub fn draw_oval(
         &mut self,
         rect: flui_foundation::geometry::Rect<f64>,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::draw_oval: rect={:?}, paint={:?}", rect, paint);
@@ -134,7 +134,7 @@ impl super::WgpuPainter {
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -170,7 +170,7 @@ impl super::WgpuPainter {
         &mut self,
         outer: flui_foundation::geometry::RRect,
         inner: flui_foundation::geometry::RRect,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -200,7 +200,7 @@ impl super::WgpuPainter {
         &mut self,
         p1: flui_foundation::geometry::Point<f64>,
         p2: flui_foundation::geometry::Point<f64>,
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -313,8 +313,8 @@ impl super::WgpuPainter {
     /// `current_max_scale`).
     pub fn draw_path(
         &mut self,
-        path: &flui_painting::paint::path::Path,
-        paint: &flui_painting::Paint,
+        path: &flui_painting::paint::Path,
+        paint: &flui_painting::paint::Paint,
     ) {
         // Material surfaces retain their exact rounded-rectangle source in
         // Path. Keep that geometry on the direct shape route instead of
@@ -325,8 +325,8 @@ impl super::WgpuPainter {
         // shapes this route accepts unbuilt (`ShapeHint::may_defer`): keep them in step. A
         // stroke, another paint or a clip of such a shape reads its curves, which each
         // recorded clone then builds for itself.
-        if paint.style == flui_painting::PaintStyle::Fill
-            && paint.blend_mode == flui_painting::BlendMode::SrcOver
+        if paint.style == flui_painting::paint::PaintStyle::Fill
+            && paint.blend_mode == flui_painting::paint::BlendMode::SrcOver
             && paint.anti_alias
             && !paint.has_shader()
             && let Some(rrect) = path.rrect_hint()
@@ -374,7 +374,7 @@ impl super::WgpuPainter {
         &mut self,
         image: &flui_painting::paint::Image,
         dst_rect: flui_foundation::geometry::Rect<f64>,
-        blend_mode: flui_painting::BlendMode,
+        blend_mode: flui_painting::paint::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image(
             &mut self.current_segment,
@@ -404,7 +404,7 @@ impl super::WgpuPainter {
         tile: Option<flui_foundation::geometry::Rect<f64>>,
         repeat: flui_painting::paint::ImageRepeat,
         filter: Option<flui_painting::paint::ColorFilter>,
-        paint: Option<&flui_painting::Paint>,
+        paint: Option<&flui_painting::paint::Paint>,
     ) {
         crate::batches::DrawBatcher::draw_image_region(
             &mut self.current_segment,
@@ -426,7 +426,7 @@ impl super::WgpuPainter {
         image: &flui_painting::paint::Image,
         centre: flui_foundation::geometry::Rect<f64>,
         dst: flui_foundation::geometry::Rect<f64>,
-        paint: Option<&flui_painting::Paint>,
+        paint: Option<&flui_painting::paint::Paint>,
     ) {
         crate::batches::DrawBatcher::draw_image_nine_slice_painted(
             &mut self.current_segment,
@@ -446,7 +446,7 @@ impl super::WgpuPainter {
         sprites: &[flui_foundation::geometry::Rect<f64>],
         transforms: &[flui_foundation::geometry::Matrix4],
         colors: Option<&[flui_painting::styling::Color]>,
-        paint: Option<&flui_painting::Paint>,
+        paint: Option<&flui_painting::paint::Paint>,
     ) {
         crate::batches::DrawBatcher::draw_atlas_painted(
             &mut self.current_segment,
@@ -457,7 +457,7 @@ impl super::WgpuPainter {
             sprites,
             transforms,
             colors,
-            paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode),
+            paint.map_or(flui_painting::paint::BlendMode::SrcOver, |p| p.blend_mode),
             paint,
         );
     }
@@ -471,8 +471,8 @@ impl super::WgpuPainter {
         &mut self,
         image: &flui_painting::paint::Image,
         dst: flui_foundation::geometry::Rect<f64>,
-        repeat: flui_painting::paint::image::ImageRepeat,
-        blend_mode: flui_painting::BlendMode,
+        repeat: flui_painting::paint::ImageRepeat,
+        blend_mode: flui_painting::paint::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_repeat(
             &mut self.current_segment,
@@ -496,7 +496,7 @@ impl super::WgpuPainter {
         image: &flui_painting::paint::Image,
         center_slice: flui_foundation::geometry::Rect<f64>,
         dst: flui_foundation::geometry::Rect<f64>,
-        blend_mode: flui_painting::BlendMode,
+        blend_mode: flui_painting::paint::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_nine_slice(
             &mut self.current_segment,
@@ -520,8 +520,8 @@ impl super::WgpuPainter {
         &mut self,
         image: &flui_painting::paint::Image,
         dst: flui_foundation::geometry::Rect<f64>,
-        filter: flui_painting::paint::image::ColorFilter,
-        blend_mode: flui_painting::BlendMode,
+        filter: flui_painting::paint::ColorFilter,
+        blend_mode: flui_painting::paint::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_filtered(
             &mut self.current_segment,
@@ -545,7 +545,7 @@ impl super::WgpuPainter {
     /// paths fall back gracefully without crashing.
     pub fn draw_shadow(
         &mut self,
-        path: &flui_painting::paint::path::Path,
+        path: &flui_painting::paint::Path,
         color: flui_painting::styling::Color,
         elevation: f32,
     ) {
@@ -586,7 +586,7 @@ impl super::WgpuPainter {
         colors: Option<&[flui_painting::styling::Color]>,
         tex_coords: Option<&[flui_foundation::geometry::Point<f64>]>,
         indices: &[u16],
-        paint: &flui_painting::Paint,
+        paint: &flui_painting::paint::Paint,
     ) {
         crate::batches::DrawBatcher::draw_vertices(
             &mut self.current_segment,
@@ -611,7 +611,7 @@ impl super::WgpuPainter {
         sprites: &[flui_foundation::geometry::Rect<f64>],
         transforms: &[flui_foundation::geometry::Matrix4],
         colors: Option<&[flui_painting::styling::Color]>,
-        blend_mode: flui_painting::BlendMode,
+        blend_mode: flui_painting::paint::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_atlas(
             &mut self.current_segment,

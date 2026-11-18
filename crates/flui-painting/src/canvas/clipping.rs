@@ -1,6 +1,6 @@
 //! Canvas clipping: `clip_rect` / `clip_rrect` / `clip_rsuperellipse` /
-//! `clip_path`, each with an `_ext` form taking the `ClipOp` and `Clip`
-//! that `dart:ui` exposes as optional arguments.
+//! `clip_path` intersect with a hard edge, and each `_with` form takes the
+//! `ClipOp` and the `Clip` behaviour explicitly.
 //!
 //! Every enabled clip records one `DrawOp::Clip*`; the engine restores
 //! its clip stack when it replays the matching `Restore` command.
@@ -14,12 +14,12 @@ use crate::display_list::DrawOp;
 impl Canvas {
     /// Clips to a rectangle (intersect, hard edge).
     pub fn clip_rect(&mut self, rect: Rect<f64>) {
-        self.clip_rect_ext(rect, ClipOp::default(), Clip::default());
+        self.clip_rect_with(rect, ClipOp::default(), Clip::default());
     }
 
     /// Clips to a rounded rectangle (intersect, hard edge).
     pub fn clip_rrect(&mut self, rrect: RRect) {
-        self.clip_rrect_ext(rrect, ClipOp::default(), Clip::default());
+        self.clip_rrect_with(rrect, ClipOp::default(), Clip::default());
     }
 
     /// Clips to a rounded superellipse (intersect, hard edge).
@@ -27,16 +27,16 @@ impl Canvas {
     /// The command carries the squircle itself; the engine evaluates it as a
     /// signed distance field rather than approximating it with an rrect.
     pub fn clip_rsuperellipse(&mut self, rsuperellipse: RSuperellipse) {
-        self.clip_rsuperellipse_ext(rsuperellipse, ClipOp::default(), Clip::default());
+        self.clip_rsuperellipse_with(rsuperellipse, ClipOp::default(), Clip::default());
     }
 
     /// Clips to a path (intersect, hard edge).
     pub fn clip_path(&mut self, path: &Path) {
-        self.clip_path_ext(path, ClipOp::default(), Clip::default());
+        self.clip_path_with(path, ClipOp::default(), Clip::default());
     }
 
     /// Clips to a rectangle with an explicit operation and behaviour.
-    pub fn clip_rect_ext(&mut self, rect: Rect<f64>, clip_op: ClipOp, clip_behavior: Clip) {
+    pub fn clip_rect_with(&mut self, rect: Rect<f64>, clip_op: ClipOp, clip_behavior: Clip) {
         self.push_clip(clip_behavior, || DrawOp::ClipRect {
             rect,
             clip_op,
@@ -45,7 +45,7 @@ impl Canvas {
     }
 
     /// Clips to a rounded rectangle with an explicit operation and behaviour.
-    pub fn clip_rrect_ext(&mut self, rrect: RRect, clip_op: ClipOp, clip_behavior: Clip) {
+    pub fn clip_rrect_with(&mut self, rrect: RRect, clip_op: ClipOp, clip_behavior: Clip) {
         self.push_clip(clip_behavior, || DrawOp::ClipRRect {
             rrect,
             clip_op,
@@ -55,7 +55,7 @@ impl Canvas {
 
     /// Clips to a rounded superellipse with an explicit operation and
     /// behaviour.
-    pub fn clip_rsuperellipse_ext(
+    pub fn clip_rsuperellipse_with(
         &mut self,
         rsuperellipse: RSuperellipse,
         clip_op: ClipOp,
@@ -69,7 +69,7 @@ impl Canvas {
     }
 
     /// Clips to a path with an explicit operation and behaviour.
-    pub fn clip_path_ext(&mut self, path: &Path, clip_op: ClipOp, clip_behavior: Clip) {
+    pub fn clip_path_with(&mut self, path: &Path, clip_op: ClipOp, clip_behavior: Clip) {
         if clip_behavior == Clip::None {
             return;
         }

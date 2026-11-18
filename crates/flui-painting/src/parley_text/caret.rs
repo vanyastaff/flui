@@ -15,9 +15,10 @@ use super::ParagraphLayout;
 use super::shape::is_hard_break as is_break;
 use crate::text_boundaries::{grapheme_bounds, graphemes, word_at};
 use crate::typography::{
-    LineMetrics, TextAffinity, TextBox, TextCharacter, TextDirection, TextLineLayout, TextLineRun,
-    TextPosition, TextRange,
+    LineMetrics, TextAffinity, TextBox, TextCharacter, TextLineLayout, TextLineRun, TextPosition,
+    TextRange,
 };
+use flui_foundation::TextDirection;
 
 /// One cluster where it is painted.
 #[derive(Clone, Debug)]
@@ -486,7 +487,8 @@ mod tests {
 
     use crate::parley_text::ParagraphSpec;
     use crate::text_layout::{FontCollection, TextContext};
-    use crate::typography::{TextDirection, TextStyle};
+    use crate::typography::TextStyle;
+    use flui_foundation::TextDirection;
 
     use crate::text_boundaries::word_segments;
 
