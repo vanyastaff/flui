@@ -1,4 +1,4 @@
-//! What an action changed in the published tree (R16): the nodes that
+//! What an action changed in the published tree: the nodes that
 //! appeared, the ones that are gone, and the ones whose description changed,
 //! matched by element id.
 //!

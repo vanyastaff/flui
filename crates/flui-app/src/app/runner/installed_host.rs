@@ -294,6 +294,11 @@ impl OwnerEffects for HostState {
         }
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         let _ = state;
+        // In front again: the expiring clipboard entries the host could not
+        // see the clipboard for are cleared now, if still there (ADR-0363).
+        if state == flui_scheduler::AppLifecycleState::Resumed && self.is_current() {
+            super::host::clipboard_expiries_in_front();
+        }
     }
 
     fn runtimes_stopped(&self, _: RecoveryState) {

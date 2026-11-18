@@ -54,8 +54,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
-    capability::Resolver,
+    ClipboardEntryId, ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
+    ExpiryClearing, capability::Resolver,
 };
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_callback::{self, WlCallback};
@@ -69,7 +69,9 @@ use web_time::Instant;
 use self::reads::{Admitted, Reads};
 use super::owners::Owners;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
-use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
+use crate::host::{
+    ExpiredClear, ExpiredEntry, MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text,
+};
 use crate::owner::linux::wayland::{LastInput, SeatInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
 use crate::transfer::linux::wayland::pipe::{self, PipeError};
@@ -178,12 +180,14 @@ impl Shared {
         self: &Arc<Self>,
         text: &Arc<str>,
         concealed: bool,
+        entry: Option<ClipboardEntryId>,
         input: &SeatInput,
     ) -> Option<WlDataSource> {
         let source = self.devices.create_source(SourceData::new(
             Arc::downgrade(self),
             Arc::clone(text),
             concealed,
+            entry,
         ))?;
         for mime in offered(concealed) {
             source.offer(mime.to_owned());
@@ -205,6 +209,9 @@ impl Shared {
 /// while it is kept in this process alone, under no seat.
 struct Owned {
     text: Arc<str>,
+    /// The entry the write `text` came from makes, when it expires: what a
+    /// conditional clear names (ADR-0363).
+    entry: Option<ClipboardEntryId>,
     source: Option<WlDataSource>,
     serial: Option<u32>,
     /// The sources set before `source` under the same serial, oldest first,
@@ -222,9 +229,10 @@ impl Owned {
     }
 
     /// Text kept in this process alone, under no seat.
-    fn kept(text: Arc<str>) -> Self {
+    fn kept(text: Arc<str>, entry: Option<ClipboardEntryId>) -> Self {
         Self {
             text,
+            entry,
             source: None,
             serial: None,
             superseded: Vec::new(),
@@ -232,9 +240,15 @@ impl Owned {
     }
 
     /// Text set as a seat's selection through `source` under `serial`.
-    fn seated(text: Arc<str>, source: WlDataSource, serial: u32) -> Self {
+    fn seated(
+        text: Arc<str>,
+        entry: Option<ClipboardEntryId>,
+        source: WlDataSource,
+        serial: u32,
+    ) -> Self {
         Self {
             text,
+            entry,
             source: Some(source),
             serial: Some(serial),
             superseded: Vec::new(),
@@ -244,15 +258,21 @@ impl Owned {
     /// Answer with `text` from now on, through every source this selection
     /// holds that can carry it: a concealed write never goes out through a
     /// source that does not offer the hint.
-    fn replace(&mut self, text: Arc<str>, concealed: bool) {
+    fn replace(&mut self, text: Arc<str>, concealed: bool, entry: Option<ClipboardEntryId>) {
         for source in self.source.iter().chain(&self.superseded) {
             if let Some(data) = source.data::<SourceData>()
                 && data.carries(concealed)
             {
-                data.replace(Arc::clone(&text), concealed);
+                data.replace(Arc::clone(&text), concealed, entry);
             }
         }
         self.text = text;
+        self.entry = entry;
+    }
+
+    /// Whether this selection answers the expiring entry `which` names.
+    fn holds(&self, which: ExpiredEntry) -> bool {
+        self.entry.is_some_and(|held| which.names(held))
     }
 }
 
@@ -431,6 +451,52 @@ impl NativeClipboard for SeatClipboard {
         Concealment::HintOnly
     }
 
+    /// The entry's source is destroyed, which the compositor takes as the
+    /// selection's end only while that source is still the selection; logind
+    /// says when the session locks.
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::AtTimeAndLock
+    }
+
+    /// Answered at once. While the seat's selection answers the entry, its
+    /// source is destroyed: the compositor serves requests in order, so a
+    /// selection another client set first has already cancelled the source,
+    /// and destroying it changes nothing of theirs; one set after finds the
+    /// selection cleared and takes it. No serial is needed, so a clear works
+    /// with the keyboard elsewhere. Text kept for the application alone is
+    /// dropped the same way.
+    fn clear_expired(&self, entry: ExpiredEntry, answer: Resolver<ExpiredClear>) {
+        let (released, cleared) = self
+            .shared
+            .state
+            .with(|state| {
+                if state.released {
+                    return (None, ExpiredClear::Failed(ClipboardError::Gone));
+                }
+                if state.owned.read(None).is_some_and(|kept| kept.holds(entry)) {
+                    return (state.owned.take_kept(), ExpiredClear::Cleared);
+                }
+                match state.owned.remove(|owned| owned.holds(entry)) {
+                    Some(owned) => (Some(owned), ExpiredClear::Cleared),
+                    None => (None, ExpiredClear::NotHeld),
+                }
+            })
+            // Off the owner thread no clear can reach the selections.
+            .unwrap_or((None, ExpiredClear::Failed(ClipboardError::Gone)));
+        if let Some(owned) = released {
+            owned.release();
+        }
+        // A retired owner has nobody left to answer.
+        let _ = answer.resolve(cleared);
+    }
+
+    /// The selection ends with the connection, which the loop releases as it
+    /// ends: no client can read the entry after the process, unless a
+    /// clipboard manager copied it while it was offered.
+    fn clear_expired_before_exit(&self, _within: Duration) -> ExpiredClear {
+        ExpiredClear::NotHeld
+    }
+
     /// Answered at once: `Ok` once the seat's selection is set to the
     /// write's source (the compositor may still cancel it for a newer one);
     /// [`ClipboardError::Unavailable`] with no user input in focus to set it
@@ -443,6 +509,7 @@ impl NativeClipboard for SeatClipboard {
     /// [`ClipboardError::Gone`] once the loop released the clipboard.
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         let concealed = write.is_concealed();
+        let entry = write.entry();
         let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest_in_focus();
         let outcome = self.shared.state.with(|state| {
@@ -468,7 +535,7 @@ impl NativeClipboard for SeatClipboard {
             // source changes them.
             let fresh = input
                 .filter(|_| held_hint != Some(concealed))
-                .and_then(|input| self.shared.place(&text, concealed, input));
+                .and_then(|input| self.shared.place(&text, concealed, entry, input));
             let effect = write_effect(input.is_some(), held_hint, concealed, fresh.is_some());
             match (effect, fresh) {
                 // Nothing is kept: the window that holds the keyboard again
@@ -477,7 +544,7 @@ impl NativeClipboard for SeatClipboard {
                 // No system clipboard on this seat: the text is kept for the
                 // application, never offered later.
                 (WriteEffect::KeepForApplication, _) => {
-                    let previous = owned.keep(Owned::kept(text));
+                    let previous = owned.keep(Owned::kept(text, entry));
                     (
                         previous.into_iter().collect(),
                         Err(ClipboardError::ApplicationOnly),
@@ -485,7 +552,7 @@ impl NativeClipboard for SeatClipboard {
                 }
                 (WriteEffect::ReplaceInPlace, _) => {
                     if let Some(held) = held.as_mut() {
-                        held.replace(Arc::clone(&text), concealed);
+                        held.replace(Arc::clone(&text), concealed, entry);
                     }
                     (owned.take_kept().into_iter().collect(), Ok(()))
                 }
@@ -494,7 +561,7 @@ impl NativeClipboard for SeatClipboard {
                 // it offers no hint.
                 (WriteEffect::SetOver, Some(source)) => {
                     if let Some(held) = held.as_mut() {
-                        held.replace(Arc::clone(&text), concealed);
+                        held.replace(Arc::clone(&text), concealed, entry);
                         if let Some(current) = held.source.replace(source) {
                             SelectionCheck::send(
                                 &current,
@@ -513,7 +580,7 @@ impl NativeClipboard for SeatClipboard {
                     let previous = owned
                         .set(
                             input.seat.clone(),
-                            Owned::seated(text, source, input.serial),
+                            Owned::seated(text, entry, source, input.serial),
                         )
                         .collect::<Vec<Owned>>();
                     (previous, Ok(()))
@@ -655,6 +722,8 @@ struct Content {
     text: Arc<str>,
     /// Whether the write was concealed.
     concealed: bool,
+    /// The entry the write makes, when it expires.
+    entry: Option<ClipboardEntryId>,
     /// The text in each form asked for so far, encoded once and shared by
     /// every `send` of that form.
     encoded: Vec<(TextForm, Arc<[u8]>)>,
@@ -663,25 +732,37 @@ struct Content {
 impl SourceData {
     /// A source's data, answering with `text` and offering the hint when the
     /// write is `concealed`; made on the owner thread.
-    fn new(shared: Weak<Shared>, text: Arc<str>, concealed: bool) -> Self {
+    fn new(
+        shared: Weak<Shared>,
+        text: Arc<str>,
+        concealed: bool,
+        entry: Option<ClipboardEntryId>,
+    ) -> Self {
         let data = Self {
             shared,
             offers_hint: concealed,
             content: OwnerCell::new(),
         };
-        data.replace(text, concealed);
+        data.replace(text, concealed, entry);
         data
     }
 
-    /// Answer with `text` from now on, a write `concealed` or not.
-    fn replace(&self, text: Arc<str>, concealed: bool) {
+    /// Answer with `text` from now on, a write `concealed` or not, which
+    /// makes `entry` when it expires.
+    fn replace(&self, text: Arc<str>, concealed: bool, entry: Option<ClipboardEntryId>) {
         self.content.with(|content| {
             *content = Content {
                 text,
                 concealed,
+                entry,
                 encoded: Vec::new(),
             };
         });
+    }
+
+    /// The entry of the write the source answers with, when it expires.
+    fn entry(&self) -> Option<ClipboardEntryId> {
+        self.content.with(|content| content.entry).flatten()
     }
 
     /// Whether the source can answer a write `concealed` or not: a concealed
@@ -821,9 +902,11 @@ impl Dispatch<WlCallback, SelectionCheck> for WaylandState {
             for dropped in sources.into_iter().chain(replaced) {
                 dropped.destroy();
             }
-            let text = kept.data::<SourceData>().and_then(SourceData::text)?;
+            let data = kept.data::<SourceData>()?;
+            let text = data.text()?;
             let dropped_write = !Arc::ptr_eq(&text, &held.text);
             held.text = text;
+            held.entry = data.entry();
             Some(dropped_write)
         });
         // The subscriber runs with the clipboard's state let go.
@@ -908,7 +991,7 @@ mod tests {
         for concealed in [false, true] {
             let offers = offered(concealed).collect::<Vec<&str>>();
             assert_eq!(offers.contains(&CONCEALED_HINT), concealed, "{concealed}");
-            let data = SourceData::new(Weak::new(), Arc::<str>::from("hunter2"), concealed);
+            let data = SourceData::new(Weak::new(), Arc::<str>::from("hunter2"), concealed, None);
             assert_eq!(
                 data.answer(CONCEALED_HINT).as_deref(),
                 concealed.then_some(CONCEALED_HINT_VALUE),
@@ -929,9 +1012,9 @@ mod tests {
         for (offered_hint, concealed) in
             [(false, false), (false, true), (true, false), (true, true)]
         {
-            let data = SourceData::new(Weak::new(), Arc::<str>::from("first"), offered_hint);
+            let data = SourceData::new(Weak::new(), Arc::<str>::from("first"), offered_hint, None);
             assert_eq!(data.answer("UTF8_STRING").as_deref(), Some(&b"first"[..]));
-            data.replace(Arc::<str>::from("second"), concealed);
+            data.replace(Arc::<str>::from("second"), concealed, None);
             let row = format!("offered {offered_hint}, concealed {concealed}");
             assert_eq!(
                 data.answer("UTF8_STRING").as_deref(),

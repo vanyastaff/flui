@@ -1,11 +1,11 @@
 //! Acceptance + edge-case tests for the ancestor-finder trio and
 //! the render-object finder on `BuildContext`:
 //!
-//! - `find_ancestor_view` / `find_ancestor` (R6) — nearest View match.
-//! - `find_ancestor_state` / `find_state` (R7) — nearest State match.
-//! - `find_root_ancestor_state` / `find_root_state` (R8) — root-most
+//! - `find_ancestor_view` / `find_ancestor` — nearest View match.
+//! - `find_ancestor_state` / `find_state` — nearest State match.
+//! - `find_root_ancestor_state` / `find_root_state` — root-most
 //!   State match.
-//! - `find_render_object` (R9) — nearest `RenderId` from a
+//! - `find_render_object` — nearest `RenderId` from a
 //!   `RenderElement` ancestor.
 //!
 //! Test fixtures use the same `mount_root` / `insert` shape as

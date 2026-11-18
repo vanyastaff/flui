@@ -37,6 +37,13 @@ chapters! {
     lists_and_keys => "tutorial/lists.md",
     #[cfg(feature = "testing")]
     navigation => "tutorial/navigation.md",
+    // the theme chapter uses the Material catalog
+    #[cfg(all(feature = "testing", feature = "material"))]
+    theming => "tutorial/theme.md",
+    #[cfg(feature = "testing")]
+    tutorial_testing => "tutorial/testing.md",
+    #[cfg(feature = "testing")]
+    platforms => "tutorial/platforms.md",
     overview => "concepts/overview.md",
     view_element_render => "concepts/view-element-render.md",
     keys => "concepts/keys.md",

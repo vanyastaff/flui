@@ -32,17 +32,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use flui_platform::{
-    ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, capability::Resolver,
+    ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
+    capability::Resolver,
 };
 use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
-use self::selection::{Command, Generation, Name, Notice, Owed, Selections};
+use self::selection::{Command, Generation, Name, Notice, Owed, OwedClear, Selections};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::error::PlatformError;
 use crate::host;
+use crate::host::{ExpiredClear, ExpiredEntry};
 use crate::owner::linux::x11::LoopClipboard;
 
 /// The X11 clipboard: a handle on the thread that owns and reads the
@@ -211,6 +214,27 @@ impl host::NativeClipboard for X11Clipboard {
     /// only a clipboard manager that reads it honours.
     fn concealment(&self) -> Concealment {
         Concealment::HintOnly
+    }
+
+    /// The selection is given up at the time the window took it, which the
+    /// server ignores once another client took it later; logind says when
+    /// the session locks.
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::AtTimeAndLock
+    }
+
+    /// Answered from the clipboard thread once the write asked before it
+    /// owned or failed; [`ExpiredClear::Failed`] with
+    /// [`Gone`](flui_platform::ClipboardError::Gone) once the thread ended.
+    fn clear_expired(&self, entry: ExpiredEntry, answer: Resolver<ExpiredClear>) {
+        self.send(Command::ClearExpired(entry, OwedClear::new(answer)));
+    }
+
+    /// The selection ends with the clipboard's connection, which closes as
+    /// the loop drops the clipboard: no client can read the entry after the
+    /// process, unless a clipboard manager copied it while it was offered.
+    fn clear_expired_before_exit(&self, _within: Duration) -> ExpiredClear {
+        ExpiredClear::NotHeld
     }
 }
 

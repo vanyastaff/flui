@@ -479,6 +479,16 @@ pub(crate) mod android {
         const SINCE: u64 = 24;
     }
 
+    /// `ClipboardManager.clearPrimaryClip` (API 28). Without it an expired
+    /// clipboard entry is replaced by an empty clip.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ClearPrimaryClip;
+
+    impl Gate for ClearPrimaryClip {
+        type Version = AndroidApi;
+        const SINCE: u64 = 28;
+    }
+
     /// `Configuration.fontWeightAdjustment` (API 31). Without it the text-weight preference is
     /// reported as unavailable.
     #[derive(Debug, Clone, Copy)]
@@ -742,10 +752,10 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::android::{
-        AndroidApi, BackgroundBlur, ClipExtras, ContextDisplay, DecorFitsSystemWindows,
-        DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion, HapticComposition,
-        InsetsByType, InsetsController, LocaleList, PointerIcons, RoundPrimitives,
-        ScaledScrollFactor, SegmentFeedback, StylusHandwriting, SystemContrast,
+        AndroidApi, BackgroundBlur, ClearPrimaryClip, ClipExtras, ContextDisplay,
+        DecorFitsSystemWindows, DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion,
+        HapticComposition, InsetsByType, InsetsController, LocaleList, PointerIcons,
+        RoundPrimitives, ScaledScrollFactor, SegmentFeedback, StylusHandwriting, SystemContrast,
         SystemGestureInsets, TextWeight, TouchpadGestures, UnbufferedDispatch, VibrationTouchUsage,
         WindowColorMode,
     };
@@ -768,6 +778,12 @@ mod tests {
         failures.extend(row::<TextWeight>("TextWeight", api(30), api(31), unknown));
         failures.extend(row::<LocaleList>("LocaleList", api(23), api(24), unknown));
         failures.extend(row::<ClipExtras>("ClipExtras", api(23), api(24), unknown));
+        failures.extend(row::<ClearPrimaryClip>(
+            "ClearPrimaryClip",
+            api(27),
+            api(28),
+            unknown,
+        ));
         failures.extend(row::<SystemContrast>(
             "SystemContrast",
             api(33),
