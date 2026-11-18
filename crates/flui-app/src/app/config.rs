@@ -3,7 +3,7 @@
 use flui_engine::FrameLatency;
 use flui_foundation::AppId;
 use flui_foundation::geometry::{Point, Size};
-use flui_log::AppIdentity;
+use flui_log::identity::AppIdentity;
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 

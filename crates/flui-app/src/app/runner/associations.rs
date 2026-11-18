@@ -62,7 +62,7 @@ impl PendingRegistration {
     /// about).
     pub(in crate::app) fn of(
         settings: &super::opened::OpenSettings,
-        identity: &flui_log::AppIdentity,
+        identity: &flui_log::identity::AppIdentity,
     ) -> Option<Self> {
         let declarations = settings.declarations?;
         let url_schemes = declarations.declared_url_schemes();
@@ -160,7 +160,7 @@ pub(in crate::app) fn start_pending() {
 /// `identity`, so the run ends there. `None` for any other start.
 #[cfg(windows)]
 pub(in crate::app) fn unregister_if_requested(
-    identity: &flui_log::AppIdentity,
+    identity: &flui_log::identity::AppIdentity,
 ) -> Option<Result<(), crate::app::LaunchError>> {
     if !unregister_requested(std::env::args_os().skip(1)) {
         return None;
