@@ -235,14 +235,4 @@ impl ForcePressDetails {
             max_pressure,
         }
     }
-
-    /// Returns the normalized pressure (0.0 to 1.0)
-    #[inline]
-    pub fn normalized_pressure(&self) -> f64 {
-        if self.max_pressure > 0.0 {
-            (self.pressure / self.max_pressure).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    }
 }

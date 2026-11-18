@@ -223,7 +223,10 @@ impl DropTracker {
                     .map(|entered| entered.receiver),
             );
             state.entered = current;
-            state.moves = state.moves.wrapping_add(1);
+            state.moves = state
+                .moves
+                .checked_add(1)
+                .expect("BUG: fewer than 2^64 moves per drag");
             if state.entered.is_empty() {
                 state.autoscroll = None;
             } else {
