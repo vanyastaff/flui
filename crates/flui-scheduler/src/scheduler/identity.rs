@@ -2,7 +2,6 @@
 //! claims.
 
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 
 use super::UpdateScheduler;
 
@@ -10,7 +9,7 @@ impl UpdateScheduler {
     /// Whether `self` and `other` are clones of the **same** scheduler — the same
     /// callback queues, the same frame.
     ///
-    /// `UpdateScheduler` is `Arc`-backed, so this is pointer identity on the shared
+    /// `UpdateScheduler` is `Rc`-backed, so this is pointer identity on the shared
     /// inner state. It exists because a capability handed to a widget must be
     /// provably pointed at the UI runtime's own scheduler, not some other one.
     #[must_use]
@@ -21,17 +20,12 @@ impl UpdateScheduler {
     /// Claim this scheduler's single owner-frame slot; `false` if a live
     /// [`OwnerFrame`](crate::OwnerFrame) already holds it.
     pub(crate) fn claim_owner_frame(&self) -> bool {
-        self.inner
-            .owner_frame_claimed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+        !self.inner.owner_frame_claimed.replace(true)
     }
 
     /// Release the slot [`claim_owner_frame`](Self::claim_owner_frame) took.
     pub(crate) fn release_owner_frame(&self) {
-        self.inner
-            .owner_frame_claimed
-            .store(false, Ordering::Release);
+        self.inner.owner_frame_claimed.set(false);
     }
 
     /// A stable, opaque identity for tracing/diagnostics only.

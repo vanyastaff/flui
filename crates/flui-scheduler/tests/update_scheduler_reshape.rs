@@ -2,10 +2,11 @@
 
 use std::{cell::Cell, rc::Rc, time::Duration};
 
+use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     DemandKind, FrameClock, FrameId, FramePhase, FramePhaseDurations, FrameTimes, Instant,
-    PresentOutcome, PresentationAddress, PresentationId, UiRuntimeId, UpdateScheduler, frame_pace,
+    PresentOutcome, UpdateScheduler, frame_pace,
 };
 
 #[test]

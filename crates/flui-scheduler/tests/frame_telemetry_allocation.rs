@@ -1,4 +1,4 @@
-//! Profiling evidence for issue #556's frame-telemetry seam
+//! Allocation gate for the frame-telemetry seam
 //! (`crate::frame_telemetry`, `FrameClock::stamp_input_epoch`/
 //! `record_frame`): the hot input-stamp -> produce -> record path must not
 //! allocate per frame, even with telemetry enabled on every pump.
@@ -31,9 +31,10 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 use flui_scheduler::{
     ClockSource, DemandKind, FrameClock, FramePhaseDurations, FrameTimes, PollDecision,
-    PresentOutcome, PresentationAddress, PresentationId, UiRuntimeId,
+    PresentOutcome,
 };
 
 // Per-thread, not process-global: a `GlobalAlloc` sees every thread's
@@ -111,7 +112,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
 
     // Warmup: settles this process's first-allocation costs (e.g. any
     // one-time lazy static / TLS init in `web_time` or `std`) that are not
-    // part of the per-frame path this issue added.
+    // part of the per-frame path.
     clock.mark_demand(DemandKind::Dirty);
     let now = clock.now();
     assert_eq!(
@@ -169,8 +170,8 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     assert_eq!(
         cycles_with_allocation, 0,
         "{cycles_with_allocation} of {CYCLES} stamp+poll+record cycles allocated at least \
-         once (worst cycle: {worst_cycle_bytes} bytes) — the frame-telemetry path this issue \
-         added (InputEpochs, FrameHistory) must be zero-allocation on every steady-state cycle"
+         once (worst cycle: {worst_cycle_bytes} bytes) — the frame-telemetry path \
+         (InputEpochs, FrameHistory) must be zero-allocation on every steady-state cycle"
     );
 
     // Negative control: same clock, right after the measured loop above --

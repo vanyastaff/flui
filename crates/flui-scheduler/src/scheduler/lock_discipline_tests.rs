@@ -59,12 +59,11 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         display_period: _,
         frame_count: _,
         completion_waiters,
-        frame_thread,
     } = frame;
     let WakeShared {
         scheduler_phase: _,
         frames_enabled: _,
-        frame_thread: _,
+        owner_thread: _,
         frame_scheduled: _,
         wake_delivery,
         on_frame_scheduled,
@@ -78,10 +77,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         current_vsync_time.try_borrow_mut().is_ok(),
         "current_vsync_time is locked during a callback"
-    );
-    assert!(
-        frame_thread.try_lock().is_some(),
-        "frame_thread is locked during a callback"
     );
     assert!(
         completion_waiters.try_borrow_mut().is_ok(),

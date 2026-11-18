@@ -105,7 +105,7 @@ fn finished_and_cancelled_futures_preserve_caught_failure_custody() {
 fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
     struct CancelsOnDrop {
         scheduler: UpdateScheduler,
-        other: Rc<Cell<Option<flui_scheduler::CallbackId>>>,
+        other: Rc<Cell<Option<flui_foundation::FrameCallbackId>>>,
     }
     impl Drop for CancelsOnDrop {
         fn drop(&mut self) {
@@ -1091,7 +1091,7 @@ fn standalone_retirement_publishes_producer_custody() {
     struct ProducerRemoval {
         owner: Weak<OwnerFrame>,
         scheduler: flui_scheduler::WeakUpdateScheduler,
-        callback: flui_scheduler::CallbackId,
+        callback: flui_foundation::FrameCallbackId,
     }
     impl Drop for ProducerRemoval {
         fn drop(&mut self) {
