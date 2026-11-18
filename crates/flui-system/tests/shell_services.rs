@@ -114,6 +114,50 @@ fn a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons
             MessageBoxRequest::new("ok").title("two\nlines"),
             MalformedRequest::Text,
         ),
+        (
+            MessageBoxRequest::new("ok").detail("  "),
+            MalformedRequest::Text,
+        ),
+        (
+            MessageBoxRequest::new("ok").detail("a\0b"),
+            MalformedRequest::Text,
+        ),
+        (
+            MessageBoxRequest::new("ok").detail("d".repeat(MAX_TEXT_LEN + 1)),
+            MalformedRequest::Text,
+        ),
+        // A default the box does not offer would leave Return to no button.
+        (
+            MessageBoxRequest::new("ok").default_button(MessageAnswer::Cancel),
+            MalformedRequest::DefaultButton,
+        ),
+        (
+            MessageBoxRequest::new("Delete?")
+                .buttons(MessageButtons::YesNo)
+                .default_button(MessageAnswer::Ok),
+            MalformedRequest::DefaultButton,
+        ),
+        // A label names a button of the box, in one line the user can read
+        // and tell from the others.
+        (
+            MessageBoxRequest::new("ok").button_label(MessageAnswer::Yes, "Sure"),
+            MalformedRequest::ButtonLabel,
+        ),
+        (
+            MessageBoxRequest::new("ok").button_label(MessageAnswer::Ok, " "),
+            MalformedRequest::ButtonLabel,
+        ),
+        (
+            MessageBoxRequest::new("ok").button_label(MessageAnswer::Ok, "Two\nlines"),
+            MalformedRequest::ButtonLabel,
+        ),
+        (
+            MessageBoxRequest::new("Delete?")
+                .buttons(MessageButtons::YesNo)
+                .button_label(MessageAnswer::Yes, "Go on")
+                .button_label(MessageAnswer::No, " Go on "),
+            MalformedRequest::ButtonLabel,
+        ),
     ];
     let slots = refused
         .into_iter()
@@ -137,6 +181,103 @@ fn a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons
     scenario
         .verify()
         .expect("only the scripted boxes reached the system");
+}
+
+#[test]
+fn a_message_box_carries_its_detail_its_default_button_and_its_labels_to_the_system() {
+    let scenario = Scenario::new();
+    let (mut host, plugin) = host_on(&scenario);
+    let boxes = acquire_on::<MessageBoxCapability>(&mut host).expect("scripted boxes");
+
+    let plain = MessageBoxRequest::new("Delete the note?").buttons(MessageButtons::YesNoCancel);
+    assert_eq!(
+        plain.title, None,
+        "a box shows no title unless it is given one"
+    );
+    assert_eq!(
+        plain.default_answer(),
+        MessageAnswer::Yes,
+        "the first button is the default unless the request names another"
+    );
+    assert_eq!(plain.label(MessageAnswer::Yes), None);
+    for (buttons, answers) in [
+        (MessageButtons::Ok, &[MessageAnswer::Ok][..]),
+        (
+            MessageButtons::OkCancel,
+            &[MessageAnswer::Ok, MessageAnswer::Cancel],
+        ),
+        (
+            MessageButtons::YesNo,
+            &[MessageAnswer::Yes, MessageAnswer::No],
+        ),
+        (
+            MessageButtons::YesNoCancel,
+            &[MessageAnswer::Yes, MessageAnswer::No, MessageAnswer::Cancel],
+        ),
+    ] {
+        assert_eq!(buttons.answers(), answers, "{buttons:?}");
+        for answer in [
+            MessageAnswer::Ok,
+            MessageAnswer::Cancel,
+            MessageAnswer::Yes,
+            MessageAnswer::No,
+        ] {
+            assert_eq!(
+                buttons.admits(answer),
+                answers.contains(&answer),
+                "{buttons:?} {answer:?}"
+            );
+        }
+    }
+
+    // A confirmation that cannot be undone: Return presses the safe answer.
+    let careful = plain
+        .clone()
+        .detail("It cannot be brought back.\nIts attachments go with it.")
+        .default_button(MessageAnswer::No)
+        .button_label(MessageAnswer::Yes, "Keep")
+        .button_label(MessageAnswer::Yes, "Delete")
+        .button_label(MessageAnswer::Cancel, "Go back");
+    assert_eq!(careful.default_answer(), MessageAnswer::No);
+    assert_eq!(
+        careful.label(MessageAnswer::Yes),
+        Some("Delete"),
+        "labelling a button again replaces its label"
+    );
+    assert_eq!(careful.label(MessageAnswer::No), None);
+    assert_eq!(
+        careful,
+        plain
+            .detail("It cannot be brought back.\nIts attachments go with it.")
+            .button_label(MessageAnswer::Cancel, "Go back")
+            .button_label(MessageAnswer::Yes, "Delete")
+            .default_button(MessageAnswer::No),
+        "two requests that say the same are equal, whatever order they were built in"
+    );
+
+    plugin.message_boxes().script().expect(
+        Expect::when("the confirmation as it was built", {
+            let careful = careful.clone();
+            move |asked: &InWindow<MessageBoxRequest>| {
+                asked.request == careful
+                    && asked.request.detail.as_deref()
+                        == Some("It cannot be brought back.\nIts attachments go with it.")
+                    && asked.request.default_button == Some(MessageAnswer::No)
+                    && asked.request.label(MessageAnswer::Cancel) == Some("Go back")
+            }
+        }),
+        Answer::value(Ok(MessageAnswer::Yes)),
+    );
+    let answered = land_dialog(boxes.show(careful));
+    turn(&mut host);
+    assert_eq!(
+        *answered.borrow(),
+        Some(Ok(Ok(MessageAnswer::Yes))),
+        "a labelled button answers what its button answers"
+    );
+    scenario
+        .verify()
+        .expect("only the scripted box reached the system");
 }
 
 #[test]

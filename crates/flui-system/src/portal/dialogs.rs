@@ -1,6 +1,8 @@
 //! The file dialogs over the `FileChooser` portal.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::future::Future;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::rc::Rc;
@@ -37,14 +39,16 @@ impl PortalDialogs {
 
     /// Show `method`'s dialog of `interface` with `options`, modal to
     /// `window`, and answer `answer` with what `picked` makes of the files
-    /// the user chose and the rest of the portal's results. The dialog stays
-    /// up while the returned hold is held; dropping it closes the portal's
-    /// request. The request holds the window's parent until it ends.
+    /// the user chose and the rest of the portal's results, on the portal's
+    /// thread, where it awaits what it reads of the file system. The dialog
+    /// stays up while the returned hold is held; dropping it closes the
+    /// portal's request. The request holds the window's parent until it
+    /// ends.
     #[expect(
         clippy::too_many_arguments,
         reason = "one dialog's parts, each its own type; a struct would only rename them"
     )]
-    fn show<T, P>(
+    fn show<T, P, F>(
         &self,
         window: &WindowRef,
         interface: Interface,
@@ -56,7 +60,8 @@ impl PortalDialogs {
     ) -> DialogHold
     where
         T: Send + 'static,
-        P: FnOnce(Picks, &Results) -> Result<T, DialogError> + Send + 'static,
+        P: FnOnce(Picks, Results) -> F + Send + 'static,
+        F: Future<Output = Result<T, DialogError>> + Send,
     {
         if let Err(error) = self.portal.start() {
             let _ = answer.resolve(Err(dialog_error(error)));
@@ -84,9 +89,10 @@ impl PortalDialogs {
                 // The window's export lasts until the request ended.
                 drop(parent);
                 let answered = match result {
-                    Ok(Response::Answered(results)) => picks(&results)
-                        .and_then(|picks| picked(picks, &results))
-                        .map(Some),
+                    Ok(Response::Answered(results)) => match picks(&results) {
+                        Ok(picks) => picked(picks, results).await.map(Some),
+                        Err(error) => Err(error),
+                    },
                     Ok(Response::Cancelled) => Ok(None),
                     Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
                     // Nobody waits: the resolver drops unanswered.
@@ -160,36 +166,91 @@ fn save_location(
     Ok(SaveLocation::new(picks.first().clone(), selected))
 }
 
+/// The kind of a filter pattern that is a glob.
+const GLOB: u32 = 0;
+/// The kind of a filter pattern that is a MIME type.
+const MIME_TYPE: u32 = 1;
+
 /// One filter as the portal takes it: each extension as a glob in lower
-/// case and one in upper case (`*.png`, `*.PNG`), then each MIME type.
+/// case and one in upper case (`*.png`, `*.PNG`), each file name as a glob
+/// of itself as written, in lower and in upper case (`Makefile`,
+/// `makefile`, `MAKEFILE`), then each MIME type; a filter of every file is
+/// the one glob `*`.
 ///
 /// The portal's backends match a glob case-sensitively, while the contract,
 /// as Windows and macOS, ignores case. A bracket per letter (`*.[pP][nN][gG]`)
 /// would match every case, but a save dialog derives the extension it
 /// appends from the selected glob and would meet the brackets, so the portal
-/// gets the two plain spellings GTK applications send, and a name in mixed
-/// case is not matched on a case-sensitive file system. A checked extension
-/// holds no glob character, so each spelling stands for itself; one with no
-/// letter is sent once.
+/// gets the plain spellings GTK applications send, and a name in any other
+/// mix of cases is not matched on a case-sensitive file system. A checked
+/// extension or file name holds no glob character, so each spelling stands
+/// for itself; a spelling that is another's is sent once.
 fn portal_filter(filter: &FileFilter) -> PortalFilter {
-    let mut patterns =
-        Vec::with_capacity(filter.extensions().len() * 2 + filter.mime_types().len());
+    if filter.is_all_files() {
+        return (filter.name().to_owned(), vec![(GLOB, "*".to_owned())]);
+    }
+    let mut patterns: Vec<(u32, String)> = Vec::with_capacity(
+        filter.extensions().len() * 2 + filter.file_names().len() * 3 + filter.mime_types().len(),
+    );
+    let mut glob = |glob: String| {
+        let glob = (GLOB, glob);
+        if !patterns.contains(&glob) {
+            patterns.push(glob);
+        }
+    };
     for extension in filter.extensions() {
         // Extensions are kept in lower case.
-        let upper = extension.to_ascii_uppercase();
-        let has_letter = upper != *extension;
-        patterns.push((0, format!("*.{extension}")));
-        if has_letter {
-            patterns.push((0, format!("*.{upper}")));
-        }
+        glob(format!("*.{extension}"));
+        glob(format!("*.{}", extension.to_ascii_uppercase()));
+    }
+    for file_name in filter.file_names() {
+        glob(file_name.clone());
+        glob(file_name.to_ascii_lowercase());
+        glob(file_name.to_ascii_uppercase());
     }
     patterns.extend(
         filter
             .mime_types()
             .iter()
-            .map(|mime_type| (1, mime_type.clone())),
+            .map(|mime_type| (MIME_TYPE, mime_type.clone())),
     );
     (filter.name().to_owned(), patterns)
+}
+
+/// `location` with its file named after the filter selected when the user
+/// accepted, where the name typed has no extension and that filter has one
+/// ([`FileFilter::completes`]): what Windows' and macOS's dialogs do
+/// themselves, and GTK's chooser, behind the portal on GNOME, does not.
+///
+/// The portal's dialog asked the user about replacing the name as typed. A
+/// file that already has the completed name was never asked about, so the
+/// name then stands as typed rather than name that file: the one case
+/// where the extension is not added. The portal reports no filter where its
+/// backend does not say which was selected, and the name stands there too.
+async fn named_after_its_filter(location: SaveLocation, filters: Vec<FileFilter>) -> SaveLocation {
+    let completed = location
+        .filter()
+        .and_then(|selected| filters.get(selected))
+        .zip(location.file().path())
+        .and_then(|(filter, path)| {
+            let completed = filter.completes(path.file_name()?.as_bytes())?;
+            Some(path.with_file_name(OsStr::from_bytes(&completed)))
+        });
+    let Some(completed) = completed else {
+        return location;
+    };
+    let examined = completed.clone();
+    // Anything but "nothing is there" keeps the name the user was asked
+    // about: a file, a link that leads nowhere, a folder that cannot be read.
+    let free = zruntime::unblock(move || {
+        std::fs::symlink_metadata(&examined)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    })
+    .await;
+    match PickedFile::try_new(completed) {
+        Some(file) if free => SaveLocation::new(file, location.filter()),
+        _ => location,
+    }
 }
 
 /// A path as the portal's `ay` options take it: its bytes and a NUL.
@@ -251,7 +312,7 @@ impl FileDialogBackend for PortalDialogs {
             request.title.as_deref(),
             options,
             answer,
-            |picks, _| Ok(picks),
+            |picks, _| std::future::ready(Ok(picks)),
         )
     }
 
@@ -276,6 +337,7 @@ impl FileDialogBackend for PortalDialogs {
             .iter()
             .map(|filter| filter.name().to_owned())
             .collect::<Vec<String>>();
+        let filters = request.filters;
         self.show(
             window,
             FILE_CHOOSER,
@@ -283,7 +345,10 @@ impl FileDialogBackend for PortalDialogs {
             request.title.as_deref(),
             options,
             answer,
-            move |picks, results| save_location(picks, results, &names),
+            move |picks, results| async move {
+                let location = save_location(picks, &results, &names)?;
+                Ok(named_after_its_filter(location, filters).await)
+            },
         )
     }
 }
@@ -325,6 +390,36 @@ mod tests {
                     (1, "image/webp".to_owned()),
                 ]
             )
+        );
+    }
+
+    #[test]
+    fn a_file_name_is_its_own_glob_and_every_file_is_one_star() {
+        let build = FileFilter::new("Build files")
+            .with_file_name("Makefile")
+            .with_file_name(".env")
+            .with_extension("mk");
+        assert_eq!(
+            portal_filter(&build),
+            (
+                "Build files".to_owned(),
+                vec![
+                    (0, "*.mk".to_owned()),
+                    (0, "*.MK".to_owned()),
+                    // As written, then the two spellings a case-sensitive
+                    // glob would otherwise miss.
+                    (0, "Makefile".to_owned()),
+                    (0, "makefile".to_owned()),
+                    (0, "MAKEFILE".to_owned()),
+                    // Written in lower case already: two spellings.
+                    (0, ".env".to_owned()),
+                    (0, ".ENV".to_owned()),
+                ]
+            )
+        );
+        assert_eq!(
+            portal_filter(&FileFilter::all_files("All files")),
+            ("All files".to_owned(), vec![(0, "*".to_owned())])
         );
     }
 }

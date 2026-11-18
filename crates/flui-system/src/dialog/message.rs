@@ -59,19 +59,32 @@ pub enum MessageButtons {
 }
 
 impl MessageButtons {
+    /// The answers its buttons give, in the order a box reads them: the
+    /// accepting one first, which is the default button unless the request
+    /// names another, and Cancel last.
+    #[must_use]
+    pub const fn answers(self) -> &'static [MessageAnswer] {
+        match self {
+            Self::Ok => &[MessageAnswer::Ok],
+            Self::OkCancel => &[MessageAnswer::Ok, MessageAnswer::Cancel],
+            Self::YesNo => &[MessageAnswer::Yes, MessageAnswer::No],
+            Self::YesNoCancel => &[MessageAnswer::Yes, MessageAnswer::No, MessageAnswer::Cancel],
+        }
+    }
+
     /// Whether a box with these buttons can answer `answer`.
     #[must_use]
     pub const fn admits(self, answer: MessageAnswer) -> bool {
-        matches!(
-            (self, answer),
-            (Self::Ok, MessageAnswer::Ok)
-                | (Self::OkCancel, MessageAnswer::Ok | MessageAnswer::Cancel)
-                | (Self::YesNo, MessageAnswer::Yes | MessageAnswer::No)
-                | (
-                    Self::YesNoCancel,
-                    MessageAnswer::Yes | MessageAnswer::No | MessageAnswer::Cancel
-                )
-        )
+        let answers = self.answers();
+        let mut at = 0;
+        while at < answers.len() {
+            // Compared by discriminant: `PartialEq` is not `const`.
+            if answers[at] as u8 == answer as u8 {
+                return true;
+            }
+            at += 1;
+        }
+        false
     }
 }
 
@@ -90,20 +103,86 @@ pub enum MessageAnswer {
     No,
 }
 
-/// A message box: the message, a title, how serious it is, and its buttons.
+/// The labels a request gives its buttons, each kept by the answer its
+/// button gives, so two requests that label the same buttons alike are
+/// equal whatever order they were labelled in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ButtonLabels {
+    ok: Option<String>,
+    cancel: Option<String>,
+    yes: Option<String>,
+    no: Option<String>,
+}
+
+impl ButtonLabels {
+    fn of(&self, answer: MessageAnswer) -> Option<&str> {
+        match answer {
+            MessageAnswer::Ok => self.ok.as_deref(),
+            MessageAnswer::Cancel => self.cancel.as_deref(),
+            MessageAnswer::Yes => self.yes.as_deref(),
+            MessageAnswer::No => self.no.as_deref(),
+        }
+    }
+
+    fn set(&mut self, answer: MessageAnswer, label: String) {
+        let slot = match answer {
+            MessageAnswer::Ok => &mut self.ok,
+            MessageAnswer::Cancel => &mut self.cancel,
+            MessageAnswer::Yes => &mut self.yes,
+            MessageAnswer::No => &mut self.no,
+        };
+        *slot = Some(label);
+    }
+
+    /// Each label given, with its button's answer.
+    fn iter(&self) -> impl Iterator<Item = (MessageAnswer, &str)> {
+        [
+            MessageAnswer::Ok,
+            MessageAnswer::Cancel,
+            MessageAnswer::Yes,
+            MessageAnswer::No,
+        ]
+        .into_iter()
+        .filter_map(|answer| Some((answer, self.of(answer)?)))
+    }
+}
+
+/// A message box: the message, a title, a detail, how serious it is, and its
+/// buttons with their default and their labels.
+///
+/// What each host shows of it:
+///
+/// | | Windows (`MessageBoxW`) | macOS (`NSAlert` sheet) |
+/// |---|---|---|
+/// | no title | an empty caption, never the system's "Error" | no heading: the message is the alert's message text |
+/// | detail | below the message, after an empty line | the informative text, below the title and message |
+/// | default button | `MB_DEFBUTTON` of its position | the button Return presses |
+/// | button label | not shown: the system's own, in the user's language | the button's title |
+///
+/// The web's box shows no heading without a title and, until its provider
+/// follows, no detail, the first button as its default and its own English
+/// labels (`docs/gaps.md`). A host that cannot show a label shows its
+/// standard one for that button, which still means the button's
+/// [`MessageAnswer`]: word the message so that it reads with either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MessageBoxRequest {
-    /// The box's title, if set; otherwise the system's (Windows shows
-    /// "Error").
+    /// The box's title, if set; a box without one shows none.
     pub title: Option<String>,
     /// The message: not blank, at most [`MAX_TEXT_LEN`](super::MAX_TEXT_LEN)
     /// bytes, no NUL; line breaks are kept.
     pub message: String,
+    /// More about the message, if set ([`detail`](Self::detail)).
+    pub detail: Option<String>,
     /// How serious it is.
     pub level: MessageLevel,
     /// The buttons it offers.
     pub buttons: MessageButtons,
+    /// The button Return presses, by its answer, if set
+    /// ([`default_button`](Self::default_button)); otherwise the first of
+    /// [`MessageButtons::answers`].
+    pub default_button: Option<MessageAnswer>,
+    labels: ButtonLabels,
 }
 
 impl MessageBoxRequest {
@@ -113,8 +192,11 @@ impl MessageBoxRequest {
         Self {
             title: None,
             message: message.into(),
+            detail: None,
             level: MessageLevel::default(),
             buttons: MessageButtons::default(),
+            default_button: None,
+            labels: ButtonLabels::default(),
         }
     }
 
@@ -122,6 +204,16 @@ impl MessageBoxRequest {
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// More about the message, shown below it in the body's lesser weight
+    /// where the host has one: what will happen, what the user can do. Not
+    /// blank, at most [`MAX_TEXT_LEN`](super::MAX_TEXT_LEN) bytes, no NUL;
+    /// line breaks are kept.
+    #[must_use]
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
         self
     }
 
@@ -139,13 +231,72 @@ impl MessageBoxRequest {
         self
     }
 
+    /// The button Return presses: the one that answers `answer`, which the
+    /// box's [`buttons`](Self::buttons) must offer. A confirmation of
+    /// something that cannot be undone names the safe answer here
+    /// (`MessageAnswer::No`, `MessageAnswer::Cancel`), so a key pressed by
+    /// habit destroys nothing.
+    #[must_use]
+    pub fn default_button(mut self, answer: MessageAnswer) -> Self {
+        self.default_button = Some(answer);
+        self
+    }
+
+    /// Label the button that answers `answer` with `label` in place of the
+    /// host's own word for it ("Delete" for the Yes of a confirmation): one
+    /// line, not blank, on a button the box's [`buttons`](Self::buttons)
+    /// offer, and no two buttons alike. The button still answers `answer`.
+    /// Labelling a button again replaces its label.
+    #[must_use]
+    pub fn button_label(mut self, answer: MessageAnswer, label: impl Into<String>) -> Self {
+        self.labels.set(answer, label.into());
+        self
+    }
+
+    /// The label the request gives the button that answers `answer`;
+    /// `None` when it gives none and the host's own word stands.
+    #[must_use]
+    pub fn label(&self, answer: MessageAnswer) -> Option<&str> {
+        self.labels.of(answer)
+    }
+
+    /// The answer of the button Return presses: the one the request named,
+    /// or the first of its buttons.
+    #[must_use]
+    pub fn default_answer(&self) -> MessageAnswer {
+        self.default_button
+            .unwrap_or_else(|| self.buttons.answers()[0])
+    }
+
     /// The first thing wrong with the request, which no box is shown for.
     fn check(&self) -> Result<(), MalformedRequest> {
         if self.message.trim().is_empty() {
             return Err(MalformedRequest::EmptyMessage);
         }
-        if !is_body(&self.message) || !self.title.as_deref().is_none_or(is_line) {
+        let detail_shows = self
+            .detail
+            .as_deref()
+            .is_none_or(|detail| is_body(detail) && !detail.trim().is_empty());
+        if !is_body(&self.message) || !self.title.as_deref().is_none_or(is_line) || !detail_shows {
             return Err(MalformedRequest::Text);
+        }
+        if !self
+            .default_button
+            .is_none_or(|answer| self.buttons.admits(answer))
+        {
+            return Err(MalformedRequest::DefaultButton);
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for (answer, label) in self.labels.iter() {
+            let shown = label.trim();
+            if !self.buttons.admits(answer)
+                || shown.is_empty()
+                || !is_line(label)
+                || seen.contains(&shown)
+            {
+                return Err(MalformedRequest::ButtonLabel);
+            }
+            seen.push(shown);
         }
         Ok(())
     }

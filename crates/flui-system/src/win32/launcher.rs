@@ -59,6 +59,7 @@ use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, SW_SHOWN
 use windows::core::{PCWSTR, w};
 
 use super::dialogs::shell_item;
+use super::verbatim::without_verbatim;
 use super::{Owner, ShellThreads, os_code, wide};
 
 /// A file opened to be judged, and kept open while it is handed on.
@@ -263,17 +264,6 @@ impl LauncherBackend for WindowsLauncher {
 /// The real shell.
 struct Shell;
 
-/// `\\?\C:\…` as `C:\…`: the final name a handle reports carries the
-/// verbatim prefix, which the shell does not need for a drive path.
-fn without_verbatim(path: Vec<u16>) -> PathBuf {
-    let path = OsString::from_wide(&path);
-    let path = PathBuf::from(path);
-    match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
-        _ => path,
-    }
-}
-
 impl ShellSystem for Shell {
     fn hold(&self, path: &Path) -> Result<HeldFile, i32> {
         let name = wide(path);
@@ -316,7 +306,10 @@ impl ShellSystem for Shell {
             }
             if written < buffer.len() {
                 buffer.truncate(written);
-                break without_verbatim(buffer);
+                // The final name carries the verbatim prefix, which the
+                // shell does not read; a share stays a share without it, so
+                // the locality judge still refuses it.
+                break without_verbatim(Path::new(&OsString::from_wide(&buffer)));
             }
             // Too small: `written` is the length needed, NUL included. A
             // path longer than the system's own limit is not one.
@@ -444,7 +437,7 @@ impl ShellSystem for Shell {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::rc::Rc;
     use std::sync::Arc;
 
@@ -454,7 +447,6 @@ mod tests {
 
     use super::{
         Shell, ShellSystem, Trashed, WindowsLauncher, launch_error, open_document, open_uri, trash,
-        without_verbatim,
     };
     use crate::testing::win32::{FakeShell, TestOwner};
     use crate::win32::ShellThreads;
@@ -568,20 +560,6 @@ mod tests {
         for (code, expected) in cases {
             assert_eq!(launch_error(code), expected, "code {code}");
         }
-    }
-
-    #[test]
-    fn a_final_name_loses_its_verbatim_prefix_only_on_a_drive() {
-        let wide = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
-        assert_eq!(
-            without_verbatim(wide(r"\\?\C:\docs\a.pdf")),
-            PathBuf::from(r"C:\docs\a.pdf")
-        );
-        assert_eq!(
-            without_verbatim(wide(r"\\?\UNC\server\share\a.pdf")),
-            PathBuf::from(r"\\?\UNC\server\share\a.pdf"),
-            "a share keeps its prefix, so the locality judge still reads it"
-        );
     }
 
     /// The real `hold` on a file of the test's own in the temporary folder:

@@ -4,6 +4,9 @@
 - **Date:** 2026-11-17
 - **Supersedes:** none. It replaces the launch policy `flui_platform::launch` stated in its own
   documentation (a list of refused schemes, which "an application cannot widen").
+- **Superseded-by:** [ADR-0371](ADR-0371-a-dialog-filter-may-name-a-file-exactly-or-admit-every-file.md)
+  for §3 only (what a file matches a filter by: also an exact file name, and every file for a
+  filter of every file)
 - **Related:** [ADR-0154](ADR-0154-capability-crates.md) §4 and §11 (the launcher and the file
   dialogs are `flui-system`'s), [ADR-0344](ADR-0344-a-dialog-lasts-while-its-caller-holds-it-and-ends-with-its-window.md)
   (a dialog's lifetime and the answers it may give), [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)

@@ -5,18 +5,29 @@
 //! version 6 common controls, which an application without that manifest
 //! entry does not load). Dismissing ends the box with `EndDialog` from its
 //! own thread; the answer is then dropped.
+//!
+//! What `MessageBoxW` has of a request: its message, with the detail below
+//! it after an empty line, since the box has one text; its title as the
+//! caption, an empty one for a request without a title, since a null
+//! caption shows the system's "Error" whatever the level; its default
+//! button, by its place among the buttons. It has no way to label a button:
+//! the box shows the system's own labels, in the user's language, for the
+//! request's button set. The box is owned by a window, which is what makes
+//! it modal to it: a window whose handle names no Win32 window answers
+//! `NoWindow`, and nothing is shown.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform::SystemFailure;
 use flui_platform::capability::{Resolver, WindowRef};
+use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EndDialog, EnumThreadWindows, GetClassNameW, IDCANCEL, IDNO, IDOK, IDYES, MB_ICONERROR,
-    MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_SETFOREGROUND, MB_YESNO,
-    MB_YESNOCANCEL, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE, MessageBoxW,
+    EndDialog, EnumThreadWindows, GetClassNameW, IDCANCEL, IDNO, IDOK, IDYES, MB_DEFBUTTON1,
+    MB_DEFBUTTON2, MB_DEFBUTTON3, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
+    MB_OKCANCEL, MB_SETFOREGROUND, MB_YESNO, MB_YESNOCANCEL, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE,
+    MessageBoxW,
 };
 use windows::core::{BOOL, PCWSTR};
 
@@ -29,20 +40,23 @@ use crate::dialog::{
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// The message box as the provider reaches it, on the box's thread: show
-/// it with `style`, installing its close on `dismisser`, and return the
-/// button chosen, or the code `MessageBoxW` failed with.
+/// `text` under `caption` with `style`, owned by `owner`, installing its
+/// close on `dismisser`, and return the button chosen, or the code
+/// `MessageBoxW` failed with.
 pub(super) trait MessageBoxSystem: Send + Sync + 'static {
     fn show(
         &self,
-        owner: Option<Owner>,
+        owner: Owner,
         text: &str,
-        caption: Option<&str>,
+        caption: &str,
         style: MESSAGEBOX_STYLE,
         dismisser: &Dismisser,
     ) -> Result<MESSAGEBOX_RESULT, i32>;
 }
 
-/// The style a request asks for: its buttons and its icon.
+/// The style a request asks for: its buttons, its icon and its default
+/// button, which `MessageBoxW` names by its place among the buttons, the
+/// order [`MessageButtons::answers`] lists them in.
 pub(super) fn style(request: &MessageBoxRequest) -> MESSAGEBOX_STYLE {
     let buttons = match request.buttons {
         MessageButtons::OkCancel => MB_OKCANCEL,
@@ -55,7 +69,34 @@ pub(super) fn style(request: &MessageBoxRequest) -> MESSAGEBOX_STYLE {
         MessageLevel::Error => MB_ICONERROR,
         MessageLevel::Info => MB_ICONINFORMATION,
     };
-    buttons | icon | MB_SETFOREGROUND
+    let default = request.default_answer();
+    let place = request
+        .buttons
+        .answers()
+        .iter()
+        .position(|answer| *answer == default);
+    let default_button = match place {
+        Some(1) => MB_DEFBUTTON2,
+        Some(2) => MB_DEFBUTTON3,
+        // The first button, and a default the seam would have refused.
+        Some(_) | None => MB_DEFBUTTON1,
+    };
+    buttons | icon | default_button | MB_SETFOREGROUND
+}
+
+/// The box's one text: the message, and the detail below it after an empty
+/// line.
+pub(super) fn text(request: &MessageBoxRequest) -> String {
+    match &request.detail {
+        Some(detail) => format!("{}\n\n{detail}", request.message),
+        None => request.message.clone(),
+    }
+}
+
+/// The box's caption: the title, or none. Never a null caption, which
+/// `MessageBoxW` reads as "Error" whatever the request's level.
+pub(super) fn caption(request: &MessageBoxRequest) -> &str {
+    request.title.as_deref().unwrap_or_default()
 }
 
 /// What the button `chosen` answers; a value the box cannot return is
@@ -93,7 +134,16 @@ impl MessageBoxBackend for WindowsMessageBoxes {
         request: MessageBoxRequest,
         answer_to: Resolver<MessageBoxResult>,
     ) -> DialogHold {
-        let owner = Owner::of(window);
+        let Some(owner) = Owner::of(window) else {
+            // A box with no owner would be modal to nothing. The owner
+            // retiring first leaves nothing waiting.
+            let _ = answer_to.resolve(Err(DialogError::Unsupported(Unsupported::of::<
+                MessageBoxCapability,
+            >(
+                UnsupportedReason::NoWindow
+            ))));
+            return DialogHold::new(());
+        };
         let style = style(&request);
         let system = Arc::clone(&self.system);
         show_answering::<MessageBoxCapability, _, _>(
@@ -101,13 +151,7 @@ impl MessageBoxBackend for WindowsMessageBoxes {
             window.id(),
             answer_to,
             move |dismisser| {
-                system.show(
-                    owner,
-                    &request.message,
-                    request.title.as_deref(),
-                    style,
-                    dismisser,
-                )
+                system.show(owner, &text(&request), caption(&request), style, dismisser)
             },
             |chosen| {
                 chosen
@@ -124,9 +168,9 @@ struct Win32MessageBox;
 impl MessageBoxSystem for Win32MessageBox {
     fn show(
         &self,
-        owner: Option<Owner>,
+        owner: Owner,
         text: &str,
-        caption: Option<&str>,
+        caption: &str,
         style: MESSAGEBOX_STYLE,
         dismisser: &Dismisser,
     ) -> Result<MESSAGEBOX_RESULT, i32> {
@@ -137,17 +181,15 @@ impl MessageBoxSystem for Win32MessageBox {
             let _ = unsafe { EnumThreadWindows(GetCurrentThreadId(), Some(end_box), LPARAM(0)) };
         });
         let text = wide(text);
-        let caption = caption.map(wide);
+        let caption = wide(caption);
         // SAFETY: `text` and `caption` are NUL-terminated buffers that
         // outlive the call; `owner` is a window of another thread, which a
         // message box may be owned by.
         let chosen = unsafe {
             MessageBoxW(
-                owner.map(Owner::hwnd),
+                Some(owner.hwnd()),
                 PCWSTR(text.as_ptr()),
-                caption
-                    .as_ref()
-                    .map_or(PCWSTR::null(), |caption| PCWSTR(caption.as_ptr())),
+                PCWSTR(caption.as_ptr()),
                 style,
             )
         };
@@ -187,16 +229,26 @@ fn end_box_window(window: HWND) -> BOOL {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::SystemFailure;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+
+    use flui_platform::capability::{Abandoned, WindowRef};
+    use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
     use windows::Win32::UI::WindowsAndMessaging::{
-        IDABORT, IDCANCEL, IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING,
-        MB_OK, MB_OKCANCEL, MB_SETFOREGROUND, MB_YESNO, MB_YESNOCANCEL,
+        IDABORT, IDCANCEL, IDNO, IDOK, IDYES, MB_DEFBUTTON1, MB_DEFBUTTON2, MB_DEFBUTTON3,
+        MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_SETFOREGROUND,
+        MB_YESNO, MB_YESNOCANCEL, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE,
     };
 
-    use super::{answer, style};
+    use super::{MessageBoxSystem, WindowsMessageBoxes, answer, style};
     use crate::dialog::{
-        DialogError, MessageAnswer, MessageBoxRequest, MessageButtons, MessageLevel,
+        DialogError, MessageAnswer, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
+        MessageBoxes, MessageButtons, MessageLevel,
     };
+    use crate::testing::win32::{TestOwner, win32_window, window};
+    use crate::win32::Owner;
+    use crate::win32::modal::Dismisser;
 
     #[test]
     fn a_request_becomes_its_buttons_and_icon_and_a_button_its_answer() {
@@ -243,73 +295,216 @@ mod tests {
         );
     }
 
-    /// A message box the user answers at once with the button it was given,
-    /// recording the style it was shown with.
-    struct AnsweringBox {
-        button: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT,
-        styles: std::sync::Mutex<Vec<windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE>>,
+    #[test]
+    fn the_default_button_is_named_by_its_place_among_the_buttons() {
+        let cases = [
+            (MessageButtons::Ok, None, MB_DEFBUTTON1),
+            (MessageButtons::OkCancel, None, MB_DEFBUTTON1),
+            (
+                MessageButtons::OkCancel,
+                Some(MessageAnswer::Ok),
+                MB_DEFBUTTON1,
+            ),
+            (
+                MessageButtons::OkCancel,
+                Some(MessageAnswer::Cancel),
+                MB_DEFBUTTON2,
+            ),
+            (
+                MessageButtons::YesNo,
+                Some(MessageAnswer::No),
+                MB_DEFBUTTON2,
+            ),
+            (
+                MessageButtons::YesNoCancel,
+                Some(MessageAnswer::Yes),
+                MB_DEFBUTTON1,
+            ),
+            (
+                MessageButtons::YesNoCancel,
+                Some(MessageAnswer::No),
+                MB_DEFBUTTON2,
+            ),
+            (
+                MessageButtons::YesNoCancel,
+                Some(MessageAnswer::Cancel),
+                MB_DEFBUTTON3,
+            ),
+        ];
+        // The bits `MessageBoxW` reads the default button from.
+        let default_bits = MB_DEFBUTTON2 | MB_DEFBUTTON3;
+        for (buttons, default, expected) in cases {
+            let mut request = MessageBoxRequest::new("Delete the note?").buttons(buttons);
+            request.default_button = default;
+            assert_eq!(
+                style(&request) & default_bits,
+                expected,
+                "{buttons:?} defaulting to {default:?}"
+            );
+        }
     }
 
-    impl super::MessageBoxSystem for AnsweringBox {
+    /// What a box was shown with.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Shown {
+        owner: Owner,
+        text: String,
+        caption: String,
+        style: MESSAGEBOX_STYLE,
+    }
+
+    /// A message box the user answers at once with the button it was given,
+    /// recording what it was shown with.
+    struct AnsweringBox {
+        button: MESSAGEBOX_RESULT,
+        shown: Mutex<Vec<Shown>>,
+    }
+
+    impl AnsweringBox {
+        fn answering(button: MESSAGEBOX_RESULT) -> Arc<Self> {
+            Arc::new(Self {
+                button,
+                shown: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn shown(&self) -> Vec<Shown> {
+            self.shown.lock().expect("BUG: the test's lock").clone()
+        }
+    }
+
+    impl MessageBoxSystem for AnsweringBox {
         fn show(
             &self,
-            _: Option<crate::win32::Owner>,
-            _: &str,
-            _: Option<&str>,
-            style: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE,
-            _: &crate::win32::modal::Dismisser,
-        ) -> Result<windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT, i32> {
-            self.styles
+            owner: Owner,
+            text: &str,
+            caption: &str,
+            style: MESSAGEBOX_STYLE,
+            _: &Dismisser,
+        ) -> Result<MESSAGEBOX_RESULT, i32> {
+            self.shown
                 .lock()
                 .expect("BUG: the test's lock")
-                .push(style);
+                .push(Shown {
+                    owner,
+                    text: text.to_owned(),
+                    caption: caption.to_owned(),
+                    style,
+                });
             Ok(self.button)
         }
     }
 
+    /// The value of the Win32 window the tests' boxes are owned by, which no
+    /// stand-in hands to the system.
+    const OWNER: isize = 0x0F1E;
+
+    /// Show `request` in `window` over `system` and turn the owner until it
+    /// answers.
+    fn ask(
+        owner: &TestOwner,
+        system: &Arc<AnsweringBox>,
+        window: WindowRef,
+        request: MessageBoxRequest,
+    ) -> MessageBoxResult {
+        let system: Arc<dyn MessageBoxSystem> = Arc::<AnsweringBox>::clone(system);
+        let boxes = MessageBoxes::try_new(
+            WindowsMessageBoxes::over(system, Rc::default()),
+            &owner.ctx(Some(window)),
+        )
+        .expect("a window");
+        let landed: Rc<RefCell<Option<Result<MessageBoxResult, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&landed);
+        boxes
+            .show(request)
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        owner.turn_until(|| landed.borrow().is_some());
+        landed
+            .borrow_mut()
+            .take()
+            .expect("landed")
+            .expect("not abandoned")
+    }
+
     #[test]
     fn a_box_answers_from_its_thread_and_a_button_it_did_not_offer_is_refused() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        use std::sync::Arc;
-
-        use flui_platform::capability::Abandoned;
-
-        use crate::dialog::{MessageBoxResult, MessageBoxes};
-        use crate::testing::win32::{TestOwner, window};
-
         let owner = TestOwner::new();
-        let ask = |button, buttons| {
-            let (win, _closer) = window();
-            let ctx = owner.ctx(Some(win));
-            let boxes = MessageBoxes::try_new(
-                super::WindowsMessageBoxes::over(
-                    Arc::new(AnsweringBox {
-                        button,
-                        styles: std::sync::Mutex::new(Vec::new()),
-                    }),
-                    Rc::default(),
-                ),
-                &ctx,
+        let asked = |button, buttons| {
+            let (window, _closer) = win32_window(OWNER);
+            ask(
+                &owner,
+                &AnsweringBox::answering(button),
+                window,
+                MessageBoxRequest::new("Delete?").buttons(buttons),
             )
-            .expect("a window");
-            let landed: Rc<RefCell<Option<Result<MessageBoxResult, Abandoned>>>> = Rc::default();
-            let into = Rc::clone(&landed);
-            boxes
-                .show(MessageBoxRequest::new("Delete?").buttons(buttons))
-                .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
-            owner.turn_until(|| landed.borrow().is_some());
-            landed
-                .borrow_mut()
-                .take()
-                .expect("landed")
-                .expect("not abandoned")
         };
-        assert_eq!(ask(IDYES, MessageButtons::YesNo), Ok(MessageAnswer::Yes));
+        assert_eq!(asked(IDYES, MessageButtons::YesNo), Ok(MessageAnswer::Yes));
         assert_eq!(
-            ask(IDCANCEL, MessageButtons::YesNo),
+            asked(IDCANCEL, MessageButtons::YesNo),
             Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
             "a yes-or-no box has no cancel"
         );
+    }
+
+    #[test]
+    fn a_box_shows_its_title_or_none_its_detail_below_its_message_and_its_default_button() {
+        let owner = TestOwner::new();
+        let system = AnsweringBox::answering(IDNO);
+        let (window, _closer) = win32_window(OWNER);
+        let untitled = MessageBoxRequest::new("Delete the note?")
+            .detail("It cannot be brought back.")
+            .level(MessageLevel::Warning)
+            .buttons(MessageButtons::YesNo)
+            .default_button(MessageAnswer::No)
+            .button_label(MessageAnswer::Yes, "Delete");
+        assert_eq!(
+            ask(&owner, &system, window, untitled),
+            Ok(MessageAnswer::No),
+            "a labelled button still answers its answer"
+        );
+        let (window, _closer) = win32_window(OWNER);
+        let titled = MessageBoxRequest::new("Saved").title("Notes");
+        assert_eq!(
+            ask(&owner, &system, window, titled),
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
+            "the stand-in answers No, which an OK box does not offer"
+        );
+
+        let owned_by = Owner(std::num::NonZeroIsize::new(OWNER).expect("not zero"));
+        assert_eq!(
+            system.shown(),
+            [
+                Shown {
+                    owner: owned_by,
+                    text: "Delete the note?\n\nIt cannot be brought back.".to_owned(),
+                    // Not a null caption, which the system shows as "Error".
+                    caption: String::new(),
+                    style: MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND,
+                },
+                Shown {
+                    owner: owned_by,
+                    text: "Saved".to_owned(),
+                    caption: "Notes".to_owned(),
+                    style: MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_window_that_is_no_win32_window_is_refused_and_shows_no_box() {
+        let owner = TestOwner::new();
+        let system = AnsweringBox::answering(IDOK);
+        let (window, _closer) = window();
+        assert_eq!(
+            ask(&owner, &system, window, MessageBoxRequest::new("Saved")),
+            Err(DialogError::Unsupported(Unsupported::of::<
+                MessageBoxCapability,
+            >(
+                UnsupportedReason::NoWindow
+            ))),
+            "a box is modal to a window"
+        );
+        assert_eq!(system.shown(), [], "no box was shown without an owner");
     }
 }

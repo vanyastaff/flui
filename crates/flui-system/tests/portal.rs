@@ -1022,6 +1022,127 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     );
 }
 
+/// A save dialog's results: the file at `uri`, and the filter the portal
+/// reports as selected, by its name and one glob, when it reports one.
+fn saved_as(uri: &str, current: Option<(&str, &str)>) -> Results {
+    let mut results = uris(&[uri]);
+    if let Some((name, glob)) = current {
+        let filter = (name.to_owned(), vec![(0_u32, glob.to_owned())]);
+        results.insert(
+            "current_filter".to_owned(),
+            OwnedVariant::try_from(Variant::from(filter)).expect("an owned structure"),
+        );
+    }
+    results
+}
+
+/// The name the portal answers for a save, the filter it reports, and what
+/// the save answers: the file's name and the filter's index.
+type CompletedSave<'a> = (
+    &'a str,
+    Option<(&'a str, &'a str)>,
+    (&'a str, Option<usize>),
+);
+
+/// GTK's chooser, behind the portal on GNOME, answers a typed name as
+/// typed, where Windows' and macOS's dialogs add the selected filter's
+/// extension: the provider adds it, unless that names a file the user was
+/// never asked about replacing.
+#[test]
+fn a_portal_save_without_an_extension_is_named_after_the_selected_filter() {
+    let portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let at = |name: &str| folder.path().join(name);
+    let uri = |name: &str| format!("file://{}", at(name).display());
+    let file = |name: &str| PickedFile::try_new(at(name)).expect("an absolute path");
+    let request = || {
+        SaveRequest::new()
+            .filter(FileFilter::new("PNG").with_extension("png"))
+            .filter(
+                FileFilter::new("Archive")
+                    .with_extension("tar.gz")
+                    .with_file_name("backup"),
+            )
+            .filter(FileFilter::all_files("All files"))
+    };
+    let png = Some(("PNG", "*.png"));
+    let archive = Some(("Archive", "*.tar.gz"));
+    let all_files = Some(("All files", "*"));
+    std::fs::write(at("taken.png"), b"another picture").expect("a file of the completed name");
+
+    let cases: [CompletedSave<'_>; 10] = [
+        ("picture", png, ("picture.png", Some(0))),
+        ("picture.", png, ("picture.png", Some(0))),
+        // The selected filter's first extension, whole.
+        ("picture", archive, ("picture.tar.gz", Some(1))),
+        // Named by the filter already, in any case or as a whole name.
+        ("picture.PNG", png, ("picture.PNG", Some(0))),
+        ("backup", archive, ("backup", Some(1))),
+        // An extension of the user's own stands.
+        ("picture.v2", png, ("picture.v2", Some(0))),
+        // Every file: no extension to add.
+        ("picture", all_files, ("picture", Some(2))),
+        // A filter the portal does not report, or one the request did not
+        // offer, says nothing of the format.
+        ("picture", None, ("picture", None)),
+        ("picture", Some(("Raw", "*.raw")), ("picture", None)),
+        // `taken.png` is there, and the portal asked the user only about
+        // `taken`: it is not named, so nothing overwrites it unasked.
+        ("taken", png, ("taken", Some(0))),
+    ];
+    for (typed, current, (named, filter)) in cases {
+        portal.answer(0, saved_as(&uri(typed), current));
+        assert_eq!(
+            settle(&mut host, dialogs.save(request())),
+            Ok(Ok(Some(SaveLocation::new(file(named), filter)))),
+            "{typed:?} with {current:?} selected"
+        );
+    }
+    assert_eq!(
+        std::fs::read(at("taken.png")).expect("the file"),
+        b"another picture"
+    );
+
+    // With contents, the completed name is the file that is written.
+    portal.answer(0, saved_as(&uri("report"), png));
+    let written = settle(
+        &mut host,
+        dialogs.save(request().contents(b"a picture".to_vec())),
+    );
+    assert_eq!(
+        written,
+        Ok(Ok(Some(SaveLocation::new(file("report.png"), Some(0)))))
+    );
+    assert_eq!(
+        std::fs::read(at("report.png")).expect("the written file"),
+        b"a picture"
+    );
+    assert!(!at("report").exists(), "the name as typed was not written");
+
+    // What the chooser was offered: a file name as a glob of itself, and
+    // every file as the one glob that matches each.
+    let options = portal.script.dialog_options.lock().expect("options");
+    let filters = Vec::<(String, Vec<(u32, String)>)>::try_from(options[0]["filters"].clone())
+        .expect("a(sa(us))");
+    assert_eq!(
+        filters[1..],
+        [
+            (
+                "Archive".to_owned(),
+                vec![
+                    (0, "*.tar.gz".to_owned()),
+                    (0, "*.TAR.GZ".to_owned()),
+                    (0, "backup".to_owned()),
+                    (0, "BACKUP".to_owned()),
+                ]
+            ),
+            ("All files".to_owned(), vec![(0, "*".to_owned())]),
+        ]
+    );
+}
+
 #[test]
 fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
     let portal = StandIn::serve();
@@ -1032,18 +1153,9 @@ fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
             .filter(FileFilter::new("PNG").with_extension("png"))
             .filter(FileFilter::new("JPEG").with_extension("jpg"))
     };
-    let answer = |current: Option<(&str, &str)>| {
-        let mut results = uris(&["file:///home/me/picture"]);
-        if let Some((name, glob)) = current {
-            let filter = (name.to_owned(), vec![(0_u32, glob.to_owned())]);
-            results.insert(
-                "current_filter".to_owned(),
-                OwnedVariant::try_from(Variant::from(filter)).expect("an owned structure"),
-            );
-        }
-        results
-    };
-    let file = PickedFile::try_new("/home/me/picture").expect("an absolute path");
+    // A name with its extension, which no filter completes.
+    let answer = |current: Option<(&str, &str)>| saved_as("file:///home/me/picture.jpeg", current);
+    let file = PickedFile::try_new("/home/me/picture.jpeg").expect("an absolute path");
 
     portal.answer(0, answer(Some(("JPEG", "*.jpg"))));
     assert_eq!(
