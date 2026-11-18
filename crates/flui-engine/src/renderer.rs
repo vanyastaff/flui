@@ -329,6 +329,9 @@ pub struct Renderer {
     color: ColorRequest,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
+    /// The lineage of the version the renderer last drew: the painter's
+    /// recordings of the one before are dropped when it draws another.
+    lineage: crate::recording_cache::DrawnLineages<()>,
     /// The newest frame of each live external texture, re-uploaded after the
     /// painter is rebuilt (device recovery, surface format change), which
     /// drops its imported allocations.
@@ -546,6 +549,7 @@ impl Renderer {
             color,
             capabilities: stack.capabilities,
             painter: stack.painter,
+            lineage: crate::recording_cache::DrawnLineages::new(),
             external_frames: rustc_hash::FxHashMap::default(),
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
@@ -1858,9 +1862,14 @@ impl Renderer {
         // points mark every frame full. Widgets reporting their own
         // bounds does not work, and ADR-0061
         // records why: the objects that always repaint cover the screen.
-        self.frame
-            .include_backdrop_dependencies(scene, (self.config.width, self.config.height));
-        let plan = self.frame.plan(self.uses_intermediate_texture());
+        let intermediate = self.uses_intermediate_texture();
+        let plan = self.frame.plan_scene(
+            &mut self.painter,
+            &mut self.lineage,
+            scene,
+            (self.config.width, self.config.height),
+            intermediate,
+        );
         if plan == crate::damage::FramePlan::Skip {
             // Nothing changed — skip this frame entirely; no present, no vsync block.
             tracing::trace!("Skipping frame: no damage");
@@ -2506,6 +2515,7 @@ mod tests {
             },
             capabilities,
             painter,
+            lineage: crate::recording_cache::DrawnLineages::new(),
             offscreen,
             supports_copy_src: false,
             device_lost: Arc::clone(&callback_flag),
@@ -2521,6 +2531,70 @@ mod tests {
             external_frames: rustc_hash::FxHashMap::default(),
         };
         (renderer, domain, callback_flag)
+    }
+
+    /// A version of a fresh scene owner whose root draws one chunk.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn one_chunk_version() -> flui_layer::SceneVersion {
+        use flui_foundation::RenderId;
+        use flui_foundation::geometry::Rect;
+        use flui_layer::{BoundaryContent, Chunk, SceneOp, SceneOwner, SurfaceKey};
+        use flui_painting::{Canvas, paint::Paint, styling::Color};
+
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let version = writer.next_content_version().expect("a content version");
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            &Paint::fill(Color::RED),
+        );
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::new(Chunk::new(
+            RenderId::new(2),
+            0,
+            version,
+            canvas.finish(),
+        )));
+        writer.push(SceneOp::Publish {
+            node: writer.current().root(),
+            content: Arc::new(content.finish()),
+        });
+        owner
+            .apply(SurfaceKey {
+                size: (16, 16),
+                generation: flui_foundation::SurfaceGeneration::ZERO,
+            })
+            .expect("the root applies");
+        owner.current().clone()
+    }
+
+    /// A `Renderer`'s frame of another scene owner's version drops the
+    /// recordings its painter kept of the owner it drew before, whether or
+    /// not the frame reaches a surface.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_renderer_frame_drops_the_recordings_of_an_owner_it_no_longer_draws() {
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        let (first, second) = (one_chunk_version(), one_chunk_version());
+        let first = flui_layer::Scene::of_version(first);
+        let _ = renderer.render_frame(&first);
+        renderer.painter.begin_frame().expect("a frame opens");
+        let _recorded: crate::frame_protocol::RecordedContent = Renderer::record_frame_content(
+            &mut renderer.painter,
+            &first,
+            None,
+            crate::recording_cache::CacheReads::On,
+        )
+        .expect("the first owner's version records");
+        renderer.painter.finish_frame();
+        assert_eq!(renderer.painter.recording_cache_work().0, 1);
+        let _ = renderer.render_frame(&flui_layer::Scene::of_version(second));
+        assert_eq!(
+            renderer.painter.recording_cache_work().0,
+            0,
+            "the first owner is drawn no more"
+        );
     }
 
     /// The frame-latency setting reaches the swapchain configuration, a repeat changes nothing,
@@ -3187,6 +3261,8 @@ mod tests {
         an_owed_surface_recreation_runs_through_the_backend_render_path();
         #[cfg(not(target_arch = "wasm32"))]
         a_frame_latency_setting_reaches_the_configuration_and_survives_release();
+        #[cfg(not(target_arch = "wasm32"))]
+        a_renderer_frame_drops_the_recordings_of_an_owner_it_no_longer_draws();
         #[cfg(not(target_arch = "wasm32"))]
         a_recreation_after_the_display_changes_resolves_its_new_range();
         #[cfg(not(target_arch = "wasm32"))]
