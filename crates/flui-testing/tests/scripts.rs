@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::PointerId;
 use flui_interaction::events::PointerEvent;
+use flui_interaction::ids::PointerId;
 use flui_platform::pointer::DeviceId;
 use flui_platform::{GesturePreferences, SystemPreferences};
 use flui_runtime::HostInput;
@@ -170,7 +170,7 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
         .iter()
         .map(|input| match input {
             HostInput::Platform(flui_platform::PlatformInput::Pointer(event)) => {
-                flui_interaction::PointerEventExt::time(event)
+                flui_interaction::events::PointerEventExt::time(event)
                     .expect("a contact event carries its time")
                     .as_nanos()
             }

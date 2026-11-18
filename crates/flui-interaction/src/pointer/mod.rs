@@ -8,7 +8,7 @@
 //! - [`MouseTracker`] - Mouse enter/exit/hover tracking
 //! - [`PointerEventResampler`] - Resampling raw input at frame time
 //!
-//! [`crate::GestureBinding`] retains pointer hit routes resolved by
+//! [`crate::binding::GestureBinding`] retains pointer hit routes resolved by
 //! [`InteractionLane`].
 
 mod hit_test;

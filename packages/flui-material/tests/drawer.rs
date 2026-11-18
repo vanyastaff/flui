@@ -601,7 +601,7 @@ pub fn incoming_end_drawer_scrim_covers_the_outgoing_start_panel() {
 fn drawer_settling_uses_profile(initially_open: bool) {
     for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
         let profile = |min, max| {
-            flui_interaction::GestureSettings::default()
+            flui_interaction::gesture::GestureSettings::default()
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };

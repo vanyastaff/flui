@@ -87,21 +87,23 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, DrivenController, FrictionSimulation, Tolerance, Vsync,
 };
+use flui_foundation::InputSequenceId;
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, EdgeInsets, Matrix4, Offset, Point, Rect, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
+use flui_interaction::gesture::{GestureEndReason, RemainderHandoff, Velocity};
 use flui_interaction::gesture::{
     GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
 use flui_interaction::pointer::EventPropagation;
-use flui_interaction::{GestureEndReason, InputSequenceId, RemainderHandoff, Velocity};
-use flui_interaction::{PointerEvent, TouchpadHoldPhase, WheelPreferencesProvider};
+use flui_interaction::{events::PointerEvent, pointer::WheelPreferencesProvider};
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Code, ImeComposition, Key, KeyPress, KeyState, NamedKey};
+use flui_platform::pointer::TouchpadHoldPhase;
 use flui_platform::{
     keyboard::Modifiers,
     pointer::{PanZoomEvent, PanZoomPhase, PointerKind, ScrollEvent, ScrollPhase, ScrollUnit},

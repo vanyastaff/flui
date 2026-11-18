@@ -10,7 +10,7 @@
 //! the press is told its key was cancelled instead, so what the press began
 //! (a keyboard scroll) ends without anything activating.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::rc::{Rc, Weak};
 
 use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
@@ -104,7 +104,7 @@ pub(super) struct Superseded(pub(super) HeldPress);
 
 #[derive(Debug, Default)]
 pub(super) struct KeyLedger {
-    pressed: HashMap<KeyId, KeyOrigin>,
+    pressed: FxHashMap<KeyId, KeyOrigin>,
 }
 
 impl KeyLedger {

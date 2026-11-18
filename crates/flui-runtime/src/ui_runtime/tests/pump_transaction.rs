@@ -482,7 +482,10 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
 #[test]
 fn a_ui_runtime_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
     use flui_interaction::gesture::GestureSettings;
-    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer, PointerId};
+    use flui_interaction::{
+        gesture::{GestureRecognizer as _, LongPressGestureRecognizer},
+        ids::PointerId,
+    };
 
     let mut clock = ManualClock::new();
     let mut ui_runtime = manual_clock_ui_runtime(&clock);
@@ -496,10 +499,10 @@ fn a_ui_runtime_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
     let down = flui_interaction::events::make_down_event_for_id(
         PointerId::new(std::num::NonZeroU64::MIN),
         position,
-        flui_interaction::PointerKind::Touch,
+        flui_platform::pointer::PointerKind::Touch,
     )
     .expect("valid Down sample");
-    recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&down));
+    recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
 
     let mut sink = ScriptedSink::always_presents();
     clock.advance(Duration::from_millis(300));

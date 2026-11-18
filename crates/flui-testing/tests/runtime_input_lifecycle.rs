@@ -12,7 +12,7 @@ use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event, make_move_event, make_move_event_for_id,
     make_up_event,
 };
-use flui_interaction::{GestureArenaMember, PointerId};
+use flui_interaction::{gesture::GestureArenaMember, ids::PointerId};
 use flui_platform::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_runtime::sink::SubmitVerdict;
@@ -996,11 +996,11 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
 struct AcceptLog(Rc<Cell<usize>>);
 
 impl GestureArenaMember for AcceptLog {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {
         self.0.set(self.0.get() + 1);
     }
 
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 }
 
 pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame() {

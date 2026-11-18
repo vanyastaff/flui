@@ -31,7 +31,7 @@
 //! differs.
 
 use crate::containment::keep_first;
-use std::{cell::RefCell, collections::BTreeMap, collections::HashSet, num::NonZeroU64, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, num::NonZeroU64, rc::Rc};
 
 use flui_foundation::{IdMint, geometry::Offset};
 use smallvec::SmallVec;
@@ -1117,14 +1117,14 @@ impl MouseTracker {
             .map(|state| state.last_position)
     }
 
-    /// Gets the set of window regions a device hovers.
+    /// The window regions a device hovers, in hit-test order (the innermost first).
     #[must_use]
-    pub fn device_active_regions(&self, device_id: DeviceId) -> HashSet<RegionId> {
+    pub fn device_active_regions(&self, device_id: DeviceId) -> Vec<RegionId> {
         self.inner
             .borrow()
             .devices
             .get(&(InputSurface::Window, SourceKey::KnownDevice(device_id)))
-            .map_or_default(|state| state.active_order.iter().copied().collect())
+            .map_or_default(|state| state.active_order.to_vec())
     }
 
     /// Gets the current window cursor for a device.

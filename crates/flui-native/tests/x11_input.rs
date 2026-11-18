@@ -579,13 +579,13 @@ fn a_window_follows_its_focus_when_a_handler_panics_at_its_loss() {
 }
 
 /// Evdev key codes as the X server numbers them (the kernel's plus 8).
-mod keycode {
-    pub(super) const ESCAPE: u8 = 9;
+pub(crate) mod keycode {
+    pub(crate) const ESCAPE: u8 = 9;
     pub(super) const CONTROL_L: u8 = 37;
     pub(super) const A: u8 = 38;
-    pub(super) const SHIFT_L: u8 = 50;
-    pub(super) const F10: u8 = 76;
-    pub(super) const MENU: u8 = 135;
+    pub(crate) const SHIFT_L: u8 = 50;
+    pub(crate) const F10: u8 = 76;
+    pub(crate) const MENU: u8 = 135;
 }
 
 /// One XTest request at a time, each followed by turns of the host's loop.

@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use flui_interaction::{
+use flui_interaction::text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaimId, PrimaryClaims,
     PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };

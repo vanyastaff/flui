@@ -262,7 +262,7 @@
   `HeadlessRenderer` рисует через offscreen-слоты. Оконные раннеры пока на `Renderer`.
 - **Тесты:** `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format`;
   `static_assertions` у типа.
-- **Ворота:** G5; `cargo xtask globals`, `send-impls`, `send-positions` без новых строк.
+- **Ворота:** G5; без нового `static`, `unsafe impl Send` и позиции `Send`/`Sync` в API (их держит читатель, ADR-0371, ADR-0375).
 - **Зависит:** нет. **Размер:** L.
 
 ### RS15. Фабрика поверхностей, команды слота, расчёт по штампу

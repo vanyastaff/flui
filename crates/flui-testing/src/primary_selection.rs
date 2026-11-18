@@ -14,7 +14,7 @@
 
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
-use flui_interaction::{
+use flui_interaction::text_input::{
     PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability,
     PrimarySelectionHandle, SelectionText,
 };

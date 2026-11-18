@@ -102,10 +102,13 @@ use crate::{DragSlot, Focus, GestureDetector, Listener, Semantics};
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{
-    HoldEnd, HoldGestureRecognizer, PointerDispatch, PointerEvent, PointerKindSet,
-    TouchpadHoldPhase, WheelPreferencesProvider,
+    events::PointerEvent,
+    gesture::{HoldEnd, HoldGestureRecognizer},
+    pointer::{PointerDispatch, WheelPreferencesProvider},
 };
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::pointer::TouchpadHoldPhase;
 use flui_platform::{
     WheelPreferences, WheelStep,
     keyboard::Modifiers,
@@ -605,7 +608,10 @@ impl ScrollableState {
     /// hold ends without this scrollable's own drag taking over, the
     /// position settles through its physics from rest, so a pager stopped
     /// between pages still lands on one.
-    fn hold_recognizer(&self, arena: flui_interaction::GestureArena) -> Rc<HoldGestureRecognizer> {
+    fn hold_recognizer(
+        &self,
+        arena: flui_interaction::gesture::GestureArena,
+    ) -> Rc<HoldGestureRecognizer> {
         let fling = self.fling_controller.controller().clone();
         let wheel_motion = Rc::clone(&self.wheel_motion);
         let held = Rc::clone(&self.owner);
@@ -1163,7 +1169,7 @@ impl ScrollableState {
                     Axis::Vertical => DragSlot::vertical(),
                     Axis::Horizontal => DragSlot::horizontal(),
                 }
-                .pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
+                .pointer_strategy(flui_interaction::gesture::DragPointerStrategy::ContinueWithRemaining)
                 // The contact a touchpad pan opens is the scroll target's to
                 // contest, not a drag of its own beside it (ADR-0251 §2).
                 .allowed_devices({
@@ -1205,7 +1211,7 @@ impl ScrollableState {
                     // Pointer velocity is in "screen coordinates": positive
                     // dy/dx = finger moving down/right; the content follows the
                     // finger, so the offset moves against it.
-                    let completed = details.reason != flui_interaction::GestureEndReason::Cancelled;
+                    let completed = details.reason != flui_interaction::gesture::GestureEndReason::Cancelled;
                     let finger = if completed {
                         match scroll_direction {
                             Axis::Vertical => details.fling_velocity().pixels_per_second.dy,

@@ -12,14 +12,14 @@ use flui_foundation::Listenable;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::{PointerButton, PointerId};
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
-use flui_interaction::{
+use flui_interaction::pointer::PointerDispatch;
+use flui_interaction::text_input::{
     ClientToken, ClipboardCapability, ClipboardHandle, TextInputClient, TextInputHandle,
 };
 use flui_objects::RenderEditable;
@@ -1061,14 +1061,16 @@ impl EditableTextState {
             let paste = self.clipboard_action();
             let handles = Rc::clone(&self.touch_handles);
             move |_ctx: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
-                let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
+                let flui_interaction::events::PointerEvent::Down(press) = dispatch.global else {
                     return;
                 };
                 let Some(position) = dispatch.global.position() else {
                     return;
                 };
                 // A mouse, pen or trackpad press ends a touch's handles.
-                if dispatch.global.pointer_kind() != Some(flui_interaction::PointerKind::Touch) {
+                if dispatch.global.pointer_kind()
+                    != Some(flui_platform::pointer::PointerKind::Touch)
+                {
                     let mut failure = FirstPanic::new();
                     handles.hide(&mut failure);
                     failure.resume();
@@ -1114,7 +1116,7 @@ impl EditableTextState {
                     contact: press.pointer.id,
                     source_anchor: provisional,
                     touch: dispatch.global.pointer_kind()
-                        == Some(flui_interaction::PointerKind::Touch),
+                        == Some(flui_platform::pointer::PointerKind::Touch),
                 };
                 drag_anchor.set(Some(admitted));
                 // A composition in this field is committed before the caret
@@ -1152,7 +1154,7 @@ impl EditableTextState {
                 let Some(drag) = drag_anchor.get() else {
                     return;
                 };
-                if flui_interaction::PointerEventExt::pointer_id(dispatch.global)
+                if flui_interaction::events::PointerEventExt::pointer_id(dispatch.global)
                     != Some(drag.contact)
                 {
                     return;
@@ -1177,7 +1179,7 @@ impl EditableTextState {
             move |_: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
                 let Some(drag) = drag_anchor.get().filter(|drag| {
                     Some(drag.contact)
-                        == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
+                        == flui_interaction::events::PointerEventExt::pointer_id(dispatch.global)
                 }) else {
                     return;
                 };
@@ -1196,7 +1198,7 @@ impl EditableTextState {
             move |_: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
                     Some(drag.contact)
-                        == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
+                        == flui_interaction::events::PointerEventExt::pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }
@@ -1224,7 +1226,7 @@ impl EditableTextState {
     /// caret into a word selection. Reimplementing double-tap timing/slop
     /// detection by hand inside `Listener`'s handlers instead of composing
     /// the real recognizer would duplicate
-    /// `flui_interaction::DoubleTapGestureRecognizer` rather than reuse
+    /// `flui_interaction::gesture::DoubleTapGestureRecognizer` rather than reuse
     /// it — see this crate's `ARCHITECTURE.md` Mapping decision for this
     /// composition.
     ///
@@ -1287,7 +1289,7 @@ impl EditableTextState {
                 };
                 controller.borrow().set_selection(range.start, range.end);
                 drag_anchor.set(None);
-                if details.kind == flui_interaction::PointerKind::Touch {
+                if details.kind == flui_platform::pointer::PointerKind::Touch {
                     let mut failure = FirstPanic::new();
                     handles.show_for_touch(false, &mut failure);
                     failure.resume();

@@ -54,7 +54,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
-use flui_interaction::TextInputHandle;
+use flui_interaction::text_input::TextInputHandle;
 use flui_interaction::text_input::{
     CompositionLedger, EditGeneration, LockArbiter, committed_text,
 };

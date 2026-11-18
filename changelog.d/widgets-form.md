@@ -10,7 +10,7 @@
   to Ctrl/Cmd+C, X and V by `DefaultFocusTraversal` and answered by `EditableText` over the
   presentation's clipboard. An obscured field copies nothing; a paste into a single-line field
   drops line breaks. Widgets reach the clipboard through `LifecycleContext::clipboard_handle`
-  (`flui_interaction::ClipboardHandle`), which every realm installs over its platform's
+  (`flui_interaction::text_input::ClipboardHandle`), which every realm installs over its platform's
   clipboard; the ADR-0084 capability registry replaces that method. `flui-platform` gains
   `InMemoryClipboard`, the headless backend's clipboard.
 - **`EditableText::on_changed`** (also on `RawTextField` and the Material `TextField`): called

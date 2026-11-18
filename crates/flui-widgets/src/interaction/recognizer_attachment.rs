@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use flui_interaction::{
-    CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer, PointerDispatch,
+    gesture::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer},
+    pointer::PointerDispatch,
 };
 
 pub(crate) struct RecognizerAttachment<R> {
@@ -57,11 +58,11 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
             .map_or(CancelOutcome::Idle, |owner| owner.cancel())
     }
 
-    fn allowed_devices(&self) -> flui_interaction::PointerKindSet {
-        self.owner()
-            .map_or(flui_interaction::PointerKindSet::all(), |owner| {
-                owner.allowed_devices()
-            })
+    fn allowed_devices(&self) -> flui_platform::input_capabilities::PointerKindSet {
+        self.owner().map_or(
+            flui_platform::input_capabilities::PointerKindSet::all(),
+            |owner| owner.allowed_devices(),
+        )
     }
 
     fn feeds_scroll_contact(&self) -> bool {

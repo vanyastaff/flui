@@ -1,7 +1,7 @@
 //! Owner-affine focus tree and traversal primitives.
 //!
 //! Focus nodes form a tree parallel to the view tree. A node is created
-//! unbound, then acquires the exact [`crate::FocusManager`] owner when its
+//! unbound, then acquires the exact [`crate::focus::FocusManager`] owner when its
 //! subtree is attached below that manager's root scope. There is no ambient
 //! focus manager and no registry keyed by node IDs.
 
@@ -22,8 +22,8 @@ use flui_platform::keyboard::KeyEvent;
 use thiserror::Error;
 
 use super::manager::FocusClosePanic;
-use crate::FocusManager;
 use crate::close::{CloseMode, CloseTombstone};
+use crate::focus::FocusManager;
 
 use crate::ids::FocusNodeId;
 

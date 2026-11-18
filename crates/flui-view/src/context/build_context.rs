@@ -484,7 +484,7 @@ pub trait LifecycleContext: BuildContext {
     /// The binding's IME/text-input attach-detach capability, if a binding
     /// installed one.
     ///
-    /// The presentation-owned `flui_interaction::TextInputOwner` installs a
+    /// The presentation-owned `flui_interaction::text_input::TextInputOwner` installs a
     /// concrete weak `TextInputHandle` into its build owner during UI runtime
     /// construction. `flui-widgets`, where `EditableText` lives, can therefore
     /// attach and detach its client without naming the application layer or
@@ -493,7 +493,7 @@ pub trait LifecycleContext: BuildContext {
     /// `None` when no binding installed one (a bare `ElementTree` in a unit
     /// test). Acquire it in a lifecycle hook (`create_state`, `init_state` or
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
-    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
+    fn text_input_handle(&self) -> Option<flui_interaction::text_input::TextInputHandle>;
 
     /// A platform capability's handle, erased: the entry point behind
     /// [`LifecycleContextExt::capability`], which is how widgets call it.
@@ -538,7 +538,7 @@ pub trait LifecycleContext: BuildContext {
     /// where to re-acquire it. `None` only on a bare owner (an `ElementTree`
     /// in a unit test). Acquire it in a lifecycle hook (`create_state`, `init_state` or
     /// `did_change_dependencies`), the same rule `text_input_handle` follows.
-    fn haptics(&self) -> Option<flui_interaction::HapticsHandle>;
+    fn haptics(&self) -> Option<flui_interaction::haptics::HapticsHandle>;
 
     /// The presentation's drag-and-drop (ADR-0211): drags that start in its
     /// window, and the transfers its keyboard and assistive technology cut,
@@ -609,7 +609,7 @@ pub trait LifecycleContext: BuildContext {
     /// (`create_state` / `init_state` / `did_change_dependencies`), never in
     /// `build`/layout/paint. Mid-frame the answer
     /// would describe a tree the asking phase is still mutating.
-    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle>;
+    fn hit_test_handle(&self) -> Option<flui_interaction::pointer::HitTestHandle>;
 
     /// Take a keep-alive hold on the lazy sliver child this element lives
     /// inside, so it survives scrolling out of the cache band.
@@ -715,7 +715,7 @@ pub trait LifecycleContext: BuildContext {
     /// rebuilds. Acquiring the manager from `build`, layout, paint, or
     /// compositing makes that side effect part of a frame phase and can create
     /// re-entrant or unbounded frame work.
-    fn focus_manager(&self) -> std::rc::Rc<flui_interaction::FocusManager>;
+    fn focus_manager(&self) -> std::rc::Rc<flui_interaction::focus::FocusManager>;
 
     /// The render tree this element is mounted in.
     ///

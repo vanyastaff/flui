@@ -25,10 +25,10 @@ use flui_foundation::generation::Generation;
 use flui_foundation::geometry::{
     DevicePixelRatio, EdgeInsets, Offset, Point, Rect, Size, WindowMetrics,
 };
-use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
-use flui_interaction::{
+use flui_interaction::gesture::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
 };
+use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_platform::Availability;
 use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
