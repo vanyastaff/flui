@@ -1,25 +1,21 @@
 /// A two-phase redraw decision around one native event poll.
 ///
-/// Construction only observes pending work. Consumption is available on the
-/// post-poll value, so a lifecycle event delivered by `poll` can revoke frame
-/// delivery before a redraw request is acknowledged.
+/// Construction only observes a pending redraw. Consumption is available on
+/// the post-poll value, so a lifecycle event delivered by `poll` can revoke
+/// frame delivery before a redraw request is acknowledged.
 ///
-/// Pending sources force an immediate poll only while the window runs. A due
-/// deadline is stateless and stays due until its producer advances it;
-/// allowing it to force zero-timeout polls while stopped would busy-loop even
-/// though no frame can be delivered. A redraw is likewise preserved rather
-/// than consumed until the post-poll execution snapshot permits delivery.
+/// A pending redraw forces an immediate poll only while the window runs:
+/// forcing one while stopped would busy-loop even though no frame can be
+/// delivered. The redraw is preserved rather than consumed until the
+/// post-poll execution snapshot permits delivery. A due wake deadline reaches
+/// here as such a redraw request (`poll::LoopDeadline`).
 pub(crate) struct RedrawPoll {
-    deadline_due: bool,
     redraw_observed: bool,
 }
 
 impl RedrawPoll {
-    pub(crate) fn new(deadline_due: bool, redraw_observed: bool) -> Self {
-        Self {
-            deadline_due,
-            redraw_observed,
-        }
+    pub(crate) fn new(redraw_observed: bool) -> Self {
+        Self { redraw_observed }
     }
 
     pub(crate) fn poll<T>(
@@ -27,32 +23,25 @@ impl RedrawPoll {
         running: bool,
         poll: impl FnOnce(bool) -> T,
     ) -> (T, PostPollRedraw) {
-        let force_immediate = running && (self.deadline_due || self.redraw_observed);
-        let output = poll(force_immediate);
-        (
-            output,
-            PostPollRedraw {
-                deadline_due: self.deadline_due,
-            },
-        )
+        let force_immediate = running && self.redraw_observed;
+        (poll(force_immediate), PostPollRedraw)
     }
 }
 
-pub(crate) struct PostPollRedraw {
-    deadline_due: bool,
-}
+/// The proof that the poll ran, which the redraw is consumed through.
+pub(crate) struct PostPollRedraw;
 
 impl PostPollRedraw {
+    #[expect(
+        clippy::unused_self,
+        reason = "consuming the post-poll value is what orders the consumption after the poll"
+    )]
     pub(crate) fn take_if_deliverable(
         self,
         running_after_poll: bool,
         take_redraw: impl FnOnce() -> bool,
     ) -> bool {
-        if !running_after_poll {
-            return false;
-        }
-        let redraw_requested = take_redraw();
-        self.deadline_due || redraw_requested
+        running_after_poll && take_redraw()
     }
 }
 
@@ -68,7 +57,7 @@ mod tests {
         let redraw_requested = Cell::new(true);
 
         let ((), after_stop) =
-            RedrawPoll::new(false, redraw_requested.get()).poll(running.get(), |force_immediate| {
+            RedrawPoll::new(redraw_requested.get()).poll(running.get(), |force_immediate| {
                 assert!(force_immediate);
                 running.set(false);
             });
@@ -78,7 +67,7 @@ mod tests {
         assert!(redraw_requested.get(), "a stop must preserve the request");
 
         let ((), after_start) =
-            RedrawPoll::new(false, redraw_requested.get()).poll(running.get(), |force_immediate| {
+            RedrawPoll::new(redraw_requested.get()).poll(running.get(), |force_immediate| {
                 assert!(!force_immediate);
                 running.set(true);
             });

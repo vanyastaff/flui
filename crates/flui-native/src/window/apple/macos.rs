@@ -412,7 +412,8 @@ impl MacOSWindow {
     /// The options' position and the position of their `normal_geometry` are
     /// read from `opening` as points of AppKit's flipped desktop, which the
     /// window position's `open` turned them into through their screens
-    /// before the window is built.
+    /// before the window is built. `delivery` holds the handler the window
+    /// opens with and counts its frames into the loop's count.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
@@ -421,12 +422,12 @@ impl MacOSWindow {
         mtm: MainThreadMarker,
         id: WindowId,
         opening: Opening,
-        handler: Rc<dyn WindowHandler>,
+        delivery: Arc<WindowDelivery>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<UnshownWindow, OpenWindowError> {
-        Self::new_inner(mtm, id, opening, handler, windows_map, windows, view_hooks)
+        Self::new_inner(mtm, id, opening, delivery, windows_map, windows, view_hooks)
     }
 
     /// Hand this window the platform's display registry, and read which display
@@ -513,7 +514,7 @@ impl MacOSWindow {
         main: MainThreadMarker,
         id: WindowId,
         opening: Opening,
-        handler: Rc<dyn WindowHandler>,
+        delivery: Arc<WindowDelivery>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
@@ -708,11 +709,6 @@ impl MacOSWindow {
         if first_reveal_pending {
             ns_window.setAlphaValue(0.0);
         }
-
-        let delivery = Arc::new(WindowDelivery::new(
-            handler,
-            crate::input::availability::macos(),
-        ));
 
         // Create content view for input events. `frame` is
         // objc2-foundation's `NSRect`, the type `create_content_view` takes.
@@ -1396,7 +1392,13 @@ impl host::Window<MacOSLoop> for MacOSWindow {
                 at,
                 returns_to,
             },
-            handler,
+            // Each frame the handler runs counts into the pump's count, which
+            // arms a delivered wake deadline again only after a frame ran.
+            Arc::new(WindowDelivery::counting_frames(
+                handler,
+                crate::input::availability::macos(),
+                owner.wake_pump.frame_counter(),
+            )),
             Arc::clone(&owner.windows),
             windows,
             owner.view_hooks,

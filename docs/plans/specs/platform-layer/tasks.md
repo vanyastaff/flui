@@ -1,8 +1,8 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 121 закрыта и 13 открыты (сверено с `main` @ `5b4e3202b` и закрытием
-  LY139, LY61 и LY148); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых
+  Из 134 задач серии 122 закрыты и 12 открыты (сверено с `main` @ `5b4e3202b` и закрытием
+  LY139, LY61, LY148 и LY107); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых
   ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY67 — провайдеры `flui-system` на Android (в работе);
@@ -15,7 +15,6 @@
   - LY100 — `flui-app[driver]` включает `scripted`, один двойник окна вместо шестнадцати, двойники
     ядра за фичей;
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
-  - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
   - LY145 — шаги закрытия, выхода и конца сеанса и сборка возможностей в `flui-runtime`.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
@@ -6738,8 +6737,8 @@ GPU-память простаивающего или невидимого окн
   support I/O timeouts»).
   Не запущено: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на этом
   хосте не компилируется); Linux и wasm32 — на CI.
-- [ ] **LY107** (открыта: правило срока на AppKit и Android) — ветка `platform/owner-core` на
-  `main`. Построено: обработчик раскладки — один `owner::layout_callback::LayoutCallback`
+- [x] **LY107** — ветки `platform/owner-core` (на `main`) и `native/wake-deadline-appkit-android`.
+  Построено: обработчик раскладки — один `owner::layout_callback::LayoutCallback`
   (`HandlerSlot`) у headless, Win32, X11 и Wayland, `OwnerTurnSlot` реализует `HandlerSlot`; паника
   `exit_policy` терминальна и решается в `AppDelivery::exit_policy` на всех хостах (ADR-0258 §2);
   `question` хранит ответ, когда падает отчёт после него; у `Services::page_origin` и
@@ -6747,20 +6746,32 @@ GPU-память простаивающего или невидимого окн
   `bind` ставит `delivering`; `owner/frame_timing.rs`, тесты `OwnerSignal` —
   `owner/signal/tests.rs`; лестница хостов в `lib.rs` — `target_os` и псевдонимы `build.rs`; ход
   после паники обработчика — `crates/flui-native/ARCHITECTURE.md` («A turn after a handler's
-  panic»). Win32 с модальным циклом, X11, Wayland и UIKit берут срок через
-  `WakeDeadline::{arm, take_due}`. Тесты: `a_second_layout_callback_replaces_the_first` (X11,
+  panic»). Все родные циклы берут срок пробуждения через `WakeDeadline::{arm, take_due}`: Win32 с
+  модальным циклом, X11, Wayland и UIKit, насос AppKit (`owner/apple/pump_deadline.rs`,
+  `PumpDeadline`: взгляд тика и конец хода владельца) и цикл Android (`owner/android/poll.rs`,
+  `LoopDeadline`: наступивший срок — запрос кадра окну и пробуждение владельца, раз на поколение
+  кадров). Окна AppKit и Android считают кадры в `FrameCount` цикла (`WindowDelivery::counting_frames`);
+  `RedrawPoll` больше не несёт срок, у `LoopTurn` нет `awaiting_vsync`. Кадр, который должно
+  закрытое окно (ADR-0357), по-прежнему ставит конец хода владельца и доставляется при позднем
+  взгляде. Тесты: `a_second_layout_callback_replaces_the_first` (X11,
   Wayland), `a_panicking_exit_policy_is_terminal`,
   `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one`,
   `a_question_keeps_its_answer_when_a_report_after_it_panics`,
   `a_report_between_bind_and_ready_waits_for_ready`,
   `a_due_deadline_gets_one_modal_frame_per_generation`,
-  `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`. Остаётся код: насос AppKit
-  (`owner/apple/macos/wake_pump.rs`, `TickPlan`) и цикл Android (`owner/android/poll.rs`,
-  `DueDeadline`) переходят на `WakeDeadline`, для чего окна AppKit и Android получают `FrameCount`
-  цикла в своём `WindowDelivery`; `TickPlan` и `DueDeadline` удаляются
-  ([gaps](../../../gaps.md#the-appkit-pump-and-the-android-loop-keep-their-own-due-deadline-rule)).
-  Прогон на Mac и на Android-устройстве (отклонённый кадр не держит цикл бодрствующим) — условие
-  закрытия той же записи.
+  `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`;
+  `a_due_deadline_is_delivered_once_per_frame_generation` и
+  `an_owed_frame_is_delivered_when_its_look_is_late` (`owner::apple::pump_deadline`),
+  `a_due_deadline_is_delivered_once_per_frame_generation` и
+  `a_declined_frame_does_not_keep_the_loop_awake` (`owner::android::poll`) — все четыре падают,
+  когда решение возвращено к прежнему правилу «срок не позже `now` — доставить» (у
+  `after_owner_turn` — ответ без записи доставки). Проверки на Windows: clippy и nextest
+  `-p flui-native` (кроме trybuild `owner_platform_is_not_send`, чей вывод на Windows расходится
+  с ожидаемым, без связи с изменением), `xtask doc-strict`, `xtask checks`; в WSL Ubuntu 24.04:
+  clippy `-p flui-native` на Linux и `cargo +nightly check -p flui-native --lib --tests` для
+  `aarch64-apple-darwin` и `aarch64-linux-android`. Прогон на Mac и на Android-устройстве (отклонённый кадр не держит
+  цикл бодрствующим) — примечание строки «Event loop, startup and wake-ups»
+  `crates/flui-native/platform-parity.toml`.
 
 - [x] **LY110** — ветка `platform/escape-hatch`, PR #2649, слит (`9e77cea15`). Остаётся прогон на
   Mac: команды `AppKitWindow` и `examples/native_window.rs` на macOS; его называют примечание

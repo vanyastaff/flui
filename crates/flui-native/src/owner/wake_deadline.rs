@@ -10,8 +10,10 @@
 //!   deadline, and the application does it in the turn it is in or asks for
 //!   an owner turn through the signal.
 //! - The wake deadline (`AppHandler::wake_deadline`) is delivered as frame
-//!   requests, through [`WakeDeadline`], on the hosts that wait with a timeout
-//!   of their own and ask their windows for frames at it.
+//!   requests, through [`WakeDeadline`], on every native host: the Win32,
+//!   X11, Wayland and Android loops wait with a timeout of their own, UIKit
+//!   with a main-queue timer and AppKit with its wake pump, and each asks its
+//!   windows for frames at it.
 
 /// The turn deadline of one loop: the instant armed, and the time of the
 /// last turn delivered for it.
@@ -59,14 +61,30 @@ impl TurnDeadline {
 /// at the instant just serviced, which must be delivered again. The count of
 /// frames that ran is the delivery generation that tells them apart. A run
 /// has one handler, so the instant alone names the answer.
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 struct DeadlineDelivery {
     arm: DeadlineArm,
     /// The count of frames that ran when the delivery was made.
     frames: u64,
 }
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 impl DeadlineDelivery {
     /// Whether `deadline` may be armed after this delivery: a different
     /// instant always, the same one whenever a frame callback ran since. An
@@ -84,11 +102,25 @@ impl DeadlineDelivery {
 /// into it when its handler's `frame_requested` produces a frame, so a frame
 /// request no handler ran a frame for (a declined one, or a window that let go
 /// of its handler) leaves it unchanged.
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios"))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android"
+))]
 #[derive(Default)]
 pub(crate) struct FrameCount(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios"))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android"
+))]
 impl FrameCount {
     pub(crate) fn get(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
@@ -101,7 +133,15 @@ impl FrameCount {
 }
 
 /// A deadline the loop waits for.
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 struct DeadlineArm {
     deadline: web_time::Instant,
 }
@@ -109,14 +149,30 @@ struct DeadlineArm {
 /// The wake deadline of a loop that waits with a timeout of its own: the
 /// deadline armed, and the last one delivered, by the rule of
 /// [`DeadlineDelivery`].
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 #[derive(Default)]
 pub(crate) struct WakeDeadline {
     armed: Option<DeadlineArm>,
     delivered: Option<DeadlineDelivery>,
 }
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 impl WakeDeadline {
     /// Whether the armed deadline is due at `now`. A due deadline is delivery
     /// debt: the caller asks every window for a frame, and the delivery is

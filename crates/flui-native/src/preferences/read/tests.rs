@@ -297,7 +297,6 @@ impl Rig {
         poll_timeout(
             LoopTurn {
                 should_render: false,
-                awaiting_vsync: false,
                 running: true,
                 wake_deadline: None,
                 next_preference_sample: next,

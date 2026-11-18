@@ -34,9 +34,15 @@
 //! window owes its surface (ADR-0357), whose window asks for no frame while it
 //! cannot be seen. A turn that leaves none schedules nothing.
 //!
-//! The chain is self-limiting, which is what keeps it from being a busy poll:
-//! a firing that finds no deadline *and* requested no frame stops, and an idle
-//! app sends no redraw requests, so nothing is ever scheduled for it.
+//! Each look arms and delivers the deadline by the rule every native host
+//! shares ([`PumpDeadline`] over `WakeDeadline`): a due instant is delivered
+//! once, as a frame request to every window, and armed again only after a
+//! frame ran, which the windows count into [`WakePump::frame_counter`]. The
+//! chain is self-limiting, which is what keeps it from being a busy poll: a
+//! look that finds nothing armed stops (the first look of a redraw request
+//! looks once more), so a deadline whose frames the handler declines costs one
+//! delivery, and an idle app sends no redraw requests, so nothing is ever
+//! scheduled for it.
 
 use std::{
     sync::{
@@ -49,18 +55,9 @@ use std::{
 use super::owner_lane::{exec_after_on_owner, owner_queue};
 
 use crate::owner::app_delivery::AppDelivery;
-
-/// How long after a redraw request the pump looks at the hook a second time
-/// when the first look found no deadline.
-///
-/// One pacing period is the natural scale: the frame a redraw request
-/// triggers runs within the pass AppKit schedules for it, and the fallback
-/// gate's own deadline is shorter than a period on every display measured so
-/// far (9.5 ms against a 100 Hz panel). A fixed delay rather than
-/// the display's refresh period because the pump is per-*platform* while the
-/// period is per-*window*, and the deadline it reads back is absolute — so being a few
-/// milliseconds off costs a re-schedule, never a missed or an early wake.
-const FOLLOW_UP: Duration = Duration::from_millis(8);
+use crate::owner::apple::pump_deadline::{FOLLOW_UP, Look, NextLook, PumpDeadline};
+use crate::owner::slot::OwnerCell;
+use crate::owner::wake_deadline::FrameCount;
 
 /// The AppKit landing place for the platform's wake deadline.
 ///
@@ -92,6 +89,14 @@ pub(crate) struct WakePump {
     /// that carries no
     /// invariant beyond itself.
     pending_at: AtomicU64,
+
+    /// The deadline armed and the last one delivered, the thread's that made
+    /// the pump (the main thread, where every tick and owner turn runs).
+    deadline: OwnerCell<PumpDeadline>,
+
+    /// The frames this platform's windows' handlers ran, which tell a
+    /// deadline a frame left due again from one nothing serviced.
+    frames: FrameCount,
 }
 
 /// The epoch [`WakePump::pending_at`] counts from.
@@ -126,7 +131,15 @@ impl WakePump {
             wake,
             generation: AtomicU64::new(0),
             pending_at: AtomicU64::new(0),
+            deadline: OwnerCell::new(),
+            frames: FrameCount::default(),
         })
+    }
+
+    /// The counter a window's delivery raises for each frame its handler
+    /// runs (`WindowDelivery::counting_frames`).
+    pub(crate) fn frame_counter(&self) -> Arc<AtomicU64> {
+        self.frames.counter()
     }
 
     /// Ask the pump to make the loop come back. Called from `request_redraw`
@@ -162,13 +175,20 @@ impl WakePump {
     }
 
     /// An owner turn ended, an idle point: look at the wake deadline once and
-    /// schedule a tick for it only when there is one earlier than the tick
-    /// queued, so a turn that leaves nothing due costs no wake. A turn can
+    /// schedule a tick for it only when one is armed earlier than the tick
+    /// queued, so a turn that leaves nothing due, or only an instant already
+    /// delivered that no frame has run for since, costs no wake. A turn can
     /// leave a deadline no redraw request starts the pump for: the frame a
     /// covered window owes its surface, whose window asks for no frame while
     /// it cannot be seen (ADR-0357).
     pub(crate) fn after_owner_turn(self: &Arc<Self>) {
-        let Some(deadline) = self.consult() else {
+        let answer = self.consult();
+        let frames = self.frames.get();
+        let Some(deadline) = self
+            .deadline
+            .with(|deadline| deadline.after_owner_turn(answer, frames))
+            .flatten()
+        else {
             return;
         };
         let pending = self.pending_at.load(Ordering::Acquire);
@@ -199,8 +219,8 @@ impl WakePump {
 
     /// A scheduled tick: honor the deadline if it is due, otherwise wait for it.
     ///
-    /// A tick whose hook or wake panics stops the chain the way
-    /// [`TickPlan::Stop`] does, so the next `arm` schedules again instead of
+    /// A tick whose hook or wake panics stops the chain the way a look that
+    /// finds nothing armed does, so the next `arm` schedules again instead of
     /// reading the failed tick as still queued; a newer tick the hook
     /// scheduled before it panicked stays queued.
     fn fire(self: &Arc<Self>, generation: u64, look: Look) {
@@ -219,18 +239,23 @@ impl WakePump {
 
     /// What a current tick does.
     fn run_tick(self: &Arc<Self>, look: Look) {
+        let answer = self.consult();
         let now = web_time::Instant::now();
-        let answer = match look {
-            // No deadline yet is the common case right after a redraw request
-            // and is NOT "nothing to do": the frame that request triggers may
-            // not have run, so the deadline it arms is not visible yet. Take
-            // the second look; a look that still finds nothing stops.
-            Look::First => self.consult().or(Some(now + FOLLOW_UP)),
-            Look::Again => self.consult(),
-        };
-        match tick_plan(answer, now) {
-            TickPlan::Stop => {
-                // Nothing pending and this tick requested no frame, so there
+        let frames = self.frames.get();
+        // Nothing armed on a first look is the common case right after a
+        // redraw request and is NOT "nothing to do": the frame that request
+        // triggers may not have run, so the deadline it arms, or the frame
+        // that lets a delivered one be armed again, is not visible yet. The
+        // look then schedules a second one; a second that still finds nothing
+        // stops. Off the thread that made the pump, or with a cell the
+        // exhausted owner slots left empty, nothing is armed.
+        let next = self
+            .deadline
+            .with(|deadline| deadline.look(look, answer, now, frames))
+            .unwrap_or(NextLook::Stop);
+        match next {
+            NextLook::Stop => {
+                // Nothing armed and this tick requested no frame, so there
                 // is nothing left to come back for. Stopping HERE is what
                 // keeps an idle app from ticking: it sends no redraw
                 // requests, so this is the only place the chain could
@@ -250,14 +275,14 @@ impl WakePump {
                 tracing::trace!(
                     target: "flui.pace",
                     event = "wake_pump_idle",
-                    "AppKit wake pump found no deadline; chain stopped"
+                    "AppKit wake pump found no deadline armed; chain stopped"
                 );
             }
-            TickPlan::WakeThenLook { late_us } => {
+            NextLook::Wake { late } => {
                 tracing::trace!(
                     target: "flui.pace",
                     event = "wake_pump_fired",
-                    late_us,
+                    late_us = u64::try_from(late.as_micros()).unwrap_or(u64::MAX),
                     "AppKit wake pump firing a frame for a due deadline"
                 );
                 (self.wake)();
@@ -267,19 +292,11 @@ impl WakePump {
                 // shortly, the same reason `arm` does.
                 self.schedule(web_time::Instant::now() + FOLLOW_UP, Look::Again);
             }
-            TickPlan::Wait(deadline) => self.schedule(deadline, Look::Again),
+            // The armed deadline ahead, or the second look of a redraw
+            // request.
+            NextLook::At(at) => self.schedule(at, Look::Again),
         }
     }
-}
-
-/// Which look at the hook a tick is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Look {
-    /// The look an `arm` scheduled: finding nothing still looks once more.
-    First,
-    /// A look that found something before, or the second look: finding
-    /// nothing stops the chain.
-    Again,
 }
 
 /// The tick a [`StopUnlessFinished`] guards: its generation and the
@@ -320,34 +337,6 @@ impl Drop for StopUnlessFinished<'_> {
 
 /// Weak handle a window's redraw requester stores (see `MacOSWindow::install_wake_pump`).
 pub(crate) type WeakWakePump = Weak<WakePump>;
-
-/// What a consult says the pump should do next.
-///
-/// Split out of [`WakePump::fire`] so the decision is unit-testable without a
-/// running run loop: `fire` is three lines of dispatch over this, and the GCD
-/// half (`schedule`/`exec_after`) never sees an `Instant`.
-#[derive(Debug, PartialEq, Eq)]
-enum TickPlan {
-    /// No deadline and no frame requested — the chain ends here.
-    Stop,
-    /// A deadline is still ahead: wait for it (carrying the instant itself,
-    /// which is absolute — see [`WakePump::arm`] for why that matters).
-    Wait(web_time::Instant),
-    /// The deadline is due: ask for a frame, then look again shortly
-    /// (carrying how late the tick was, for the trace).
-    WakeThenLook { late_us: u64 },
-}
-
-/// Decide what to do at `now`, given what the hook answered.
-fn tick_plan(answer: Option<web_time::Instant>, now: web_time::Instant) -> TickPlan {
-    match answer {
-        None => TickPlan::Stop,
-        Some(deadline) if deadline <= now => TickPlan::WakeThenLook {
-            late_us: now.saturating_duration_since(deadline).as_micros() as u64,
-        },
-        Some(deadline) => TickPlan::Wait(deadline),
-    }
-}
 
 #[cfg(test)]
 mod tests {
