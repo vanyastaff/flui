@@ -530,8 +530,10 @@ executor and slot.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no
-  borrow of the host or a runtime held; it waits the same way for an attach's answer and the
-  thread's stop. It waits through the platform's `flui_platform::OwnerWait` where the platform
+  borrow of the host or a runtime held. It waits the same way for an attach's answer, inside the
+  host's borrow, and for the thread's stop wherever the handle drops; a window procedure a sent
+  message reaches during those two may run with the host borrowed (`docs/gaps.md`). It waits
+  through the platform's `flui_platform::OwnerWait` where the platform
   has one (`Platform::owner_wait`), which the thread notifies after each turn and once it
   stopped, and on a condition variable otherwise. On Win32 that wait serves sent messages only
   (`MsgWaitForMultipleObjectsEx` with `QS_SENDMESSAGE`, then `PeekMessageW` with

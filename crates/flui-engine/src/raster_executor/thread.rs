@@ -152,7 +152,7 @@ impl Drop for StopTold {
     fn drop(&mut self) {
         // The owner may have stopped waiting; nobody to tell then.
         let _told = self.stopped.send(());
-        self.shared.note_turn();
+        let _held = self.shared.note_turn();
     }
 }
 
@@ -172,7 +172,7 @@ fn serve<B: RasterBackend>(
         let mut caught = FirstPanic::new();
         let _outcome = caught.contain(|| executor.turn());
         owed |= hand_over(caught, shared);
-        shared.note_turn();
+        owed |= shared.note_turn();
         let due = rebuild_due_in(&executor, shared, &mut owed);
         if std::mem::take(&mut owed) {
             wake_owner(wake, shared);
@@ -183,11 +183,12 @@ fn serve<B: RasterBackend>(
     caught.contain(|| executor.shut_down());
     caught.contain(|| drop(executor));
     // A failure owed from before a stop that came ahead of the first turn is
-    // woken for here.
-    if hand_over(caught, shared) || owed {
+    // woken for here, and so is a panic of the platform's wait the last
+    // notification raised.
+    let owed = hand_over(caught, shared) || owed;
+    if shared.note_turn() || owed {
         wake_owner(wake, shared);
     }
-    shared.note_turn();
 }
 
 /// Give a contained panic to the owner as its text; answers whether it is

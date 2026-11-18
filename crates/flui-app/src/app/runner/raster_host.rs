@@ -2533,9 +2533,7 @@ fn damage_mode() -> DamageMode {
 /// pacing budget, and inline on every other host until a run on it does.
 /// X11 waits for a run on a real X server, since Xvfb has no vsync and an
 /// unmapped window's `Fifo` present may block the one thread every window
-/// shares; Windows also until the owner's wait for the raster thread services
-/// the sent messages a swap chain's thread sends it (ADR-0305 §9); the
-/// headless host stays inline, as ADR-0305 §10 places it.
+/// shares; the headless host stays inline, as ADR-0305 §10 places it.
 #[cfg_attr(
     all(
         any(target_os = "android", target_os = "ios", target_arch = "wasm32"),

@@ -646,6 +646,7 @@ pub struct ScriptedOwnerWait {
 struct OwnerWaitState {
     notified: bool,
     served: VecDeque<Box<dyn FnOnce() + Send>>,
+    panic_on_notify: bool,
     waits: usize,
     notifications: usize,
 }
@@ -666,6 +667,11 @@ impl ScriptedOwnerWait {
         self.state.lock().served.push_back(Box::new(serve));
     }
 
+    /// Panic in the next notification, as a platform's wait that fails.
+    pub fn panic_next_notify(&self) {
+        self.state.lock().panic_on_notify = true;
+    }
+
     /// How many waits the owner made through it.
     #[must_use]
     pub fn waits(&self) -> usize {
@@ -684,6 +690,10 @@ impl flui_platform::OwnerWait for ScriptedOwnerWait {
         let mut state = self.state.lock();
         state.notified = true;
         state.notifications += 1;
+        if std::mem::take(&mut state.panic_on_notify) {
+            drop(state);
+            panic!("scripted owner wait notification panic");
+        }
         drop(state);
         self.notified.notify_all();
     }

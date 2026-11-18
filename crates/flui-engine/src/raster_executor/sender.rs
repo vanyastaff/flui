@@ -245,11 +245,14 @@ impl Shared {
     }
 
     /// A raster thread finished a turn, or stopped: an owner waiting on a
-    /// slot's record or on the stop looks again.
+    /// slot's record or on the stop looks again. Answers whether a panic of
+    /// the platform's wait was newly held for the owner, which the thread
+    /// then wakes the owner for.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn note_turn(&self) {
+    #[must_use = "a panic it held is owed a wake of the owner"]
+    pub(crate) fn note_turn(&self) -> bool {
         let Some(doorbell) = &self.doorbell else {
-            return;
+            return false;
         };
         *doorbell.turns.lock() += 1;
         doorbell.turned.notify_all();
@@ -264,9 +267,10 @@ impl Shared {
                     .unwrap_or("a panic without a message")
                     .to_owned();
                 flui_foundation::panic::discard_payload(payload);
-                let _kept = self.hold_failure(ExecutorFailure::TurnPanicked { message });
+                return self.hold_failure(ExecutorFailure::TurnPanicked { message });
             }
         }
+        false
     }
 
     /// How many turns the raster thread finished.
@@ -363,7 +367,7 @@ impl Shared {
         let first = self.death.set(failure).is_ok();
         self.health.store(DIED, Ordering::SeqCst);
         // An owner waiting on a slot's record learns of it now.
-        self.note_turn();
+        let _held = self.note_turn();
         if first && let Some(cause) = self.death.get() {
             // Logged once, by whichever side reached the death first, with
             // no lock held. A subscriber is user code: its panic is held for

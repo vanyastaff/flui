@@ -5,8 +5,9 @@
 //! to the thread the window was made on and block until it is handled, so
 //! an owner that waits on the raster thread with a plain wait deadlocks with
 //! it (Microsoft's "DXGI: multithread considerations"). This wait serves
-//! sent messages only: a posted message, input or a timer stays queued for
-//! the loop, which runs none of the application's code during the wait.
+//! sent messages only: their window procedures run, with whatever handler of
+//! the application they reach, while a posted message, input or a timer
+//! stays queued for the loop.
 
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::time::Duration;
