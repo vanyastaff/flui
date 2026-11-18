@@ -253,7 +253,10 @@ impl std::fmt::Debug for MouseTracker {
 /// Callback for cursor changes with the source's actual contact and optional
 /// hardware identity: the cursor the window is to show now, an icon, an image
 /// or none, as the hovered region asked for it.
-pub type CursorChangeCallback = Rc<dyn Fn(PointerSource, &Cursor) + 'static>;
+pub type CursorChangeCallback = Rc<CursorChange>;
+
+/// What a [`CursorChangeCallback`] calls.
+type CursorChange = dyn Fn(PointerSource, &Cursor) + 'static;
 
 struct CursorPublication {
     observation: Rc<()>,
@@ -275,7 +278,7 @@ impl Default for CursorPublication {
 
 struct CursorFlight {
     observation: Rc<()>,
-    callback: std::rc::Weak<dyn Fn(PointerSource, &Cursor)>,
+    callback: std::rc::Weak<CursorChange>,
     cursor: Cursor,
 }
 

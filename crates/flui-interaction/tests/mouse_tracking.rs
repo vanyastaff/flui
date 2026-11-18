@@ -263,7 +263,7 @@ fn departure_exits_once_and_releases_the_region(departure: Departure) {
     binding
         .mouse_tracker()
         .set_cursor_change_callback(Rc::new(move |_, cursor| {
-            sink.borrow_mut().push(icon(cursor))
+            sink.borrow_mut().push(icon(cursor));
         }));
     let mut movement = hover(
         PEN,
@@ -820,7 +820,7 @@ fn tracker_reports_the_explicit_arrow() {
     let changes = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&changes);
     tracker.set_cursor_change_callback(Rc::new(move |_, cursor| {
-        sink.borrow_mut().push(icon(cursor))
+        sink.borrow_mut().push(icon(cursor));
     }));
     let at = Offset::new(10.0, 10.0);
     let text_area = cursor_path(&[None, Some(CursorIcon::Text)]);
