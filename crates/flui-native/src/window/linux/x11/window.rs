@@ -94,6 +94,7 @@
 //! destroyed; everything else names the window by its identity.
 
 mod manager_hints;
+mod mode_wait;
 mod sync;
 
 use std::cell::{Cell, RefCell};
@@ -160,8 +161,7 @@ use crate::window::desktop::DisplayFrame;
 use crate::window::linux::class::AppClass;
 use crate::window::plan::{FrameInset, OpenPlan};
 use crate::window::state::{
-    MODE_ANSWER_LIMIT, ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of,
-    not_carried_out,
+    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
 };
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
@@ -630,14 +630,6 @@ impl X11Window {
         self.record.borrow().mode
     }
 
-    /// The window asked its window manager for `mode`: the snapshot keeps
-    /// the mode the window left until the server's properties say `mode`, or
-    /// for [`MODE_ANSWER_LIMIT`] (`WindowStateCell::expect_mode`).
-    fn expect_mode(&self, mode: WindowMode) {
-        self.cell
-            .expect_mode(mode, Instant::now() + MODE_ANSWER_LIMIT);
-    }
-
     /// The loop has the window follow its state at the turn's read.
     fn owe_a_read(&self) {
         self.unread.set(true);
@@ -840,11 +832,7 @@ impl X11Window {
         let frame = support.kept(read.frame);
         let mode = mode_of(support.kept(mode_flags(read.wm_state, read.net_state)));
         record.mode = mode;
-        // A step on the way to another mode is no place the window returns to.
-        let settled = self
-            .cell
-            .mode_in_flight(Instant::now())
-            .is_none_or(|asked| asked == mode);
+        let settled = self.settles_in(mode, Instant::now());
         let level = support.kept(read.level);
         let cursor_grab = self.input.pointer_grab(self.window_ref());
         let outer = outer_bounds(read.origin, read.content, frame);
@@ -2833,16 +2821,7 @@ impl LoopWindows for X11Windows {
     fn read_stale(&self) {
         // Read now if no window asked for it in this turn.
         let _: WindowManagerSupport = self.support();
-        let now = Instant::now();
-        for window in self.table.borrow().windows.values() {
-            if window
-                .cell
-                .mode_deadline()
-                .is_some_and(|until| until <= now)
-            {
-                window.mark_stale();
-            }
-        }
+        self.mark_waits_over(Instant::now());
         if !self.unread.take() {
             return;
         }
@@ -2865,12 +2844,7 @@ impl LoopWindows for X11Windows {
     }
 
     fn mode_deadline(&self) -> Option<Instant> {
-        let table = self.table.borrow();
-        let waits = table
-            .windows
-            .values()
-            .filter_map(|window| window.cell.mode_deadline());
-        waits.min()
+        self.earliest_mode_deadline()
     }
 
     fn chrome_event(&self, event: &Event) -> bool {
