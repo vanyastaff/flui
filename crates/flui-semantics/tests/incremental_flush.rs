@@ -58,7 +58,7 @@ fn rebuild(owner: &mut SemanticsOwner, labels: &[&str]) {
 fn recording_owner() -> (SemanticsOwner, Arc<Mutex<Vec<TreeUpdate>>>) {
     let received: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&received);
-    let owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+    let owner = SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
         sink.lock().push(update.clone());
     }));
     (owner, received)
@@ -282,7 +282,7 @@ fn assert_delivery_recovers(
     let received = Arc::new(Mutex::new(Vec::<TreeUpdate>::new()));
     let sink = Arc::clone(&received);
     let fail = Arc::clone(&fail_delivery);
-    let mut owner = SemanticsOwner::new(Arc::new(move |update| {
+    let mut owner = SemanticsOwner::new(Rc::new(move |update| {
         assert!(
             !fail.load(Ordering::Relaxed),
             "delivery failed before acceptance"
@@ -1647,7 +1647,7 @@ impl RejectingAdapter {
     fn new() -> Self {
         let failing = Arc::new(AtomicBool::new(false));
         let reject = Arc::clone(&failing);
-        let owner = SemanticsOwner::new(Arc::new(move |_: &TreeUpdate| {
+        let owner = SemanticsOwner::new(Rc::new(move |_: &TreeUpdate| {
             assert!(
                 !reject.load(Ordering::Relaxed),
                 "the adapter rejected the update"
@@ -2119,7 +2119,7 @@ fn a_rejected_callback_replacement_keeps_the_delivered_tree() {
 
     adapter.owner.tree_mut().replace_node(id, button(true));
     let replacement = catch_unwind(AssertUnwindSafe(|| {
-        adapter.owner.set_callback(Arc::new(|_: &TreeUpdate| {
+        adapter.owner.set_callback(Rc::new(|_: &TreeUpdate| {
             panic!("the replacement adapter rejected the update");
         }));
     }));

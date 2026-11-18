@@ -7121,7 +7121,7 @@ fn harness_custom_paint_regions_project_clip_and_rebind_owner() {
     let foreign_id = foreign_source.allocate(1).unwrap()[0];
     let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
     let delivered = updates.clone();
-    let mut owner = SemanticsOwner::new(Arc::new(move |update| {
+    let mut owner = SemanticsOwner::new(Rc::new(move |update| {
         delivered.lock().expect("update log").push(update.clone());
     }));
     let node = owner.insert(
