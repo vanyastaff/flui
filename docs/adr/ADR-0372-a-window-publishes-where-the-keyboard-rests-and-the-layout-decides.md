@@ -146,8 +146,8 @@ The iOS view keeps one note of the four notifications it observes (`keyboard::He
 | any other with no end frame | the one that stood |
 | `WillChangeFrame` or `DidChangeFrame` with UIKit's zero frame (the user is dragging) | the one that stood |
 | `WillChangeFrame` with a frame | the keyboard goes to that frame, along the change it starts |
-| `WillShow` or `DidChangeFrame` with the frame that stands | the one that stood: one move starts one motion |
-| `DidChangeFrame` with a frame, after a `WillHide` | the hide and its motion, and the frame the keyboard came to rest at |
+| `WillShow` or `DidChangeFrame` with the frame a frame change or a show left standing | the one that stood: one move starts one motion |
+| the first `DidChangeFrame` with a frame after a `WillHide` | the hide and its motion, and the frame the keyboard came to rest at |
 | `WillShow` or `DidChangeFrame` with another frame | the keyboard is at that frame |
 
 A keyboard that left its dock is `Floating` when the frame it came to rest at floats, and

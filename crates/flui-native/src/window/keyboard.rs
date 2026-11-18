@@ -222,14 +222,17 @@ pub(crate) struct Heard {
 /// inset there.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Note {
-    /// The keyboard goes to `end`.
-    At { end: Frame, change: Change },
-    /// The keyboard left its dock along `change`. `came_to_rest` is the frame
-    /// UIKit named once it had, if it named one: a keyboard the user undocked
-    /// is announced as a hide and then rests floating.
-    Undocked {
+    /// `WillHide`: the keyboard left its dock along the change, and UIKit has
+    /// not yet said where it came to rest.
+    Hide(Change),
+    /// The keyboard goes to `end` along `change`, which `notice` started.
+    /// [`Notice::Hiding`] here is a hide whose `DidChangeFrame` named where
+    /// the keyboard came to rest: a keyboard the user undocked is announced
+    /// as a hide and then rests floating.
+    At {
+        notice: Notice,
+        end: Frame,
         change: Change,
-        came_to_rest: Option<Frame>,
     },
 }
 
@@ -245,10 +248,12 @@ impl Heard {
     ///   sends while the user drags a floating keyboard; on a show it is a
     ///   shortcuts bar dropped floating, which stands (with no area, so no
     ///   placement).
-    /// - A show or a finished frame change that names the frame standing is a
-    ///   later notice of the same move, whose motion is already under way.
-    /// - A finished frame change after a hide keeps the hide and its motion,
-    ///   and adds where the keyboard came to rest.
+    /// - A show or a finished frame change that names the frame a frame
+    ///   change or a show left standing is a later notice of the same move,
+    ///   whose motion is already under way. After a hide the same frame is a
+    ///   keyboard that comes back.
+    /// - The first finished frame change after a hide keeps the hide's change
+    ///   and names where the keyboard came to rest.
     #[must_use]
     pub(crate) fn kept(self, standing: Option<Note>) -> Option<Note> {
         let Self {
@@ -257,24 +262,30 @@ impl Heard {
             change,
         } = self;
         match (notice, end) {
-            (Notice::Hiding, _) => Some(Note::Undocked {
-                change,
-                came_to_rest: None,
-            }),
+            (Notice::Hiding, _) => Some(Note::Hide(change)),
             (Notice::Moving | Notice::Moved | Notice::Showing, None) => standing,
             (Notice::Moving | Notice::Moved, Some(end)) if end == Frame::ZERO => standing,
-            (Notice::Moving, Some(end)) => Some(Note::At { end, change }),
+            (Notice::Moving, Some(end)) => Some(Note::At {
+                notice,
+                end,
+                change,
+            }),
             (Notice::Moved | Notice::Showing, Some(end)) => match standing {
-                Some(Note::At { end: resting, .. }) if resting == end => standing,
-                Some(Note::Undocked { change, .. }) if notice == Notice::Moved => {
-                    Some(Note::Undocked {
-                        change,
-                        came_to_rest: Some(end),
-                    })
-                }
-                Some(Note::At { .. } | Note::Undocked { .. }) | None => {
-                    Some(Note::At { end, change })
-                }
+                Some(Note::At {
+                    notice: started_by,
+                    end: resting,
+                    ..
+                }) if started_by != Notice::Hiding && resting == end => standing,
+                Some(Note::Hide(hide)) if notice == Notice::Moved => Some(Note::At {
+                    notice: Notice::Hiding,
+                    end,
+                    change: hide,
+                }),
+                Some(Note::At { .. } | Note::Hide(_)) | None => Some(Note::At {
+                    notice,
+                    end,
+                    change,
+                }),
             },
         }
     }
@@ -284,10 +295,10 @@ impl Heard {
 impl Note {
     /// The keyboard this note puts over a view `view` in size, `to_view`
     /// taking a frame from screen coordinates into the view's: the
-    /// [`placement`] of the frame the keyboard goes to. A keyboard that left
-    /// its dock is hidden unless the frame it came to rest at floats: a hide
-    /// whose frame still lies on the bottom of the screen is a hide all the
-    /// same. `None` for a placement the platform's types refuse.
+    /// [`placement`] of the frame the keyboard goes to. A hide is hidden
+    /// unless the frame it came to rest at floats: a hide whose frame still
+    /// lies on the bottom of the screen is a hide all the same. `None` for a
+    /// placement the platform's types refuse.
     #[must_use]
     pub(crate) fn keyboard(
         self,
@@ -295,18 +306,16 @@ impl Note {
         to_view: impl FnOnce(Frame) -> Frame,
     ) -> Option<SoftKeyboard> {
         let (placement, change) = match self {
-            Self::At { end, change } => (placement(view, to_view(end), view.height), change),
-            Self::Undocked {
+            Self::Hide(change) => (KeyboardPlacement::Hidden, change),
+            Self::At {
+                notice: Notice::Hiding,
+                end,
                 change,
-                came_to_rest: Some(end),
             } => match placement(view, to_view(end), view.height) {
                 floating @ KeyboardPlacement::Floating { .. } => (floating, change),
                 _ => (KeyboardPlacement::Hidden, change),
             },
-            Self::Undocked {
-                change,
-                came_to_rest: None,
-            } => (KeyboardPlacement::Hidden, change),
+            Self::At { end, change, .. } => (placement(view, to_view(end), view.height), change),
         };
         change.keyboard(placement)
     }
@@ -609,7 +618,7 @@ mod tests {
     fn the_notifications_heard_name_where_the_keyboard_rests() {
         use Notice::{Hiding, Moved, Moving, Showing};
         let floats = |frame: Frame| floating(frame.x, frame.y, frame.width, frame.height);
-        let rows: [(&str, &[Announced], KeyboardPlacement); 16] = [
+        let rows: [(&str, &[Announced], KeyboardPlacement); 18] = [
             (
                 "a show",
                 &[
@@ -734,15 +743,42 @@ mod tests {
                 &[(Moving, Some(Frame::ZERO)), (Moved, Some(Frame::ZERO))],
                 KeyboardPlacement::Hidden,
             ),
+            (
+                "a keyboard that comes to rest off screen is hidden",
+                &[
+                    (Moving, Some(FLOATING)),
+                    (Moved, Some(FLOATING)),
+                    (Moving, Some(Frame::ZERO)),
+                    (Moved, Some(OFF_SCREEN)),
+                ],
+                KeyboardPlacement::Hidden,
+            ),
+            (
+                "a keyboard shown again after a hide that rested on its dock",
+                &[
+                    (Moving, Some(DOCKED)),
+                    (Hiding, Some(DOCKED)),
+                    (Moved, Some(DOCKED)),
+                    (Showing, Some(DOCKED)),
+                ],
+                docked(336.0),
+            ),
         ];
-        for (case, heard, expected) in rows {
-            let placement = after(heard).map_or(KeyboardPlacement::Hidden, |note| {
-                note.keyboard(VIEW, |end| end)
-                    .expect("a placement the platform takes")
-                    .placement()
-            });
-            assert_eq!(placement, expected, "{case}");
-        }
+        // Every row is read before the assertion, so a failure names each
+        // case it breaks.
+        let wrong: Vec<String> = rows
+            .into_iter()
+            .filter_map(|(case, heard, expected)| {
+                let placement = after(heard).map_or(KeyboardPlacement::Hidden, |note| {
+                    note.keyboard(VIEW, |end| end)
+                        .expect("a placement the platform takes")
+                        .placement()
+                });
+                (placement != expected)
+                    .then(|| format!("{case}: got {placement:?}, wanted {expected:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// One move starts one motion: the notices that repeat its frame leave
@@ -755,6 +791,7 @@ mod tests {
         assert_eq!(
             shown,
             Some(Note::At {
+                notice: Moving,
                 end: DOCKED,
                 change: change_at(1_000)
             })
@@ -773,12 +810,14 @@ mod tests {
                 (Hiding, Some(OFF_SCREEN)),
                 (Moved, Some(FLOATING))
             ]),
-            Some(Note::Undocked {
-                change: change_at(2_000),
-                came_to_rest: Some(FLOATING)
+            Some(Note::At {
+                notice: Hiding,
+                end: FLOATING,
+                change: change_at(2_000)
             })
         );
-        // After a hide the same frame is a keyboard that comes back.
+        // After a hide the same frame is a keyboard that comes back, also
+        // when the hide came to rest at it.
         assert_eq!(
             after(&[
                 (Moving, Some(DOCKED)),
@@ -786,8 +825,22 @@ mod tests {
                 (Showing, Some(DOCKED))
             ]),
             Some(Note::At {
+                notice: Showing,
                 end: DOCKED,
                 change: change_at(3_000)
+            })
+        );
+        assert_eq!(
+            after(&[
+                (Moving, Some(DOCKED)),
+                (Hiding, Some(DOCKED)),
+                (Moved, Some(DOCKED)),
+                (Showing, Some(DOCKED))
+            ]),
+            Some(Note::At {
+                notice: Showing,
+                end: DOCKED,
+                change: change_at(4_000)
             })
         );
     }

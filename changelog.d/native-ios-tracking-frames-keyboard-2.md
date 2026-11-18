@@ -23,6 +23,7 @@
 - On iOS, frames keep coming while UIKit tracks a touch (an edit menu, a native scroll view or
   control, an interactive keyboard dismissal).
 - On iOS, a floating keyboard no longer shrinks a layout that resizes for the keyboard to the
-  strip above it, dragging it no longer makes the inset flicker to none, a keyboard hiding with
+  strip above it, dragging it no longer makes the inset flicker to none, a keyboard the user drags
+  or undocks is published where it comes to rest, a keyboard hiding with
   its end frame still partly on screen leaves no inset behind, and neither does a shortcuts bar
   dropped away from the bottom edge. The Web host reads a keyboard rectangle by the same rule.
