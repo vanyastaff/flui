@@ -1,93 +1,58 @@
 //! Panic containment for synchronous dispatch phases.
 //!
 //! A pointer route, a recognizer and the binding each run user code in phases
-//! whose mandatory cleanup must finish before a failure propagates.
-//! [`RoutePanic`] holds the first such failure until that cleanup is done.
-//! A value withdrawn after a caught failure is still destroyed, with its
-//! destructor under containment ([`drop_contained`], ADR-0281 §3).
+//! whose mandatory cleanup must finish before a failure propagates. Each phase
+//! runs under [`caught`] or [`try_run`], and the dispatch folds the phases'
+//! failures into one [`FirstPanic`] with [`keep_first`] (ADR-0281): the first
+//! is resumed once the cleanup is done, a later one is reported and discarded
+//! under containment. A value withdrawn after a caught failure is still
+//! destroyed, with its destructor under containment ([`drop_contained`],
+//! ADR-0281 §3).
 
-use std::any::Any;
-use std::fmt;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+pub(crate) use flui_foundation::panic::{FirstPanic, drop_contained};
 
-pub(crate) use flui_foundation::panic::drop_contained;
-
-/// The first panic captured while invoking a resolved pointer route, as
-/// [`InteractionDispatchHandle::invoke_pointer_route`](crate::pointer::InteractionDispatchHandle::invoke_pointer_route)
-/// returns it.
-///
-/// The dispatch owner must finish its mandatory cleanup (close the arena on
-/// Down, sweep on Up, release on Up/Cancel, release an ephemeral route) and
-/// then call [`resume`](Self::resume) so the panic propagates under the
-/// repository panic policy.
-#[must_use = "a captured route panic must be resumed after dispatch cleanup"]
-pub struct RoutePanic {
-    payload: Box<dyn Any + Send>,
+/// Run one synchronous dispatch phase and hold its panic, if it has one.
+pub(crate) fn caught(run: impl FnOnce()) -> FirstPanic {
+    let mut failure = FirstPanic::new();
+    let _: Option<()> = failure.contain(run);
+    failure
 }
 
-impl RoutePanic {
-    /// Run one synchronous dispatch phase and retain its return value unless it
-    /// unwinds.
-    pub(crate) fn try_run<T>(run: impl FnOnce() -> T) -> Result<T, Self> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a dispatch phase's panic is captured to resume after cleanup"
-        )]
-        catch_unwind(AssertUnwindSafe(run)).map_err(|payload| Self { payload })
-    }
-
-    /// Capture an unwind from one synchronous dispatch phase.
-    pub(crate) fn capture(run: impl FnOnce()) -> Option<Self> {
-        Self::try_run(run).err()
-    }
-
-    /// Keep transaction ordering deterministic when several phases panic.
-    ///
-    /// The earliest payload is resumed after mandatory cleanup; later payloads
-    /// are reported but deliberately cannot replace it.
-    pub(crate) fn preserve_first(
-        first: &mut Option<Self>,
-        candidate: Option<Self>,
-        phase: &'static str,
-    ) {
-        let Some(candidate) = candidate else {
-            return;
-        };
-        if first.is_none() {
-            *first = Some(candidate);
-        } else {
-            // A later payload is a competing failure: it is destroyed under
-            // containment so its destructor cannot replace the first one
-            // (ADR-0281 §2).
-            candidate.discard();
-            // Diagnostics are user code too. Discard the superseded payload
-            // before reporting it, and contain a failing subscriber without
-            // recursively reporting that diagnostic's own failure.
-            if let Some(diagnostic) = Self::capture(|| {
-                tracing::error!(
-                    phase,
-                    "dispatch phase panicked after an earlier phase; only the first panic is resumed"
-                );
-            }) {
-                diagnostic.discard();
-            }
-        }
-    }
-
-    /// Continue unwinding with the captured payload.
-    pub fn resume(self) -> ! {
-        resume_unwind(self.payload)
-    }
-
-    /// Destroy a failure already superseded or reported, under containment
-    /// (ADR-0281 §2).
-    pub(crate) fn discard(self) {
-        flui_foundation::panic::discard_payload(self.payload);
-    }
+/// Run one synchronous dispatch phase and hand back its return value, or the
+/// panic it raised instead.
+pub(crate) fn try_run<T>(run: impl FnOnce() -> T) -> Result<T, FirstPanic> {
+    let mut failure = FirstPanic::new();
+    failure.contain(run).ok_or(failure)
 }
 
-impl fmt::Debug for RoutePanic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RoutePanic").finish_non_exhaustive()
+/// Fold the failure of the phase named `phase` into `first`. The earliest
+/// failure stays and is resumed after mandatory cleanup; a later one cannot
+/// replace it: it is destroyed under containment (ADR-0281 §2), then
+/// reported.
+pub(crate) fn keep_first(first: &mut FirstPanic, later: FirstPanic, phase: &'static str) {
+    if !later.is_held() {
+        return;
     }
+    if !first.is_held() {
+        first.absorb(later);
+        return;
+    }
+    drop(later);
+    // A tracing subscriber is user code too: one that panics is contained,
+    // and its own failure is not reported again.
+    drop(caught(|| {
+        tracing::error!(
+            phase,
+            "dispatch phase panicked after an earlier phase; only the first panic is resumed"
+        );
+    }));
+}
+
+/// Raise the panic [`try_run`] caught, where the caller has no value to return
+/// in its place.
+pub(crate) fn raise(failure: FirstPanic) -> ! {
+    let payload = failure
+        .into_payload()
+        .expect("BUG: try_run's error holds the panic it caught");
+    std::panic::resume_unwind(payload)
 }

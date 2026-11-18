@@ -20,7 +20,6 @@ mod resampler;
 mod sampling_clock;
 mod wheel_preferences;
 
-pub use crate::containment::RoutePanic;
 pub use hit_test::{
     CursorRequest, EventPropagation, HitMetadata, HitTestBehavior, HitTestEntry, HitTestResult,
     RenderId, TransformGuard,

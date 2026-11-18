@@ -4,6 +4,7 @@
 //! global nor thread-local. Nodes reach it only through the weak owner stored
 //! when their subtree is attached below [`FocusManager::root_scope`].
 
+use crate::containment::keep_first;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashSet, VecDeque},
@@ -15,7 +16,7 @@ use flui_foundation::{Notifier, Subscription};
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 
-use crate::containment::RoutePanic;
+use crate::containment::{FirstPanic, caught, try_run};
 use crate::focus::focus_scope::{
     FocusCause, FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, OrphanMarker,
     TraversalDirection,
@@ -1085,11 +1086,9 @@ impl FocusManager {
         // a panicking handler leaves it describing the key-down it received.
         // Every handler this event reaches runs whatever an earlier one did;
         // the first failure propagates once they all have.
-        let mut first = None;
+        let mut first = FirstPanic::new();
         let result = self.deliver_admitted_key(&id, event, &mut first);
-        if let Some(failure) = first {
-            failure.resume();
-        }
+        first.resume();
         result
     }
 
@@ -1098,7 +1097,7 @@ impl FocusManager {
         &self,
         id: &KeyId,
         event: &KeyEvent,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) -> KeyEventResult {
         let admission = loop {
             let unit = self.focused_unit();
@@ -1115,8 +1114,8 @@ impl FocusManager {
             // the key was cancelled before the new press is admitted, so the
             // new press belongs to wherever focus is once that settles, and
             // nothing the cancellation does to the ledger forgets it.
-            let failure = RoutePanic::capture(|| self.cancel_presses([press]));
-            RoutePanic::preserve_first(first, failure, "key cancellation");
+            let failure = caught(|| self.cancel_presses([press]));
+            keep_first(first, failure, "key cancellation");
         };
         match admission {
             Admission::Withheld => {
@@ -1138,8 +1137,8 @@ impl FocusManager {
                 // Focus moved to another unit while the key was held: the
                 // release is no key event here, and the press's path is told
                 // its key was cancelled.
-                let failure = RoutePanic::capture(|| self.cancel_presses([press]));
-                RoutePanic::preserve_first(first, failure, "key cancellation");
+                let failure = caught(|| self.cancel_presses([press]));
+                keep_first(first, failure, "key cancellation");
                 KeyEventResult::Ignored
             }
             Admission::Press | Admission::Continuation => {
@@ -1147,15 +1146,14 @@ impl FocusManager {
                     && *id != KeyId::PointerBack
                     && !key_ledger::is_modifier(&event.key)
                 {
-                    let failure =
-                        RoutePanic::capture(|| self.set_modality(InputModality::Keyboard));
-                    RoutePanic::preserve_first(first, failure, "input modality");
+                    let failure = caught(|| self.set_modality(InputModality::Keyboard));
+                    keep_first(first, failure, "input modality");
                 }
                 // The ledger is updated before any handler runs and rebound
                 // after, so a panicking handler leaves it describing the
                 // key-down it received.
                 let traversals = self.traversal_transitions.get();
-                match RoutePanic::try_run(|| self.walk_key_event(event)) {
+                match try_run(|| self.walk_key_event(event)) {
                     Ok(result) => {
                         if self.traversal_transitions.get() != traversals {
                             let unit = self.focused_unit();
@@ -1167,7 +1165,7 @@ impl FocusManager {
                         result
                     }
                     Err(walked) => {
-                        RoutePanic::preserve_first(first, Some(walked), "key event");
+                        keep_first(first, walked, "key event");
                         KeyEventResult::Ignored
                     }
                 }
@@ -1190,7 +1188,7 @@ impl FocusManager {
     /// cancelled, while that node is still in this tree. Every handler runs
     /// even after one panics; the first panic propagates once all have run.
     fn cancel_presses(&self, presses: impl IntoIterator<Item = HeldPress>) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for press in presses {
             let Some(origin) = press.leaf.as_ref().and_then(Weak::upgrade) else {
                 continue;
@@ -1199,13 +1197,11 @@ impl FocusManager {
                 continue;
             }
             for node in std::iter::once(Rc::clone(&origin)).chain(origin.ancestors()) {
-                let failure = RoutePanic::capture(|| node.handle_key_cancel(&press.event));
-                RoutePanic::preserve_first(&mut first, failure, "key cancellation");
+                let failure = caught(|| node.handle_key_cancel(&press.event));
+                keep_first(&mut first, failure, "key cancellation");
             }
         }
-        if let Some(failure) = first {
-            failure.resume();
-        }
+        first.resume();
     }
 
     fn walk_key_event(&self, event: &KeyEvent) -> KeyEventResult {

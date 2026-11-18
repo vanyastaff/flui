@@ -5,12 +5,13 @@ use super::{
     contact::{ArenaMembership, ContactEnd, ContactId, PrimaryContact},
     recognizer::{CancelOutcome, GestureRecognizer},
 };
+use crate::containment::keep_first;
 use crate::events::PointerButton;
 use crate::gesture::details::{TapDownDetails, TapUpDetails};
 use crate::gesture::observer::GestureContest;
 use crate::ids::PointerId;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
@@ -687,9 +688,9 @@ impl GestureRecognizer for TapGestureRecognizer {
             return CancelOutcome::Idle;
         }
         let incoming = std::thread::panicking();
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for sequence in live {
-            let candidate = RoutePanic::capture(|| {
+            let candidate = caught(|| {
                 invoke_callback(
                     self.callbacks.cancel_after_down(&sequence),
                     || {
@@ -705,7 +706,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                     },
                 );
             });
-            RoutePanic::preserve_first(&mut first, candidate, "tap cancellation");
+            keep_first(&mut first, candidate, "tap cancellation");
         }
         finish_containment(first, incoming);
         CancelOutcome::Cancelled

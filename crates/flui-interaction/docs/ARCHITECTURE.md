@@ -12,7 +12,7 @@ the common ones.
 | Layer | Module | One-paragraph description |
 |---|---|---|
 | 0 | `events`, `ids` | The owned input vocabulary and identities. |
-| 1 | `close`, `containment` | `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
+| 1 | `close`, `containment` | `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` runs a synchronous dispatch phase under `caught` or `try_run`; its phases fold their failures into one `FirstPanic`, resumed once mandatory cleanup finishes. |
 | 2 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | 2 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
 | 2 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, `ClipboardHandle`, and what a widget's text store is built from (`LockArbiter`, `CompositionLedger`, `EditGeneration`). |

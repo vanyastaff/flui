@@ -364,7 +364,7 @@ impl MediaQuery {
     /// The frame of the soft keyboard floating over the window (an iPad's
     /// floating, undocked or split keyboard), in logical pixels in the
     /// window's content coordinates; `None` while no keyboard floats or no
-    /// ancestor publishes one (ADR-0372). A floating keyboard covers no edge,
+    /// ancestor publishes one (ADR-0373). A floating keyboard covers no edge,
     /// so it is not in [`view_insets_of`](Self::view_insets_of): a widget that
     /// must stay in view (a focused field, a toolbar) reads this and moves out
     /// from under the frame.
@@ -460,7 +460,7 @@ impl_inherited_view!(MediaQuery);
 // The soft keyboard floating over the window.
 
 /// The soft keyboard floating over the window, a value published to a
-/// subtree (ADR-0322 §5, ADR-0372): its frame in logical pixels in the
+/// subtree (ADR-0322 §5, ADR-0373): its frame in logical pixels in the
 /// window's content coordinates.
 ///
 /// The runtime publishes one from each window's root while a keyboard floats

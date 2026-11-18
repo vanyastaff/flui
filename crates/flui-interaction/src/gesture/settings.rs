@@ -462,7 +462,7 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 /// Every slop, ratio and velocity is finite and not negative, and the
 /// minimum fling velocity never exceeds the maximum. These invariants hold
 /// for every value of the type: the built-in profiles satisfy them, and
-/// [`Self::try_new`] and the `try_with_*` builders reject a value that would
+/// [`Self::try_from_values`] and the `try_with_*` builders reject a value that would
 /// break one with a [`GestureSettingsError`] instead of storing it.
 ///
 /// # Example
