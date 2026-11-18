@@ -204,7 +204,6 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
-| A pull request that edits an expectation (a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | `xtask unmounted-tests` (in `xtask checks`; ADR-0371 §3) |
 | No two records in `docs/adr/` share a number | `xtask adr-numbers` (in `xtask checks`; ADR-0371 §3) |
@@ -311,11 +310,11 @@ with an answer you can point to in the code; the reviewers ask the same ones.
 13. **Replaced forms.** What does the diff replace or reverse? Name the old form, `rg` it across
     code and documents, and point to zero users left, or to the deprecation and its
     `docs/gaps.md` entry. Does any new line use a form from the "Not" column of "Current forms"?
-14. **Expectations.** `cargo xtask expectations` lists what the diff edits of what the checks
-    compare against: a changed `*.stderr`, `*.snap` or protocol schema, a raised perf baseline,
-    fewer tests, a new `#[ignore]`, a new `deny.toml` or `typos.toml` value. For each, was the old expectation wrong, or is the code?
-    An expectation moved to turn a check green is the defect the check was there to find. The
-    pull request's body names each path under `## Expectations` with that answer (ADR-0331).
+14. **Expectations.** What does the diff change of what the checks compare against: a changed
+    `*.stderr`, `*.snap` or protocol schema, a raised perf baseline, fewer tests, a new
+    `#[ignore]`, a new `deny.toml` or `typos.toml` value? For each, was the old expectation
+    wrong, or is the code? An expectation moved to turn a check green is the defect the check was
+    there to find. The pull request's body says why for each.
 
 ## Before a merge
 
@@ -325,9 +324,8 @@ answered by the reasoning that wrote the code. Before the merge, a reviewer that
 the change reads it to break it:
 
 - **A fresh context.** A subagent or a separate session that has seen none of the author's
-  conversation. It gets the diff against the merge base, the list `cargo xtask expectations`
-  prints and the checkout; not the plan, not the PR body, not the author's account of why the
-  change is right.
+  conversation. It gets the diff against the merge base and the checkout; not the plan, not the
+  PR body, not the author's account of why the change is right.
 - **One job.** It assumes the change has a defect and looks for the input, the order of events
   or the state that shows it, in the code around the diff as much as in the changed lines,
   working from "Recurring defects", "Before each push" and "Review guidelines". It does not fix,
@@ -363,8 +361,8 @@ Review. Report defects with a concrete failure scenario, and code an experienced
 would be embarrassed by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
-- an edited expectation (the list `cargo xtask expectations` prints) whose line under
-  `## Expectations` in the PR body does not say why the old one was wrong: a snapshot
+- an edited expectation (a snapshot, a trybuild `*.stderr`, a removed test, a raised baseline)
+  the PR body does not justify by saying why the old one was wrong: a snapshot
   regenerated, a test removed or a baseline raised because the check was red;
 - a stub in place of the behaviour: an empty body, a default return, a test that returns before
   its assertion;
