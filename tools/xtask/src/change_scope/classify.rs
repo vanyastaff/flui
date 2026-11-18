@@ -26,7 +26,6 @@ use regex::Regex;
 use serde::Deserialize;
 
 use super::aggregator::WIDE_CONDITION;
-use super::{diagnostics, miri_scope, perf_scope, thread_positions, without_agent_scope};
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -302,19 +301,7 @@ impl Package {
             .and_then(serde_json::Value::as_bool)
             != Some(false)
     }
-
-    /// The directory of the package's manifest, repo-relative and
-    /// `/`-separated, `""` for the root package.
-    pub(super) fn dir(&self, root: &Path) -> String {
-        let dir = self
-            .manifest_path
-            .parent()
-            .and_then(|d| relative(d, root))
-            .unwrap_or_default();
-        if dir == "." { String::new() } else { dir }
-    }
 }
-
 /// A declared dependency of a workspace package.
 #[derive(Debug, Deserialize)]
 pub(super) struct Dependency {
@@ -551,19 +538,6 @@ impl Repo {
         String::from_utf8(out.stdout).context("non-UTF-8 `git` output")
     }
 
-    /// The added and removed lines of the Rust files changed since the merge
-    /// base with `base` (with `worktree`, uncommitted work too), as a unified
-    /// diff with no context.
-    pub(super) fn changed_lines(&self, base: &str, worktree: bool) -> anyhow::Result<String> {
-        let merge_base = self.git(&["merge-base", base, "HEAD"])?;
-        let range = format!("{}..HEAD", merge_base.trim());
-        let mut diff = self.git(&["diff", "-U0", "--no-renames", &range, "--", "*.rs"])?;
-        if worktree {
-            diff.push_str(&self.git(&["diff", "-U0", "--no-renames", "HEAD", "--", "*.rs"])?);
-        }
-        Ok(diff)
-    }
-
     /// The files changed since the merge base with `base`, plus (with
     /// `worktree`) staged, unstaged and untracked work, for `cargo xtask affected --worktree`.
     pub(super) fn changed_files(&self, base: &str, worktree: bool) -> anyhow::Result<Vec<String>> {
@@ -608,32 +582,10 @@ impl Mode {
 #[derive(Debug, Clone)]
 pub(super) struct Scope {
     pub(super) mode: Mode,
-    /// The whole scope, sorted: seeds plus their transitive dependents.
+    /// The whole scope, sorted: the packages a changed file belongs to plus
+    /// their transitive dependents.
     pub(super) packages: Vec<String>,
-    /// The packages a changed file belongs to.
-    pub(super) seeds: Vec<String>,
-    /// Packages whose `Cargo.toml` changed.
-    pub(super) manifests: Vec<String>,
     pub(super) heavy_required: bool,
-    /// The changed file that can change a trybuild expectation, if any
-    /// ([`diagnostics::changed_input`]): a pull request then runs the suites.
-    pub(super) trybuild_input: Option<String>,
-    /// The changed file that can move a size `perf --size` holds, if any
-    /// ([`crate::perf::size::changed_input`]): a pull request then runs `size`.
-    pub(super) size_input: Option<String>,
-    /// The changed file that can change what `send-positions` reports, if any
-    /// ([`thread_positions::changed_position`]): a pull request then runs it.
-    pub(super) send_positions_input: Option<String>,
-    /// The changed file that can change what the `miri` job finds, if any
-    /// ([`miri_scope::changed_input`]): a pull request then runs it.
-    pub(super) miri_input: Option<String>,
-    /// The changed file that can move a count the `perf-gates` job compares,
-    /// if any ([`perf_scope::changed_input`]): a pull request then runs it.
-    pub(super) perf_input: Option<String>,
-    /// The changed file the `test-without-agent` job compiles its tests from, if
-    /// any ([`without_agent_scope::changed_input`]): a pull request then runs
-    /// it.
-    pub(super) without_agent_input: Option<String>,
     pub(super) reason: String,
 }
 
@@ -642,15 +594,7 @@ impl Scope {
         Self {
             mode,
             packages: Vec::new(),
-            seeds: Vec::new(),
-            manifests: Vec::new(),
             heavy_required: false,
-            trybuild_input: None,
-            size_input: None,
-            send_positions_input: None,
-            miri_input: None,
-            perf_input: None,
-            without_agent_input: None,
             reason,
         }
     }
@@ -665,51 +609,21 @@ fn first_five(files: &[&str]) -> String {
     files.iter().take(5).copied().collect::<Vec<_>>().join(", ")
 }
 
-/// Classifies the changed `files` (repo-relative, `/`-separated), reading the
-/// current text of each for the messages it holds.
+/// Classifies the changed `files` (repo-relative, `/`-separated).
 pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
-    classify_change(repo, files, None)
+    classify_packages(repo, files)
 }
 
-/// [`classify`], with the added and removed lines of the change as a unified
-/// diff (`changed_lines`) when there is one: a message the change removes
-/// counts as much as one it adds.
-pub(super) fn classify_change(
-    repo: &Repo,
-    files: &[String],
-    changed_lines: Option<&str>,
-) -> anyhow::Result<Scope> {
-    let mut scope = classify_packages(repo, files)?;
-    if scope.mode == Mode::Full && !files.is_empty() {
-        // a workspace-wide input (Cargo.lock, ci.yml) beside a crate's change
-        // still names that crate: the per-feature pass runs over it
-        let owners = owners(repo.workspace()?, files);
-        scope.seeds = owners.seeds.into_iter().collect();
-        scope.manifests = owners.manifests.into_iter().collect();
-    }
-    scope.trybuild_input =
-        diagnostics::changed_input(repo, files, changed_lines)?.map(str::to_owned);
-    scope.size_input = crate::perf::size::changed_input(files).map(str::to_owned);
-    scope.send_positions_input =
-        thread_positions::changed_position(repo, files, changed_lines)?.map(str::to_owned);
-    scope.miri_input = miri_scope::changed_input(files).map(str::to_owned);
-    scope.perf_input = perf_scope::changed_input(files).map(str::to_owned);
-    scope.without_agent_input = without_agent_scope::changed_input(files).map(str::to_owned);
-    Ok(scope)
-}
-
-/// The packages the changed code files belong to, the ones whose manifest
-/// changed, and the code files no package owns.
+/// The packages the changed code files belong to and the code files no
+/// package owns.
 struct Owners<'f> {
     seeds: BTreeSet<String>,
-    manifests: BTreeSet<String>,
     unknown: Vec<&'f str>,
 }
 
 fn owners<'f>(ws: &Workspace, files: &'f [String]) -> Owners<'f> {
     let mut owners = Owners {
         seeds: BTreeSet::new(),
-        manifests: BTreeSet::new(),
         unknown: Vec::new(),
     };
     for f in files.iter().map(String::as_str) {
@@ -719,9 +633,6 @@ fn owners<'f>(ws: &Workspace, files: &'f [String]) -> Owners<'f> {
         match ws.owning_package(f) {
             Some(pkg) => {
                 owners.seeds.insert(pkg.to_owned());
-                if f == "Cargo.toml" || f.ends_with("/Cargo.toml") {
-                    owners.manifests.insert(pkg.to_owned());
-                }
             }
             None => owners.unknown.push(f),
         }
@@ -778,11 +689,7 @@ fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         ));
     }
     let ws = repo.workspace()?;
-    let Owners {
-        seeds,
-        manifests,
-        unknown,
-    } = owners(ws, files);
+    let Owners { seeds, unknown } = owners(ws, files);
     if !unknown.is_empty() {
         let reason = format!(
             "no package owns: {} (conservatively: everything)",
@@ -806,15 +713,7 @@ fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     Ok(Scope {
         mode: Mode::Packages,
         packages: scope.into_iter().collect(),
-        seeds: seed_list,
-        manifests: manifests.into_iter().collect(),
         heavy_required: false,
-        trybuild_input: None,
-        size_input: None,
-        send_positions_input: None,
-        miri_input: None,
-        perf_input: None,
-        without_agent_input: None,
         reason,
     })
 }
@@ -1035,10 +934,11 @@ pub(super) mod tests {
         // docs/gaps.md or the parity render alone runs flui-native's test that reads it
         for doc in ["docs/gaps.md", "docs/platform-parity.md"] {
             let s = scope(&[doc]);
-            assert_eq!(
-                (s.mode, s.seeds),
-                (Mode::Packages, vec!["flui-native".to_owned()]),
-                "{doc}"
+            assert_eq!(s.mode, Mode::Packages, "{doc}");
+            assert!(
+                s.reason.starts_with("changed: flui-native;"),
+                "{doc}: {}",
+                s.reason
             );
         }
         // beside other documentation it still compiles
@@ -1113,13 +1013,6 @@ pub(super) mod tests {
         assert_eq!(
             (s.mode, s.packages),
             (Mode::Packages, vec!["flui-web-demo".to_owned()])
-        );
-    }
-
-    fn a_changed_manifest_is_reported() {
-        assert_eq!(
-            scope(&["packages/flui-material/Cargo.toml"]).manifests,
-            ["flui-material"]
         );
     }
 
@@ -1243,10 +1136,6 @@ pub(super) mod tests {
                 (
                     "root_package_owns_its_targets_directories",
                     root_package_owns_its_targets_directories as fn(),
-                ),
-                (
-                    "a_changed_manifest_is_reported",
-                    a_changed_manifest_is_reported as fn(),
                 ),
                 (
                     "a_move_puts_both_crates_in_scope",

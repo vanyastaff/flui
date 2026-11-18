@@ -24,7 +24,7 @@ tried, when no reviewer could be started.
 
 ## Architecture
 
-- [ ] No new `edge-exceptions`, `reach-exceptions` or allowlist entry without the ADR that removes it
+- [ ] No new `edge-exceptions` or `reach-exceptions` entry without the ADR that removes it
 - [ ] No new lock on per-node render state, no capability acquired outside lifecycle hooks (AGENTS.md)
 - [ ] New dependencies are declared through workspace dependencies when shared
 
