@@ -187,76 +187,6 @@ fn a_switch_tracks_activity_after_hopping_to_a_live_source() {
 }
 
 #[cfg(feature = "serde")]
-fn admission_error_wire_values() {
-    use flui_animation::{AnimationError, AnimationInput, RangeDefect};
-
-    let controller = AnimationController::builder(Duration::from_secs(1))
-        .unbounded()
-        .build();
-    for (error, expected) in [
-        (
-            controller
-                .animate_to(f64::NAN, None)
-                .expect_err("NaN target"),
-            serde_json::json!({"NonFiniteInput": {"input": "Target", "value": "NaN"}}),
-        ),
-        (
-            controller.forward().expect_err("missing upper endpoint"),
-            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "Infinity"}}),
-        ),
-        (
-            controller.reverse().expect_err("missing lower endpoint"),
-            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "-Infinity"}}),
-        ),
-    ] {
-        let wire = serde_json::to_value(&error).expect("serialize refused admission");
-        let decoded: AnimationError =
-            serde_json::from_value(wire.clone()).expect("decode refused admission");
-        assert_eq!(wire, expected);
-        match decoded {
-            AnimationError::NonFiniteInput { input, value } => {
-                assert_eq!(input, AnimationInput::Target);
-                assert!(value.is_nan());
-            }
-            AnimationError::UnboundedTarget { input, value } => {
-                assert_eq!(input, AnimationInput::Target);
-                assert!(value.is_infinite());
-                assert_eq!(
-                    value.is_sign_negative(),
-                    expected["UnboundedTarget"]["value"] == "-Infinity"
-                );
-            }
-            other => panic!("unexpected decoded refusal: {other:?}"),
-        }
-    }
-    let error = controller
-        .repeat(flui_animation::RepeatMode::Restart)
-        .expect_err("no finite range to repeat inside");
-    let wire = serde_json::to_value(&error).expect("serialize repeat refusal");
-    assert_eq!(wire["InvalidRepeatRange"]["min"], "-Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["max"], "Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["lower"], "-Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["upper"], "Infinity");
-    assert!(matches!(
-        serde_json::from_value::<AnimationError>(wire).expect("decode repeat refusal"),
-        AnimationError::InvalidRepeatRange { min, max, defect: RangeDefect::NonFinite, .. }
-            if min == f64::NEG_INFINITY && max == f64::INFINITY
-    ));
-    for rejected in [
-        serde_json::Value::Null,
-        serde_json::json!("nan"),
-        serde_json::json!("1.0"),
-    ] {
-        assert!(
-            serde_json::from_value::<AnimationError>(serde_json::json!({
-                "NonFiniteInput": {"input": "Target", "value": rejected}
-            }))
-            .is_err()
-        );
-    }
-}
-
-#[cfg(feature = "serde")]
 fn directional_phase_wire_names() {
     for (phase, wire) in [
         (AnimationStatus::Forward, "\"Forward\""),
@@ -309,7 +239,7 @@ fn curved_run_never_publishes_a_non_finite_value() {
         sink.lock().expect("published values").push(reader.value());
     }));
     let _run = controller
-        .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(NanInTheMiddle))
+        .animate_to_curved(1.0, Some(Duration::from_secs(1)), NanInTheMiddle)
         .expect("curved run");
 
     controller.tick_at(std::time::Duration::from_secs_f64(0.2));
@@ -334,7 +264,7 @@ fn overshooting_curve_stays_within_bounds() {
     for (curve, bound) in [(1.5, 1.0), (-0.5, 0.0)] {
         let controller = controller();
         let _run = controller
-            .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(Constant(curve)))
+            .animate_to_curved(1.0, Some(Duration::from_secs(1)), Constant(curve))
             .expect("curved run");
         controller.tick_at(std::time::Duration::from_secs_f64(0.5));
         assert_eq!(
@@ -1000,8 +930,6 @@ fn controller_robustness_contract() {
             "explicit finish refuses unknown endpoints atomically",
             explicit_finish_refuses_an_undeclared_endpoint_without_sampling,
         ),
-        #[cfg(feature = "serde")]
-        ("admission error wire values", admission_error_wire_values),
         #[cfg(feature = "serde")]
         ("directional phase wire names", directional_phase_wire_names),
         (

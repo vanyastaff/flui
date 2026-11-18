@@ -1221,7 +1221,7 @@ The error enums are `#[non_exhaustive]`; outcomes can clone their causes. Typed
 refusals commit no run change, and diagnostics run after borrows end. The public
 `typed_refusals_preserve_the_original_run` case checks exact input kinds and
 values, bounded infinity clamping, unchanged samples and original-future delivery.
-ADR-0198 records migration and optional serde limits.
+ADR-0198 records the migration; error types carry no serde implementation (ADR-0380).
 
 ## Memory Management
 

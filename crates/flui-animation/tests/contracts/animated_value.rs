@@ -187,20 +187,6 @@ fn refused_threshold<const CASE: usize>() {
     let error = owner
         .retarget(InvalidThreshold(2.0), spring)
         .expect_err("invalid rest threshold");
-    #[cfg(feature = "serde")]
-    {
-        let wire = serde_json::to_value(&error).expect("serialize component cause");
-        let decoded: AnimationError =
-            serde_json::from_value(wire.clone()).expect("decode component cause");
-        let source = &wire["ComponentSimulation"]["source"];
-        if CASE < 2 {
-            let finite = [serde_json::json!(0.0), serde_json::json!(-1.0)][CASE].clone();
-            assert_eq!(source["OutOfRange"]["value"], finite);
-        } else {
-            assert_eq!(source["NonFinite"]["parameter"], "Distance");
-        }
-        assert!(threshold_refusal::<CASE>(&decoded));
-    }
     assert!(threshold_refusal::<CASE>(&error));
     assert!(old.is_pending(), "refusal cannot cancel accepted motion");
     assert_eq!((owner.value().0, owner.velocity()), seam);
