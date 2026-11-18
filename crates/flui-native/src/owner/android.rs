@@ -160,7 +160,7 @@ mod hooks {
             &self,
             app: &AndroidApp,
             event: &android_activity::input::MotionEvent<'_>,
-            scale: f64,
+            scale: flui_foundation::geometry::DevicePixelRatio,
         ) -> Vec<PlatformInput>;
 
         /// Whether `event` is a hover of TalkBack's explore by touch: its

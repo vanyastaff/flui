@@ -6,7 +6,7 @@
 //! so the registry's native recording holds the turn as one row and replays
 //! it on any host.
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{DevicePixelRatio, Point};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
@@ -44,7 +44,7 @@ pub struct WheelReading {
     /// The cursor, in device pixels of the window's client area.
     pub position: (f64, f64),
     /// Device pixels per logical pixel.
-    pub scale: f64,
+    pub scale: DevicePixelRatio,
     /// When the message was generated, already on the event timeline.
     pub time: EventTime,
     /// The modifiers held.
@@ -53,7 +53,7 @@ pub struct WheelReading {
 
 impl ContactRegistry {
     /// The scroll `reading` delivers under the primary mouse, or `None` when
-    /// its position or scale is not a finite point.
+    /// its position is not a finite point.
     ///
     /// A distance that is not a whole number of detents is
     /// [`ScrollPrecision::Precise`]: it shows a finer device. A whole one is
@@ -63,11 +63,9 @@ impl ContactRegistry {
     pub fn wheel(&self, reading: &WheelReading) -> Option<PlatformInput> {
         journal!(self.journal, super::capture::Captured::Wheel(reading));
         let scale = reading.scale;
-        if !scale.is_finite() || scale <= 0.0 {
-            return None;
-        }
         let (x, y) = reading.position;
-        let position = PointerPosition::try_new(Point::new(x / scale, y / scale)).ok()?;
+        let position =
+            PointerPosition::try_new(Point::new(scale.to_logical(x), scale.to_logical(y))).ok()?;
         // Win32 signs the vertical wheel turned away from the user, toward
         // earlier content, and the horizontal one tilted right.
         let steps = DetentSteps::new(i32::from(reading.distance));

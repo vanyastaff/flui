@@ -127,6 +127,16 @@ pub enum CodecError {
         /// What was refused.
         what: String,
     },
+    /// Line `line` holds a device pixel ratio no screen has (zero, negative,
+    /// or outside `DevicePixelRatio::MIN..=MAX`): a reading's scale, a
+    /// display's scale factor, a window's or the system's pixel ratio.
+    #[error("line {line} holds a device pixel ratio no screen has: {ratio}")]
+    Ratio {
+        /// The 1-based line.
+        line: u64,
+        /// The ratio the row holds.
+        ratio: f64,
+    },
     /// Line `line` reads a device the header does not declare with that kind.
     #[error("line {line} reads device {device} as a kind the header does not declare")]
     UndeclaredDevice {
@@ -1247,6 +1257,8 @@ pub(super) enum DtoError {
     /// The schema has a variant this codec does not read.
     UnknownSpelling(String),
     Invalid(String),
+    /// A device pixel ratio no screen has.
+    Ratio(f64),
     /// This crate has a variant the schema does not mirror.
     Unmirrored(&'static str),
 }
@@ -1256,6 +1268,7 @@ impl DtoError {
         match self {
             Self::UnknownSpelling(tag) => CodecError::UnknownVariant { line, tag },
             Self::Invalid(what) => CodecError::Invalid { line, what },
+            Self::Ratio(ratio) => CodecError::Ratio { line, ratio },
             Self::Unmirrored(what) => CodecError::Unmirrored { line, what },
         }
     }
@@ -1265,6 +1278,13 @@ pub(super) type DtoResult<T> = Result<T, DtoError>;
 
 pub(super) fn invalid(what: impl Into<String>) -> DtoError {
     DtoError::Invalid(what.into())
+}
+
+/// The device pixel ratio a row holds, checked as the host checks the number
+/// it reads: a recording is untrusted input, so a ratio no screen has is
+/// refused here rather than carried into a reading or a display.
+pub(super) fn ratio(value: f64) -> DtoResult<DevicePixelRatio> {
+    DevicePixelRatio::try_new(value).ok_or(DtoError::Ratio(value))
 }
 
 /// A schema variant this codec does not read, by its spelling.
@@ -1706,7 +1726,7 @@ fn frame_to_wire(frame: &TouchpadFrame) -> DtoResult<wire::Frame> {
         time: time_to_wire(frame.time.coarse),
         counter: frame.time.counter.map(|count| count.0),
         position: [frame.position.0, frame.position.1],
-        scale: frame.scale,
+        scale: frame.scale.get(),
         modifiers: modifiers_to_wire(frame.modifiers)?,
     })
 }
@@ -1718,7 +1738,7 @@ fn frame_from_wire(frame: wire::Frame) -> DtoResult<TouchpadFrame> {
             counter: frame.counter.map(QpcTicks),
         },
         position: (frame.position[0], frame.position[1]),
-        scale: frame.scale,
+        scale: ratio(frame.scale)?,
         modifiers: modifiers_from_wire(&frame.modifiers)?,
     })
 }
@@ -1731,7 +1751,7 @@ fn wheel_to_wire(reading: &WheelReading) -> DtoResult<wire::Wheel> {
         },
         distance: reading.distance,
         position: [reading.position.0, reading.position.1],
-        scale: reading.scale,
+        scale: reading.scale.get(),
         time_ns: nanos(reading.time),
         modifiers: modifiers_to_wire(reading.modifiers)?,
     })
@@ -1746,7 +1766,7 @@ fn wheel_from_wire(wheel: wire::Wheel) -> DtoResult<WheelReading> {
         },
         distance: wheel.distance,
         position: (wheel.position[0], wheel.position[1]),
-        scale: wheel.scale,
+        scale: ratio(wheel.scale)?,
         time: EventTime::from_nanos(wheel.time_ns),
         modifiers: modifiers_from_wire(&wheel.modifiers)?,
     })
@@ -1767,7 +1787,7 @@ fn reading_to_wire(reading: &NativeReading) -> DtoResult<wire::Reading> {
         time: time_to_wire(reading.time.coarse),
         counter: reading.time.counter.map(|count| count.0),
         position: reading.position.map(|point| [point.x, point.y]),
-        scale: reading.scale,
+        scale: reading.scale.get(),
         pressure: sensors.pressure,
         tangential_pressure: sensors.tangential_pressure,
         angles: sensors.angles.map(angles_to_wire),
@@ -1796,7 +1816,7 @@ fn reading_from_wire(dto: wire::Reading) -> DtoResult<NativeReading> {
         twist_degrees: dto.twist_degrees,
         contact_size: dto.contact_size.map(|[width, height]| (width, height)),
     });
-    reading.scale = dto.scale;
+    reading.scale = ratio(dto.scale)?;
     reading.position = dto.position.map(|[x, y]| RawPoint { x, y });
     reading.primary = dto.primary;
     if let Some(device) = dto.device {
@@ -2300,8 +2320,7 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
                 .map_err(|error| invalid(format!("refresh period {nanos} ns: {error}")))
         })
         .transpose()?;
-    let scale_factor = DevicePixelRatio::try_new(scale_factor)
-        .ok_or_else(|| invalid(format!("scale factor {scale_factor}")))?;
+    let scale_factor = ratio(scale_factor)?;
     Ok(RecordedDisplay {
         label,
         parts: DisplayParts {
@@ -2616,6 +2635,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
     let metrics = metrics
         .map(|wire::WindowMetrics { physical, scale }| {
             let [width, height] = physical;
+            let scale = ratio(scale)?.get();
             WindowMetrics::try_new(Size::new(width, height), scale)
                 .map_err(|error| invalid(format!("metrics {width}x{height} at {scale}: {error}")))
         })

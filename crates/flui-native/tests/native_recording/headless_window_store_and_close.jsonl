@@ -1,4 +1,4 @@
-{"flui_native_recording":3,"backend":"headless","stream":"window","provenance":"hand-written: a composition an input method makes in the focused store, a reconversion read, then a vetoed and a granted close","devices":[]}
+{"flui_native_recording":4,"backend":"headless","stream":"window","provenance":"hand-written: a composition an input method makes in the focused store, a reconversion read, then a vetoed and a granted close","devices":[]}
 {"row":"store_focus","focus":{"store":1,"status":{"single_line":true,"enter_action":"default","correction":"autocorrect"}}}
 {"row":"store_lock","lock":{"store":1,"kind":"read_write","opened":{"text":"ab","selection":[2,2]},"steps":[{"call":"selection","selection":[2,2]},{"call":"replace","range":[2,2],"text":"か","change":[2,2,3]},{"call":"set_composition","composition":{"range":[2,3]}},{"call":"set_selection","selection":[3,3]}]}}
 {"row":"store_lock","lock":{"store":1,"kind":"read","steps":[{"call":"text","range":[0,3],"text":"abか"},{"call":"composition","composition":{"range":[2,3]}},{"call":"index_at_point","point":[25.0,10.0],"round_to_nearest_edge":true,"index":3}]}}

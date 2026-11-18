@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
@@ -1060,7 +1060,7 @@ fn decode_reading(
         action,
         ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
     )
-    .at_device(10.0, 10.0, 1.0);
+    .at_device(10.0, 10.0, DevicePixelRatio::ONE);
     if let Some(device) = device {
         reading = reading.from_device(device);
     }

@@ -732,6 +732,13 @@ trait depends on `flui-platform` instead.
   from the base ratio, so a display's bounds and scale agree
   (`a_scale_no_screen_has_reads_as_the_base_ratio`). A ratio an application
   hands the runtime is refused typed (`UiRuntimeError::PixelRatio`).
+  A pointer reading carries its window's ratio in that type
+  (`NativeReading::scale`, and a wheel's and a touchpad frame's), so the
+  assembly never meets a scale no screen has; a native recording holds the
+  number, and its codec refuses one no screen has on read, as it does a
+  display's scale factor and a window's or the system's pixel ratio
+  (`CodecError::Ratio`,
+  `a_ratio_no_screen_has_is_refused_where_a_recording_holds_it`).
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate

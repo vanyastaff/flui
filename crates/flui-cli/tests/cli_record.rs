@@ -303,7 +303,7 @@ fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
 
     let mut peer = Peer::accept(&listener);
     assert_eq!(started(&mut peer), json!({ "layers": ["input", "native"] }));
-    let registry = json!({ "flui_native_recording": 3, "backend": "x11" });
+    let registry = json!({ "flui_native_recording": 4, "backend": "x11" });
     let add = json!({ "row": "add_device", "device": 1, "kind": "mouse", "time_ns": 51 });
     let gap = json!({ "gap": { "rows": 3 } });
     peer.send(&native(7, 0, &json!({ "header": registry })));
@@ -311,7 +311,7 @@ fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
         7,
         1,
         &json!({ "header": {
-        "flui_native_recording": 3, "backend": "x11", "stream": "app",
+        "flui_native_recording": 4, "backend": "x11", "stream": "app",
     } }),
     ));
     peer.send(&native(7, 0, &json!({ "row": add })));
@@ -341,7 +341,7 @@ fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
     assert_eq!(lines.len(), 5, "{text}");
     assert_eq!(
         lines[0],
-        json!({ "flui_native_recording": 3, "backend": "x11", "devices": [
+        json!({ "flui_native_recording": 4, "backend": "x11", "devices": [
             { "device": 1, "kinds": ["mouse"] },
             { "device": 2, "kinds": ["pen"] },
         ] })

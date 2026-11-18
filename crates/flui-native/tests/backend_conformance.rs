@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{DevicePixelRatio, Point};
 use flui_native::haptics::degradation::{
     AndroidHapticsApi, AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform,
     WebVibration, android_feedback, android_pattern, ios_feedback, ios_pattern, macos_feedback,
@@ -917,7 +917,7 @@ impl SharedAssembly {
         };
         let mut reading =
             NativeReading::new(NativeContact(label), step.kind, action, self.time(step.at))
-                .at_device(x, y, 1.0);
+                .at_device(x, y, DevicePixelRatio::ONE);
         if let Some(device) = step.device
             && self.profile.names_devices
             && !self.faulty(Fault::NoDevice)
@@ -1057,7 +1057,7 @@ impl SharedAssembly {
         if self.faulty(Fault::FrozenFocal) && phase != GesturePhase::Began {
             reading
         } else {
-            reading.at_device(step.x, step.y, 1.0)
+            reading.at_device(step.x, step.y, DevicePixelRatio::ONE)
         }
     }
 
@@ -1746,7 +1746,11 @@ impl BackendUnderTest for X11Decoder {
                         .map(|(_, input)| input),
                 ),
                 X11Reading::Event(event) => {
-                    inputs.extend(self.pointers.event(NativeSurface(1), 1.0, &event).inputs);
+                    inputs.extend(
+                        self.pointers
+                            .event(NativeSurface(1), DevicePixelRatio::ONE, &event)
+                            .inputs,
+                    );
                 }
                 X11Reading::Composition(step) => self.ime.apply(step),
                 X11Reading::FocusOut(time) => inputs.extend(self.pointers.cancel_surface(

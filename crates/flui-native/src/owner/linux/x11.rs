@@ -83,6 +83,7 @@ use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{Cursor, CursorError, CursorGrab, PlatformFailure};
 use std::sync::{Arc, Weak};
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_foundation::panic::FirstPanic;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
@@ -767,18 +768,19 @@ pub(crate) struct WindowScale(Arc<AtomicU64>);
 
 impl WindowScale {
     /// A window at `scale`.
-    pub(crate) fn new(scale: f64) -> Self {
-        Self(Arc::new(AtomicU64::new(scale.to_bits())))
+    pub(crate) fn new(scale: DevicePixelRatio) -> Self {
+        Self(Arc::new(AtomicU64::new(scale.get().to_bits())))
     }
 
     /// The scale now.
-    pub(crate) fn get(&self) -> f64 {
-        f64::from_bits(self.0.load(Ordering::Acquire))
+    pub(crate) fn get(&self) -> DevicePixelRatio {
+        DevicePixelRatio::try_new(f64::from_bits(self.0.load(Ordering::Acquire)))
+            .expect("BUG: a window scale stores only the bits of a DevicePixelRatio")
     }
 
     /// The window is at `scale` now.
-    pub(crate) fn set(&self, scale: f64) {
-        self.0.store(scale.to_bits(), Ordering::Release);
+    pub(crate) fn set(&self, scale: DevicePixelRatio) {
+        self.0.store(scale.get().to_bits(), Ordering::Release);
     }
 }
 

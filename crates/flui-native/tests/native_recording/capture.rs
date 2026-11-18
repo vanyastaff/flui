@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_native::input::assembly::{
     ContactRegistry, NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
@@ -47,7 +48,7 @@ const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native_reco
 /// positions are compared at the pixel they were injected at.
 pub fn shape(recording: &NativeRecording) -> Vec<String> {
     fn in_device_pixels(reading: &mut NativeReading) {
-        reading.scale = 1.0;
+        reading.scale = DevicePixelRatio::ONE;
         if let Some(position) = &mut reading.position {
             position.x = position.x.round();
             position.y = position.y.round();
@@ -66,8 +67,10 @@ pub fn shape(recording: &NativeRecording) -> Vec<String> {
                     in_device_pixels(reading);
                 }
             }
-            Row::Viewport { frame, .. } | Row::ViewportAbandoned { frame } => frame.scale = 1.0,
-            Row::Wheel(reading) => reading.scale = 1.0,
+            Row::Viewport { frame, .. } | Row::ViewportAbandoned { frame } => {
+                frame.scale = DevicePixelRatio::ONE
+            }
+            Row::Wheel(reading) => reading.scale = DevicePixelRatio::ONE,
             // A scroll step is in logical pixels already, from its contact's
             // position: a rerun on the same device has the same scale.
             Row::Scroll(_)
@@ -301,7 +304,7 @@ fn touch(action: ReadingAction, ms: u64) -> NativeReading {
         action,
         ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
     )
-    .at_device(10.0, 20.0, 1.0)
+    .at_device(10.0, 20.0, DevicePixelRatio::ONE)
 }
 
 const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);
