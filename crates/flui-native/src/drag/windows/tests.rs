@@ -1175,7 +1175,14 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
     let in_loop = Arc::clone(&frames);
     let during = Rc::new(Cell::new(0));
     let measured = Rc::clone(&during);
+    let asked_to_end = Arc::clone(&release);
+    // OLE asks its drop source on any input the loop takes, the desktop's own
+    // included (a cursor clip's synthetic move): the drag goes on until the
+    // case releases it, and is measured then.
     let decide = move || {
+        if !asked_to_end.load(Ordering::Acquire) {
+            return S_OK;
+        }
         measured.set(in_loop.load(Ordering::Relaxed) - before);
         DRAGDROP_S_CANCEL
     };
@@ -1266,7 +1273,12 @@ fn work_from_another_thread_reaches_a_resting_drag_loop() {
     let turns_before = turns.get();
     let during = Rc::new(Cell::new((0, 0)));
     let measured = Rc::clone(&during);
+    let asked_to_end = Arc::clone(&release);
+    // As above: the drag goes on until the asking thread releases it.
     let decide = move || {
+        if !asked_to_end.load(Ordering::Acquire) {
+            return S_OK;
+        }
         measured.set((
             in_loop.load(Ordering::Relaxed) - before,
             turns_in_loop.get() - turns_before,
