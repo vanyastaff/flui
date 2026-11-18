@@ -5885,7 +5885,7 @@ GPU-память простаивающего или невидимого окн
   Тесты (`crates/flui-cli/src/build/ios_package.rs`): `the_info_plist_matches_its_golden`,
   `info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer`,
   `the_info_plist_registers_what_the_application_opens`. Прогон на iPad Simulator (указатель,
-  ориентации) — заметки строк parity `mouse-buttons-hover-capture` и `multiple-windows`.
+  ориентации) — заметки строк parity `mouse-buttons-hover-capture` и `orientation-lock`.
 - [x] **LY72** — #2121 (`8b154b514`). Окно UIKit слушает `keyboardWillChangeFrame:` и публикует
   inset в снимке, он доходит до `MediaQuery`. Правила те же, что у Android (`window/keyboard.rs`).
   Решено: `UIKeyboardLayoutGuide` не строится, уведомление уже несёт конечную рамку, длительность
