@@ -114,14 +114,10 @@ moves to a raster thread without changing a command or an answer.
 pub struct GpuContext {
     instance: wgpu::Instance,           // the one the owner's SurfaceFactory clones (§2)
     adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    domain: Arc<DeviceDomain>,          // ADR-0100; shared only with wgpu's device callbacks
-    pipelines: PipelineLibrary,         // keyed by (PipelineKey, wgpu::TextureFormat)
-    glyphs: TextAtlas,                  // ADR-0067, one per context
-    images: TextureCache,               // keyed by TextureKey, which pins the allocation
+    domain: Arc<DeviceDomain>,          // ADR-0100: device and queue, shared with wgpu's callbacks
+    painter: Option<WgpuPainter>,       // the shared content caches, taken for a frame
+    pipelines: Option<PipelineLibrary>, // a torn painter's library, kept for the next (§7)
     slots: SlotTable<SurfaceSlot>,      // §3
-    epoch: ContextEpoch,                // §7
     _one_mutator: PhantomData<Cell<()>>, // Send, !Sync
 }
 ```
@@ -146,6 +142,15 @@ pub struct GpuContext {
   (`crates/flui-engine/src/frame_protocol.rs:1-9`), its committed images (ADR-0100), its viewport,
   its `SurfaceGeneration` counter (§6) and its external textures, whose `TextureId`s each
   presentation's registry mints on its own (`crates/flui-layer/src/texture_registry.rs:103-113`).
+- **The content caches live in the one painter every slot shares.** The context keeps one
+  `WgpuPainter` (`crates/flui-engine/src/painter/mod.rs`) that holds the pipeline library, the
+  glyph atlas, the image cache, the path caches and the chunk recordings derived from them
+  (`crates/flui-engine/src/recording_cache.rs`). A frame takes the painter, is lent its slot's
+  external textures, and puts it back. Holding the caches and the recordings in one owner is
+  what keeps a recording from outliving the texels it names: whatever moves those texels
+  advances the recording cache's `ResourceEpoch` (ADR-0304 §9), and a painter that is dropped
+  takes its recordings with it. The headless renderer and the benches draw with a
+  `WgpuPainter` of their own, so the caches keep one owning form.
 - **The first format's pipelines are built while the first frame is.** The first slot to name a
   target format starts that format's `PipelineLibrary` on a worker thread
   (`crates/flui-engine/src/pipeline_warmup.rs`): a window slot at its attach, from the format its
@@ -423,12 +428,15 @@ executor runs each command under its own catch, in both placements.
   and later ones discarded under containment (ADR-0281). The owner reports it at the slot's address
   through `UiRuntime::report_contained_panic` (ADR-0258 §1), and the next attempt waits out
   ADR-0258 §6's backoff, so a panic on every frame costs one attempt per backoff interval.
-- The executor then rebuilds what a panic can tear and other slots share: the glyph atlas, the
-  image and path caches and the scratch pools; `ContextEpoch` advances. A slot's recording derived
-  from a shared cache carries the epoch it was derived under and is recorded again when the epoch
-  moved. The panicking slot redraws in full; a slot whose retained scene the panic tore is rebuilt
-  from the owner's next scene as ADR-0304 decides. The other slots keep their committed images,
-  which only a completed commit changes (ADR-0100).
+- The executor then drops the painter the frame unwound in, keeping only its pipeline library
+  (`GpuContext::keep_pipelines`), and the next frame builds a painter on that library. What a
+  panic can tear and other slots share goes with the dropped painter: the glyph atlas, the image
+  and path caches, the scratch pools and the chunk recordings derived from them, so no recording
+  outlives the caches it was derived from and none needs an epoch of the context's. A destructor
+  in that drop that panics too costs the library as well; the frame's panic stays the one the
+  slot's record gets. The panicking slot redraws in full; a slot whose retained scene the panic
+  tore is rebuilt from the owner's next scene as ADR-0304 decides. The other slots keep their
+  committed images, which only a completed commit changes (ADR-0100).
 - The pipeline library is kept: an entry is inserted after its pipeline is built
   (`pipeline_cache.rs:551-552`), so a panic leaves a complete entry or none.
 - A panic inside a submission quarantines the device domain, which is a device loss (ADR-0100;
@@ -712,8 +720,7 @@ the facade. Every production use of `with_backend` becomes:
     `a_corrupt_stored_pipeline_cache_is_emptied_and_the_context_starts_cold`,
     `a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter`,
     `a_saved_pipeline_cache_seeds_the_next_context`
-    and `a_device_rebuild_restarts_the_pipeline_cache_cold`;
-  - `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
+    and `a_device_rebuild_restarts_the_pipeline_cache_cold`.
 - Tests to be added through the public API, without a GPU, in `flui-engine`'s `tests/` against
   the testing backend: `a_full_lifecycle_queue_returns_the_command`,
   `a_stale_slot_id_is_refused_after_detach`,
@@ -737,6 +744,8 @@ the facade. Every production use of `with_backend` becomes:
   `stale_surface_generation_is_rejected_before_render`,
   `trims_coalesce_to_the_strongest_level_and_apply_before_the_frame`,
   `every_render_outcome_settles_its_frame`,
+  `a_slot_that_is_not_shown_settles_not_shown_and_redraws_in_full_when_shown` (a hidden slot is
+  not drawn, so no surface texture is acquired for it),
   `a_stopped_executor_settles_every_pending_frame_failed`,
   `a_full_settlement_ring_holds_the_next_frame`,
   `a_full_lifecycle_queue_returns_the_command` and
