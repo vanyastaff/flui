@@ -24773,7 +24773,7 @@ pub struct flui::view::UpdateScheduler { .. }
 impl Clone for flui::view::UpdateScheduler
 impl Default for flui::view::UpdateScheduler
 impl core::fmt::Debug for flui::view::UpdateScheduler
-pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui_scheduler::id::CallbackId
+pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui::foundation::FrameCallbackId
 pub fn flui::view::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
 pub fn flui::view::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
 pub fn flui::view::UpdateScheduler::display_period(&self) -> core::time::Duration
@@ -24789,7 +24789,7 @@ pub fn flui::view::UpdateScheduler::is_same_instance(&self, other: &Self) -> boo
 pub fn flui::view::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
 pub fn flui::view::UpdateScheduler::new() -> Self
 pub fn flui::view::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
-pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui_scheduler::id::CallbackId) -> bool
+pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui::foundation::FrameCallbackId) -> bool
 pub fn flui::view::UpdateScheduler::request_frame(&self)
 pub fn flui::view::UpdateScheduler::set_display_period(&self, period: core::time::Duration)
 pub fn flui::view::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
@@ -36456,7 +36456,6 @@ impl core::fmt::Debug for flui_scheduler::frame_telemetry::PresentOutcome
 impl core::marker::StructuralPartialEq for flui_scheduler::frame_telemetry::PresentOutcome
 variant flui_scheduler::frame_telemetry::PresentOutcome::Errored // at 1
 variant flui_scheduler::frame_telemetry::PresentOutcome::Presented // at 0
-pub type flui_scheduler::id::CallbackId = flui::foundation::FrameCallbackId
 pub struct flui_scheduler::post_frame::OwnerFrame { .. }
 impl Drop for flui_scheduler::post_frame::OwnerFrame
 impl core::fmt::Debug for flui_scheduler::post_frame::OwnerFrame

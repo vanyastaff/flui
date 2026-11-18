@@ -964,7 +964,7 @@ impl PresentationState {
         // Reentrancy-safe: the callback fires while the CALLER holds the
         // pipeline cell checked out, and the scheduler's `ensure_visual_update`
         // only touches `Send + Sync` runtime-level state (its own atomic phase
-        // and, briefly, the `frame_thread`/`on_frame_scheduled` slots — none of
+        // and owner thread, and, briefly, the `on_frame_scheduled` slot — none of
         // which is held across a call back into the pipeline) — never this
         // presentation's own `widgets` / `renderer` / gesture state.
         //

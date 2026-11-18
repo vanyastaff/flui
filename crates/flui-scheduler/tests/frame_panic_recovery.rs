@@ -165,7 +165,7 @@ fn async_future_poll_panic_closes_the_frame() {
     assert_eq!(
         owner.async_driver().pending_task_count(),
         pending_before + 1,
-        "the panicking future's slot must not be left as a zombie (issue #1057), but the \
+        "the panicking future's slot must not be left as a zombie, but the \
          sibling task must still be tracked"
     );
     assert_eq!(
@@ -258,8 +258,7 @@ fn post_frame_callbacks_run_in_the_clean_frame_after_a_panic() {
 /// `abort_frame`: the pipeline already committed layout and paint before
 /// this callback ran, and only the callback itself failed. The completion
 /// future must resolve `Completed`, never `Aborted`, even though the panic
-/// still propagates to the caller (issue #1162; this distinction did not
-/// exist before it -- both paths resolved the same bare `FrameTiming`).
+/// still propagates to the caller.
 fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
