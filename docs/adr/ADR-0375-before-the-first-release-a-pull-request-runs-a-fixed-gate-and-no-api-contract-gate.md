@@ -1,13 +1,15 @@
-# ADR-0374: Before the first release a pull request runs a fixed gate, and no API contract gate
+# ADR-0375: Before the first release a pull request runs a fixed gate, and no API contract gate
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18
 - **Supersedes:** [ADR-0324](ADR-0324-the-facade-api-is-a-committed-snapshot.md) whole (the facade's
   API has no committed snapshot); [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
-  §9 whole (a job only main runs has no narrow form on a pull request);
+  §9 whole and the tests its Confirmation cites of §9 (a job only main runs has no narrow form on a
+  pull request);
   [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md) §1
-  only for `public-api` and the on-demand jobs, and §3 whole. For the gate each names, in the
-  section its own `Superseded-by` line cites, where the rule stands and its reader confirms it:
+  only for `public-api` and the on-demand jobs, §2 for its list of `FULL_JOBS`, and §3 whole. For the
+  gate each names, in the section its own `Superseded-by` line cites, where the rule stands and its
+  reader confirms it:
   ADR-0082, ADR-0089, ADR-0098, ADR-0151, ADR-0266, ADR-0280, ADR-0304, ADR-0305, ADR-0311,
   ADR-0312, ADR-0322, ADR-0323, ADR-0327, ADR-0329, ADR-0330, ADR-0331, ADR-0368.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)

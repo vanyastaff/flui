@@ -12,7 +12,7 @@
 - **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §3 the `TimingsCallback` sentence only: the scheduler keeps no timings lane.
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask globals` gate only (Confirmation): the rule stands and its reader confirms it.
-  [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
   it.
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md) (the

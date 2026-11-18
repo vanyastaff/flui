@@ -9,7 +9,7 @@
   for the `xtask workspace`, `xtask reach`, `xtask globals`, `xtask module-dag` and
   `xtask panic-boundary` gates only (§10, §16, Confirmation): the rule stands and its reader
   confirms it.
-  [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `xtask api-closure` gate only (§5, §8, Confirmation): the rule stands and its reader
   confirms it.
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
