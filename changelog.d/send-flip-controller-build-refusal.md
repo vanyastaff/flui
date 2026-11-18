@@ -1,6 +1,6 @@
 ### Added
 
-- `flui_foundation::BuildPhase`, an owner-local view of "a `build` is running", with `LifecycleContext::build_phase`, `BuildOwner::build_phase`, `BuildInProgress::phase`, `Vsync::set_build_phase` and `Vsync::is_building`.
+- `flui_foundation::BuildPhase`, an owner-local view of "a `build` is running", with `LifecycleContext::build_phase`, `BuildOwner::build_phase`, `BuildInProgress::phase`, `VsyncDriver::set_build_phase` and `Vsync::is_building`.
 - `flui_foundation::MutatedDuringBuild`, the typed refusal of a controller mutation made from `build`, and `AnimationError::MutatedDuringBuild`.
 
 ### Changed

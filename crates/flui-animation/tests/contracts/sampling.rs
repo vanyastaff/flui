@@ -1,5 +1,6 @@
 //! Required samples and committed notices share one addressed owner's custody.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::Curve;
 use flui_animation::Simulation;
 use flui_animation::{Animation, AnimationController, DrivenController, MotionClock, Vsync};
@@ -96,7 +97,8 @@ fn admit(vsync: &Vsync, fault: Fault, armed: Rc<Cell<bool>>) -> DrivenController
 }
 
 fn sample(first: Fault, second: Option<Fault>) {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     // This healthy commit precedes either failure and must never be rolled back.
     let healthy = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     healthy.controller().forward().expect("healthy run");
@@ -107,11 +109,11 @@ fn sample(first: Fault, second: Option<Fault>) {
     let tail = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     tail.controller().forward().expect("healthy tail run");
     let mut clock = MotionClock::new();
-    vsync.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     first_armed.set(true);
     second_armed.set(true);
     let mut recovery = PanicRecovery::new();
-    vsync.tick_all_with_recovery(
+    driver.tick_all_with_recovery(
         &clock.frame(Duration::from_millis(250)),
         &mut recovery.scope(),
     );
@@ -166,7 +168,7 @@ fn sample(first: Fault, second: Option<Fault>) {
     }
     drop(failure);
     let mut next = PanicRecovery::new();
-    vsync.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
+    driver.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
     assert!(
         next.into_failure().is_none(),
         "the repaired operation progresses"
@@ -198,7 +200,8 @@ fn computation_then_delivery() {
 }
 
 fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let source = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let armed = Rc::new(Cell::new(false));
     let run = source
@@ -213,11 +216,11 @@ fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
         .build_on(Some(&vsync));
     healthy.controller().forward().expect("preserved peer");
     let mut clock = MotionClock::new();
-    vsync.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     armed.set(true);
     clock.set_system_motion(flui_platform::MotionPreference::Reduce);
     let mut recovery = PanicRecovery::new();
-    vsync.tick_all_with_recovery(
+    driver.tick_all_with_recovery(
         &clock.frame(Duration::from_millis(250)),
         &mut recovery.scope(),
     );
@@ -240,7 +243,7 @@ fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
     assert_eq!(failure.blocking_class(), Some(FailureClass::Computation));
     drop(failure);
     let mut next = PanicRecovery::new();
-    vsync.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
+    driver.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
     assert!(
         next.into_failure().is_none(),
         "the next policy sample may recover"
@@ -258,7 +261,8 @@ enum TerminalDelivery {
 }
 
 fn terminal_delivery(stage: TerminalDelivery) {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let controller = owner.controller();
     let mut run = controller.forward().expect("terminal run");
@@ -294,9 +298,9 @@ fn terminal_delivery(stage: TerminalDelivery) {
         }
     }));
     let mut clock = MotionClock::new();
-    vsync.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     let mut recovery = PanicRecovery::new();
-    vsync.tick_all_with_recovery(&clock.frame(Duration::from_secs(1)), &mut recovery.scope());
+    driver.tick_all_with_recovery(&clock.frame(Duration::from_secs(1)), &mut recovery.scope());
     assert_eq!(controller.value(), 1.0, "terminal value remains published");
     assert!(
         run.is_complete(),
@@ -336,7 +340,8 @@ impl Drop for RetiredListenerCapture {
 }
 
 fn withdrawn_value_listener_retirement_preserves_the_commit() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let controller = owner.controller();
     let run = controller.forward().expect("listener retirement run");
@@ -363,11 +368,11 @@ fn withdrawn_value_listener_retirement_preserves_the_commit() {
     let delivered = Rc::clone(&tail);
     let _listening = controller.listen(Rc::new(move || delivered.set(delivered.get() + 1)));
     let mut clock = MotionClock::new();
-    vsync.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     armed.set(true);
     tail.set(0);
     let mut recovery = PanicRecovery::new();
-    vsync.tick_all_with_recovery(
+    driver.tick_all_with_recovery(
         &clock.frame(Duration::from_millis(250)),
         &mut recovery.scope(),
     );
@@ -386,7 +391,7 @@ fn withdrawn_value_listener_retirement_preserves_the_commit() {
     );
     drop(receipt);
     let mut next = PanicRecovery::new();
-    vsync.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
+    driver.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
     assert!(next.into_failure().is_none(), "the next sample progresses");
     assert_eq!(controller.value(), 0.5);
     assert_eq!(tail.get(), 2);

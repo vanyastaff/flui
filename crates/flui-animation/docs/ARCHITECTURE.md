@@ -36,7 +36,9 @@ src/
 ├── observability.rs  # Contained tracing callouts and CPU span custody
 ├── controller_tests.rs # controller failure-path matrix (cfg(test))
 ├── builder.rs        # AnimationControllerBuilder
-├── vsync.rs          # Vsync registry: drives many controllers per frame
+├── vsync.rs          # Vsync registry handle: registration, nesting, muting
+├── vsync/driver.rs   # VsyncDriver: the presentation's tick, binding and close (ADR-0382)
+├── __runtime.rs      # Frame driver's seam (hidden): VsyncDriver, VsyncRetirement
 │
 ├── channels.rs       # Channels: the value and status channels every combinator owns
 ├── curved.rs         # CurvedAnimation (applies curve)
@@ -338,6 +340,10 @@ their private probes invoke no user code or owned-value destruction.
 `vsync_admission_contract`, pins last-owner timing, muting, reentry, competing
 callback/capture failures and the next healthy frame.
 
+A presentation owns its root registry through a `VsyncDriver` (ADR-0382): the
+driver alone ticks, binds and closes it, and the tree receives only the `Vsync`
+handle, which registers, nests and mutes.
+
 A `VsyncRegistration` names the registry that issued it (a weak identity) and
 one slot from a monotonic namespace that controllers and children share
 (ADR-0125). Removal borrows the token: a token from another registry, or one
@@ -491,7 +497,7 @@ ownership and the run future for success or cancellation (ADR-0193).
 ### Tick Cycle
 
 A presentation samples its `MotionClock` and passes a typed `FrameTick` to
-`Vsync::tick_all`. Manual controllers accept elapsed `Duration` through
+`VsyncDriver::tick_all` (ADR-0382). Manual controllers accept elapsed `Duration` through
 `tick_at`. Source sampling releases the state borrow before invoking user code;
 the run generation and sample epoch must still match before its result commits.
 Value, status and outcome callbacks drain outside the borrow with shared

@@ -710,19 +710,20 @@ fn rejected_viewport_resize_preserves_the_fractional_page() {
 }
 
 fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
-    use flui_animation::{MotionClock, SharedCurve, Vsync, curves};
+    use flui_animation::__runtime::VsyncDriver;
+    use flui_animation::{MotionClock, SharedCurve, curves};
     use flui_objects::{RenderAnimatedSize, SizeMotion};
     use flui_painting::{Alignment, paint::Clip};
     use std::time::Duration;
 
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
     let mut clock = MotionClock::new();
     let size = SizeMotion::new(
         flui_animation::MotionSpec::Curve {
             duration: Duration::from_secs(1),
             curve: SharedCurve::new(curves::LINEAR),
         },
-        Some(&registry),
+        Some(driver.vsync()),
     );
     let (owner, labels) = mount(
         &ui_runtime_text(),
@@ -747,9 +748,9 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     let (mut owner, result) = scene.run_frame(owner);
     result.expect("larger text lays out and starts a resize");
     let committed = inspect::box_geometry(&owner, root);
-    registry.tick_all(&clock.frame(Duration::ZERO));
-    registry.tick_all(&clock.frame(Duration::from_millis(20)));
-    assert!(registry.has_running(), "the resize run is in flight");
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(20)));
+    assert!(driver.vsync().has_running(), "the resize run is in flight");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
     let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
         &mut owner,
@@ -763,9 +764,9 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
         Err(RenderError::TextLayout(_))
     ));
     assert_eq!(inspect::box_geometry(&owner, root), committed);
-    registry.tick_all(&clock.frame(Duration::from_millis(40)));
+    driver.tick_all(&clock.frame(Duration::from_millis(40)));
     assert!(
-        registry.has_running(),
+        driver.vsync().has_running(),
         "rejected child layout cannot stop accepted animation"
     );
     let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(

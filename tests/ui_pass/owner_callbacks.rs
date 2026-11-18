@@ -34,19 +34,17 @@ fn main() {
                 observed.set(observed.get() + 1);
             }
         }))
-        .detach();
+        .forget();
     let outcome = controller.forward().expect("live controller");
     let observed = calls.clone();
     outcome.when_complete_or_cancel(move |result| {
         assert!(result.is_ok());
         observed.set(observed.get() + 1);
     });
-    vsync.tick_all(
-        &flui::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
-    );
-    vsync.tick_all(
-        &flui::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.1)),
-    );
+    // An application never ticks a registry: the test window's frames drive the one it nests.
+    laid.adopt_vsync(vsync.clone()).expect("the registry nests under the window's");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(100));
     assert_eq!(calls.get(), 4);
     owner.dispose();
     assert!(vsync.is_empty());

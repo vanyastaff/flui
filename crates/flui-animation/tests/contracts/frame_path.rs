@@ -5,6 +5,7 @@
 //! The rows run in child processes: a regression here shows as a deadlock or
 //! an abort, not a failed assertion.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use crate::child_process;
-use flui_animation::{Animation, AnimationController, AnimationRunFuture, AnimationStatus, Vsync};
+use flui_animation::{Animation, AnimationController, AnimationRunFuture, AnimationStatus};
 use flui_foundation::Listenable;
 
 /// A one-second `[0, 1]` controller advanced only by explicit times.
@@ -101,7 +102,8 @@ fn nested_commit_is_not_overwritten() {
 }
 
 fn dispose_from_a_value_listener_mid_walk() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let disposed_owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let disposed = disposed_owner.controller().clone();
@@ -118,17 +120,17 @@ fn dispose_from_a_value_listener_mid_walk() {
         }
     }));
 
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
     );
     assert!(
         matches!(poll(&mut run), Poll::Ready(Err(_))),
         "disposing from a listener cancels the run"
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.75)),
     );
 
@@ -145,7 +147,8 @@ fn dispose_from_a_value_listener_mid_walk() {
 }
 
 fn last_owner_released_from_its_own_listener_mid_walk() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let first_owner =
         AnimationController::builder(Duration::from_millis(500)).build_on(Some(&vsync));
     let second_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
@@ -168,11 +171,11 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
         .forget();
     drop(first);
 
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
     let before = ticks(&second_ticks);
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
     );
     assert_eq!(
@@ -182,7 +185,7 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     );
     assert_eq!(vsync.len(), 0);
     assert!(!vsync.has_running());
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.75)),
     );
     assert_eq!(ticks(&second_ticks), before);

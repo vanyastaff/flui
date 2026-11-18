@@ -1,5 +1,6 @@
 //! Authored easing is immutable, canonical, finite and independent of query order.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{
     Curve, LinearStop, PiecewiseLinear, PiecewiseLinearError, SharedCurve, SimulationError,
     SimulationParameter, SpeedLimit, SpringCurve, SpringDescription, Tolerance,
@@ -286,7 +287,7 @@ fn spring_refuses_unusable_duration_and_admits_nanosecond_motion() {
 }
 
 fn equivalent_recreated_curves_keep_the_admitted_run() {
-    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, Vsync};
+    use flui_animation::{AnimatedValue, MotionClock, MotionSpec};
     for spring in [false, true] {
         let make = || {
             if spring {
@@ -312,14 +313,15 @@ fn equivalent_recreated_curves_keep_the_admitted_run() {
             duration: Duration::from_secs(1),
             curve: make(),
         };
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let mut clock = MotionClock::new();
         let mut original = AnimatedValue::try_new(0.0, motion(), Some(&registry)).unwrap();
         let mut reference = AnimatedValue::try_new(0.0, motion(), Some(&registry)).unwrap();
         let run = original.animate_to(1.0).unwrap();
         let reference_run = reference.animate_to(1.0).unwrap();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_millis(100)));
         let seam = (original.value(), original.velocity());
         let alias = original.set_motion(motion()).unwrap();
         assert!(
@@ -328,7 +330,7 @@ fn equivalent_recreated_curves_keep_the_admitted_run() {
         );
         assert_eq!((original.value(), original.velocity()), seam);
         for millis in [250, 500, 750, 1000] {
-            registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+            driver.tick_all(&clock.frame(Duration::from_millis(millis)));
             assert_eq!(original.value(), reference.value());
             assert_eq!(original.velocity(), reference.velocity());
             assert_eq!(run.is_pending(), reference_run.is_pending());

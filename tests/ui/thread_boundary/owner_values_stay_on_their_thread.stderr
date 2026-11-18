@@ -42,16 +42,16 @@ help: use parentheses to call this trait object
 14 |     require_thread_spawnable(property(/* &WidgetStates */));
    |                                      +++++++++++++++++++++
 
-error[E0277]: `Rc<(dyn flui::flui_animation::Curve + 'static)>` cannot be sent between threads safely
+error[E0277]: `Rc<(dyn flui::animation::Curve + 'static)>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:15:30
    |
 15 |     require_thread_spawnable(curve);
-   |     ------------------------ ^^^^^ `Rc<(dyn flui::flui_animation::Curve + 'static)>` cannot be sent between threads safely
+   |     ------------------------ ^^^^^ `Rc<(dyn flui::animation::Curve + 'static)>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `SharedCurve`, the trait `Send` is not implemented for `Rc<(dyn flui::flui_animation::Curve + 'static)>`
-note: required because it appears within the type `animation::curve::erased::Erased`
+   = help: within `SharedCurve`, the trait `Send` is not implemented for `Rc<(dyn flui::animation::Curve + 'static)>`
+note: required because it appears within the type `flui_animation::curve::erased::Erased`
   --> crates/flui-animation/src/curve/erased.rs
    |
    | enum Erased {
@@ -67,21 +67,21 @@ note: required by a bound in `require_thread_spawnable`
  5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
-error[E0277]: `Rc<animation::curve::builtin::Builtin>` cannot be sent between threads safely
+error[E0277]: `Rc<flui_animation::curve::builtin::Builtin>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:15:30
    |
 15 |     require_thread_spawnable(curve);
-   |     ------------------------ ^^^^^ `Rc<animation::curve::builtin::Builtin>` cannot be sent between threads safely
+   |     ------------------------ ^^^^^ `Rc<flui_animation::curve::builtin::Builtin>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `SharedCurve`, the trait `Send` is not implemented for `Rc<animation::curve::builtin::Builtin>`
-note: required because it appears within the type `animation::curve::builtin::BuiltinCurve`
+   = help: within `SharedCurve`, the trait `Send` is not implemented for `Rc<flui_animation::curve::builtin::Builtin>`
+note: required because it appears within the type `flui_animation::curve::builtin::BuiltinCurve`
   --> crates/flui-animation/src/curve.rs
    |
    |     pub struct BuiltinCurve(Rc<Builtin>);
    |                ^^^^^^^^^^^^
-note: required because it appears within the type `animation::curve::erased::Erased`
+note: required because it appears within the type `flui_animation::curve::erased::Erased`
   --> crates/flui-animation/src/curve/erased.rs
    |
    | enum Erased {

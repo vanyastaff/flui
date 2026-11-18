@@ -133,7 +133,7 @@ impl<'runtime> PresentationSampling<'runtime> {
                     presentation.sampled_motion_tick.set(Some(tick));
                     return;
                 }
-                let vsync = presentation.vsync();
+                let driver = presentation.vsync_driver();
                 let tick = presentation.motion_tick(raw);
                 presentation.sampled_motion_tick.set(Some(tick));
                 let enabled =
@@ -147,7 +147,7 @@ impl<'runtime> PresentationSampling<'runtime> {
                     presentation.clock().clear_demand(DemandKind::Animation);
                 }
                 if enabled {
-                    vsync.tick_all_with_recovery(&tick, recovery);
+                    driver.tick_all_with_recovery(&tick, recovery);
                 }
             });
         }
