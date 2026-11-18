@@ -275,16 +275,6 @@ impl<T: Unit> BoxShadow<T> {
     pub const fn with_inset(self, inset: bool) -> Self {
         Self { inset, ..self }
     }
-
-    /// Converts this BoxShadow to a Shadow (losing the spread radius).
-    #[inline]
-    pub const fn to_shadow(self) -> Shadow<T> {
-        Shadow {
-            color: self.color,
-            offset: self.offset,
-            blur_radius: self.blur_radius,
-        }
-    }
 }
 
 impl BoxShadow {

@@ -6,8 +6,8 @@
 //! node provider, `FluiHost`'s wake), and none of those catches: an exception
 //! pending when the method returns is thrown there, and an exception nothing
 //! catches on the main thread ends the process. So every native method is
-//! one call of [`jni_native`], which `cargo xtask panic-boundary` holds them
-//! to: the body runs inside the panic boundary with the method's environment,
+//! one call of [`jni_native`]: the body runs inside the panic boundary with
+//! the method's environment,
 //! Java receives the body's answer or, after a failed JNI call or a panic,
 //! the method's "nothing" (`false`, `0`, `null`, no value), and never a
 //! pending exception, which [`ClearsPending`] describes to the log and clears

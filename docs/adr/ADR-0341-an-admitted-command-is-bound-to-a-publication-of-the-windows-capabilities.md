@@ -7,6 +7,8 @@
   there and in its Confirmation (the token carried the capabilities revision it was admitted
   against, `apply` compared that revision with the window's current one, and `Superseded` meant the
   revision moved)
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0313](ADR-0313-a-generational-slot-never-mints-an-id-twice.md) (identities are minted, never built
   from a number), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the publication counter is a granted
   process global)

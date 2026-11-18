@@ -19,6 +19,9 @@
   build enables, from `cargo tree`), for §7 (declarations: a versioned
   `[package.metadata.flui.declares]` in any crate) and for §8's step of `flui add` that writes
   declarations (the crate states its plugin instead)
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace`, `xtask reach` and `xtask globals` gates only (§12, Confirmation): the
+  rule stands and its reader confirms it.
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
   with the train until the contract has its own version),

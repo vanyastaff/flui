@@ -38,6 +38,8 @@
   for §2 items 5 and 6 in part (a request its caller can call off, the file dialog, answers through
   a `Dialog<T>` that wraps its `Completion<T>` and dismisses on drop; `WindowRef` also carries the
   window's `WindowLifetime`).
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md)
   (the clipboard stays plain text, and the reserved shape of a richer read),
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),

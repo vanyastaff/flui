@@ -1,7 +1,5 @@
 //! Clipping types for painting.
 
-use flui_foundation::geometry::{Offset, Rect, Size};
-
 /// How a new clip region combines with the current clip.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -85,67 +83,5 @@ impl Clip {
     #[inline]
     pub const fn is_efficient(&self) -> bool {
         matches!(self, Clip::None | Clip::HardEdge)
-    }
-}
-
-/// Widget-level clipping behavior, convertible to a low-level [`Clip`] mode.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum ClipBehavior {
-    /// No clipping.
-    None,
-
-    /// Clip without anti-aliasing; the default.
-    #[default]
-    HardEdge,
-
-    /// Clip with anti-aliasing applied.
-    ///
-    /// This is appropriate for shapes with smooth curves or diagonal edges.
-    AntiAlias,
-
-    /// Clip with anti-aliasing and save a layer immediately following the clip.
-    ///
-    /// This is rarely needed, but can be used when a clip is applied to a
-    /// widget with transparent children.
-    AntiAliasWithSaveLayer,
-}
-
-impl ClipBehavior {
-    /// Converts this behavior to the equivalent low-level [`Clip`] mode.
-    #[must_use]
-    #[inline]
-    pub const fn to_clip(self) -> Clip {
-        match self {
-            ClipBehavior::None => Clip::None,
-            ClipBehavior::HardEdge => Clip::HardEdge,
-            ClipBehavior::AntiAlias => Clip::AntiAlias,
-            ClipBehavior::AntiAliasWithSaveLayer => Clip::AntiAliasWithSaveLayer,
-        }
-    }
-
-    /// Returns `true` if this behavior performs any clipping at all.
-    #[must_use]
-    #[inline]
-    pub const fn clips(self) -> bool {
-        !matches!(self, ClipBehavior::None)
-    }
-
-    /// Returns `true` if this behavior applies anti-aliasing to clip edges.
-    #[must_use]
-    #[inline]
-    pub const fn is_anti_aliased(self) -> bool {
-        matches!(
-            self,
-            ClipBehavior::AntiAlias | ClipBehavior::AntiAliasWithSaveLayer
-        )
-    }
-}
-
-impl From<ClipBehavior> for Clip {
-    #[inline]
-    fn from(behavior: ClipBehavior) -> Self {
-        behavior.to_clip()
     }
 }

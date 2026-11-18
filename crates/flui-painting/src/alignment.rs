@@ -5,6 +5,7 @@
 
 use std::ops::{Add, Neg};
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Rect, Size};
 
 /// A point within a rectangle, in normalized coordinates.
@@ -244,10 +245,10 @@ impl AlignmentDirectional {
     ///
     /// # Arguments
     ///
-    /// * `is_ltr` - true for left-to-right, false for right-to-left
+    /// * `direction` - the text direction `start` and `end` follow
     #[inline]
-    pub fn resolve(&self, is_ltr: bool) -> Alignment {
-        if is_ltr {
+    pub fn resolve(&self, direction: TextDirection) -> Alignment {
+        if direction.is_ltr() {
             Alignment::new(self.start, self.y)
         } else {
             Alignment::new(-self.start, self.y)
@@ -312,12 +313,12 @@ impl AlignmentGeometry {
     ///
     /// # Arguments
     ///
-    /// * `is_ltr` - true for left-to-right, false for right-to-left
+    /// * `direction` - the text direction `start` and `end` follow
     #[inline]
-    pub fn resolve(&self, is_ltr: bool) -> Alignment {
+    pub fn resolve(&self, direction: TextDirection) -> Alignment {
         match self {
             AlignmentGeometry::Absolute(alignment) => *alignment,
-            AlignmentGeometry::Directional(alignment) => alignment.resolve(is_ltr),
+            AlignmentGeometry::Directional(alignment) => alignment.resolve(direction),
         }
     }
 }

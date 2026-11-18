@@ -154,7 +154,7 @@ deny = [
 
     # UI state is owner-local (ADR-0136): a value crosses a thread because the
     # compiler proves it may, never through a wrapper that asserts it or checks
-    # it at run time. `cargo xtask send-impls` lists the hand-written impls.
+    # it at run time.
     { crate = "send_wrapper", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
     { crate = "fragile", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
     { crate = "send-cell", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
@@ -168,7 +168,7 @@ deny = [
     # No build script runs a platform compiler (ADR-0255 decision 21, ADR-0154
     # decision 5): `flui build` builds Java, Kotlin, Swift and the dex from the
     # sources a crate declares. A capability crate has no build script at all
-    # (`cargo xtask workspace`, ADR-0154 decision 6); these bans keep the crates
+    # (ADR-0154 decision 6); these bans keep the crates
     # that exist to run the tools out of every other member's build too.
     { crate = "android-build", reason = "its JavaBuild and Dexer run javac and d8 from a build script (ADR-0255 decision 21)" },
     { crate = "swift-rs", reason = "its SwiftLinker runs `swift build` from a build script (ADR-0255 decision 21)" },

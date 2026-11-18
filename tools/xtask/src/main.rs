@@ -18,41 +18,26 @@ mod table_test;
 
 mod tasks;
 
-mod source_tree;
-
+mod adr_numbers;
 mod android_dex;
 mod api_closure;
 mod bench;
-mod builder_names;
 mod change_scope;
 mod changelog;
-mod context_names;
 mod doc_strict;
 mod docs_links;
-mod docs_paths;
 mod doctor;
-mod file_length;
 mod fonts;
-mod globals;
 mod icon_import;
 mod key_vocabulary;
-mod markers;
-mod module_dag;
-mod panic_boundary;
-mod panic_messages;
 mod perf;
 mod platform_floor;
 mod public_api;
-mod ratchet;
 mod recording_vocabulary;
-mod send_impls;
 mod send_positions;
-mod testing;
 mod toolchain;
-mod try_new;
+mod unmounted_tests;
 mod wasm;
-mod wgsl;
-mod workspace;
 mod worktree;
 
 use std::process::ExitCode;
@@ -112,12 +97,6 @@ enum Command {
     Fuzz(tasks::FuzzArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
-    /// Check crate tiers, manifests, test reachability and ADR numbers.
-    Workspace(workspace::WorkspaceArgs),
-    /// Check that no crate reaches what its tier forbids (ADR-0081 §2).
-    Reach(workspace::ReachArgs),
-    /// Check the declared import direction between a crate's top-level modules.
-    ModuleDag(module_dag::ModuleDagArgs),
     /// Print the lane and the packages a change touches (CI's `plan`).
     Affected(change_scope::AffectedArgs),
     /// List the expectations a change edits; with `--body`, fail on each the body leaves unnamed (ADR-0331).
@@ -128,30 +107,15 @@ enum Command {
     CiVerify(change_scope::CiVerifyArgs),
     /// Check that every declared MSRV matches rust-toolchain.toml.
     Toolchain(toolchain::ToolchainArgs),
-    /// Check WGSL derivative uniformity.
-    Wgsl(wgsl::WgslArgs),
-    /// Check that every process-global has a reviewed entry (ADR-0097).
-    Globals(globals::GlobalsArgs),
-    /// Check that every OS entry into flui-native goes through the panic boundary (ADR-0151 §16).
-    PanicBoundary(panic_boundary::PanicBoundaryArgs),
-    /// Check that every `unsafe impl Send`/`Sync` is listed and the list only shrinks (ADR-0136).
-    SendImpls(send_impls::SendImplsArgs),
+    /// Check that every `tests/*.rs` file of an `autotests = false` crate is compiled.
+    UnmountedTests(unmounted_tests::UnmountedTestsArgs),
+    /// Check that no two records in `docs/adr/` share a number.
+    AdrNumbers(adr_numbers::AdrNumbersArgs),
     /// Check that every place the public API names `Send` or `Sync` is listed under
     /// ADR-0323 §3.
     SendPositions(send_positions::SendPositionsArgs),
     /// Check the facade's public API against its committed snapshot `api/flui.txt` (ADR-0324).
     PublicApi(public_api::PublicApiArgs),
-    /// Check that every `new` returning `Result` or `Option` is listed and the list only
-    /// shrinks: such a constructor is `try_new` (AGENTS.md).
-    TryNew(try_new::TryNewArgs),
-    /// Check that a context is bound as `ctx`, never as `cx` (ADR-0325).
-    ContextNames(context_names::ContextNamesArgs),
-    /// Check that a description type's builder method has no `with_` prefix; the list of
-    /// the ones that still have it only shrinks (ADR-0325).
-    BuilderNames(builder_names::BuilderNamesArgs),
-    /// Check that every production `expect` and `panic!` names its invariant (`BUG: `) or its
-    /// `try_` twin; the counts of the ones that do not only go down (docs/PANIC-POLICY.md).
-    PanicMessages(panic_messages::PanicMessagesArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -162,16 +126,8 @@ enum Command {
     DocStrict(doc_strict::DocStrictArgs),
     /// Check the links in the repository's markdown (lychee, offline).
     DocsLinks(docs_links::DocsLinksArgs),
-    /// Check the repository paths, packages and llms.txt links the docs name.
-    DocsPaths(docs_paths::DocsPathsArgs),
     /// Check or list the bundled font assets.
     FontAssets(fonts::FontAssetsArgs),
-    /// Check that no .rs file exceeds 3000 production lines (ADR-0081 §5).
-    FileLength(file_length::FileLengthArgs),
-    /// Check for process markers outside the archival roots (ADR-0078 §4).
-    Markers(markers::MarkersArgs),
-    /// Check that test helpers live in a kit and test support is named `testing` (ADR-0243).
-    Testing(testing::TestingArgs),
     /// Import vector animations as `AnimatedIconData` constants, or check the bundled Material ones.
     IconImport(icon_import::IconImportArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
@@ -225,34 +181,21 @@ fn main() -> ExitCode {
         Command::Miri(args) => tasks::miri(&args),
         Command::Fuzz(args) => tasks::fuzz(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
-        Command::Workspace(args) => workspace::workspace(&args),
-        Command::Reach(args) => workspace::reach(&args),
-        Command::ModuleDag(args) => module_dag::module_dag(&args),
         Command::Affected(args) => change_scope::affected(&args),
         Command::Expectations(args) => change_scope::expectations(&args),
         Command::PathsFilter(args) => change_scope::paths_filter(&args),
         Command::CiVerify(args) => change_scope::ci_verify(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
-        Command::Wgsl(args) => wgsl::wgsl(&args),
-        Command::Globals(args) => globals::globals(&args),
-        Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
-        Command::SendImpls(args) => send_impls::send_impls(&args),
+        Command::UnmountedTests(args) => unmounted_tests::unmounted_tests(&args),
+        Command::AdrNumbers(args) => adr_numbers::adr_numbers(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::PublicApi(args) => public_api::public_api(&args),
-        Command::TryNew(args) => try_new::try_new(&args),
-        Command::ContextNames(args) => context_names::context_names(&args),
-        Command::BuilderNames(args) => builder_names::builder_names(&args),
-        Command::PanicMessages(args) => panic_messages::panic_messages(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
         Command::DocStrict(args) => doc_strict::doc_strict(&args),
         Command::DocsLinks(args) => docs_links::docs_links(&args),
-        Command::DocsPaths(args) => docs_paths::docs_paths(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
-        Command::FileLength(args) => file_length::file_length(&args),
-        Command::Markers(args) => markers::markers(&args),
-        Command::Testing(args) => testing::testing(&args),
         Command::IconImport(args) => icon_import::icon_import(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
         Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),

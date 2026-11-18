@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-08-18)
 - **Date:** 2026-08-18
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (One owner, no ambient reach): the rule stands and its reader
+  confirms it.
 - **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (execution services stay
   loop-scoped; any process-global executor state is a `cargo xtask globals` entry that only
   shrinks); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (where
