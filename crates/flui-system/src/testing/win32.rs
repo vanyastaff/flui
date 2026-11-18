@@ -144,7 +144,7 @@ pub(crate) fn win32_window(hwnd: isize) -> (WindowRef, WindowCloser) {
 fn open(target: Arc<dyn SurfaceTarget>) -> (WindowRef, WindowCloser) {
     thread_local! {
         // One mint per test thread: two windows of one test are two ids.
-        static WINDOW_IDS: WindowIdMint = WindowIdMint::new();
+        static WINDOW_IDS: WindowIdMint = const { WindowIdMint::new() };
     }
     let (closer, lifetime) = WindowCloser::new();
     let id = WINDOW_IDS

@@ -258,7 +258,7 @@ impl AppName {
     }
 
     /// A scenario's name for the application.
-    #[cfg(feature = "testing")]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn scripted(id: &str) -> Self {
         Self(id.into())
     }
