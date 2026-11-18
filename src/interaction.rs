@@ -133,12 +133,11 @@ pub use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
     DragStartDetails, DragUpdateDetails, ForcePressGestureRecognizer, GestureEndReason,
     GestureProfiles, GestureRecognizer, GestureSettings, GestureSettingsError,
-    HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
-    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
-    MultiTapCount, MultiTapCountError, MultiTapGestureRecognizer, PanGestureRecognizer, PointerId,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails,
-    TapDragStartDetails, TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer,
-    VerticalDragGestureRecognizer,
+    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragUpdateDetails, MultiTapCount, MultiTapCountError,
+    MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    TapDragDownDetails, TapDragEndDetails, TapDragStartDetails, TapDragUpDetails,
+    TapDragUpdateDetails, TapGestureRecognizer,
 };
 pub use flui_interaction::{
     ForcePressDetails, LongPressCallback, LongPressDetails, LongPressDownCallback,

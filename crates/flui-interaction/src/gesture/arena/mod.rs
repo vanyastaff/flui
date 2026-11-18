@@ -225,12 +225,6 @@ impl GestureDisposition {
     pub const fn is_accepted(self) -> bool {
         matches!(self, Self::Accepted)
     }
-
-    /// Returns `true` if rejected.
-    #[inline]
-    pub const fn is_rejected(self) -> bool {
-        matches!(self, Self::Rejected)
-    }
 }
 
 // ============================================================================
@@ -2228,20 +2222,6 @@ impl GestureArena {
         }
         let pending = self.resolve_slot(pointer, &slot, winner.as_ref(), Resolution::Claimed);
         self.dispatch_with_candidate(pending, slot.contest(), winner);
-    }
-
-    /// Withdraw a single member from the arena, leaving the others to keep
-    /// competing.
-    ///
-    /// Unlike [`resolve`](Self::resolve) with no winner — which resolves the
-    /// whole entry and rejects *every* member — this removes only `member`.
-    /// When exactly one member remains in a closed arena, that member wins
-    /// (the caller is withdrawn without rejecting its competitors).
-    pub fn reject_member(&self, pointer: PointerId, member: &Rc<dyn GestureArenaMember>) {
-        let Some(slot) = self.current_slot(pointer) else {
-            return;
-        };
-        self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
     }
 
     /// Sweep - remove resolved arenas for a pointer.
