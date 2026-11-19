@@ -234,7 +234,6 @@ const noAgent = () => assert.fail('no agent may run')
   assert.ok(result.gaps.includes('proposal c: no result (refused by a usage limit, skipped, or failed after retries)'))
   for (const label of ['attack:a', 'attack:red-team', 'second-round']) assert.ok(!targetsOf(calls.find((o) => o.label === label)).includes('c'), label)
   assert.equal(result.proposals.length, 2)
-  assert.ok(result.attacks.every((x) => x.target !== 'c'))
   const { result: two } = await run({ topic: 'T', stances }, happy({ 'propose:b': null, 'propose:c': null }))
   assert.match(two.error, /fewer than two proposals/)
   assert.deepEqual(two.proposals.map((p) => p.stance), ['a'])
@@ -345,6 +344,29 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(result.scores, [{ stance: 'a', score: 90, why: 'w' }, { stance: 'b', score: 70, why: 'w' }])
   assert.ok(result.gaps.includes('judge: a scored 2 times'))
   assert.ok(result.gaps.includes('judge: c scored 0 times'))
+}
+
+// 7b. The script reads each value by its schema's shape and the runtime holds a value to its schema,
+//     so the schemas carry every constraint the script relies on: a score in 0..100, an answer's
+//     integer id, closed verdicts and severities, and the fields it reads required.
+{
+  const { calls } = await run({ topic: 'T', stances }, happy())
+  const schemaOf = (label) => calls.find((o) => o.label === label).schema
+  const score = schemaOf('judge').properties.scores.items.properties.score
+  assert.deepEqual([score.type, score.minimum, score.maximum], ['integer', 0, 100])
+  const answer = schemaOf('revise:a').properties.answers.items
+  assert.equal(answer.properties.id.type, 'integer')
+  assert.deepEqual(answer.properties.verdict.enum, ['fixed', 'refuted', 'conceded'])
+  assert.equal(answer.properties.how.type, 'string')
+  assert.deepEqual(answer.required, ['id', 'verdict', 'how'])
+  for (const label of ['attack:a', 'second-round']) {
+    const attack = schemaOf(label).properties.attacks.items
+    assert.deepEqual(attack.properties.severity.enum, ['fatal', 'major', 'minor'], label)
+    assert.deepEqual(attack.required, ['target', 'claim', 'scenario', 'evidence', 'severity'], label)
+  }
+  assert.deepEqual(schemaOf('judge').properties.scores.items.required, ['stance', 'score', 'why'])
+  assert.deepEqual(schemaOf('propose:a').required, ['title', 'thesis', 'shapes', 'flow', 'prediction', 'migration', 'risks', 'debt_removed'])
+  assert.deepEqual(schemaOf('research:code').properties.facts.items.required, ['claim', 'evidence'])
 }
 
 // 8. Without stances the four default schools compete.

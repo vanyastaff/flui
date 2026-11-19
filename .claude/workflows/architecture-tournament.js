@@ -242,7 +242,8 @@ const attackSchema = (targets) => ({
 })
 
 // Both rounds keep attacks up to the bound and name the rest as a gap. Each attack's target is one
-// of the designs on the table: the schema's enum says so and `attempt` holds it.
+// of the designs on the table: the schema's enum says so, and the runtime holds a value to its
+// schema (see `attempt`).
 function takeAttacks(who, attacks) {
   if (attacks.length > MAX_ATTACKS) gaps.push(`${who}: ${attacks.length - MAX_ATTACKS} past the bound of ${MAX_ATTACKS} were left out`)
   return attacks.slice(0, MAX_ATTACKS)
