@@ -90,3 +90,10 @@ mod opened;
 
 #[path = "text_store_refusal.rs"]
 mod text_store_refusal;
+
+#[path = "asset_key.rs"]
+mod asset_key;
+
+#[cfg(feature = "testing")]
+#[path = "assets.rs"]
+mod assets;

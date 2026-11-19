@@ -43,9 +43,9 @@ impl DrawBatcher {
     /// A run whose face the rasterizer cannot register (its blob holds no
     /// face at the run's index) is not drawn; the rest of the paragraph is.
     ///
-    /// Glyphs whose quad lies entirely outside the active scissor are not
-    /// recorded; a fully clipped paragraph costs its placement walk and
-    /// nothing on the GPU.
+    /// Under [`GlyphCull::Scissor`], glyphs whose quad lies entirely outside
+    /// the active scissor are not recorded; a fully clipped paragraph costs
+    /// its placement walk and nothing on the GPU.
     #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/atlas are disjoint WgpuPainter fields"
@@ -60,6 +60,7 @@ impl DrawBatcher {
         position: Point<f64>,
         color: Color,
         ink: GlyphInk,
+        cull: GlyphCull,
     ) {
         if segment.recording_result().is_err() {
             return;
@@ -67,6 +68,13 @@ impl DrawBatcher {
 
         let scale = state.max_scale();
         let scissor = state.current_scissor();
+        // The scissor a glyph outside of which is left out: the active one,
+        // or none while the chunk is captured, whose recording is culled
+        // where it is spliced instead (ADR-0306 §2).
+        let cull = match cull {
+            GlyphCull::Scissor => scissor,
+            GlyphCull::None => None,
+        };
         let origin = state.apply_transform(position);
         // Uniform: the linear part is `scale × I` (up to float noise), so the
         // raster space IS device space and glyphs snap to the device grid.
@@ -122,7 +130,7 @@ impl DrawBatcher {
                 let x = i64::from(glyph.x) + i64::from(slot.left);
                 let y = i64::from(glyph.y) - i64::from(slot.top);
                 let (w, h) = (i64::from(slot.size[0]), i64::from(slot.size[1]));
-                if matches!(placement, Placement::Uniform) && outside_scissor(scissor, x, y, w, h) {
+                if matches!(placement, Placement::Uniform) && outside_scissor(cull, x, y, w, h) {
                     continue;
                 }
 
@@ -169,6 +177,17 @@ pub(crate) enum GlyphInk {
     Silhouette,
 }
 
+/// Whether recording a paragraph leaves out the glyphs outside the active
+/// scissor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlyphCull {
+    /// Left out: the IR is drawn only where it is recorded.
+    Scissor,
+    /// Kept: a chunk captured for the recording cache is spliced under
+    /// other scissors, and the splice culls against each (ADR-0306 §2).
+    None,
+}
+
 /// How a paragraph's quads are placed: see [`DrawBatcher::draw_paragraph`].
 #[derive(Clone, Copy)]
 enum Placement {
@@ -194,7 +213,7 @@ fn uniform_linear(state: &GpuStateStack, scale: f32) -> Option<[f32; 4]> {
 }
 
 /// Whether a `w × h` quad at `(x, y)` shares no pixel with `scissor`.
-fn outside_scissor(
+pub(crate) fn outside_scissor(
     scissor: crate::command_ir::ScissorRect,
     x: i64,
     y: i64,

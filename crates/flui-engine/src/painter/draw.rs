@@ -239,6 +239,7 @@ impl super::WgpuPainter {
             "WgpuPainter::draw_paragraph"
         );
         let opacity = self.compositor.current_opacity();
+        let cull = self.glyph_cull();
         crate::batches::DrawBatcher::draw_paragraph(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -249,6 +250,7 @@ impl super::WgpuPainter {
             position,
             color,
             crate::batches::GlyphInk::Text,
+            cull,
         );
     }
 
@@ -281,6 +283,7 @@ impl super::WgpuPainter {
             self.save_layer_with_image_filter(spec);
         }
         let opacity = self.compositor.current_opacity();
+        let cull = self.glyph_cull();
         crate::batches::DrawBatcher::draw_paragraph(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -291,6 +294,7 @@ impl super::WgpuPainter {
             position,
             color,
             crate::batches::GlyphInk::Silhouette,
+            cull,
         );
         if blur.is_some() {
             self.restore_layer();

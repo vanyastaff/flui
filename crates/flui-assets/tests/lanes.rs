@@ -69,7 +69,7 @@ impl ThreadLanes {
 
     /// The lanes as a load's services take them.
     pub fn services(self: &Arc<Self>) -> LoadServices {
-        LoadServices::new().with_lanes(self.lanes())
+        LoadServices::new().lanes(self.lanes())
     }
 
     /// The IO lane's runtime.
@@ -163,7 +163,7 @@ impl QueuedLanes {
 
     /// The lanes as a load's services take them.
     pub fn services(self: &Arc<Self>) -> LoadServices {
-        LoadServices::new().with_lanes(self.lanes())
+        LoadServices::new().lanes(self.lanes())
     }
 
     /// Refuse every later spawn with `refusal`, on both lanes.

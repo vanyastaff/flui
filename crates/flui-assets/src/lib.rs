@@ -14,9 +14,10 @@
 //!
 //! let cache = ImageCache::new(ImageCacheConfig::default().budget(64 * 1024 * 1024));
 //! // Nothing is kept before a load completes.
-//! assert!(cache.cached_image(&ImageSource::Asset("logo.png".into())).is_none());
+//! let logo = ImageSource::asset("logo.png");
+//! assert!(cache.get(&logo).is_none());
 //! // With no lanes, the load runs where the returned future is polled.
-//! let load = cache.load_image("logo.png", LoadServices::new());
+//! let load = cache.load(&logo, &LoadServices::new());
 //! drop(load); // the last waiter left: the load is cancelled
 //! ```
 
@@ -32,7 +33,5 @@
 mod error;
 mod image_cache;
 
-pub use crate::error::{AssetError, Result};
-pub use crate::image_cache::{
-    ImageCache, ImageCacheConfig, ImageLoad, ImageSource, LoadServices, NetworkSource,
-};
+pub use crate::error::{ImageLoadError, ImageLoadErrorKind};
+pub use crate::image_cache::{ImageCache, ImageCacheConfig, ImageLoad, ImageSource, LoadServices};

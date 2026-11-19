@@ -59,7 +59,7 @@ this one path (ADR-0151 §9).
   while `PlatformHaptics` and `HapticFeedback` stay at the root),
   `data_transfer`, `drag`, `text_store` (whose four traits are also at the
   root), `pointer`, `keyboard`, `input_capabilities`, `input_regions`,
-  `capability`, `executor`, `http` and `launch`. `testing` exists only under
+  `assets`, `capability`, `executor`, `http` and `launch`. `testing` exists only under
   the `testing` feature: what a test double's window is written with
   (`NoNativeSurface` and the `window_takes_no_frame_verbs!` macro) and the
   doubles of this crate's contracts, none of which production code uses.

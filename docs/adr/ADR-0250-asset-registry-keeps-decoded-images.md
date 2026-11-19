@@ -36,7 +36,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
 
 1. **The image cache keeps the decoded images of the loads it bridges.** `ImageCache` owns an LRU
    bounded by pixel bytes (`ImageCacheConfig::budget`; 256 MiB, 64 MiB on
-   Android, iOS and the web), a pending map, and `cached_image(&ImageSource)` as the synchronous
+   Android, iOS and the web), a pending map, and `get(&ImageSource)` as the synchronous
    probe. An image larger than the budget is handed to its waiters and not kept. There is no
    process-wide image cache; the `image::decode_cache::CACHE` global and its allowlist entry are
    removed.

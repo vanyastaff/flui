@@ -402,4 +402,35 @@ mod tests {
             assert_eq!(build(), build(), "{template} plan is not deterministic");
         }
     }
+
+    /// Every template holds a file in each directory its `flui.toml` lists
+    /// under `[assets] directories`, so `flui build` right after `flui create`,
+    /// or in a clone of the project (git keeps no empty directory), packages
+    /// the project instead of refusing a directory that is not there
+    /// (ADR-0384 §3).
+    #[test]
+    fn every_template_makes_the_asset_directories_it_declares() {
+        let templates = [
+            (Template::Basic, false),
+            (Template::Counter, false),
+            (Template::Empty, false),
+            (Template::Widget, false),
+            (Template::Counter, true),
+        ];
+        for (template, hot_reload) in templates {
+            let plan = TemplateBuilder::new(
+                ProjectName::new("assets-check").expect("valid name"),
+                AppId::try_new("com.example.assets_check").expect("valid id"),
+            )
+            .template(template)
+            .hot_reload(hot_reload)
+            .platforms(vec!["linux".to_string()])
+            .plan();
+            let root = tempfile::tempdir().expect("a temporary directory");
+            plan.write(root.path()).expect("the plan is written");
+            if let Err(error) = crate::build::assets::of_project(root.path()) {
+                panic!("{template} (hot reload: {hot_reload}): {error}");
+            }
+        }
+    }
 }

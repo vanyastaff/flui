@@ -502,7 +502,7 @@ first capability crate that needs them.
   and shows the registration. `cargo xtask workspace` requires every capability crate to be the
   facade's optional normal dependency, with `<service> = ["dep:<crate>"]` as its only feature
   entry; its self-test plants a mandatory dependency, a missing feature and a wrong feature.
-  `cargo xtask facade-combos` builds each capability feature on its own.
+  CI's `feature-matrix` job builds each capability feature on its own.
 - **Open until the first crate that needs it.** The schema in decision 7 is illustrative, and its
   keys are fixed with the first crate that needs a declaration; Win32 has nothing in the host
   bridge until a capability has a consumer for a message hook (decision 9, item 4); each later
