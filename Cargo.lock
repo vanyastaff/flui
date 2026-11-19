@@ -2190,7 +2190,6 @@ dependencies = [
  "flui-painting",
  "flui-rendering",
  "insta",
- "parking_lot",
  "serde",
  "static_assertions",
  "thiserror 2.0.21",

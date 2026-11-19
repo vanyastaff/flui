@@ -34,12 +34,12 @@
 //! effect is to exist, so that something above it has a `RenderId` to point at.
 //! It is the narrower object: identity without the compositing side effect.
 
-use std::sync::Arc;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::pipeline::LocalRenderInvalidationHandle;
-use parking_lot::Mutex;
 
 use flui_foundation::RenderId;
 use flui_rendering::{
@@ -59,11 +59,12 @@ use flui_rendering::{
 /// `detach`, which is what makes a stale handle **inert rather than wrong** — a
 /// caller cannot resolve the id of a subtree that has left the tree.
 ///
-/// The lock is private and never escapes: [`get`](Self::get) copies the id out
-/// (`RenderId` is `Copy`), so no guard crosses the API boundary.
+/// The slot is owner-thread state (ADR-0323 §1): the element and its render
+/// object live on one UI thread, so the anchor is `Rc` and neither `Send` nor
+/// `Sync`. [`get`](Self::get) copies the id out (`RenderId` is `Copy`).
 #[derive(Clone, Default)]
 pub struct SubtreeAnchor {
-    published: Arc<Mutex<Option<RenderId>>>,
+    published: Rc<Cell<Option<RenderId>>>,
 }
 
 impl SubtreeAnchor {
@@ -81,7 +82,7 @@ impl SubtreeAnchor {
     /// which returns `None` before the first layout commits.
     #[must_use]
     pub fn get(&self) -> Option<RenderId> {
-        *self.published.lock()
+        self.published.get()
     }
 
     /// Whether a mounted render object is currently publishing into this anchor.
@@ -91,13 +92,12 @@ impl SubtreeAnchor {
     }
 
     pub(crate) fn publish(&self, id: RenderId) {
-        *self.published.lock() = Some(id);
+        self.published.set(Some(id));
     }
 
     pub(crate) fn clear(&self, id: RenderId) {
-        let mut published = self.published.lock();
-        if *published == Some(id) {
-            *published = None;
+        if self.published.get() == Some(id) {
+            self.published.set(None);
         }
     }
 }
@@ -146,7 +146,7 @@ impl RenderSubtreeAnchor {
     /// Changes the publication slot without replacing the mounted render node.
     /// An unmounted object publishes nothing until its next attach.
     pub fn set_anchor(&mut self, anchor: SubtreeAnchor) {
-        if Arc::ptr_eq(&self.anchor.published, &anchor.published) {
+        if Rc::ptr_eq(&self.anchor.published, &anchor.published) {
             return;
         }
         if let Some(id) = self.mounted_id {
@@ -259,7 +259,7 @@ impl RenderSliverSubtreeAnchor {
 
     /// Changes the publication slot without replacing the mounted render node.
     pub fn set_anchor(&mut self, anchor: SubtreeAnchor) {
-        if Arc::ptr_eq(&self.anchor.published, &anchor.published) {
+        if Rc::ptr_eq(&self.anchor.published, &anchor.published) {
             return;
         }
         if let Some(id) = self.mounted_id {
