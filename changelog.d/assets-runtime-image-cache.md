@@ -10,7 +10,7 @@
 
 ### Changed
 
-- `Image::asset(path)`, `Image::network(url)`, `AssetImage::new(path)` and
+- `Image::asset(key)`, `Image::network(url)`, `AssetImage::new(key)` and
   `NetworkImage::new(url)` take no cache: they load through their UI runtime's.
-  `ImageCacheKey` of an asset or network image is its path or URL alone.
+  `ImageCacheKey` of an asset or network image is its key or URL alone.
   An application no longer registers an image cache with `AppConfig::memory_reclaim`.

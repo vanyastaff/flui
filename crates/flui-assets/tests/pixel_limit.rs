@@ -3,6 +3,7 @@
 
 use flui_assets::{ImageCache, ImageLoadErrorKind, ImageSource, LoadServices};
 use flui_painting::paint::ImageDecodeError;
+use flui_platform::assets::{AssetBundle, AssetKey, DirectoryAssets};
 
 use crate::lanes::block_on;
 
@@ -56,7 +57,10 @@ fn decoded_pixels_are_bounded_before_decoding() {
     let path = directory.join("huge.png");
     std::fs::write(&path, &huge).expect("the oversized header is written");
     let decoded = block_on(cache.load(
-        &ImageSource::asset(path.to_string_lossy().into_owned()),
+        &ImageSource::asset(
+            AssetKey::try_new("huge.png").expect("the test's asset key is valid"),
+            &AssetBundle::new(std::sync::Arc::new(DirectoryAssets::new(&directory))),
+        ),
         &LoadServices::new(),
     ));
     let _ = std::fs::remove_dir_all(&directory);

@@ -53,11 +53,11 @@ no load can be refused for a mismatch.
 
 ```rust
 impl ImageSource {
-    pub fn asset(path: impl Into<Arc<str>>) -> Self;
+    pub fn asset(key: AssetKey, bundle: &AssetBundle) -> Self;   // ADR-0384 §6
     pub fn network(url: impl Into<Arc<str>>, http: &Http) -> Self;
-    pub fn path(&self) -> Option<&str>;
+    pub fn asset_key(&self) -> Option<&AssetKey>;
     pub fn url(&self) -> Option<&str>;
-}                                   // Eq and Hash by path, or by URL and the client's authority
+}        // Eq and Hash by key and the bundle's authority, or by URL and the client's authority
 impl LoadServices { pub fn new() -> Self; pub fn lanes(self, lanes: Arc<dyn Executor>) -> Self; }
 impl ImageCache {
     pub fn load(&self, source: &ImageSource, services: &LoadServices) -> ImageLoad;
@@ -72,9 +72,10 @@ pub enum ImageLoadErrorKind {
 }
 ```
 
-1. **The key holds no client.** The cache keeps images and loads in flight under the path, or the
-   URL and the client's `HttpAuthority`; the `Http` handle lives in the source a request holds,
-   so a kept image keeps no client alive (ADR-0118).
+1. **The key holds no reader.** The cache keeps images and loads in flight under the asset key and
+   its bundle's `AssetAuthority` (ADR-0384 §6), or the URL and the client's `HttpAuthority`; the
+   bundle and the `Http` handle live in the source a request holds, so a kept image keeps neither
+   alive (ADR-0118).
 2. **No client, no network source.** A caller without a client cannot build a network source;
    `NetworkImage` answers `ImageProviderError::HttpUnavailable` itself and sends nothing.
 3. **Every waiter gets the same kind, with its source.** A load's outcome is shared; each
