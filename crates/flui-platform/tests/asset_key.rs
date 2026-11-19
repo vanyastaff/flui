@@ -2,14 +2,38 @@
 
 use flui_platform::assets::{AssetKey, AssetKeyError, MAX_ASSET_KEY_LEN};
 
-/// Every key that could name a path outside its bundle's root, on any
+/// Every key that could name a path outside its bundle's root, or a file
+/// Windows names differently, on any
 /// platform, is refused before a reader sees it; the keys a project
 /// declares pass as written.
 ///
 /// Red-check: drop one arm of `AssetKey::try_new`'s allow-list.
 #[test]
 fn asset_key_refuses_every_key_outside_its_bundle() {
-    let refused: [(&str, AssetKeyError); 13] = [
+    let refused: [(&str, AssetKeyError); 24] = [
+        (
+            "assets/logo?.png",
+            AssetKeyError::Forbidden { character: '?' },
+        ),
+        ("assets/*.png", AssetKeyError::Forbidden { character: '*' }),
+        (
+            "assets/\"logo\".png",
+            AssetKeyError::Forbidden { character: '"' },
+        ),
+        (
+            "assets/<logo>.png",
+            AssetKeyError::Forbidden { character: '<' },
+        ),
+        (
+            "assets/a|b.png",
+            AssetKeyError::Forbidden { character: '|' },
+        ),
+        ("assets/NUL", AssetKeyError::ReservedSegment),
+        ("assets/con.txt", AssetKeyError::ReservedSegment),
+        ("Com1/logo.png", AssetKeyError::ReservedSegment),
+        ("assets/lpt9.tar.gz", AssetKeyError::ReservedSegment),
+        ("assets/logo.png.", AssetKeyError::ReservedSegment),
+        ("assets /logo.png", AssetKeyError::ReservedSegment),
         ("", AssetKeyError::Empty),
         ("/etc/passwd", AssetKeyError::EmptySegment),
         ("assets/", AssetKeyError::EmptySegment),
@@ -65,6 +89,9 @@ fn asset_key_refuses_every_key_outside_its_bundle() {
         "assets/.hidden",
         "assets/a..b",
         "assets/фото 1.png",
+        "assets/console.png",
+        "assets/com10.png",
+        "assets/#1 %20.png",
     ] {
         let admitted_key = AssetKey::try_new(admitted).expect("an admitted key");
         assert_eq!(admitted_key.as_str(), admitted);

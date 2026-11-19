@@ -124,3 +124,67 @@ fn a_bundles_authority_is_its_source() {
         );
     }
 }
+
+/// A directory read refuses an asset over its limit from the file's length,
+/// before it reads a byte; reads a large asset one chunk per poll, so its
+/// lane gets turns between them; reads an empty one; and never opens a FIFO
+/// for reading, which would hold the lane until a writer came.
+///
+/// Red-check: drop the length check before the chunk loop, read the file
+/// whole in one poll, or open without `O_NONBLOCK`.
+#[test]
+fn a_directory_read_checks_before_it_reads() {
+    let root = std::env::temp_dir().join(format!("flui-assets-read-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("BUG: the temp dir is writable");
+    let large = vec![7_u8; 200 * 1024];
+    std::fs::write(root.join("large.bin"), &large).expect("BUG: writable");
+    std::fs::write(root.join("empty.bin"), b"").expect("BUG: writable");
+    let bundle = AssetBundle::new(Arc::new(DirectoryAssets::new(&root)));
+
+    let mut over = bundle.load(&key("large.bin"), 100 * 1024);
+    let mut ctx = Context::from_waker(Waker::noop());
+    assert!(
+        matches!(
+            over.as_mut().poll(&mut ctx),
+            Poll::Ready(Err(AssetLoadError::TooLarge { .. }))
+        ),
+        "the length refuses it at the first poll, before any chunk"
+    );
+
+    let mut whole = bundle.load(&key("large.bin"), u64::MAX);
+    let mut polls = 0_usize;
+    let bytes = loop {
+        polls += 1;
+        if let Poll::Ready(answer) = whole.as_mut().poll(&mut ctx) {
+            break answer.expect("a file under the limit reads");
+        }
+    };
+    assert_eq!(bytes, large);
+    assert!(
+        polls >= 4,
+        "200 KiB in 64 KiB chunks yields between them: {polls} polls"
+    );
+
+    assert_eq!(
+        block_on(bundle.load(&key("empty.bin"), 0)).expect("an empty file is under any limit"),
+        Vec::<u8>::new()
+    );
+
+    #[cfg(unix)]
+    {
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("pipe"))
+            .status()
+            .expect("BUG: a Unix test host has mkfifo");
+        assert!(made.success());
+        assert!(
+            matches!(
+                block_on(bundle.load(&key("pipe"), 1024)),
+                Err(AssetLoadError::NotAFile { .. })
+            ),
+            "a FIFO is refused without waiting for a writer"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

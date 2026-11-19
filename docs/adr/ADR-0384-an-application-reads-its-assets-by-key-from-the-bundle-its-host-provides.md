@@ -96,10 +96,12 @@ and it puts the reader where HTTP, the clipboard and storage already are.
 `flui_platform::assets::AssetKey` is the asset's path relative to the project root, with `/`
 between segments, as `[assets] directories` declares it: `assets/logo.png` for the file
 `<project>/assets/logo.png`. It is built by `AssetKey::try_new(&str) -> Result<AssetKey,
-AssetKeyError>`, an allow-list: at most 1024 bytes, at least one segment, no empty segment, no
-`.` or `..` segment, and no `\`, `:`, NUL or other control character anywhere. A key that passes
-is never absolute and never leaves the bundle's root, so every reader joins it to its root
-without checking it again. The same key names the same asset on every platform.
+AssetKeyError>`: at most 1024 bytes, at least one segment, no empty segment, no `.` or `..`
+segment, no character a Windows file name may not hold (`\ : * ? " < > |`) and no control
+character anywhere, and no segment Windows would not keep as written (one ending in `.` or a
+space, or a device name such as `NUL` or `COM1.txt`). A key that passes is never absolute, never
+leaves the bundle's root and names one file on every file system, so every reader joins it to its
+root without checking it again. The same key names the same asset on every platform.
 
 ### §2 The bundle is a capability of the host
 
@@ -119,10 +121,12 @@ pub enum AssetLoadError { NotFound, TooLarge { limit: u64 }, Io(std::io::Error),
 `AssetBundle::load(&key, limit)` and `AssetBundle::load_string(&key, limit)` (UTF-8, Flutter's
 `loadString`) are what a widget or a service calls. A widget acquires the handle in a lifecycle
 hook with `ctx.capability::<AssetBundleCapability>()`, as it acquires `HttpCapability`. The future
-needs no async runtime of the caller's: a reader over a file or `AAssetManager` reads one chunk
-per poll on whatever lane polls it, and the Web reader awaits the browser's fetch. A reader
-checks the length against `limit` before it allocates, and again on every chunk, and opens only a
-regular file. A missing asset is `NotFound`, never an I/O error with a message. The handle is
+needs no async runtime of the caller's, and nothing is read before it is polled: a reader over
+files reads one chunk per poll on whatever lane polls it, the Android reader reads its asset in
+its first poll (an `AAsset` is not `Send`), and the Web reader awaits the browser's fetch. A
+reader checks the length against `limit` before it allocates, and again on every chunk, and reads
+only a regular file: on Unix it opens without blocking and checks the open file, so a FIFO swapped
+in for an asset never holds the lane. A missing asset is `NotFound`, never an I/O error with a message. The handle is
 FLUI's `rootBundle`: the composition root makes one source per UI runtime and every handle it
 provides clones it, never a `static`. `AssetBundle::authority` names that source by its
 allocation, which it keeps reserved but not alive, so a cache keys a result by the bundle it came
@@ -150,7 +154,8 @@ section ships no assets, and its bundle answers `NotFound`.
 
 `flui run` on a desktop target starts the application with `FLUI_ASSET_ROOT` set to the project
 root, so an edited asset is read on the next load without a copy; the desktop reader reads
-`$FLUI_ASSET_ROOT/<key>` when that variable is set, and its package's `flui_assets/` otherwise.
+`$FLUI_ASSET_ROOT/<key>` when that variable is an absolute path, and its package's `flui_assets/`
+otherwise (a relative one would resolve against the current directory, so it is ignored).
 `flui run` on Android, iOS and the Web packages the assets as `flui build` does. The current
 directory is never a root: an application started with plain `cargo run` and without
 `FLUI_ASSET_ROOT` finds its assets only once `flui build` has copied them.
@@ -190,10 +195,13 @@ record's.
 ### Confirmation
 
 - `asset_key_refuses_every_key_outside_its_bundle` (`flui-platform`) runs the allow-list of §1
-  over absolute paths, `..`, backslashes, drive letters, empty segments and control characters.
+  over absolute paths, `..`, backslashes, drive letters, empty segments, control characters,
+  the other characters Windows refuses, Windows device names and trailing dots and spaces.
 - `every_asset_source_keeps_the_bundle_contract` (`flui-platform`) runs §2 against
   `DirectoryAssets` and `MemoryAssets`: a missing key is `NotFound`, a file over the limit is
-  `TooLarge` before its bytes are read, a directory is `NotAFile`.
+  `TooLarge`, a directory is `NotAFile`; `a_directory_read_checks_before_it_reads` refuses an
+  oversized file at its first poll, before a chunk, reads a large one a chunk per poll, and
+  refuses a FIFO without waiting for a writer.
 - `flui-cli`'s build tests state §3 for each package: the declared files land at
   `flui_assets/<key>`, and a refused key, a collision and a symbolic link fail the build.
 - The platform readers of §3 other than Linux's are confirmed by a run on each platform, rows of

@@ -30,7 +30,7 @@ impl PageAssets {
 
     /// The assets beside the page at `page_url`, fetched with `http`.
     #[must_use]
-    pub fn new(page_url: &str, http: Http) -> Self {
+    fn new(page_url: &str, http: Http) -> Self {
         Self {
             base: page_directory(page_url).to_owned(),
             http,

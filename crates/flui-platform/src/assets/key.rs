@@ -20,14 +20,18 @@ pub const MAX_ASSET_KEY_LEN: usize = 1024;
 pub struct AssetKey(Arc<str>);
 
 impl AssetKey {
-    /// The key `key`, if it names a path inside a bundle.
+    /// The key `key`, if it names the same file inside a bundle on every
+    /// platform.
     ///
     /// # Errors
     ///
     /// [`AssetKeyError`] when `key` is empty or longer than
-    /// [`MAX_ASSET_KEY_LEN`] bytes, has an empty, `.` or `..` segment
-    /// (a leading or trailing `/` makes an empty one), or holds a `\`, a
-    /// `:` or a control character anywhere.
+    /// [`MAX_ASSET_KEY_LEN`] bytes; has an empty, `.` or `..` segment (a
+    /// leading or trailing `/` makes an empty one); holds a character no
+    /// Windows file name may (`\ : * ? " < > |`) or a control character;
+    /// or has a segment Windows would not keep as written: one ending in `.`
+    /// or a space, or a device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`,
+    /// `LPT0`–`LPT9`, in any case and with any extension).
     pub fn try_new(key: &str) -> Result<Self, AssetKeyError> {
         if key.is_empty() {
             return Err(AssetKeyError::Empty);
@@ -35,16 +39,19 @@ impl AssetKey {
         if key.len() > MAX_ASSET_KEY_LEN {
             return Err(AssetKeyError::TooLong { len: key.len() });
         }
-        if let Some(character) = key
-            .chars()
-            .find(|&character| matches!(character, '\\' | ':') || character.is_control())
-        {
+        if let Some(character) = key.chars().find(|&character| {
+            matches!(character, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                || character.is_control()
+        }) {
             return Err(AssetKeyError::Forbidden { character });
         }
         for segment in key.split('/') {
             match segment {
                 "" => return Err(AssetKeyError::EmptySegment),
                 "." | ".." => return Err(AssetKeyError::DotSegment),
+                _ if segment.ends_with(['.', ' ']) || is_device_name(segment) => {
+                    return Err(AssetKeyError::ReservedSegment);
+                }
                 _ => {}
             }
         }
@@ -94,11 +101,27 @@ pub enum AssetKeyError {
     /// A segment is `.` or `..`.
     #[error("an asset key has a `.` or `..` segment")]
     DotSegment,
-    /// The key holds a character no key may: `\`, `:` or a control
-    /// character.
+    /// The key holds a character no key may: one no Windows file name may
+    /// (`\ : * ? " < > |`) or a control character.
     #[error("an asset key holds {character:?}")]
     Forbidden {
         /// The first such character.
         character: char,
     },
+    /// A segment is one Windows does not keep as written: it ends in `.`
+    /// or a space, or it names a device (`NUL`, `COM1.txt`).
+    #[error("an asset key has a segment Windows reserves or trims")]
+    ReservedSegment,
+}
+
+/// Whether Windows takes `segment` for a device rather than a file: its
+/// stem before the first `.` is one of the reserved names, in any case.
+fn is_device_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    let upper = stem.to_ascii_uppercase();
+    match upper.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => digit.is_ascii_digit(),
+        _ => false,
+    }
 }

@@ -47,7 +47,7 @@ mod tests {
     /// fragment, and a key's segments are encoded one by one, so no key
     /// reaches a URL outside `flui_assets/` or another origin.
     ///
-    /// Red-check: keep the query in the base, or leave `%`, `?` or `#`
+    /// Red-check: keep the query in the base, or leave `%` or `#`
     /// unencoded in a segment.
     #[test]
     fn an_asset_url_stays_under_the_pages_flui_assets() {
@@ -63,10 +63,10 @@ mod tests {
             page_directory("https://example.com/"),
             "https://example.com/"
         );
-        let key = AssetKey::try_new("assets/фото 1?#%.png").expect("a valid key");
+        let key = AssetKey::try_new("assets/фото 1#%.png").expect("a valid key");
         assert_eq!(
             asset_url("https://example.com/app/", &key),
-            "https://example.com/app/flui_assets/assets/%D1%84%D0%BE%D1%82%D0%BE%201%3F%23%25.png"
+            "https://example.com/app/flui_assets/assets/%D1%84%D0%BE%D1%82%D0%BE%201%23%25.png"
         );
     }
 }

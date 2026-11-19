@@ -29,11 +29,12 @@ pub use apk::ApkAssets;
 pub use page::PageAssets;
 
 /// The directory inside a package that holds its assets.
-pub const PACKAGE_DIR: &str = "flui_assets";
+pub(crate) const PACKAGE_DIR: &str = "flui_assets";
 
 /// The environment variable a desktop development run names the project
 /// root in, so the run reads the project's assets as they are edited.
-pub const DEVELOPMENT_ROOT_VAR: &str = "FLUI_ASSET_ROOT";
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub(crate) const DEVELOPMENT_ROOT_VAR: &str = "FLUI_ASSET_ROOT";
 
 /// The bundle this process's package holds: the directory `flui_assets/`
 /// beside the executable or under the main bundle's resources, or the

@@ -34,12 +34,6 @@ impl DirectoryAssets {
         }
     }
 
-    /// The directory the keys are joined to.
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// The file asset `key` is read from. An [`AssetKey`] has no empty,
     /// `.` or `..` segment and no `\` or `:`, so the path stays under the
     /// root on every platform.
@@ -72,30 +66,27 @@ async fn read_in_chunks(
     limit: u64,
 ) -> Result<Vec<u8>, AssetLoadError> {
     let failed = |error: std::io::Error| AssetLoadError::from_io(&key, error);
-    let not_a_file = || AssetLoadError::NotAFile { key: key.clone() };
     let too_large = || AssetLoadError::TooLarge {
         key: key.clone(),
         limit,
     };
-    // Opening a FIFO or a device can block until another party acts, and a
-    // read runs on a shared IO lane: only a regular file is opened, checked
-    // again once open in case the path was swapped in between.
-    if !std::fs::metadata(&path).map_err(failed)?.is_file() {
-        return Err(not_a_file());
-    }
-    let mut file = File::open(&path).map_err(failed)?;
-    let metadata = file.metadata().map_err(failed)?;
-    if !metadata.is_file() {
-        return Err(not_a_file());
-    }
-    let length = metadata.len();
+    let mut file = open_regular_file(&path)
+        .map_err(failed)?
+        .ok_or_else(|| AssetLoadError::NotAFile { key: key.clone() })?;
+    let length = file.metadata().map_err(failed)?.len();
     if length > limit {
         return Err(too_large());
     }
     // The metadata length is a hint, not a bound: the file can grow while it
-    // is read, so every chunk is checked against the limit.
-    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
-    let mut chunk = vec![0_u8; READ_CHUNK];
+    // is read, so every chunk is checked against the limit, and a length the
+    // process cannot hold is an error, not an abort.
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(length).unwrap_or(usize::MAX))
+        .map_err(|_| failed(ErrorKind::OutOfMemory.into()))?;
+    let chunk_len =
+        usize::try_from(length.saturating_add(1)).map_or(READ_CHUNK, |len| len.min(READ_CHUNK));
+    let mut chunk = vec![0_u8; chunk_len];
     loop {
         let read = match file.read(&mut chunk) {
             Ok(0) => return Ok(bytes),
@@ -110,6 +101,31 @@ async fn read_in_chunks(
         bytes.extend_from_slice(&chunk[..read]);
         yield_now().await;
     }
+}
+
+/// The file at `path` open for reading, or `None` when it is not a regular
+/// file (a directory, a FIFO, a device).
+///
+/// Opening a FIFO or a device can block until another party acts, and a read
+/// runs on a shared IO lane. On Unix the open does not block
+/// (`O_NONBLOCK`, which a regular file's reads ignore), and the open file is
+/// what is checked, so a path swapped for a FIFO between a check and the
+/// open is refused too. Elsewhere the path is checked before it is opened
+/// and the open file again after.
+fn open_regular_file(path: &Path) -> std::io::Result<Option<File>> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if !std::fs::metadata(path)?.is_file() {
+        return Ok(None);
+    }
+    let file = options.open(path)?;
+    Ok(file.metadata()?.is_file().then_some(file))
 }
 
 /// Pending once, waking itself: whoever polls the read gets a turn to drop
