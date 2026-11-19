@@ -17,8 +17,7 @@
 //!             ├─ render_object: Box<dyn RenderObject<P>>  (owned by value, no lock)
 //!             ├─ state: RenderState<BoxProtocol>
 //!             │    ├─ flags: AtomicRenderFlags
-//!             │    ├─ geometry: Option<ProtocolGeometry<P>>
-//!             │    ├─ constraints: Option<ProtocolConstraints<P>>
+//!             │    ├─ layout: P::LayoutRecord  (last geometry and constraints)
 //!             │    └─ offset: OffsetCell
 //!             └─ links: NodeLinks
 //!                  ├─ parent: Option<RenderId>
