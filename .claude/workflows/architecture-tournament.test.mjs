@@ -226,14 +226,13 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(owned.markdown, new RegExp(`- #${conceded} on a by [a-z-]+, conceded: `))
 }
 
-// 4. A refused proposal is a named gap, an attack that names it anyway is a list item off its schema,
-//    left out while the attacker's other attacks are kept, and fewer than two proposals stop the run.
+// 4. A refused proposal is a named gap, no attacker may name it (each attack schema's target enum lists
+//    only the designs on the table, and the runtime holds a value to its schema), and fewer than two
+//    proposals stop the run.
 {
-  const onAll = (by) => () => ({ attacks: stances.filter((s) => s.key !== by).map((s) => ({ target: s.key, claim: `${by} on ${s.key}`, scenario: 'sc', evidence: 'ev', severity: 'major' })) })
-  const { result } = await run({ topic: 'T', stances }, happy({ 'propose:c': null, 'attack:a': onAll('a') }))
+  const { result, calls } = await run({ topic: 'T', stances }, happy({ 'propose:c': null }))
   assert.ok(result.gaps.includes('proposal c: no result (refused by a usage limit, skipped, or failed after retries)'))
-  assert.ok(result.gaps.includes('attack:a: 1 list items off their schema were left out (at $.attacks[1].target)'))
-  assert.deepEqual(result.attacks.filter((x) => x.by === 'a').map((x) => x.target), ['b'])
+  for (const label of ['attack:a', 'attack:red-team', 'second-round']) assert.ok(!targetsOf(calls.find((o) => o.label === label)).includes('c'), label)
   assert.equal(result.proposals.length, 2)
   assert.ok(result.attacks.every((x) => x.target !== 'c'))
   const { result: two } = await run({ topic: 'T', stances }, happy({ 'propose:b': null, 'propose:c': null }))
@@ -262,62 +261,6 @@ const noAgent = () => assert.fail('no agent may run')
   // A failed proposal and a failed second round reach the judge as failures too.
   const { prompts: lost } = await run({ topic: 'T', stances }, happy({ 'propose:c': null, 'second-round': null }))
   for (const line of ['proposal c: no result', 'second round: no result']) assert.match(lost.judge.split('Agents that returned nothing')[1], new RegExp(`- ${line}`), line)
-  // A value off its schema outside its lists, in any phase, is an agent that returned nothing usable:
-  // named with the path where it breaks, told to the judge, and the run goes on to its judge.
-  const { result: off, prompts: offPrompts } = await run({ topic: 'T', stances }, happy({
-    'research:code': { facts: 'a string', summary: 'sum' },
-    'propose:c': { ...design('c'), debt_removed: 'a string' },
-    'revise:a': { answers: 'not a list', design: design('a revised') },
-    'second-round': { attacks: 'none' },
-    judge: (p, o) => ({ ...verdict(p, o), scores: 'high' }),
-    'judge:opus': verdict,
-  }))
-  const offLines = [
-    'research code: a result off its schema at $.facts',
-    'proposal c: a result off its schema at $.debt_removed',
-    'revision of a: a result off its schema at $.answers; its first design stands with its attacks unanswered',
-    'second round: a result off its schema at $.attacks',
-  ]
-  for (const line of offLines) {
-    assert.ok(off.gaps.includes(line), line)
-    assert.ok(offPrompts['judge:opus'].split('Agents that returned nothing usable')[1].includes(`- ${line}`), line)
-  }
-  assert.ok(off.gaps.includes('judged on opus after the fable judge returned a result off its schema at $.scores'))
-  assert.equal(off.proposals.length, 2)
-  assert.deepEqual(off.open.filter((x) => x.stance === 'a').map((x) => x.why), ['revision failed', 'revision failed'])
-  // Outside a list, a wrong type or a missing field leaves nothing usable.
-  const { result: kinds } = await run({ topic: 'T', stances }, happy({
-    'research:code': { facts: [], summary: 7 },
-    'propose:a': { title: 'a', thesis: 't', shapes: 's', flow: 'f', prediction: 'p', migration: 'm', risks: 'r' },
-  }))
-  for (const line of ['research code: a result off its schema at $.summary', 'proposal a: a result off its schema at $.debt_removed']) assert.ok(kinds.gaps.includes(line), line)
-  // A list item off its schema is the agent's own output: it is left out with a gap that is no agent
-  // failure, and the rest of the value is kept, a concession and a verdict included.
-  let conceding = 0
-  const { result: items, prompts: itemPrompts } = await run({ topic: 'T', stances }, happy({
-    'research:prior-art': { facts: ['a string', { claim: 'kept', evidence: 'x.rs:2' }], summary: 'sum' },
-    'attack:a': (p, o) => ({ attacks: [{ target: 'b', claim: 'kept attack', scenario: 'sc', evidence: 'ev', severity: 'major' }, { target: 'c', claim: 'x', scenario: 'sc', evidence: 'ev', severity: 'grave' }] }),
-    'revise:b': (p) => {
-      const ids = [...p.matchAll(/"id": (\d+)/g)].map((m) => Number(m[1]))
-      conceding = ids[1]
-      return { answers: [{ id: String(ids[0]), verdict: 'fixed', how: 'h' }, { id: conceding, verdict: 'conceded', how: 'costs a pass' }], design: design('b revised') }
-    },
-    judge: (p, o) => ({ ...verdict(p, o), scores: [...verdict(p, o).scores, { stance: 'zzz', score: 10, why: 'w' }] }),
-  }))
-  for (const line of [
-    'research:prior-art: 1 list items off their schema were left out (at $.facts[0])',
-    'attack:a: 1 list items off their schema were left out (at $.attacks[1].severity)',
-    'revise:b: 1 list items off their schema were left out (at $.answers[0].id)',
-    'judge: 1 list items off their schema were left out (at $.scores[3].stance)',
-  ]) {
-    assert.ok(items.gaps.includes(line), line)
-    assert.ok(!itemPrompts.judge.includes(`- ${line}`), line)
-  }
-  assert.deepEqual(items.research.find((r) => r.key === 'prior-art').facts.map((f) => f.claim), ['kept'])
-  assert.ok(items.attacks.some((x) => x.claim === 'kept attack'))
-  assert.equal(items.judge, 'fable')
-  assert.equal(items.scores.length, 3)
-  assert.deepEqual(items.open.filter((x) => x.stance === 'b' && x.why === 'conceded').map((x) => x.id), [conceding])
   assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
   assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('research failures: no result (refused by a usage limit, skipped, or failed after retries)'))
@@ -378,7 +321,7 @@ const noAgent = () => assert.fail('no agent may run')
 }
 
 // 7. Facts, first-round attacks and a design's debt are bounded with a gap; each design gets one
-//    score, the first the judge gave it, in 0..100, and a design scored twice or not at all is a gap.
+//    score, the first the judge gave it, and a design scored twice or not at all is a gap.
 {
   const many = (n, make) => Array.from({ length: n }, (_, i) => make(i))
   const { result, prompts } = await run({ topic: 'T', stances }, happy({
@@ -386,7 +329,7 @@ const noAgent = () => assert.fail('no agent may run')
     'attack:red-team': { attacks: many(15, (i) => ({ target: 'a', claim: `red ${i}`, scenario: 'sc', evidence: 'ev', severity: 'minor' })) },
     'propose:a': { ...design('a'), debt_removed: many(15, (i) => `debt ${i}`) },
     'revise:b': () => ({ answers: [], design: { ...design('b revised'), debt_removed: many(14, (i) => `rdebt ${i}`) } }),
-    judge: (p, o) => ({ ...verdict(p, o), scores: [{ stance: 'a', score: 150, why: 'w' }, { stance: 'a', score: 30, why: 'w2' }, { stance: 'b', score: -5, why: 'w' }] }),
+    judge: (p, o) => ({ ...verdict(p, o), scores: [{ stance: 'a', score: 90, why: 'w' }, { stance: 'a', score: 30, why: 'w2' }, { stance: 'b', score: 70, why: 'w' }] }),
   }))
   assert.equal(result.research.find((r) => r.key === 'code').facts.length, 30)
   assert.ok(result.gaps.includes('research code: 5 facts past the bound of 30 were left out'))
@@ -399,7 +342,7 @@ const noAgent = () => assert.fail('no agent may run')
   assert.ok(result.gaps.includes('revision of b: 2 debt items past the bound of 12 were left out'))
   assert.match(prompts.judge, /rdebt 11/)
   assert.doesNotMatch(prompts.judge, /rdebt 12/)
-  assert.deepEqual(result.scores, [{ stance: 'a', score: 100, why: 'w' }, { stance: 'b', score: 0, why: 'w' }])
+  assert.deepEqual(result.scores, [{ stance: 'a', score: 90, why: 'w' }, { stance: 'b', score: 70, why: 'w' }])
   assert.ok(result.gaps.includes('judge: a scored 2 times'))
   assert.ok(result.gaps.includes('judge: c scored 0 times'))
 }

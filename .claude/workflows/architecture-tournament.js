@@ -24,9 +24,9 @@ export const meta = {
 //             directory)
 const opts = args || {}
 const gaps = []
-// The gaps that are agents which returned nothing usable (no result, an error, or a value off its
-// schema), kept apart from the gaps a design's own output causes (a misnumbered answer, a list past
-// its bound), so a later prompt can excuse only these.
+// The gaps that are agents which returned nothing usable (no result, or an error), kept apart from
+// the gaps a design's own output causes (a misnumbered answer, a list past its bound), so a later
+// prompt can excuse only these.
 const failed = []
 const agentFailed = (line) => { gaps.push(line); failed.push(line) }
 if (typeof opts.topic !== 'string' || !opts.topic.trim()) {
@@ -109,54 +109,14 @@ function blankQuotes(value) {
   return value
 }
 
-// An agent's value held to its schema, since the script reads every value by its schema's shape and
-// does not trust the runtime to hold it. A list item that breaks the schema is the agent's own
-// output, so it is left out and its path recorded in `dropped`, and the rest of the value is kept; a
-// break anywhere else leaves nothing usable, and its path comes back as `off`. A number's minimum and
-// maximum are left to its reader, which clamps.
-function conform(value, schema, path, dropped) {
-  if (schema.enum && !schema.enum.includes(value)) return { off: path }
-  switch (schema.type) {
-    case 'string': return typeof value === 'string' ? { ok: value } : { off: path }
-    case 'integer': return Number.isInteger(value) ? { ok: value } : { off: path }
-    case 'array': {
-      if (!Array.isArray(value)) return { off: path }
-      const kept = []
-      value.forEach((item, i) => {
-        const got = conform(item, schema.items, `${path}[${i}]`, dropped)
-        if (got.off) dropped.push(got.off)
-        else kept.push(got.ok)
-      })
-      return { ok: kept }
-    }
-    case 'object': {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return { off: path }
-      for (const key of schema.required || []) if (!(key in value)) return { off: `${path}.${key}` }
-      const kept = { ...value }
-      for (const [key, sub] of Object.entries(schema.properties || {})) {
-        if (!(key in value)) continue
-        const got = conform(value[key], sub, `${path}.${key}`, dropped)
-        if (got.off) return got
-        kept[key] = got.ok
-      }
-      return { ok: kept }
-    }
-    default: return { ok: value }
-  }
-}
-
-// An agent refused, skipped, past the token target or off its schema outside its lists is a gap the
-// result names as an agent that returned nothing usable; list items it returned off its schema are a
-// gap of its own output. Past `attempt`, a value has its schema's shape.
+// The runtime validates an agent's value against its `schema` at the tool-call layer, and the model
+// retries on a mismatch, so `agent()` returns a value of its schema's shape or null (the Workflow
+// tool's contract for `schema`). Every phase reads a value by that shape. An agent refused, skipped,
+// past the token target or failed is a gap the result names, never an empty answer.
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
-    if (!value) return { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
-    const dropped = []
-    const got = conform(value, options.schema, '$', dropped)
-    if (got.off) return { error: `a result off its schema at ${got.off}` }
-    if (dropped.length) gaps.push(`${options.label}: ${dropped.length} list items off their schema were left out (at ${dropped.slice(0, 3).join(', ')}${dropped.length > 3 ? ', …' : ''})`)
-    return { value: blankQuotes(got.ok) }
+    return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
     return { error: errorText(e) }
   }
@@ -432,13 +392,13 @@ if (verdict.error) {
 }
 
 const v = verdict.value
-// One score per design: the first the judge gave it, in 0..100; a design scored twice or not at all
-// is a gap.
+// One score per design: the first the judge gave it (the schema holds it to a design on the table, in
+// 0..100); a design scored twice or not at all is a gap.
 const scores = []
 for (const stance of proposed) {
   const given = v.scores.filter((x) => x.stance === stance)
   if (given.length !== 1) gaps.push(`judge: ${stance} scored ${given.length} times`)
-  if (given.length) scores.push({ ...given[0], score: Math.max(0, Math.min(100, given[0].score)) })
+  if (given.length) scores.push(given[0])
 }
 const synthesis = v.synthesis
 const markdown = `# ${synthesis.title}
