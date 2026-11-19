@@ -1519,7 +1519,8 @@ jobs:
               .workspace_members as $members
               | [.resolve.nodes[]
                   | select(.id as $id | $members | index($id))
-                  | select(any(.deps[]; .name == "wasm_bindgen_test"
+                  # by package id, which a renamed dependency keeps
+                  | select(any(.deps[]; (.pkg | test("#wasm-bindgen-test@"))
                       and any(.dep_kinds[]; .kind == "dev")))
                   | .id] as $opted
               | .packages[]
@@ -1568,9 +1569,10 @@ jobs:
             cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked
 
       # The system services' web providers (`flui-system`'s `web::tests`, in
-      # its lib test: they drive the providers' private seams) on the same
-      # headless Chrome with their `testing` feature: the pickers, the
-      # launcher and the badge, with no picker or window opened.
+      # its lib test: they drive the providers' private seams) again with the
+      # crate's `testing` feature, which the step above leaves off: the
+      # feature changes what compiles on wasm32 (its `testing` module and the
+      # code gated on it), so this is the only build of that configuration.
       - name: cargo test -p flui-system --lib (headless Chrome)
         env:
           CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}

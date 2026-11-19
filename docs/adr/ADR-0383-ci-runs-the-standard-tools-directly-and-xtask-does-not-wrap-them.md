@@ -91,20 +91,29 @@ with `docs-links`, so such a link is the reader's to catch.
 ### §5. `wasm-check` links the web demos and runs the wasm32 tests itself
 
 The job builds `flui-web-demo` and `flui-painting-demo` for wasm32, so the demos link. Their
-imports are not checked against a list: `wasm-imports` compared them with a committed allowlist
+imports are not checked against a list. `wasm-imports` compared them with a committed allowlist
 because an undefined symbol used to link as an import (`env` the catch-all for an accidental
-native extern), and rustc stopped passing `--allow-undefined` to the wasm linker in 1.96
-(rust-lang/rust#149868), so on the pinned toolchain that symbol fails the link. What would still
-become an import is an extern that names its module (`#[link(wasm_import_module = …)]`), code a
-reader sees in the diff that adds it; keeping the list for that class would cost a tool installed
-beside the toolchain, an allowlist and a step no pull request runs.
+native extern); rustc stopped passing `--allow-undefined` to the wasm linker in 1.96
+(rust-lang/rust#149868), so on the pinned toolchain that symbol fails the link. What still becomes
+an import is an extern that names its module (`#[link(wasm_import_module = …)]`), in the
+workspace or in a dependency. Two options were weighed for that class:
+
+1. Keep the list: read each demo's imports with `wasm-tools` (fetched with a checksum, as the
+   `checks` job fetches lychee) and fail on a module the allowlist lacks. Good, because a
+   dependency bump that adds an import module is refused. Bad, because it is a tool, a version and
+   an allowlist beside the toolchain for a class no dependency of the demos has entered, checked
+   only on main.
+2. Rely on the linker (chosen). Good, because the accidental class fails the link with no tool of
+   its own. Bad, because an import module a dependency adds passes until the demo is loaded in a
+   browser (Consequences).
 
 The job then runs `cargo test --target wasm32-unknown-unknown`, through the runner
 `.cargo/config.toml` names, for each workspace package whose dev-dependencies on wasm32 include
 `wasm-bindgen-test`, as cargo's resolver reports them (`cargo metadata --filter-platform
 wasm32-unknown-unknown`, which evaluates each target table's `cfg`): its lib test, and its
-`wasm32` test target when it has one. A test runs on node, or in the job's pinned headless Chrome
-when its crate configures `run_in_browser`. A package whose run passes no assertion fails the step,
+`wasm32` test target when it has one. A test runs on node, or in the job's headless Chrome (the
+stable release of the day and its matching ChromeDriver) when its crate configures
+`run_in_browser`. A package whose run passes no assertion fails the step,
 and so does an empty list. The `wasm-bindgen-cli` the job installs is the one version of
 `wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
 more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
@@ -125,8 +134,11 @@ more than one fails the step, and `cargo xtask doctor full` fails its row on the
   non-wasm32 target table declares, does not opt a package in) and the count of passed assertions
   (which lines of the runner's output count). The job runs only on main, so such a change is run
   on its branch before the merge (Confirmation).
-- Bad, because an import from a module the extern names is no longer refused by a list; the
-  reader of the change that adds one holds it.
+- Bad, because an import from a module the extern names is no longer refused by a list: in the
+  workspace the reader of the change that adds it holds it, and one a dependency bump brings in
+  is found when the demo is loaded, since nothing in CI instantiates the demos.
+- Bad, because the job's Chrome is whatever stable release is current, so a browser release can
+  change a browser test's result with no change in the repository.
 
 ### Confirmation
 

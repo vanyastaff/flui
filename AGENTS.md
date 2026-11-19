@@ -164,8 +164,10 @@ conversation:
   backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`). So a change to a native backend, a shader, a trybuild case or a
-  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's. A red `main`
-  is fixed forward within the hour or reverted.
+  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's, and a change
+  to the steps of a job only main runs is run on its branch at the head that merges
+  (`gh workflow run CI --ref <branch>`, linked from the PR body; ADR-0383). A red `main` is fixed
+  forward within the hour or reverted.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.

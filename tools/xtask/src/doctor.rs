@@ -658,14 +658,31 @@ mod tests {
             locked_package_versions(&two, "wasm-bindgen").expect("parses"),
             ["0.1.9", "0.2.1"]
         );
-        assert!(locked_package_versions("[[package]\n", "wasm-bindgen").is_err());
+        let malformed = locked_package_versions("[[package]\n", "wasm-bindgen")
+            .expect_err("a lock that is not TOML");
+        assert_eq!(malformed.to_string(), "parsing Cargo.lock");
+        let empty = locked_package_versions("version = 4\n", "wasm-bindgen")
+            .expect_err("a lock with no packages");
+        assert_eq!(empty.to_string(), "Cargo.lock has no [[package]] array");
     }
 
     /// This repository's lock pins one wasm-bindgen, the version CI's
     /// `wasm-check` installs the CLI at.
     fn this_lock_pins_one_wasm_bindgen() {
         let locked = locked_wasm_bindgen().expect("Cargo.lock reads");
-        assert_eq!(locked.len(), 1, "{locked:?}");
+        let [version] = locked.as_slice() else {
+            panic!(
+                "Cargo.lock pins {} wasm-bindgen versions: {locked:?}",
+                locked.len()
+            );
+        };
+        let lock = read("Cargo.lock").expect("Cargo.lock reads");
+        assert!(
+            lock.contains(&format!(
+                "name = \"wasm-bindgen\"\nversion = \"{version}\"\n"
+            )),
+            "{version} is not the wasm-bindgen entry of Cargo.lock"
+        );
     }
 
     /// The row is usable only for one locked version equal to the installed
@@ -692,6 +709,11 @@ mod tests {
         let none = wasm_bindgen_row(&Ok(Vec::new()), Some("0.2.1"));
         assert!(!none.ok);
         assert!(none.detail.contains("no wasm-bindgen"), "{none:?}");
+        assert!(
+            none.install
+                .starts_with("cargo install --locked wasm-bindgen-cli"),
+            "{none:?}"
+        );
         let unreadable = wasm_bindgen_row(
             &locked_package_versions("[[package]\n", "wasm-bindgen"),
             Some("0.2.1"),
@@ -700,6 +722,10 @@ mod tests {
         assert!(
             unreadable.detail.starts_with("parsing Cargo.lock"),
             "an unreadable lock names why: {unreadable:?}"
+        );
+        assert!(
+            unreadable.install.starts_with("repair Cargo.lock"),
+            "{unreadable:?}"
         );
         let two = wasm_bindgen_row(
             &Ok(vec!["0.1.9".to_owned(), "0.2.1".to_owned()]),
@@ -711,6 +737,7 @@ mod tests {
                 .contains("pins 2 wasm-bindgen versions (0.1.9, 0.2.1)"),
             "{two:?}"
         );
+        assert!(two.install.starts_with("leave one wasm-bindgen"), "{two:?}");
     }
 
     fn only_apple_hosts_require_the_ios_target() {
