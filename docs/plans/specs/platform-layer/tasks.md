@@ -5938,17 +5938,28 @@ GPU-память простаивающего или невидимого окн
   `an_obscured_field_offers_the_platform_no_copy_or_cut` (красные без команды); `select:` —
   `EditCommand::SelectWord`, Paste предлагается по `hasStrings`; команда доходит только до поля,
   над которым меню предложено (`an_edit_command_reaches_only_the_field_it_was_offered_for`).
-  Прямоугольники обрезаны видимой частью поля с клипами предков (`TextStoreRead::visible_bounds`,
-  `a_field_shows_only_what_its_ancestors_clip_leaves`), каретка удерживается внутри неё
+  Прямоугольники обрезаны видимой частью поля, которую считает запрос конвейера
+  `PipelineOwner::presented_placement` (ворота и шаг обхода отрисовки; им же пользуются обход
+  input regions и `presented_nodes`): `TextStoreRead::visible_bounds`,
+  `a_field_shows_only_what_its_ancestors_clip_leaves`, `an_offstage_field_shows_nothing`;
+  каретка удерживается внутри неё
   (`the_caret_stays_inside_the_part_of_the_field_the_window_shows`); UIKit спрашивает геометрию
-  снова только при сдвиге самого поля (`TextStoreObserver::field_moved`), не при движении
-  каретки и не во время составления или жеста
+  снова только при сдвиге самого поля, его рамки или видимой части (`TextStoreObserver::field_moved`,
+  `a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved`), или после чтения геометрии,
+  отказанного без раскладки (`a_geometry_read_refused_for_lack_of_layout_is_asked_again_once_laid_out`),
+  не при движении каретки и не во время составления или жеста
   (`a_field_move_asks_for_its_geometry_once_and_never_mid_composition_or_gesture`,
-  `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`); жесты начинаются там, где hit
-  test окна находит поле, или у ручки, где нет другой цели (`TextStoreRead::press_target_at`,
+  `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`); уход фокуса снимает жест и
+  долги старого поля (`a_focus_move_asks_for_the_next_fields_geometry_once_whatever_the_last_one_held`).
+  Жесты начинаются там, где hit test окна находит поле, или у ручки, где нет чужой цели: предки
+  поля (прокрутка, страница) чужой целью не считаются (`TextStoreRead::press_target_at`,
   `a_control_over_the_field_keeps_its_press`,
-  `a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers`); уход фокуса закрывает меню
-  правки, не снимая interaction (`a_focus_move_between_fields_keeps_the_keyboard_and_leaves_the_old_field_once`). Клаузы
+  `a_scroll_view_around_the_field_leaves_the_handles_their_reach`,
+  `a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers`). Клиент сообщает ответчику уход
+  со старого поля без момента «поля нет»
+  (`a_focus_move_between_fields_keeps_the_keyboard_and_leaves_the_old_field_once`); что ответчик
+  при этом закрывает меню правки и не снимает interaction, проверено только проверкой типов и
+  остаётся прогону Simulator (заметка строки parity). Клаузы
   составления CJK не различаются: хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
   CoreText по языку (`crates/flui-native/src/fonts/apple.rs`); квадраты вместо кана и кандзи
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,

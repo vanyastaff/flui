@@ -90,10 +90,11 @@ impl FieldCommands {
     /// The word at a collapsed caret, as UIKit's `select:` takes it: the word
     /// that holds the caret, else the one that ends at it, else the one that
     /// starts at it, else the nearest word before it on its line past
-    /// punctuation and spaces, else the nearest after. A word is a segment
-    /// with a letter or a digit, so a caret just past "hello," selects
-    /// "hello", never the comma. None for a selection, for a line with no
-    /// word, and in an obscured field, which shows no words.
+    /// punctuation and spaces, else the nearest after on its line. A word is
+    /// a segment with a letter or a digit, so a caret just past "hello,"
+    /// selects "hello", never the comma; a line break bounds the search on
+    /// both sides. None for a selection, for a line with no word, and in an
+    /// obscured field, which shows no words.
     fn word_at_caret(&self) -> Option<Range<usize>> {
         if self.clipboard.obscure.get() {
             return None;
@@ -110,10 +111,29 @@ impl FieldCommands {
                     .chars()
                     .any(char::is_alphanumeric)
         };
+        // Each line break is a segment of its own; the segments start at the
+        // caret's line, past its last line feed, and a break before the
+        // caret that is not a line feed (a carriage return, a paragraph
+        // separator) starts the line again.
+        let is_line_break = |segment: &WordSegment| {
+            text[segment.start..segment.end].contains([
+                '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
+            ])
+        };
         // The line's words in order: the last that ends at or before the
         // caret, and the first that starts at or after it.
         let mut before: Option<WordSegment> = None;
-        for segment in word_segments_from(&text, caret).filter(is_word) {
+        for segment in word_segments_from(&text, caret) {
+            if is_line_break(&segment) {
+                if segment.end > caret {
+                    break;
+                }
+                before = None;
+                continue;
+            }
+            if !is_word(&segment) {
+                continue;
+            }
             if segment.start < caret && caret < segment.end {
                 return Some(segment.start..segment.end);
             }

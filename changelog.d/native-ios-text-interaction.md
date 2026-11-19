@@ -19,7 +19,12 @@
 - `TextStoreRead::press_target_at` and `PressTarget`: what a press at a point lands on (the
   field, another target, nothing), and `TextStoreRead::visible_bounds`: the part of the field the
   window shows, its ancestors' clips included. Both are required of every store session;
-  `EditableText` answers them with the window's hit test and its ancestors' paint clips.
+  `EditableText` answers them with the window's hit test, where its own ancestors take no press
+  from it, and the pipeline's placement query.
+- `PipelineOwner::presented_placement` and `PresentedPlacement` in `flui-rendering`: where one
+  render node's local space is drawn in the window after the last frame and the part of the
+  window its ancestors' clips leave it, by the paint walk's gates and composition, which the
+  input-region walk and `presented_nodes` share.
 - `TextStoreObserver::field_moved`: the field itself moved in the window, told apart from the
   layout change every caret move sends.
 - `flui-testing`: `RecordingTextStoreHost::with_selection_ui`,

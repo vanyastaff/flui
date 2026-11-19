@@ -566,7 +566,8 @@ the other way, through the store (`TextStore::edit_command_enabled` and
 holds of the field, so the field's own clipboard and selection rules perform it.
 Such a platform draws inside `TextStoreRead::visible_bounds` (the field's box cut
 by its ancestors' clips) and begins its gestures by `TextStoreRead::press_target_at`
-(the field, another target, or nothing, from the window's own hit test), so a
+(the field, another target, or nothing, from the window's own hit test; the
+field's own ancestors, a scroll view around it, are no other target), so a
 control drawn over the field keeps its tap; it asks for the field's geometry
 again on `TextStoreObserver::field_moved`, which a caret move never sends. The
 two session reads have no default, so a wrapper session cannot drop them; a

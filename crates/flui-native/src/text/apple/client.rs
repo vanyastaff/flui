@@ -35,8 +35,8 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     Composition, CompositionEnd, LockGrant, LockTiming, OwnerCalls, PointMode, Selection,
-    SelectionUi, TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreHost,
-    TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
+    SelectionUi, TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreError,
+    TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
 };
 #[cfg(any(target_os = "ios", test))]
 use flui_platform::text_store::{EditCommand, PressTarget};
@@ -167,6 +167,10 @@ pub(crate) struct TextClient {
     /// was under way: [`InputContext::geometry_changed`] is owed, once, when
     /// that ends.
     geometry_owed: Cell<bool>,
+    /// The focused field refused a geometry read for lack of layout: what
+    /// the platform drew from that read is asked for again
+    /// ([`InputContext::geometry_changed`]) once the field reports its layout.
+    layout_refused: Cell<bool>,
     this: Weak<Self>,
 }
 
@@ -195,7 +199,6 @@ fn scalar_range(
     at: Utf16Offset,
     backward: bool,
 ) -> Option<Utf16Range> {
-    use flui_platform::text_store::TextStoreError;
     use flui_platform::text_store::utf16::OffsetError;
 
     let valid = |range: Utf16Range| -> Result<(), TextStoreError> {
@@ -310,6 +313,7 @@ impl TextClient {
             offered: RefCell::new(None),
             interacting: Cell::new(false),
             geometry_owed: Cell::new(false),
+            layout_refused: Cell::new(false),
             this: this.clone(),
         })
     }
@@ -346,7 +350,7 @@ impl TextClient {
         #[cfg(any(target_os = "ios", test))]
         let offered = self.offered.borrow_mut().take();
         self.marked.set(false);
-        self.geometry_owed.set(false);
+        self.forget_field_geometry();
         let mut failure = FirstPanic::new();
         // The field an edit menu was offered over is let go too: a retired
         // client keeps no store alive.
@@ -490,6 +494,11 @@ impl TextClient {
     /// ([`InputContext::geometry_changed`]), now, or once the marked text or
     /// the platform's gesture under way ends.
     fn field_moved(&self) {
+        if self.focused.borrow().is_none() {
+            // No field is served: nothing it drew is out of date.
+            self.geometry_owed.set(false);
+            return;
+        }
         if self.marked.get() || self.interacting.get() {
             self.geometry_owed.set(true);
             return;
@@ -508,10 +517,30 @@ impl TextClient {
         }
     }
 
+    /// The focused field reported a layout change: a geometry read it
+    /// refused for lack of layout is owed as a move of the field, told under
+    /// the same holds ([`Self::field_moved`]).
+    fn layout_settled(&self) {
+        if self.layout_refused.replace(false) {
+            self.field_moved();
+        }
+    }
+
+    /// Forget what is owed of the served field's geometry, and the platform
+    /// gesture that was under way over it: the field is no longer served, or
+    /// another is (whose own geometry the caller asks for). A gesture whose
+    /// end UIKit never reports, focus having left mid-gesture, does not hold
+    /// the next field's geometry back.
+    fn forget_field_geometry(&self) {
+        self.interacting.set(false);
+        self.geometry_owed.set(false);
+        self.layout_refused.set(false);
+    }
+
     /// The platform's own selection gesture over the field began (`true`,
     /// UIKit's `interactionWillBegin:`) or ended (`false`,
-    /// `interactionDidEnd:`): a move of the field during it is told once, at
-    /// its end.
+    /// `interactionDidEnd:`, or the interaction taken off its view): a move
+    /// of the field during it is told once, at its end.
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn set_interacting(&self, interacting: bool) {
         self.interacting.set(interacting);
@@ -614,6 +643,10 @@ impl TextClient {
         if same || self.retired.get() {
             return;
         }
+        // What is owed of the field losing focus is not paid to it: ending
+        // its composition below settles nothing for it, and the next field's
+        // geometry is asked for once it is served.
+        self.forget_field_geometry();
         // An edit command offered for the field losing focus is not the
         // next field's.
         #[cfg(any(target_os = "ios", test))]
@@ -682,6 +715,26 @@ impl TextClient {
         failure.contain(|| drop(store));
         failure.resume();
         answer
+    }
+
+    /// Read the focused field's geometry ([`Self::read`]): a read it refuses
+    /// for lack of layout makes its layout notice ask the platform for the
+    /// geometry again ([`Self::layout_settled`]), since the platform asks
+    /// only when told. `None` for any refusal.
+    fn read_geometry<R: 'static>(
+        &self,
+        body: impl FnOnce(&dyn TextStoreRead) -> Result<R, TextStoreError> + 'static,
+    ) -> Option<R> {
+        match self.read(body)? {
+            Ok(answer) => Some(answer),
+            Err(error) => {
+                if error == TextStoreError::NoLayout {
+                    self.layout_refused.set(true);
+                }
+                tracing::debug!(?error, "the focused field refused a geometry read");
+                None
+            }
+        }
     }
 
     /// Edit the focused store under an asynchronous lock: now when it is
@@ -829,14 +882,12 @@ impl TextClient {
         &self,
         range: Option<Utf16Range>,
     ) -> Option<(Bounds<f64>, Utf16Range)> {
-        self.read(move |session| {
+        self.read_geometry(move |session| {
             let range = query_target(session, range);
             session
                 .rect_for_range(range)
-                .ok()
                 .map(|rect| (rect.bounds, range))
         })
-        .flatten()
     }
 
     /// `characterIndexForPoint:` — the character boundary nearest `point`,
@@ -904,7 +955,7 @@ impl TextClient {
         &self,
         range: Utf16Range,
     ) -> Vec<super::selection_rects::SelectionRect> {
-        self.read(move |session| {
+        self.read_geometry(move |session| {
             super::selection_rects::selection_rects(session, clamped(range, session.document_len()))
         })
         .unwrap_or_default()
@@ -972,7 +1023,7 @@ impl TextClient {
     /// none.
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn caret_rect(&self, at: Utf16Offset) -> Option<Bounds<f64>> {
-        self.read(move |session| super::selection_rects::caret_in(session, at))
+        self.read_geometry(move |session| super::selection_rects::caret_in(session, at))
             .flatten()
     }
 
@@ -1152,10 +1203,13 @@ impl TextStoreObserver for ClientObserver {
     /// The focused field's caret, composition or layout moved, typing
     /// included: the candidate window asks for its rectangle again
     /// (`invalidateCharacterCoordinates` on AppKit; UIKit asks
-    /// `firstRectForRange:` itself and is told nothing).
+    /// `firstRectForRange:` itself and is told nothing). A geometry read the
+    /// field refused for lack of layout is now owed as a move of the field
+    /// ([`InputContext::geometry_changed`], under the same holds).
     fn layout_changed(&self) {
         if let Some(client) = self.serving() {
             client.invalidate_character_coordinates();
+            client.layout_settled();
         }
     }
 

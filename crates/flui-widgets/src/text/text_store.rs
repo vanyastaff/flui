@@ -1055,8 +1055,10 @@ impl TextStoreRead for Session<'_> {
 
     /// The window's own hit test, the one a touch is dispatched by, run at
     /// `point`: the field when its editable is on the path (a control drawn
-    /// over it keeps it off), another target when an entry on the path takes
-    /// pointer events, nothing otherwise. A render object's hit test is user
+    /// over it keeps it off), another target when an entry on the path that
+    /// is not one of the field's ancestors takes pointer events (a scroll
+    /// view around the field takes none from it), nothing otherwise. A render
+    /// object's hit test is user
     /// code: one that panics makes the walk resume its panic once the path is
     /// complete (`PipelineOwner::hit_test`), and it leaves this call; the
     /// platform's entry contains it (iOS's `interactionShouldBegin:atPoint:`
@@ -1067,57 +1069,63 @@ impl TextStoreRead for Session<'_> {
 }
 
 impl EditableTextStore {
-    /// The field's box in the window, cut by the window and by every
-    /// ancestor's paint clip (`describe_approximate_paint_clip`, the clip the
-    /// paint walk and the window's presented-node query apply), each mapped
-    /// into the window through its node's transform. `None` when nothing of
-    /// the box is left.
-    pub(super) fn visible_box(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+    /// Where the field is in the window after the last frame: its box, and
+    /// the part of it the window and every ancestor's paint clip leave, by
+    /// the pipeline's own placement query (`PipelineOwner::presented_placement`,
+    /// the paint walk's gates and composition, follower placement included).
+    /// `Ok(None)` when the paint walk draws nothing of the field (it is
+    /// offstage, skipped or left out of its parent's paint); `NoLayout`,
+    /// which owes the observer a layout notice, before the field is laid out.
+    pub(super) fn placement(&self) -> Result<Option<FieldPlacement>, TextStoreError> {
         let viewport = self.viewport()?;
-        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
-        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
-        pipeline
-            .try_with_layout(|owner| {
-                let tree = owner.render_tree();
-                let root = owner.root_id()?;
-                let editable = *tree.children(anchor).first()?;
-                let window = Rect::from_origin_size(Point::ZERO, tree.get(root)?.laid_out_size()?);
-                let field = owner
-                    .transform_to(editable, root)?
-                    .transform_rect(&viewport);
-                let mut visible = field.intersect(&window);
-                let mut child = editable;
-                while let Some(parent) = tree.parent(child) {
-                    let slot = tree.children(parent).iter().position(|&id| id == child)?;
-                    let node = tree.get(parent)?;
-                    let size = node.laid_out_size()?;
-                    let local = match (node.as_box(), node.as_sliver()) {
-                        (Some(entry), _) => entry
-                            .render_object()
-                            .describe_approximate_paint_clip(slot, size),
-                        (None, Some(entry)) => entry
-                            .render_object()
-                            .describe_approximate_paint_clip(slot, size),
-                        (None, None) => None,
-                    };
-                    if let Some(local) = local {
-                        let clip = owner.transform_to(parent, root)?.transform_rect(&local);
-                        visible = visible.and_then(|kept| kept.intersect(&clip));
-                    }
-                    child = parent;
-                }
-                Some(
-                    visible
-                        .filter(|kept| !kept.is_empty())
-                        .map(bounds_from_rect),
-                )
-            })
-            .flatten()
-            .ok_or(TextStoreError::NoLayout)
+        let measured = self
+            .pipeline
+            .as_ref()
+            .zip(self.inner_anchor.get())
+            .and_then(|(pipeline, anchor)| {
+                pipeline
+                    .try_with_layout(|owner| {
+                        let editable = *owner.render_tree().children(anchor).first()?;
+                        let Some(placement) = owner.presented_placement(editable) else {
+                            return Some(None);
+                        };
+                        let rect = placement.transform.transform_rect(&viewport);
+                        let finite = [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                            .iter()
+                            .all(|edge| edge.is_finite());
+                        if !finite {
+                            return Some(None);
+                        }
+                        let visible = placement
+                            .clip
+                            .intersect(&rect)
+                            .filter(|kept| !kept.is_empty())
+                            .map(bounds_from_rect);
+                        Some(Some(FieldPlacement {
+                            rect: bounds_from_rect(rect),
+                            visible,
+                        }))
+                    })
+                    .flatten()
+            });
+        measured.ok_or_else(|| {
+            self.layout_owed.set(true);
+            TextStoreError::NoLayout
+        })
+    }
+
+    /// The part of the field the window shows ([`Self::placement`]); `None`
+    /// when it shows nothing of it.
+    pub(super) fn visible_box(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        Ok(self.placement()?.and_then(|placement| placement.visible))
     }
 
     /// What a press at `point` lands on, by the window's own hit test
-    /// ([`TextStoreRead::press_target_at`]).
+    /// ([`TextStoreRead::press_target_at`]): the field when its editable is
+    /// on the path; another target when an entry that takes pointer events
+    /// and is not one of the field's own ancestors is (a control drawn over
+    /// or beside it, another field), since a scroll view or a page around the
+    /// field is on every path through it; nothing otherwise.
     fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
         let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
         let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
@@ -1126,7 +1134,10 @@ impl EditableTextStore {
         let mut path = HitTestResult::new();
         let target = pipeline
             .try_with_layout(|owner| {
-                let editable = *owner.render_tree().children(anchor).first()?;
+                let tree = owner.render_tree();
+                let editable = *tree.children(anchor).first()?;
+                let ancestors: Vec<_> =
+                    std::iter::successors(tree.parent(editable), |&id| tree.parent(id)).collect();
                 owner.hit_test(Offset::new(point.x, point.y), PointerKind::Touch, &mut path);
                 let entries = path.path();
                 Some(
@@ -1135,7 +1146,9 @@ impl EditableTextStore {
                         .any(|entry| entry.target == editable || entry.target == anchor)
                     {
                         PressTarget::Field
-                    } else if entries.iter().any(|entry| entry.pointer_target.is_some()) {
+                    } else if entries.iter().any(|entry| {
+                        entry.pointer_target.is_some() && !ancestors.contains(&entry.target)
+                    }) {
                         PressTarget::Other
                     } else {
                         PressTarget::Nothing
@@ -1147,6 +1160,17 @@ impl EditableTextStore {
         drop(path);
         target
     }
+}
+
+/// Where a field is in the window ([`EditableTextStore::placement`]), in
+/// window-root logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct FieldPlacement {
+    /// The field's box.
+    pub(super) rect: Bounds<f64>,
+    /// The part of it the window and its ancestors' clips leave; `None` for
+    /// nothing.
+    pub(super) visible: Option<Bounds<f64>>,
 }
 
 /// The rendered byte offset at a local point. A point inside a scalar's box

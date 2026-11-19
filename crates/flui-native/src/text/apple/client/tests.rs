@@ -8,8 +8,9 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionEnd, EditCommand, PressTarget, Selection, SelectionUi,
-    TextStore, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, PointMode, PressTarget,
+    RangeRect, Selection, SelectionUi, TextStore, TextStoreError, TextStoreHost,
+    TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
     commit_composition_in_place,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
@@ -1840,4 +1841,194 @@ fn a_retired_client_lets_go_of_the_field_a_menu_was_offered_over() {
     assert!(client.edit_command_enabled(EditCommand::Paste));
     client.retire();
     assert_eq!(Rc::strong_count(&field), 1, "only the test holds the field");
+}
+
+/// The reference store as a field whose geometry reads are refused for lack
+/// of layout until `laid_out` is set, as a field typed into before its next
+/// frame refuses them.
+struct FieldAwaitingLayout {
+    inner: Rc<InMemoryTextStore>,
+    laid_out: Rc<Cell<bool>>,
+}
+
+impl TextStore for FieldAwaitingLayout {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, TextStoreError> {
+        let grant = match grant {
+            LockGrant::Read(body) => {
+                let laid_out = self.laid_out.get();
+                LockGrant::read(move |session| body(&AwaitingLayout { session, laid_out }))
+            }
+            edit @ LockGrant::ReadWrite(_) => edit,
+        };
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// A read session of a [`FieldAwaitingLayout`]: its text as it is, its
+/// geometry refused with `NoLayout` until it is laid out.
+struct AwaitingLayout<'a> {
+    session: &'a dyn TextStoreRead,
+    laid_out: bool,
+}
+
+impl AwaitingLayout<'_> {
+    fn laid_out(&self) -> Result<(), TextStoreError> {
+        if self.laid_out {
+            Ok(())
+        } else {
+            Err(TextStoreError::NoLayout)
+        }
+    }
+}
+
+impl TextStoreRead for AwaitingLayout<'_> {
+    fn document_len(&self) -> Utf16Offset {
+        self.session.document_len()
+    }
+
+    fn text(&self, range: Utf16Range) -> Result<String, TextStoreError> {
+        self.session.text(range)
+    }
+
+    fn selection(&self) -> Selection {
+        self.session.selection()
+    }
+
+    fn composition(&self) -> Option<Composition> {
+        self.session.composition()
+    }
+
+    fn rect_for_range(&self, range: Utf16Range) -> Result<RangeRect, TextStoreError> {
+        self.laid_out()?;
+        self.session.rect_for_range(range)
+    }
+
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
+        self.laid_out()?;
+        self.session.document_bounds()
+    }
+
+    fn index_at_point(
+        &self,
+        point: Point<f64>,
+        mode: PointMode,
+    ) -> Result<Utf16Offset, TextStoreError> {
+        self.laid_out()?;
+        self.session.index_at_point(point, mode)
+    }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.laid_out()?;
+        self.session.visible_bounds()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.laid_out()?;
+        self.session.press_target_at(point)
+    }
+}
+
+/// A geometry read the field refuses for lack of layout (UIKit asking for
+/// the caret, the selection or the candidate bar's rectangle right after an
+/// `insertText:`) makes the field's next layout notice ask UIKit for its
+/// geometry again, once, under the holds a move of the field has: not while
+/// the keyboard composes, and once when it stops. A read the field answered
+/// owes nothing.
+#[test]
+fn a_geometry_read_refused_for_lack_of_layout_is_asked_again_once_laid_out() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let field = Rc::new(FieldAwaitingLayout {
+        inner: InMemoryTextStore::new("abc"),
+        laid_out: Rc::new(Cell::new(true)),
+    });
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    let queries = || context.geometry_queries.get();
+    let served = queries();
+
+    assert!(client.caret_rect(Utf16Offset::ZERO).is_some());
+    field.inner.screen_moved();
+    assert_eq!(queries(), served, "an answered read owes nothing");
+
+    field.laid_out.set(false);
+    assert_eq!(client.caret_rect(Utf16Offset::ZERO), None);
+    assert_eq!(client.selection_rects(span(0, 1)), Vec::new());
+    assert_eq!(client.first_rect(None), None);
+    assert_eq!(queries(), served, "a refusal asks nothing yet");
+    field.laid_out.set(true);
+    field.inner.screen_moved();
+    assert_eq!(queries(), served + 1, "once the layout settles");
+    field.inner.screen_moved();
+    assert_eq!(queries(), served + 1, "and only once");
+
+    client.set_marked_text("ni".to_owned(), span(0, 2), None);
+    field.laid_out.set(false);
+    assert_eq!(client.first_rect(None), None);
+    field.laid_out.set(true);
+    field.inner.screen_moved();
+    assert_eq!(queries(), served + 1, "not while the keyboard composes");
+    client.unmark_text();
+    assert_eq!(queries(), served + 2, "once the composition ended");
+}
+
+/// A focus move ends what the client held for the field it left: a UIKit
+/// gesture whose `interactionDidEnd:` never comes (focus left mid-gesture)
+/// does not hold back the next field's geometry, and a move owed to the old
+/// field while the keyboard composed is not told for it on the way out, so
+/// the next field's geometry is asked for once.
+#[test]
+fn a_focus_move_asks_for_the_next_fields_geometry_once_whatever_the_last_one_held() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let first = Rc::new(FieldKeepingItsObserver {
+        inner: InMemoryTextStore::new("one"),
+        kept: RefCell::new(None),
+    });
+    let second = InMemoryTextStore::new("two");
+    let third = InMemoryTextStore::new("three");
+    let queries = || context.geometry_queries.get();
+
+    client.focus_store(Some(Rc::clone(&first) as Rc<dyn TextStore>));
+    client.set_interacting(true);
+    let before = queries();
+    client.focus_store(Some(as_store(&second)));
+    assert_eq!(
+        queries(),
+        before + 1,
+        "a gesture over the field left holds nothing back"
+    );
+
+    client.focus_store(Some(Rc::clone(&first) as Rc<dyn TextStore>));
+    let observer = first.kept.borrow().clone().expect("the field was observed");
+    client.set_marked_text("ni".to_owned(), span(0, 2), None);
+    observer.field_moved();
+    let before = queries();
+    client.focus_store(Some(as_store(&third)));
+    assert_eq!(
+        queries(),
+        before + 1,
+        "the next field's geometry, and nothing for the one left"
+    );
 }

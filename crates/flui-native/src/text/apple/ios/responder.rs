@@ -624,8 +624,10 @@ define_class!(
             })
         }
 
-        /// The caret, cut to the field's box; an empty rectangle, which
-        /// UIKit draws nothing for, while it is scrolled out of the box.
+        /// The caret, held inside the part of the field the window shows: one
+        /// scrolled out stands at the nearest edge of that part
+        /// ([`TextClient::caret_rect`]); an empty rectangle only when no
+        /// field is served or it shows nothing.
         #[unsafe(method(caretRectForPosition:))]
         fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
             os_entry("FluiTextInputView caretRectForPosition:", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
@@ -887,7 +889,9 @@ impl TextInputView {
         }
     }
 
-    /// Take UIKit's text interaction off the view it is on, if any.
+    /// Take UIKit's text interaction off the view it is on, if any. A
+    /// gesture under way ends with it, though UIKit may never send its
+    /// `interactionDidEnd:`.
     fn remove_interaction(&self) {
         let Some(interaction) = self.ivars().interaction.get() else {
             return;
@@ -895,6 +899,7 @@ impl TextInputView {
         if let Some(view) = interaction.view() {
             view.removeInteraction(ProtocolObject::from_ref(&**interaction));
         }
+        self.client().set_interacting(false);
     }
 
     /// Reload the keyboard for traits that changed while it composed, once

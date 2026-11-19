@@ -71,40 +71,31 @@ impl SelectionRect {
 /// The rectangles of `range`, an offset range inside `session`'s document,
 /// one per line in document order, cut to the part of the field the window
 /// shows ([`TextStoreRead::visible_bounds`], ancestor clips included): one
-/// zero-wide rectangle, the caret, for an empty range, and none when the
-/// field has no layout for it, none of it is shown, or the store answers a
-/// rectangle that is not finite. A line scrolled wholly out of view has
-/// none, and a line the cut moves at the range's start or end no longer
-/// holds that end ([`clip_to`]). An end that splits a surrogate pair moves
-/// out to cover the whole scalar.
+/// zero-wide rectangle, the caret, for an empty range, and none when none of
+/// it is shown or the store answers a rectangle that is not finite. A line
+/// scrolled wholly out of view has none, and a line the cut moves at the
+/// range's start or end no longer holds that end ([`clip_to`]). An end that
+/// splits a surrogate pair moves out to cover the whole scalar. The store's
+/// refusal is returned (`NoLayout` while the field has no layout for it).
 pub(crate) fn selection_rects(
     session: &dyn TextStoreRead,
     range: Utf16Range,
-) -> Vec<SelectionRect> {
-    let answer = lines(session, range).and_then(|rects| Ok((rects, session.visible_bounds()?)));
-    match answer {
-        Ok((_, None)) => Vec::new(),
-        Ok((rects, Some(visible)))
-            if is_finite(visible) && rects.iter().all(|rect| is_finite(rect.bounds)) =>
-        {
-            clip_to(rects, visible)
-        }
-        Ok(_) => {
-            tracing::debug!("the field answered a selection rectangle that is not finite");
-            Vec::new()
-        }
-        Err(error) => {
-            tracing::debug!(
-                ?error,
-                "the field has no selection rectangles for the range"
-            );
-            Vec::new()
-        }
+) -> Result<Vec<SelectionRect>, TextStoreError> {
+    let rects = lines(session, range)?;
+    let Some(visible) = session.visible_bounds()? else {
+        return Ok(Vec::new());
+    };
+    if is_finite(visible) && rects.iter().all(|rect| is_finite(rect.bounds)) {
+        Ok(clip_to(rects, visible))
+    } else {
+        tracing::debug!("the field answered a selection rectangle that is not finite");
+        Ok(Vec::new())
     }
 }
 
-/// `rects` cut to `visible`, the field's box. A rectangle the cut leaves
-/// nothing of goes (a caret, zero-wide, stays while it stands inside). A
+/// `rects` cut to `visible`, the part of the field the window shows. A
+/// rectangle the cut leaves nothing of goes (a caret, zero-wide, stays while
+/// it stands inside). A
 /// line whose edge at the range's start (its leading edge) or end (its
 /// trailing edge) the cut moved no longer holds that end: the end is
 /// scrolled out, and a handle there would stand at the box's edge instead
@@ -152,22 +143,28 @@ pub(crate) fn clip_bounds(bounds: Bounds<f64>, visible: Bounds<f64>) -> Option<B
 /// nearest edge of the shown part. UIKit documents no value for "no caret"
 /// (`caretRectForPosition:` returns "a rectangle that defines the area for
 /// drawing a caret"), so a caret is always answered where the field shows
-/// something. `None` when the field has no layout, shows nothing, or answers
-/// geometry that is not finite.
-pub(crate) fn caret_in(session: &dyn TextStoreRead, at: Utf16Offset) -> Option<Bounds<f64>> {
+/// something. `None` when the field shows nothing or answers geometry that
+/// is not finite; the store's refusal is returned (`NoLayout` while the
+/// field has no layout).
+pub(crate) fn caret_in(
+    session: &dyn TextStoreRead,
+    at: Utf16Offset,
+) -> Result<Option<Bounds<f64>>, TextStoreError> {
     let at = at.min(session.document_len());
-    let (_, caret) = caret(session, at, Toward::Start).ok()?;
-    let visible = session.visible_bounds().ok()??;
+    let (_, caret) = caret(session, at, Toward::Start)?;
+    let Some(visible) = session.visible_bounds()? else {
+        return Ok(None);
+    };
     if !is_finite(caret) || !is_finite(visible) {
-        return None;
+        return Ok(None);
     }
     let x = caret.left().clamp(visible.left(), visible.right());
     let top = caret.top().clamp(visible.top(), visible.bottom());
     let bottom = caret.bottom().clamp(visible.top(), visible.bottom());
-    Some(Bounds::new(
+    Ok(Some(Bounds::new(
         Point::new(x, top),
         Size::new(caret.size.width.min(visible.right() - x), bottom - top),
-    ))
+    )))
 }
 
 /// Whether the platform's selection gestures begin at `point`: on the field,
@@ -596,7 +593,7 @@ mod tests {
             ),
         ];
         for (case, layout, range, expected) in rows {
-            assert_eq!(selection_rects(&layout, range), expected, "{case}");
+            assert_eq!(selection_rects(&layout, range), Ok(expected), "{case}");
         }
     }
 
@@ -631,7 +628,7 @@ mod tests {
             ),
         ];
         for (case, layout, range, expected) in rows {
-            let rects = selection_rects(&layout, range);
+            let rects = selection_rects(&layout, range).expect("the layout answers");
             let edges: Vec<Bounds<f64>> = SelectionRect::handle_edges(&rects).collect();
             assert_eq!(edges, expected, "{case}");
         }
@@ -678,12 +675,16 @@ mod tests {
             ),
         ];
         for (case, layout, at, expected) in rows {
-            assert_eq!(caret_in(&layout, Utf16Offset::new(at)), expected, "{case}");
+            assert_eq!(
+                caret_in(&layout, Utf16Offset::new(at)),
+                Ok(expected),
+                "{case}"
+            );
         }
         let hidden = LaidOutLines::new("abc", &[(0, Ltr)]).shown_in((0.0, 0.0, f64::NAN, LINE));
         assert_eq!(
             caret_in(&hidden, Utf16Offset::ZERO),
-            None,
+            Ok(None),
             "geometry that is not finite"
         );
     }
@@ -695,7 +696,7 @@ mod tests {
     fn a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers() {
         use TextDirection::Ltr;
         let layout = LaidOutLines::new("hello world", &[(0, Ltr)]);
-        let rects = selection_rects(&layout, span(6, 11));
+        let rects = selection_rects(&layout, span(6, 11)).expect("the layout answers");
         let beside_the_end = Point::new(120.0, LINE / 2.0);
         let rows = [
             (

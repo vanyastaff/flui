@@ -21,8 +21,9 @@ use flui_platform::text_store::{
 use flui_testing::replay::PointerScript;
 use flui_view::ViewExt;
 use flui_widgets::{
-    ClipRect, Column, EditableText, GestureDetector, HitTestBehavior, LongPressSelection,
-    OverflowBox, Padding, Positioned, SizedBox, Stack, TextEditingController, WidgetsApp,
+    ClipRect, Column, EditableText, GestureDetector, HitTestBehavior, LongPressSelection, Offstage,
+    OverflowBox, Padding, Positioned, ScrollController, ScrollView, SingleChildScrollView,
+    SizedBox, Stack, TextEditingController, WidgetsApp,
 };
 
 use crate::common::harness::{Harness, mount_with_selection_ui_on};
@@ -259,6 +260,143 @@ pub(crate) fn a_control_over_the_field_keeps_its_press() {
     assert_eq!(taps.get(), 1, "the button took its tap");
 }
 
+/// Inside a scroll view, whose gesture detector is on every press's path
+/// through the field, a press on the bare page beside the field lands on
+/// nothing of anyone else's, so the platform's handles keep their reach
+/// there; a control drawn over the field and another field below it each
+/// keep their press.
+///
+/// Fails with every pointer target on the path counted as another target:
+/// the scroll view's own detector makes the bare spot beside the field one.
+pub(crate) fn a_scroll_view_around_the_field_leaves_the_handles_their_reach() {
+    let controller = TextEditingController::with_text("hello world");
+    let node = FocusNode::with_debug_label("scrolled field");
+    let other = FocusNode::with_debug_label("the field below");
+    let page = SizedBox::new(400.0, 200.0).child(
+        SingleChildScrollView::new().child(
+            SizedBox::new(400.0, 400.0).child(Stack::new((
+                SizedBox::new(200.0, 40.0).child(EditableText::new(controller, Rc::clone(&node))),
+                Positioned::new(
+                    GestureDetector::new()
+                        .behavior(HitTestBehavior::Opaque)
+                        .on_tap(|_ctx| {})
+                        .child(SizedBox::new(50.0, 40.0)),
+                )
+                .left(100.0)
+                .top(0.0),
+                Positioned::new(SizedBox::new(200.0, 40.0).child(EditableText::new(
+                    TextEditingController::with_text("below"),
+                    other,
+                )))
+                .left(0.0)
+                .top(100.0),
+            ))),
+        ),
+    );
+    let mut harness =
+        mount_with_selection_ui_on(page.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+
+    for (point, target, case) in [
+        ((20.0, 10.0), PressTarget::Field, "the bare field"),
+        (
+            (120.0, 10.0),
+            PressTarget::Other,
+            "the control over the field",
+        ),
+        (
+            (210.0, 10.0),
+            PressTarget::Nothing,
+            "the page beside the field",
+        ),
+        ((20.0, 110.0), PressTarget::Other, "the field below"),
+    ] {
+        assert_eq!(
+            press_target_at(&store, Point::new(point.0, point.1)),
+            target,
+            "{case}"
+        );
+    }
+}
+
+/// A field taller than the viewport it scrolls in shows the same part of
+/// the window wherever it is scrolled to while its text moves under it: a
+/// scroll of 50 tells the observer the field moved, once.
+///
+/// Fails with only the shown part compared: it is the whole viewport before
+/// and after the scroll.
+pub(crate) fn a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved() {
+    let controller = TextEditingController::with_text("hello");
+    let node = FocusNode::with_debug_label("tall field");
+    let scroll = ScrollController::new();
+    let page = SizedBox::new(400.0, 200.0).child(
+        SingleChildScrollView::new()
+            .controller(scroll.clone())
+            .child(
+                SizedBox::new(400.0, 600.0).child(EditableText::new(controller, Rc::clone(&node))),
+            ),
+    );
+    let mut harness =
+        mount_with_selection_ui_on(page.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    let notices = Rc::new(CountedNotices::default());
+    store.set_observer(Some(
+        Rc::clone(&notices) as Rc<dyn flui_platform::text_store::TextStoreObserver>
+    ));
+    harness.tick();
+    let shown = || {
+        read_store(&store, |session| session.visible_bounds())
+            .expect("laid out")
+            .expect("the field fills the viewport")
+    };
+    let before = shown();
+
+    scroll.jump_to(50.0).expect("the scroll view is mounted");
+    harness.tick();
+    harness.tick();
+    assert_eq!(shown(), before, "the field still fills the viewport");
+    assert_eq!(notices.moves.get(), 1, "the scrolled field moved once");
+}
+
+/// A field the paint walk draws nothing of, offstage, shows no part of
+/// itself, so the platform draws no selection for it.
+///
+/// Fails with the ancestors' clips walked alone: an offstage parent clips
+/// nothing, and the field's box was reported.
+pub(crate) fn an_offstage_field_shows_nothing() {
+    let controller = TextEditingController::with_text("hello");
+    let node = FocusNode::with_debug_label("offstage field");
+    let field = |offstage: bool| {
+        Offstage::new()
+            .offstage(offstage)
+            .child(EditableText::new(controller.clone(), Rc::clone(&node)))
+            .boxed()
+    };
+    let mut harness =
+        mount_with_selection_ui_on(field(false), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    let shown = |store: &Rc<dyn TextStore>| {
+        read_store(store, |session| session.visible_bounds()).expect("laid out")
+    };
+    assert!(shown(&store).is_some(), "onstage, the field shows");
+
+    harness.swap_root(field(true));
+    harness.tick();
+    assert_eq!(shown(&store), None, "offstage, it shows nothing");
+}
+
 /// The part of the field the window shows is its box cut by every clip
 /// above it: a field half under the edge of a clipping ancestor shows only
 /// the half inside, which is where a platform draws its selection.
@@ -397,6 +535,10 @@ pub(crate) fn the_platforms_edit_menu_reaches_the_field_through_its_store() {
         ("hello, world", 7, 7..12),
         ("(hello)", 7, 1..6),
         ("!! x", 0, 3..4),
+        // A line break bounds the search: the nearest word on the caret's
+        // own line, never one past a break.
+        ("abc\r, xyz", 5, 6..9),
+        ("abc,\nxyz", 4, 0..3),
     ] {
         controller.set_text(text);
         controller.set_caret_byte_offset(caret);
@@ -407,12 +549,14 @@ pub(crate) fn the_platforms_edit_menu_reaches_the_field_through_its_store() {
         assert!(store.perform_edit_command(EditCommand::SelectWord));
         assert_eq!(controller.selection(), word, "{text:?} at {caret}");
     }
-    controller.set_text("!!");
-    controller.set_caret_byte_offset(1);
-    assert!(
-        !store.edit_command_enabled(EditCommand::SelectWord),
-        "a line with no word offers no Select"
-    );
+    for (text, caret) in [("!!", 1), ("abc,\n\nxyz", 5), ("abc\n, \nxyz", 4)] {
+        controller.set_text(text);
+        controller.set_caret_byte_offset(caret);
+        assert!(
+            !store.edit_command_enabled(EditCommand::SelectWord),
+            "{text:?} at {caret}: a line with no word offers no Select"
+        );
+    }
     controller.set_text("hello world");
     controller.set_selection(0, 5);
 

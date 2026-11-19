@@ -1309,18 +1309,24 @@ value owns the state, the field's `PlatformSelection`: the build, the handles an
 magnifier all read it, and losing the input gives the field its own gestures back. The
 field's store answers what a press lands on (`TextStoreRead::press_target_at`) with the
 window's own hit test, the one a touch is dispatched by, so a control drawn over the field
-or beside a handle keeps its tap; it answers the part of itself the window shows
-(`TextStoreRead::visible_bounds`) from its box and every ancestor's paint clip, which the
-platform draws inside; and its cursor-area loop tells the observer when its visible box
-moves (`TextStoreObserver::field_moved`), apart from the layout change every caret move
-sends. The platform's edit menu reaches the field as `EditCommand`s through its store
-(`TextStore::perform_edit_command`), performed by the actions its chords invoke, under the
-same rules; Select picks the word at a collapsed caret, the word before it past
-punctuation, and is not offered in an obscured field. The `text_editing` family pins this
-with `a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
+or beside a handle keeps its tap, while the field's own ancestors (a scroll view, the page)
+take no press from it; it answers the part of itself the window shows
+(`TextStoreRead::visible_bounds`) from the pipeline's placement query
+(`PipelineOwner::presented_placement`: the paint walk's gates and composition, so an
+offstage field shows nothing), which the platform draws inside; and its cursor-area loop
+tells the observer when its box or its visible part moves (`TextStoreObserver::field_moved`),
+apart from the layout change every caret move sends. The platform's edit menu reaches the
+field as `EditCommand`s through its store (`TextStore::perform_edit_command`), performed by
+the actions its chords invoke, under the same rules; Select picks the word at a collapsed
+caret, the word before it past punctuation, never one past a line break, and is not offered
+in an obscured field. The `text_editing` family pins this with
+`a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
 `the_fields_own_handles_go_when_the_platform_takes_the_selection_ui`,
 `a_control_over_the_field_keeps_its_press`,
+`a_scroll_view_around_the_field_leaves_the_handles_their_reach`,
 `a_field_shows_only_what_its_ancestors_clip_leaves`,
+`a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved`,
+`an_offstage_field_shows_nothing`,
 `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`,
 `the_platforms_edit_menu_reaches_the_field_through_its_store` and
 `an_obscured_field_offers_the_platform_no_copy_or_cut`.
