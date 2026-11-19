@@ -688,6 +688,9 @@ impl flui_foundation::inspect::Inspect for RenderWrap {
             .unit(flui_foundation::inspect::Unit::LogicalPx)
             .default(&0.0_f64);
         out.field("cross_axis_alignment", &self.cross_axis_alignment);
+        out.field("text_direction", &self.text_direction);
+        out.field("vertical_direction", &self.vertical_direction)
+            .default(&VerticalDirection::Down);
         out.field("clip_behavior", &self.clip_behavior);
         out.field("has_visual_overflow", &self.has_visual_overflow);
     }

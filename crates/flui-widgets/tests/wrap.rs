@@ -43,11 +43,6 @@ pub(crate) fn wrap_three_boxes_form_two_runs_when_width_is_narrow() {
 
 // ── Reading direction ─────────────────────────────────────────────────────────
 
-/// A wrap in a right-to-left subtree starts each run at the right, and
-/// follows the ambient direction when it changes.
-///
-/// Red-check: never hand the render object the ambient direction (every
-/// run starts at the left).
 /// Each axis follows its own direction: the reading direction flips the
 /// horizontal axis and `vertical_direction` the vertical one, whichever of
 /// them is a wrap's main axis. Every row after the first is a rebuild of the
@@ -144,6 +139,11 @@ pub(crate) fn wrap_alignment_names_the_reading_edges() {
     }
 }
 
+/// A wrap in a right-to-left subtree starts each run at the right, and
+/// follows the ambient direction when it changes.
+///
+/// Red-check: never hand the render object the ambient direction (every
+/// run starts at the left).
 pub(crate) fn wrap_starts_its_runs_at_the_reading_edge() {
     use flui_foundation::TextDirection;
     use flui_widgets::Directionality;
