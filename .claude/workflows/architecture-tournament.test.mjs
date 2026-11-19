@@ -193,6 +193,14 @@ const noAgent = () => assert.fail('no agent may run')
     },
   }))
   assert.deepEqual(reversed.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', 'c']])
+  // A reason written as quotes in either style, padded or not, is blank, so that answer is not kept.
+  const { result: quoted } = await run({ topic: 'T', stances }, happy({
+    'revise:a': (p) => {
+      const [first, second] = [...p.matchAll(/"id": (\d+)/g)].map((m) => Number(m[1]))
+      return { answers: [{ id: first, verdict: 'fixed', how: " '' " }, { id: second, verdict: 'refuted', how: "''" }], design: design('a revised') }
+    },
+  }))
+  assert.deepEqual(quoted.proposals.find((p) => p.stance === 'a').answers, [])
   // A concession that gives no reason still holds against a fixed answer.
   const { result: bare } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -347,11 +355,23 @@ const noAgent = () => assert.fail('no agent may run')
 }
 
 // 7b. The script reads each value by its schema's shape and the runtime holds a value to its schema,
-//     so the schemas carry every constraint the script relies on: a score in 0..100, an answer's
-//     integer id, closed verdicts and severities, and the fields it reads required.
+//     so the schemas carry what the script relies on: every field of every object required, every
+//     field typed, a score in 0..100, an answer's integer id, closed verdicts, severities and targets.
 {
   const { calls } = await run({ topic: 'T', stances }, happy())
   const schemaOf = (label) => calls.find((o) => o.label === label).schema
+  const everyFieldRequired = (schema, path) => {
+    assert.ok(schema.type, `${path} has a type`)
+    if (schema.type === 'object') {
+      assert.deepEqual([...(schema.required || [])].sort(), Object.keys(schema.properties).sort(), `${path} requires every field`)
+      for (const [key, sub] of Object.entries(schema.properties)) everyFieldRequired(sub, `${path}.${key}`)
+    }
+    if (schema.type === 'array') everyFieldRequired(schema.items, `${path}[]`)
+  }
+  const labels = [...new Set(calls.map((o) => o.label))]
+  assert.deepEqual(labels.filter((l) => !calls.find((o) => o.label === l).schema), [])
+  for (const label of labels) everyFieldRequired(schemaOf(label), label)
+  assert.deepEqual(schemaOf('judge').properties.scores.items.properties.stance.enum, ['a', 'b', 'c'])
   const score = schemaOf('judge').properties.scores.items.properties.score
   assert.deepEqual([score.type, score.minimum, score.maximum], ['integer', 0, 100])
   const answer = schemaOf('revise:a').properties.answers.items
@@ -367,6 +387,18 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(schemaOf('judge').properties.scores.items.required, ['stance', 'score', 'why'])
   assert.deepEqual(schemaOf('propose:a').required, ['title', 'thesis', 'shapes', 'flow', 'prediction', 'migration', 'risks', 'debt_removed'])
   assert.deepEqual(schemaOf('research:code').properties.facts.items.required, ['claim', 'evidence'])
+}
+
+// 7c. The judge's scores, experiments, debt and unresolved attacks reach the markdown and the result.
+{
+  const { result } = await run({ topic: 'T', stances }, happy({
+    judge: (p, o) => ({ ...verdict(p, o), experiments: ['e1', 'e2'], debt: ['y.rs:9 debt'], unresolved: ['u1 left open'] }),
+  }))
+  assert.match(result.markdown, /## Scores\n- \*\*a\*\* 80: w\n- \*\*b\*\* 80: w\n- \*\*c\*\* 80: w\n/)
+  assert.match(result.markdown, /## Experiments that decide what research could not\n- e1\n- e2\n/)
+  assert.match(result.markdown, /## Technical debt found on the way\n- y\.rs:9 debt\n/)
+  assert.match(result.markdown, /## Attacks the synthesis leaves unresolved, by the judge\n- u1 left open\n/)
+  assert.deepEqual([result.experiments, result.debt, result.unresolved], [['e1', 'e2'], ['y.rs:9 debt'], ['u1 left open']])
 }
 
 // 8. Without stances the four default schools compete.
