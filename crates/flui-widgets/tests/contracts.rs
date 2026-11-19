@@ -1630,7 +1630,8 @@ fn layout_and_render_object_wiring() {
         &[
             ("stack_positioned::positioned_places_child_at_explicit_edges", crate::stack_positioned::positioned_places_child_at_explicit_edges as fn()),
             ("stack_positioned::positioned_start_resolves_against_directionality", crate::stack_positioned::positioned_start_resolves_against_directionality as fn()),
-            ("stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child", crate::stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child),
+            ("stack_positioned::a_stack_clips_overflow_unless_its_clip_behavior_is_none", crate::stack_positioned::a_stack_clips_overflow_unless_its_clip_behavior_is_none),
+            ("stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child",crate::stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child),
             ("wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow", crate::wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow),
             ("wrap::wrap_starts_its_runs_at_the_reading_edge", crate::wrap::wrap_starts_its_runs_at_the_reading_edge),
             ("table::table_mounts_render_table_and_lays_out_a_grid_row_major", crate::table::table_mounts_render_table_and_lays_out_a_grid_row_major),
