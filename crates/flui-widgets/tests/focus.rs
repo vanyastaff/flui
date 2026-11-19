@@ -1188,11 +1188,12 @@ pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
 }
 
 /// A `Focus` disposed after its caller-owned node was adopted elsewhere
-/// takes what it recorded on the node with it: the node must not keep the
-/// old host's callbacks alive, and a `Shortcuts` above must not resolve
-/// through the old host's actions chain.
+/// takes what it installed on the node with it: the node must not keep the
+/// old host's focus or key handler alive, and a `Shortcuts` above must not
+/// resolve through the old host's actions chain.
 pub(crate) fn a_superseded_focus_takes_its_record_and_callbacks_when_disposed() {
     use crate::common::{lay_out, loose};
+    use flui_interaction::focus::KeyEventResult;
     use flui_platform::{
         EventTime,
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
@@ -1203,18 +1204,25 @@ pub(crate) fn a_superseded_focus_takes_its_record_and_callbacks_when_disposed() 
     impl Intent for SaveIntent {}
 
     let node = FocusNode::with_debug_label("superseded-host-target");
-    // Held by the old host's focus handler alone once its view is gone.
+    // Each is held by one of the old host's handlers alone once its view is
+    // gone.
     let captured = Rc::new(());
+    let key_captured = Rc::new(());
     let saves = Rc::new(Cell::new(0_u32));
     let tree = |hosted: bool| {
         let child = if hosted {
             let captured = Rc::clone(&captured);
+            let key_captured = Rc::clone(&key_captured);
             let saves = Rc::clone(&saves);
             Actions::new(
                 Focus::new(SizedBox::new(10.0, 10.0))
                     .focus_node(Rc::clone(&node))
                     .on_focus_change(move |_ctx, _focused| {
                         let _ = &captured;
+                    })
+                    .on_key_event(move |_ctx, _event| {
+                        let _ = &key_captured;
+                        KeyEventResult::Ignored
                     }),
             )
             .action(CallbackAction::new(move |_ctx, _intent: &SaveIntent| {
@@ -1262,6 +1270,11 @@ pub(crate) fn a_superseded_focus_takes_its_record_and_callbacks_when_disposed() 
         Rc::strong_count(&captured),
         1,
         "the node keeps the disposed host's focus handler alive"
+    );
+    assert_eq!(
+        Rc::strong_count(&key_captured),
+        1,
+        "the node keeps the disposed host's key handler alive"
     );
     let _ = node.request_focus();
     assert!(node.has_primary_focus(), "the adopted node takes focus");

@@ -13,6 +13,7 @@
 
 ### Fixed
 
-- A `Focus` whose caller-owned node was adopted elsewhere clears what it recorded on the node
-  when it is disposed: the node no longer keeps the disposed widget's focus callbacks alive, and
-  a `Shortcuts` above no longer resolves through the disposed widget's `Actions`.
+- A `Focus` whose caller-owned node was adopted elsewhere clears what it installed on the node
+  when it is disposed: the node no longer keeps the disposed widget's focus and key callbacks,
+  geometry source or traversal links alive, and a `Shortcuts` above no longer resolves through
+  the disposed widget's `Actions`.

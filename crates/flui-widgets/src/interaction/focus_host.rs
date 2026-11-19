@@ -727,33 +727,13 @@ impl FocusHost {
     /// installed on it.
     pub(crate) fn dispose(&mut self) {
         // An external node outlives its host: it must not keep measuring a
-        // dead element or calling a host-owned key handler. Only the current
-        // generation owns those registrations: a stale host must not erase
-        // state installed by a newer host of the same external node.
-        let owns_attachment = self
-            .shared
-            .attachment
-            .borrow()
-            .as_ref()
-            .is_some_and(FocusAttachment::is_attached);
-        if owns_attachment {
-            drop(std::mem::take(&mut self.rare));
-            self.rect_provider_registration.take();
-        } else if let Some(registration) = self.rare.take_key_handler() {
-            // A superseded attachment has no authority to mutate this node.
-            registration.relinquish();
-        }
-        if !owns_attachment && let Some(registration) = self.rect_provider_registration.take() {
-            registration.relinquish();
-        }
-        if !owns_attachment && let Some(registration) = self.rare.take_traversal() {
-            registration.relinquish();
-        }
-        // The context is this host's state, never the caller's, so it goes
-        // whoever owns the attachment: dropping the registration clears it
-        // only while the node still holds this host's generation of it. A
-        // node kept past its host would otherwise hold the host's handlers
-        // and record, and a `Shortcuts` above would resolve through them.
+        // dead element, calling a host-owned key handler or holding the
+        // host's state as its context, whoever owns the attachment now. Each
+        // registration is generation-checked: dropping it clears the node's
+        // property only while the node still holds this host's write of it,
+        // so a newer host or the caller keeps whatever it installed since.
+        drop(std::mem::take(&mut self.rare));
+        drop(self.rect_provider_registration.take());
         drop(self.context_registration.take());
         drop(self.focus_subscription.take());
         drop(self.shared.reveal.target.take());
