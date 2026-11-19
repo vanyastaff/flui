@@ -4,7 +4,9 @@
   (`PickedFile::grant`): bytes the application stores and, after a restart, resolves through the
   new `GrantCapability`'s `Grants::resolve` into the file again (`Access`), or a typed
   `GrantError` (`Foreign`, `Revoked`, `Missing`, `NotLocal`, `TooLarge`). A resolve lasts while
-  its `Resolving` is held; dropping it stops the system's work. macOS keeps a security-scoped
+  its `Resolving` is held; dropping it delivers nothing, stops an Android read and its provider's
+  calls, and keeps macOS and iOS from starting the file's security scope (a Linux or Windows
+  path check finishes, unheard). macOS keeps a security-scoped
   bookmark, iOS a bookmark made under the picker's access, Android the content URI with its read
   permission persisted, Linux and Windows the path (a Flatpak's document portal path).
 - `flui_platform::sandbox` detects the sandbox a process runs in: a Flatpak by its
@@ -22,6 +24,7 @@
   A packaged application that kept a store under `%APPDATA%` before has it copied into the
   package's folders once, at that first call, when the package's folder holds no store yet: files
   are copied, never moved or overwritten, and a store past the copy's bound on files and bytes is
-  left where it was and not copied.
+  left where it was and not copied. The copy is put in place whole: one that fails leaves nothing,
+  and the next start copies again.
 - The Linux user folders answer none for a folder that is not there for the process, as a
   Flatpak shows a folder its manifest does not expose.

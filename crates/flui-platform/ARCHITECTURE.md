@@ -696,17 +696,27 @@ values, which stay with the host.
 ### The sandbox is detected once, for every crate that needs it
 
 `sandbox` says which sandbox the process runs in (`Confinement`), so `flui-native`'s data folders
-and `flui-system`'s grants read one answer (ADR-0380 §3, §4). A Flatpak is a process with
-`/.flatpak-info` (`read_flatpak_info`, size-checked before it is read and bounded, off the owner
-thread): `FLATPAK_ID` alone is inherited by a host process a Flatpak's terminal starts. The
-file's `[Context] filesystems=` entries become folders in order, the access mode dropped and a
-`!` entry taking back an earlier one. The macOS App Sandbox is `APP_SANDBOX_CONTAINER_ID`, its
-container `HOME` or the container under the user's home. A `TMPDIR` names a temporary folder
-only when it is absolute, plain, not a root, and inside the App Sandbox's container
+and `flui-system`'s grants read one answer (ADR-0380 §3, §4). A contract crate reads one file
+here, and only this one: `flui-system` and `flui-native` both need the answer, this is the lowest
+crate both depend on, and two readers of one description disagreed before. The read
+(`read_flatpak_info`) is bounded, runs off the owner thread, and happens on Linux alone: no other
+system has a Flatpak, and on Windows the name is a drive's root.
+
+A Flatpak is a process with `/.flatpak-info`: `FLATPAK_ID` alone is inherited by a host process a
+Flatpak's terminal starts. The file's `[Context] filesystems=` is modelled as Flatpak writes it,
+flattened (no entry takes another back): the key file's escapes undone, the access mode dropped,
+an `xdg-*` user folder reached only where the `UserFolder` lookup places it, as Flatpak ignores
+an unconfigured one, `host-os` and `host-etc` at `/run/host` and `/run/host/etc`. Flatpak unsets
+`TMPDIR`, so it is never read there. A path hidden by `--nofilesystem` under an exposed folder is
+a tmpfs the file does not show, and is reached here. The macOS App Sandbox is
+`APP_SANDBOX_CONTAINER_ID`; its container is `HOME` only when `HOME` is that container's path,
+else the container under the user's home; a `TMPDIR` counts only inside the container
 (`usable_temporary`). `Confinement::detect` is a pure function of what it is given;
-`Confinement::of_process` reads the process's environment and home.
+`Confinement::of_process` reads the process's environment and home. What both callers need is
+public (the variants, their accessors, `FLATPAK_INFO`, `is_plain`, `usable_temporary`); the
+description's fields and its bound are not.
 **Tests:** `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
+`the_description_is_read_on_linux_alone_and_within_its_bound`,
+`a_key_file_list_is_split_where_its_writer_did_not_escape`,
 `a_manifests_filesystems_name_what_the_flatpak_reaches`,
-`a_temporary_folder_that_would_reach_everything_is_ignored`,
-`an_app_sandbox_keeps_to_its_container_even_without_home`,
-`the_description_is_read_within_its_bound`.
+`an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`.

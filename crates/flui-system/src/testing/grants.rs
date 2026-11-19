@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 
 use crate::dialog::PickedFile;
 use crate::grant::{
-    Access, AccessScope, Grant, GrantBackend, GrantError, GrantKind, GrantResult, ResolveHold,
+    Access, AccessScope, Grant, GrantBackend, GrantError, GrantResult, ResolveHold,
 };
 use crate::sandbox::Sandbox;
 
@@ -87,7 +87,7 @@ impl GrantStore {
                 },
             },
         );
-        Grant::try_new(KIND, id.to_le_bytes()).expect("BUG: an id is a payload a grant holds")
+        Grant::scripted(id.to_le_bytes()).expect("BUG: an id is a payload a grant holds")
     }
 
     /// Withdraw `grant`, as a user who revokes it or a system that prunes
@@ -144,14 +144,24 @@ impl GrantStore {
     }
 }
 
-/// The kind a store's grants are: opaque bytes only their store reads, as a
-/// bookmark is.
-const KIND: GrantKind = GrantKind::AppleBookmark;
-
-/// The id a store's grant names.
+/// The id a store's grant names: a scripted grant, which no system's backend
+/// takes.
 fn id_of(grant: &Grant) -> Option<u64> {
     let id: [u8; 8] = grant.payload().try_into().ok()?;
-    (grant.kind() == KIND).then(|| u64::from_le_bytes(id))
+    grant.is_scripted().then(|| u64::from_le_bytes(id))
+}
+
+/// How the simulated system answers a handle's question for the sandbox.
+#[derive(Debug, Default)]
+enum SandboxAnswers {
+    /// At once, with the sandbox the test set.
+    #[default]
+    Answered,
+    /// Never: the question is dropped, as a portal that cannot start drops
+    /// it.
+    Dropped,
+    /// When the test releases them, in order.
+    Held(Vec<Resolver<Sandbox>>),
 }
 
 /// Grants whose system is simulated: each resolve answers what the
@@ -164,6 +174,7 @@ fn id_of(grant: &Grant) -> Option<u64> {
 pub struct ScriptedGrants {
     store: Rc<RefCell<GrantStore>>,
     sandbox: Rc<RefCell<Sandbox>>,
+    answers: Rc<RefCell<SandboxAnswers>>,
 }
 
 impl Default for ScriptedGrants {
@@ -171,6 +182,7 @@ impl Default for ScriptedGrants {
         Self {
             store: Rc::default(),
             sandbox: Rc::new(RefCell::new(Sandbox::unconfined())),
+            answers: Rc::default(),
         }
     }
 }
@@ -191,17 +203,60 @@ impl ScriptedGrants {
     pub fn set_sandbox(&self, sandbox: Sandbox) {
         *self.sandbox.borrow_mut() = sandbox;
     }
+
+    /// Answer every question for the sandbox from now on, at once.
+    pub fn answer_sandbox(&self) {
+        let held = std::mem::take(&mut *self.answers.borrow_mut());
+        if let SandboxAnswers::Held(waiting) = held {
+            for answer in waiting {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(self.sandbox.borrow().clone());
+            }
+        }
+    }
+
+    /// Drop every question for the sandbox from now on, unanswered.
+    pub fn drop_sandbox_questions(&self) {
+        *self.answers.borrow_mut() = SandboxAnswers::Dropped;
+    }
+
+    /// Hold every question for the sandbox from now on, until
+    /// [`answer_sandbox`](Self::answer_sandbox).
+    pub fn hold_sandbox(&self) {
+        *self.answers.borrow_mut() = SandboxAnswers::Held(Vec::new());
+    }
+
+    /// How many times a handle asked for the sandbox while held.
+    #[must_use]
+    pub fn sandbox_questions_held(&self) -> usize {
+        match &*self.answers.borrow() {
+            SandboxAnswers::Held(waiting) => waiting.len(),
+            SandboxAnswers::Answered | SandboxAnswers::Dropped => 0,
+        }
+    }
 }
 
 impl GrantBackend for ScriptedGrants {
-    /// A bookmark's kind: the store's grants are opaque bytes.
-    fn kind(&self) -> GrantKind {
-        KIND
+    /// A scripted grant: no system's backend takes one, and this double
+    /// takes no other.
+    fn takes(&self, grant: &Grant) -> bool {
+        grant.is_scripted()
     }
 
     fn sandbox(&self, answer: Resolver<Sandbox>) {
-        // A retired owner has nobody left to answer.
-        let _ = answer.resolve(self.sandbox.borrow().clone());
+        let mut answers = self.answers.borrow_mut();
+        match &mut *answers {
+            SandboxAnswers::Answered => {
+                drop(answers);
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(self.sandbox.borrow().clone());
+            }
+            SandboxAnswers::Dropped => {
+                drop(answers);
+                drop(answer);
+            }
+            SandboxAnswers::Held(waiting) => waiting.push(answer),
+        }
     }
 
     fn resolve(&self, grant: Grant, _max_bytes: u64, answer: Resolver<GrantResult>) -> ResolveHold {

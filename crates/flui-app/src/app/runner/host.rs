@@ -60,8 +60,12 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 /// Give the host the storage `config` asks for, under the installed owner
 /// platform's data roots. Call once the owner platform and the host's
 /// executors are installed. Without a directory to name
-/// ([`storage_dir`]) widgets are refused storage as not registered; where
-/// the platform has no data root, as not on this platform.
+/// ([`storage_dir`]) widgets are refused storage as not registered. A native
+/// desktop host always answers a store, whose calls are refused when its
+/// platform names no data folder (found at the store's first call, on its IO
+/// thread); only an Android Activity that reports no internal data path
+/// answers none, and widgets are then refused storage as not on this
+/// platform.
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     let refused =
         |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
@@ -73,7 +77,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
                 .ok_or_else(|| {
                     tracing::warn!(
                         storage_dir = dir.as_str(),
-                        "this platform has no data directory; widgets get no storage"
+                        "the Activity reports no internal data path; widgets get no storage"
                     );
                     refused(flui_platform::UnsupportedReason::NotOnThisPlatform)
                 })

@@ -38,6 +38,38 @@ pub(crate) fn resolution_error(code: ErrorCode) -> GrantError {
     }
 }
 
+/// Whether anybody still waits for a resolve: cleared when its hold drops,
+/// read on the work item before a security scope is started, so a resolve
+/// let go of starts no scope for nobody.
+#[derive(Clone, Debug)]
+pub(crate) struct Waited(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Waited {
+    /// A resolve someone waits for, and the hold whose drop lets it go.
+    pub(crate) fn new() -> (Self, WaitedHold) {
+        let waited = Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            true,
+        )));
+        (waited.clone(), WaitedHold(waited))
+    }
+
+    /// Start a scope with `start` when someone still waits, answering
+    /// whether it started; nothing is started for a resolve let go of.
+    pub(crate) fn start_scope(&self, start: impl FnOnce() -> bool) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire) && start()
+    }
+}
+
+/// A resolve's hold: its drop tells the work item nobody waits any more.
+#[derive(Debug)]
+pub(crate) struct WaitedHold(Waited);
+
+impl Drop for WaitedHold {
+    fn drop(&mut self) {
+        self.0.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Operation not permitted, Darwin's.
 const EPERM: i32 = 1;
 /// Permission denied, Darwin's.
@@ -62,7 +94,7 @@ mod foundation {
         NSData, NSURL, NSURLBookmarkCreationOptions, NSURLBookmarkResolutionOptions,
     };
 
-    use super::resolution_error;
+    use super::{Waited, resolution_error};
     use crate::apple::queue::WorkQueue;
     use crate::apple::{error_code, url_path};
     use crate::dialog::PickedFile;
@@ -117,8 +149,9 @@ mod foundation {
 
     /// What the bookmark `payload` resolves to: the file's path while its
     /// access is held, a fresher bookmark when Foundation called it stale.
-    /// Off the main thread only.
-    fn resolve(payload: &[u8]) -> GrantResult {
+    /// No scope is started once nobody waits (`waited`). Off the main thread
+    /// only.
+    fn resolve(payload: &[u8], waited: &Waited) -> GrantResult {
         let data = NSData::with_bytes(payload);
         let mut stale = Bool::NO;
         // SAFETY: `stale` outlives the call, which writes it once.
@@ -135,9 +168,11 @@ mod foundation {
         let file = url_path(&url)
             .and_then(PickedFile::try_new)
             .ok_or(malformed)?;
-        // SAFETY: a method of a URL that takes nothing; a start that
-        // succeeded is stopped once, when its scope drops.
-        let started = unsafe { url.startAccessingSecurityScopedResource() };
+        let started = waited.start_scope(|| {
+            // SAFETY: a method of a URL that takes nothing; a start that
+            // succeeded is stopped once, when its scope drops.
+            unsafe { url.startAccessingSecurityScopedResource() }
+        });
         // Made while the access is held, which an App Sandbox requires.
         let renewed = if stale.as_bool() {
             bookmark(&url)
@@ -167,8 +202,8 @@ mod foundation {
     }
 
     impl GrantBackend for AppleGrants {
-        fn kind(&self) -> GrantKind {
-            GrantKind::AppleBookmark
+        fn takes(&self, grant: &Grant) -> bool {
+            grant.kind() == Some(GrantKind::AppleBookmark)
         }
 
         /// Read from the environment when the provider was made: no file
@@ -187,11 +222,12 @@ mod foundation {
             let busy = Err(GrantError::Unsupported(Unsupported::of::<GrantCapability>(
                 UnsupportedReason::Unavailable,
             )));
+            let (waited, hold) = Waited::new();
             self.queue
-                .run(answer, busy, move || resolve(grant.payload()));
-            // A resolution cannot be called back; its access, started for
-            // nobody, stops when the dropped answer is.
-            ResolveHold::new(())
+                .run(answer, busy, move || resolve(grant.payload(), &waited));
+            // A resolution under way finishes; dropped before its scope, the
+            // hold keeps the scope from being started for nobody.
+            ResolveHold::new(hold)
         }
     }
 }
@@ -200,9 +236,28 @@ mod foundation {
 mod tests {
     use flui_platform::SystemFailure;
 
-    use super::resolution_error;
+    use super::{Waited, resolution_error};
     use crate::apple::ErrorCode;
     use crate::grant::GrantError;
+
+    #[test]
+    fn a_resolve_let_go_of_starts_no_scope() {
+        let (waited, hold) = Waited::new();
+        assert!(
+            waited.start_scope(|| true),
+            "someone waits: the scope starts"
+        );
+        drop(hold);
+        let mut asked = false;
+        assert!(
+            !waited.start_scope(|| {
+                asked = true;
+                true
+            }),
+            "nobody waits: no scope"
+        );
+        assert!(!asked, "the system is not asked to start one");
+    }
 
     #[test]
     fn a_bookmark_that_does_not_resolve_answers_why() {

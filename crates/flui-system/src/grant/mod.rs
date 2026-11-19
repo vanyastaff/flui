@@ -19,10 +19,13 @@ mod resolving;
 mod token;
 
 use std::any::Any;
+use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 
-use flui_platform::capability::{Capability, CompletionSource, ProviderContext, Resolver};
+use flui_platform::capability::{
+    Capability, Completion, CompletionSource, ProviderContext, Resolver,
+};
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 pub use resolving::{ResolveHold, Resolving};
@@ -30,7 +33,7 @@ pub use token::{Grant, GrantKind, MalformedGrant};
 
 use crate::dialog::{PickedFile, PickedForm};
 use crate::sandbox::Sandbox;
-use resolving::{ResolveState, SandboxSlot};
+use resolving::{ResolveState, SandboxSlot, TooManyWaiting};
 
 /// The grant capability: `ctx.capability::<GrantCapability>()` hands out
 /// [`Grants`].
@@ -186,14 +189,16 @@ impl Access {
 ///
 /// Owner-local; it reads the file system off the owner thread and answers
 /// through the [`Resolver`]s, never calling back into the handle. A grant it
-/// receives is of its [`kind`](Self::kind).
+/// receives is one it [takes](Self::takes).
 pub trait GrantBackend: 'static {
-    /// The kind of grant it resolves, and its dialogs make.
-    fn kind(&self) -> GrantKind;
+    /// Whether it resolves `grant`: one its system made (a real backend
+    /// takes the [`GrantKind`] its dialogs make, and never the scripted
+    /// double's grants).
+    fn takes(&self, grant: &Grant) -> bool;
 
-    /// Read the sandbox the process runs in, once per handle: off the owner
-    /// thread where the file system describes it (a Flatpak's
-    /// `/.flatpak-info`).
+    /// Read the sandbox the process runs in: off the owner thread where the
+    /// file system describes it (a Flatpak's `/.flatpak-info`). Asked again
+    /// at a later resolve when it answered nothing (the resolver dropped).
     fn sandbox(&self, answer: Resolver<Sandbox>);
 
     /// Reacquire what `grant` reaches; a system that hands the file over as
@@ -221,9 +226,7 @@ impl Grants {
     pub fn new(backend: impl GrantBackend, ctx: &ProviderContext<'_>) -> Self {
         let backend: Rc<dyn GrantBackend> = Rc::new(backend);
         let completions = ctx.completions().clone();
-        let (read, answer) = completions.pending::<Sandbox>();
-        let sandbox = SandboxSlot::waiting_for(read);
-        backend.sandbox(answer);
+        let sandbox = SandboxSlot::reading(read_sandbox(&*backend, &completions));
         Self {
             backend,
             sandbox,
@@ -244,36 +247,41 @@ impl Grants {
     ///
     /// `max_bytes` bounds what a system that hands the file over as its
     /// contents (Android) reads; a reacquired path is the application's to
-    /// read. Dropping the [`Resolving`] before it answers stops the resolve.
+    /// read. A resolve waits for the process's sandbox, which is read again
+    /// when the backend answered it nothing before; past
+    /// [`MAX_WAITING`](Self::MAX_WAITING) resolves already waiting, one more
+    /// is refused with `Unsupported` (`Unavailable`), worth asking again.
+    /// Dropping the [`Resolving`] before it answers delivers nothing, and
+    /// stops what its platform can stop ([`Resolving`] says what).
     pub fn resolve(&self, grant: &Grant, max_bytes: u64) -> Resolving {
         let (completion, caller) = self.completions.pending::<GrantResult>();
         let state = Rc::new(ResolveState::default());
-        let kind = self.backend.kind();
-        if grant.kind() != kind {
+        if !self.backend.takes(grant) {
             // The owner retiring first leaves nothing waiting.
             let _ = caller.resolve(Err(GrantError::Foreign));
             return Resolving::new(completion, state);
         }
+        let caller = Rc::new(Cell::new(Some(caller)));
         let backend = Rc::clone(&self.backend);
         let completions = self.completions.clone();
         let grant = grant.clone();
         let held = Rc::downgrade(&state);
-        self.sandbox.when_read(move |sandbox| {
+        let starting = Rc::clone(&caller);
+        let start = move |sandbox: Option<Rc<Sandbox>>| {
             // A resolve dropped while the sandbox was read starts nothing.
-            let Some(state) = held.upgrade() else {
+            let (Some(state), Some(caller)) = (held.upgrade(), starting.take()) else {
                 return;
             };
+            state.started();
             let Some(sandbox) = sandbox else {
-                // The backend answered no sandbox: nothing is reached.
-                let _ = caller.resolve(Err(GrantError::Unsupported(Unsupported::of::<
-                    GrantCapability,
-                >(
-                    UnsupportedReason::Unavailable,
-                ))));
+                // The backend answered no sandbox this time: nothing is
+                // reached, and the next resolve asks again.
+                let _ = caller.resolve(Err(unavailable()));
                 return;
             };
             let (answered, answer) = completions.pending::<GrantResult>();
             let mut caller = Some(caller);
+            let resolved = grant.clone();
             answered.on_complete(move |outcome| {
                 let Some(caller) = caller.take() else {
                     return;
@@ -282,7 +290,7 @@ impl Grants {
                     Ok(result) => {
                         // The owner retiring first leaves nothing waiting.
                         let _ = caller.resolve(
-                            result.and_then(|access| admit(access, &sandbox, kind, max_bytes)),
+                            result.and_then(|access| admit(access, &sandbox, &resolved, max_bytes)),
                         );
                     }
                     // The backend dropped its answer: so does the handle.
@@ -290,23 +298,56 @@ impl Grants {
                 }
             });
             state.hold(backend.resolve(grant, max_bytes, answer));
-        });
+        };
+        let reader = Rc::clone(&self.backend);
+        let completions = self.completions.clone();
+        match self
+            .sandbox
+            .when_read(start, || read_sandbox(&*reader, &completions))
+        {
+            Ok(Some(ticket)) => state.waits_in(&self.sandbox, ticket),
+            Ok(None) => {}
+            Err(TooManyWaiting) => {
+                if let Some(caller) = caller.take() {
+                    // The owner retiring first leaves nothing waiting.
+                    let _ = caller.resolve(Err(unavailable()));
+                }
+            }
+        }
         Resolving::new(completion, state)
     }
+
+    /// The most resolves of one handle that wait for its sandbox at once.
+    pub const MAX_WAITING: usize = SandboxSlot::MAX_WAITING;
+}
+
+/// Ask `backend` for the process's sandbox.
+fn read_sandbox(backend: &dyn GrantBackend, completions: &CompletionSource) -> Completion<Sandbox> {
+    let (read, answer) = completions.pending::<Sandbox>();
+    backend.sandbox(answer);
+    read
+}
+
+/// The refusal of a resolve that cannot run now and may later.
+fn unavailable() -> GrantError {
+    GrantError::Unsupported(Unsupported::of::<GrantCapability>(
+        UnsupportedReason::Unavailable,
+    ))
 }
 
 /// `access`, if the process can use it: a path `sandbox` reaches or a scope
-/// holds open, contents within `max_bytes`, a fresher grant of `kind`.
+/// holds open, contents within `max_bytes`, a fresher grant of the system
+/// that made `resolved`.
 fn admit(
     access: Access,
     sandbox: &Sandbox,
-    kind: GrantKind,
+    resolved: &Grant,
     max_bytes: u64,
 ) -> Result<Access, GrantError> {
     if access
         .renewed
         .as_ref()
-        .is_some_and(|renewed| renewed.kind() != kind)
+        .is_some_and(|renewed| !renewed.same_origin(resolved))
     {
         return Err(SystemFailure::MalformedAnswer.into());
     }
@@ -333,9 +374,7 @@ fn admit(
 
 impl fmt::Debug for Grants {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Grants")
-            .field("kind", &self.backend.kind())
-            .finish_non_exhaustive()
+        f.debug_struct("Grants").finish_non_exhaustive()
     }
 }
 
@@ -356,7 +395,8 @@ mod tests {
     #[test]
     fn an_answer_is_admitted_only_in_a_form_the_process_can_use() {
         let nowhere = android_app();
-        let admitted = |access: Access| admit(access, &nowhere, GrantKind::ContentUri, 4);
+        let resolved = Grant::try_new(GrantKind::ContentUri, &b"content://a"[..]).expect("a URI");
+        let admitted = |access: Access| admit(access, &nowhere, &resolved, 4);
         assert!(admitted(Access::new(contents(4), None)).is_ok());
         assert_eq!(
             admitted(Access::new(contents(5), None)).err(),

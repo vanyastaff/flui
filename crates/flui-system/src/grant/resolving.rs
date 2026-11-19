@@ -13,9 +13,10 @@ use super::GrantResult;
 use crate::sandbox::Sandbox;
 
 /// What a backend gives the handle for each resolve: the work goes on while
-/// the handle holds it, and its drop stops the work nobody waits for (an
-/// Android read's cancellation signal and its read loop). `()` holds
-/// nothing, for a backend whose work cannot be stopped.
+/// the handle holds it, and its drop stops what of the work nobody waits for
+/// can be stopped (an Android read's loop and its cancellation signal, an
+/// Apple scope not yet started). `()` holds nothing, for a backend whose work
+/// cannot be stopped.
 #[must_use = "dropping the hold stops the resolve it holds"]
 pub struct ResolveHold(#[expect(dead_code, reason = "held for its drop")] Box<dyn Any>);
 
@@ -36,75 +37,146 @@ impl fmt::Debug for ResolveHold {
 /// when the backend answered none.
 type WhenRead = Box<dyn FnOnce(Option<Rc<Sandbox>>)>;
 
-/// The sandbox a handle's resolves are held to: read once, off the owner
-/// thread where it reads the file system, and the resolves asked for
-/// meanwhile wait for it.
+/// The sandbox a handle's resolves are held to: read off the owner thread
+/// where it reads the file system, one read at a time, the resolves asked
+/// for meanwhile waiting for it. A read the backend did not answer is not
+/// kept: the next resolve asks again.
 pub(super) struct SandboxSlot {
     /// One `Cell` over the state, so each step takes it out and puts the
     /// next in: no borrow is held while a waiting resolve starts.
     state: Cell<SlotState>,
+    /// The ticket the next waiting resolve gets.
+    next_ticket: Cell<u64>,
 }
 
 #[derive(Default)]
 enum SlotState {
-    /// The backend has not answered; these resolves wait.
-    Waiting(Vec<WhenRead>),
-    /// The backend answered this sandbox, or none.
-    Read(Option<Rc<Sandbox>>),
-    /// Taken for the length of a step.
+    /// No read is in flight, and none answered: the next resolve asks.
     #[default]
-    Taken,
+    Unread,
+    /// A read is in flight; these resolves wait for it, by ticket.
+    Reading(Vec<(u64, WhenRead)>),
+    /// The backend answered this sandbox.
+    Read(Rc<Sandbox>),
 }
 
+/// Too many resolves already wait for the sandbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TooManyWaiting;
+
 impl SandboxSlot {
-    /// A slot the backend's answer `read` fills.
-    pub(super) fn waiting_for(read: Completion<Sandbox>) -> Rc<Self> {
+    /// The most resolves of one handle that wait for its sandbox at once.
+    pub(super) const MAX_WAITING: usize = 64;
+
+    /// A slot whose sandbox is read by `read` now.
+    pub(super) fn reading(read: Completion<Sandbox>) -> Rc<Self> {
         let slot = Rc::new(Self {
-            state: Cell::new(SlotState::Waiting(Vec::new())),
+            state: Cell::new(SlotState::Reading(Vec::new())),
+            next_ticket: Cell::new(0),
         });
-        let filled = Rc::downgrade(&slot);
+        Self::fill_on(&slot, read);
+        slot
+    }
+
+    /// Fill `slot` with `read`'s answer, and start the resolves that wait:
+    /// with the sandbox, or with none when the backend dropped the read,
+    /// which leaves the slot unread for the next resolve to ask again.
+    fn fill_on(slot: &Rc<Self>, read: Completion<Sandbox>) {
+        let filled = Rc::downgrade(slot);
         read.on_complete(move |outcome| {
             let Some(slot) = filled.upgrade() else {
                 return;
             };
             let sandbox = outcome.ok().map(Rc::new);
-            let waiting = match slot.state.replace(SlotState::Read(sandbox.clone())) {
-                SlotState::Waiting(waiting) => waiting,
-                SlotState::Read(_) | SlotState::Taken => Vec::new(),
+            let settled = sandbox.clone().map_or(SlotState::Unread, SlotState::Read);
+            let waiting = match slot.state.replace(settled) {
+                SlotState::Reading(waiting) => waiting,
+                SlotState::Unread | SlotState::Read(_) => Vec::new(),
             };
             // The slot is committed before any resolve starts: one that asks
-            // the handle again finds the sandbox read.
-            for start in waiting {
+            // the handle again finds the sandbox read, or asks again.
+            for (_, start) in waiting {
                 start(sandbox.clone());
             }
         });
-        slot
     }
 
-    /// Run `start` with the sandbox: now when it is read, else once it is.
-    pub(super) fn when_read(&self, start: impl FnOnce(Option<Rc<Sandbox>>) + 'static) {
-        let state = &self.state;
-        match state.take() {
+    /// Run `start` with the sandbox now when it is read; else queue it under
+    /// a ticket, asking `read` for the sandbox when no read is in flight.
+    ///
+    /// # Errors
+    ///
+    /// [`TooManyWaiting`] when [`MAX_WAITING`](Self::MAX_WAITING) resolves
+    /// wait already; `start` is dropped unrun.
+    pub(super) fn when_read(
+        self: &Rc<Self>,
+        start: impl FnOnce(Option<Rc<Sandbox>>) + 'static,
+        read: impl FnOnce() -> Completion<Sandbox>,
+    ) -> Result<Option<u64>, TooManyWaiting> {
+        match self.state.take() {
             SlotState::Read(sandbox) => {
-                state.set(SlotState::Read(sandbox.clone()));
-                start(sandbox);
+                self.state.set(SlotState::Read(Rc::clone(&sandbox)));
+                start(Some(sandbox));
+                Ok(None)
             }
-            SlotState::Waiting(mut waiting) => {
-                waiting.push(Box::new(start));
-                state.set(SlotState::Waiting(waiting));
+            SlotState::Reading(mut waiting) => {
+                if waiting.len() >= Self::MAX_WAITING {
+                    self.state.set(SlotState::Reading(waiting));
+                    return Err(TooManyWaiting);
+                }
+                let ticket = self.ticket();
+                waiting.push((ticket, Box::new(start)));
+                self.state.set(SlotState::Reading(waiting));
+                Ok(Some(ticket))
             }
-            SlotState::Taken => {
-                unreachable!("BUG: the slot's state is put back before any code it runs")
+            SlotState::Unread => {
+                let ticket = self.ticket();
+                self.state
+                    .set(SlotState::Reading(vec![(ticket, Box::new(start))]));
+                // The state is committed before the backend is asked.
+                Self::fill_on(self, read());
+                Ok(Some(ticket))
             }
         }
     }
+
+    /// Take the resolve waiting under `ticket` off the queue: its caller let
+    /// go of it.
+    pub(super) fn withdraw(&self, ticket: u64) {
+        let withdrawn = match self.state.take() {
+            SlotState::Reading(mut waiting) => {
+                let index = waiting.iter().position(|(held, _)| *held == ticket);
+                let withdrawn = index.map(|index| waiting.remove(index));
+                self.state.set(SlotState::Reading(waiting));
+                withdrawn
+            }
+            other => {
+                self.state.set(other);
+                None
+            }
+        };
+        // Dropped once the slot is whole again: it holds the caller's
+        // resolver, whose drop is the caller's to hear.
+        drop(withdrawn);
+    }
+
+    fn ticket(&self) -> u64 {
+        let ticket = self.next_ticket.get();
+        self.next_ticket.set(
+            ticket
+                .checked_add(1)
+                .expect("BUG: a handle asks fewer than u64::MAX resolves"),
+        );
+        ticket
+    }
 }
 
-/// What a resolve holds while it runs: the backend's hold, once the
-/// sandbox was read and the backend asked.
+/// What a resolve holds while it runs: its place in the queue for the
+/// sandbox, then the backend's hold once the backend was asked.
 #[derive(Default)]
 pub(super) struct ResolveState {
     hold: Cell<Option<ResolveHold>>,
+    waiting: Cell<Option<(std::rc::Weak<SandboxSlot>, u64)>>,
 }
 
 impl ResolveState {
@@ -113,15 +185,40 @@ impl ResolveState {
         // The earlier value is none: a resolve asks its backend once.
         drop(self.hold.replace(Some(hold)));
     }
+
+    /// The resolve waits in `slot`'s queue under `ticket`.
+    pub(super) fn waits_in(&self, slot: &Rc<SandboxSlot>, ticket: u64) {
+        self.waiting.set(Some((Rc::downgrade(slot), ticket)));
+    }
+
+    /// The resolve left the queue: its sandbox was read.
+    pub(super) fn started(&self) {
+        self.waiting.set(None);
+    }
+}
+
+impl Drop for ResolveState {
+    fn drop(&mut self) {
+        if let Some((slot, ticket)) = self.waiting.take()
+            && let Some(slot) = slot.upgrade()
+        {
+            slot.withdraw(ticket);
+        }
+    }
 }
 
 /// A resolve in flight, and the answer it will give.
 ///
 /// Owner-thread (`!Send`). The resolve lasts while this value, or the
-/// closure or future it was turned into, is held: dropping it stops the
-/// backend's work and nothing is delivered. The answer settles at an owner
-/// turn, never inside the call that asked.
-#[must_use = "dropping a resolve stops it"]
+/// closure or future it was turned into, is held; dropping it delivers
+/// nothing. What else the drop stops depends on where the resolve is: one
+/// still waiting for the sandbox leaves the queue and never reaches the
+/// backend; on Android the read stops before its next chunk and the
+/// provider's calls are cancelled; on macOS and iOS a bookmark already
+/// resolving finishes, but its security scope is not started; on Linux and
+/// Windows the one `metadata` call finishes and its answer is dropped. The
+/// answer settles at an owner turn, never inside the call that asked.
+#[must_use = "dropping a resolve delivers nothing"]
 pub struct Resolving {
     completion: Completion<GrantResult>,
     state: Rc<ResolveState>,

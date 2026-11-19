@@ -6276,7 +6276,9 @@ packaged Windows application's `LocalState` and `RoamingState` instead of the
 (`DataStore::of_process`) finds them at its first call, on its IO thread, since
 a Flatpak's description is a file; a packaged application's store from before it
 was packaged is copied over then, once, within `MAX_MIGRATED_FILES` and
-`MAX_MIGRATED_BYTES`, never overwriting a file. Android overrides it, because `dirs`
+`MAX_MIGRATED_BYTES`, into a staging folder renamed into place whole, so a failed
+copy leaves no root and a root another instance placed first is kept. The
+Flatpak description is read on Linux alone. Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
 backs up. Headless never touches the user's directories: it answers with a

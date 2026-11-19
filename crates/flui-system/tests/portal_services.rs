@@ -685,7 +685,7 @@ fn a_picks_path_is_its_grant_and_resolves_while_the_file_is_there() {
     let (mut host, grants) = acquire::<GrantCapability>(&portal.plugin());
     let grants = grants.expect("the portal provides grants on Linux");
     let grant = Grant::try_from_bytes(&kept).expect("the bytes the application kept");
-    assert_eq!(grant.kind(), GrantKind::UnixPath);
+    assert_eq!(grant.kind(), Some(GrantKind::UnixPath));
     let access = settle(&mut host, grants.resolve(&grant, 1024))
         .expect("not abandoned")
         .expect("the file is there");

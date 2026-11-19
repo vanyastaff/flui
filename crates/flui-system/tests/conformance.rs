@@ -453,6 +453,31 @@ fn a_path_the_seam_refuses_is_refused_before_the_file_system(subject: Subject) {
     bench.verify();
 }
 
+/// The scripted double's grants carry a tag no system's backend reads: each
+/// platform's provider answers one `Foreign`, without asking its system.
+fn a_scripted_grant_is_foreign_to_every_system(subject: Subject) {
+    if matches!(subject, Subject::Scripted) {
+        return;
+    }
+    let mut bench = Bench::new(subject);
+    let Some(grants) = bench.handle::<GrantCapability>() else {
+        return;
+    };
+    let scripted =
+        flui_system::testing::GrantStore::new().grant(std::env::temp_dir().join("scripted.txt"));
+    assert_eq!(scripted.kind(), None, "no kind of system made it");
+    let resolved = land_resolving(grants.resolve(&scripted, 1024));
+    turn(&mut bench.host);
+    let refusal = resolved
+        .borrow_mut()
+        .take()
+        .expect("settled at the turn")
+        .expect("not abandoned")
+        .err();
+    assert_eq!(refusal, Some(GrantError::Foreign));
+    bench.verify();
+}
+
 fn land_resolving(resolving: flui_system::grant::Resolving) -> Slot<GrantResult> {
     let slot = outcome_slot::<Result<GrantResult, Abandoned>>();
     let into = Rc::clone(&slot);
@@ -466,7 +491,7 @@ type Row = (&'static str, fn(Subject));
 /// The table: each row, run against each subject.
 #[test]
 fn every_provider_keeps_the_system_services_contract() {
-    let rows: [Row; 8] = [
+    let rows: [Row; 9] = [
         (
             "each_service_is_provided_or_refused_for_a_lasting_reason",
             each_service_is_provided_or_refused_for_a_lasting_reason,
@@ -498,6 +523,10 @@ fn every_provider_keeps_the_system_services_contract() {
         (
             "a_path_the_seam_refuses_is_refused_before_the_file_system",
             a_path_the_seam_refuses_is_refused_before_the_file_system,
+        ),
+        (
+            "a_scripted_grant_is_foreign_to_every_system",
+            a_scripted_grant_is_foreign_to_every_system,
         ),
     ];
     for subject in [Subject::Scripted, Subject::Platform] {

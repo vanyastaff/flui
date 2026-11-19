@@ -2,11 +2,12 @@
 //! where a sandboxed process keeps its data (`flui-native`'s data folders) and
 //! what it may open without a grant (`flui-system`'s grants).
 //!
-//! - A **Flatpak** is a process that has `/.flatpak-info`, the file
+//! - A **Flatpak** is a Linux process that has `/.flatpak-info`, the file
 //!   `bubblewrap` mounts into every Flatpak sandbox: `FLATPAK_ID` alone is not
 //!   one, since a host process started from a Flatpak's terminal (an IDE's)
 //!   inherits it. The file's `[Context] filesystems=` names what the
-//!   application's manifest exposes beyond its own folders.
+//!   application's manifest exposes beyond its own folders, as Flatpak wrote
+//!   it: flattened, with no entry that takes one back.
 //! - The **macOS App Sandbox** is a process the system started with
 //!   `APP_SANDBOX_CONTAINER_ID`, whose container
 //!   (`~/Library/Containers/<id>/Data`) the system makes its `HOME`.
@@ -19,36 +20,42 @@ use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 /// What [`Confinement::detect`] reads of the process's environment.
-pub type Environment<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+pub(crate) type Environment<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// Where Flatpak mounts its description of the sandbox.
 pub const FLATPAK_INFO: &str = "/.flatpak-info";
 
 /// The longest `/.flatpak-info` read, in bytes: it names an application, its
 /// runtime and its permissions; one larger is not that file.
-pub const MAX_FLATPAK_INFO_LEN: u64 = 64 * 1024;
+const MAX_FLATPAK_INFO_LEN: u64 = 64 * 1024;
 
 /// What the process found at [`FLATPAK_INFO`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FlatpakInfo {
-    /// No such file: the process is no Flatpak, whatever its environment
-    /// says.
+    /// No such file, or a system with no Flatpak: the process is no
+    /// Flatpak, whatever its environment says.
     Absent,
     /// The file is there, and holds this text: empty when it was larger than
-    /// [`MAX_FLATPAK_INFO_LEN`] or could not be read, which leaves the
-    /// sandbox its own folders alone.
+    /// a description is or could not be read, which leaves the sandbox its
+    /// own folders alone.
     Present(String),
 }
 
-/// Read [`FLATPAK_INFO`], its size checked before a byte is read and the read
-/// bounded again. Blocks on the file system: off the owner thread only.
+/// Read [`FLATPAK_INFO`] on Linux, its size checked before a byte is read
+/// and the read bounded again; every other system has no Flatpak, so a file
+/// at that name (the root of a Windows drive) means nothing there and is not
+/// read. Blocks on the file system: off the owner thread only.
 #[must_use]
 pub fn read_flatpak_info() -> FlatpakInfo {
-    read_info_at(Path::new(FLATPAK_INFO))
+    read_description(Path::new(FLATPAK_INFO), cfg!(target_os = "linux"))
 }
 
-fn read_info_at(path: &Path) -> FlatpakInfo {
+/// The description at `path`, on a system that has Flatpak (`linux`).
+fn read_description(path: &Path, linux: bool) -> FlatpakInfo {
+    if !linux {
+        return FlatpakInfo::Absent;
+    }
     let Ok(metadata) = std::fs::metadata(path) else {
         return FlatpakInfo::Absent;
     };
@@ -65,38 +72,109 @@ fn read_info_at(path: &Path) -> FlatpakInfo {
     }
 }
 
+/// A user folder a Flatpak manifest names as `xdg-<name>`, which the user's
+/// `user-dirs.dirs` places.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum UserFolder {
+    /// `xdg-desktop`.
+    Desktop,
+    /// `xdg-documents`.
+    Documents,
+    /// `xdg-download`.
+    Download,
+    /// `xdg-music`.
+    Music,
+    /// `xdg-pictures`.
+    Pictures,
+    /// `xdg-public-share`.
+    PublicShare,
+    /// `xdg-videos`.
+    Videos,
+    /// `xdg-templates`.
+    Templates,
+}
+
+impl UserFolder {
+    /// The folder a manifest's `xdg-<name>` names.
+    fn of_entry(name: &str) -> Option<Self> {
+        Some(match name {
+            "desktop" => Self::Desktop,
+            "documents" => Self::Documents,
+            "download" => Self::Download,
+            "music" => Self::Music,
+            "pictures" => Self::Pictures,
+            "public-share" => Self::PublicShare,
+            "videos" => Self::Videos,
+            "templates" => Self::Templates,
+            _ => return None,
+        })
+    }
+}
+
 /// A Flatpak sandbox, as its description and environment say.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct FlatpakSandbox {
-    /// The application's id (`[Application] name=`, else `FLATPAK_ID`), one
-    /// plain name; `None` when neither names one.
-    pub id: Option<OsString>,
     /// The application's own folder, `~/.var/app/<id>`.
-    pub own: Option<PathBuf>,
+    own: Option<PathBuf>,
     /// Its data folder: `XDG_DATA_HOME`, else `~/.var/app/<id>/data`.
-    pub data_home: Option<PathBuf>,
-    /// Its temporary folder: a usable `TMPDIR`, else the sandbox's own `/tmp`.
-    pub temporary: PathBuf,
+    data_home: Option<PathBuf>,
     /// The document portal's folders: Flatpak's mount inside the sandbox and
     /// `$XDG_RUNTIME_DIR/doc`.
-    pub documents: Vec<PathBuf>,
-    /// What the manifest's `filesystems` expose, each entry resolved to a
-    /// folder, an entry with `!` taking back an earlier one.
-    pub filesystems: Vec<PathBuf>,
+    documents: Vec<PathBuf>,
+    /// What the manifest's `filesystems` expose, each entry resolved.
+    filesystems: Vec<PathBuf>,
+}
+
+/// The folder every Flatpak keeps private: its own `/tmp`. Flatpak unsets
+/// `TMPDIR`, so the variable is never read there.
+const FLATPAK_TEMPORARY: &str = "/tmp";
+
+impl FlatpakSandbox {
+    /// Its data folder: `XDG_DATA_HOME`, else `~/.var/app/<id>/data`; `None`
+    /// when neither names one.
+    #[must_use]
+    pub fn data_home(&self) -> Option<&Path> {
+        self.data_home.as_deref()
+    }
+
+    /// Every folder the sandbox reaches: its own, its private `/tmp`, the
+    /// document portal's folders and what its manifest exposes. A path its
+    /// manifest hides with `--nofilesystem` under an exposed folder is a
+    /// tmpfs the description does not show: reached here, and refused by
+    /// the sandbox when it is opened.
+    pub fn reached(&self) -> impl Iterator<Item = &Path> {
+        self.own
+            .as_deref()
+            .into_iter()
+            .chain([Path::new(FLATPAK_TEMPORARY)])
+            .chain(self.documents.iter().map(PathBuf::as_path))
+            .chain(self.filesystems.iter().map(PathBuf::as_path))
+    }
 }
 
 /// The macOS App Sandbox's container.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct AppSandbox {
-    /// The container's id (`APP_SANDBOX_CONTAINER_ID`).
-    pub id: OsString,
-    /// The container, `~/Library/Containers/<id>/Data`: `HOME` when it is
-    /// the container's, else derived from the user's home.
-    pub home: PathBuf,
+    /// The container, `~/Library/Containers/<id>/Data`.
+    home: PathBuf,
     /// The container's temporary folder: a `TMPDIR` inside the container.
-    pub temporary: Option<PathBuf>,
+    temporary: Option<PathBuf>,
+}
+
+impl AppSandbox {
+    /// The container, `~/Library/Containers/<id>/Data`: `HOME` when it is
+    /// that path for the container's id, else rebuilt under the user's home.
+    #[must_use]
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// The container's temporary folder: a `TMPDIR` inside the container.
+    #[must_use]
+    pub fn temporary(&self) -> Option<&Path> {
+        self.temporary.as_deref()
+    }
 }
 
 /// The sandbox a process runs in.
@@ -134,14 +212,14 @@ fn folder(env: Environment<'_>, name: &str) -> Option<PathBuf> {
     env(name).map(PathBuf::from).filter(|path| is_plain(path))
 }
 
-/// `TMPDIR`, when it names a temporary folder a sandbox may reach: absolute,
-/// plain, not a root (`/` would reach everything), and inside `within` when
-/// given (an App Sandbox's container).
+/// `TMPDIR`, when it names a temporary folder inside `container`: absolute,
+/// plain and under it. Any other is not the sandbox's, and is not reached.
 #[must_use]
-pub fn usable_temporary(env: Environment<'_>, within: Option<&Path>) -> Option<PathBuf> {
-    folder(env, "TMPDIR")
-        .filter(|path| path.parent().is_some())
-        .filter(|path| within.is_none_or(|container| path.starts_with(container)))
+pub fn usable_temporary(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    container: &Path,
+) -> Option<PathBuf> {
+    folder(env, "TMPDIR").filter(|path| path.starts_with(container) && path != container)
 }
 
 impl Confinement {
@@ -150,7 +228,7 @@ impl Confinement {
     /// library finds it (`HOME`, else the system's user database).
     pub fn of_process(
         flatpak_info: &FlatpakInfo,
-        user_dir: &dyn Fn(&str) -> Option<PathBuf>,
+        user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
     ) -> Self {
         let home = std::env::home_dir();
         Self::detect(
@@ -163,43 +241,38 @@ impl Confinement {
 
     /// The sandbox `env` and `flatpak_info` describe; `user_home` is the
     /// user's home from the system's user database, for a container whose
-    /// `HOME` is not set; `user_dir` names a user folder (`"documents"`,
-    /// `"download"`, …) as the user's `user-dirs.dirs` does, for a
-    /// manifest's `xdg-*` entries.
+    /// `HOME` is not its container; `user_dir` places a user folder as the
+    /// user's `user-dirs.dirs` does, for a manifest's `xdg-*` entries, and
+    /// answers none for a folder it does not configure.
     pub fn detect(
-        env: Environment<'_>,
+        env: &dyn Fn(&str) -> Option<OsString>,
         flatpak_info: &FlatpakInfo,
         user_home: Option<&Path>,
-        user_dir: &dyn Fn(&str) -> Option<PathBuf>,
+        user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
     ) -> Self {
         if let FlatpakInfo::Present(text) = flatpak_info {
             return Self::Flatpak(flatpak(env, text, user_home, user_dir));
         }
         if let Some(id) = env("APP_SANDBOX_CONTAINER_ID").filter(is_one_name) {
-            let derived = || {
-                user_home.map(|home| {
-                    home.join("Library")
-                        .join("Containers")
-                        .join(&id)
-                        .join("Data")
-                })
-            };
-            if let Some(home) = folder(env, "HOME").or_else(derived) {
-                let temporary = usable_temporary(env, Some(&home));
-                return Self::AppSandbox(AppSandbox {
-                    id,
-                    home,
-                    temporary,
-                });
+            let container = Path::new("Library")
+                .join("Containers")
+                .join(&id)
+                .join("Data");
+            let home = folder(env, "HOME")
+                .filter(|home| home.ends_with(&container))
+                .or_else(|| user_home.map(|home| home.join(&container)));
+            if let Some(home) = home {
+                let temporary = usable_temporary(env, &home);
+                return Self::AppSandbox(AppSandbox { home, temporary });
             }
         }
         Self::Unconfined
     }
 }
 
-/// The value of `key` in the `[group]` of an INI-style `text`, its last line
-/// winning.
-fn ini_value<'a>(text: &'a str, group: &str, key: &str) -> Option<&'a str> {
+/// The value of `key` in the `[group]` of a key file's `text`, its last
+/// line winning.
+fn key_file_value<'a>(text: &'a str, group: &str, key: &str) -> Option<&'a str> {
     let mut in_group = false;
     let mut value = None;
     for line in text.lines().map(str::trim) {
@@ -212,19 +285,50 @@ fn ini_value<'a>(text: &'a str, group: &str, key: &str) -> Option<&'a str> {
             && let Some((name, rest)) = line.split_once('=')
             && name.trim() == key
         {
-            value = Some(rest.trim());
+            value = Some(rest.trim_start());
         }
     }
     value
+}
+
+/// A key file's list value split at each `;` the writer did not escape,
+/// each item unescaped as GLib's key file writes it (`\;`, `\\`, `\s`,
+/// `\t`, `\n`, `\r`).
+fn key_file_list(value: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut item = String::new();
+    let mut characters = value.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => match characters.next() {
+                Some(';') => item.push(';'),
+                Some('s') => item.push(' '),
+                Some('t') => item.push('\t'),
+                Some('n') => item.push('\n'),
+                Some('r') => item.push('\r'),
+                Some('\\') | None => item.push('\\'),
+                Some(other) => {
+                    item.push('\\');
+                    item.push(other);
+                }
+            },
+            ';' => items.push(std::mem::take(&mut item)),
+            other => item.push(other),
+        }
+    }
+    if !item.is_empty() {
+        items.push(item);
+    }
+    items
 }
 
 fn flatpak(
     env: Environment<'_>,
     text: &str,
     user_home: Option<&Path>,
-    user_dir: &dyn Fn(&str) -> Option<PathBuf>,
+    user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
 ) -> FlatpakSandbox {
-    let id = ini_value(text, "Application", "name")
+    let id = key_file_value(text, "Application", "name")
         .map(OsString::from)
         .or_else(|| env("FLATPAK_ID"))
         .filter(is_one_name);
@@ -248,13 +352,11 @@ fn flatpak(
         runtime: runtime.as_deref(),
         user_dir,
     };
-    let filesystems = ini_value(text, "Context", "filesystems")
+    let filesystems = key_file_value(text, "Context", "filesystems")
         .map_or_else(Vec::new, |list| context.filesystems(list));
     FlatpakSandbox {
-        id,
         own,
         data_home,
-        temporary: usable_temporary(env, None).unwrap_or_else(|| PathBuf::from("/tmp")),
         documents,
         filesystems,
     }
@@ -264,21 +366,8 @@ fn flatpak(
 struct Context<'a> {
     home: Option<&'a Path>,
     runtime: Option<&'a Path>,
-    user_dir: &'a dyn Fn(&str) -> Option<PathBuf>,
+    user_dir: &'a dyn Fn(UserFolder) -> Option<PathBuf>,
 }
-
-/// The user folders a manifest names as `xdg-<name>`, and the English folder
-/// a home holds when the user's `user-dirs.dirs` names none.
-const USER_FOLDERS: [(&str, &str); 8] = [
-    ("desktop", "Desktop"),
-    ("documents", "Documents"),
-    ("download", "Downloads"),
-    ("music", "Music"),
-    ("pictures", "Pictures"),
-    ("public-share", "Public"),
-    ("videos", "Videos"),
-    ("templates", "Templates"),
-];
 
 /// The folders under the user's home a manifest names as `xdg-<name>`.
 const HOME_FOLDERS: [(&str, &str); 4] = [
@@ -289,37 +378,27 @@ const HOME_FOLDERS: [(&str, &str); 4] = [
 ];
 
 impl Context<'_> {
-    /// The folders `list` (`;`-separated entries) exposes, in order, an entry
-    /// with `!` taking back the folder it names.
+    /// The folders `list` exposes, in order; an entry this library does not
+    /// read, or one that climbs, is left out.
     fn filesystems(&self, list: &str) -> Vec<PathBuf> {
-        let mut exposed: Vec<PathBuf> = Vec::new();
-        for entry in list
-            .split(';')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-        {
-            let (negated, entry) = match entry.strip_prefix('!') {
-                Some(rest) => (true, rest),
-                None => (false, entry),
-            };
-            // The access mode does not change what is reached.
-            let entry = entry
-                .strip_suffix(":ro")
-                .or_else(|| entry.strip_suffix(":rw"))
-                .or_else(|| entry.strip_suffix(":create"))
-                .unwrap_or(entry);
-            let Some(folder) = self.resolve(entry).filter(|folder| is_plain(folder)) else {
-                continue;
-            };
-            exposed.retain(|known| *known != folder);
-            if !negated {
-                exposed.push(folder);
-            }
-        }
-        exposed
+        key_file_list(list)
+            .iter()
+            .map(|entry| {
+                // The access mode does not change what is reached.
+                entry
+                    .strip_suffix(":ro")
+                    .or_else(|| entry.strip_suffix(":rw"))
+                    .or_else(|| entry.strip_suffix(":create"))
+                    .unwrap_or(entry)
+            })
+            .filter_map(|entry| self.resolve(entry))
+            .filter(|folder| is_plain(folder))
+            .collect()
     }
 
-    /// The folder one entry names; `None` for one this library does not read.
+    /// The folder one entry names; `None` for one this library does not read,
+    /// or a user folder the user's `user-dirs.dirs` does not configure, which
+    /// Flatpak ignores too.
     fn resolve(&self, entry: &str) -> Option<PathBuf> {
         let (head, rest) = entry
             .split_once('/')
@@ -341,10 +420,7 @@ impl Context<'_> {
                 if let Some((_, folder)) = HOME_FOLDERS.iter().find(|(key, _)| *key == name) {
                     return self.home.map(|home| under(home.join(folder)));
                 }
-                let (_, english) = USER_FOLDERS.iter().find(|(key, _)| *key == name)?;
-                (self.user_dir)(name)
-                    .or_else(|| self.home.map(|home| home.join(english)))
-                    .map(under)
+                (self.user_dir)(UserFolder::of_entry(name)?).map(under)
             }
         }
     }
@@ -355,7 +431,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{Confinement, FlatpakInfo, read_info_at, usable_temporary};
+    use super::{Confinement, FlatpakInfo, UserFolder, key_file_list, read_description};
 
     fn environment(vars: Vec<(&'static str, OsString)>) -> impl Fn(&str) -> Option<OsString> {
         move |name| {
@@ -369,9 +445,24 @@ mod tests {
         std::env::temp_dir().join(path)
     }
 
-    fn no_user_dirs(_: &str) -> Option<PathBuf> {
+    fn no_user_dirs(_: UserFolder) -> Option<PathBuf> {
         None
     }
+
+    fn app_sandbox(confinement: Confinement) -> super::AppSandbox {
+        let Confinement::AppSandbox(sandbox) = confinement else {
+            panic!("the App Sandbox, not {confinement:?}");
+        };
+        sandbox
+    }
+
+    /// A row: its name, `HOME`, `TMPDIR`, and the temporary folder reached.
+    type Row = (
+        &'static str,
+        Option<PathBuf>,
+        Option<PathBuf>,
+        Option<PathBuf>,
+    );
 
     #[test]
     fn a_flatpak_is_a_process_with_its_description_whatever_its_environment_says() {
@@ -392,15 +483,43 @@ mod tests {
             panic!("a process with the description is a Flatpak");
         };
         assert_eq!(
-            sandbox.id,
-            Some("org.example.App".into()),
+            sandbox.data_home(),
+            Some(home.join(".var/app/org.example.App/data").as_path()),
             "the description names it"
         );
-        assert_eq!(sandbox.own, Some(home.join(".var/app/org.example.App")));
+    }
+
+    #[test]
+    fn the_description_is_read_on_linux_alone_and_within_its_bound() {
+        let info = std::env::temp_dir().join(format!("flui-flatpak-info-{}", std::process::id()));
+        let _ = std::fs::remove_file(&info);
+        assert_eq!(read_description(&info, true), FlatpakInfo::Absent);
+        std::fs::write(&info, "[Application]\nname=a.b\n").expect("written");
         assert_eq!(
-            sandbox.data_home,
-            Some(home.join(".var/app/org.example.App/data"))
+            read_description(&info, true),
+            FlatpakInfo::Present("[Application]\nname=a.b\n".to_owned())
         );
+        assert_eq!(
+            read_description(&info, false),
+            FlatpakInfo::Absent,
+            "a system with no Flatpak reads no description, a file at its name included"
+        );
+        std::fs::write(&info, vec![b'x'; 64 * 1024 + 1]).expect("written");
+        assert_eq!(
+            read_description(&info, true),
+            FlatpakInfo::Present(String::new()),
+            "one past the bound is refused by its size, a Flatpak with its own folders alone"
+        );
+        let _ = std::fs::remove_file(&info);
+    }
+
+    #[test]
+    fn a_key_file_list_is_split_where_its_writer_did_not_escape() {
+        assert_eq!(
+            key_file_list(r"home;/media/a\;b;/srv/c\\d;~/with\sspace;"),
+            ["home", "/media/a;b", r"/srv/c\d", "~/with space"]
+        );
+        assert_eq!(key_file_list(""), Vec::<String>::new());
     }
 
     /// A manifest's entries are Linux paths: the table runs where they are
@@ -411,12 +530,14 @@ mod tests {
         let env = environment(vec![
             ("HOME", "/home/ann".into()),
             ("XDG_RUNTIME_DIR", "/run/user/1000".into()),
+            ("TMPDIR", "/home/ann/tmp".into()),
         ]);
-        let user_dir =
-            |name: &str| (name == "documents").then(|| PathBuf::from("/home/ann/Dokumente"));
+        let user_dir = |folder: UserFolder| {
+            (folder == UserFolder::Documents).then(|| PathBuf::from("/home/ann/Dokumente"))
+        };
         let text = "[Context]\nshared=network;\nfilesystems=home;xdg-documents/Notes:ro;\
                     xdg-download;xdg-config/app:create;xdg-run/pipewire-0;~/Projects:rw;\
-                    /media/usb;!xdg-download;../escape;/a/../b;unknown-thing;\n";
+                    /media/usb;/media/a\\;b;host-etc;../escape;/a/../b;unknown-thing;\n";
         let Confinement::Flatpak(sandbox) = Confinement::detect(
             &env,
             &FlatpakInfo::Present(text.to_owned()),
@@ -425,18 +546,27 @@ mod tests {
         ) else {
             panic!("a Flatpak");
         };
-        let folders = [
+        let exposed = [
             "/home/ann",
             "/home/ann/Dokumente/Notes",
             "/home/ann/.config/app",
             "/run/user/1000/pipewire-0",
             "/home/ann/Projects",
             "/media/usb",
+            "/media/a;b",
+            "/run/host/etc",
         ]
         .map(PathBuf::from);
         assert_eq!(
-            sandbox.filesystems, folders,
-            "the mode is dropped, a `!` entry takes back its folder, an unknown or climbing one is ignored"
+            sandbox.filesystems, exposed,
+            "the mode dropped, an escaped `;` kept in its entry, an unconfigured user folder \
+             (xdg-download) and an unknown or climbing entry left out"
+        );
+        assert!(
+            !sandbox
+                .reached()
+                .any(|folder| folder == std::path::Path::new("/home/ann/tmp")),
+            "Flatpak unsets TMPDIR: the variable is never read there"
         );
         let host = FlatpakInfo::Present("[Context]\nfilesystems=host;\n".to_owned());
         let Confinement::Flatpak(sandbox) = Confinement::detect(&env, &host, None, &no_user_dirs)
@@ -450,82 +580,60 @@ mod tests {
         );
     }
 
+    /// Each row: the App Sandbox's `HOME` and `TMPDIR`, the container the
+    /// sandbox keeps to and the temporary folder it reaches.
     #[test]
-    fn a_temporary_folder_that_would_reach_everything_is_ignored() {
-        let container = absolute("Containers/com.example.app/Data");
-        let cases: [(&str, Option<OsString>, Option<PathBuf>); 5] = [
-            (
-                "inside the container",
-                Some(container.join("tmp").into()),
-                Some(container.join("tmp")),
-            ),
-            ("relative", Some("tmp".into()), None),
-            (
-                "outside the container",
-                Some(absolute("elsewhere").into()),
-                None,
-            ),
-            (
-                "climbing out",
-                Some(container.join("..").join("x").into()),
-                None,
-            ),
-            ("unset", None, None),
-        ];
-        for (name, tmpdir, usable) in cases {
-            let env = environment(tmpdir.into_iter().map(|tmp| ("TMPDIR", tmp)).collect());
-            assert_eq!(usable_temporary(&env, Some(&container)), usable, "{name}");
-        }
+    fn an_app_sandbox_keeps_to_its_container_whatever_its_environment_names() {
+        let user = absolute("user");
+        let container = user.join("Library/Containers/com.example.app/Data");
         let root = std::env::temp_dir()
             .ancestors()
             .last()
             .expect("a path has a root")
             .to_path_buf();
-        let env = environment(vec![("TMPDIR", root.into())]);
-        assert_eq!(
-            usable_temporary(&env, None),
-            None,
-            "a root reaches everything"
-        );
-    }
-
-    #[test]
-    fn an_app_sandbox_keeps_to_its_container_even_without_home() {
-        let user = absolute("user");
-        let env = environment(vec![("APP_SANDBOX_CONTAINER_ID", "com.example.app".into())]);
-        let Confinement::AppSandbox(sandbox) =
-            Confinement::detect(&env, &FlatpakInfo::Absent, Some(&user), &no_user_dirs)
-        else {
-            panic!("the App Sandbox");
-        };
-        assert_eq!(
-            sandbox.home,
-            user.join("Library/Containers/com.example.app/Data")
-        );
+        let rows: [Row; 6] = [
+            (
+                "HOME the container, TMPDIR inside it",
+                Some(container.clone()),
+                Some(container.join("tmp")),
+                Some(container.join("tmp")),
+            ),
+            ("no HOME", None, None, None),
+            ("HOME the disk's root", Some(root.clone()), None, None),
+            (
+                "HOME another application's container",
+                Some(user.join("Library/Containers/com.other.app/Data")),
+                None,
+                None,
+            ),
+            ("TMPDIR a root", Some(container.clone()), Some(root), None),
+            (
+                "TMPDIR outside the container",
+                Some(container.clone()),
+                Some(absolute("elsewhere")),
+                None,
+            ),
+        ];
+        for (name, home, tmpdir, temporary) in rows {
+            let mut vars = vec![(
+                "APP_SANDBOX_CONTAINER_ID",
+                OsString::from("com.example.app"),
+            )];
+            vars.extend(home.map(|home| ("HOME", home.into_os_string())));
+            vars.extend(tmpdir.map(|tmp| ("TMPDIR", tmp.into_os_string())));
+            let sandbox = app_sandbox(Confinement::detect(
+                &environment(vars),
+                &FlatpakInfo::Absent,
+                Some(&user),
+                &no_user_dirs,
+            ));
+            assert_eq!(sandbox.home(), container.as_path(), "{name}");
+            assert_eq!(sandbox.temporary(), temporary.as_deref(), "{name}");
+        }
         let climbing = environment(vec![("APP_SANDBOX_CONTAINER_ID", "../x".into())]);
         assert_eq!(
             Confinement::detect(&climbing, &FlatpakInfo::Absent, Some(&user), &no_user_dirs),
             Confinement::Unconfined
         );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn the_description_is_read_within_its_bound() {
-        let info = std::env::temp_dir().join(format!("flui-flatpak-info-{}", std::process::id()));
-        let _ = std::fs::remove_file(&info);
-        assert_eq!(read_info_at(&info), FlatpakInfo::Absent);
-        std::fs::write(&info, "[Application]\nname=a.b\n").expect("written");
-        assert_eq!(
-            read_info_at(&info),
-            FlatpakInfo::Present("[Application]\nname=a.b\n".to_owned())
-        );
-        std::fs::write(&info, vec![b'x'; 64 * 1024 + 1]).expect("written");
-        assert_eq!(
-            read_info_at(&info),
-            FlatpakInfo::Present(String::new()),
-            "one past the bound is refused by its size, a Flatpak with its own folders alone"
-        );
-        let _ = std::fs::remove_file(&info);
     }
 }

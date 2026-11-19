@@ -17,12 +17,11 @@
 //!   the private copy Windows redirects a write under `%APPDATA%` into. A
 //!   store it kept there before is copied over once ([`migrate`]).
 //!
-//! Reading `/.flatpak-info` and copying a store touch the file system: this
+//! Reading `/.flatpak-info` (on Linux alone) and copying a store touch the
+//! file system: this
 //! runs on the store's IO thread, at its first call.
 
-#[cfg(any(windows, test))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use flui_platform::sandbox::Confinement;
 
@@ -71,11 +70,14 @@ impl Container {
 pub(crate) fn data_dirs_in(container: &Container, app: &str, base: &BaseDirs) -> Option<DataDirs> {
     let (roaming, local) = match container {
         Container::Sandbox(Confinement::Flatpak(flatpak)) => {
-            let data = flatpak.data_home.clone().or_else(|| base.data.clone())?;
+            let data = flatpak
+                .data_home()
+                .map(Path::to_path_buf)
+                .or_else(|| base.data.clone())?;
             (data.clone(), data)
         }
         Container::Sandbox(Confinement::AppSandbox(sandbox)) => {
-            let support = sandbox.home.join("Library").join("Application Support");
+            let support = sandbox.home().join("Library").join("Application Support");
             (support.clone(), support)
         }
         Container::Sandbox(_) => (base.data.clone()?, base.local.clone()?),
@@ -116,44 +118,96 @@ pub(crate) enum Migrated {
 
 /// Copy the store under `from` to `to` once: only when `to` holds no store
 /// (it is missing or empty) and `from` holds one, every file and folder of
-/// it within the bounds, each file made new (`create_new`, so nothing at
-/// `to` is ever overwritten). A link, or anything but a file or a folder,
+/// it within the bounds. The copy is made in a staging folder beside `to`
+/// and renamed into place whole, so a copy that fails midway, or a process
+/// killed during it, leaves no root behind and the next first call copies
+/// again; a root another instance renamed into place first is kept, and the
+/// staging copy discarded. A link, or anything but a file or a folder,
 /// leaves the store where it was. Blocks on the file system.
 #[cfg(any(windows, test))]
 pub(crate) fn migrate(from: &Path, to: &Path) -> std::io::Result<Migrated> {
-    let holds_store = |root: &Path| -> std::io::Result<bool> {
-        match std::fs::read_dir(root) {
-            Ok(mut entries) => Ok(entries.next().is_some()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
-        }
-    };
+    migrate_with(from, to, &mut |source, target| {
+        let mut source = std::fs::File::open(source)?;
+        let mut copy = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)?;
+        std::io::copy(&mut source, &mut copy)?;
+        copy.sync_all()
+    })
+}
+
+/// [`migrate`], each file copied by `copy` (source, target).
+#[cfg(any(windows, test))]
+fn migrate_with(
+    from: &Path,
+    to: &Path,
+    copy: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<Migrated> {
     if holds_store(to)? || !holds_store(from)? {
         return Ok(Migrated::Nothing);
     }
     let Some(entries) = listed(from)? else {
         return Ok(Migrated::TooLarge);
     };
-    for (relative, is_folder) in &entries {
-        let target = to.join(relative);
-        if *is_folder {
-            std::fs::create_dir_all(&target)?;
-            continue;
+    let staging = staging_beside(to)?;
+    let copied = (|| {
+        std::fs::create_dir_all(&staging)?;
+        for (relative, is_folder) in &entries {
+            let target = staging.join(relative);
+            if *is_folder {
+                std::fs::create_dir_all(&target)?;
+            } else {
+                copy(&from.join(relative), &target)?;
+            }
         }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut source = std::fs::File::open(from.join(relative))?;
-        let mut copy = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)?;
-        std::io::copy(&mut source, &mut copy)?;
-        copy.sync_all()?;
+        Ok::<(), std::io::Error>(())
+    })();
+    if let Err(error) = copied {
+        // Best effort: a staging folder left behind is never a root.
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
     }
-    Ok(Migrated::Copied(
-        entries.iter().filter(|(_, is_folder)| !is_folder).count(),
-    ))
+    match std::fs::rename(&staging, to) {
+        Ok(()) => Ok(Migrated::Copied(
+            entries.iter().filter(|(_, is_folder)| !is_folder).count(),
+        )),
+        // Another instance put its root in place first: it is the store.
+        Err(_) if holds_store(to)? => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Ok(Migrated::Nothing)
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Err(error)
+        }
+    }
+}
+
+/// Whether `root` holds a store: a folder with an entry.
+#[cfg(any(windows, test))]
+fn holds_store(root: &Path) -> std::io::Result<bool> {
+    match std::fs::read_dir(root) {
+        Ok(mut entries) => Ok(entries.next().is_some()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// A staging folder beside `to`, named for this process and the moment, so
+/// two instances never stage in one folder; its parent is made.
+#[cfg(any(windows, test))]
+fn staging_beside(to: &Path) -> std::io::Result<PathBuf> {
+    let parent = to.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+    std::fs::create_dir_all(parent)?;
+    let name = to
+        .file_name()
+        .ok_or(std::io::ErrorKind::InvalidInput)?
+        .to_string_lossy();
+    let moment = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    Ok(parent.join(format!(".{name}.migrating-{}-{moment}", std::process::id())))
 }
 
 /// Every file and folder under `root`, relative to it, folders before what
@@ -237,7 +291,9 @@ mod tests {
 
     use flui_platform::sandbox::{Confinement, FlatpakInfo};
 
-    use super::{BaseDirs, Container, MAX_MIGRATED_FILES, Migrated, data_dirs_in, migrate};
+    use super::{
+        BaseDirs, Container, MAX_MIGRATED_FILES, Migrated, data_dirs_in, migrate, migrate_with,
+    };
     use crate::storage::DataDirs;
 
     fn absolute(path: &str) -> PathBuf {
@@ -385,6 +441,84 @@ mod tests {
         assert!(
             !untouched.exists(),
             "a store past the bound is not copied in part"
+        );
+    }
+
+    /// A store of two files under a fresh scratch folder, and where it goes.
+    fn two_file_store() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let scratch = tempfile::tempdir().expect("a scratch folder");
+        let old = scratch.path().join("old");
+        std::fs::create_dir_all(&old).expect("the old store");
+        std::fs::write(old.join("a"), b"a").expect("written");
+        std::fs::write(old.join("b"), b"b").expect("written");
+        let new = scratch.path().join("new");
+        (scratch, old, new)
+    }
+
+    /// What the scratch folder holds besides the old store and the new root:
+    /// a staging folder left behind.
+    fn leftovers(scratch: &tempfile::TempDir) -> Vec<String> {
+        std::fs::read_dir(scratch.path())
+            .expect("listed")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name != "old" && name != "new")
+            .collect()
+    }
+
+    #[test]
+    fn a_copy_that_fails_midway_leaves_no_root_and_the_next_start_copies_again() {
+        let (scratch, old, new) = two_file_store();
+        let mut copied = 0;
+        let failed = migrate_with(&old, &new, &mut |source, target| {
+            copied += 1;
+            if copied == 2 {
+                return Err(std::io::Error::other("the volume filled up"));
+            }
+            std::fs::copy(source, target).map(drop)
+        });
+        assert!(failed.is_err());
+        assert!(
+            !new.exists(),
+            "no root, which a later start would read as the store"
+        );
+        assert_eq!(
+            leftovers(&scratch),
+            Vec::<String>::new(),
+            "the staging copy is removed"
+        );
+        assert_eq!(migrate(&old, &new).expect("copied"), Migrated::Copied(2));
+        assert_eq!(std::fs::read(new.join("b")).expect("copied"), b"b");
+    }
+
+    #[test]
+    fn a_root_another_instance_put_in_place_first_is_kept() {
+        let (scratch, old, new) = two_file_store();
+        let theirs = new.clone();
+        let result = migrate_with(&old, &new, &mut |source, target| {
+            // The other instance finishes its copy while this one copies.
+            if !theirs.exists() {
+                std::fs::create_dir_all(&theirs).expect("their root");
+                std::fs::write(theirs.join("theirs"), b"theirs").expect("written");
+            }
+            std::fs::copy(source, target).map(drop)
+        });
+        assert_eq!(result.expect("judged"), Migrated::Nothing);
+        assert_eq!(
+            std::fs::read(new.join("theirs")).expect("kept"),
+            b"theirs",
+            "the root in place is the store"
+        );
+        assert!(!new.join("a").exists(), "nothing of this copy reaches it");
+        assert_eq!(
+            leftovers(&scratch),
+            Vec::<String>::new(),
+            "the staging copy is discarded"
         );
     }
 }

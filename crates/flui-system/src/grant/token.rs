@@ -45,6 +45,37 @@ impl GrantKind {
     }
 }
 
+/// What made a grant: a kind of system, or the scripted double, whose grants
+/// no system's backend resolves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Origin {
+    System(GrantKind),
+    Scripted,
+}
+
+/// The byte the scripted double's grants are written with, outside every
+/// [`GrantKind`]'s.
+const SCRIPTED_TAG: u8 = 0xF0;
+
+impl Origin {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::System(kind) => kind.tag(),
+            Self::Scripted => SCRIPTED_TAG,
+        }
+    }
+
+    const fn of_tag(tag: u8) -> Option<Self> {
+        if tag == SCRIPTED_TAG {
+            return Some(Self::Scripted);
+        }
+        match GrantKind::of_tag(tag) {
+            Some(kind) => Some(Self::System(kind)),
+            None => None,
+        }
+    }
+}
+
 /// What the bytes of a grant begin with.
 const MAGIC: [u8; 8] = *b"flui.grt";
 
@@ -92,7 +123,7 @@ pub enum MalformedGrant {
 /// [`Debug`] shows only its kind and length.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Grant {
-    kind: GrantKind,
+    origin: Origin,
     payload: Box<[u8]>,
 }
 
@@ -106,15 +137,40 @@ impl Grant {
     /// [`MAX_PAYLOAD`](Self::MAX_PAYLOAD).
     #[must_use]
     pub fn try_new(kind: GrantKind, payload: impl Into<Box<[u8]>>) -> Option<Self> {
-        let payload = payload.into();
-        (!payload.is_empty() && payload.len() <= Self::MAX_PAYLOAD)
-            .then_some(Self { kind, payload })
+        Self::of(Origin::System(kind), payload.into())
     }
 
-    /// The kind of system that made it.
+    fn of(origin: Origin, payload: Box<[u8]>) -> Option<Self> {
+        (!payload.is_empty() && payload.len() <= Self::MAX_PAYLOAD)
+            .then_some(Self { origin, payload })
+    }
+
+    /// A grant the scripted double minted, which no system's backend
+    /// resolves.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn scripted(payload: impl Into<Box<[u8]>>) -> Option<Self> {
+        Self::of(Origin::Scripted, payload.into())
+    }
+
+    /// Whether the scripted double minted it.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn is_scripted(&self) -> bool {
+        self.origin == Origin::Scripted
+    }
+
+    /// Whether `other` was made by the same kind of system.
+    pub(crate) fn same_origin(&self, other: &Self) -> bool {
+        self.origin == other.origin
+    }
+
+    /// The kind of system that made it; `None` for one the scripted double
+    /// minted, which no system resolves.
     #[must_use]
-    pub fn kind(&self) -> GrantKind {
-        self.kind
+    pub fn kind(&self) -> Option<GrantKind> {
+        match self.origin {
+            Origin::System(kind) => Some(kind),
+            Origin::Scripted => None,
+        }
     }
 
     /// Its system-specific form, which only a backend of its
@@ -131,7 +187,7 @@ impl Grant {
         let mut bytes = Vec::with_capacity(HEADER_LEN + self.payload.len());
         bytes.extend_from_slice(&MAGIC);
         bytes.push(VERSION);
-        bytes.push(self.kind.tag());
+        bytes.push(self.origin.tag());
         bytes.extend_from_slice(&self.payload);
         bytes
     }
@@ -156,12 +212,12 @@ impl Grant {
         if *version != VERSION {
             return Err(MalformedGrant::Version(*version));
         }
-        let kind = GrantKind::of_tag(*kind).ok_or(MalformedGrant::Kind(*kind))?;
+        let origin = Origin::of_tag(*kind).ok_or(MalformedGrant::Kind(*kind))?;
         // Judged by its length before a byte of it is copied.
         if payload.is_empty() || payload.len() > Self::MAX_PAYLOAD {
             return Err(MalformedGrant::Payload);
         }
-        Self::try_new(kind, payload).ok_or(MalformedGrant::Payload)
+        Self::of(origin, payload.into()).ok_or(MalformedGrant::Payload)
     }
 }
 
@@ -196,7 +252,7 @@ impl Grant {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt as _;
-            (self.kind == GrantKind::UnixPath)
+            (self.origin == Origin::System(GrantKind::UnixPath))
                 .then(|| std::ffi::OsString::from_vec(self.payload.to_vec()).into())
         }
         #[cfg(windows)]
@@ -205,7 +261,7 @@ impl Grant {
             let (pairs, []) = self.payload.as_chunks::<2>() else {
                 return None;
             };
-            if self.kind != GrantKind::WindowsPath {
+            if self.origin != Origin::System(GrantKind::WindowsPath) {
                 return None;
             }
             let units = pairs
@@ -221,7 +277,7 @@ impl fmt::Debug for Grant {
     /// The kind and the length: the payload names the user's file.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Grant")
-            .field("kind", &self.kind)
+            .field("origin", &self.origin)
             .field("len", &self.payload.len())
             .finish()
     }
@@ -271,6 +327,20 @@ mod tests {
             "the payload stays out of a log"
         );
         assert!(!format!("{grant:?}").contains("book"));
+    }
+
+    #[test]
+    fn a_scripted_grant_reads_back_and_names_no_kind_of_system() {
+        let scripted = Grant::scripted(&b"12345678"[..]).expect("a payload");
+        assert_eq!(scripted.kind(), None);
+        let read = Grant::try_from_bytes(&scripted.to_bytes()).expect("its own bytes");
+        assert!(read.is_scripted(), "it survives a restart as the double's");
+        let bookmark =
+            Grant::try_new(GrantKind::AppleBookmark, &b"12345678"[..]).expect("a payload");
+        assert!(
+            !bookmark.same_origin(&scripted),
+            "same bytes, another origin"
+        );
     }
 
     #[cfg(any(unix, windows))]

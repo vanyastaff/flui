@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use flui_platform::capability::Resolver;
+use flui_platform::sandbox::UserFolder;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use super::Portal;
@@ -50,20 +51,20 @@ impl UserDirBackend for XdgUserDirs {
     }
 }
 
-/// The folder a Flatpak manifest's `xdg-<name>` entry names (`documents`,
-/// `download`, …), as the user's `user-dirs.dirs` names it; `None` for a
-/// name it does not know or a folder the file does not name. Reads the file
-/// system: off the owner thread only.
-pub(super) fn named_folder(name: &str) -> Option<PathBuf> {
-    let dir = match name {
-        "desktop" => UserDir::Desktop,
-        "documents" => UserDir::Documents,
-        "download" => UserDir::Downloads,
-        "music" => UserDir::Music,
-        "pictures" => UserDir::Pictures,
-        "public-share" => UserDir::PublicShare,
-        "videos" => UserDir::Videos,
-        "templates" => UserDir::Templates,
+/// The folder a Flatpak manifest's `xdg-<name>` entry names, as the user's
+/// `user-dirs.dirs` places it; `None` for a folder the file does not
+/// configure, which Flatpak ignores too. Reads the file system: off the
+/// owner thread only.
+pub(super) fn named_folder(folder: UserFolder) -> Option<PathBuf> {
+    let dir = match folder {
+        UserFolder::Desktop => UserDir::Desktop,
+        UserFolder::Documents => UserDir::Documents,
+        UserFolder::Download => UserDir::Downloads,
+        UserFolder::Music => UserDir::Music,
+        UserFolder::Pictures => UserDir::Pictures,
+        UserFolder::PublicShare => UserDir::PublicShare,
+        UserFolder::Videos => UserDir::Videos,
+        UserFolder::Templates => UserDir::Templates,
         _ => return None,
     };
     locate(dir, &Environment::of_process()).ok().flatten()

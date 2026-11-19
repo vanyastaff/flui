@@ -228,3 +228,72 @@ fn a_grant_the_system_no_longer_honours_answers_why() {
         Some(outside("renamed.txt").as_path())
     );
 }
+
+/// A host over a scripted system that resolves from `store`, its questions
+/// for the sandbox handled as `prepare` set them before the handle was made.
+fn run_with(
+    store: &GrantStore,
+    prepare: impl FnOnce(&ScriptedSystem),
+) -> (HeadlessHost, ScriptedSystem, Grants) {
+    let system = ScriptedSystem::new(ScriptedLauncher::new(), ScriptedFileDialogs::new());
+    system.grants().set_store(store.clone());
+    system.grants().set_sandbox(sandbox());
+    prepare(&system);
+    let (host, grants) = acquire::<GrantCapability>(&system);
+    (
+        host,
+        system,
+        grants.expect("the scripted plugin provides grants"),
+    )
+}
+
+/// The refusal of a resolve that may run later.
+fn unavailable() -> GrantError {
+    GrantError::Unsupported(flui_platform::Unsupported::of::<GrantCapability>(
+        flui_platform::UnsupportedReason::Unavailable,
+    ))
+}
+
+#[test]
+fn a_sandbox_read_that_answered_nothing_is_asked_again() {
+    let store = GrantStore::new();
+    let grant = store.grant(outside("notes.txt"));
+    let (mut host, system, grants) =
+        run_with(&store, |system| system.grants().drop_sandbox_questions());
+    assert_eq!(
+        settled(&mut host, grants.resolve(&grant, 1024)).err(),
+        Some(unavailable()),
+        "no sandbox read: nothing is reached this time"
+    );
+    system.grants().answer_sandbox();
+    let access = settled(&mut host, grants.resolve(&grant, 1024))
+        .expect("the next resolve asks for the sandbox again, and is answered");
+    assert_eq!(access.file().path(), Some(outside("notes.txt").as_path()));
+}
+
+#[test]
+fn a_dropped_resolve_leaves_the_queue_and_the_queue_is_bounded() {
+    let store = GrantStore::new();
+    let grant = store.grant(outside("notes.txt"));
+    let (mut host, system, grants) = run_with(&store, |system| system.grants().hold_sandbox());
+    let waiting = (0..Grants::MAX_WAITING)
+        .map(|_| grants.resolve(&grant, 1024))
+        .collect::<Vec<Resolving>>();
+    assert_eq!(
+        system.grants().sandbox_questions_held(),
+        1,
+        "one read for every resolve that waits"
+    );
+    assert_eq!(
+        settled(&mut host, grants.resolve(&grant, 1024)).err(),
+        Some(unavailable()),
+        "one past the bound is refused"
+    );
+    drop(waiting);
+    let late = grants.resolve(&grant, 1024);
+    system.grants().answer_sandbox();
+    assert!(
+        settled(&mut host, late).is_ok(),
+        "the resolves let go of left the queue: one more waits, and is answered"
+    );
+}

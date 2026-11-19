@@ -40,8 +40,8 @@ impl PortalGrants {
 }
 
 impl GrantBackend for PortalGrants {
-    fn kind(&self) -> GrantKind {
-        GrantKind::UnixPath
+    fn takes(&self, grant: &Grant) -> bool {
+        grant.kind() == Some(GrantKind::UnixPath)
     }
 
     /// The sandbox `/.flatpak-info` describes, read off the owner thread; a

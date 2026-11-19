@@ -13,6 +13,7 @@
 
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_platform::capability::Resolver;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
@@ -114,13 +115,20 @@ impl<R: DocumentReach> AndroidGrants<R> {
 /// A resolve's hold: dropped before the answer, it stops the worker's read
 /// before its next chunk and cancels the provider's calls that take the
 /// signal (a query, an open), so the worker's place comes back.
+/// A read that finished calls nobody back: no JNI call for a resolve that
+/// answered.
 struct ReadHold {
     let_go: LetGo,
+    /// Set by the worker once the read ended, whichever way.
+    finished: Arc<AtomicBool>,
     interrupt: Option<Interrupt>,
 }
 
 impl Drop for ReadHold {
     fn drop(&mut self) {
+        if self.finished.load(Ordering::Acquire) {
+            return;
+        }
         self.let_go.set();
         if let Some(interrupt) = self.interrupt.take() {
             interrupt();
@@ -141,8 +149,8 @@ fn not_run(reason: NotRun) -> GrantResult {
 }
 
 impl<R: DocumentReach> GrantBackend for AndroidGrants<R> {
-    fn kind(&self) -> GrantKind {
-        GrantKind::ContentUri
+    fn takes(&self, grant: &Grant) -> bool {
+        grant.kind() == Some(GrantKind::ContentUri)
     }
 
     /// An Android application reaches no path: what it reacquires is
@@ -165,12 +173,16 @@ impl<R: DocumentReach> GrantBackend for AndroidGrants<R> {
         };
         let hold = ReadHold {
             let_go: LetGo::default(),
+            finished: Arc::default(),
             interrupt: Some(interrupt),
         };
         let let_go = hold.let_go.clone();
+        let finished = Arc::clone(&hold.finished);
         self.workers
             .run("flui-system-grant", answer, not_run, move || {
-                reacquire(&mut documents, max_bytes, &let_go)
+                let read = reacquire(&mut documents, max_bytes, &let_go);
+                finished.store(true, Ordering::Release);
+                read
             });
         ResolveHold::new(hold)
     }
@@ -337,6 +349,10 @@ mod tests {
         let access = settle(&owner, grants(&reach, &owner).resolve(&grant, 1024))
             .expect("the permission is held");
         assert_eq!(access.file().contents(), Some(&b"notes"[..]));
+        assert!(
+            !reach.steps.taken().contains(&Step::Interrupted),
+            "a read that answered cancels nothing: no JNI call for it"
+        );
     }
 
     #[test]

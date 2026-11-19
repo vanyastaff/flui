@@ -113,26 +113,21 @@ fn confined(kind: SandboxKind, roots: impl IntoIterator<Item = PathBuf>) -> Sand
 }
 
 /// The sandbox a detected confinement reaches: a Flatpak's own folders, its
-/// temporary folder, the document portal's folders and its manifest's
+/// private `/tmp`, the document portal's folders and its manifest's
 /// filesystems; the App Sandbox's container and temporary folder.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) fn of_confinement(confinement: &Confinement) -> Sandbox {
     match confinement {
         Confinement::Flatpak(flatpak) => confined(
             SandboxKind::Flatpak,
-            flatpak
-                .own
-                .iter()
-                .cloned()
-                .chain([flatpak.temporary.clone()])
-                .chain(flatpak.documents.iter().cloned())
-                .chain(flatpak.filesystems.iter().cloned()),
+            flatpak.reached().map(Path::to_path_buf),
         ),
         Confinement::AppSandbox(container) => confined(
             SandboxKind::AppSandbox,
-            [Some(container.home.clone()), container.temporary.clone()]
+            [Some(container.home()), container.temporary()]
                 .into_iter()
-                .flatten(),
+                .flatten()
+                .map(Path::to_path_buf),
         ),
         _ => Sandbox::unconfined(),
     }
@@ -141,11 +136,11 @@ pub(crate) fn of_confinement(confinement: &Confinement) -> Sandbox {
 /// An iOS application's container: every iOS application is sandboxed, its
 /// `HOME` its container and a `TMPDIR` inside it its temporary folder.
 #[cfg(any(target_os = "ios", test))]
-pub(crate) fn ios_app(env: flui_platform::sandbox::Environment<'_>) -> Sandbox {
+pub(crate) fn ios_app(env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Sandbox {
     let home = env("HOME").map(PathBuf::from).filter(|home| is_plain(home));
     let temporary = home
         .as_deref()
-        .and_then(|home| flui_platform::sandbox::usable_temporary(env, Some(home)));
+        .and_then(|home| flui_platform::sandbox::usable_temporary(env, home));
     confined(SandboxKind::IosApp, home.into_iter().chain(temporary))
 }
 
@@ -164,13 +159,19 @@ mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
-    use flui_platform::sandbox::{Confinement, FlatpakInfo};
+    use flui_platform::sandbox::{Confinement, FlatpakInfo, UserFolder};
 
     use super::{Sandbox, SandboxKind, android_app, ios_app, of_confinement};
 
-    /// An absolute path on the host the test runs on.
+    /// An absolute path on the host the test runs on, under no folder a
+    /// sandbox reaches of itself (a Flatpak reaches `/tmp`).
     fn absolute(path: &str) -> PathBuf {
-        std::env::temp_dir().join(path)
+        std::env::temp_dir()
+            .ancestors()
+            .last()
+            .expect("a path has a root")
+            .join("flui-sandbox-test")
+            .join(path)
     }
 
     fn environment(vars: Vec<(&'static str, OsString)>) -> impl Fn(&str) -> Option<OsString> {
@@ -181,7 +182,7 @@ mod tests {
         }
     }
 
-    fn no_user_dirs(_: &str) -> Option<PathBuf> {
+    fn no_user_dirs(_: UserFolder) -> Option<PathBuf> {
         None
     }
 
@@ -219,7 +220,7 @@ mod tests {
     fn each_sandbox_reaches_its_own_folders_and_what_its_system_exposes() {
         let home = absolute("home");
         let runtime = absolute("run");
-        let container = absolute("Containers/com.example.app/Data");
+        let container = absolute("Library/Containers/com.example.app/Data");
         let flatpak_env = || {
             environment(vec![
                 ("FLATPAK_ID", "org.example.App".into()),
@@ -256,12 +257,28 @@ mod tests {
             "a manifest with --filesystem=home reaches the real path the portal answers"
         );
         assert!(
-            reaches(&flatpak_env(), &info("xdg-documents:ro;"), &documents),
-            "an xdg folder, its mode dropped"
+            !reaches(&flatpak_env(), &info("xdg-documents:ro;"), &documents),
+            "a user folder `user-dirs.dirs` does not configure is ignored, as Flatpak ignores it"
+        );
+        let configured =
+            |folder: UserFolder| (folder == UserFolder::Documents).then(|| home.join("Documents"));
+        assert!(
+            of_confinement(&Confinement::detect(
+                &flatpak_env(),
+                &info("xdg-documents:ro;"),
+                None,
+                &configured
+            ))
+            .reaches(&documents),
+            "a configured xdg folder, its mode dropped"
         );
         assert!(
-            !reaches(&flatpak_env(), &info("home;!home;"), &documents),
-            "a `!` entry takes it back"
+            !reaches(
+                &flatpak_env(),
+                &info(""),
+                &absolute("sandbox-tmp").join("a")
+            ),
+            "Flatpak unsets TMPDIR: an inherited one is not the sandbox's"
         );
         assert_eq!(
             Confinement::detect(&flatpak_env(), &FlatpakInfo::Absent, None, &no_user_dirs),
