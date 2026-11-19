@@ -14,7 +14,9 @@ use crate::{
     FrameLatency, UnconfiguredSurface,
     error::{EngineError, EngineResult},
     raster::PresentDisposition,
-    raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
+    raster_executor::{
+        DeviceAnswered, DeviceTicket, RasterBackend, SlotConfig, SlotId, SlotTarget,
+    },
 };
 
 /// What a [`ScriptedSlots`] backend does on its next call of one kind.
@@ -66,9 +68,10 @@ pub enum SlotCall {
     Detach(SlotId),
     /// `reclaim`.
     Reclaim(MemoryPressureLevel),
-    /// `rebuild_device`.
+    /// `install_requested_device` of an answered request: one device
+    /// rebuild.
     RebuildDevice,
-    /// `adopt_device`; answered from the same script as `rebuild_device`,
+    /// `adopt_device`; answered from the same script as a rebuild,
     /// where a failure is ignored, since adoption cannot fail.
     AdoptDevice,
 }
@@ -107,7 +110,13 @@ struct Script {
     rebuild_refusals: Vec<(SlotId, EngineError)>,
     device_lost: bool,
     lose_in_next_render: bool,
-    no_inline_rebuild: bool,
+    no_device_requests: bool,
+    /// Whether device requests wait for [`ScriptedSlots::answer_device_request`].
+    hold_device_requests: bool,
+    /// The device requests still asking, oldest first, with their wakes.
+    held_requests: VecDeque<(DeviceTicket, DeviceAnswered)>,
+    /// The device requests answered and not yet installed.
+    answered_requests: Vec<DeviceTicket>,
     /// How many of the owner's next probes answer no device.
     refused_probes: u32,
     /// The owner's probes run so far.
@@ -282,21 +291,57 @@ impl ScriptedSlots {
         self.script.lock().probes
     }
 
-    /// Answer that no device rebuild can succeed where the executor runs, as
-    /// the web's context does.
-    pub fn cannot_rebuild_inline(&self) {
-        self.script.lock().no_inline_rebuild = true;
+    /// Answer that no device request can be answered where the executor
+    /// runs, as the web's context does.
+    pub fn cannot_request_devices(&self) {
+        self.script.lock().no_device_requests = true;
     }
 
-    /// Undo [`cannot_rebuild_inline`](Self::cannot_rebuild_inline): device
-    /// rebuilds can succeed where the executor runs again, as a driver that
-    /// came back does.
-    pub fn can_rebuild_inline(&self) {
-        self.script.lock().no_inline_rebuild = false;
+    /// Undo [`cannot_request_devices`](Self::cannot_request_devices): device
+    /// requests can be answered where the executor runs again, as a driver
+    /// that came back does.
+    pub fn can_request_devices(&self) {
+        self.script.lock().no_device_requests = false;
     }
 
-    /// Every device rebuild from now on advances `clock` by `took`, as a
-    /// driver that blocks the attempt does.
+    /// Hold every device request from now on until
+    /// [`answer_device_request`](Self::answer_device_request), as a worker
+    /// whose driver has not answered yet. Without it a request answers at
+    /// once, and the turn that started it installs the device.
+    pub fn hold_device_requests(&self) {
+        self.script.lock().hold_device_requests = true;
+    }
+
+    /// Answer the oldest held device request and call its wake, as its
+    /// worker does once the driver answered; the install is answered from
+    /// the rebuild script. Answers whether a request was held.
+    pub fn answer_device_request(&self) -> bool {
+        let answered = {
+            let mut script = self.script.lock();
+            let Some((ticket, answered)) = script.held_requests.pop_front() else {
+                return false;
+            };
+            script.answered_requests.push(ticket);
+            answered
+        };
+        answered.notify();
+        true
+    }
+
+    /// The device requests still asking.
+    #[must_use]
+    pub fn held_device_requests(&self) -> usize {
+        self.script.lock().held_requests.len()
+    }
+
+    /// The device renders again with no device installed, as a backend whose
+    /// lost device came back by itself.
+    pub fn recover_device(&self) {
+        self.script.lock().device_lost = false;
+    }
+
+    /// Every device install from now on advances `clock` by `took`, as an
+    /// install that takes the answer late does.
     pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {
         self.script.lock().rebuild_takes = Some((clock.clone(), took));
     }
@@ -532,12 +577,46 @@ impl RasterBackend for ScriptedSlots {
         self.script.lock().device_lost
     }
 
-    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+    fn request_device(
+        &mut self,
+        ticket: DeviceTicket,
+        answered: DeviceAnswered,
+    ) -> EngineResult<()> {
+        let mut script = self.script.lock();
+        // A request under an earlier ticket is dropped, as a context drops
+        // its worker's.
+        script.held_requests.clear();
+        script.answered_requests.clear();
+        if script.hold_device_requests {
+            script.held_requests.push_back((ticket, answered));
+        } else {
+            script.answered_requests.push(ticket);
+        }
+        Ok(())
+    }
+
+    fn install_requested_device(
+        &mut self,
+        ticket: DeviceTicket,
+    ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
+        {
+            let mut script = self.script.lock();
+            if script.held_requests.iter().any(|(held, _)| *held == ticket) {
+                return None;
+            }
+            let answered = script.answered_requests.contains(&ticket);
+            // Any other answer is one nobody waits for.
+            script.held_requests.clear();
+            script.answered_requests.clear();
+            if !answered {
+                return Some(Err(EngineError::GpuUnavailable));
+            }
+        }
         let takes = self.script.lock().rebuild_takes.clone();
         if let Some((clock, took)) = takes {
             clock.advance(took);
         }
-        match self.answer(SlotCall::RebuildDevice) {
+        Some(match self.answer(SlotCall::RebuildDevice) {
             None | Some(ScriptedAnswer::Answer(_)) => {
                 let mut script = self.script.lock();
                 script.device_lost = false;
@@ -545,11 +624,11 @@ impl RasterBackend for ScriptedSlots {
             }
             Some(ScriptedAnswer::Fail(error)) => Err(error),
             Some(ScriptedAnswer::Panic) => {
-                // The new device is in place when the rebuild unwinds.
+                // The new device is in place when the install unwinds.
                 self.script.lock().device_lost = false;
                 panic!("scripted device rebuild panic")
             }
-        }
+        })
     }
 
     fn adopt_device(&mut self, device: crate::ProbedDevice) -> Vec<(SlotId, EngineError)> {
@@ -564,8 +643,8 @@ impl RasterBackend for ScriptedSlots {
         std::mem::take(&mut script.rebuild_refusals)
     }
 
-    fn rebuilds_inline(&self) -> bool {
-        !self.script.lock().no_inline_rebuild
+    fn requests_devices(&self) -> bool {
+        !self.script.lock().no_device_requests
     }
 }
 

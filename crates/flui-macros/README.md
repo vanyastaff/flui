@@ -4,7 +4,8 @@ The procedural macros of FLUI. An author never names this crate: each macro is
 re-exported beside the trait or function it serves, at the path the table
 gives. An application reaches the same items through the facade:
 `flui::prelude` carries the view derives, `InheritedData` and `Routable`,
-`Inspect` is `flui::Inspect`, `TwoWayConverter` is in `flui::animation`, and
+`Inspect` is `flui::Inspect`, `MotionValue` is in `flui::animation`, `Lerp` is in
+`flui::geometry`, and
 the entry attribute is `flui::main`.
 
 | Macro | Writes | Import it from |
@@ -12,7 +13,8 @@ the entry attribute is `flui::main`.
 | `#[derive(StatelessView)]`, `#[derive(StatefulView)]` | `impl View` for a type that implements the authoring trait, with its key and creation site from the fields marked `#[view(key)]` and `#[view(site)]` | `flui_view` |
 | `#[derive(InheritedData)]` | one `FIELD_<NAME>` mask per field and `impl InheritedData` | `flui_view` |
 | `#[derive(Inspect)]` | `impl Inspect` for a struct or an enum | `flui_foundation::inspect` |
-| `#[derive(TwoWayConverter)]` | `impl TwoWayConverter` and a fieldwise `impl Lerp` | `flui_animation` |
+| `#[derive(MotionValue)]` | `impl MotionValue` from each field's vector and rest thresholds | `flui_animation` |
+| `#[derive(Lerp)]` | a fieldwise `impl Lerp` | `flui_foundation::geometry` |
 | `#[derive(Routable)]` | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router` |
 | `#[flui::main]` | the entry every platform starts an application from | `flui` |
 

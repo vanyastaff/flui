@@ -122,7 +122,7 @@ where
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Rc<dyn Animation<T>> {
-        self.inner.parent.borrow().get().clone()
+        Rc::clone(self.inner.parent.borrow().get())
     }
 
     /// Set a new parent animation.

@@ -64,7 +64,7 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
+| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders) and its `RegionPlan` (one pass under the bounding box or one per rect, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
@@ -181,7 +181,24 @@ image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
 
-`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) keeps the recording of a
+`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) captures a chunk's
+recording only on the second frame that draws it under one key, as Flutter's
+raster cache admits a picture after `access_threshold` frames: a chunk drawn
+once, every chunk of a first frame and content that changes each frame, is
+recorded and never copied (`a_chunk_drawn_once_is_not_captured`). Until then
+its key is a candidate (`recording_cache/admission.rs`): at most 4096, in a
+`RecencyList` by last draw and found through a `TalliedMap`. When the table
+is full a new key displaces the least recently drawn candidate if that one
+was drawn on an earlier frame, and is not tracked if it was drawn on this
+one; a frame's end takes out up to two candidates it did not draw. A draw
+costs a few steps, a frame that draws more keys than the table holds admits
+the first ones on their next draw (`the_candidate_table_stays_bounded`), and
+keys drawn after the churn of earlier frames are tracked and admitted while
+it goes on (`stable_keys_are_admitted_under_churn`); a frame whose first
+4096 new keys come before a repeated one leaves that one untracked. The
+candidates of a lineage no target draws age out the same way. An epoch
+advance drops the candidates with the recordings, and an admitted capture
+that is refused starts its key over. The cache keeps the recording of a
 chunk that stayed one fragment of the open segment: no external texture, no
 draw item, layer or clip of its own, every glyph it asked for placed, recorded
 Ok under a finite affine transform whose translation is below 2^23.
@@ -376,8 +393,9 @@ drivers stay local runs.
 
 ## Ownership and thread safety
 
-`flui-engine` runs on the render thread, and one worker builds the first format's pipelines
-on the shared device while the first frame is built (ADR-0305 §1). No `Arc<Mutex<_>>` guards any
+`flui-engine` runs on the render thread; one worker builds the first format's pipelines
+on the shared device while the first frame is built (ADR-0305 §1), and another asks for a lost
+device's replacement (§8). No `Arc<Mutex<_>>` guards any
 engine subsystem, and none should come back; every
 shared handle is a wgpu ref-count.
 
@@ -388,6 +406,7 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
+| `GpuContext::requested` | `Option<DeviceWorker<(Adapter, Device, Queue)>>` over an `mpsc::Receiver` | Owned. The worker asks the adapter for its device and hands the answer, or the payload of its panic, over once; it is deliberately not joined, so a driver that hangs holds no owner: dropping the request (a newer one, an adoption, the context's retirement) leaves the worker to drop its device when it finds nobody to take it, and an answer already handed over is dropped with the request, on the dropping thread |
 | `GpuContext::warmup` | `Option<PipelineWarmup>` over a `JoinHandle<PipelineLibrary>` | Owned. The worker holds its own `Arc<DeviceDomain>` and hands the library back whole at the join; dropping the warm-up joins the worker, so no build outlives the context or the device a rebuild let go |
 | `GpuContext::pipeline_store` | `Option<PipelineStore>`: a `wgpu::PipelineCache`, its adapter key and an `Arc<dyn Storage>` | Owned; cloned into the warm-up worker, which saves the cache once its library is built. Every pipeline is created through it (`PipelineDevice`); a structure that builds pipelines on first use keeps a clone of the cache handle. A rebuild replaces it with a cold cache on the new device, unsaved from the lost one; nothing saves at retirement, since the runners stop admitting storage writes before the context drops. `Storage::publish` accepts the bytes before returning and writes them on the store's threads, so no save waits on a disk or takes a lock on the frame path |
 | `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics take no lock, and the executor only `try_recv`s the queue and waits on no lock |

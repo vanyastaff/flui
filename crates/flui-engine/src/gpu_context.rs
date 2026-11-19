@@ -39,7 +39,9 @@ use crate::{
     pipeline_device::PipelineDevice,
     pipeline_set::PipelineLibrary,
     raster::PresentDisposition,
-    raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
+    raster_executor::{
+        DeviceAnswered, DeviceTicket, RasterBackend, SlotConfig, SlotId, SlotTarget,
+    },
     surface_factory::{SurfaceFactory, UnconfiguredSurface},
     window_slot::{Gpu, WindowSlot},
 };
@@ -192,23 +194,39 @@ impl DeviceRecipe {
         instance: &wgpu::Instance,
         surface: Option<&wgpu::Surface<'static>>,
     ) -> EngineResult<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+        let adapter = self.adapter(instance, surface).await?;
+        let (device, queue) = self.device(&adapter).await?;
+        Ok((adapter, device, queue))
+    }
+
+    /// An adapter on `instance` that presents to `surface` when one is named:
+    /// what the rebuild asks on the executor's thread, since the surface is a
+    /// slot's (ADR-0305 §8).
+    async fn adapter(
+        self,
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'static>>,
+    ) -> EngineResult<wgpu::Adapter> {
         match self {
-            Self::Probed(attempt) => {
-                let (adapter, _, device, queue) =
-                    crate::Renderer::adapter_and_device(instance, attempt, surface).await?;
-                Ok((adapter, device, queue))
-            }
-            Self::Offscreen(wanted_features) => {
-                let adapter = instance
-                    .request_adapter(&crate::adapter::trusted_adapter_options(
-                        wgpu::PowerPreference::HighPerformance,
-                        surface,
-                    ))
-                    .await
-                    .map_err(EngineError::adapter_request)?;
-                let (device, queue) = offscreen_device(&adapter, wanted_features).await?;
-                Ok((adapter, device, queue))
-            }
+            Self::Probed(attempt) => crate::Renderer::adapter_for(instance, attempt, surface).await,
+            Self::Offscreen(_) => instance
+                .request_adapter(&crate::adapter::trusted_adapter_options(
+                    wgpu::PowerPreference::HighPerformance,
+                    surface,
+                ))
+                .await
+                .map_err(EngineError::adapter_request),
+        }
+    }
+
+    /// This recipe's device on `adapter`: what the rebuild asks on a worker,
+    /// since the driver may take hundreds of milliseconds to answer it.
+    async fn device(self, adapter: &wgpu::Adapter) -> EngineResult<(wgpu::Device, wgpu::Queue)> {
+        match self {
+            Self::Probed(_) => crate::Renderer::device_on(adapter)
+                .await
+                .map(|(_, device, queue)| (device, queue)),
+            Self::Offscreen(wanted_features) => offscreen_device(adapter, wanted_features).await,
         }
     }
 }
@@ -234,8 +252,8 @@ async fn offscreen_device(
         .map_err(EngineError::device_creation)
 }
 
-/// Wait for a device request on the executor's thread: the inline executor
-/// rebuilds on the owner thread, where nothing else is polled meanwhile.
+/// Wait for an adapter request on the executor's thread, which enumerates the
+/// instance's adapters: its device is asked on a worker (ADR-0305 §8).
 #[cfg(not(target_arch = "wasm32"))]
 fn block_on<T>(request: impl std::future::Future<Output = EngineResult<T>>) -> EngineResult<T> {
     pollster::block_on(request)
@@ -281,6 +299,11 @@ pub struct GpuContext {
     /// the old one and cleared once every slot is on it, so a rebuild that
     /// unwinds part way leaves the device lost (ADR-0305 §8).
     rebuilding: bool,
+    /// The replacement device a rebuild asked for, under way on its worker
+    /// until the executor installs it (ADR-0305 §8).
+    #[cfg(not(target_arch = "wasm32"))]
+    requested:
+        Option<crate::device_worker::DeviceWorker<(wgpu::Adapter, wgpu::Device, wgpu::Queue)>>,
     /// What the attempts of the rebuild under way refused.
     refusals: RebuildRefusals,
     /// The painter every slot records and replays with: its pipelines per
@@ -346,6 +369,9 @@ pub struct GpuContext {
     /// How many of the next device rebuilds fail.
     #[cfg(test)]
     rebuilds_failing: u32,
+    /// What the next device request waits on, on its worker, before it asks.
+    #[cfg(test)]
+    request_hold: Option<std::sync::mpsc::Receiver<()>>,
     _one_mutator: PhantomData<Cell<()>>,
 }
 
@@ -465,6 +491,8 @@ impl GpuContext {
             recipe,
             domain,
             rebuilding: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            requested: None,
             refusals: RebuildRefusals::default(),
             painter: None,
             pipelines: None,
@@ -499,24 +527,27 @@ impl GpuContext {
             panic_in_warmup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
+            #[cfg(test)]
+            request_hold: None,
             _one_mutator: PhantomData,
         }
     }
 
-    /// Make a new device on the context's instance and configure every slot
-    /// on it again (ADR-0305 §8). The surfaces are kept: the adapter is asked
-    /// to present to the first window slot holding one. The pipelines, the
-    /// glyph atlas, the image and path caches and the presentation blit were
-    /// the old device's, so the next frame builds them again; an offscreen
-    /// slot gets a new target of its size, cleared.
-    ///
-    /// Answers the slots the new device cannot present to, with why; their
-    /// surface was dropped.
+    /// Start asking for a new device on the context's instance under
+    /// `ticket` (ADR-0305 §8). The surfaces are kept: the adapter is asked,
+    /// here, to present to the first window slot holding one, since that
+    /// surface is the slot's; its device is asked on a worker, which calls
+    /// `answered` once [`Self::install_requested`] can take it. A request
+    /// under an earlier ticket is dropped.
     ///
     /// # Errors
-    /// The adapter or device request failed; the context keeps its lost
-    /// device and every slot as it was.
-    fn rebuild(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+    /// The adapter request failed, or the operating system refused the
+    /// worker; the context keeps its lost device and every slot as it was.
+    fn request(&mut self, ticket: DeviceTicket, answered: DeviceAnswered) -> EngineResult<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.requested = None;
+        }
         #[cfg(test)]
         if self.rebuilds_failing > 0 {
             self.rebuilds_failing -= 1;
@@ -526,8 +557,70 @@ impl GpuContext {
             SurfaceSlot::Window(window) => window.surface(),
             SurfaceSlot::Offscreen(_) => None,
         });
-        let (adapter, device, queue) = block_on(self.recipe.request(&self.instance, compatible))?;
-        Ok(self.install(adapter, device, queue))
+        let adapter = block_on(self.recipe.adapter(&self.instance, compatible))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let recipe = self.recipe;
+            #[cfg(test)]
+            let hold = self.request_hold.take();
+            self.requested = Some(crate::device_worker::DeviceWorker::start(
+                ticket,
+                answered,
+                move || {
+                    #[cfg(test)]
+                    if let Some(held) = hold {
+                        let _released = held.recv();
+                    }
+                    let (device, queue) = pollster::block_on(recipe.device(&adapter))?;
+                    Ok((adapter, device, queue))
+                },
+            )?);
+            Ok(())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _unanswered = (adapter, ticket, answered);
+            Err(EngineError::GpuUnavailable)
+        }
+    }
+
+    /// Put the device the request under `ticket` answered in place of the
+    /// lost one, and configure every slot on it again; `None` while the
+    /// request is still asking. The pipelines, the glyph atlas, the image and
+    /// path caches and the presentation blit were the old device's, so the
+    /// next frame builds them again; an offscreen slot gets a new target of
+    /// its size, cleared.
+    ///
+    /// Answers the slots the new device cannot present to, with why; their
+    /// surface was dropped.
+    ///
+    /// # Errors
+    /// The device request failed, or no request under `ticket` is held; the
+    /// context keeps its lost device and every slot as it was.
+    fn install_requested(
+        &mut self,
+        ticket: DeviceTicket,
+    ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(mut worker) = self.requested.take() else {
+                return Some(Err(EngineError::GpuUnavailable));
+            };
+            if worker.ticket() != ticket {
+                // An answer nobody waits for: its device goes with it.
+                return Some(Err(EngineError::GpuUnavailable));
+            }
+            let Some(answer) = worker.try_answer() else {
+                self.requested = Some(worker);
+                return None;
+            };
+            Some(answer.map(|(adapter, device, queue)| self.install(adapter, device, queue)))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _unheld = ticket;
+            Some(Err(EngineError::GpuUnavailable))
+        }
     }
 
     /// Adopt `probed`, a device the owner's probe answered in an instance of
@@ -546,6 +639,11 @@ impl GpuContext {
             queue,
             recipe,
         } = probed;
+        // A request still under way is for the instance this replaces.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.requested = None;
+        }
         // Lost until every slot is on the new device, as in a rebuild.
         self.rebuilding = true;
         // The instance is the probe's from here on, so a rebuild after an
@@ -1274,6 +1372,24 @@ impl GpuContext {
         self.rebuilds_failing = rebuilds;
     }
 
+    /// Hold the next device request on its worker until the answer this
+    /// returns is sent (or dropped), so a test acts while it is under way.
+    #[cfg(test)]
+    pub(crate) fn hold_next_device_request(&mut self) -> std::sync::mpsc::Sender<()> {
+        let (release, held) = std::sync::mpsc::channel();
+        self.request_hold = Some(held);
+        release
+    }
+
+    /// Wait until the device request under way answered, so the executor's
+    /// next turn installs its device; nothing when none is under way.
+    #[cfg(test)]
+    pub(crate) fn await_device_request(&mut self) {
+        if let Some(worker) = self.requested.as_mut() {
+            worker.wait();
+        }
+    }
+
     /// How many recordings the shared painter's cache keeps; `None` before
     /// a frame built the painter.
     #[cfg(test)]
@@ -1649,15 +1765,26 @@ impl RasterBackend for GpuContext {
         self.rebuilding || self.domain.is_lost()
     }
 
-    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
-        self.rebuild()
+    fn request_device(
+        &mut self,
+        ticket: DeviceTicket,
+        answered: DeviceAnswered,
+    ) -> EngineResult<()> {
+        self.request(ticket, answered)
+    }
+
+    fn install_requested_device(
+        &mut self,
+        ticket: DeviceTicket,
+    ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
+        self.install_requested(ticket)
     }
 
     fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)> {
         self.adopt(device)
     }
 
-    fn rebuilds_inline(&self) -> bool {
+    fn requests_devices(&self) -> bool {
         cfg!(not(target_arch = "wasm32"))
     }
 }
@@ -1848,11 +1975,13 @@ mod tests {
             let counters = context.slot_counters();
             (counters.chunks_recorded, counters.recording_cache_hits)
         };
-        assert_eq!(
-            draw(FullReason::FirstFrame),
-            (1, 0),
-            "the first frame records"
-        );
+        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+            assert_eq!(
+                draw(FullReason::FirstFrame),
+                (1, 0),
+                "the frames that admit the chunk record it"
+            );
+        }
         assert_eq!(draw(FullReason::FirstFrame), (0, 1), "the next replays");
         assert_eq!(draw(FullReason::DamageOff), (1, 0), "damage off records");
         assert_eq!(draw(FullReason::FirstFrame), (0, 1), "and the next replays");
@@ -1885,9 +2014,12 @@ mod tests {
         attach(&mut context, rgba, wgpu::TextureFormat::Rgba8Unorm);
         attach(&mut context, bgra, wgpu::TextureFormat::Bgra8Unorm);
         attach(&mut fresh, bgra, wgpu::TextureFormat::Bgra8Unorm);
-        context
-            .render(rgba, drawn_frame(), &scene, full())
-            .expect("the first slot draws");
+        // On the frames that admit its chunk.
+        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+            context
+                .render(rgba, drawn_frame(), &scene, full())
+                .expect("the first slot draws");
+        }
         context
             .render(bgra, drawn_frame(), &scene, full())
             .expect("the second slot draws");
@@ -1942,6 +2074,7 @@ mod tests {
         let (mut executor, sender) = RasterExecutor::new(
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
             || {},
         );
         let targets = [
@@ -2067,6 +2200,7 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slots = [(); 2].map(|()| {
             let slot = sender.mint_slot().expect("a slot id is left");
@@ -2187,7 +2321,7 @@ mod tests {
         };
         let clock = ManualClock::new();
         let (mut executor, sender) =
-            RasterExecutor::new(context, std::rc::Rc::new(clock.clone()), || {});
+            RasterExecutor::new(context, std::rc::Rc::new(clock.clone()), || {}, || {});
         let slots = [(32, 16), (48, 16)].map(|(width, height)| {
             let slot = sender.mint_slot().expect("a slot id is left");
             let address = PresentationAddress {
@@ -2256,6 +2390,10 @@ mod tests {
         let retry_at = sender.device_retry_at().expect("the next rebuild is paced");
         clock.advance(retry_at.duration_since(MonotonicClock::now(&clock)));
 
+        // The turn that starts the rebuild's request does not wait for it:
+        // the turn after its answer installs the device.
+        let _ = executor.turn();
+        executor.backend_mut().await_device_request();
         assert_eq!(
             draw(&mut executor, stale),
             [RasterVerdict::SurfaceStale; 2],
@@ -2307,7 +2445,8 @@ mod tests {
             return;
         };
         let clock = ManualClock::new();
-        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let (mut executor, sender) =
+            RasterExecutor::new(context, std::rc::Rc::new(clock), || {}, || {});
         let colors = [[255, 0, 0, 255], [0, 0, 255, 255]];
         let presentations = colors.map(|rgba| {
             let slot = sender.mint_slot().expect("a slot id is left");
@@ -2382,8 +2521,10 @@ mod tests {
         );
 
         executor.backend().lose_device();
-        let _ = draw(&mut executor);
-        // The rebuild ran in that turn; frames stamped before it are stale.
+        let _ = executor.turn();
+        // That turn started the rebuild's request; the turn after its answer
+        // installs the device, so frames stamped before it are stale.
+        executor.backend_mut().await_device_request();
         let _ = draw(&mut executor);
         assert_eq!(
             executor.backend().builds().devices,
@@ -2433,7 +2574,8 @@ mod tests {
             return;
         };
         let clock = ManualClock::new();
-        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let (mut executor, sender) =
+            RasterExecutor::new(context, std::rc::Rc::new(clock), || {}, || {});
         let slot = sender.mint_slot().expect("a slot id is left");
         let address = PresentationAddress {
             ui_runtime_id: UiRuntimeId::new(1),
@@ -2520,7 +2662,8 @@ mod tests {
             return;
         };
         let clock = ManualClock::new();
-        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let (mut executor, sender) =
+            RasterExecutor::new(context, std::rc::Rc::new(clock), || {}, || {});
         let slot = sender.mint_slot().expect("a slot id is left");
         let address = PresentationAddress {
             ui_runtime_id: UiRuntimeId::new(1),
@@ -2620,7 +2763,8 @@ mod tests {
             return;
         };
         let clock = ManualClock::new();
-        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let (mut executor, sender) =
+            RasterExecutor::new(context, std::rc::Rc::new(clock), || {}, || {});
         let slot = sender.mint_slot().expect("a slot id is left");
         let address = PresentationAddress {
             ui_runtime_id: UiRuntimeId::new(1),
@@ -2740,6 +2884,7 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
         let address = PresentationAddress {
@@ -2826,6 +2971,7 @@ mod tests {
             crate::testing::ScriptedSlots::new(),
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
         assert!(matches!(
@@ -2882,6 +3028,7 @@ mod tests {
             crate::testing::ScriptedSlots::new(),
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
         context
@@ -2934,6 +3081,7 @@ mod tests {
             let (_executor, sender) = RasterExecutor::new(
                 crate::testing::ScriptedSlots::new(),
                 std::rc::Rc::new(flui_foundation::SystemClock),
+                || {},
                 || {},
             );
             let slot = sender.mint_slot().expect("a slot id is left");
@@ -3033,6 +3181,7 @@ mod tests {
                 crate::testing::ScriptedSlots::new(),
                 std::rc::Rc::new(flui_foundation::SystemClock),
                 || {},
+                || {},
             );
             let slot = sender.mint_slot().expect("a slot id is left");
             context
@@ -3082,6 +3231,7 @@ mod tests {
             crate::testing::ScriptedSlots::new(),
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
         context
@@ -3129,6 +3279,7 @@ mod tests {
         let (_executor, sender) = RasterExecutor::new(
             crate::testing::ScriptedSlots::new(),
             std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
             || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
@@ -3297,6 +3448,7 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = attach_rgba(&sender);
         // The executor applies the attach on its turn.
@@ -3342,6 +3494,7 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = attach_rgba(&sender);
         assert_eq!(
@@ -3384,11 +3537,14 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let (slot, address, _generation) = attach_rgba(&sender);
         let _ = executor.turn();
         assert!(executor.backend().warming_up());
         executor.backend().lose_device();
+        let _ = executor.turn();
+        executor.backend_mut().await_device_request();
         let _ = executor.turn();
         assert!(!executor.backend().warming_up(), "the rebuild dropped it");
         let generation = sender
@@ -3478,6 +3634,7 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let slot = attach_rgba(&sender);
         assert_eq!(
@@ -3508,6 +3665,7 @@ mod tests {
         let (mut executor, sender) = RasterExecutor::new(
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
             || {},
         );
         let slot = attach_rgba(&sender);
@@ -3547,8 +3705,12 @@ mod tests {
             Some(false),
             "nothing stored yet"
         );
-        let (mut executor, sender) =
-            RasterExecutor::new(first, std::rc::Rc::new(flui_foundation::SystemClock), || {});
+        let (mut executor, sender) = RasterExecutor::new(
+            first,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
         let slot = attach_rgba(&sender);
         assert_eq!(
             draw_once(&mut executor, &sender, slot),
@@ -3587,10 +3749,13 @@ mod tests {
             context,
             std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
+            || {},
         );
         let (slot, address, _generation) = attach_rgba(&sender);
         let _ = executor.turn();
         executor.backend().lose_device();
+        let _ = executor.turn();
+        executor.backend_mut().await_device_request();
         let _ = executor.turn();
         assert_eq!(
             executor.backend().pipeline_cache_seeded(),
@@ -3603,6 +3768,57 @@ mod tests {
             .required_generation;
         assert_eq!(
             draw_once(&mut executor, &sender, (slot, address, generation)),
+            RasterVerdict::Presented
+        );
+    }
+
+    /// A window closed while its device is asked for is not served by the
+    /// new device: the install configures the slots left, and the one
+    /// detached meanwhile has no target on it.
+    ///
+    /// Red-check: skip `GpuContext::detach` in the backend's `detach`, so the
+    /// closed slot stays in the context's table, and the install serves it.
+    #[test]
+    fn a_slot_detached_while_its_device_is_requested_is_not_served_by_the_new_device() {
+        use crate::raster_executor::DeviceHealth;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let (closed, _, _) = attach_rgba(&sender);
+        let (kept, address, _) = attach_rgba(&sender);
+        let _ = executor.turn();
+        let release = executor.backend_mut().hold_next_device_request();
+        executor.backend().lose_device();
+        let _ = executor.turn();
+        let _ = sender
+            .send(RasterCommand::Detach { slot: closed })
+            .expect("the detach is accepted");
+        let _ = executor.turn();
+        assert!(
+            sender.device_health().is_lost(),
+            "the window closed while the device was asked for"
+        );
+        release.send(()).expect("the worker waits for its release");
+        executor.backend_mut().await_device_request();
+        let _ = executor.turn();
+        assert_eq!(sender.device_health(), DeviceHealth::Healthy);
+        assert!(
+            executor.backend().read_slot(closed).is_err(),
+            "the closed slot has no target on the new device"
+        );
+        let generation = sender
+            .record(kept)
+            .expect("the owner holds the slot")
+            .required_generation;
+        assert_eq!(
+            draw_once(&mut executor, &sender, (kept, address, generation)),
             RasterVerdict::Presented
         );
     }

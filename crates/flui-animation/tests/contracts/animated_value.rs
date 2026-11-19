@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flui_animation::{
     AnimatedValue, Animation, AnimationError, AnimationStatus, MotionClock, MotionSpec,
-    MotionUpdate, SharedCurve, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate, curves,
+    MotionUpdate, MotionValue, SharedCurve, SpringDescription, Vsync, VsyncUpdate, curves,
 };
 use flui_foundation::geometry::Offset;
 
@@ -133,7 +133,7 @@ fn geometry_reaches_rest_before_normalized_components() {
 #[derive(Clone)]
 struct InvalidThreshold<const CASE: usize>(f64);
 
-impl<const CASE: usize> TwoWayConverter for InvalidThreshold<CASE> {
+impl<const CASE: usize> MotionValue for InvalidThreshold<CASE> {
     type Vector = [f64; 1];
     fn to_vector(&self) -> Self::Vector {
         [self.0]
@@ -399,7 +399,7 @@ fn immediate_motion_does_not_reconstruct_the_displaced_sample() {
     }
     #[derive(Clone)]
     struct Value(f64);
-    impl TwoWayConverter for Value {
+    impl MotionValue for Value {
         type Vector = [f64; 1];
         fn to_vector(&self) -> Self::Vector {
             [self.0]
@@ -461,7 +461,7 @@ fn displaced_exact_endpoints_share_failure_custody() {
             }
         }
     }
-    impl TwoWayConverter for Value {
+    impl MotionValue for Value {
         type Vector = [f64; 1];
         fn to_vector(&self) -> Self::Vector {
             [self.position]
@@ -593,7 +593,7 @@ impl Clone for ReentrantValue {
     }
 }
 
-impl TwoWayConverter for ReentrantValue {
+impl MotionValue for ReentrantValue {
     type Vector = [f64; 1];
     fn rest_thresholds() -> Self::Vector {
         [0.001]
@@ -1023,7 +1023,7 @@ fn owner_retirement_joins_every_delivery_channel() {
             }
         }
     }
-    impl TwoWayConverter for Target {
+    impl MotionValue for Target {
         type Vector = [f64; 1];
         fn to_vector(&self) -> Self::Vector {
             [self.position]
@@ -1204,7 +1204,7 @@ fn owner_retirement_keeps_its_first_destructor_failure() {
     }
     #[derive(Clone)]
     struct TargetCapture(Rc<Cell<usize>>);
-    impl TwoWayConverter for TargetCapture {
+    impl MotionValue for TargetCapture {
         type Vector = [f64; 1];
         fn to_vector(&self) -> Self::Vector {
             [0.0]

@@ -1,8 +1,8 @@
-//! Codegen for `#[derive(TwoWayConverter)]`.
+//! Codegen for `#[derive(MotionValue)]`.
 //!
-//! Fields implement `TwoWayConverter` and `Lerp`. Their fixed vectors are
-//! flattened in declaration order; interpolation delegates to each field,
-//! preserving contracts such as premultiplied colour interpolation.
+//! Fields implement `MotionValue`. Their fixed vectors are flattened in
+//! declaration order, and their rest thresholds with them. Interpolation is
+//! not written here: `#[derive(Lerp)]` (`super::lerp`) writes it.
 //!
 //! A field's vector has a concrete width: stable Rust cannot sum associated
 //! constants that depend on a generic parameter in an array length, so a field
@@ -18,7 +18,7 @@ use crate::generics::mentions_param;
 use crate::hygiene::{local, receiver};
 use crate::refusals::Refusals;
 
-/// Expand `#[derive(TwoWayConverter)]`.
+/// Expand `#[derive(MotionValue)]`.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // Every refusal is recorded before any is reported, so one build shows
     // them all.
@@ -29,7 +29,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         for lifetime in input.generics.lifetimes() {
             refusals.push(syn::Error::new(
                 lifetime.span(),
-                "#[derive(TwoWayConverter)] requires a type without lifetime parameters: a vector's width cannot depend on one",
+                "#[derive(MotionValue)] requires a type without lifetime parameters: a vector's width cannot depend on one",
             ));
         }
 
@@ -38,7 +38,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             _ => {
                 return Err(syn::Error::new(
                     input.ident.span(),
-                    "#[derive(TwoWayConverter)] requires a struct with at least one field",
+                    "#[derive(MotionValue)] requires a struct with at least one field",
                 ));
             }
         };
@@ -59,7 +59,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         {
             refusals.push(syn::Error::new_spanned(
                 &field.ty,
-                "#[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths",
+                "#[derive(MotionValue)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths",
             ));
         }
         Ok(fields)
@@ -68,58 +68,51 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // Shape errors above are reported before the runtime path is needed, so
     // they do not depend on the consumer's manifest.
     let runtime = crate::runtime_path::Runtime::Animation.resolve(input.ident.span())?;
-    let geometry = crate::runtime_path::Runtime::Geometry.resolve(input.ident.span())?;
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     // The locals and parameters of the generated methods.
     let vector = local("vector");
     let index = local("index");
-    let other = local("other");
-    let t = local("t");
     let this = receiver();
     let mut width = quote!(0usize);
     let mut reads = Vec::with_capacity(fields.len());
     let mut thresholds = Vec::with_capacity(fields.len());
     let mut writes = Vec::with_capacity(fields.len());
-    let mut lerps = Vec::with_capacity(fields.len());
     for (field, member) in fields.iter().zip(fields.members()) {
         let ty = &field.ty;
         let component_count = quote_spanned! {ty.span()=>
-            <<#ty as #runtime::TwoWayConverter>::Vector as #runtime::AnimationVector>::COMPONENTS
+            <<#ty as #runtime::MotionValue>::Vector as #runtime::AnimationVector>::COMPONENTS
         };
         let start = width;
         let end = quote!(#start + #component_count);
         // Each piece is spanned at the field's type and names the field's
         // vector only through that type, never through a local: rustc reports
-        // a field that is not a converter once, at the field. A local of the
+        // a field that is not a motion value once, at the field. A local of the
         // vector's type would carry the same failure to wherever it is read.
         // A type a `macro_rules!` passes as a `ty` fragment is reported at the
         // caller's type and again at the fragment, since rustc keeps both spans.
         reads.push(quote_spanned! {ty.span()=>
             #vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(
-                &<#ty as #runtime::TwoWayConverter>::to_vector(&#this.#member),
+                &<#ty as #runtime::MotionValue>::to_vector(&#this.#member),
             ));
         });
         thresholds.push(quote_spanned! {ty.span()=>
             #vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(
-                &<#ty as #runtime::TwoWayConverter>::rest_thresholds(),
+                &<#ty as #runtime::MotionValue>::rest_thresholds(),
             ));
         });
         // `member: value` initialises a named field and a tuple field alike.
         writes.push(quote_spanned! {ty.span()=>
-            #member: <#ty as #runtime::TwoWayConverter>::from_vector(
+            #member: <#ty as #runtime::MotionValue>::from_vector(
                 ::core::array::from_fn(|#index| #vector[#start + #index]),
             )
-        });
-        lerps.push(quote_spanned! {ty.span()=>
-            #member: <#ty as #geometry::Lerp>::lerp_to(&#this.#member, &#other.#member, #t)
         });
         width = end;
     }
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics #runtime::TwoWayConverter for #name #ty_generics #where_clause {
+        impl #impl_generics #runtime::MotionValue for #name #ty_generics #where_clause {
             type Vector = [f64; #width];
 
             #[inline]
@@ -138,16 +131,6 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                 let mut #vector = [0.0; #width];
                 #(#thresholds)*
                 #vector
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics #geometry::Lerp for #name #ty_generics #where_clause {
-            #[inline]
-            fn lerp_to(&self, #other: &Self, #t: f64) -> Self {
-                if #t == 0.0 { return ::core::clone::Clone::clone(self); }
-                if #t == 1.0 { return ::core::clone::Clone::clone(#other); }
-                Self { #(#lerps),* }
             }
         }
     })

@@ -264,7 +264,8 @@ the dispatch layer moves there too.
   no surface of their own; a surface the backend refuses is asked for again
   at the window's `RestorePace` (16 ms doubling to 1 s), only while the
   window is shown. `RasterHost::window_deadline` (that deadline and the
-  device's next rebuild) is what a window's frame gate counts, and the
+  device's next turn: its next rebuild or the deadline of its request under
+  way, whose answer asks every window for a frame) is what a window's frame gate counts, and the
   loop's wake (`AppRuntime::next_wake`, on every platform) counts it for each
   window whose frames run (`RasterHost::wake_deadline`), so no window's
   deadline wakes the loop while only another window's frame would run. A native
@@ -354,8 +355,10 @@ the dispatch layer moves there too.
   separates font invalidation from redraw caused by close. Background polling
   also survives primary close and rejects a replaced runtime incarnation.
 - **Device recovery brackets the pump.** On every native platform the
-  executor rebuilds a lost device in the turn before the frame and in the
-  frame's own turn, on its own backoff; `RasterSlot::pump`, which the
+  executor asks for a lost device's replacement on a worker in the turn before
+  the frame or in the frame's own turn, and installs it in the turn after the
+  answer, which asks every window for a frame;
+  attempts are paced on its own backoff; `RasterSlot::pump`, which the
   desktop, Android and iOS drivers share, maps its `DeviceHealth` to the
   presentation's `DeviceRecovery` before and after the pump, and a device
   that came back before the frame marks the tree for a full repaint. The

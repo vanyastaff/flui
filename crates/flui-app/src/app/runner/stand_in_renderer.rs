@@ -199,6 +199,7 @@ impl StandInRenderers {
     pub(super) fn backend(&self) -> StandInBackend {
         StandInBackend {
             shared: Arc::clone(&self.shared),
+            requested: None,
         }
     }
 
@@ -220,6 +221,9 @@ impl StandInRenderers {
 /// The stand-in as the raster executor owns it.
 pub(super) struct StandInBackend {
     shared: Arc<Mutex<Shared>>,
+    /// The device request the executor waits for: answered at once, and
+    /// installed by the turn that started it.
+    requested: Option<flui_engine::DeviceTicket>,
 }
 
 impl StandInBackend {
@@ -350,21 +354,36 @@ impl RasterBackend for StandInBackend {
         self.shared.lock().device.lost
     }
 
+    fn request_device(
+        &mut self,
+        ticket: flui_engine::DeviceTicket,
+        _answered: flui_engine::DeviceAnswered,
+    ) -> EngineResult<()> {
+        self.requested = Some(ticket);
+        Ok(())
+    }
+
     /// A window whose configured size passes the device's limit is refused
     /// at that size and keeps its surface, as a GPU context's rebuild does;
     /// with [`StandInRenderer::drop_surfaces_on_rebuild`] every surface is
     /// dropped instead.
-    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+    fn install_requested_device(
+        &mut self,
+        ticket: flui_engine::DeviceTicket,
+    ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
+        if self.requested.take() != Some(ticket) {
+            return Some(Err(EngineError::GpuUnavailable));
+        }
         let shared = &mut *self.shared.lock();
         let device = &mut shared.device;
         device.rebuild_attempts = device.rebuild_attempts.saturating_add(1);
         if device.failing_rebuilds > 0 {
             device.failing_rebuilds -= 1;
-            return Err(EngineError::DeviceLost);
+            return Some(Err(EngineError::DeviceLost));
         }
         device.lost = false;
         let device = &shared.device;
-        Ok(shared
+        Some(Ok(shared
             .windows
             .iter()
             .filter_map(|window| {
@@ -375,7 +394,7 @@ impl RasterBackend for StandInBackend {
                 let refusal = window.size.and_then(|size| device.fits(size).err())?;
                 Some((slot, refusal))
             })
-            .collect::<Vec<(SlotId, EngineError)>>())
+            .collect::<Vec<(SlotId, EngineError)>>()))
     }
 
     /// The probed device takes the lost one's place; every window's surface
@@ -397,7 +416,7 @@ impl RasterBackend for StandInBackend {
             .collect::<Vec<(SlotId, EngineError)>>()
     }
 
-    fn rebuilds_inline(&self) -> bool {
+    fn requests_devices(&self) -> bool {
         true
     }
 }

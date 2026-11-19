@@ -11,6 +11,7 @@ mod attribute;
 
 pub(crate) mod inherited_data;
 pub(crate) mod inspect;
+pub(crate) mod lerp;
+pub(crate) mod motion_value;
 pub(crate) mod routable;
-pub(crate) mod two_way_converter;
 pub(crate) mod view;
