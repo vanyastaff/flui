@@ -134,9 +134,27 @@ mod tests {
         assert!(error.to_string().contains("--no-such-flag"), "{error}");
     }
 
-    /// Each in-process check is printed as the command line that runs it.
+    /// The checks `cargo xtask checks` runs, each printed as the command line
+    /// that runs it, and none a `--self-test` (that is a test of this crate).
     fn every_in_process_check_is_its_command_line() {
-        for (line, _) in IN_PROCESS {
+        let lines = IN_PROCESS.map(|(line, _)| line);
+        assert_eq!(
+            lines,
+            [
+                "toolchain",
+                "unmounted-tests",
+                "adr-numbers",
+                "font-assets --package-list",
+                "icon-import material",
+                "key-vocabulary",
+                "recording-vocabulary",
+                "android-dex",
+                "platform-floor",
+                "changelog --check",
+            ]
+        );
+        assert!(!lines.iter().any(|line| line.contains("--self-test")));
+        for line in lines {
             let argv = std::iter::once("cargo xtask").chain(line.split(' '));
             if let Err(error) = crate::Cli::try_parse_from(argv) {
                 panic!("`cargo xtask {line}`: {error}");

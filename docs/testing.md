@@ -146,9 +146,11 @@ module declarations with `syn`; a commented declaration or an example inside
 a string cannot mount a test file. This checks direct mounts, not arbitrary
 macro expansion or conditional module graphs.
 
-Locally, `checks`
-skips typos, taplo or lychee with a message when they are not installed; CI
-passes `--strict`, which makes a missing one a failure. The flui-native step
+typos, taplo and lychee are binaries of their own (`cargo xtask doctor` says
+how to install each); CI's `checks` job installs them. The job's lychee line
+is written for a Linux shell: on Windows its remap needs the checkout as
+`file:///D:/…` (`pwd -W` in Git Bash), or a correct link to this repository's
+`main` on GitHub fails. The flui-native step
 of the `test` job needs `xvfb-run` on Linux (`apt install xvfb`). On Windows
 flui-native's suite runs without it, on the run's own desktop
 ([The Windows test desktop](#the-windows-test-desktop)), and on macOS with

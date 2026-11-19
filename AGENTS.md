@@ -224,6 +224,8 @@ and the readers of "Before a merge" look for a change that breaks one:
   removes it (ADR-0081).
 - A crate's top-level modules import in one direction (ADR-0081 §5; ADR-0151 §10 for the core
   host), and a Rust source file has at most 3000 production lines.
+- A relative link in markdown stays inside the repository: lychee follows `../` above the root,
+  where the runner's checkout makes it resolve (ADR-0383 §4).
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.

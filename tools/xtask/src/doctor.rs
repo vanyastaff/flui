@@ -16,6 +16,10 @@ use crate::fonts::find_python;
 use crate::util::repo_root;
 use crate::wasm::repo_locked_version;
 
+/// The lychee CI's `checks` job installs (its `LYCHEE_VERSION`), which the
+/// install hint names.
+const LYCHEE_VERSION: &str = "0.24.2";
+
 /// Which set of tools is required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Mode {
@@ -381,7 +385,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     doctor.check_bin(
         Scope::Local,
         "lychee",
-        "cargo install --locked lychee --version 0.24.2 (the version ci.yml's checks job installs)",
+        &format!("cargo install --locked lychee --version {LYCHEE_VERSION}"),
         &["--version"],
     );
 
@@ -549,6 +553,17 @@ mod tests {
         );
     }
 
+    /// The install hint names the lychee CI installs.
+    fn the_lychee_hint_names_the_version_ci_installs() {
+        let ci =
+            std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("ci.yml");
+        assert!(
+            ci.lines()
+                .any(|line| line.trim() == format!("LYCHEE_VERSION: {LYCHEE_VERSION}")),
+            "ci.yml's LYCHEE_VERSION is not {LYCHEE_VERSION}"
+        );
+    }
+
     fn only_apple_hosts_require_the_ios_target() {
         let installed = [
             "wasm32-unknown-unknown",
@@ -570,6 +585,10 @@ mod tests {
         crate::table_test::run_table(
             "doctor_contract",
             &[
+                (
+                    "the_lychee_hint_names_the_version_ci_installs",
+                    the_lychee_hint_names_the_version_ci_installs as fn(),
+                ),
                 (
                     "only_apple_hosts_require_the_ios_target",
                     only_apple_hosts_require_the_ios_target as fn(),

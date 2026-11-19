@@ -373,7 +373,7 @@ own change; a gate that would only be removed is removed after the owner's decis
 
 | Gate | Rung | What follows |
 |---|---|---|
-| `workspace`, `reach`, `globals`, `send-impls`, `send-positions`, `try-new`, `file-length`, `testing`, `toolchain`, `docs-links`, `docs-paths`, `changelog` | 5 | stays; `try-new` has no stock lint, since `clippy::new_ret_no_self` accepts `Result<Self, _>` |
+| `workspace`, `reach`, `globals`, `send-impls`, `send-positions`, `try-new`, `file-length`, `testing`, `toolchain`, `docs-paths`, `changelog` | 5 | stays (`docs-links` is the `checks` job's lychee step, ADR-0383 §4); `try-new` has no stock lint, since `clippy::new_ret_no_self` accepts `Result<Self, _>` |
 | `panic-messages` | 5 (§8) | stays |
 | `inspect-debug` | 2 (§7) | replaced by the deprecated constructor, gate deleted |
 | hand-written `catch_unwind` | 2 (§6) | a `clippy.toml` entry, no gate |

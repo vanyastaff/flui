@@ -88,7 +88,8 @@ jobs:
       # The same for lychee, plus the SHA-256 of that version's
       # x86_64-unknown-linux-gnu tarball. 0.24.2 is also lychee-action
       # v2.9.0's default, which docs.yml runs over the rendered book: bump the
-      # two together, and `cargo xtask doctor`'s install hint with them.
+      # two together. `cargo test -p xtask` holds `cargo xtask doctor`'s install
+      # hint to this line.
       LYCHEE_VERSION: 0.24.2
       LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
     steps:
@@ -226,8 +227,13 @@ jobs:
       - name: lychee (markdown links into the checkout, offline)
         if: ${{ !cancelled() }}
         run: |
-          git -c core.quotepath=off ls-files --cached --others --exclude-standard -- '*.md' \
-            | grep -v '^docs/plans/' \
+          set -o pipefail
+          files=$(git -c core.quotepath=off ls-files --cached --others --exclude-standard -- '*.md' \
+            | grep -v '^docs/plans/')
+          [ -n "$files" ] || { echo "no markdown file listed"; exit 1; }
+          # a file still in the index but deleted from the working tree has nothing to read
+          printf '%s\n' "$files" \
+            | while IFS= read -r file; do if [ -f "$file" ]; then printf '%s\n' "$file"; fi; done \
             | lychee --offline --no-progress --include-fragments=anchor-only \
                 --root-dir "$PWD" \
                 --remap "^https://github\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)\$ file://$PWD/\$1" \
