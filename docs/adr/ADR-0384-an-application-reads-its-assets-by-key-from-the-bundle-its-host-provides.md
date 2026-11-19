@@ -193,7 +193,7 @@ record's.
   over absolute paths, `..`, backslashes, drive letters, empty segments and control characters.
 - `every_asset_source_keeps_the_bundle_contract` (`flui-platform`) runs §2 against
   `DirectoryAssets` and `MemoryAssets`: a missing key is `NotFound`, a file over the limit is
-  `TooLarge` before its bytes are read, a FIFO is not opened.
+  `TooLarge` before its bytes are read, a directory is `NotAFile`.
 - `flui-cli`'s build tests state §3 for each package: the declared files land at
   `flui_assets/<key>`, and a refused key, a collision and a symbolic link fail the build.
 - The platform readers of §3 other than Linux's are confirmed by a run on each platform, rows of
