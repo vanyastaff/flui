@@ -1162,6 +1162,90 @@ fn window_frame(slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::
     presented == Some(true)
 }
 
+/// A texture frame fed to a window whose tree changes nothing reaches its
+/// slot as the damage of the texture's user alone: the UI runtime publishes
+/// the version it holds with no scene damage (ADR-0304 §8), and the host
+/// takes the frame from the window's registry with it and adds the user's
+/// footprint (§9). The frame after asks nothing of the slot.
+///
+/// Red-check: let a frame that painted nothing publish nothing whatever the
+/// registry holds (`draw_prepared_frame_for_presentation` in flui-runtime),
+/// and the texture frame never reaches the slot.
+#[test]
+fn a_texture_frame_reaches_the_slot_as_its_users_damage() {
+    use flui_widgets::{Align, ColoredBox, Padding, SizedBox, Texture};
+
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    let presentation = ui_runtime.active_presentation_for_test();
+    let registry = ui_runtime
+        .texture_registry(presentation)
+        .expect("the window's registry");
+    let texture = registry.register().expect("a texture id");
+    ui_runtime
+        .attach_root_widget(
+            &ColoredBox::new(flui_painting::styling::Color::BLUE).child(
+                Align::new(flui_painting::Alignment::TOP_LEFT).child(
+                    Padding::only(AT.dx, AT.dy, 0.0, 0.0).child(
+                        SizedBox::new(TEN.width, TEN.height).child(Texture::new(texture.id())),
+                    ),
+                ),
+            ),
+        )
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: presentation,
+    };
+    let slots = ScriptedSlots::new();
+    let shared = SharedRasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(1)),
+                None,
+                at,
+                &crate::app::AppConfig::default(),
+                Some(registry),
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+    let mut slot = RasterSlot {
+        host: shared,
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+        renderer_dead: false,
+    };
+    let mut frame = |ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
+        slot.pump(ui_runtime, web_time::Instant::now(), None)
+    };
+    for _ in 0..3 {
+        let _ = frame(&mut ui_runtime);
+    }
+    let drawn = renders(&slots).len();
+    assert!(drawn >= 1, "the first frame draws");
+
+    texture.submit_frame(pixel());
+    assert!(frame(&mut ui_runtime), "the texture frame presents");
+    let _ = frame(&mut ui_runtime);
+    let renders = renders(&slots);
+    assert_eq!(
+        renders.len(),
+        drawn + 1,
+        "one frame for the texture: {renders:?}"
+    );
+    assert_eq!(
+        region_rects(renders[drawn]),
+        vec![covering_on_surface(AT.dx, AT.dy, TEN.width, TEN.height)],
+        "the texture's user alone is redrawn"
+    );
+}
+
 /// A retry whose probe answers no device, or whose device's adoption
 /// panics, tells the application the device is given up again, and the
 /// window's next frames probe nothing until the application asks once

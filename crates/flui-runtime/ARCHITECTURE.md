@@ -754,6 +754,32 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_waits_out_the_backoff`.
 
+### An idle frame publishes nothing; a texture frame publishes the held version
+
+A frame whose segment paints nothing publishes nothing (ADR-0304 §8): the retained
+scene already holds what the window shows. Two cases publish the current version again
+with nothing painted: a version the surface withheld (above), and a frame of an external
+texture. A texture frame or retirement waits in the presentation's `TextureRegistry` and
+wakes the runtime, as Flutter's `markTextureFrameAvailable` schedules a frame; sampling
+admits the segment while the registry holds updates (`PresentationState::has_texture_updates`,
+also counted as frame work a settlement or a shown window wakes for), and a segment that
+paints nothing then publishes the held version, with the damage since the acknowledged base,
+which is none once the raster side showed it, provided the version was applied for this frame's
+target (`PresentationScene::holds_version_for`). The raster host takes the frames from the
+registry with the publication and damages the texture's users alone (ADR-0304 §9). The
+registry is the one record of what is owed: it keeps a frame until a host takes it, so a frame
+that never reached the host (refused or withheld before it) leaves it for the next, a texture
+frame that arrives with a tree change rides that change's frame, and a frame after the host
+took it publishes nothing. The `Texture` widget neither rebuilds nor repaints for a frame.
+Pinned by the `external_textures` rows of `frame_pacing_and_pump_matrix`
+(`a_fed_frame_republishes_the_held_version`, `a_texture_frame_not_taken_is_published_again`,
+`a_hidden_texture_repaints_nothing`), `flui-widgets`' perf scenarios
+`perf_a_texture_frame_republishes_the_held_version`,
+`an_idle_frame_after_a_texture_frame_publishes_nothing`,
+`texture_frames_between_two_frames_go_out_in_one_publication` and
+`a_texture_frame_rides_the_frame_of_a_tree_change`, and `flui-app`'s
+`a_texture_frame_reaches_the_slot_as_its_users_damage`.
+
 ### An unseen window waits, and a covered one owes its surface a frame
 
 A presentation whose window is not seen (`WindowState::is_seen`) has a hidden clock: its polls

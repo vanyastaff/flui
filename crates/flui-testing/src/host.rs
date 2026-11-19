@@ -1477,11 +1477,14 @@ impl HeadlessHost {
             accessibility,
             text_store_host,
         };
+        // The primary presentation's texture frames ride the frames its sink
+        // presents, as they ride a runner's raster host.
+        let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         Self {
             ui_runtime_id: ui_runtime.id(),
             ui_runtime: Some(ui_runtime),
             clock,
-            sink: HeadlessSink::new(surface.0, surface.1),
+            sink: HeadlessSink::new(surface.0, surface.1, textures),
             open: vec![primary.clone()],
             primary,
             scripted,

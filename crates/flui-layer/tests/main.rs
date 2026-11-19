@@ -147,8 +147,8 @@ fn follower_resolution() {
     );
 }
 
-/// External textures: unique ids, newest-frame delivery, retirement and
-/// listeners.
+/// External textures: unique ids, newest-frame delivery, retirement and the
+/// wake that asks for the frame that delivers them.
 #[test]
 fn texture_registry() {
     use texture_registry as t;
@@ -165,16 +165,12 @@ fn texture_registry() {
                 t::dropping_a_registration_retires_it,
             ),
             (
-                "listeners_run_reentrantly_until_removed",
-                t::listeners_run_reentrantly_until_removed,
+                "the_wake_may_reach_the_registry",
+                t::the_wake_may_reach_the_registry,
             ),
             (
-                "a_panicking_listener_keeps_the_frame_deliverable",
-                t::a_panicking_listener_keeps_the_frame_deliverable,
-            ),
-            (
-                "a_panicking_listener_drop_still_wakes_the_retirement",
-                t::a_panicking_listener_drop_still_wakes_the_retirement,
+                "a_panicking_wake_keeps_the_frame_pending",
+                t::a_panicking_wake_keeps_the_frame_pending,
             ),
             (
                 "merged_updates_keep_the_newest_frame_and_every_retirement",

@@ -43,7 +43,9 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use flui_painting::paint::{Image as PixelImage, TextureId};
 use flui_painting::styling::Color;
+use flui_rendering::layer::TextureRegistration;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::control_cost::control_over_text;
@@ -54,7 +56,7 @@ use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
-    SliverList, Text, Viewport,
+    SliverList, Text, Texture, Viewport,
 };
 
 #[global_allocator]
@@ -836,6 +838,257 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
     ] {
         assert_eq!(counter(&retry, name), 0, "{name}: {retry:#?}");
     }
+}
+
+/// The registrations of [`Videos`]' two textures, which the test feeds.
+type Feeds = std::rc::Rc<std::cell::RefCell<Vec<TextureRegistration>>>;
+
+/// Two 40×40 external textures, registered when the state is created.
+#[derive(Clone, StatefulView)]
+struct Videos {
+    feeds: Feeds,
+}
+
+struct VideosState {
+    ids: [TextureId; 2],
+}
+
+impl StatefulView for Videos {
+    type State = VideosState;
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let registry = ctx
+            .texture_registry()
+            .expect("a window offers external textures");
+        let mut feeds = self.feeds.borrow_mut();
+        let ids = [(); 2].map(|()| {
+            let registration = registry.register().expect("a texture id");
+            let id = registration.id();
+            feeds.push(registration);
+            id
+        });
+        VideosState { ids }
+    }
+}
+
+impl ViewState<Videos> for VideosState {
+    fn build(&self, _view: &Videos, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(
+            self.ids
+                .iter()
+                .map(|id| SizedBox::new(40.0, 40.0).child(Texture::new(*id)).boxed())
+                .collect::<Vec<BoxedView>>(),
+        )
+    }
+}
+
+/// A label over two textures.
+#[derive(Clone, StatelessView)]
+struct VideoApp {
+    label: SharedSignal<String>,
+    feeds: Feeds,
+}
+
+impl StatelessView for VideoApp {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(vec![
+            SizedBox::height(LABEL_HEIGHT)
+                .child(Label {
+                    text: self.label.clone(),
+                })
+                .boxed(),
+            Videos {
+                feeds: self.feeds.clone(),
+            }
+            .boxed(),
+        ])
+    }
+}
+
+/// [`VideoApp`] mounted and settled, with its label and its textures' feeds.
+fn mount_videos() -> (LaidOut, SharedSignal<String>, Feeds) {
+    let label = SharedSignal::new(String::from("label"));
+    let feeds = Feeds::default();
+    let mut laid = lay_out(
+        VideoApp {
+            label: label.clone(),
+            feeds: feeds.clone(),
+        },
+        tight(WIDTH, HEIGHT),
+    );
+    for _ in 0..3 {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(feeds.borrow().len(), 2, "both textures registered");
+    (laid, label, feeds)
+}
+
+/// Feeds texture `index` of `feeds` a one-pixel frame of `shade`.
+fn feed(feeds: &Feeds, index: usize, shade: u8) {
+    feeds.borrow()[index].submit_frame(PixelImage::from_rgba8(
+        1,
+        1,
+        vec![shade, shade, shade, 255],
+    ));
+}
+
+/// The texture frames the sink took with the frame it presented last, as
+/// `(texture index, shade)` in the order the textures were registered.
+fn frames_taken(laid: &LaidOut, feeds: &Feeds) -> Vec<(usize, u8)> {
+    let feeds = feeds.borrow();
+    let mut frames: Vec<(usize, u8)> = laid
+        .sink()
+        .textures()
+        .frames
+        .iter()
+        .map(|(id, image)| {
+            let index = feeds
+                .iter()
+                .position(|registration| registration.id() == *id)
+                .expect("a frame of a registered texture");
+            (index, image.data()[0])
+        })
+        .collect();
+    frames.sort_unstable();
+    frames
+}
+
+fn shown_version(laid: &LaidOut) -> flui_rendering::layer::SceneVersionId {
+    laid.sink().version().expect("a version was presented").id()
+}
+
+/// A texture frame with nothing changed in the tree publishes the version the
+/// scene holds, with that frame for the raster host and no scene damage
+/// (ADR-0304 §8): it builds, lays out and paints nothing, applies no patch,
+/// and the sink takes the frame with it. The raster host's half, which
+/// damages the texture's users alone, is `flui-app`'s
+/// `a_texture_frame_reaches_the_slot_as_its_users_damage`.
+#[test]
+fn perf_a_texture_frame_republishes_the_held_version() {
+    let (mut laid, _label, feeds) = mount_videos();
+    let shown = shown_version(&laid);
+    let submits = laid.painted_frame_count();
+
+    feed(&feeds, 0, 9);
+    let (report, heap) = perf_measured(|| laid.pump_report(FRAME));
+    record("texture_frame", &report, heap);
+    for name in [
+        "builds_run",
+        "elements_rebuilt",
+        "nodes_laid_out",
+        "nodes_painted",
+        "layers_produced",
+        "scene_ops",
+        "damage_rects",
+        "damage_full",
+    ] {
+        assert_eq!(counter(&report, name), 0, "{name}: {report:#?}");
+    }
+    assert_eq!(
+        laid.painted_frame_count(),
+        submits + 1,
+        "the texture frame is published"
+    );
+    assert_eq!(shown_version(&laid), shown, "as the version already held");
+    assert_eq!(frames_taken(&laid, &feeds), [(0, 9)]);
+
+    laid.pump_for(FRAME);
+    assert_eq!(
+        laid.painted_frame_count(),
+        submits + 1,
+        "a frame with no texture frame waiting publishes nothing"
+    );
+}
+
+/// Frames requested with nothing changed after a texture frame went out
+/// publish nothing and ask nothing of the heap: the registry has no frame
+/// waiting, so the held version is not sent again (ADR-0304 §8).
+#[test]
+fn an_idle_frame_after_a_texture_frame_publishes_nothing() {
+    let feeds = Feeds::default();
+    let app = VideoApp {
+        label: SharedSignal::new(String::from("label")),
+        feeds: feeds.clone(),
+    };
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&app).expect("a fresh host takes a root");
+    for _ in 0..3 {
+        let _ = host.pump(FRAME);
+    }
+    feed(&feeds, 1, 4);
+    let _ = host.pump(FRAME);
+    assert_eq!(host.sink().textures().frames.len(), 1, "the frame went out");
+    let submits = host.sink().submits();
+    let ((), allocations) = perf_measured(|| {
+        for _ in 0..10 {
+            host.request_frame();
+            let _ = host.pump(FRAME);
+        }
+    });
+    assert_eq!(
+        host.sink().submits(),
+        submits,
+        "an idle frame submits nothing"
+    );
+    assert_eq!(
+        allocations,
+        HeapCounts::default(),
+        "an idle frame allocates nothing"
+    );
+}
+
+/// Several texture frames fed between two frames go out in one publication,
+/// which carries the newest frame of each texture and builds nothing.
+#[test]
+fn texture_frames_between_two_frames_go_out_in_one_publication() {
+    let (mut laid, _label, feeds) = mount_videos();
+    let shown = shown_version(&laid);
+    let submits = laid.painted_frame_count();
+
+    feed(&feeds, 0, 1);
+    feed(&feeds, 0, 2);
+    feed(&feeds, 1, 3);
+    let report = laid.pump_report(FRAME);
+    assert_eq!(counter(&report, "builds_run"), 0, "{report:#?}");
+    assert_eq!(counter(&report, "nodes_painted"), 0, "{report:#?}");
+    assert_eq!(laid.painted_frame_count(), submits + 1, "one publication");
+    assert_eq!(shown_version(&laid), shown);
+    assert_eq!(
+        frames_taken(&laid, &feeds),
+        [(0, 2), (1, 3)],
+        "the newest frame of each texture"
+    );
+    laid.pump_for(FRAME);
+    assert_eq!(laid.painted_frame_count(), submits + 1, "and no other");
+}
+
+/// A texture frame fed while the tree has a change to draw goes out with that
+/// change's frame, which paints what the change alone paints: no second
+/// publication, and no repaint of the texture.
+#[test]
+fn a_texture_frame_rides_the_frame_of_a_tree_change() {
+    let (mut laid, label, feeds) = mount_videos();
+    label.set(String::from("first"));
+    let alone = laid.pump_report(FRAME);
+    assert!(
+        counter(&alone, "nodes_painted") > 0,
+        "the label repaints: {alone:#?}"
+    );
+    let submits = laid.painted_frame_count();
+    let before = shown_version(&laid);
+
+    label.set(String::from("other"));
+    feed(&feeds, 1, 7);
+    let report = laid.pump_report(FRAME);
+    assert_eq!(laid.painted_frame_count(), submits + 1, "one publication");
+    assert_ne!(shown_version(&laid), before, "of the label's new version");
+    assert_eq!(frames_taken(&laid, &feeds), [(1, 7)]);
+    assert_eq!(
+        counter(&report, "nodes_painted"),
+        counter(&alone, "nodes_painted"),
+        "the texture does not repaint: {report:#?}"
+    );
+    laid.pump_for(FRAME);
+    assert_eq!(laid.painted_frame_count(), submits + 1, "and no other");
 }
 
 /// What a `Semantics` with one action adds to the `Text` it holds in a

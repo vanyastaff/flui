@@ -358,8 +358,8 @@ which no production path calls yet. Whether each unproduced variant is "not wire
 | `SceneOwner` | owned ledger and `IdMint` | Single owner (the UI runtime); `Send`, not `Sync` |
 | `ContentToken` (feature `testing`) | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
 | `LayerDiffer` (feature `testing`) | owned records of one tree | Single owner (the test that compares); no lock |
-| `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus `Arc<dyn Fn() + Send + Sync>` wake and listeners | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |
+| `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus an `Arc<dyn Fn() + Send + Sync>` wake | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |
 
 No `unsafe` in the crate. Its one lock is `TextureRegistry`'s; its `dyn`s are that registry's
-wake and listener callbacks and the `Arc<dyn Any + Send + Sync>` inside `AnnotationValue`
+wake callback and the `Arc<dyn Any + Send + Sync>` inside `AnnotationValue`
 (`src/layer/annotated_region.rs`).

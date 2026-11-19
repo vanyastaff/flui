@@ -1678,6 +1678,15 @@ impl PresentationState {
         &self.textures
     }
 
+    /// Whether a texture frame or retirement waits for the raster host: a
+    /// frame finding no tree work publishes the held version for it
+    /// (ADR-0304 §8). The registry holds it until the host takes it with a
+    /// publication, so a frame that never reached the host leaves it for the
+    /// next.
+    pub(crate) fn has_texture_updates(&self) -> bool {
+        self.textures.has_updates()
+    }
+
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
@@ -1869,11 +1878,12 @@ impl PresentationState {
     }
 
     /// Whether frame work waits on this presentation: a demand its clock
-    /// keeps, a redraw mark, or tree work.
+    /// keeps, a redraw mark, tree work, or a texture frame for the raster host.
     pub(crate) fn has_retained_frame_work(&self) -> bool {
         !self.clock.demand_mask().is_empty()
             || self.redraw_pending.get()
             || self.has_pending_work_snapshot()
+            || self.has_texture_updates()
     }
 
     /// When this presentation, unseen with frame work waiting, draws the
@@ -2158,7 +2168,8 @@ impl PresentationState {
     }
 
     /// Whether this presentation has work a frame would do: demand its clock keeps, a redraw it
-    /// was asked for, a build or a dirty node, or completion callbacks that wait. What a
+    /// was asked for, a build or a dirty node, completion callbacks that wait, or a texture frame
+    /// for the raster host. What a
     /// settlement that frees an in-flight place wakes the loop for, unless a dropped frame's
     /// backoff or an abandoned device holds the presentation (ADR-0305 §5).
     pub(crate) fn has_frame_work(&self) -> bool {
@@ -2166,6 +2177,7 @@ impl PresentationState {
             || self.redraw_pending.get()
             || self.has_pending_work_snapshot()
             || self.has_eligible_completion()
+            || self.has_texture_updates()
     }
 
     /// While this presentation has frames pending, the latest the owner sleeps until: the next

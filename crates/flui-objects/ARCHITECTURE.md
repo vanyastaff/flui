@@ -731,10 +731,12 @@ capture (ADR-0230), pinned by
 `RenderAnnotatedRegion` annotates its own box through a paint scope that becomes an
 `AnnotatedRegionLayer`; readers use `LayerTree::find_annotations` (ADR-0232), pinned by
 `harness_annotated_region_is_found_in_the_scene_over_its_box`. `RenderTexture` fills
-the largest box its constraints allow and draws its texture there; a new frame
-revision repaints it, which is how a frame fed through the presentation's
-`TextureRegistry` reaches the screen without other changes (ADR-0233), pinned by
-`harness_texture_fills_its_box_and_repaints_per_frame`. It is not a repaint boundary;
-the `Texture` widget puts one above it, so a frame repaints the texture alone and a
-hidden texture stops repainting after one frame, pinned by `a_fed_frame_damages_only_the_texture`
-and `a_hidden_texture_stops_painting_after_one_frame` in flui-runtime.
+the largest box its constraints allow and draws its texture there, and repaints only
+when it is given another texture, pinned by
+`harness_texture_fills_its_box_and_repaints_on_another_texture`. A frame fed through the
+presentation's `TextureRegistry` repaints nothing: the presentation publishes the version
+it holds with the frame, and the raster host damages the texture's users in it
+(ADR-0304 §8, §9), pinned by `a_fed_frame_republishes_the_held_version` in flui-runtime
+and `perf_a_texture_frame_republishes_the_held_version` in flui-widgets. It is not a
+repaint boundary; the `Texture` widget puts one above it, so the texture is composited in
+a layer of its own.

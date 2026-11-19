@@ -27,26 +27,24 @@ pub(crate) fn ids_are_never_reissued() {
     drop(first);
     let second = registry.register().expect("id");
     assert_ne!(second.id(), first_id);
-    assert_eq!(
-        registry.revision(first_id),
-        None,
-        "a retired id is not live"
-    );
+    assert_eq!(registry.take_updates().retired, [first_id]);
 }
 
 /// The backend sees only the newest frame per texture, once, and every frame
-/// wakes the presentation.
+/// wakes the presentation; the registry holds updates until they are taken.
 pub(crate) fn the_backend_takes_the_newest_frame_once() {
     let (registry, wakes) = counting_registry();
     let texture = registry.register().expect("id");
+    assert!(!registry.has_updates(), "a registration alone is no update");
     texture.submit_frame(frame(10));
     texture.submit_frame(frame(20));
-    assert_eq!(registry.revision(texture.id()), Some(2));
     assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    assert!(registry.has_updates());
     let updates = registry.take_updates();
     assert_eq!(updates.frames.len(), 1);
     assert_eq!(updates.frames[0].0, texture.id());
     assert_eq!(updates.frames[0].1.data(), [20, 20, 20, 255]);
+    assert!(!registry.has_updates(), "the frame was taken");
     assert!(
         registry.take_updates().is_empty(),
         "a frame is applied once"
@@ -61,118 +59,61 @@ pub(crate) fn dropping_a_registration_retires_it() {
     texture.submit_frame(frame(1));
     drop(texture);
     assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    assert!(registry.has_updates(), "a retirement is an update");
     let updates = registry.take_updates();
     assert!(
         updates.frames.is_empty(),
         "a retired texture's frame is not drawn"
     );
     assert_eq!(updates.retired, [id]);
+    assert!(!registry.has_updates());
 }
 
-/// Listeners run after each frame, may reach the registry again, and stop
-/// when their guard drops.
-pub(crate) fn listeners_run_reentrantly_until_removed() {
-    let (registry, _) = counting_registry();
-    let texture = registry.register().expect("id");
-    let id = texture.id();
+/// The wake runs with the registry unlocked, so the host's wake may read it
+/// again, as a runtime that checks for updates at once does.
+pub(crate) fn the_wake_may_reach_the_registry() {
     let seen = Arc::new(AtomicUsize::new(0));
-    let observer = registry.clone();
-    let record = Arc::clone(&seen);
-    let guard = registry
-        .listen(id, move || {
-            let revision = observer.revision(id).expect("live");
-            record.store(usize::try_from(revision).expect("small"), Ordering::SeqCst);
-        })
-        .expect("live id");
+    let slot: Arc<std::sync::OnceLock<TextureRegistry>> = Arc::default();
+    let registry = {
+        let (seen, slot) = (Arc::clone(&seen), Arc::clone(&slot));
+        TextureRegistry::new(Arc::new(move || {
+            let registry = slot.get().expect("set before the first frame");
+            if registry.has_updates() {
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+        }))
+    };
+    slot.set(registry.clone()).expect("set once");
+    let texture = registry.register().expect("id");
     texture.submit_frame(frame(1));
-    texture.submit_frame(frame(2));
-    assert_eq!(seen.load(Ordering::SeqCst), 2);
-    drop(guard);
-    texture.submit_frame(frame(3));
+    drop(texture);
     assert_eq!(
         seen.load(Ordering::SeqCst),
         2,
-        "a removed listener is not called"
-    );
-    drop(texture);
-    assert!(
-        registry.listen(id, || {}).is_none(),
-        "a retired id takes no listener"
+        "the frame and the retirement are pending when the wake runs"
     );
 }
 
-/// A panicking listener neither skips the listeners after it nor the wake:
-/// the frame stays deliverable, the first panic is the one resumed, and the
-/// next frame is delivered the same way.
-pub(crate) fn a_panicking_listener_keeps_the_frame_deliverable() {
-    let (registry, wakes) = counting_registry();
+/// A wake that panics leaves the frame pending: it is delivered by whatever
+/// frame the presentation draws next, and the next frame wakes again.
+pub(crate) fn a_panicking_wake_keeps_the_frame_pending() {
+    let registry = TextureRegistry::new(Arc::new(|| std::panic::panic_any("wake")));
     let texture = registry.register().expect("id");
-    let id = texture.id();
-    let later = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&later);
-    let _first = registry
-        .listen(id, || std::panic::panic_any("first listener"))
-        .expect("live id");
-    let _counting = registry
-        .listen(id, move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        })
-        .expect("live id");
-    let _second = registry
-        .listen(id, || std::panic::panic_any("second listener"))
-        .expect("live id");
-    for (shade, delivered) in [(1_u8, 1_usize), (2, 2)] {
+    for shade in [1_u8, 2] {
         let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             texture.submit_frame(frame(shade));
         }))
-        .expect_err("the listener's panic propagates");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"first listener"),
-            "the first panic is authoritative"
-        );
-        assert_eq!(
-            later.load(Ordering::SeqCst),
-            delivered,
-            "later listeners run"
-        );
-        assert_eq!(
-            wakes.load(Ordering::SeqCst),
-            delivered,
-            "the presentation wakes"
-        );
+        .expect_err("the wake's panic propagates");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake"));
+        assert!(registry.has_updates(), "the frame is pending");
         let updates = registry.take_updates();
         assert_eq!(updates.frames.len(), 1);
         assert_eq!(updates.frames[0].1.data(), [shade, shade, shade, 255]);
     }
-}
-
-/// A listener whose captures panic as the retired entry drops still lets the
-/// retirement wake the presentation, so the backend releases the texture.
-pub(crate) fn a_panicking_listener_drop_still_wakes_the_retirement() {
-    struct PanicsOnDrop;
-    impl Drop for PanicsOnDrop {
-        fn drop(&mut self) {
-            std::panic::panic_any("listener capture dropped");
-        }
-    }
-    let (registry, wakes) = counting_registry();
-    let texture = registry.register().expect("id");
-    let id = texture.id();
-    let capture = PanicsOnDrop;
-    let _listener = registry
-        .listen(id, move || {
-            let _ = &capture;
-        })
-        .expect("live id");
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(texture)))
-        .expect_err("the capture's panic propagates");
-    assert_eq!(
-        payload.downcast_ref::<&str>(),
-        Some(&"listener capture dropped")
-    );
-    assert_eq!(wakes.load(Ordering::SeqCst), 1, "the retirement wakes");
-    assert_eq!(registry.take_updates().retired, [id]);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(texture)))
+        .expect_err("the retirement's wake panics too");
+    assert!(registry.has_updates(), "the retirement is pending");
+    assert_eq!(registry.take_updates().retired.len(), 1);
 }
 
 /// Two updates merged apply as both would in turn: a newer frame replaces

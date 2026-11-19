@@ -102,7 +102,7 @@ pub use scene_snapshot::{
     DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,
 };
 pub use texture_registry::{
-    TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
+    TextureIdsExhausted, TextureRegistration, TextureRegistry, TextureUpdates,
 };
 #[cfg(feature = "testing")]
 pub use tree::{BoundaryStamp, ContentToken};

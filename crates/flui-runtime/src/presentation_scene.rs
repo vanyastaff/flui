@@ -19,6 +19,11 @@
 //! scene holds that debt beside the target the version was applied for, so a
 //! retry that finds another target or a newer version repaints instead. Only a
 //! verdict that shows the version, or a new version applied, pays the debt.
+//!
+//! A frame that paints nothing while a texture frame waits in the
+//! presentation's registry publishes the current version again too, when it
+//! was applied for the frame's target: the raster host takes the texture
+//! frame with it and damages only the texture's users (ADR-0304 §8, §9).
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -255,10 +260,20 @@ impl PresentationScene {
         }
     }
 
-    /// The withheld version again, with the damage since the acknowledged
-    /// base, for a frame that painted nothing. The debt stays until the
-    /// frame's verdict: shown, it is paid ([`Self::completed`]); withheld
-    /// again, it is owed again.
+    /// Whether the current version was applied for `target`, so a frame that
+    /// painted nothing may publish it again for a texture frame
+    /// ([`Self::republish`], ADR-0304 §8): `false` before the first version,
+    /// after a renewal, and when the surface or its scale changed since.
+    pub(crate) fn holds_version_for(&self, target: SceneTarget) -> bool {
+        self.target == Some(target)
+    }
+
+    /// The current version again, with the damage since the acknowledged
+    /// base, for a frame that painted nothing: a withheld version owed to the
+    /// screen, or the held version a texture frame rides to the raster host
+    /// (ADR-0304 §7, §8). A withheld version's debt stays until the frame's
+    /// verdict: shown, it is paid ([`Self::completed`]); withheld again, it
+    /// is owed again.
     pub(crate) fn republish(&self) -> ScenePublication {
         self.owner.publication()
     }

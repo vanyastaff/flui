@@ -15,19 +15,17 @@ use flui_rendering::{
 /// Draws an external texture's current frame over its whole box.
 ///
 /// The box takes the largest size the constraints allow (the smallest on an
-/// unbounded axis): a texture has no intrinsic size of its own. The
-/// `revision` is the number of frames the texture has received; a new one
-/// repaints, so the frame the backend just uploaded reaches the screen even
-/// when nothing else changed.
+/// unbounded axis): a texture has no intrinsic size of its own. A new frame
+/// of the texture repaints nothing: the presentation publishes the version it
+/// holds with the frame, and the raster side damages the texture's users in
+/// it (ADR-0304 §8, §9).
 ///
-/// Not a repaint boundary itself: the `Texture` widget wraps it in one, so a
-/// new revision repaints only the texture, while a texture that an ancestor
-/// hides absorbs later revisions in its pending paint flag.
+/// Not a repaint boundary itself: the `Texture` widget wraps it in one, so
+/// the texture is composited in a layer of its own.
 #[derive(Debug, Clone)]
 pub struct RenderTexture {
     texture: TextureId,
     filter_quality: FilterQuality,
-    revision: u64,
 }
 
 impl RenderTexture {
@@ -36,7 +34,6 @@ impl RenderTexture {
         Self {
             texture,
             filter_quality,
-            revision: 0,
         }
     }
 
@@ -60,16 +57,6 @@ impl RenderTexture {
             return RenderUpdateImpact::NONE;
         }
         self.filter_quality = filter_quality;
-        RenderUpdateImpact::PAINT
-    }
-
-    /// Records that the texture received frame number `revision`; a new
-    /// revision repaints.
-    pub fn set_revision(&mut self, revision: u64) -> RenderUpdateImpact {
-        if self.revision == revision {
-            return RenderUpdateImpact::NONE;
-        }
-        self.revision = revision;
         RenderUpdateImpact::PAINT
     }
 
@@ -98,7 +85,6 @@ impl Inspect for RenderTexture {
 
     fn inspect(&self, out: &mut Fields<'_>) {
         out.field("texture", &self.texture.get());
-        out.field("revision", &self.revision);
     }
 }
 

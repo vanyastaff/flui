@@ -4,12 +4,17 @@
 use std::cell::OnceCell;
 use std::num::NonZeroU32;
 
-use flui_rendering::layer::{LayerTree, ScenePublication, SceneVersion};
+use flui_rendering::layer::{
+    LayerTree, ScenePublication, SceneVersion, TextureRegistry, TextureUpdates,
+};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 
 /// The frame sink of a [`HeadlessHost`](super::HeadlessHost): a surface of fixed size that
 /// presents every scene and keeps the last version, unless told to leave
 /// some unshown ([`HeadlessHost::leave_unshown`](super::HeadlessHost::leave_unshown)).
+/// Like a runner's raster host, a frame it presents takes the primary
+/// presentation's texture frames and retirements with it
+/// ([`Self::textures`]); one it leaves unshown leaves them in the registry.
 ///
 /// The version is flattened into a layer tree only when a test reads it, so a
 /// frame costs the sink nothing that grows with the tree.
@@ -23,6 +28,10 @@ pub struct HeadlessSink {
     /// The epochs of the frames presented most recently, oldest first, at
     /// most [`PRESENTED_KEPT`].
     presented: std::collections::VecDeque<flui_foundation::FrameEpoch>,
+    /// The primary presentation's external textures.
+    registry: Option<TextureRegistry>,
+    /// What the frame presented last took from the registry.
+    textures: TextureUpdates,
 }
 
 /// Why a [`HeadlessSink`] leaves a frame unshown, as a real surface does:
@@ -76,7 +85,7 @@ const PRESENTED_KEPT: usize = 16;
 impl HeadlessSink {
     /// A `width` × `height` surface that has presented nothing yet.
     #[must_use]
-    pub(crate) fn new(width: u32, height: u32) -> Self {
+    pub(crate) fn new(width: u32, height: u32, registry: Option<TextureRegistry>) -> Self {
         Self {
             size: (width, height),
             last: None,
@@ -84,6 +93,8 @@ impl HeadlessSink {
             unshown: None,
             // Its room is taken here, so a frame that presents allocates nothing.
             presented: std::collections::VecDeque::with_capacity(PRESENTED_KEPT),
+            registry,
+            textures: TextureUpdates::default(),
         }
     }
 
@@ -125,6 +136,14 @@ impl HeadlessSink {
     pub fn submits(&self) -> u64 {
         self.submits
     }
+
+    /// The texture frames and retirements the frame presented last took
+    /// from the registry, as a raster host applies them before it draws:
+    /// the newest frame of each texture fed since the frame before.
+    #[must_use]
+    pub fn textures(&self) -> &TextureUpdates {
+        &self.textures
+    }
 }
 
 impl FrameSink for HeadlessSink {
@@ -141,6 +160,11 @@ impl FrameSink for HeadlessSink {
             self.unshown = NonZeroU32::new(frames.get() - 1).map(|left| (left, how));
             return how.verdict();
         }
+        // Taken with the frame it rides, as the raster host takes them.
+        self.textures = self
+            .registry
+            .as_ref()
+            .map_or_else(TextureUpdates::default, TextureRegistry::take_updates);
         self.last = Some((publication.scene, OnceCell::new()));
         self.submits = self.submits.saturating_add(1);
         if self.presented.len() == PRESENTED_KEPT {

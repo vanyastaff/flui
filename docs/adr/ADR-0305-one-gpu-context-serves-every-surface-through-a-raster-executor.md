@@ -144,7 +144,7 @@ pub struct GpuContext {
   surface and its configuration, its frame protocol and damage history
   (`crates/flui-engine/src/frame_protocol.rs:1-9`), its committed images (ADR-0100), its viewport,
   its `SurfaceGeneration` counter (§6) and its external textures, whose `TextureId`s each
-  presentation's registry mints on its own (`crates/flui-layer/src/texture_registry.rs:103-113`).
+  presentation's registry mints on its own (`TextureRegistry::register`, `crates/flui-layer/src/texture_registry.rs:115-131`).
 - **The content caches live in the one painter every slot shares.** The context keeps one
   `WgpuPainter` (`crates/flui-engine/src/painter/mod.rs`) that holds the pipeline library, the
   glyph atlas, the image cache, the path caches and the chunk recordings derived from them

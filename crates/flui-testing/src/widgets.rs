@@ -1736,9 +1736,17 @@ impl LaidOut {
         self.host.did_paint_last_frame()
     }
 
-    /// Number of harness frames that produced a fresh layer tree.
+    /// Number of harness frames the sink presented, a republished version
+    /// included.
     pub fn painted_frame_count(&self) -> u64 {
         self.host.ui_runtime().sink().submits()
+    }
+
+    /// The window's frame sink: the version the last presented frame showed
+    /// and the texture frames it took ([`crate::HeadlessSink::textures`]).
+    #[must_use]
+    pub fn sink(&self) -> &crate::HeadlessSink {
+        self.host.ui_runtime().sink()
     }
 
     /// Leave the next `frames` frames unshown for the reason `how` names; see

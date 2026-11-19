@@ -127,6 +127,7 @@ impl UiRuntime {
                 segment_start,
                 woken,
                 pending,
+                textures,
                 resuming,
                 completion,
             }) = operation.take_segment()
@@ -135,7 +136,7 @@ impl UiRuntime {
             };
 
             let scoped = self.scheduler.phase() == flui_scheduler::SchedulerPhase::Frame;
-            if scoped && completion && !pending && !woken && !resuming {
+            if scoped && completion && !pending && !woken && !textures && !resuming {
                 presentation.complete_segment();
                 continue;
             }
@@ -715,12 +716,18 @@ impl UiRuntime {
 
         if !painted {
             phases.lap(FramePhase::Paint);
-            if held_retry != crate::presentation_scene::HeldRetry::Republish {
+            // A frame that painted nothing publishes nothing, unless the screen is owed the held
+            // version: the surface withheld it, or a texture frame waits for the raster host,
+            // which takes it with the publication and damages the texture's users alone
+            // (ADR-0304 §7, §8). A version applied for another target is not republished for a
+            // texture frame: the frame waits in the registry for the frame that paints it.
+            let textures = scene.holds_version_for(target) && presentation.has_texture_updates();
+            if held_retry != crate::presentation_scene::HeldRetry::Republish && !textures {
                 return Ok(FramePaintOutcome::Idle);
             }
-            // The withheld version again, with the damage since the acknowledged base: the
-            // pipeline, its probes and input regions already read it, and only the system bars'
-            // style, which the withheld frame took with it, is staged once more.
+            // The held version again, with the damage since the acknowledged base, which is none
+            // once the raster side showed it: the pipeline, its probes and input regions already
+            // read it, and only the system bars' style is staged once more.
             presentation.enter_segment_phase(SegmentPhase::Scene);
             let publication = scene.republish();
             presentation
