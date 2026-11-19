@@ -71,6 +71,18 @@ impl Directionality {
         ctx.depend_on::<Self, _>(|d| d.direction)
             .unwrap_or(TextDirection::Ltr)
     }
+
+    /// `alignment` resolved to a physical one for a render view's configuration:
+    /// an absolute alignment as it is, a directional one against
+    /// [`of_render_object`](Self::of_render_object), which only then takes the
+    /// `Directionality` dependency.
+    #[must_use]
+    pub(crate) fn resolve_alignment(
+        ctx: &flui_view::RenderObjectContext<'_>,
+        alignment: flui_painting::AlignmentGeometry,
+    ) -> flui_painting::Alignment {
+        resolve_alignment(alignment, || Self::of_render_object(ctx))
+    }
 }
 
 impl std::fmt::Debug for Directionality {

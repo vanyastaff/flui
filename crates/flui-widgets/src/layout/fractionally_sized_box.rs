@@ -6,7 +6,7 @@ use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
-use crate::localization::{Directionality, resolve_alignment};
+use crate::Directionality;
 
 /// Sizes its child to a fraction of the available space along each axis.
 ///
@@ -69,18 +69,12 @@ impl FractionallySizedBox {
         value.map(FractionFactor::new_unchecked)
     }
 
-    /// The alignment resolved against the ambient [`Directionality`], read only
-    /// for a directional one.
-    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
-        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
-    }
-
     fn build_render_object(
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
     ) -> RenderFractionallySizedBox {
-        let mut render_object =
-            RenderFractionallySizedBox::new().with_alignment(self.resolved_alignment(ctx));
+        let mut render_object = RenderFractionallySizedBox::new()
+            .with_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         if let Some(factor) = Self::factor(self.width_factor) {
             render_object = render_object.with_width_factor(factor);
         }
@@ -114,7 +108,8 @@ impl RenderView for FractionallySizedBox {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_width_factor(Self::factor(self.width_factor));
         impact |= render_object.set_height_factor(Self::factor(self.height_factor));
-        impact |= render_object.set_alignment(self.resolved_alignment(ctx));
+        impact |=
+            render_object.set_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         impact
     }
 

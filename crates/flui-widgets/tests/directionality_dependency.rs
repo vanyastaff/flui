@@ -346,8 +346,9 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
     type Reading = Option<(f64, f64)>;
     // A row: its name, the constraints it is laid out under, how to build it,
     // how to read it, and the readings in LTR, in RTL and with no alignment.
-    // A layout box is read where it placed its child, under a tight box so its
-    // alignment has room to move the child.
+    // A layout box is read where it placed its child, under constraints that
+    // make it 200 wide: tight for a box that would shrink to its child under
+    // loose ones, loose for an overflow box, which takes its 200 slot itself.
     type Case = (
         &'static str,
         flui_rendering::constraints::BoxConstraints,
@@ -463,7 +464,7 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
 
         for (alignment, expected, what) in [
             (
-                Some(Alignment::TOP_LEFT.into()),
+                Some(AlignmentGeometry::from(Alignment::TOP_LEFT)),
                 ltr,
                 "an absolute alignment",
             ),

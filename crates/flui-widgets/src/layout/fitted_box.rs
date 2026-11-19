@@ -7,7 +7,7 @@ use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
-use crate::localization::{Directionality, resolve_alignment};
+use crate::Directionality;
 
 /// Scales and positions its child within itself according to a [`BoxFit`].
 ///
@@ -75,12 +75,6 @@ impl FittedBox {
         self.child = Child::some(child.into_view());
         self
     }
-
-    /// The alignment resolved against the ambient [`Directionality`], read only
-    /// for a directional one.
-    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
-        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
-    }
 }
 
 impl RenderView for FittedBox {
@@ -88,7 +82,11 @@ impl RenderView for FittedBox {
     type RenderObject = RenderFittedBox;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderFittedBox::new(self.fit, self.resolved_alignment(ctx), self.clip)
+        RenderFittedBox::new(
+            self.fit,
+            Directionality::resolve_alignment(ctx, self.alignment),
+            self.clip,
+        )
     }
 
     fn update_render_object(
@@ -97,7 +95,7 @@ impl RenderView for FittedBox {
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         render_object.set_fit(self.fit)
-            | render_object.set_alignment(self.resolved_alignment(ctx))
+            | render_object.set_alignment(Directionality::resolve_alignment(ctx, self.alignment))
             | render_object.set_clip_behavior(self.clip)
     }
 

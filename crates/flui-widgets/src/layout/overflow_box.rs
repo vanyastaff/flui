@@ -5,7 +5,7 @@ use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
-use crate::localization::{Directionality, resolve_alignment};
+use crate::Directionality;
 
 /// Lays its child out as if it lived in a box with different constraints,
 /// potentially allowing the child to overflow the parent's available space.
@@ -106,21 +106,13 @@ impl Default for OverflowBox {
     }
 }
 
-impl OverflowBox {
-    /// The alignment resolved against the ambient [`Directionality`], read only
-    /// for a directional one.
-    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
-        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
-    }
-}
-
 impl RenderView for OverflowBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderConstrainedOverflowBox;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderConstrainedOverflowBox::new(
-            self.resolved_alignment(ctx),
+            Directionality::resolve_alignment(ctx, self.alignment),
             self.min_width,
             self.max_width,
             self.min_height,
@@ -135,7 +127,8 @@ impl RenderView for OverflowBox {
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(self.resolved_alignment(ctx));
+        impact |=
+            render_object.set_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         impact |= render_object.set_min_width(self.min_width);
         impact |= render_object.set_max_width(self.max_width);
         impact |= render_object.set_min_height(self.min_height);

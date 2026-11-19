@@ -8,7 +8,7 @@ use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
-use crate::localization::{Directionality, resolve_alignment};
+use crate::Directionality;
 
 /// Removes the constraints imposed on `child` — on both axes, or, when
 /// `constrained_axis` is set, on every axis *except* that one (the named
@@ -92,7 +92,7 @@ impl UnconstrainedBox {
         ctx: &flui_view::RenderObjectContext<'_>,
     ) -> RenderConstraintsTransformBox {
         RenderConstraintsTransformBox::new(
-            self.resolved_alignment(ctx),
+            Directionality::resolve_alignment(ctx, self.alignment),
             self.constrained_axis,
             self.clip_behavior,
         )
@@ -103,14 +103,6 @@ impl Default for UnconstrainedBox {
     fn default() -> Self {
         // A trait fn cannot be `#[track_caller]`: the site is this line.
         Self::new()
-    }
-}
-
-impl UnconstrainedBox {
-    /// The alignment resolved against the ambient [`Directionality`], read only
-    /// for a directional one.
-    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
-        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
     }
 }
 
@@ -128,7 +120,8 @@ impl RenderView for UnconstrainedBox {
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(self.resolved_alignment(ctx));
+        impact |=
+            render_object.set_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         impact |= render_object.set_constrained_axis(self.constrained_axis);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         impact

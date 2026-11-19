@@ -7,7 +7,7 @@ use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
-use crate::localization::{Directionality, resolve_alignment};
+use crate::Directionality;
 
 /// Applies a [`Matrix4`] transform to its child before painting.
 ///
@@ -102,11 +102,10 @@ impl Transform {
         self
     }
 
-    /// The pivot alignment resolved against the ambient [`Directionality`],
-    /// read only for a directional one.
+    /// The pivot alignment resolved against the ambient [`Directionality`].
     fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Option<Alignment> {
         self.alignment
-            .map(|alignment| resolve_alignment(alignment, || Directionality::of_render_object(ctx)))
+            .map(|alignment| Directionality::resolve_alignment(ctx, alignment))
     }
 
     fn build_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> RenderTransform {
