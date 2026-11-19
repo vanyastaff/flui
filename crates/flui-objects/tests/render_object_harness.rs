@@ -4280,6 +4280,8 @@ fn harness_static_opacity_setters_report_their_exact_impact() {
             expected,
             "sliver {case}"
         );
+        assert_eq!(boxed.always_include_semantics(), after, "box {case}");
+        assert_eq!(sliver.always_include_semantics(), after, "sliver {case}");
     }
     // An opacity crossing zero republishes semantics only without the flag.
     for always in [false, true] {
