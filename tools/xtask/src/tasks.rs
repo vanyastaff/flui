@@ -1,9 +1,8 @@
-//! The tasks that choose packages, targets or tools from the workspace and
-//! the host: `checks`, `fuzz` and `clean-nested`.
+//! The tasks `checks`, `fuzz` and `clean-nested`.
 //!
-//! Each task prints every command before it runs it and stops at the first
-//! failure, except `checks` and `fuzz`, which run every step and then report
-//! all that failed. `--dry-run` prints the commands without running them.
+//! `checks` and `fuzz` run every step even after one fails and then report all
+//! that failed; `fuzz` prints each command before it runs it. `--dry-run`
+//! prints what a task would run or remove without doing it.
 
 mod checks;
 mod exec;

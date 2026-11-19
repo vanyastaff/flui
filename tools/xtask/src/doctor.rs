@@ -362,14 +362,22 @@ pub(crate) fn android_archiver_available(archiver: &OsStr) -> bool {
 /// environment, read from the variables cc-rs reads, in its order. `None` when none is set: cc-rs
 /// then guesses a wrapper name, which doctor does not probe.
 pub(crate) fn android_tool(prefix: &str) -> Option<std::ffi::OsString> {
+    android_tool_in(prefix, |name| std::env::var_os(name))
+}
+
+/// [`android_tool`] over the variables `lookup` reads.
+fn android_tool_in(
+    prefix: &str,
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
     [
         format!("{prefix}_aarch64-linux-android"),
         format!("{prefix}_aarch64_linux_android"),
         format!("TARGET_{prefix}"),
         prefix.to_owned(),
     ]
-    .into_iter()
-    .find_map(std::env::var_os)
+    .iter()
+    .find_map(|name| lookup(name))
 }
 
 fn first_line(bytes: &[u8]) -> String {
@@ -635,6 +643,35 @@ mod tests {
         );
     }
 
+    /// The tool is read from the variables cc-rs reads, the target-specific one first, and no
+    /// fallback stands in when none is set.
+    fn the_android_tool_is_the_first_variable_cc_rs_reads() {
+        let set = |names: &'static [&'static str]| {
+            move |name: &str| names.contains(&name).then(|| name.into())
+        };
+        assert_eq!(android_tool_in("CC", set(&[])), None);
+        assert_eq!(
+            android_tool_in("AR", set(&["AR", "TARGET_AR"])),
+            Some("TARGET_AR".into())
+        );
+        assert_eq!(
+            android_tool_in(
+                "CC",
+                set(&[
+                    "CC",
+                    "TARGET_CC",
+                    "CC_aarch64_linux_android",
+                    "CC_aarch64-linux-android"
+                ])
+            ),
+            Some("CC_aarch64-linux-android".into())
+        );
+        assert_eq!(
+            android_tool_in("CC", set(&["CC", "CC_aarch64_linux_android"])),
+            Some("CC_aarch64_linux_android".into())
+        );
+    }
+
     /// The install hint names the lychee CI installs.
     fn the_lychee_hint_names_the_version_ci_installs() {
         let ci =
@@ -801,6 +838,10 @@ mod tests {
                 (
                     "a_version_only_compiler_does_not_supply_android_headers",
                     a_version_only_compiler_does_not_supply_android_headers as fn(),
+                ),
+                (
+                    "the_android_tool_is_the_first_variable_cc_rs_reads",
+                    the_android_tool_is_the_first_variable_cc_rs_reads as fn(),
                 ),
                 (
                     "a_failing_binary_probe_is_not_an_available_tool",

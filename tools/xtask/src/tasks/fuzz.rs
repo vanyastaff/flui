@@ -114,7 +114,7 @@ pub(crate) struct FuzzArgs {
 /// Needs the nightly toolchain, on x86_64 Linux.
 pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
     let targets = selected(&args.targets)?;
-    if std::env::consts::OS != "linux" || std::env::consts::ARCH != "x86_64" {
+    if !runs_fuzz(std::env::consts::OS, std::env::consts::ARCH) {
         bail!("`cargo xtask fuzz` runs on x86_64 Linux: its sanitizer flags name {FUZZ_TARGET}");
     }
     let runner = args.run.runner();
@@ -146,6 +146,12 @@ pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
     }
     runner.every(&cmds)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Whether a host of `os` and `arch` (`std::env::consts`) can run the
+/// fuzzers: the one [`FUZZ_TARGET`] names.
+fn runs_fuzz(os: &str, arch: &str) -> bool {
+    os == "linux" && arch == "x86_64"
 }
 
 /// The targets `names` asks for, in the order of [`TARGETS`]; all of them
@@ -275,6 +281,18 @@ mod tests {
         );
     }
 
+    /// Only x86_64 Linux runs the fuzzers: either half alone does not.
+    fn only_x86_64_linux_runs_the_fuzzers() {
+        assert!(runs_fuzz("linux", "x86_64"));
+        for (os, arch) in [
+            ("linux", "aarch64"),
+            ("windows", "x86_64"),
+            ("macos", "aarch64"),
+        ] {
+            assert!(!runs_fuzz(os, arch), "{os} {arch}");
+        }
+    }
+
     /// Every target is an example its package declares, with seeds that exist:
     /// a target renamed in one place fails here, not in the nightly run.
     fn every_target_is_a_declared_example_with_seeds() {
@@ -327,6 +345,10 @@ mod tests {
                 (
                     "targets_are_selected_by_name_and_an_unknown_one_is_refused",
                     targets_are_selected_by_name_and_an_unknown_one_is_refused as fn(),
+                ),
+                (
+                    "only_x86_64_linux_runs_the_fuzzers",
+                    only_x86_64_linux_runs_the_fuzzers as fn(),
                 ),
                 (
                     "every_target_is_a_declared_example_with_seeds",
