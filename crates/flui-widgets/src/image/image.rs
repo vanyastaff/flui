@@ -182,7 +182,7 @@ impl Image {
     /// Requires the `flui-widgets/asset-images` feature.
     #[cfg(feature = "asset-images")]
     #[track_caller]
-    pub fn asset(registry: Arc<flui_assets::AssetRegistry>, path: impl Into<String>) -> Self {
+    pub fn asset(registry: Arc<flui_assets::ImageCache>, path: impl Into<String>) -> Self {
         Self::new(super::AssetImage::new(registry, path))
     }
 
@@ -195,7 +195,7 @@ impl Image {
     /// the host's HTTP capability (`flui_platform::http::HttpCapability`).
     #[cfg(feature = "asset-images")]
     #[track_caller]
-    pub fn network(registry: Arc<flui_assets::AssetRegistry>, url: impl Into<String>) -> Self {
+    pub fn network(registry: Arc<flui_assets::ImageCache>, url: impl Into<String>) -> Self {
         Self::new(super::NetworkImage::new(registry, url))
     }
 

@@ -70,14 +70,14 @@ a crate's features locally.
 `[package.metadata.flui.api-closure]` table and no `tools/xtask/allowlists/`. `cargo xtask
 expectations` no longer counts an API snapshot or an allowlist. The rules those gates held stay
 written where they were decided (ADR-0089 §2 and §6, ADR-0151 §8, ADR-0323 §2 and §3); the
-reader of "Before a merge" checks a change against them.
+readers of "Before a merge" check a change against them.
 
 ### Consequences
 
 - Good, because every pull request runs the same five jobs, none on a nightly toolchain.
 - Good, because main loses a gate that kept it red for hours on findings no pull request saw.
 - Bad, because a change to the facade's surface shows only in the code diff: no snapshot lists
-  what it adds or removes, and the reader has to see it.
+  what it adds or removes, and the readers have to see it.
 - Bad, because a public signature can name an upstream type ADR-0089 §2 forbids, or a new
   `Send`/`Sync` position can appear, and nothing fails.
 - Bad, because a trybuild expectation, a size, a miri finding or a perf count a pull request moves
@@ -91,7 +91,7 @@ reader of "Before a merge" checks a change against them.
   `aggregator_contract` (`tools/xtask/src/change_scope/aggregator.rs`) pin `HEAVY_JOBS` and
   `FULL_JOBS` to the jobs whose `if:` names their lanes, and `cargo xtask ci-verify` fails a run in
   which a job of another lane ran.
-- The API rules have no confirmation but the reader of "Before a merge" (Consequences).
+- The API rules have no confirmation but the readers of "Before a merge" (Consequences).
 
 ## Pros and cons of the options
 

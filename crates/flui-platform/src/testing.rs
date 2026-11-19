@@ -11,7 +11,9 @@
 //! [`PlatformHaptics`](crate::haptics::PlatformHaptics) a scenario asserts against,
 //! `ScriptedHttp`, the [`HttpClient`](crate::http::HttpClient) a headless host
 //! registers so no test reaches the network, and
-//! `ScriptedLauncher`, the scripted [`LauncherBackend`](crate::launch::LauncherBackend).
+//! `ScriptedLauncher`, the scripted [`LauncherBackend`](crate::launch::LauncherBackend), and
+//! `MemoryAssets`, the [`AssetSource`](crate::assets::AssetSource) a test hands its host
+//! its assets through.
 //!
 //! A double whose service answers later is built on the scenario primitive,
 //! [`capability::scripted`](crate::capability::scripted), so its answers are
@@ -26,6 +28,10 @@
 //! scenario's ledger; and `flui_testing::storage::MemoryStorage` is a store,
 //! not a script, behind the `Send + Sync` storage contract, with nothing a
 //! request could be unexpected against.
+
+mod assets;
+
+pub use assets::MemoryAssets;
 
 mod haptics;
 

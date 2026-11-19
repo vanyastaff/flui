@@ -12,10 +12,14 @@ Describe the change and why it belongs in FLUI.
 
 ## Review
 
-Who read the diff in a fresh context before the merge (AGENTS.md, "Before a merge"), each finding
-and what became of it: fixed, or refuted by a line or a test. "Documentation only" when the `docs`
-lane takes the pull request; `Independent read unavailable: <reason>` and the scenarios the author
-tried, when no reviewer could be started.
+The head the readers and the judge read and the mutation run beside them (AGENTS.md, "Before
+each push" item 10 and "Before a merge"), each finding the judge
+confirmed or left unaccounted for (every reader's finding when no judge started) and what became
+of it: fixed, with its class, or refuted by a line or a test; the same for each later read of a
+fix. A lens that could not be started, with its reason and what the author's own read through
+it showed. "Documentation only" when the `docs` lane takes the pull request;
+`Independent read unavailable: <reason>` and the scenarios the author tried, when no reader
+could be started.
 
 ## Architecture
 

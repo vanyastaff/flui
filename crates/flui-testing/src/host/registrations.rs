@@ -92,7 +92,8 @@ pub(super) enum Registry {
     Composed(AppRegistrations),
 }
 
-/// The registry a runner builds for an application on `platform`: the
+/// The registry a runner builds for an application on `platform`, reading
+/// `assets` (ADR-0384 §5): the
 /// application's overrides first (the provided storage among them), then the
 /// built-ins with the host's storage, then the application's plugins and the
 /// package plugin a test of that package names. Every registry a headless
@@ -105,11 +106,12 @@ pub(super) enum Registry {
 pub(super) fn compose_registry(
     scripted: &ScriptedBuiltIns,
     platform: flui_platform::TargetPlatform,
+    assets: &flui_platform::assets::AssetBundle,
     storage: Option<&KitStorage>,
     application: &AppRegistrations,
     package: Option<&dyn flui_platform::capability::Plugin>,
 ) -> flui_runtime::capability::CapabilityRegistry {
-    let mut built_ins = scripted.registrar(platform);
+    let mut built_ins = scripted.registrar(platform, assets);
     let mut overrides = flui_platform::capability::CapabilityRegistrar::new();
     for registration in &application.overrides {
         registration.register(&mut overrides);

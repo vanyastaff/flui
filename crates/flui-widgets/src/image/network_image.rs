@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::{AssetRegistry, ImageSource};
+use flui_assets::{ImageCache, ImageSource};
 use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
@@ -13,7 +13,7 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 
 /// An [`ImageProvider`] that fetches an image over HTTP/HTTPS with the
 /// host's HTTP capability and decodes it through a `flui-assets`
-/// [`AssetRegistry`], off the calling thread.
+/// [`ImageCache`], off the calling thread.
 ///
 /// Like [`AssetImage`](super::AssetImage), the registry is an explicit
 /// constructor argument, so the decoded image is kept by the registry the
@@ -27,14 +27,14 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 /// constructor.
 #[derive(Debug, Clone)]
 pub struct NetworkImage {
-    registry: Arc<AssetRegistry>,
+    registry: Arc<ImageCache>,
     url: Arc<str>,
 }
 
 impl NetworkImage {
     /// Creates a provider that fetches `url` through `registry` on a decoded
     /// cache miss during asynchronous resolution.
-    pub fn new(registry: Arc<AssetRegistry>, url: impl Into<String>) -> Self {
+    pub fn new(registry: Arc<ImageCache>, url: impl Into<String>) -> Self {
         Self {
             registry,
             url: Arc::from(url.into()),
@@ -62,34 +62,39 @@ impl ImageProvider for NetworkImage {
         })
     }
 
-    /// Reuses the registry's decoded image, or shares an in-flight load for
+    /// Reuses the cache's decoded image, or shares an in-flight load for
     /// the same URL and client authority. A hit refreshes recency without
     /// HTTP traffic. The request is sent with `services`' HTTP client from
     /// their IO lane, and the decode runs on their compute lane. Without a
-    /// client the load fails with `AssetError::HttpUnavailable`. Failed
-    /// loads are not cached and a later request can retry. Dropping the
-    /// future drops the request once no other request waits for it.
+    /// client it fails with [`ImageProviderError::HttpUnavailable`] and
+    /// sends nothing. Failed loads are not cached and a later request can
+    /// retry. Dropping the future drops the request once no other request
+    /// waits for it.
     fn resolve_async(
         &self,
         services: &ImageServices,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let load = self
-            .registry
-            .load_network_image(Arc::clone(&self.url), services.load_services());
-        let url = Arc::clone(&self.url);
+        let Some(http) = services.http() else {
+            let url = self.url.to_string();
+            return Box::pin(async move { Err(ImageProviderError::HttpUnavailable { url }) });
+        };
+        let load = self.registry.load(
+            &ImageSource::network(Arc::clone(&self.url), http),
+            &services.load_services(),
+        );
         Box::pin(async move {
             load.await
-                .map_err(|error| ImageProviderError::from_asset_error(url.to_string(), error))
+                .map_err(|error| ImageProviderError::from_load_error(&error))
         })
     }
 
-    /// The registry's decoded image for this URL as `services`' client
+    /// The cache's decoded image for this URL as `services`' client
     /// fetched it; `None` without a client.
     fn cached(&self, services: &ImageServices) -> Option<PixelImage> {
         let http = services.http()?;
         self.registry
-            .cached_image(&ImageSource::network(Arc::clone(&self.url), http))
+            .get(&ImageSource::network(Arc::clone(&self.url), http))
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {

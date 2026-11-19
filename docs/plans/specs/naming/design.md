@@ -56,7 +56,7 @@ Material 3 и Compose (`Scaffold`, `AppBar`, `Card`) или имя, которо
 `GestureArenaScope`). Префикс `Default*` у поставщика уходит.
 
 **Словарь стёртых и сырых форм.** `Erased*` — объектно-безопасная форма: `ErasedElement`,
-`ErasedBoxLayoutContext`, `ErasedAssetCache`. `Raw*` — нижний контекст под удобной обёрткой
+`ErasedBoxLayoutContext`. `Raw*` — нижний контекст под удобной обёрткой
 (прецедент std `RawWaker`/`Waker`). `Driver*` — реализация, которую строит обход pipeline.
 
 **Колбэки и замыкания.** `Fn`-псевдоним или обёртка, которую вызывают, называется `*Callback`

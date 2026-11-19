@@ -4,9 +4,9 @@
   unchanged, or which only moved by whole device pixels from a position on a dyadic grid (whole
   or quarter pixels, as a list scrolled by whole pixels is), and replays it instead of recording
   it again: a full frame of 60 text-heavy chunks takes about half the CPU it took. A chunk moved
-  by a fraction of a pixel, from a position whose fraction rounds differently at the new one, or
-  under a fixed clip that cuts it, and chunks with a clip, a layer, a draw item or an external
-  texture of their own, still record every time.
+  by a fraction of a pixel or from a position whose fraction rounds differently at the new one,
+  and chunks with a clip, a layer, a draw item or an external texture of their own, still record
+  every time.
 
 ### Fixed
 
