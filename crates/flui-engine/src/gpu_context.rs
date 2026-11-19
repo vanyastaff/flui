@@ -1398,9 +1398,15 @@ impl GpuContext {
     }
 
     /// Wait until the device request under way answered, so the executor's
-    /// next turn installs its device; nothing when none is under way.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    /// next turn installs its device; nothing when none is under way, which
+    /// on wasm32 is always: a request there is refused, not started.
+    #[cfg(test)]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(clippy::unused_self, reason = "wasm32 starts no device request")
+    )]
     pub(crate) fn await_device_request(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(worker) = self.requested.as_mut() {
             worker.wait();
         }
