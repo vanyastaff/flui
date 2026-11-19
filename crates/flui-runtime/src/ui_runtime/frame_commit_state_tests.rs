@@ -1,6 +1,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
+use flui_foundation::ManualClock;
 use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRuntime};
@@ -27,11 +29,30 @@ fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
 }
 
 fn mount_box() -> UiRuntime {
-    let ui_runtime = UiRuntime::for_test();
+    mount_box_into(UiRuntime::for_test())
+}
+
+/// A box on a runtime whose clock moves only when the test advances `clock`, for the cases that
+/// read back how long a retry waits: on the platform clock the read lands a moment after the
+/// deadline was armed, by however long the test was descheduled.
+fn mount_box_on(clock: &ManualClock) -> UiRuntime {
+    mount_box_into(UiRuntime::for_test_on_manual_clock(clock))
+}
+
+fn mount_box_into(ui_runtime: UiRuntime) -> UiRuntime {
     ui_runtime
         .attach_root_widget(&SizedBox::new(20.0, 20.0))
         .expect("root attaches");
     ui_runtime
+}
+
+/// How long `ui_runtime`'s primary presentation waits before it tries a dropped frame again,
+/// read on its own clock; `None` when no wait is armed.
+fn primary_retry_wait(ui_runtime: &UiRuntime) -> Option<Duration> {
+    let presentation = ui_runtime.presentations.primary();
+    presentation
+        .failure_retry_at()
+        .map(|at| at.saturating_duration_since(presentation.clock().now()))
 }
 
 fn primary_state(ui_runtime: &UiRuntime) -> FrameCommitState {
@@ -387,7 +408,8 @@ pub(crate) fn a_withheld_frame_commits_nothing_and_holds_input_for_the_frame_tha
 /// does not grow.
 pub(crate) fn the_withheld_retry_is_bounded_and_then_waits_out_the_backoff() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
-    let ui_runtime = mount_box();
+    let clock = ManualClock::new();
+    let ui_runtime = mount_box_on(&clock);
     let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
     for _ in 0..=budget {
         assert!(
@@ -401,16 +423,17 @@ pub(crate) fn the_withheld_retry_is_bounded_and_then_waits_out_the_backoff() {
         "{budget} retained attempts follow each other, then the attempt that exhausts the budget"
     );
     let presentation = || ui_runtime.presentations.primary();
-    let mut delays = Vec::new();
-    for attempt in 0..2 {
-        if attempt > 0 {
-            assert!(ui_runtime.wait_out_failure_retry_for_test());
+    let mut delays: Vec<Duration> = Vec::new();
+    for _ in 0..2 {
+        // The host wakes at the deadline the last attempt armed.
+        if let Some(&delay) = delays.last() {
+            clock.advance(delay);
             assert!(!ui_runtime.render_frame(&mut withheld));
         }
-        let at = presentation()
-            .failure_retry_at()
-            .expect("an attempt past the budget waits out the dropped-frame backoff");
-        delays.push(at.saturating_duration_since(presentation().clock().now()));
+        delays.push(
+            primary_retry_wait(&ui_runtime)
+                .expect("an attempt past the budget waits out the dropped-frame backoff"),
+        );
         let submits = withheld.submit_calls;
         for _ in 0..8 {
             let _ = ui_runtime.render_frame(&mut withheld);
@@ -620,61 +643,70 @@ fn a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_keeps_the_retry() {
 /// doubles until it reaches `FAILURE_RETRY_CAP` and stays there, every attempt a deadline, and
 /// once a frame presents the next withdrawal starts over from the display rate.
 ///
-/// Fails when a wait shrinks while the surface keeps withholding, when the waits stop short of
-/// the ceiling or pass it, or when a present leaves the next withdrawal at the ceiling.
+/// The runtime's clock moves only at each deadline, so every wait is read exactly as it was armed.
+///
+/// Fails when a wait shrinks while the surface keeps withholding, when a wait below the ceiling
+/// does not double, when the waits stop short of the ceiling or pass it, or when a present leaves
+/// the next withdrawal anywhere but the schedule's first wait.
 pub(crate) fn a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
-    let ui_runtime = mount_box();
+    let clock = ManualClock::new();
+    let ui_runtime = mount_box_on(&clock);
     let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
-    let presentation = || ui_runtime.presentations.primary();
-    let wait = || {
-        presentation()
-            .failure_retry_at()
-            .map(|at| at.saturating_duration_since(presentation().clock().now()))
-    };
     for _ in 0..=budget {
         let _ = ui_runtime.render_frame(&mut withheld);
     }
-    let mut waits = vec![wait().expect("past the budget an attempt waits")];
+    let mut waits =
+        vec![primary_retry_wait(&ui_runtime).expect("past the budget an attempt waits")];
     while waits.len() < 16 {
-        assert!(ui_runtime.wait_out_failure_retry_for_test());
+        // The host wakes at the deadline the last attempt armed.
+        clock.advance(waits[waits.len() - 1]);
         assert!(!ui_runtime.render_frame(&mut withheld));
-        waits.push(wait().expect("every attempt past the budget waits"));
+        waits.push(primary_retry_wait(&ui_runtime).expect("every attempt past the budget waits"));
     }
     let cap = crate::frame_failure::FAILURE_RETRY_CAP;
-    // Each wait is read against the clock a moment after it was armed.
-    let slack = std::time::Duration::from_millis(1);
     assert!(
-        waits.windows(2).all(|pair| pair[0] <= pair[1] + slack),
+        waits.windows(2).all(|pair| pair[0] <= pair[1]),
         "the wait never shrinks while the surface withholds: {waits:?}"
+    );
+    assert!(
+        waits
+            .windows(2)
+            .all(|pair| pair[1] == pair[0].saturating_mul(2).min(cap)),
+        "each wait doubles the one before until the ceiling: {waits:?}"
     );
     assert!(
         waits.iter().all(|wait| *wait <= cap),
         "never past the ceiling: {waits:?}"
     );
-    assert!(
-        waits.last().is_some_and(|last| *last + slack >= cap),
+    assert_eq!(
+        waits.last(),
+        Some(&cap),
         "the schedule reaches its ceiling: {waits:?}"
     );
 
     press_primary(&ui_runtime);
     assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
-    assert_eq!(wait(), None, "the present ends the wait");
+    assert_eq!(
+        primary_retry_wait(&ui_runtime),
+        None,
+        "the present ends the wait"
+    );
     // The shown tree is clean: the next withdrawal starts with a repaint.
-    ui_runtime.mark_needs_full_repaint_for(presentation());
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
     for _ in 0..budget {
         let _ = ui_runtime.render_frame(&mut withheld);
     }
     assert_eq!(
-        wait(),
+        primary_retry_wait(&ui_runtime),
         None,
         "a new withdrawal is ridden out at the display rate again"
     );
     let _ = ui_runtime.render_frame(&mut withheld);
-    let restarted = wait().expect("past the new budget an attempt waits");
-    assert!(
-        restarted < cap,
-        "and its first wait starts the schedule over, not at the ceiling: {restarted:?}"
+    assert_eq!(
+        primary_retry_wait(&ui_runtime),
+        Some(waits[0]),
+        "and its first wait starts the schedule over, not at the ceiling"
     );
 }
 
@@ -1203,13 +1235,15 @@ fn held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree() {
 /// backoff grows by.
 #[test]
 fn a_failed_frame_is_painted_again_after_a_growing_backoff() {
-    let ui_runtime = mount_box();
+    let clock = ManualClock::new();
+    let ui_runtime = mount_box_on(&clock);
     let mut failing = ScriptedSink::new(|_, _| SubmitVerdict::Failed);
     let presentation = || ui_runtime.presentations.primary();
-    let mut delays = Vec::new();
+    let mut delays: Vec<Duration> = Vec::new();
     for attempt in 0..3 {
-        if attempt > 0 {
-            assert!(ui_runtime.wait_out_failure_retry_for_test());
+        // The host wakes at the deadline the last attempt armed.
+        if let Some(&delay) = delays.last() {
+            clock.advance(delay);
         }
         assert!(!ui_runtime.render_frame(&mut failing));
         assert_eq!(
@@ -1217,17 +1251,14 @@ fn a_failed_frame_is_painted_again_after_a_growing_backoff() {
             attempt + 1,
             "each attempt paints and submits the tree again"
         );
-        let at = presentation()
-            .failure_retry_at()
-            .expect("a failed frame arms its retry");
-        delays.push(at.saturating_duration_since(presentation().clock().now()));
+        delays.push(primary_retry_wait(&ui_runtime).expect("a failed frame arms its retry"));
     }
     assert!(
         delays[0] < delays[1] && delays[1] < delays[2],
         "the backoff doubles while frames keep failing: {delays:?}"
     );
 
-    assert!(ui_runtime.wait_out_failure_retry_for_test());
+    clock.advance(delays[2]);
     assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
     assert_eq!(presentation().failure_retry_at(), None);
     assert_eq!(presentation().frame_failure_streak(), 0);
