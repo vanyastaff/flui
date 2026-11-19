@@ -229,6 +229,17 @@ impl TextStoreRead for ReadFault<'_> {
     ) -> Result<Utf16Offset, TextStoreError> {
         faulty_index(self.inner, self.fault, point, mode)
     }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.inner.visible_bounds()
+    }
+
+    fn press_target_at(
+        &self,
+        point: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
 }
 
 struct EditFault<'a> {
@@ -287,6 +298,17 @@ impl TextStoreRead for EditFault<'_> {
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         faulty_index(&*self.inner, self.fault, point, mode)
+    }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.inner.visible_bounds()
+    }
+
+    fn press_target_at(
+        &self,
+        point: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
 }
 

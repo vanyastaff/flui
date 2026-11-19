@@ -64,9 +64,9 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
     CommitGate, Composition, EditCommand, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    PointMode, RangeRect, Selection, TextChange, TextInputOptions, TextStore, TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
-    Utf16Range, utf16,
+    PointMode, PressTarget, RangeRect, Selection, TextChange, TextInputOptions, TextStore,
+    TextStoreChange, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -229,6 +229,8 @@ pub(super) struct EditableTextStore {
     /// A layout or status change the observer has not heard of yet, because
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
+    /// A move of the field's visible box the observer has not heard of yet.
+    field_moved_dirty: Cell<bool>,
     /// The store answered `NoLayout` to a read and the observer has not been
     /// told that layout now exists (TSF's `OnLayoutChange` owes one).
     layout_owed: Cell<bool>,
@@ -309,6 +311,7 @@ impl EditableTextStore {
             publication: RefCell::new(Publication::Idle),
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
+            field_moved_dirty: Cell::new(false),
             layout_owed: Cell::new(false),
             diffed: RefCell::new(None),
             status_dirty: Cell::new(false),
@@ -417,6 +420,17 @@ impl EditableTextStore {
         if self.layout_dirty.replace(false) {
             self.notify(calls, |observer| observer.layout_changed());
         }
+        if self.field_moved_dirty.replace(false) {
+            self.notify(calls, |observer| observer.field_moved());
+        }
+    }
+
+    /// The field's visible box moved in the window (a scroll, a transform,
+    /// an ancestor's clip): reported now if the store may notify, otherwise
+    /// at the next point it may. A caret move alone is [`Self::layout_changed`].
+    pub(super) fn field_moved(&self) {
+        self.field_moved_dirty.set(true);
+        self.flush_now();
     }
 
     /// The field is gone: refuse every later lock and drop queued ones
@@ -1035,39 +1049,103 @@ impl TextStoreRead for Session<'_> {
         Ok(self.doc.units(source))
     }
 
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.store.visible_box()
+    }
+
     /// The window's own hit test, the one a touch is dispatched by, run at
-    /// `point`: the field is hit when its editable is on the path, which a
-    /// control drawn over it keeps off. A render object's hit test is user
-    /// code; one that panics counts as a miss and its failure is resumed
-    /// here, after the walk.
-    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
-        let pipeline = self
-            .store
-            .pipeline
-            .as_ref()
-            .ok_or(TextStoreError::NoLayout)?;
-        let anchor = self
-            .store
-            .inner_anchor
-            .get()
-            .ok_or(TextStoreError::NoLayout)?;
+    /// `point`: the field when its editable is on the path (a control drawn
+    /// over it keeps it off), another target when an entry on the path takes
+    /// pointer events, nothing otherwise. A render object's hit test is user
+    /// code: one that panics makes the walk resume its panic once the path is
+    /// complete (`PipelineOwner::hit_test`), and it leaves this call; the
+    /// platform's entry contains it (iOS's `interactionShouldBegin:atPoint:`
+    /// answers no gesture).
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.store.press_target_at(point)
+    }
+}
+
+impl EditableTextStore {
+    /// The field's box in the window, cut by the window and by every
+    /// ancestor's paint clip (`describe_approximate_paint_clip`, the clip the
+    /// paint walk and the window's presented-node query apply), each mapped
+    /// into the window through its node's transform. `None` when nothing of
+    /// the box is left.
+    pub(super) fn visible_box(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        let viewport = self.viewport()?;
+        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
+        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
+        pipeline
+            .try_with_layout(|owner| {
+                let tree = owner.render_tree();
+                let root = owner.root_id()?;
+                let editable = *tree.children(anchor).first()?;
+                let window = Rect::from_origin_size(Point::ZERO, tree.get(root)?.laid_out_size()?);
+                let field = owner
+                    .transform_to(editable, root)?
+                    .transform_rect(&viewport);
+                let mut visible = field.intersect(&window);
+                let mut child = editable;
+                while let Some(parent) = tree.parent(child) {
+                    let slot = tree.children(parent).iter().position(|&id| id == child)?;
+                    let node = tree.get(parent)?;
+                    let size = node.laid_out_size()?;
+                    let local = match (node.as_box(), node.as_sliver()) {
+                        (Some(entry), _) => entry
+                            .render_object()
+                            .describe_approximate_paint_clip(slot, size),
+                        (None, Some(entry)) => entry
+                            .render_object()
+                            .describe_approximate_paint_clip(slot, size),
+                        (None, None) => None,
+                    };
+                    if let Some(local) = local {
+                        let clip = owner.transform_to(parent, root)?.transform_rect(&local);
+                        visible = visible.and_then(|kept| kept.intersect(&clip));
+                    }
+                    child = parent;
+                }
+                Some(
+                    visible
+                        .filter(|kept| !kept.is_empty())
+                        .map(bounds_from_rect),
+                )
+            })
+            .flatten()
+            .ok_or(TextStoreError::NoLayout)
+    }
+
+    /// What a press at `point` lands on, by the window's own hit test
+    /// ([`TextStoreRead::press_target_at`]).
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
+        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
         // The path outlives the pipeline's borrow: its entries' payloads are
         // destroyed after it is released.
         let mut path = HitTestResult::new();
-        let hit = pipeline
+        let target = pipeline
             .try_with_layout(|owner| {
                 let editable = *owner.render_tree().children(anchor).first()?;
                 owner.hit_test(Offset::new(point.x, point.y), PointerKind::Touch, &mut path);
+                let entries = path.path();
                 Some(
-                    path.path()
+                    if entries
                         .iter()
-                        .any(|entry| entry.target == editable || entry.target == anchor),
+                        .any(|entry| entry.target == editable || entry.target == anchor)
+                    {
+                        PressTarget::Field
+                    } else if entries.iter().any(|entry| entry.pointer_target.is_some()) {
+                        PressTarget::Other
+                    } else {
+                        PressTarget::Nothing
+                    },
                 )
             })
             .flatten()
             .ok_or(TextStoreError::NoLayout);
         drop(path);
-        hit
+        target
     }
 }
 

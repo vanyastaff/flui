@@ -564,10 +564,14 @@ everywhere else by the default), and that platform's edit menu reaches the field
 the other way, through the store (`TextStore::edit_command_enabled` and
 `perform_edit_command` with an `EditCommand`): the store is the one object a host
 holds of the field, so the field's own clipboard and selection rules perform it.
-Such a platform begins its gestures only where `TextStoreRead::is_hit_at` holds:
-the field answers it with the window's own hit test, so a control drawn over the
-field keeps its tap. A wrapper store, session or host forwards all of these (the
-journal's do).
+Such a platform draws inside `TextStoreRead::visible_bounds` (the field's box cut
+by its ancestors' clips) and begins its gestures by `TextStoreRead::press_target_at`
+(the field, another target, or nothing, from the window's own hit test), so a
+control drawn over the field keeps its tap; it asks for the field's geometry
+again on `TextStoreObserver::field_moved`, which a caret move never sends. The
+two session reads have no default, so a wrapper session cannot drop them; a
+wrapper store, session, observer or host forwards all of these (the journal's
+do).
 
 A push preedit's cursor is the input method's target clause: the projection
 selects it inside the composition, as AppKit's `setMarkedText:selectedRange:`

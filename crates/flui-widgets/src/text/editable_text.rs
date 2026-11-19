@@ -1891,6 +1891,7 @@ impl ViewState<EditableText> for EditableTextState {
                         store: Rc::downgrade(&store_for_ime),
                         alive,
                         last_sent,
+                        last_box: Rc::new(Cell::new(cursor_area::SeenBox::Unread)),
                     }
                     .start();
                 } else {

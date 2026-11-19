@@ -5938,10 +5938,17 @@ GPU-память простаивающего или невидимого окн
   `an_obscured_field_offers_the_platform_no_copy_or_cut` (красные без команды); `select:` —
   `EditCommand::SelectWord`, Paste предлагается по `hasStrings`; команда доходит только до поля,
   над которым меню предложено (`an_edit_command_reaches_only_the_field_it_was_offered_for`).
-  Прямоугольники и каретка обрезаны рамкой поля, сдвиг поля заставляет UIKit спросить их снова
-  (`a_layout_change_asks_for_the_geometry_of_the_focused_field_only`), жесты начинаются там,
-  где hit test окна находит поле (`TextStoreRead::is_hit_at`,
-  `a_control_over_the_field_keeps_its_press`). Клаузы
+  Прямоугольники обрезаны видимой частью поля с клипами предков (`TextStoreRead::visible_bounds`,
+  `a_field_shows_only_what_its_ancestors_clip_leaves`), каретка удерживается внутри неё
+  (`the_caret_stays_inside_the_part_of_the_field_the_window_shows`); UIKit спрашивает геометрию
+  снова только при сдвиге самого поля (`TextStoreObserver::field_moved`), не при движении
+  каретки и не во время составления или жеста
+  (`a_field_move_asks_for_its_geometry_once_and_never_mid_composition_or_gesture`,
+  `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`); жесты начинаются там, где hit
+  test окна находит поле, или у ручки, где нет другой цели (`TextStoreRead::press_target_at`,
+  `a_control_over_the_field_keeps_its_press`,
+  `a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers`); уход фокуса закрывает меню
+  правки, не снимая interaction (`a_focus_move_between_fields_keeps_the_keyboard_and_leaves_the_old_field_once`). Клаузы
   составления CJK не различаются: хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
   CoreText по языку (`crates/flui-native/src/fonts/apple.rs`); квадраты вместо кана и кандзи
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,

@@ -93,6 +93,15 @@ impl TextStoreRead for ReadOnlySession {
     fn index_at_point(&self, _: Point<f64>, _: PointMode) -> Result<Utf16Offset, TextStoreError> {
         Err(TextStoreError::NoLayout)
     }
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        Err(TextStoreError::NoLayout)
+    }
+    fn press_target_at(
+        &self,
+        _: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        Err(TextStoreError::NoLayout)
+    }
 }
 
 impl TextStoreEdit for ReadOnlySession {

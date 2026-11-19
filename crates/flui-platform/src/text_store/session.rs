@@ -237,23 +237,52 @@ pub trait TextStoreRead {
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError>;
 
-    /// Whether a press at `point` (window-root logical pixels) would land on
-    /// the field: the window's own hit test finds the field under the point,
-    /// not a control drawn over it. A platform that recognizes gestures over
-    /// the field itself (iOS's `UITextInteraction`) begins one only where
-    /// this holds, so a control over the field keeps its tap.
+    /// The part of the field's box the window shows, in window-root logical
+    /// pixels: [`Self::document_bounds`] cut by every clip of the field's
+    /// ancestors (a scroll view, an app bar's clip) and by the window. `None`
+    /// when none of it is shown. What a platform draws over the field (iOS's
+    /// caret, selection highlight and handles) stays inside it.
     ///
-    /// The default is the field's bounds ([`Self::document_bounds`]): a
-    /// store with no tree of its own has nothing drawn over it. A store
-    /// that wraps another forwards it.
+    /// No default: a store that wraps another forwards it, and one that left
+    /// it out would draw a platform's selection over whatever clips the
+    /// field.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::NoLayout`] when the field is not laid out, or the
+    /// window's tree cannot be read now.
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError>;
+
+    /// What a press at `point` (window-root logical pixels) would land on, by
+    /// the window's own hit test: the field, another target drawn there (a
+    /// control over the field or beside it), or nothing that takes a press.
+    /// A platform that recognizes gestures over the field itself (iOS's
+    /// `UITextInteraction`) begins one only on the field, or where nothing
+    /// else takes the press, so every control keeps its tap.
+    ///
+    /// No default: a store that wraps another forwards it, and one that left
+    /// it out would hand a control's tap to the platform.
     ///
     /// # Errors
     ///
     /// [`TextStoreError::NoLayout`] when the field is not laid out, or the
     /// window's tree cannot be hit-tested now.
-    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
-        Ok(self.document_bounds()?.contains(&point))
-    }
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError>;
+}
+
+/// What a press at a point would land on ([`TextStoreRead::press_target_at`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a press lands on the field, on another target or on none: there is no fourth place"
+)]
+pub enum PressTarget {
+    /// The field.
+    Field,
+    /// Another target that takes a press, drawn over the field or beside it.
+    Other,
+    /// Nothing that takes a press.
+    Nothing,
 }
 
 /// The edits a platform makes under a read-write lock.

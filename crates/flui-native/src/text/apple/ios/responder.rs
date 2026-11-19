@@ -26,7 +26,7 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{Autofill, EditCommand, TextStoreStatus};
+use flui_platform::text_store::{Autofill, EditCommand, PressTarget, TextStoreStatus};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -37,17 +37,17 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSSize as CGSize, NSString,
 };
 use objc2_ui_kit::{
-    NSWritingDirection, UIInteraction, UIKeyInput, UIKeyboardType, UIPasteboard, UIResponder,
-    UIReturnKeyType, UITextAutocapitalizationType, UITextAutocorrectionType,
-    UITextContentTypeNewPassword, UITextContentTypeOneTimeCode, UITextContentTypePassword,
-    UITextContentTypeUsername, UITextInput, UITextInputDelegate, UITextInputStringTokenizer,
-    UITextInputTokenizer, UITextInputTraits, UITextInteraction, UITextInteractionDelegate,
-    UITextInteractionMode, UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
-    UITextSpellCheckingType, UITextStorageDirection, UIView,
+    NSWritingDirection, UIEditMenuInteraction, UIInteraction, UIKeyInput, UIKeyboardType,
+    UIPasteboard, UIResponder, UIReturnKeyType, UITextAutocapitalizationType,
+    UITextAutocorrectionType, UITextContentTypeNewPassword, UITextContentTypeOneTimeCode,
+    UITextContentTypePassword, UITextContentTypeUsername, UITextInput, UITextInputDelegate,
+    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextInteraction,
+    UITextInteractionDelegate, UITextInteractionMode, UITextLayoutDirection, UITextPosition,
+    UITextRange, UITextSelectionRect, UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
 use super::super::client::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
-use super::super::selection_rects::SelectionRect;
+use super::super::selection_rects::{SelectionRect, gesture_begins};
 use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
@@ -698,6 +698,23 @@ define_class!(
                 self.begins_at(Point::new(point.x, point.y))
             })
         }
+
+        /// The interaction's own gesture began (a drag of the caret or a
+        /// handle, a long press): a move of the field during it is told once,
+        /// when it ends.
+        #[unsafe(method(interactionWillBegin:))]
+        fn interaction_will_begin(&self, _interaction: &UITextInteraction) {
+            os_entry("FluiTextInputView interactionWillBegin:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().set_interacting(true);
+            });
+        }
+
+        #[unsafe(method(interactionDidEnd:))]
+        fn interaction_did_end(&self, _interaction: &UITextInteraction) {
+            os_entry("FluiTextInputView interactionDidEnd:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().set_interacting(false);
+            });
+        }
     }
 );
 
@@ -831,22 +848,28 @@ impl TextInputView {
         }
     }
 
-    /// Whether UIKit's selection gestures begin at `point`: where a press
-    /// lands on the focused field by the window's own hit test, so a control
-    /// drawn over the field keeps its tap, or within a handle's reach of the
-    /// edge a shown selection handle stands on, whose knob UIKit draws past
-    /// the line. The edges come from the rectangles cut to the field's box,
-    /// so a handle scrolled out of it reaches nothing.
+    /// Whether UIKit's selection gestures begin at `point`
+    /// ([`gesture_begins`]): where a press lands on the focused field by the
+    /// window's own hit test, or, where nothing else takes the press, within
+    /// a handle's reach of the edge a shown selection handle stands on. The
+    /// edges come from the rectangles cut to the part of the field the window
+    /// shows, so a handle scrolled or clipped out of view reaches nothing,
+    /// and a control over the field or beside a handle keeps its tap.
     fn begins_at(&self, point: Point<f64>) -> bool {
         let client = self.client();
-        if client.is_hit_at(point) {
-            return true;
-        }
-        let Some(selection) = client.selected_range().filter(|range| !range.is_empty()) else {
+        let Some(target) = client.press_target_at(point) else {
             return false;
         };
-        let rects = client.selection_rects(selection);
-        SelectionRect::handle_edges(&rects).any(|edge| edge.dilate(HANDLE_REACH).contains(&point))
+        let rects = if target == PressTarget::Nothing {
+            client
+                .selected_range()
+                .filter(|range| !range.is_empty())
+                .map(|selection| client.selection_rects(selection))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        gesture_begins(target, point, &rects, HANDLE_REACH)
     }
 
     /// Put UIKit's text interaction on the window's view, the view the
@@ -892,14 +915,17 @@ impl TextInputView {
         }
     }
 
-    /// Tell UIKit the field's geometry changed under it (the field moved:
-    /// a scroll, the keyboard lifting the view). UIKit keeps no rectangle the
-    /// candidate bar asks for, but `UITextInteraction` keeps the caret,
-    /// highlight and handles it drew: told the selection changed, the
-    /// interaction asks `caretRectForPosition:` and `selectionRectsForRange:`
-    /// again (`UITextInputDelegate`'s `selectionWillChange:` and
-    /// `selectionDidChange:`, the pair a text input sends when what UIKit
-    /// shows of its selection is out of date).
+    /// Tell UIKit the field itself moved in the window (a scroll, a
+    /// transform, the keyboard lifting the view), or another field is
+    /// served: `UITextInteraction` keeps the caret, highlight and handles it
+    /// drew, and told the selection changed it asks `caretRectForPosition:`
+    /// and `selectionRectsForRange:` again (`UITextInputDelegate`'s
+    /// `selectionWillChange:` and `selectionDidChange:`, the pair a text input
+    /// sends when what UIKit shows of its selection is out of date). The
+    /// client sends it only for such a move, never for a caret move, and
+    /// never while the keyboard holds marked text or the interaction's own
+    /// gesture is under way: a keyboard told the selection changed mid
+    /// composition may end it.
     fn geometry_changed_under_keyboard(&self) {
         let delegate = self.delegate();
         let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
@@ -909,18 +935,35 @@ impl TextInputView {
         }
     }
 
-    /// Focus moved off the field the interaction served: taken off and put
-    /// back, it drops what it showed over the old field (an edit menu, a
-    /// loupe) and serves the next one fresh.
-    fn reinstall_interaction(&self) {
-        let installed = self
-            .ivars()
-            .interaction
-            .get()
-            .is_some_and(|interaction| interaction.view().is_some());
-        if installed {
-            self.remove_interaction();
-            self.install_interaction();
+    /// Focus moved off the field an edit menu may be open over: the menu is
+    /// dismissed, and the interaction and the keyboard's input delegate stay
+    /// as they are. iOS 16 and later present the text interaction's edit
+    /// menu through a `UIEditMenuInteraction` on its view, which
+    /// `dismissMenu` closes; before iOS 16 the menu is `UIMenuController`'s,
+    /// which `hideMenu` (iOS 13) closes.
+    fn dismiss_edit_menu(&self) {
+        if objc2::available!(ios = 16.0) {
+            let views = [
+                self.ivars()
+                    .interaction
+                    .get()
+                    .and_then(|interaction| interaction.view()),
+                Some(Retained::into_super(self.retain())),
+            ];
+            for view in views.iter().flatten() {
+                for interaction in view.interactions().iter() {
+                    let object: &AnyObject = interaction.as_ref();
+                    if let Some(menu) = object.downcast_ref::<UIEditMenuInteraction>() {
+                        menu.dismissMenu();
+                    }
+                }
+            }
+        } else {
+            #[expect(
+                deprecated,
+                reason = "UIMenuController is the edit menu below iOS 16, the floor being 13"
+            )]
+            objc2_ui_kit::UIMenuController::sharedMenuController(self.mtm()).hideMenu();
         }
     }
 
@@ -964,10 +1007,16 @@ impl InputContext for ResponderContext {
         }
     }
 
-    /// The focused field moved on the screen: UIKit's text interaction asks
-    /// for the caret and selection rectangles again
+    /// UIKit asks `firstRectForRange:` each time it places the candidate
+    /// bar and keeps no rectangle to invalidate: a caret or composition move
+    /// is told nothing, so the keyboard is never told the selection changed
+    /// while it composes.
+    fn invalidate_character_coordinates(&self) {}
+
+    /// The field itself moved, or another is served: UIKit's text
+    /// interaction asks for the caret and selection rectangles again
     /// ([`TextInputView::geometry_changed_under_keyboard`]).
-    fn invalidate_character_coordinates(&self) {
+    fn geometry_changed(&self) {
         if let Some(view) = self.view.load() {
             view.geometry_changed_under_keyboard();
         }
@@ -979,10 +1028,11 @@ impl InputContext for ResponderContext {
         }
     }
 
-    /// An edit menu open over the field focus left goes with it.
+    /// An edit menu open over the field focus left is dismissed; the
+    /// interaction and the input delegate stay.
     fn field_left(&self) {
         if let Some(view) = self.view.load() {
-            view.reinstall_interaction();
+            view.dismiss_edit_menu();
         }
     }
 

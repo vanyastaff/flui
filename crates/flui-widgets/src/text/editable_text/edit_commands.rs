@@ -87,10 +87,13 @@ impl FieldCommands {
         outcome == ActionOutcome::Performed
     }
 
-    /// The word at a collapsed caret: the word segment that holds the caret
-    /// or ends at it, else the one that starts at it, as UIKit's `select:`
-    /// takes it. None for a selection, for a caret with no word beside it,
-    /// and in an obscured field, which shows no words.
+    /// The word at a collapsed caret, as UIKit's `select:` takes it: the word
+    /// that holds the caret, else the one that ends at it, else the one that
+    /// starts at it, else the nearest word before it on its line past
+    /// punctuation and spaces, else the nearest after. A word is a segment
+    /// with a letter or a digit, so a caret just past "hello," selects
+    /// "hello", never the comma. None for a selection, for a line with no
+    /// word, and in an obscured field, which shows no words.
     fn word_at_caret(&self) -> Option<Range<usize>> {
         if self.clipboard.obscure.get() {
             return None;
@@ -101,13 +104,33 @@ impl FieldCommands {
         }
         let caret = controller.caret_byte_offset();
         let text = controller.text();
-        // The line's words up to the caret, in order: the one that holds the
-        // caret comes before the one that starts at it, and is preferred.
-        word_segments_from(&text, caret)
-            .take_while(|segment| segment.start <= caret)
-            .filter(|segment| !segment.whitespace && caret <= segment.end)
-            .map(|segment: WordSegment| segment.start..segment.end)
-            .next()
+        let is_word = |segment: &WordSegment| {
+            !segment.whitespace
+                && text[segment.start..segment.end]
+                    .chars()
+                    .any(char::is_alphanumeric)
+        };
+        // The line's words in order: the last that ends at or before the
+        // caret, and the first that starts at or after it.
+        let mut before: Option<WordSegment> = None;
+        for segment in word_segments_from(&text, caret).filter(is_word) {
+            if segment.start < caret && caret < segment.end {
+                return Some(segment.start..segment.end);
+            }
+            if segment.end <= caret {
+                before = Some(segment);
+                continue;
+            }
+            let touching_before = before.filter(|word| word.end == caret);
+            let after_touches = segment.start == caret;
+            let chosen = match (touching_before, after_touches) {
+                (Some(word), _) => word,
+                (None, true) => segment,
+                (None, false) => before.unwrap_or(segment),
+            };
+            return Some(chosen.start..chosen.end);
+        }
+        before.map(|word| word.start..word.end)
     }
 
     fn select_word(&self) -> ActionOutcome {

@@ -567,6 +567,10 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "NSText",
     "UIInteraction",
     "UITextInteraction",
+    # Dismissing the text interaction's edit menu when focus leaves its
+    # field: `UIEditMenuInteraction` from iOS 16, `UIMenuController` below.
+    "UIEditMenuInteraction",
+    "UIMenuController",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     # `CACurrentMediaTime`, the clock the link stamps its ticks on.

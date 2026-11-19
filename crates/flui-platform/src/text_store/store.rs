@@ -175,8 +175,21 @@ pub trait TextStoreObserver {
     /// publishes it; its preceding read sees the previous composition.
     fn composition_changed(&self) {}
 
-    /// The document's geometry changed (`OnLayoutChange`).
+    /// The document's geometry changed (`OnLayoutChange`): its caret or
+    /// composition moved, or its text was laid out again. Reported on every
+    /// caret move, typing included, so an input method's candidate window
+    /// follows it.
     fn layout_changed(&self);
+
+    /// The field itself moved in the window: its visible box moved or changed
+    /// size (a scroll, a transform, the keyboard lifting the view, an
+    /// ancestor's clip changing), whatever its caret did. Not reported for a
+    /// caret move inside an unmoved field, so a platform that redraws its own
+    /// selection UI over the field asks for its geometry again only on this.
+    /// Delivered under the same rule as [`Self::layout_changed`]. The default
+    /// ignores it: an input method that follows the caret alone has the
+    /// layout change.
+    fn field_moved(&self) {}
 
     /// [`TextStore::status`] changed, in some part: a field tells of any
     /// difference, including one a platform has no word for.

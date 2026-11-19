@@ -127,6 +127,19 @@ impl<S: Deref<Target = T>, T: TextStoreRead + ?Sized> TextStoreRead for LateLayo
         let at = Point::new(at.x - FIELD.0, at.y - FIELD.1 - self.shift);
         self.session.index_at_point(at, mode)
     }
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.document_bounds().map(Some)
+    }
+    fn press_target_at(
+        &self,
+        at: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        Ok(if self.document_bounds()?.contains(&at) {
+            flui_platform::text_store::PressTarget::Field
+        } else {
+            flui_platform::text_store::PressTarget::Nothing
+        })
+    }
 }
 
 impl<S: DerefMut<Target = T>, T: TextStoreEdit + ?Sized> TextStoreEdit for LateLayoutSession<S> {

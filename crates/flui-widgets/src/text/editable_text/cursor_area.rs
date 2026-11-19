@@ -48,6 +48,18 @@ pub(super) struct CursorAreaLoop {
     /// a brand-new IME session must always get the first rect, even at an
     /// unchanged caret position.
     pub(super) last_sent: Rc<Cell<Option<Bounds<f64>>>>,
+    /// The field's visible box as of the last firing. Fresh per attach, so a
+    /// new session starts from the box it finds and reports no move for it.
+    pub(super) last_box: Rc<Cell<SeenBox>>,
+}
+
+/// The field's visible box as a cursor-area loop last read it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SeenBox {
+    /// No firing has read it yet.
+    Unread,
+    /// The part of the field the window showed, `None` for nothing.
+    Read(Option<Bounds<f64>>),
 }
 
 impl CursorAreaLoop {
@@ -118,6 +130,21 @@ impl CursorAreaLoop {
                     }
                 }
                 None => {}
+            }
+        }
+        // The field itself moving in the window (a scroll, a transform, an
+        // ancestor's clip) is told apart from its caret moving: only the
+        // first makes a platform that draws over the field ask for its
+        // geometry again. A box that cannot be read now is skipped, as the
+        // caret rect is.
+        if let Some(store) = &store
+            && let Some(Ok(visible)) = calls.run(|| store.visible_box())
+        {
+            let read = SeenBox::Read(visible);
+            let previous = self.last_box.replace(read);
+            let moved = previous != SeenBox::Unread && previous != read;
+            if moved {
+                calls.run(|| store.field_moved());
             }
         }
         // A read the store answered `NoLayout` inside an edit session owes the

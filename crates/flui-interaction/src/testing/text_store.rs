@@ -22,10 +22,10 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Bounds, Point, Size};
 
 use flui_platform::text_store::{
-    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    Selection, TextChange, TextInputOptions, TextStore, TextStoreChange, TextStoreEdit,
-    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
-    utf16,
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode,
+    PressTarget, RangeRect, Selection, TextChange, TextInputOptions, TextStore, TextStoreChange,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
+    Utf16Range, utf16,
 };
 
 use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};
@@ -721,6 +721,16 @@ fn index_at_point(
     Ok(doc.offset_of_cell(cell))
 }
 
+/// The reference store's field has nothing drawn over it or clipping it: a
+/// press inside its box lands on it, one outside on nothing.
+fn press_target_at(doc: &Document, point: Point<f64>) -> PressTarget {
+    if document_bounds(doc).contains(&point) {
+        PressTarget::Field
+    } else {
+        PressTarget::Nothing
+    }
+}
+
 impl TextStoreRead for ReadSession<'_> {
     fn document_len(&self) -> Utf16Offset {
         utf16::utf16_len(&self.doc.text)
@@ -752,6 +762,14 @@ impl TextStoreRead for ReadSession<'_> {
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         index_at_point(self.doc, point, mode)
+    }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        Ok(Some(document_bounds(self.doc)))
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        Ok(press_target_at(self.doc, point))
     }
 }
 
@@ -786,6 +804,14 @@ impl TextStoreRead for EditSession<'_> {
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         index_at_point(self.doc, point, mode)
+    }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        Ok(Some(document_bounds(self.doc)))
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        Ok(press_target_at(self.doc, point))
     }
 }
 

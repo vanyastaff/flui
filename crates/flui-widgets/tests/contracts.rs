@@ -317,6 +317,8 @@ fn text_editing() {
             ("editable_text_platform_selection::a_field_leaves_its_selection_ui_to_a_platform_that_draws_it", crate::editable_text_platform_selection::a_field_leaves_its_selection_ui_to_a_platform_that_draws_it),
             ("editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui", crate::editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui),
             ("editable_text_platform_selection::a_control_over_the_field_keeps_its_press", crate::editable_text_platform_selection::a_control_over_the_field_keeps_its_press),
+            ("editable_text_platform_selection::a_field_shows_only_what_its_ancestors_clip_leaves", crate::editable_text_platform_selection::a_field_shows_only_what_its_ancestors_clip_leaves),
+            ("editable_text_platform_selection::typing_moves_the_caret_and_only_a_moved_field_says_it_moved", crate::editable_text_platform_selection::typing_moves_the_caret_and_only_a_moved_field_says_it_moved),
             ("editable_text_platform_selection::the_platforms_edit_menu_reaches_the_field_through_its_store", crate::editable_text_platform_selection::the_platforms_edit_menu_reaches_the_field_through_its_store),
             ("editable_text_platform_selection::an_obscured_field_offers_the_platform_no_copy_or_cut", crate::editable_text_platform_selection::an_obscured_field_offers_the_platform_no_copy_or_cut),
             ("editable_text::a_field_measures_and_hit_tests_the_current_text_scale", crate::editable_text::a_field_measures_and_hit_tests_the_current_text_scale),

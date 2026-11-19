@@ -5,21 +5,24 @@
 //! on it only where nothing is drawn over it, and the platform's edit menu
 //! reaches it through its store as `EditCommand`s.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Offset, Point};
+use flui_foundation::geometry::{EdgeInsets, Offset, Point};
 use flui_interaction::focus::FocusNode;
 use flui_objects::RenderEditable;
+use flui_painting::Alignment;
 use flui_painting::typography::TextStyle;
 use flui_platform::TargetPlatform;
-use flui_platform::text_store::{EditCommand, LockGrant, LockTiming, SelectionUi, TextStore};
+use flui_platform::text_store::{
+    EditCommand, LockGrant, LockTiming, PressTarget, SelectionUi, TextStore, TextStoreRead,
+};
 use flui_testing::replay::PointerScript;
 use flui_view::ViewExt;
 use flui_widgets::{
-    Column, EditableText, GestureDetector, HitTestBehavior, LongPressSelection, Positioned,
-    SizedBox, Stack, TextEditingController, WidgetsApp,
+    ClipRect, Column, EditableText, GestureDetector, HitTestBehavior, LongPressSelection,
+    OverflowBox, Padding, Positioned, SizedBox, Stack, TextEditingController, WidgetsApp,
 };
 
 use crate::common::harness::{Harness, mount_with_selection_ui_on};
@@ -175,26 +178,32 @@ pub(crate) fn the_fields_own_handles_go_when_the_platform_takes_the_selection_ui
     }
 }
 
-/// Whether the store says a press at `point` lands on its field.
-fn is_hit_at(store: &Rc<dyn TextStore>, point: Point<f64>) -> bool {
-    let answer = Rc::new(Cell::new(None));
+/// What `read` answers of the store's field under a synchronous read lock.
+fn read_store<R: 'static>(
+    store: &Rc<dyn TextStore>,
+    read: impl FnOnce(&dyn TextStoreRead) -> R + 'static,
+) -> R {
+    let answer = Rc::new(RefCell::new(None));
     let out = Rc::clone(&answer);
     let _granted = store
         .request_lock(
-            LockGrant::read(move |session| out.set(Some(session.is_hit_at(point)))),
+            LockGrant::read(move |session| *out.borrow_mut() = Some(read(session))),
             LockTiming::Sync,
         )
         .expect("a synchronous read outside a frame is granted");
-    answer
-        .take()
-        .expect("the read ran")
-        .expect("the field is laid out")
+    answer.take().expect("the read ran")
+}
+
+fn press_target_at(store: &Rc<dyn TextStore>, point: Point<f64>) -> PressTarget {
+    read_store(store, move |session| session.press_target_at(point)).expect("the field is laid out")
 }
 
 /// A press lands on the field only where the window's own hit test finds the
-/// field: a button drawn over its right half keeps the press there, and the
-/// button's tap still reaches it with the platform owning the field's
-/// gestures; the bare left half is the field's.
+/// field: a button drawn over its right half keeps the press there (another
+/// target), and its tap still reaches it with the platform owning the
+/// field's gestures; the bare left half is the field's; a button beside the
+/// field, within a handle's reach, is another target; the bare page below is
+/// nothing.
 ///
 /// Fails with the store answering from the field's box alone: the point over
 /// the button lies inside the box.
@@ -203,17 +212,19 @@ pub(crate) fn a_control_over_the_field_keeps_its_press() {
     let node = FocusNode::with_debug_label("covered field");
     let taps = Rc::new(Cell::new(0));
     let tapped = Rc::clone(&taps);
-    let page = Stack::new((
+    let button = |taps: Rc<Cell<usize>>| {
+        GestureDetector::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_tap(move |_ctx| taps.set(taps.get() + 1))
+            .child(SizedBox::new(100.0, 40.0))
+    };
+    let page = SizedBox::new(400.0, 200.0).child(Stack::new((
         SizedBox::new(200.0, 40.0).child(EditableText::new(controller, Rc::clone(&node))),
-        Positioned::new(
-            GestureDetector::new()
-                .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |_ctx| tapped.set(tapped.get() + 1))
-                .child(SizedBox::new(100.0, 40.0)),
-        )
-        .left(100.0)
-        .top(0.0),
-    ));
+        Positioned::new(button(tapped)).left(100.0).top(0.0),
+        Positioned::new(button(Rc::new(Cell::new(0))))
+            .left(205.0)
+            .top(0.0),
+    )));
     let mut harness =
         mount_with_selection_ui_on(page.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
     let _ = node.request_focus();
@@ -222,15 +233,130 @@ pub(crate) fn a_control_over_the_field_keeps_its_press() {
         .active_text_store()
         .expect("the focused field's store is served");
 
-    assert!(is_hit_at(&store, Point::new(20.0, 10.0)), "the bare field");
-    assert!(
-        !is_hit_at(&store, Point::new(150.0, 10.0)),
+    assert_eq!(
+        press_target_at(&store, Point::new(20.0, 10.0)),
+        PressTarget::Field,
+        "the bare field"
+    );
+    assert_eq!(
+        press_target_at(&store, Point::new(150.0, 10.0)),
+        PressTarget::Other,
         "the button over the field"
+    );
+    assert_eq!(
+        press_target_at(&store, Point::new(210.0, 10.0)),
+        PressTarget::Other,
+        "the button beside the field"
+    );
+    assert_eq!(
+        press_target_at(&store, Point::new(20.0, 150.0)),
+        PressTarget::Nothing,
+        "the bare page"
     );
     harness.dispatch_pointer_down(150.0, 10.0);
     harness.dispatch_pointer_up(150.0, 10.0);
     harness.pump_for(Duration::from_millis(500));
     assert_eq!(taps.get(), 1, "the button took its tap");
+}
+
+/// The part of the field the window shows is its box cut by every clip
+/// above it: a field half under the edge of a clipping ancestor shows only
+/// the half inside, which is where a platform draws its selection.
+///
+/// Fails with the store answering its own box: the hidden half is included.
+pub(crate) fn a_field_shows_only_what_its_ancestors_clip_leaves() {
+    let controller = TextEditingController::with_text("hello world");
+    let node = FocusNode::with_debug_label("clipped field");
+    let page = ClipRect::new().child(
+        SizedBox::new(100.0, 40.0).child(
+            OverflowBox::new()
+                .max_width(200.0)
+                .alignment(Alignment::TOP_LEFT)
+                .child(
+                    SizedBox::new(200.0, 40.0)
+                        .child(EditableText::new(controller, Rc::clone(&node))),
+                ),
+        ),
+    );
+    let mut harness =
+        mount_with_selection_ui_on(page.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    let whole = read_store(&store, |session| session.document_bounds()).expect("laid out");
+    let shown = read_store(&store, |session| session.visible_bounds())
+        .expect("laid out")
+        .expect("half of the field is shown");
+    assert_eq!(whole.size.width, 200.0, "the field's own box");
+    assert_eq!(shown.size.width, 100.0, "what the clip leaves of it");
+    assert_eq!(shown.origin, whole.origin);
+}
+
+/// Counts what the field's store tells its observer.
+#[derive(Default)]
+struct CountedNotices {
+    layouts: Cell<usize>,
+    moves: Cell<usize>,
+}
+
+impl flui_platform::text_store::TextStoreObserver for CountedNotices {
+    fn text_changed(&self, _change: flui_platform::text_store::TextChange) {}
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {
+        self.layouts.set(self.layouts.get() + 1);
+    }
+    fn field_moved(&self) {
+        self.moves.set(self.moves.get() + 1);
+    }
+    fn status_changed(&self) {}
+}
+
+/// Typing and composing move the field's caret and tell its observer of a
+/// layout change, never that the field moved; moving the field in the window
+/// (here, a padding above it growing) tells it once.
+///
+/// Fails with every caret move reported as a move of the field, and with a
+/// move of the field not reported.
+pub(crate) fn typing_moves_the_caret_and_only_a_moved_field_says_it_moved() {
+    let controller = TextEditingController::with_text("");
+    let node = FocusNode::with_debug_label("moving field");
+    let field = |top: f64| {
+        Padding::new(EdgeInsets::only_top(top))
+            .child(EditableText::new(controller.clone(), Rc::clone(&node)))
+            .boxed()
+    };
+    let mut harness =
+        mount_with_selection_ui_on(field(0.0), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    let notices = Rc::new(CountedNotices::default());
+    store.set_observer(Some(
+        Rc::clone(&notices) as Rc<dyn flui_platform::text_store::TextStoreObserver>
+    ));
+
+    for text in ["a", "ab", "abc"] {
+        harness.dispatch_ime(&flui_platform::ImeEvent::Commit(
+            text[text.len() - 1..].to_owned(),
+        ));
+        harness.tick();
+    }
+    harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
+        text: "ni".to_owned(),
+        cursor: Some((0, 2)),
+    });
+    harness.tick();
+    assert!(notices.layouts.get() > 0, "the caret moved");
+    assert_eq!(notices.moves.get(), 0, "the field did not move");
+
+    harness.swap_root(field(30.0));
+    harness.tick();
+    harness.tick();
+    assert_eq!(notices.moves.get(), 1, "the field moved down once");
 }
 
 /// The platform's edit menu reaches the focused field through its store:
@@ -259,15 +385,36 @@ pub(crate) fn the_platforms_edit_menu_reaches_the_field_through_its_store() {
     assert!(store.perform_edit_command(EditCommand::SelectAll));
     assert_eq!(controller.selection(), 0..11);
 
-    for (caret, word) in [(8, 6..11), (11, 6..11), (6, 6..11), (2, 0..5)] {
+    // Select takes the word at the caret, and past punctuation the word
+    // before it, never the punctuation or the space.
+    for (text, caret, word) in [
+        ("hello world", 8, 6..11),
+        ("hello world", 11, 6..11),
+        ("hello world", 6, 6..11),
+        ("hello world", 2, 0..5),
+        ("hello, world", 6, 0..5),
+        ("hello, world", 5, 0..5),
+        ("hello, world", 7, 7..12),
+        ("(hello)", 7, 1..6),
+        ("!! x", 0, 3..4),
+    ] {
+        controller.set_text(text);
         controller.set_caret_byte_offset(caret);
         assert!(
             store.edit_command_enabled(EditCommand::SelectWord),
-            "a caret at {caret}"
+            "{text:?} at {caret}"
         );
         assert!(store.perform_edit_command(EditCommand::SelectWord));
-        assert_eq!(controller.selection(), word, "a caret at {caret}");
+        assert_eq!(controller.selection(), word, "{text:?} at {caret}");
     }
+    controller.set_text("!!");
+    controller.set_caret_byte_offset(1);
+    assert!(
+        !store.edit_command_enabled(EditCommand::SelectWord),
+        "a line with no word offers no Select"
+    );
+    controller.set_text("hello world");
+    controller.set_selection(0, 5);
 
     controller.set_selection(0, 6);
     assert!(store.perform_edit_command(EditCommand::Cut));

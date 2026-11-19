@@ -23,8 +23,8 @@ use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, LockKind, LockOutcome,
-    LockTiming, OwnerCalls, PointMode, RangeRect, Selection, SelectionUi, TextChange, TextStore,
-    TextStoreChange, TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError,
+    LockTiming, OwnerCalls, PointMode, PressTarget, RangeRect, Selection, SelectionUi, TextChange,
+    TextStore, TextStoreChange, TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError,
     TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
@@ -451,6 +451,10 @@ impl TextStoreObserver for ChangeWatch {
         self.inner.layout_changed();
     }
 
+    fn field_moved(&self) {
+        self.inner.field_moved();
+    }
+
     fn status_changed(&self) {
         self.changed();
         self.inner.status_changed();
@@ -704,8 +708,12 @@ impl TextStoreRead for ReadTap<'_> {
         self.log.index_at_point(self.session, point, mode)
     }
 
-    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
-        self.session.is_hit_at(point)
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.session.visible_bounds()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.session.press_target_at(point)
     }
 }
 
@@ -749,8 +757,12 @@ impl TextStoreRead for EditTap<'_> {
         self.log.index_at_point(&*self.session, point, mode)
     }
 
-    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
-        self.session.is_hit_at(point)
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.session.visible_bounds()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.session.press_target_at(point)
     }
 }
 

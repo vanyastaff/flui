@@ -16,7 +16,7 @@
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::text_store::utf16::{OffsetError, Utf16Offset, Utf16Range};
-use flui_platform::text_store::{TextStoreError, TextStoreRead};
+use flui_platform::text_store::{PressTarget, TextStoreError, TextStoreRead};
 
 /// The most rectangles one answer holds: the lines from the last one on are
 /// covered by the last rectangle, so one UIKit query reads a bounded number
@@ -69,20 +69,22 @@ impl SelectionRect {
 }
 
 /// The rectangles of `range`, an offset range inside `session`'s document,
-/// one per line in document order, cut to the field's box
-/// ([`TextStoreRead::document_bounds`]): one zero-wide rectangle, the caret,
-/// for an empty range, and none when the field has no layout for it or the
-/// store answers a rectangle that is not finite. A line scrolled wholly out
-/// of the box has none, and a line the box cuts at the range's start or end
-/// no longer holds that end ([`clip_to`]). An end that splits a surrogate
-/// pair moves out to cover the whole scalar.
+/// one per line in document order, cut to the part of the field the window
+/// shows ([`TextStoreRead::visible_bounds`], ancestor clips included): one
+/// zero-wide rectangle, the caret, for an empty range, and none when the
+/// field has no layout for it, none of it is shown, or the store answers a
+/// rectangle that is not finite. A line scrolled wholly out of view has
+/// none, and a line the cut moves at the range's start or end no longer
+/// holds that end ([`clip_to`]). An end that splits a surrogate pair moves
+/// out to cover the whole scalar.
 pub(crate) fn selection_rects(
     session: &dyn TextStoreRead,
     range: Utf16Range,
 ) -> Vec<SelectionRect> {
-    let answer = lines(session, range).and_then(|rects| Ok((rects, session.document_bounds()?)));
+    let answer = lines(session, range).and_then(|rects| Ok((rects, session.visible_bounds()?)));
     match answer {
-        Ok((rects, visible))
+        Ok((_, None)) => Vec::new(),
+        Ok((rects, Some(visible)))
             if is_finite(visible) && rects.iter().all(|rect| is_finite(rect.bounds)) =>
         {
             clip_to(rects, visible)
@@ -142,6 +144,49 @@ pub(crate) fn clip_bounds(bounds: Bounds<f64>, visible: Bounds<f64>) -> Option<B
     let wide_enough = if caret { right >= left } else { right > left };
     (wide_enough && bottom > top)
         .then(|| Bounds::new(Point::new(left, top), Size::new(right - left, bottom - top)))
+}
+
+/// The caret at `at` (`caretRectForPosition:`), clamped to the document and
+/// held inside the part of the field the window shows: one standing inside
+/// or on its edge is answered as it is, one scrolled out is moved to the
+/// nearest edge of the shown part. UIKit documents no value for "no caret"
+/// (`caretRectForPosition:` returns "a rectangle that defines the area for
+/// drawing a caret"), so a caret is always answered where the field shows
+/// something. `None` when the field has no layout, shows nothing, or answers
+/// geometry that is not finite.
+pub(crate) fn caret_in(session: &dyn TextStoreRead, at: Utf16Offset) -> Option<Bounds<f64>> {
+    let at = at.min(session.document_len());
+    let (_, caret) = caret(session, at, Toward::Start).ok()?;
+    let visible = session.visible_bounds().ok()??;
+    if !is_finite(caret) || !is_finite(visible) {
+        return None;
+    }
+    let x = caret.left().clamp(visible.left(), visible.right());
+    let top = caret.top().clamp(visible.top(), visible.bottom());
+    let bottom = caret.bottom().clamp(visible.top(), visible.bottom());
+    Some(Bounds::new(
+        Point::new(x, top),
+        Size::new(caret.size.width.min(visible.right() - x), bottom - top),
+    ))
+}
+
+/// Whether the platform's selection gestures begin at `point`: on the field,
+/// or where nothing else takes a press (`target`) within `reach` of the edge
+/// a shown selection handle stands on, whose knob the platform draws past the
+/// line. A control there, over the field or beside it, keeps its press.
+pub(crate) fn gesture_begins(
+    target: PressTarget,
+    point: Point<f64>,
+    rects: &[SelectionRect],
+    reach: f64,
+) -> bool {
+    match target {
+        PressTarget::Field => true,
+        PressTarget::Other => false,
+        PressTarget::Nothing => {
+            SelectionRect::handle_edges(rects).any(|edge| edge.dilate(reach).contains(&point))
+        }
+    }
 }
 
 fn lines(
@@ -300,10 +345,10 @@ mod tests {
     use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::text_store::utf16::{self, Utf16Offset, Utf16Range};
     use flui_platform::text_store::{
-        Composition, PointMode, RangeRect, Selection, TextStoreError, TextStoreRead,
+        Composition, PointMode, PressTarget, RangeRect, Selection, TextStoreError, TextStoreRead,
     };
 
-    use super::{SelectionRect, selection_rects};
+    use super::{SelectionRect, caret_in, gesture_begins, selection_rects};
 
     /// Each scalar's advance.
     const ADVANCE: f64 = 10.0;
@@ -436,6 +481,18 @@ mod tests {
             _mode: PointMode,
         ) -> Result<Utf16Offset, TextStoreError> {
             Err(TextStoreError::NoLayout)
+        }
+
+        fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+            Ok(Some(self.visible))
+        }
+
+        fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+            Ok(if self.visible.contains(&point) {
+                PressTarget::Field
+            } else {
+                PressTarget::Nothing
+            })
         }
     }
 
@@ -577,6 +634,101 @@ mod tests {
             let rects = selection_rects(&layout, range);
             let edges: Vec<Bounds<f64>> = SelectionRect::handle_edges(&rects).collect();
             assert_eq!(edges, expected, "{case}");
+        }
+    }
+
+    /// The caret is answered where it stands while the field shows it, on
+    /// the shown part's edge included (a zero-wide caret there is not an
+    /// empty rectangle to drop), and moved to the nearest edge of the shown
+    /// part when it is scrolled out; a field that shows nothing has none.
+    #[test]
+    fn the_caret_stays_inside_the_part_of_the_field_the_window_shows() {
+        use TextDirection::Ltr;
+        let caret = |x: f64| Some(Bounds::new(Point::new(x, 0.0), Size::new(0.0, LINE)));
+        let rows: [(&str, LaidOutLines, usize, Option<Bounds<f64>>); 5] = [
+            (
+                "inside the shown part",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((0.0, 0.0, 200.0, LINE)),
+                3,
+                caret(30.0),
+            ),
+            (
+                "on the shown part's right edge",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((0.0, 0.0, 80.0, LINE)),
+                8,
+                caret(80.0),
+            ),
+            (
+                "scrolled out to the right",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((0.0, 0.0, 50.0, LINE)),
+                11,
+                caret(50.0),
+            ),
+            (
+                "scrolled out to the left",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((30.0, 0.0, 50.0, LINE)),
+                0,
+                caret(30.0),
+            ),
+            (
+                "past the document's end, clamped to it",
+                LaidOutLines::new("abc", &[(0, Ltr)]),
+                99,
+                caret(30.0),
+            ),
+        ];
+        for (case, layout, at, expected) in rows {
+            assert_eq!(caret_in(&layout, Utf16Offset::new(at)), expected, "{case}");
+        }
+        let hidden = LaidOutLines::new("abc", &[(0, Ltr)]).shown_in((0.0, 0.0, f64::NAN, LINE));
+        assert_eq!(
+            caret_in(&hidden, Utf16Offset::ZERO),
+            None,
+            "geometry that is not finite"
+        );
+    }
+
+    /// The platform's gestures begin on the field, and within a handle's
+    /// reach only where nothing else takes the press: a control there keeps
+    /// it, and a point past the reach is nobody's.
+    #[test]
+    fn a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers() {
+        use TextDirection::Ltr;
+        let layout = LaidOutLines::new("hello world", &[(0, Ltr)]);
+        let rects = selection_rects(&layout, span(6, 11));
+        let beside_the_end = Point::new(120.0, LINE / 2.0);
+        let rows = [
+            (
+                "on the field",
+                PressTarget::Field,
+                Point::new(30.0, 5.0),
+                true,
+            ),
+            (
+                "beside a handle, nothing there",
+                PressTarget::Nothing,
+                beside_the_end,
+                true,
+            ),
+            (
+                "beside a handle, a control there",
+                PressTarget::Other,
+                beside_the_end,
+                false,
+            ),
+            (
+                "past the reach",
+                PressTarget::Nothing,
+                Point::new(200.0, 5.0),
+                false,
+            ),
+        ];
+        for (case, target, point, begins) in rows {
+            assert_eq!(
+                gesture_begins(target, point, &rects, 22.0),
+                begins,
+                "{case}"
+            );
         }
     }
 }
