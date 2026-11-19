@@ -21,7 +21,7 @@
 //! - [`Simulation`] - Validated physics: [`SpringSimulation`], friction and a bouncing
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - An owned value driven by [`MotionSpec`], with
-//!   velocity-preserving retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//!   velocity-preserving retargeting (`#[derive(MotionValue)]` for custom types)
 //! - [`Vsync`] - The registry handle a tree hands its controllers; a presentation's
 //!   frame driver alone ticks and closes it (ADR-0382)
 //! - [`AnimationError`] - Error type for animation operations
@@ -128,6 +128,7 @@ mod driven;
 mod error;
 mod keyframes;
 mod motion;
+mod motion_value;
 mod observability;
 mod origin;
 mod proxy;
@@ -140,7 +141,6 @@ mod simulation;
 mod stagger;
 mod switch;
 mod tween;
-mod value_conversion;
 mod vsync;
 mod vsync_update;
 
@@ -169,6 +169,7 @@ pub use motion::{
     AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionOverride, MotionPolicy,
     PlaybackRate,
 };
+pub use motion_value::{AnimationVector, MotionValue};
 pub use proxy::ProxyAnimation;
 pub use refusal::{CONTAINED_PANIC_TARGET, NEVER_SETTLES_TARGET, REFUSAL_TARGET};
 pub use repeat::{Iterations, RepeatMode, RepeatSpec};
@@ -181,13 +182,11 @@ pub use simulation::{
     SpringSimulation, SpringType, Tolerance,
 };
 pub use stagger::{Stagger, StaggerOrigin};
-pub use value_conversion::{AnimationVector, TwoWayConverter};
 pub use vsync_update::{VsyncPublication, VsyncUpdate};
-// `#[derive(TwoWayConverter)]` writes `TwoWayConverter` and the geometry
-// `Lerp`. It shares the trait's name in the macro namespace (the serde
-// `Serialize` trait and derive), so one `use flui_animation::TwoWayConverter`
-// brings in both.
-pub use flui_macros::TwoWayConverter;
+// `#[derive(MotionValue)]` shares the trait's name in the macro namespace (as
+// serde's `Serialize` does), so one `use flui_animation::MotionValue` brings in
+// both; interpolation is the separate `flui_foundation::geometry::Lerp` derive.
+pub use flui_macros::MotionValue;
 pub use switch::AnimationSwitch;
 pub use tween::TweenAnimation;
 pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};

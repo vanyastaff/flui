@@ -26,7 +26,7 @@
   attribute's list. Each used to stop at the first. A
   refusal of an attribute out of place or empty underlines the whole attribute, and a refusal
   of a field or of a type the whole of it, where each used to mark its first character.
-- `#[derive(TwoWayConverter)]` marks its impls `#[automatically_derived]` and refuses a type
+- `#[derive(MotionValue)]` marks its impls `#[automatically_derived]` and refuses a type
   with a lifetime parameter with its reason, where rustc used to report a constant expression
   it could not evaluate.
 
@@ -41,7 +41,7 @@
 - An expression in `#[inspect(default = …)]` or `#[inspect(with = …)]` that names a function
   called like one of the derive's own locals (`out`) means that function; it used to name the
   derive's local. The parameters and locals every expansion declares resolve at the macro.
-- `#[derive(Inspect)]` adds its bound, and `#[derive(TwoWayConverter)]` makes its refusal, for
+- `#[derive(Inspect)]` adds its bound, and `#[derive(MotionValue)]` makes its refusal, for
   a field whose type names a parameter as a raw identifier (`r#T`).
 - The view derives and `#[flui::main]` name `::std::rc::Rc`, `::core::include_bytes!` and
   `::core::cfg!` by absolute path, so a module or macro of the same name in the deriving
@@ -50,7 +50,7 @@
   `android_main` shadowed it.
 - `#[derive(InheritedData)]` reports a field that is not `PartialEq` at the field, where it
   pointed at the derive.
-- `#[derive(TwoWayConverter)]` builds when the derive and the fields come from different
+- `#[derive(MotionValue)]` builds when the derive and the fields come from different
   `macro_rules!` contexts, which failed with "cannot find value `self`".
 - `#[flui::main]` in a crate that has `flui-sdk` but no application runtime no longer advises
   adding `flui-sdk`.

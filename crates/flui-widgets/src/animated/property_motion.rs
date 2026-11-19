@@ -3,14 +3,14 @@
 use std::rc::Rc;
 
 use flui_animation::{
-    AnimatedValue, AnimatedValueView, AnimationError, MotionSpec, MotionUpdate, TwoWayConverter,
-    Vsync, VsyncUpdate,
+    AnimatedValue, AnimatedValueView, AnimationError, MotionSpec, MotionUpdate, MotionValue, Vsync,
+    VsyncUpdate,
 };
 use flui_foundation::{ChangeNotifier, Listenable};
 
 /// An owner named `label` in animation diagnostics whose changes notify
 /// `notifications`.
-pub(super) fn observed_property<T: TwoWayConverter + 'static>(
+pub(super) fn observed_property<T: MotionValue + 'static>(
     label: &'static str,
     initial: T,
     motion: MotionSpec,
@@ -32,7 +32,7 @@ pub(super) fn observed_property<T: TwoWayConverter + 'static>(
 }
 
 #[derive(Debug)]
-pub(super) struct PropertyMotion<T: TwoWayConverter + 'static> {
+pub(super) struct PropertyMotion<T: MotionValue + 'static> {
     /// The diagnostics label of every owner this property creates.
     label: &'static str,
     owner: Option<AnimatedValue<T>>,
@@ -40,7 +40,7 @@ pub(super) struct PropertyMotion<T: TwoWayConverter + 'static> {
     relay: Option<flui_foundation::Subscription>,
 }
 
-impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
+impl<T: MotionValue + 'static> PropertyMotion<T> {
     pub(super) fn try_new(
         label: &'static str,
         initial: Option<T>,

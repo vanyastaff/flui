@@ -1,7 +1,7 @@
 //! Coordinated admission of independently owned property motion.
 
 use super::{Admission, AnimatedValue, Change, Prepared, Terminal};
-use crate::{AnimationError, MotionSpec, TwoWayConverter};
+use crate::{AnimationError, MotionSpec, MotionValue};
 use flui_foundation::panic::{PanicRecovery, RecoveryScope};
 use std::rc::Rc;
 
@@ -12,7 +12,7 @@ trait Plan {
     fn retire(&mut self, recovery: &mut RecoveryScope<'_>);
 }
 
-struct Retarget<'a, T: TwoWayConverter + 'static> {
+struct Retarget<'a, T: MotionValue + 'static> {
     owner: &'a mut AnimatedValue<T>,
     target: Terminal<Rc<T>>,
     motion: Terminal<MotionSpec>,
@@ -20,7 +20,7 @@ struct Retarget<'a, T: TwoWayConverter + 'static> {
     admission: Option<Terminal<Admission<T>>>,
 }
 
-impl<T: TwoWayConverter + 'static> Plan for Retarget<'_, T> {
+impl<T: MotionValue + 'static> Plan for Retarget<'_, T> {
     fn validate(&self) -> Result<(), AnimationError> {
         let prepared = self
             .prepared
@@ -67,19 +67,19 @@ impl<T: TwoWayConverter + 'static> Plan for Retarget<'_, T> {
     }
 }
 
-struct Replace<'a, T: TwoWayConverter + 'static> {
+struct Replace<'a, T: MotionValue + 'static> {
     owner: &'a mut Option<AnimatedValue<T>>,
     next: Option<Terminal<AnimatedValue<T>>>,
     outgoing: Option<Terminal<AnimatedValue<T>>>,
     disposal: Option<Terminal<crate::driven::DrivenRetirement>>,
 }
 
-struct Dispose<'a, T: TwoWayConverter + 'static> {
+struct Dispose<'a, T: MotionValue + 'static> {
     owner: &'a mut AnimatedValue<T>,
     disposal: Option<Terminal<crate::driven::DrivenRetirement>>,
 }
 
-impl<T: TwoWayConverter + 'static> Plan for Dispose<'_, T> {
+impl<T: MotionValue + 'static> Plan for Dispose<'_, T> {
     fn validate(&self) -> Result<(), AnimationError> {
         Ok(())
     }
@@ -100,7 +100,7 @@ impl<T: TwoWayConverter + 'static> Plan for Dispose<'_, T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> Plan for Replace<'_, T> {
+impl<T: MotionValue + 'static> Plan for Replace<'_, T> {
     fn validate(&self) -> Result<(), AnimationError> {
         Ok(())
     }
@@ -197,7 +197,7 @@ impl<'owners> MotionUpdate<'owners> {
     /// # Errors
     /// Refuses invalid motion; the whole update remains refused even if the
     /// calling closure ignores this error.
-    pub fn retarget<T: TwoWayConverter + 'static>(
+    pub fn retarget<T: MotionValue + 'static>(
         &mut self,
         owner: &'owners mut AnimatedValue<T>,
         target: T,
@@ -212,7 +212,7 @@ impl<'owners> MotionUpdate<'owners> {
     ///
     /// # Errors
     /// Refuses a non-finite origin, target or unrepresentable motion.
-    pub fn restart<T: TwoWayConverter + 'static>(
+    pub fn restart<T: MotionValue + 'static>(
         &mut self,
         owner: &'owners mut AnimatedValue<T>,
         origin: T,
@@ -224,7 +224,7 @@ impl<'owners> MotionUpdate<'owners> {
 
     /// Stage appearance or disappearance of an optional property owner.
     /// An outgoing owner retires only after every participant is installed.
-    pub fn replace<T: TwoWayConverter + 'static>(
+    pub fn replace<T: MotionValue + 'static>(
         &mut self,
         owner: &'owners mut Option<AnimatedValue<T>>,
         next: Option<AnimatedValue<T>>,
@@ -239,14 +239,14 @@ impl<'owners> MotionUpdate<'owners> {
 
     /// Stage logical closure of a required owner. Its last published value
     /// stays readable; cancellation runs after every group member is closed.
-    pub fn dispose<T: TwoWayConverter + 'static>(&mut self, owner: &'owners mut AnimatedValue<T>) {
+    pub fn dispose<T: MotionValue + 'static>(&mut self, owner: &'owners mut AnimatedValue<T>) {
         self.plans.push(Terminal::new(Box::new(Dispose {
             owner,
             disposal: None,
         })));
     }
 
-    fn stage<T: TwoWayConverter + 'static>(
+    fn stage<T: MotionValue + 'static>(
         &mut self,
         owner: &'owners mut AnimatedValue<T>,
         target: T,

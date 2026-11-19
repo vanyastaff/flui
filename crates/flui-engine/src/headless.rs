@@ -284,6 +284,7 @@ impl HeadlessRenderer {
             intermediate_required: false,
             fail_after_begin: false,
             panic_after_record: false,
+            fail_after_record: false,
             last_plan: None,
             last_ir: None,
             keep_ir: false,
@@ -475,6 +476,9 @@ pub(crate) struct RetainedCapture {
     /// When set, the next frame panics once its content is recorded, before
     /// it is submitted, and the flag clears itself.
     panic_after_record: bool,
+    /// When set, the next frame fails once its content is recorded, before
+    /// it is submitted, and the flag clears itself.
+    fail_after_record: bool,
     last_plan: Option<crate::damage::FramePlan>,
     /// The IR the last frame that recorded content recorded.
     last_ir: Option<Vec<u8>>,
@@ -549,6 +553,12 @@ impl RetainedCapture {
     /// target.
     pub(crate) fn fail_next_frame_after_begin(&mut self) {
         self.fail_after_begin = true;
+    }
+
+    /// Makes the next frame's content pass fail once it is recorded, before
+    /// it is submitted.
+    pub(crate) fn fail_next_frame_after_record(&mut self) {
+        self.fail_after_record = true;
     }
 
     /// Registers a one-texel external texture of `rgba` under `id`, or, when
@@ -723,6 +733,7 @@ struct CaptureFrame<'a> {
     scene: &'a flui_layer::Scene,
     fail: &'a mut bool,
     panic: &'a mut bool,
+    fail_recorded: &'a mut bool,
     /// The IR the frame recorded, read before it is replayed.
     ir: Option<&'a mut Option<Vec<u8>>>,
 }
@@ -771,6 +782,9 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
             !std::mem::take(self.panic),
             "injected panic after the frame was recorded"
         );
+        if std::mem::take(self.fail_recorded) {
+            return Err(EngineError::Timeout);
+        }
         self.painter.render_to_texture(texture, encoder)?;
         Ok(recorded)
     }
@@ -840,6 +854,7 @@ impl RetainedCapture {
             scene,
             fail: &mut self.fail_after_begin,
             panic: &mut self.panic_after_record,
+            fail_recorded: &mut self.fail_after_record,
             ir: self.keep_ir.then_some(&mut self.last_ir),
         };
         self.frame.run(

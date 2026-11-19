@@ -7,17 +7,17 @@ owning crates; generated code resolves them from the consuming manifest.
 
 ### Compose fixed-width animation fields
 
-`TwoWayConverter` derives flatten each field's associated `AnimationVector`
+`MotionValue` derives flatten each field's associated `AnimationVector`
 in declaration order. `AnimationVector::COMPONENTS` is the width of its sealed
 scalar array; no type names, memory layout assumptions or heap buffers determine
-the representation. Derived `Lerp` delegates to each field, preserving geometry
+the representation. `#[derive(Lerp)]`, a separate derive, delegates to each field, preserving geometry
 extrapolation and premultiplied color interpolation, and returns exact authored
 endpoints. The shared scalar `Lerp` handles representable extreme differences.
 The derive also concatenates `rest_thresholds` in that same field order, retaining
 each representation's units ([ADR-0186](../../docs/adr/ADR-0186-typed-animation-rest-thresholds.md)).
 Thresholds are not converted through `to_vector`: a nonlinear value converter
 need not preserve distances. The nested spring case in
-`two_way_converter_derive_contract` observes nested geometry retaining its own
+`motion_value_derive_contract` observes nested geometry retaining its own
 completion timing rather than adopting the scalar field's threshold.
 
 Empty structs are refused because they have no motion components. A field that
@@ -28,7 +28,7 @@ lifetime. Unused const parameters with concrete fields remain supported. A manua
 implementation can choose a concrete vector representation when a generic author
 needs one.
 
-`two_way_converter_derive_contract` in `flui-animation` tests named, tuple and
+`motion_value_derive_contract` in `flui-animation` tests named, tuple and
 nested fields, color behavior and actual registered retargeting.
 `trybuild_ui::ui_tests` in `flui-sdk` tests SDK expansion, aliases, concrete const
 generics, empty structs, missing field traits and generic-dependent widths.
@@ -185,8 +185,8 @@ of the author's with a local's lower-case name still meets it in a pattern.
 Such a name is a different span from the author's tokens around it, and rustc
 reports one failure once per span. Code spanned at a field's type therefore
 names what depends on that type through the type alone, never through a local
-of the expansion: `TwoWayConverter` writes each field's part of the vector as
-one expression over `<FieldType as TwoWayConverter>`, so a field that is not a
+of the expansion: `MotionValue` writes each field's part of the vector as
+one expression over `<FieldType as MotionValue>`, so a field that is not a
 converter is reported once, at the field (`non_motion_field` in `flui-sdk`).
 The field of an enum's variant has to be read through a binding the derive
 declares, so `Inspect` reports its unmapped type at the derive and labels the
@@ -198,7 +198,7 @@ the derive does not, it no longer names the generated signature's `&self`
 (E0424). Such code interpolates `hygiene::receiver`, a `self` of the call
 site's context (`a_derive_reads_fields_a_macro_rules_caller_wrote` in
 `flui-view`, the `a type from a macro` row of `flui-animation`'s
-`two_way_converter_derive_contract`).
+`motion_value_derive_contract`).
 
 ### A view's key is a field
 

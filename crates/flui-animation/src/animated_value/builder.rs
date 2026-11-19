@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use super::AnimatedValue;
-use crate::{AnimationError, MotionSpec, TwoWayConverter, Vsync};
+use crate::{AnimationError, MotionSpec, MotionValue, Vsync};
 
 /// Configures an [`AnimatedValue`], the way
 /// [`AnimationControllerBuilder`](crate::AnimationControllerBuilder) configures
@@ -19,13 +19,13 @@ use crate::{AnimationError, MotionSpec, TwoWayConverter, Vsync};
 /// # Ok::<(), flui_animation::AnimationError>(())
 /// ```
 #[must_use = "a builder does nothing until `build_on` is called"]
-pub struct AnimatedValueBuilder<T: TwoWayConverter + 'static> {
+pub struct AnimatedValueBuilder<T: MotionValue + 'static> {
     initial: T,
     motion: MotionSpec,
     debug_label: Option<Cow<'static, str>>,
 }
 
-impl<T: TwoWayConverter + 'static> AnimatedValueBuilder<T> {
+impl<T: MotionValue + 'static> AnimatedValueBuilder<T> {
     pub(super) fn new(initial: T, motion: MotionSpec) -> Self {
         Self {
             initial,
@@ -59,7 +59,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValueBuilder<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> std::fmt::Debug for AnimatedValueBuilder<T> {
+impl<T: MotionValue + 'static> std::fmt::Debug for AnimatedValueBuilder<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedValueBuilder")
             .field("debug_label", &self.debug_label)

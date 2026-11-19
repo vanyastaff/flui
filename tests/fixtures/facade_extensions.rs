@@ -75,13 +75,13 @@ fn custom_painter_records_a_rectangle() {
     assert_eq!((bounds.width, bounds.height), (24.0, 16.0));
 }
 
-#[derive(Debug, Clone, flui::animation::TwoWayConverter)]
+#[derive(Debug, Clone, flui::animation::MotionValue)]
 struct Appearance {
     position: Offset,
     color: Color,
 }
 
-#[derive(Debug, Clone, flui::animation::TwoWayConverter)]
+#[derive(Debug, Clone, flui::animation::MotionValue)]
 struct CardMotion(Appearance, f64);
 
 #[derive(Debug)]

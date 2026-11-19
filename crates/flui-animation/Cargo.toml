@@ -31,7 +31,7 @@ workspace = true
 flui-painting = { workspace = true }
 flui-foundation = { workspace = true }
 flui-platform.workspace = true
-# `#[derive(TwoWayConverter)]` — re-exported for user-defined animatable types.
+# `#[derive(MotionValue)]`, re-exported beside the trait it implements.
 flui-macros = { workspace = true }
 
 # Utility

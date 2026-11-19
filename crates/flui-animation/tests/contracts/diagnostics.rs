@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationController, MotionSpec, MotionUpdate, REFUSAL_TARGET,
-    RepeatMode, SpringDescription, TwoWayConverter, Vsync,
+    AnimatedValue, Animation, AnimationController, MotionSpec, MotionUpdate, MotionValue,
+    REFUSAL_TARGET, RepeatMode, SpringDescription, Vsync,
 };
 #[cfg(feature = "diagnostics")]
 use flui_foundation::Listenable;
@@ -1414,7 +1414,7 @@ struct Hooked {
     hook: Rc<dyn Fn()>,
 }
 
-impl TwoWayConverter for Hooked {
+impl MotionValue for Hooked {
     type Vector = [f64; 1];
     fn rest_thresholds() -> Self::Vector {
         [0.001]
@@ -1435,7 +1435,7 @@ impl TwoWayConverter for Hooked {
 #[derive(Clone)]
 struct NegativeThreshold(f64);
 
-impl TwoWayConverter for NegativeThreshold {
+impl MotionValue for NegativeThreshold {
     type Vector = [f64; 1];
     fn rest_thresholds() -> Self::Vector {
         [-1.0]

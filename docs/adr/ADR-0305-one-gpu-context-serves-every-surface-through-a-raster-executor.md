@@ -719,7 +719,7 @@ the facade. Every production use of `with_backend` becomes:
 - Gates: `cargo xtask globals` admits no new `static` or `thread_local!`, so none holds a
   context, a device or an atlas; the `cargo xtask send-impls` and `cargo xtask send-positions`
   lists do not grow.
-- Tests to be added, in `flui-engine` on offscreen slots under `cargo xtask gpu-test` (lavapipe and
+- Tests to be added, in `flui-engine` on offscreen slots under the GPU readback runs of CI's `test` job (`FLUI_REQUIRE_GPU=1`, lavapipe and
   llvmpipe):
   - `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format`: several slots,
     counting instances, devices, atlases and pipeline builds;
