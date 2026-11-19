@@ -318,6 +318,18 @@ impl RenderWrap {
         self
     }
 
+    /// Updates the vertical direction and reports layout when changed.
+    pub fn set_vertical_direction(
+        &mut self,
+        vertical_direction: VerticalDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.vertical_direction == vertical_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.vertical_direction = vertical_direction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
     /// `(flip_main, flip_cross)` for this wrap's own axes.
     ///
     /// The reading

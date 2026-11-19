@@ -363,7 +363,9 @@ pub use flui_view::HapticsMode;
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
 // (re-exported from the `flui-objects` catalog, their home beside
 // the render objects that read them).
-pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+pub use flui_objects::{
+    CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit, VerticalDirection,
+};
 // `WrapAlignment`/`WrapCrossAlignment` configure `Wrap`'s main-axis distribution
 // and per-child cross-axis positioning.
 pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
@@ -480,7 +482,9 @@ pub mod prelude {
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
         TapDetails,
     };
-    pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+    pub use flui_objects::{
+        CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit, VerticalDirection,
+    };
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_painting::Alignment;
     pub use flui_painting::BoxFit;
