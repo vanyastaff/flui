@@ -12,7 +12,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitCode, Stdio};
+use std::process::{Child, Command, ExitCode};
 
 use anyhow::{Context, bail};
 
@@ -288,16 +288,6 @@ pub(super) fn parsed<T: clap::Args + clap::FromArgMatches>(
     Ok(T::from_arg_matches(&matches)?)
 }
 
-/// Whether `program <args>` runs and exits 0: an optional tool's presence.
-pub(super) fn installed(program: &str, args: &[&str]) -> bool {
-    Command::new(program)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 /// The workspace's target directory as cargo resolves it: `CARGO_TARGET_DIR`
 /// (relative to the repository root, where every task's cargo runs),
 /// `build.target-dir`, or `target/`. Built artifacts are looked up here, never
@@ -320,6 +310,8 @@ fn target_dir_with(root: &Path, target_dir: Option<&OsStr>) -> anyhow::Result<Pa
 
 #[cfg(test)]
 mod tests {
+    use std::process::Stdio;
+
     use super::*;
 
     #[derive(Clone, Copy)]

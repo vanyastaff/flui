@@ -22,7 +22,6 @@ mod adr_numbers;
 mod android_dex;
 mod bench;
 mod changelog;
-mod docs_links;
 mod doctor;
 mod fonts;
 mod icon_import;
@@ -72,8 +71,6 @@ enum Command {
     WasmTestCrates(wasm::WasmTestCratesArgs),
     /// Print a package's version from Cargo.lock.
     LockedVersion(wasm::LockedVersionArgs),
-    /// Check the links in the repository's markdown (lychee, offline).
-    DocsLinks(docs_links::DocsLinksArgs),
     /// Check or list the bundled font assets.
     FontAssets(fonts::FontAssetsArgs),
     /// Import vector animations as `AnimatedIconData` constants, or check the bundled Material ones.
@@ -117,7 +114,6 @@ fn main() -> ExitCode {
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
-        Command::DocsLinks(args) => docs_links::docs_links(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::IconImport(args) => icon_import::icon_import(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
