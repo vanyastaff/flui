@@ -672,6 +672,30 @@ impl Requestor {
         self.round_trip();
     }
 
+    /// Wait until what other clients select on the window is `mask`: the
+    /// clipboard's thread selects it after the answers it sends, so a
+    /// release may reach the server a moment after the answer.
+    fn wait_until_heard_as(&self, mask: xproto::EventMask, what: &str) {
+        let deadline = Instant::now() + STEP;
+        loop {
+            let heard = self
+                .connection
+                .get_window_attributes(self.window)
+                .expect("the request is sent")
+                .reply()
+                .expect("the server answers")
+                .all_event_masks;
+            if heard == mask {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{what}: the window is heard as {heard:?}, not {mask:?}"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     /// Wait until the server has carried out every request sent so far.
     fn round_trip(&self) {
         self.connection
@@ -816,11 +840,14 @@ fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
     assert_eq!(asked.get(), writers, "the refused requests ask nothing");
 }
 
-/// A requestor that goes (it crashes, or is killed) holds none of the
-/// `INCR` transfers the clipboard writes at once: those under way end as its
-/// window goes, not at their timeout, and those asked before it went are
-/// dropped as it goes, never started on a window that is not there. The next
-/// client is served at once either way.
+/// A requestor that goes (it crashes, or is killed) keeps the next client
+/// waiting for nothing: the `INCR` transfers it held end as its window goes,
+/// not at their timeout, and the next client is answered at once with its own
+/// answer, whether the gone one's requests were under way or still waiting on
+/// the owner thread. Whether the next client's window takes the gone one's
+/// id is the server's choice here;
+/// `a_window_that_takes_a_gone_requestors_id_hears_only_its_own_answer` makes
+/// it take the id.
 #[test]
 fn a_requestor_that_goes_lets_go_of_its_transfers() {
     #[derive(Debug, Clone, Copy)]
@@ -895,15 +922,14 @@ fn a_requestor_that_goes_lets_go_of_its_transfers() {
 /// one's ids does: that window hears only its own answer, whole or `INCR`.
 /// The case makes the window under the same id itself, while the clipboard's
 /// thread is held in a command, so the owner thread's text for the gone
-/// window's request reaches the thread before the window's end does.
+/// window's request reaches the thread before the window's end does. The
+/// thread hears of a requestor's window only what waits on it needs.
 #[test]
 fn a_window_that_takes_a_gone_requestors_id_hears_only_its_own_answer() {
-    use super::selection::{Command, Name, Owed};
-
     let Some(_server) = server() else {
         return;
     };
-    for text in ["selected".to_owned(), "x".repeat(1 << 20)] {
+    for (text, incremental) in [("selected".to_owned(), false), ("x".repeat(1 << 20), true)] {
         let owner = clipboard();
         let asked = Rc::new(Cell::new(0));
         offer_primary(&owner, counted(&text, &asked));
@@ -915,24 +941,12 @@ fn a_window_that_takes_a_gone_requestors_id_hears_only_its_own_answer() {
             Vec::<xproto::Atom>::new(),
             "the request waits on the owner thread"
         );
+        requestor.wait_until_heard_as(
+            xproto::EventMask::STRUCTURE_NOTIFY,
+            "a waiting request hears only the window's end",
+        );
 
-        // A read of the primary selection answers through a poster that
-        // holds the thread until the case lets go.
-        let (entered, held) = std::sync::mpsc::channel::<()>();
-        let (release, released) = std::sync::mpsc::channel::<()>();
-        let released = Mutex::new(released);
-        let poster = OwnerPoster::new(move |_| {
-            let _ = entered.send(());
-            // A dropped sender lets go, as a send does.
-            let _ = released.lock().expect("the release").recv_timeout(STEP);
-            Err(OwnerRetired)
-        });
-        let source = CompletionSource::new(poster, PendingCompletions::new());
-        let (_read, answer) = source.pending::<ClipboardRead>();
-        owner.send(Command::Read(Name::Primary, Owed::new(answer)));
-        held.recv_timeout(STEP)
-            .expect("the thread answers the read");
-
+        let (release, _read) = hold_in_a_command(&owner);
         requestor.replace_window();
         let after = atom("FLUI_AFTER");
         requestor.send_request(after);
@@ -959,7 +973,154 @@ fn a_window_that_takes_a_gone_requestors_id_hears_only_its_own_answer() {
             "{} bytes: nothing is written for the gone window's request",
             text.len()
         );
+        // A transfer hears the property's deletions too; an answer written
+        // whole leaves nothing waiting on the window, which is let go.
+        let (mask, what) = if incremental {
+            (
+                xproto::EventMask::PROPERTY_CHANGE | xproto::EventMask::STRUCTURE_NOTIFY,
+                "a transfer hears the window's deletions and end",
+            )
+        } else {
+            (
+                xproto::EventMask::NO_EVENT,
+                "a window nothing waits on is not heard",
+            )
+        };
+        requestor.wait_until_heard_as(mask, what);
     }
+}
+
+/// Hold `owner`'s clipboard thread inside a command until the returned
+/// sender drops: a read of the primary selection, which the thread answers
+/// through a poster that waits for the case. The commands sent meanwhile are
+/// carried out right after it, in the same batch, before the thread reads an
+/// event. The completion is the read's, kept until the case ends.
+fn hold_in_a_command(
+    owner: &X11Clipboard,
+) -> (std::sync::mpsc::Sender<()>, Completion<ClipboardRead>) {
+    use super::selection::{Command, Name, Owed};
+
+    let (entered, held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let poster = OwnerPoster::new(move |_| {
+        let _ = entered.send(());
+        // A dropped sender lets go, as a send does.
+        let _ = released.lock().expect("the release").recv_timeout(STEP);
+        Err(OwnerRetired)
+    });
+    let source = CompletionSource::new(poster, PendingCompletions::new());
+    let (read, answer) = source.pending::<ClipboardRead>();
+    owner.send(Command::Read(Name::Primary, Owed::new(answer)));
+    held.recv_timeout(STEP)
+        .expect("the thread answers the read");
+    (release, read)
+}
+
+/// A requestor whose window goes after the owner thread's text for it
+/// reached the clipboard's thread, but before the server took the thread's
+/// next request, is never answered, though another window has its id by
+/// then: the thread meets the server before it writes the answers it
+/// decided, and the window's end it reads on the way drops the request,
+/// whole or `INCR`. The requestor holds the server here, so the thread's
+/// requests wait until the window went and another took its id.
+#[test]
+fn a_requestor_that_goes_before_its_answer_is_written_hears_nothing() {
+    let Some(_server) = server() else {
+        return;
+    };
+    for text in ["selected".to_owned(), "x".repeat(1 << 20)] {
+        let owner = clipboard();
+        let asked = Rc::new(Cell::new(0));
+        offer_primary(&owner, counted(&text, &asked));
+        let requestor = Requestor::new();
+        // Interned before the grab: `atom` connects anew, which a held
+        // server would not serve.
+        let (gone, after) = (atom("FLUI_GONE"), atom("FLUI_AFTER"));
+        requestor.send_request(gone);
+        assert_eq!(
+            requestor.heard(),
+            Vec::<xproto::Atom>::new(),
+            "the request waits on the owner thread"
+        );
+
+        let (release, _read) = hold_in_a_command(&owner);
+        // The text for the gone window's request, decided behind the read.
+        owner.deliver();
+        requestor
+            .connection
+            .grab_server()
+            .expect("the request is sent");
+        requestor.round_trip();
+        drop(release);
+        // The thread goes on to the answers it decided, and waits on the
+        // server for whatever it sends.
+        std::thread::sleep(Duration::from_millis(50));
+        requestor.replace_window();
+        requestor.send_request(after);
+        requestor
+            .connection
+            .ungrab_server()
+            .expect("the request is sent");
+        requestor.round_trip();
+
+        assert_eq!(
+            requestor.answer(&owner),
+            after,
+            "{} bytes: the window hears its own answer, not the gone one's",
+            text.len()
+        );
+        let written = requestor
+            .connection
+            .get_property(false, requestor.window, gone, xproto::AtomEnum::ANY, 0, 1)
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        assert_eq!(
+            written.type_,
+            x11rb::NONE,
+            "{} bytes: nothing is written for the gone window's request",
+            text.len()
+        );
+    }
+}
+
+/// The answers the clipboard's thread decides in the batch of commands that
+/// stops it are still written: a requestor waiting on the owner thread's
+/// text hears it, though `Stop` came right behind the text.
+#[test]
+fn answers_decided_as_the_thread_stops_are_written() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let mut owner = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    offer_primary(&owner, counted("selected", &asked));
+    let requestor = Requestor::new();
+    let property = atom("FLUI_BEFORE_STOP");
+    requestor.send_request(property);
+    assert_eq!(
+        requestor.heard(),
+        Vec::<xproto::Atom>::new(),
+        "the request waits on the owner thread"
+    );
+
+    let (release, _read) = hold_in_a_command(&owner);
+    owner.deliver();
+    owner.send(super::selection::Command::Stop);
+    drop(release);
+    owner
+        .thread
+        .take()
+        .expect("the thread runs")
+        .join()
+        .expect("the thread ends without a panic");
+
+    assert_eq!(
+        requestor.answer(&owner),
+        property,
+        "the waiting requestor hears its answer"
+    );
 }
 
 /// Ask the `CLIPBOARD` selection's owner for `target` as another client

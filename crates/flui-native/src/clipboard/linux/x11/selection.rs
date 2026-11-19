@@ -15,19 +15,26 @@
 //!   written, a zero-length one last. At most [`MAX_WRITERS`] such
 //!   transfers run at once, each given [`TRANSFER_TIMEOUT`] between
 //!   chunks.
-//! - **A requestor that goes is never answered.** The server may hand a
-//!   gone client's ids to the next client that connects, and a gone
-//!   window's id to that client's window, which did not ask. Whatever
-//!   outlives the step that heard its request (a request waiting on the
-//!   owner thread, an `INCR` transfer) hears its requestor's window from
-//!   then on, and the window's end drops it. An answer decided later is
-//!   written only once every event read before it is handled, so a window
-//!   whose end the thread has read is never answered, nor refused; a
-//!   requestor already gone when the thread starts to hear it is dropped
-//!   the same way. What X cannot tell apart is a window that ends, and
-//!   whose id a new window takes, between the last event the thread read
-//!   and the server carrying out its write: only a server grab would close
-//!   that.
+//! - **A requestor that goes is not answered.** The server may hand a gone
+//!   client's ids to the next client that connects, and a gone window's id
+//!   to that client's window, which did not ask. A request answered in the
+//!   step that heard it is answered before any later event is handled.
+//!   Whatever outlives that step (a request waiting on the owner thread, an
+//!   `INCR` transfer, which starts only once its requestor is heard) hears
+//!   the requestor's window from then on, and the window's end drops it.
+//!   The answers decided later are written at the end of the step, and on
+//!   every exit of the thread's loop that leaves the connection working:
+//!   first a round trip to the server, then every event read until its
+//!   reply handled, then the answers, with no round trip among them. A
+//!   window that ended before that round trip reached the server is
+//!   therefore never answered, nor refused. A requestor already gone when
+//!   the thread starts to hear it is not answered; one the server will not
+//!   let the thread hear for another reason is refused. What X cannot tell
+//!   apart is a window that ends, and whose id a new window takes, after
+//!   the thread last met the server (the request itself, for an answer in
+//!   the step that heard it; the round trip, for one decided later) and
+//!   before the server carries out the write: only a server grab would
+//!   close that.
 //! - **The primary selection is lazy.** The application offers it with a
 //!   closure the owner thread alone may call, so the thread holds only the
 //!   offer's [`Generation`]. A request for its text waits while the thread
@@ -105,9 +112,16 @@ pub(super) const MAX_WRITERS: usize = 4;
 const TRANSFER_BUDGET: usize = 2 * MAX_TEXT;
 
 /// The most requests waiting on the owner thread for the primary
-/// selection's text, those whose answer waits to be written counted with
-/// them; more are refused.
+/// selection's text, counted with those whose answer waits for the end of
+/// the step; more are refused.
 const MAX_ASKS: usize = 16;
+
+/// What the thread hears of a requestor's window while a transfer writes to
+/// it: the deletions of its property, each asking for the next chunk, and
+/// its end.
+fn transfer_events() -> EventMask {
+    EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY
+}
 
 /// The largest chunk written in one request, below the server's request
 /// limit whatever it is.
@@ -445,13 +459,28 @@ struct Ask {
     deadline: Instant,
 }
 
-/// A request that waited, whose answer is decided: written at the end of
-/// the thread's step, once the events read before it are handled
-/// ([`Selections::write_decided`]).
+/// A request whose answer is decided but written later, at the end of the
+/// thread's step ([`Selections::write_decided`]): one that waited on the
+/// owner thread, or text that goes `INCR` to a requestor the thread had to
+/// start hearing first.
 struct Decided {
-    ask: Ask,
-    /// The text and its length in the form asked for; `None` refuses it.
+    request: SelectionRequestEvent,
+    property: xproto::Atom,
+    form: TextForm,
+    /// The text and its length in `form`; `None` refuses the request.
     text: Option<(Arc<str>, usize)>,
+}
+
+impl Decided {
+    /// `ask`, answered with `text`.
+    fn answer(ask: Ask, text: Option<(Arc<str>, usize)>) -> Self {
+        Self {
+            request: ask.request,
+            property: ask.property,
+            form: ask.form,
+            text,
+        }
+    }
 }
 
 /// The read under way: the form asked for and what came so far.
@@ -860,17 +889,60 @@ fn is_form(reply: &GetPropertyReply, form: xproto::Atom) -> bool {
     reply.format == 8 && reply.type_ == form
 }
 
-/// How a request is answered.
+/// What the requestor is told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reply {
-    /// Now: its property holds the answer.
+    /// Its property holds the answer.
     Written,
-    /// Now, with property `None`.
+    /// Refused, with property `None`.
     Refused,
-    /// Once the owner thread sends the text.
+}
+
+/// When a request is answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    /// Now.
+    Now(Reply),
+    /// At the end of the step, or once the owner thread sends the text.
     Later,
     /// Never: the requestor's window is gone, and the window that holds its
     /// id next did not ask.
     Never,
+}
+
+/// Whether the thread hears a requestor's window, which anything that
+/// waits on the requestor needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Watched {
+    /// It does: the window's end will be heard.
+    Heard,
+    /// The window is gone (`BadWindow`): its request is never answered.
+    Gone,
+    /// The server refused otherwise (an allocation failure, a security
+    /// policy): the requestor is there and waits, so it is refused.
+    Unheard,
+}
+
+impl Watched {
+    /// What selecting on the requestor's window came to.
+    fn of(selection: WindowSelection) -> Result<Self, ReplyOrIdError> {
+        match selection {
+            WindowSelection::Selected => Ok(Self::Heard),
+            WindowSelection::Gone => Ok(Self::Gone),
+            WindowSelection::Failed(ReplyError::X11Error(_)) => Ok(Self::Unheard),
+            WindowSelection::Failed(ReplyError::ConnectionError(error)) => Err(error.into()),
+        }
+    }
+
+    /// How a request is answered now because its requestor cannot be heard;
+    /// `None` when it is heard and may wait.
+    fn unheard_answer(self) -> Option<Answer> {
+        match self {
+            Self::Heard => None,
+            Self::Gone => Some(Answer::Never),
+            Self::Unheard => Some(Answer::Now(Reply::Refused)),
+        }
+    }
 }
 
 /// The clipboard thread's state over its connection.
@@ -1155,7 +1227,7 @@ impl Selections {
             .retain(|transfer| transfer.requestor != requestor);
         self.asks.retain(|ask| ask.request.requestor != requestor);
         self.decided
-            .retain(|decided| decided.ask.request.requestor != requestor);
+            .retain(|decided| decided.request.requestor != requestor);
     }
 
     /// The server's time arrived: own selection `name` with what waits.
@@ -1254,11 +1326,13 @@ impl Selections {
         } else {
             request.property
         };
-        let reply = self.answer_request(request, property)?;
-        self.send_reply(request, property, reply)
+        match self.answer_request(request, property)? {
+            Answer::Now(reply) => self.send_reply(request, property, reply),
+            Answer::Later | Answer::Never => Ok(()),
+        }
     }
 
-    /// Tell `request`'s requestor how it is answered, if it is now.
+    /// Tell `request`'s requestor `reply`.
     fn send_reply(
         &self,
         request: &SelectionRequestEvent,
@@ -1268,7 +1342,6 @@ impl Selections {
         match reply {
             Reply::Written => self.notify(request, property),
             Reply::Refused => self.notify(request, NONE),
-            Reply::Later | Reply::Never => Ok(()),
         }
     }
 
@@ -1294,22 +1367,24 @@ impl Selections {
     }
 
     /// Write the answer to `request` into the requestor's `property`, or
-    /// hold it for the owner thread's text.
+    /// hold it for the end of the step or the owner thread's text.
     fn answer_request(
         &mut self,
         request: &SelectionRequestEvent,
         property: xproto::Atom,
-    ) -> Result<Reply, ReplyOrIdError> {
+    ) -> Result<Answer, ReplyOrIdError> {
+        const REFUSED: Answer = Answer::Now(Reply::Refused);
+        const WRITTEN: Answer = Answer::Now(Reply::Written);
         let Some(name) = self.named(request.selection) else {
-            return Ok(Reply::Refused);
+            return Ok(REFUSED);
         };
         let Some(owned) = &self.selection(name).owned else {
-            return Ok(Reply::Refused);
+            return Ok(REFUSED);
         };
         let current = request.owner == self.window
             && (request.time == CURRENT_TIME || not_before(request.time, owned.time));
         if !current {
-            return Ok(Reply::Refused);
+            return Ok(REFUSED);
         }
         let target = request.target;
         let concealed = matches!(&owned.content, Content::Text(encodings) if encodings.concealed);
@@ -1326,7 +1401,7 @@ impl Selections {
                 AtomEnum::ATOM,
                 &targets,
             )?;
-            return Ok(Reply::Written);
+            return Ok(WRITTEN);
         }
         if target == self.atoms.timestamp {
             self.connection.change_property32(
@@ -1336,11 +1411,11 @@ impl Selections {
                 AtomEnum::INTEGER,
                 &[owned.time],
             )?;
-            return Ok(Reply::Written);
+            return Ok(WRITTEN);
         }
         if target == self.atoms.concealed_hint {
             if !concealed {
-                return Ok(Reply::Refused);
+                return Ok(REFUSED);
             }
             self.connection.change_property8(
                 PropMode::REPLACE,
@@ -1349,10 +1424,10 @@ impl Selections {
                 self.atoms.concealed_hint,
                 CONCEALED_HINT_VALUE,
             )?;
-            return Ok(Reply::Written);
+            return Ok(WRITTEN);
         }
         let Some(form) = self.atoms.form_of(target) else {
-            return Ok(Reply::Refused);
+            return Ok(REFUSED);
         };
         let Content::Offered(offer) = owned.content else {
             let (_, _, _, selection) = self.split(name);
@@ -1361,9 +1436,9 @@ impl Selections {
                 .as_ref()
                 .and_then(|owned| owned.text_in(form))
             else {
-                return Ok(Reply::Refused);
+                return Ok(REFUSED);
             };
-            return self.write_text(request, property, form, text, len);
+            return self.answer_text(request, property, form, text, len);
         };
         // With every transfer held, a long text could not be written: the
         // closure is not asked at all, so a requestor that holds the writers
@@ -1372,16 +1447,16 @@ impl Selections {
             tracing::debug!(
                 "an X11 primary selection request while {MAX_WRITERS} transfers run was refused"
             );
-            return Ok(Reply::Refused);
+            return Ok(REFUSED);
         }
         if self.asks.len() + self.decided.len() >= MAX_ASKS {
             tracing::debug!("an X11 primary selection request past {MAX_ASKS} waiting was refused");
-            return Ok(Reply::Refused);
+            return Ok(REFUSED);
         }
         // The request outlives this step: its requestor's end has to be
         // heard, or the answer could reach a window that took its id.
-        if !self.watch(request.requestor)? {
-            return Ok(Reply::Never);
+        if let Some(answer) = self.watch(request.requestor)?.unheard_answer() {
+            return Ok(answer);
         }
         // One ask covers every request waiting on the offer.
         let asked = self.asks.iter().any(|ask| ask.offer == offer);
@@ -1395,7 +1470,40 @@ impl Selections {
         if !asked {
             self.notice.ask(offer);
         }
-        Ok(Reply::Later)
+        Ok(Answer::Later)
+    }
+
+    /// Answer `request` with `text` in `form`, `len` bytes of it: whole now,
+    /// or `INCR` once the requestor is heard, the transfer started at the end
+    /// of the step. Hearing it takes a round trip, which may read the
+    /// window's end; the step handles that before it writes.
+    fn answer_text(
+        &mut self,
+        request: &SelectionRequestEvent,
+        property: xproto::Atom,
+        form: TextForm,
+        text: Arc<str>,
+        len: usize,
+    ) -> Result<Answer, ReplyOrIdError> {
+        if len <= self.chunk {
+            return Ok(Answer::Now(
+                self.write_text(request, property, form, text, len)?,
+            ));
+        }
+        if self.asks.len() + self.decided.len() >= MAX_ASKS {
+            tracing::debug!("an X11 selection transfer past {MAX_ASKS} waiting was refused");
+            return Ok(Answer::Now(Reply::Refused));
+        }
+        if let Some(answer) = self.watch(request.requestor)?.unheard_answer() {
+            return Ok(answer);
+        }
+        self.decided.push_back(Decided {
+            request: *request,
+            property,
+            form,
+            text: Some((text, len)),
+        });
+        Ok(Answer::Later)
     }
 
     /// The owner thread answered `offer` with `text`: the requests that
@@ -1413,7 +1521,7 @@ impl Selections {
             let text = encodings
                 .as_ref()
                 .map(|encodings| (Arc::clone(&encodings.text), encodings.len_in(ask.form)));
-            Decided { ask, text }
+            Decided::answer(ask, text)
         }));
     }
 
@@ -1426,40 +1534,43 @@ impl Selections {
             .partition(|ask| Some(ask.offer) != current);
         self.asks = kept;
         self.decided
-            .extend(stale.into_iter().map(|ask| Decided { ask, text: None }));
+            .extend(stale.into_iter().map(|ask| Decided::answer(ask, None)));
     }
 
-    /// Write the answers decided for the requests that waited, each once
-    /// every event read before it is handled: a requestor whose window's end
-    /// the thread read is dropped by then ([`Self::gone`]), and the window
-    /// that took its id hears nothing it did not ask for. `true` when an
-    /// event was handled or an answer written.
+    /// Write the answers decided this step. A round trip comes first, and
+    /// every event read until its reply is handled, so a requestor whose
+    /// window ended before the round trip reached the server is dropped by
+    /// then ([`Self::gone`]). The answers follow with no round trip among
+    /// them: each is written while its entry still holds its requestor
+    /// heard, so an `INCR` start waits on no reply, and no event is handled
+    /// between that drain and the last write. `true` when there was
+    /// something to write.
     fn write_decided(&mut self) -> Result<bool, ReplyOrIdError> {
-        let mut stepped = false;
-        loop {
-            // The round trip of the answer before may have read events.
-            while let Some(event) = self.connection.poll_for_event()? {
-                stepped = true;
-                self.event(event)?;
-            }
-            let Some(Decided { ask, text }) = self.decided.pop_front() else {
-                return Ok(stepped);
-            };
-            stepped = true;
-            let reply = match text {
-                Some((text, len)) => {
-                    self.write_text(&ask.request, ask.property, ask.form, text, len)?
-                }
+        if self.decided.is_empty() {
+            return Ok(false);
+        }
+        self.connection.get_input_focus()?.reply()?;
+        while let Some(event) = self.connection.poll_for_event()? {
+            self.event(event)?;
+        }
+        while let Some(decided) = self.decided.front() {
+            let (request, property, form) = (decided.request, decided.property, decided.form);
+            let reply = match decided.text.clone() {
+                Some((text, len)) => self.write_text(&request, property, form, text, len)?,
                 None => Reply::Refused,
             };
-            self.send_reply(&ask.request, ask.property, reply)?;
-            self.forget(ask.request.requestor)?;
+            self.send_reply(&request, property, reply)?;
+            let before = self.needs(request.requestor);
+            self.decided.pop_front();
+            self.release(request.requestor, before)?;
         }
+        Ok(true)
     }
 
     /// Write `text` in `form`, `len` bytes of it, into the requestor's
     /// `property`: whole, or `INCR` when larger than one request, each chunk
-    /// encoded as it is written.
+    /// encoded as it is written. An `INCR` start needs its requestor heard
+    /// already ([`Self::watch`]), so it reads no event.
     fn write_text(
         &mut self,
         request: &SelectionRequestEvent,
@@ -1494,11 +1605,9 @@ impl Selections {
         let Ok(size) = u32::try_from(len) else {
             return Ok(Reply::Refused);
         };
-        // The requestor's deletions of the property ask for each chunk, and
-        // its window's end ends the transfer.
-        if !self.watch(request.requestor)? {
-            return Ok(Reply::Never);
-        }
+        // The requestor's deletions of the property ask for each chunk: the
+        // selection reaches the server before the header they answer.
+        self.hear_deletions(request.requestor)?;
         self.connection.change_property32(
             PropMode::REPLACE,
             request.requestor,
@@ -1535,8 +1644,8 @@ impl Selections {
         };
         let transfer = &mut self.transfers[at];
         if transfer.ended {
-            let transfer = self.transfers.swap_remove(at);
-            self.forget(transfer.requestor)?;
+            self.transfers.swap_remove(at);
+            self.release(requestor, transfer_events())?;
             return Ok(());
         }
         let (chunk, next) =
@@ -1574,54 +1683,80 @@ impl Selections {
         total.saturating_add(text.len()) <= TRANSFER_BUDGET
     }
 
-    /// Whether something the thread holds waits on `requestor`, whose
-    /// window it therefore hears: a request waiting on the owner thread or
-    /// for its answer to be written, or a transfer. The thread's own window
-    /// is heard for as long as it lives.
-    fn hears(&self, requestor: xproto::Window) -> bool {
-        requestor == self.window
-            || self
-                .transfers
-                .iter()
-                .any(|transfer| transfer.requestor == requestor)
-            || self
-                .asks
-                .iter()
-                .any(|ask| ask.request.requestor == requestor)
+    /// What the thread needs to hear of `requestor`'s window for what waits
+    /// on it: its end while a request waits on the owner thread or for its
+    /// answer to be written, and its property deletions too while a transfer
+    /// writes to it. X keeps one event mask per client and window, a later
+    /// selection replacing the earlier, so the mask selected is always this,
+    /// moved as it changes ([`Self::release`], [`Self::hear_deletions`]).
+    fn needs(&self, requestor: xproto::Window) -> EventMask {
+        if self
+            .transfers
+            .iter()
+            .any(|transfer| transfer.requestor == requestor)
+        {
+            return transfer_events();
+        }
+        let waits = self
+            .asks
+            .iter()
+            .any(|ask| ask.request.requestor == requestor)
             || self
                 .decided
                 .iter()
-                .any(|decided| decided.ask.request.requestor == requestor)
+                .any(|decided| decided.request.requestor == requestor);
+        if waits {
+            EventMask::STRUCTURE_NOTIFY
+        } else {
+            EventMask::NO_EVENT
+        }
     }
 
-    /// Hear `requestor`'s end and its property deletions, for something
-    /// about to wait on it, until nothing does ([`Self::forget`]). `false`
-    /// when its window is gone, or cannot be heard: nothing may wait on it,
-    /// and its request is never answered, since the window that takes its
-    /// id did not ask.
-    fn watch(&self, requestor: xproto::Window) -> Result<bool, ReplyOrIdError> {
+    /// Whether the thread hears `requestor`'s window: something waits on
+    /// it, or it is the thread's own, heard for as long as it lives.
+    fn hears(&self, requestor: xproto::Window) -> bool {
+        requestor == self.window || self.needs(requestor) != EventMask::NO_EVENT
+    }
+
+    /// Hear `requestor`'s end, for a request about to wait on it, until
+    /// nothing does ([`Self::release`]).
+    fn watch(&self, requestor: xproto::Window) -> Result<Watched, ReplyOrIdError> {
         if self.hears(requestor) {
-            return Ok(true);
+            return Ok(Watched::Heard);
         }
-        match select_checked(
+        Watched::of(select_checked(
             &self.connection,
             requestor,
-            EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY,
-        ) {
-            WindowSelection::Selected => Ok(true),
-            WindowSelection::Gone | WindowSelection::Failed(ReplyError::X11Error(_)) => Ok(false),
-            WindowSelection::Failed(ReplyError::ConnectionError(error)) => Err(error.into()),
-        }
+            EventMask::STRUCTURE_NOTIFY,
+        ))
     }
 
-    /// Stop hearing `requestor` once nothing waits on it.
-    fn forget(&self, requestor: xproto::Window) -> Result<(), ReplyOrIdError> {
-        if !self.hears(requestor) {
-            self.connection.change_window_attributes(
-                requestor,
-                &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
-            )?;
+    /// Hear the property deletions of `requestor`, already heard, as well as
+    /// its end, for a transfer about to write to it.
+    fn hear_deletions(&self, requestor: xproto::Window) -> Result<(), ReplyOrIdError> {
+        if requestor != self.window && self.needs(requestor) != transfer_events() {
+            self.select(requestor, transfer_events())?;
         }
+        Ok(())
+    }
+
+    /// Something that waited on `requestor` ended: select what its window
+    /// needs now if that is not `before`, nothing once nothing waits on it.
+    fn release(&self, requestor: xproto::Window, before: EventMask) -> Result<(), ReplyOrIdError> {
+        let now = self.needs(requestor);
+        if requestor != self.window && now != before {
+            self.select(requestor, now)?;
+        }
+        Ok(())
+    }
+
+    /// Select `mask` on `requestor`'s window, unchecked: a window gone
+    /// meanwhile answers an error event, which the thread ignores.
+    fn select(&self, requestor: xproto::Window, mask: EventMask) -> Result<(), ReplyOrIdError> {
+        self.connection.change_window_attributes(
+            requestor,
+            &ChangeWindowAttributesAux::new().event_mask(mask),
+        )?;
         Ok(())
     }
 
@@ -1635,7 +1770,7 @@ impl Selections {
         self.transfers = kept;
         for transfer in expired {
             tracing::debug!("an X11 selection transfer timed out");
-            self.forget(transfer.requestor)?;
+            self.release(transfer.requestor, transfer_events())?;
         }
         let (expired, kept): (Vec<Ask>, Vec<Ask>) = std::mem::take(&mut self.asks)
             .into_iter()
@@ -1645,7 +1780,7 @@ impl Selections {
             tracing::debug!("the owner thread left an X11 primary selection request unanswered");
         }
         self.decided
-            .extend(expired.into_iter().map(|ask| Decided { ask, text: None }));
+            .extend(expired.into_iter().map(|ask| Decided::answer(ask, None)));
         Ok(())
     }
 
@@ -1685,7 +1820,19 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
         reason = "ADR-0287: a panic ends the clipboard thread, which answers its reads and writes `Gone` first"
     )]
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        steps(&mut selections, &commands, bell)
+        let stepped = steps(&mut selections, &commands, bell);
+        // The answers decided before the loop ended (at `Stop`, or as a
+        // reply failed) are owed to requestors still waiting: written on
+        // every exit, which a broken connection refuses at once. The loop's
+        // own failure is the one reported.
+        let written = selections.write_decided().and_then(|_| {
+            // The connection closes next, and a server drops the requests
+            // of a client that closed before it read them: a round trip has
+            // it carry out the answers first.
+            selections.connection.get_input_focus()?.reply()?;
+            Ok(())
+        });
+        stepped.and(written)
     }));
     #[expect(
         clippy::disallowed_methods,
@@ -1767,6 +1914,7 @@ fn steps(
         let _ = rustix::io::read(bell, &mut count);
         while let Ok(command) = commands.try_recv() {
             if !selections.command(command)? {
+                // [`run`] writes what this batch decided.
                 return Ok(());
             }
         }
@@ -1778,7 +1926,8 @@ fn steps(
             selections.event(event)?;
         }
         selections.expire(Instant::now())?;
-        // The answers decided this step go last, after the events read.
+        // The answers decided this step go last, after the events read until
+        // a round trip of their own.
         heard |= selections.write_decided()?;
         selections.connection.flush()?;
         if heard {
@@ -1816,7 +1965,50 @@ fn not_before(time: xproto::Timestamp, since: xproto::Timestamp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TEXT, append, not_before};
+    use x11rb::errors::ReplyError;
+    use x11rb::protocol::ErrorKind;
+    use x11rb::x11_utils::X11Error;
+
+    use super::{Answer, MAX_TEXT, Reply, Watched, WindowSelection, append, not_before};
+
+    /// A requestor whose window is gone is never answered, since the window
+    /// that takes its id did not ask; one the server will not let the thread
+    /// hear for another reason is there and waiting, and is refused (ICCCM
+    /// §2.2). Xvfb refuses this selection only with `BadWindow`, so the other
+    /// refusals are fed in at the seam.
+    #[test]
+    fn a_requestor_that_cannot_be_heard_is_refused_unless_it_is_gone() {
+        let refused = |error_kind| {
+            WindowSelection::Failed(ReplyError::X11Error(X11Error {
+                error_kind,
+                error_code: 0,
+                sequence: 0,
+                bad_value: 0,
+                minor_opcode: 0,
+                major_opcode: 2,
+                extension_name: None,
+                request_name: Some("ChangeWindowAttributes"),
+            }))
+        };
+        let table = [
+            ("heard", WindowSelection::Selected, None),
+            ("gone", WindowSelection::Gone, Some(Answer::Never)),
+            (
+                "access",
+                refused(ErrorKind::Access),
+                Some(Answer::Now(Reply::Refused)),
+            ),
+            (
+                "alloc",
+                refused(ErrorKind::Alloc),
+                Some(Answer::Now(Reply::Refused)),
+            ),
+        ];
+        for (case, selection, expected) in table {
+            let watched = Watched::of(selection).expect("no connection error");
+            assert_eq!(watched.unheard_answer(), expected, "{case}");
+        }
+    }
 
     /// A time just past the clock's wrap is later than one just before it.
     #[test]
