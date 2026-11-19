@@ -20,7 +20,7 @@ use flui_interaction::{
     ids::{DeviceId, PointerId},
     pointer::{EventPropagation, HitTestEntry, HitTestResult},
 };
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
+use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 /// The icon a published cursor names; the paths of these tests ask for icons
 /// only.
@@ -217,7 +217,7 @@ fn departure_exits_once_and_releases_the_region(departure: Departure) {
     use flui_interaction::binding::GestureBinding;
     use flui_platform::{
         EventTime,
-        pointer::{PointerDeviceChange, PointerSignal},
+        input::pointer::{PointerDeviceChange, PointerSignal},
     };
 
     struct Release(Rc<Cell<usize>>);
@@ -1674,7 +1674,7 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
     use flui_foundation::geometry::Point;
     use flui_platform::{
         EventTime,
-        pointer::{ScrollPhase, ScrollPrecision},
+        input::pointer::{ScrollPhase, ScrollPrecision},
     };
 
     // Forward projection is (x, y) / (1 - x/2). Thus screen (0,2)

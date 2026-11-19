@@ -56,7 +56,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 
 use drop;
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     CompositionEnd, OwnerCalls, TextStore, TextStoreHost, TextStoreHostError,
 };
 use windows::Win32::{

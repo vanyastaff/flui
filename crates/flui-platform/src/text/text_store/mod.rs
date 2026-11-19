@@ -9,7 +9,7 @@
 //! verbs (ADR-0090 "Platform mapping").
 //!
 //! - [`utf16`]: every offset on this surface counts UTF-16 code units
-//!   ([`Utf16Offset`]); the conversion to a field's own representation lives
+//!   ([`Utf16Offset`](utf16::Utf16Offset)); the conversion to a field's own representation lives
 //!   here, once.
 //! - [`TextStoreRead`] and [`TextStoreEdit`]: what a session can do. A read
 //!   lock hands out only the first, so an edit under it does not compile.
@@ -62,4 +62,3 @@ pub use session::{
     TextStoreRead, TextStoreStatus,
 };
 pub use store::{EditCommand, TextStore, TextStoreChange, TextStoreObserver};
-pub use utf16::{OffsetError, Utf16Offset, Utf16Range};

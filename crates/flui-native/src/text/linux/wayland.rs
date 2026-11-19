@@ -23,7 +23,7 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::geometry::Bounds;
 use flui_platform::WindowId;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::text_store::TextStoreHost;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;

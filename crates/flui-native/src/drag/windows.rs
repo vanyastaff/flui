@@ -55,19 +55,19 @@ mod tests;
 /// and out of global memory. When that loop asks for frames is the
 /// owner's (`owner::modal_pace`).
 ///
-/// [`TransferActions`]: flui_platform::data_transfer::TransferActions
+/// [`TransferActions`]: flui_platform::transfer::data_transfer::TransferActions
 #[forbid(unsafe_code)]
 mod crossing {
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use flui_platform::UnsupportedReason;
-    use flui_platform::data_transfer::{
+    use flui_platform::input::pointer::PointerKind;
+    use flui_platform::transfer::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
         TransferPayload,
     };
-    use flui_platform::drag::IDENTITY_ESSENCE;
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::transfer::drag::IDENTITY_ESSENCE;
 
     use crate::drag::offers::{PathStyle, TransferUri};
 
@@ -525,12 +525,14 @@ use flui_foundation::DataTransferId;
 #[cfg(windows)]
 use flui_platform::{
     Unsupported, UnsupportedReason,
-    data_transfer::{
+    input::pointer::PointerKind,
+    transfer::data_transfer::{
         DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor,
         RepresentationIndex, TransferError, TransferLimits, TransferRequest,
     },
-    drag::{DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
-    pointer::PointerKind,
+    transfer::drag::{
+        DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
+    },
 };
 #[cfg(windows)]
 use parking_lot::Mutex;
@@ -1304,7 +1306,8 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
             }
         }
     }
-    let identity_format = NativeFormat::Named(flui_platform::drag::IDENTITY_ESSENCE.to_owned());
+    let identity_format =
+        NativeFormat::Named(flui_platform::transfer::drag::IDENTITY_ESSENCE.to_owned());
     let identity = formats
         .contains(&identity_format)
         .then(|| {

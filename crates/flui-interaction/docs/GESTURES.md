@@ -359,7 +359,7 @@ nothing more of that contact.
 use web_time::Instant;
 use flui_foundation::geometry::Offset;
 use flui_interaction::gesture::{Velocity, VelocityTracker};
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 
 let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
 let now = Instant::now();

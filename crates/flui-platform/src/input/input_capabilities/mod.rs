@@ -10,7 +10,7 @@ mod kind_set;
 pub use kind_set::PointerKindSet;
 
 use crate::Availability;
-use crate::input_regions::InputRegionKind;
+use crate::input::input_regions::InputRegionKind;
 
 /// The input capabilities of one surface's backend that no handle answers for: pen input,
 /// precise (phased) scrolling, trackpad pinch and rotate, touchpad holds and swipes, each kind of input region and outgoing drags,
@@ -30,8 +30,8 @@ use crate::input_regions::InputRegionKind;
 ///
 /// ```compile_fail,E0451
 /// use flui_platform::Availability;
-/// use flui_platform::input_capabilities::InputCapabilities;
-/// use flui_platform::input_capabilities::PointerKindSet;
+/// use flui_platform::input::input_capabilities::InputCapabilities;
+/// use flui_platform::input::input_capabilities::PointerKindSet;
 ///
 /// let forged = InputCapabilities {
 ///     pen: Availability::Native,
@@ -52,8 +52,8 @@ use crate::input_regions::InputRegionKind;
 ///
 /// ```
 /// use flui_platform::Availability;
-/// use flui_platform::input_capabilities::InputCapabilities;
-/// use flui_platform::input_capabilities::PointerKindSet;
+/// use flui_platform::input::input_capabilities::InputCapabilities;
+/// use flui_platform::input::input_capabilities::PointerKindSet;
 ///
 /// let wayland = InputCapabilities::builder()
 ///     .pen(Availability::Native)
@@ -116,20 +116,20 @@ impl InputCapabilities {
     }
 
     /// Precise scrolling with gesture and momentum phases
-    /// ([`ScrollPhase`](crate::pointer::ScrollPhase)), not only wheel detents.
+    /// ([`ScrollPhase`](crate::input::pointer::ScrollPhase)), not only wheel detents.
     #[must_use]
     pub const fn precise_scroll(&self) -> Availability {
         self.precise_scroll
     }
 
-    /// Trackpad pinch and rotate, delivered as [`PanZoom`](crate::pointer::PointerEvent::PanZoom).
+    /// Trackpad pinch and rotate, delivered as [`PanZoom`](crate::input::pointer::PointerEvent::PanZoom).
     #[must_use]
     pub const fn trackpad_gestures(&self) -> Availability {
         self.trackpad_gestures
     }
 
     /// Fingers resting on a touchpad, delivered as
-    /// [`TouchpadHold`](crate::pointer::PointerEvent::TouchpadHold): where it is unavailable,
+    /// [`TouchpadHold`](crate::input::pointer::PointerEvent::TouchpadHold): where it is unavailable,
     /// nothing stops a fling but a new scroll or a press.
     #[must_use]
     pub const fn touchpad_hold(&self) -> Availability {
@@ -137,7 +137,7 @@ impl InputCapabilities {
     }
 
     /// A swipe of three fingers or more, delivered as
-    /// [`TouchpadSwipe`](crate::pointer::PointerEvent::TouchpadSwipe). Where it is unavailable
+    /// [`TouchpadSwipe`](crate::input::pointer::PointerEvent::TouchpadSwipe). Where it is unavailable
     /// the OS keeps such swipes for itself, or reports none.
     #[must_use]
     pub const fn touchpad_swipe(&self) -> Availability {

@@ -20,10 +20,10 @@ use super::{
 };
 use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     Autofill, Capitalization, CommitGate, Composition, Correction, EnterAction, LockGrant,
     LockTiming, NumberFormat, Selection, TextInputOptions, TextInputPurpose, TextStore,
-    TextStoreStatus, Utf16Offset, Utf16Range,
+    TextStoreStatus, utf16::Utf16Offset, utf16::Utf16Range,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 

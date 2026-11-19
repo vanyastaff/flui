@@ -29,8 +29,8 @@ use flui_interaction::{
     pointer::PointerDispatch,
 };
 use flui_platform::EventTime;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerSource};
+use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerSource};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 

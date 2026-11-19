@@ -3,7 +3,7 @@
 use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite};
 use crate::EventTime;
-use crate::keyboard::Modifiers;
+use crate::input::keyboard::Modifiers;
 
 /// The unit a scroll distance is in, as the device reported it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,12 +31,12 @@ pub enum ScrollUnit {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::{ScrollDelta, ScrollUnit};
+/// use flui_platform::input::pointer::{ScrollDelta, ScrollUnit};
 ///
 /// let notch = ScrollDelta::try_new(ScrollUnit::Detents, 0.0, 1.0)?;
 /// assert_eq!((notch.unit(), notch.x(), notch.y()), (ScrollUnit::Detents, 0.0, 1.0));
 /// assert!(ScrollDelta::try_new(ScrollUnit::Pixels, f64::NAN, 0.0).is_err());
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollDelta {
@@ -160,7 +160,7 @@ pub enum ScrollInversion {
 /// ```
 /// use flui_foundation::geometry::Point;
 /// use flui_platform::EventTime;
-/// use flui_platform::pointer::{
+/// use flui_platform::input::pointer::{
 ///     PointerId, PointerSource, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
 ///     ScrollPhase, ScrollPrecision, ScrollUnit,
 /// };

@@ -14,8 +14,8 @@ use crate::input::assembly::{NativeCancel, PenAngles};
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
-use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::Modifiers;
+use flui_platform::input::pointer::{
     CancelReason, MotionAcceleration, PanZoomPhase, PenTool, PointerButton, PointerButtons,
     PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
 };
@@ -532,7 +532,7 @@ fn a_wheel_scrolls_unphased_from_the_cursor() {
         SCALE,
         &|horizontal, vertical| {
             ScrollDelta::try_new(
-                flui_platform::pointer::ScrollUnit::Lines,
+                flui_platform::input::pointer::ScrollUnit::Lines,
                 f64::from(-horizontal),
                 f64::from(-vertical),
             )

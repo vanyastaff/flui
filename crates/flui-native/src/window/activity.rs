@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 use flui_platform::InputLatency;
-use flui_platform::os_options::AndroidColorMode;
+use flui_platform::window::os_options::AndroidColorMode;
 
 use crate::version::gate::android::{AndroidApi, UnbufferedDispatch};
 

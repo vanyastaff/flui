@@ -78,7 +78,7 @@
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
-use flui_platform::input_regions::{InputRegion, InputRegionKind};
+use flui_platform::input::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmissionError, AppTitleBar, ApplyError, AspectRatio, Availability, CursorGrab, EventTime,
     FrameRateHint, FrameRequest, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
@@ -151,10 +151,10 @@ pub trait WindowFixture {
     }
 
     /// The input regions the window's input path honours, as its
-    /// [`InputCapabilities`](flui_platform::input_capabilities::InputCapabilities)
+    /// [`InputCapabilities`](flui_platform::input::input_capabilities::InputCapabilities)
     /// report them: the capabilities the input-region verb answers to, which
     /// the snapshot does not carry.
-    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities;
+    fn input_capabilities(&self) -> flui_platform::input::input_capabilities::InputCapabilities;
 
     /// Whether the window has a native surface, which its surface target
     /// hands out a window handle for while it is open, on the thread the

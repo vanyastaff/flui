@@ -24,9 +24,9 @@ use std::sync::Weak;
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{Autofill, EditCommand, PressTarget, TextStoreStatus};
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::text_store::{Autofill, EditCommand, PressTarget, TextStoreStatus};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};

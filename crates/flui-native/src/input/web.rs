@@ -20,7 +20,7 @@ pub mod keys {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::keyboard::ImeComposition;
+    use flui_platform::input::keyboard::ImeComposition;
 
     /// `KeyboardEvent.keyCode` of a key an input method processes: every
     /// browser reports 229 for it, including WebKit for the key that commits a
@@ -60,7 +60,7 @@ pub(crate) mod wheel {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
+    use flui_platform::input::pointer::{InputValueError, ScrollDelta, ScrollUnit};
 
     use crate::input::scroll::{WheelAmount, wheel_step};
 
@@ -455,8 +455,8 @@ pub(crate) mod events {
     use flui_foundation::geometry::{DevicePixelRatio, Point};
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
-        pointer::{
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
+        input::pointer::{
             ButtonChange, MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerButtons,
             PointerEvent, PointerId, PointerKind, PointerPosition, PointerRole, PointerSource,
             ScrollEvent, ScrollInversion,
@@ -490,7 +490,7 @@ pub(crate) mod events {
     impl HostInput for WebInput {
         /// Trackpad pinch is native where the browser has WebKit gesture
         /// events, else emulated from Control-held wheel events.
-        fn availability(&self) -> flui_platform::input_capabilities::InputCapabilities {
+        fn availability(&self) -> flui_platform::input::input_capabilities::InputCapabilities {
             crate::input::availability::web(has_gesture_events())
         }
 

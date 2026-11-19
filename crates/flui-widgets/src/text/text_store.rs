@@ -5,7 +5,7 @@
 //! [`TextEditingController`] and the laid-out `RenderEditable` — until the
 //! per-UI runtime editing state of ADR-0092 replaces them behind the same trait.
 //! The controller's UTF-8 offsets are converted at this boundary with
-//! `flui_platform::text_store::utf16`, and nowhere else.
+//! `flui_platform::text::text_store::utf16`, and nowhere else.
 //!
 //! # Sessions
 //!
@@ -62,11 +62,11 @@ use flui_interaction::text_input::{
 };
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     CommitGate, Composition, EditCommand, LockGrant, LockOutcome, LockTiming, OwnerCalls,
     PointMode, PressTarget, RangeRect, Selection, TextChange, TextInputOptions, TextStore,
     TextStoreChange, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    TextStoreStatus, utf16, utf16::Utf16Offset, utf16::Utf16Range,
 };
 use flui_rendering::pipeline::PipelineCell;
 

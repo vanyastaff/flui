@@ -23,8 +23,8 @@ use flui_interaction::{
     ids::PointerId,
     pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::{GesturePreferences, pointer::CancelReason, pointer::PenTool};
+use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::{GesturePreferences, input::pointer::CancelReason, input::pointer::PenTool};
 
 type Log = Rc<RefCell<Vec<(&'static str, GestureDisposition)>>>;
 

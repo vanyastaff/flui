@@ -12,7 +12,7 @@ pub(crate) mod intent_tests {
     use flui_interaction::focus::FocusNode;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
@@ -173,7 +173,7 @@ pub(crate) mod tab_tests {
     };
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
     };
     use flui_view::ViewExt;
     use flui_view::prelude::*;
@@ -494,7 +494,7 @@ pub(crate) mod activation_tests {
     use flui_interaction::focus::FocusNode;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
@@ -569,7 +569,7 @@ pub(crate) mod event_context_tests {
     use flui_interaction::focus::FocusNode;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
@@ -715,7 +715,7 @@ pub(crate) mod event_context_tests {
 pub(crate) mod activator_tests {
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_widgets::interaction::SingleActivator;
 

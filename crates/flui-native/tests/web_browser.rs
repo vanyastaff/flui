@@ -20,18 +20,18 @@ use std::time::Duration;
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_native::{HostWindow, Platform, WebPlatform};
 use flui_platform::Availability;
-use flui_platform::data_transfer::{
+use flui_platform::input::keyboard::{ImeComposition, KeyEvent};
+use flui_platform::input::pointer::{PanZoomPhase, PointerEvent, PointerKind};
+use flui_platform::text::text_store::{
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+    TextStoreHost, TextStoreObserver, TextStoreStatus, utf16::Utf16Offset, utf16::Utf16Range,
+};
+use flui_platform::transfer::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
 };
-use flui_platform::drag::{
+use flui_platform::transfer::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, OsDragTerms, ProcessNonce,
-};
-use flui_platform::keyboard::{ImeComposition, KeyEvent};
-use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
-use flui_platform::text_store::{
-    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
-    TextStoreHost, TextStoreObserver, TextStoreStatus, Utf16Offset, Utf16Range,
 };
 use flui_platform::{DispatchEventResult, WindowOptions};
 use flui_platform::{DragDropEvent, PlatformInput};
@@ -861,7 +861,7 @@ fn a_ctrl_held_mouse_wheel_stays_a_scroll() {
     assert!(
         scroll
             .modifiers
-            .contains(flui_platform::keyboard::Modifiers::CONTROL)
+            .contains(flui_platform::input::keyboard::Modifiers::CONTROL)
     );
 }
 
@@ -1286,7 +1286,7 @@ fn os_drag_request(ended: &Rc<RefCell<Vec<OsDragEnd>>>) -> OsDragRequest {
                 TransferPayload::Text("dragged".to_owned())
             } else {
                 TransferPayload::Custom {
-                    mime: Mime::new(flui_platform::drag::IDENTITY_ESSENCE),
+                    mime: Mime::new(flui_platform::transfer::drag::IDENTITY_ESSENCE),
                     bytes: Arc::from(Vec::new()),
                 }
             })
@@ -1339,7 +1339,7 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
         start
             .stored
             .keys()
-            .any(|dom_type| dom_type.starts_with(flui_platform::drag::IDENTITY_ESSENCE)),
+            .any(|dom_type| dom_type.starts_with(flui_platform::transfer::drag::IDENTITY_ESSENCE)),
         "the identity rides in its type: {start:?}"
     );
     assert_eq!(start.effect_allowed, "copyMove");
@@ -1640,7 +1640,9 @@ fn a_textarea_serves_the_field_without_edit_context() {
         key_at_focus("Enter", None);
         assert_eq!(
             canvas.last_key().key,
-            flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
+            flui_platform::input::keyboard::Key::Named(
+                flui_platform::input::keyboard::NamedKey::Enter
+            )
         );
 
         canvas.host.focus_store(None);
@@ -1830,8 +1832,8 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     assert_eq!(editor_hints(), r#"["none","off",null]"#);
     assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
     let plain = InMemoryTextStore::new("ab");
-    plain.set_text_input(flui_platform::text_store::TextInputOptions::new(
-        flui_platform::text_store::TextInputPurpose::Search,
+    plain.set_text_input(flui_platform::text::text_store::TextInputOptions::new(
+        flui_platform::text::text_store::TextInputPurpose::Search,
     ));
     canvas.host.focus_store(Some(as_store(&plain)));
     assert_eq!(editor_hints(), r#"["search","off","search"]"#);
@@ -1901,7 +1903,7 @@ fn completing_a_composition_in_the_hidden_editor_moves_no_focus() {
     assert_eq!(page_focus(), "editor");
     // The application commits the store's composition in place, as
     // `Abandoned` asks.
-    let committed = flui_platform::text_store::commit_composition_in_place(&*served, |_| {})
+    let committed = flui_platform::text::text_store::commit_composition_in_place(&*served, |_| {})
         .expect("the store commits");
     assert_eq!(committed, LockOutcome::Granted, "committed now");
     assert_eq!(store.composition(), None);
@@ -1932,8 +1934,10 @@ impl TextStore for RefusingStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
-    {
+    ) -> Result<
+        flui_platform::text::text_store::PressTarget,
+        flui_platform::text::text_store::TextStoreError,
+    > {
         self.inner.press_target_at(point)
     }
 
@@ -2036,8 +2040,8 @@ fn a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone() {
 /// browser) and how to capitalize and correct.
 #[wasm_bindgen_test]
 fn the_hidden_editor_states_each_purpose_and_enter_action() {
-    use flui_platform::text_store::TextInputPurpose::{Email, Phone, Search, Text, Url};
-    use flui_platform::text_store::{
+    use flui_platform::text::text_store::TextInputPurpose::{Email, Phone, Search, Text, Url};
+    use flui_platform::text::text_store::{
         Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions, TextInputPurpose,
     };
 
@@ -2109,7 +2113,7 @@ fn the_hidden_editor_states_each_purpose_and_enter_action() {
 /// attribute with none.
 #[wasm_bindgen_test]
 fn a_page_canvas_gets_back_the_inputmode_and_the_style_it_had() {
-    use flui_platform::text_store::{EnterAction, TextInputOptions, TextInputPurpose};
+    use flui_platform::text::text_store::{EnterAction, TextInputOptions, TextInputPurpose};
 
     let canvas = HostedCanvas::open_on(bare_canvas);
     let store = InMemoryTextStore::new("ab");

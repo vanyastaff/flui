@@ -76,12 +76,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Size};
-use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
+use flui_platform::transfer::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::{
     AppDataDir, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformSystemChrome,
     SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowHandler, WindowOptions, haptics::PlatformHaptics, pointer::DeviceId,
+    WindowHandler, WindowOptions, haptics::PlatformHaptics, input::pointer::DeviceId,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,

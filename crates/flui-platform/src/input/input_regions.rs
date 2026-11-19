@@ -37,13 +37,13 @@ pub enum InputRegionKind {
     /// The click that brings an inactive window forward may act here: a toolbar button, a
     /// drag source. On macOS the host reads these regions as a rough pre-filter
     /// (`acceptsFirstMouse:`): a press inside one, edges included, is delivered marked
-    /// ([`PointerButtonEvent::is_first_click`](crate::pointer::PointerButtonEvent::is_first_click)),
+    /// ([`PointerButtonEvent::is_first_click`](crate::input::pointer::PointerButtonEvent::is_first_click)),
     /// and anywhere else that click only activates the window. The gesture binding then
     /// admits a marked press only when its hit path runs through the box that reported the
     /// region, so a widget painted over the box does not receive it. On Windows, X11 and
     /// Wayland FLUI delivers the activating click unmarked, by those desktops' convention
     /// (Win32's `WM_MOUSEACTIVATE` could swallow it; FLUI does not), and the region changes
-    /// nothing ([`InputCapabilities::input_region`](crate::input_capabilities::InputCapabilities::input_region)).
+    /// nothing ([`InputCapabilities::input_region`](crate::input::input_capabilities::InputCapabilities::input_region)).
     FirstClick,
 }
 

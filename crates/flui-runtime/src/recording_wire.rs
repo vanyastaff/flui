@@ -30,15 +30,12 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_platform::Availability;
-use flui_platform::data_transfer::{
-    DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
-};
-use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
-use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
-use flui_platform::keyboard::{
+use flui_platform::input::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::input::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
+use flui_platform::input::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
     MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
     PointerButton, PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange,
@@ -46,6 +43,9 @@ use flui_platform::pointer::{
     PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent, ScrollInversion,
     ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TangentialPressure,
     TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+};
+use flui_platform::transfer::data_transfer::{
+    DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
@@ -622,7 +622,7 @@ fn samples(samples: Vec<rec::Sample>) -> Result<Vec<PointerSample>> {
         .collect()
 }
 
-impl<D: flui_platform::pointer::ButtonDirection> TryConvert<&PointerButtonEvent<D>>
+impl<D: flui_platform::input::pointer::ButtonDirection> TryConvert<&PointerButtonEvent<D>>
     for rec::ButtonEvent
 {
     fn try_convert(event: &PointerButtonEvent<D>) -> Result<Self> {
@@ -639,9 +639,9 @@ impl<D: flui_platform::pointer::ButtonDirection> TryConvert<&PointerButtonEvent<
 }
 
 /// The press `stored` records, with its first-click mark.
-fn press_event(stored: rec::ButtonEvent) -> Result<flui_platform::pointer::PointerPress> {
+fn press_event(stored: rec::ButtonEvent) -> Result<flui_platform::input::pointer::PointerPress> {
     let first_click = stored.first_click;
-    let press = button_event::<flui_platform::pointer::Press>(stored)?;
+    let press = button_event::<flui_platform::input::pointer::Press>(stored)?;
     Ok(if first_click {
         press.with_first_click()
     } else {
@@ -650,7 +650,7 @@ fn press_event(stored: rec::ButtonEvent) -> Result<flui_platform::pointer::Point
 }
 
 /// The button event `event` records, in the direction `D` names.
-fn button_event<D: flui_platform::pointer::ButtonDirection>(
+fn button_event<D: flui_platform::input::pointer::ButtonDirection>(
     stored: rec::ButtonEvent,
 ) -> Result<PointerButtonEvent<D>> {
     let mut event = PointerButtonEvent::<D>::new(

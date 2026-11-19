@@ -13,8 +13,8 @@ use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
-use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{PanZoomPhase, PointerEvent};
+use flui_platform::input::keyboard::Modifiers;
+use flui_platform::input::pointer::{PanZoomPhase, PointerEvent};
 use std::num::NonZeroU64;
 
 const EPOCH: EventTime = EventTime::from_nanos(1_000_000_000);

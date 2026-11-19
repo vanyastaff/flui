@@ -10,7 +10,7 @@ use flui_interaction::{
 };
 use flui_platform::{
     EventTime,
-    pointer::{
+    input::pointer::{
         DeviceId, PointerButtons, PointerId, PointerKind, PointerMove, PointerPosition,
         PointerSample, PointerSource,
     },

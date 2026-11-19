@@ -28,8 +28,10 @@ use flui_painting::{
     typography::{TextSpan, TextStyle},
 };
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey};
-use flui_platform::text_store::{EnterAction, OwnerCalls, TextInputOptions};
+use flui_platform::input::keyboard::{
+    ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey,
+};
+use flui_platform::text::text_store::{EnterAction, OwnerCalls, TextInputOptions};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
@@ -283,7 +285,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// # IME composition
 ///
 /// The field is a text store the platform's input method pulls from
-/// ([`flui_platform::text_store::TextStore`], ADR-0090). On focus gain,
+/// ([`flui_platform::text::text_store::TextStore`], ADR-0090). On focus gain,
 /// `EditableTextState` attaches it as a [`TextInputClient`] through
 /// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states). The input method reads
@@ -1083,7 +1085,7 @@ impl EditableTextState {
                 };
                 // A mouse, pen or trackpad press ends a touch's handles.
                 if dispatch.global.pointer_kind()
-                    != Some(flui_platform::pointer::PointerKind::Touch)
+                    != Some(flui_platform::input::pointer::PointerKind::Touch)
                 {
                     let mut failure = FirstPanic::new();
                     handles.hide(&mut failure);
@@ -1130,7 +1132,7 @@ impl EditableTextState {
                     contact: press.pointer.id,
                     source_anchor: provisional,
                     touch: dispatch.global.pointer_kind()
-                        == Some(flui_platform::pointer::PointerKind::Touch),
+                        == Some(flui_platform::input::pointer::PointerKind::Touch),
                 };
                 drag_anchor.set(Some(admitted));
                 // A composition in this field is committed before the caret
@@ -1305,7 +1307,7 @@ impl EditableTextState {
                 };
                 controller.borrow().set_selection(range.start, range.end);
                 drag_anchor.set(None);
-                if details.kind == flui_platform::pointer::PointerKind::Touch {
+                if details.kind == flui_platform::input::pointer::PointerKind::Touch {
                     let mut failure = FirstPanic::new();
                     handles.show_for_touch(false, &mut failure);
                     failure.resume();
@@ -1859,7 +1861,8 @@ impl ViewState<EditableText> for EditableTextState {
                     .replace(Rc::clone(&alive));
 
                 let last_sent_for_session = Rc::clone(&last_sent);
-                let store: Rc<dyn flui_platform::text_store::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
+                let store: Rc<dyn flui_platform::text::text_store::TextStore> =
+                    store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
                 // The backend may have restarted the IME session (`Enabled`
                 // re-fires on that restart) — clearing `last_sent`
                 // guarantees the new session gets a fresh rect instead of

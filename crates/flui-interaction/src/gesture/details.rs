@@ -9,7 +9,7 @@
 use flui_foundation::geometry::Offset;
 
 use crate::{gesture::Velocity, ids::PointerId};
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 
 // ============================================================================
 // Tap Gesture Details

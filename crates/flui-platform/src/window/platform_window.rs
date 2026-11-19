@@ -137,7 +137,7 @@ impl PreferenceQueryError {
 /// use std::sync::Arc;
 ///
 /// use flui_foundation::geometry::Point;
-/// use flui_platform::input_regions::InputRegion;
+/// use flui_platform::input::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint,
 ///     GestureGeometry, haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
@@ -215,7 +215,7 @@ impl PreferenceQueryError {
 ///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
 ///         None
 ///     }
-///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
 ///         None
 ///     }
 ///     // It shares no desktop with other windows.
@@ -289,7 +289,7 @@ impl PreferenceQueryError {
 /// use std::sync::Arc;
 ///
 /// use flui_foundation::geometry::Point;
-/// use flui_platform::input_regions::InputRegion;
+/// use flui_platform::input::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint, GestureGeometry,
 ///     haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
@@ -338,7 +338,7 @@ impl PreferenceQueryError {
 ///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
 ///         None
 ///     }
-///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
 ///         None
 ///     }
 ///     fn set_frame_rate_hint(&self, _hint: FrameRateHint) -> Result<(), Unsupported> {
@@ -499,10 +499,10 @@ pub trait PlatformWindow {
 
     /// Get this window's OS drag source, if the backend can start OS drag
     /// sessions (ADR-0211). `None` for backends without one; their
-    /// [`InputCapabilities::outgoing_drag`](crate::input_capabilities::InputCapabilities::outgoing_drag)
+    /// [`InputCapabilities::outgoing_drag`](crate::input::input_capabilities::InputCapabilities::outgoing_drag)
     /// says `Unavailable`, and a drag that needs the OS stays in-window.
     /// Every implementation says which; there is no default.
-    fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>>;
+    fn drag_source(&self) -> Option<Arc<dyn crate::transfer::drag::PlatformDragSource>>;
 
     /// Which window's content is topmost under `position`, given in this
     /// window's logical pixels and possibly outside it, honouring the stacking
@@ -533,9 +533,9 @@ pub trait PlatformWindow {
     ///
     /// The set is in paint order, and a backend keeps that order: a region later in it lies
     /// over the ones before it, which is how
-    /// [`chrome_hit`](crate::input_regions::chrome_hit) reads move areas, the content cut out
+    /// [`chrome_hit`](crate::input::input_regions::chrome_hit) reads move areas, the content cut out
     /// of them and the caption buttons. A backend keeps the regions of the kinds its window
-    /// honours ([`InputCapabilities::input_region`](crate::input_capabilities::InputCapabilities::input_region))
+    /// honours ([`InputCapabilities::input_region`](crate::input::input_capabilities::InputCapabilities::input_region))
     /// and drops the rest.
     ///
     /// It is a verb, not a [`WindowCommand`](crate::WindowCommand): commands apply at the
@@ -544,11 +544,11 @@ pub trait PlatformWindow {
     /// # Errors
     ///
     /// [`Unsupported`] exactly when the window honours no kind of input region
-    /// ([`InputCapabilities::honours_input_regions`](crate::input_capabilities::InputCapabilities::honours_input_regions)
+    /// ([`InputCapabilities::honours_input_regions`](crate::input::input_capabilities::InputCapabilities::honours_input_regions)
     /// is `false`), and the set is not kept.
     fn set_input_regions(
         &self,
-        regions: &[crate::input_regions::InputRegion],
+        regions: &[crate::input::input_regions::InputRegion],
     ) -> Result<(), Unsupported>;
 
     // ==================== Control ====================
@@ -577,7 +577,7 @@ pub trait PlatformWindow {
     /// ```compile_fail,E0046
     /// use std::sync::Arc;
     ///
-    /// use flui_platform::input_regions::InputRegion;
+    /// use flui_platform::input::input_regions::InputRegion;
     /// use flui_platform::*;
     ///
     /// struct Deferred(WindowId);

@@ -12,11 +12,11 @@ use super::{
     delivered, incoming_allowed, offered, read_type_names, source_end,
 };
 use flui_foundation::{DragSessionId, UiRuntimeId};
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data_transfer::{
     Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload,
 };
-use flui_platform::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
+use flui_platform::transfer::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
 use crate::drag::offers::{PathStyle, TransferUri};
 

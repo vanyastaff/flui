@@ -17,7 +17,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
 use flui_platform::SystemFailure;
-use flui_platform::keyboard::{Modifiers, NamedKey};
+use flui_platform::input::keyboard::{Modifiers, NamedKey};
 use rustc_hash::FxHashMap;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -393,7 +393,7 @@ mod tests {
     use std::rc::Rc;
 
     use flui_platform::capability::Abandoned;
-    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
     };

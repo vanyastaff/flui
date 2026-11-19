@@ -41,8 +41,8 @@
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{TextStoreHost, TextStoreStatus};
+use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::text_store::{TextStoreHost, TextStoreStatus};
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 

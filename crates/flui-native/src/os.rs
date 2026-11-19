@@ -11,7 +11,7 @@
 //! through `raw-window-handle`'s traits, which every window implements
 //! (ADR-0089 §2). What a window is created with on one system is not here but
 //! in the contract's `WindowOptions::os_options`
-//! (`flui_platform::os_options`).
+//! (`flui_platform::window::os_options`).
 
 #[cfg(windows)]
 pub mod windows {
@@ -22,7 +22,7 @@ pub mod windows {
     //! when they did nothing.
     //!
     //! The corners and theme a Win32 window opens with are
-    //! `flui_platform::os_options::Win32WindowOptions`.
+    //! `flui_platform::window::os_options::Win32WindowOptions`.
 
     pub use crate::window::windows::backdrop::{
         Win32Window, Win32WindowError, WindowsBackdrop, WindowsWindowExt,

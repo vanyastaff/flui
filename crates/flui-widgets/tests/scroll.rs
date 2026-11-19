@@ -569,7 +569,7 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
 pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling() {
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
             PointerPress, PointerRelease, PointerSample, PointerSource,
         },
@@ -1934,12 +1934,12 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
 
 fn dispatch_typed_wheel(
     laid: &LaidOut,
-    precision: flui_platform::pointer::ScrollPrecision,
+    precision: flui_platform::input::pointer::ScrollPrecision,
     dy: f64,
 ) {
     use flui_foundation::geometry::Point;
     use flui_platform::EventTime;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
@@ -1982,12 +1982,12 @@ impl flui_view::StatelessView for AuthoredWheelContent {
 
 fn dispatch_wheel_distance(
     laid: &LaidOut,
-    unit: flui_platform::pointer::ScrollUnit,
+    unit: flui_platform::input::pointer::ScrollUnit,
     x: f64,
     y: f64,
-    modifiers: flui_platform::keyboard::Modifiers,
+    modifiers: flui_platform::input::keyboard::Modifiers,
 ) {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent,
     };
@@ -2009,7 +2009,9 @@ fn dispatch_wheel_distance(
 pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
     use flui_foundation::geometry::Axis;
     use flui_interaction::pointer::WheelPreferencesSource;
-    use flui_platform::{WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit};
+    use flui_platform::{
+        WheelPreferences, WheelStep, input::keyboard::Modifiers, input::pointer::ScrollUnit,
+    };
     use flui_widgets::WheelScrollDistances;
 
     for axis in [Axis::Vertical, Axis::Horizontal] {
@@ -2173,7 +2175,9 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
 pub(crate) fn wheel_distances_refuse_overflow_and_the_next_packet_recovers() {
     use flui_foundation::geometry::Axis;
     use flui_interaction::pointer::WheelPreferencesSource;
-    use flui_platform::{WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit};
+    use flui_platform::{
+        WheelPreferences, WheelStep, input::keyboard::Modifiers, input::pointer::ScrollUnit,
+    };
     use flui_widgets::{InvalidWheelScrollDistance, WheelScrollDistances};
 
     for invalid in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -2259,7 +2263,7 @@ pub(crate) fn wheel_distances_refuse_overflow_and_the_next_packet_recovers() {
 }
 
 pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
-    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_platform::input::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
     let vsync = Vsync::new();
     let mut laid = crate::common::lay_out_animated(
@@ -2309,7 +2313,7 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
 /// fling coasts catches it instead: the fling stops and the content sees no
 /// tap (ADR-0208 rule 4).
 pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it() {
-    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_platform::input::pointer::ScrollPrecision::Notched;
     use flui_widgets::GestureDetector;
     let scroll = ScrollController::new();
     let vsync = Vsync::new();
@@ -2369,7 +2373,7 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
 /// press does, and leave a notched wheel's easing to reach its destination.
 pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
     use flui_foundation::geometry::Offset;
-    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_platform::input::pointer::ScrollPrecision::Notched;
     use flui_testing::TrackpadScript;
     let scroll = ScrollController::new();
     let vsync = Vsync::new();
@@ -2421,7 +2425,7 @@ pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
 }
 
 pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
-    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_platform::input::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
     let old = Vsync::new();
     let next = Vsync::new();
@@ -2456,7 +2460,7 @@ pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
 }
 
 pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
-    use flui_platform::pointer::ScrollPrecision::{Notched, Precise, Unknown};
+    use flui_platform::input::pointer::ScrollPrecision::{Notched, Precise, Unknown};
     for precision in [Precise, Unknown] {
         let scroll = ScrollController::new();
         let vsync = Vsync::new();
@@ -2501,7 +2505,7 @@ pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
 }
 
 pub(crate) fn replacing_or_unmounting_a_scrollable_retires_its_notched_motion() {
-    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_platform::input::pointer::ScrollPrecision::Notched;
     let old = ScrollController::new();
     let new = ScrollController::new();
     let vsync = Vsync::new();
@@ -2546,7 +2550,7 @@ pub(crate) fn replacing_or_unmounting_a_scrollable_retires_its_notched_motion() 
 }
 
 pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independently() {
-    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_platform::input::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
     let other = ScrollController::new();
     let vsync = Vsync::new();
@@ -3648,7 +3652,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     use flui_animation::Simulation;
     use flui_platform::{
         EventTime, PlatformInput,
-        pointer::{
+        input::pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
             PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },
@@ -5048,14 +5052,14 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
 #[derive(Debug)]
 struct CountingBehavior {
     physics: SharedScrollPhysics,
-    devices: flui_platform::input_capabilities::PointerKindSet,
+    devices: flui_platform::input::input_capabilities::PointerKindSet,
     asked: Cell<usize>,
 }
 
 impl CountingBehavior {
     fn new(
         physics: SharedScrollPhysics,
-        devices: flui_platform::input_capabilities::PointerKindSet,
+        devices: flui_platform::input::input_capabilities::PointerKindSet,
     ) -> Rc<Self> {
         Rc::new(Self {
             physics,
@@ -5074,7 +5078,7 @@ impl flui_widgets::ScrollBehavior for CountingBehavior {
     fn drag_devices(
         &self,
         _details: &flui_widgets::ScrollBehaviorDetails,
-    ) -> flui_platform::input_capabilities::PointerKindSet {
+    ) -> flui_platform::input::input_capabilities::PointerKindSet {
         self.devices
     }
 }
@@ -5104,11 +5108,11 @@ impl flui_widgets::ScrollPhysics for PinnedPhysics {
 /// Drag a 300 px viewport over 800 px of `view`'s content up by 50 px and
 /// return the offset it lands on.
 fn dragged_offset(view: impl Fn(&ScrollController) -> flui_view::BoxedView) -> f64 {
-    dragged_offset_with(flui_platform::pointer::PointerKind::Touch, view)
+    dragged_offset_with(flui_platform::input::pointer::PointerKind::Touch, view)
 }
 
 fn dragged_offset_with(
-    kind: flui_platform::pointer::PointerKind,
+    kind: flui_platform::input::pointer::PointerKind,
     view: impl Fn(&ScrollController) -> flui_view::BoxedView,
 ) -> f64 {
     let controller = ScrollController::new();
@@ -5129,30 +5133,30 @@ pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
             .child(SizedBox::new(300.0, 800.0))
             .boxed()
     };
-    let pen = flui_platform::pointer::PointerKind::Pen {
-        tool: flui_platform::pointer::PenTool::Tip,
+    let pen = flui_platform::input::pointer::PointerKind::Pen {
+        tool: flui_platform::input::pointer::PenTool::Tip,
     };
     for kind in [
-        flui_platform::pointer::PointerKind::Touch,
+        flui_platform::input::pointer::PointerKind::Touch,
         pen,
-        flui_platform::pointer::PointerKind::Virtual,
+        flui_platform::input::pointer::PointerKind::Virtual,
     ] {
         assert_eq!(dragged_offset_with(kind, list), 50.0, "{kind:?} drags");
     }
     assert_eq!(
-        dragged_offset_with(flui_platform::pointer::PointerKind::Mouse, list),
+        dragged_offset_with(flui_platform::input::pointer::PointerKind::Mouse, list),
         0.0,
         "the mouse leaves the drag"
     );
     let every = |controller: &ScrollController| {
         SingleChildScrollView::new()
             .controller(controller.clone())
-            .allowed_devices(flui_platform::input_capabilities::PointerKindSet::all())
+            .allowed_devices(flui_platform::input::input_capabilities::PointerKindSet::all())
             .child(SizedBox::new(300.0, 800.0))
             .boxed()
     };
     assert_eq!(
-        dragged_offset_with(flui_platform::pointer::PointerKind::Mouse, every),
+        dragged_offset_with(flui_platform::input::pointer::PointerKind::Mouse, every),
         50.0,
         "a view that names every device takes the mouse"
     );
@@ -5161,7 +5165,7 @@ pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
 /// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
 /// open, and what it names itself wins.
 pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
-    use flui_platform::input_capabilities::PointerKindSet;
+    use flui_platform::input::input_capabilities::PointerKindSet;
     use flui_widgets::{ScrollBehavior, ScrollConfiguration};
 
     let clamping = || -> SharedScrollPhysics { Rc::new(ClampingScrollPhysics::new()) };
@@ -5249,7 +5253,7 @@ pub(crate) fn the_default_scroll_behavior_follows_the_platform_convention() {
 /// A rebuild under the same behavior keeps the physics it answered; another
 /// behavior is asked again.
 pub(crate) fn a_scroll_view_asks_its_behavior_again_only_when_it_changes() {
-    use flui_platform::input_capabilities::PointerKindSet;
+    use flui_platform::input::input_capabilities::PointerKindSet;
     use flui_widgets::ScrollConfiguration;
 
     let controller = ScrollController::new();

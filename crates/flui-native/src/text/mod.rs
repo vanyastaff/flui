@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::text_store::TextStoreHost;
 
 use crate::host::{Absent, position};
 

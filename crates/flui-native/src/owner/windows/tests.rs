@@ -177,7 +177,7 @@ fn created(hwnd: HWND) -> CreatedWindow {
         scale: super::WindowScale::unscaled(),
         delivery: Arc::new(crate::owner::window_delivery::WindowDelivery::new(
             flui_testing::window_handler::RecordingWindowHandler::new(),
-            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+            flui_platform::input::input_capabilities::InputCapabilities::UNAVAILABLE,
         )),
         app_hooks: Rc::new(RefCell::new(super::AppHooks::new(
             Arc::new(crate::owner::app_delivery::AppDelivery::new()),

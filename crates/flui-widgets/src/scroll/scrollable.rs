@@ -105,13 +105,15 @@ use flui_interaction::{
     gesture::{HoldEnd, HoldGestureRecognizer},
     pointer::{PointerDispatch, WheelPreferencesProvider},
 };
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::pointer::TouchpadHoldPhase;
+use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey,
+};
+use flui_platform::input::pointer::TouchpadHoldPhase;
 use flui_platform::{
     WheelPreferences, WheelStep,
-    keyboard::Modifiers,
-    pointer::{ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit},
+    input::keyboard::Modifiers,
+    input::pointer::{ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit},
 };
 use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;

@@ -7,7 +7,8 @@ use crate::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
 use crate::{
-    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics,
+    input::pointer::DeviceId,
 };
 
 /// What a request asked a [`FakeHaptics`] to play.

@@ -10,12 +10,12 @@ use crate::EventTime;
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::MotionDelta;
+/// use flui_platform::input::pointer::MotionDelta;
 ///
 /// let nudge = MotionDelta::try_new(3.0, -1.5)?;
 /// assert_eq!((nudge.x(), nudge.y()), (3.0, -1.5));
 /// assert!(MotionDelta::try_new(f64::INFINITY, 0.0).is_err());
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionDelta {

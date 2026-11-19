@@ -63,9 +63,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::pointer::PointerKind;
-use flui_platform::text_store::TextStore;
+use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::pointer::PointerKind;
+use flui_platform::text::text_store::TextStore;
 /// The input a backend delivers, re-exported for implementors.
 pub use flui_runtime::HostInput;
 
@@ -108,15 +108,15 @@ pub trait BackendUnderTest {
     /// rows; `None`, the default, when the backend starts no OS drag session.
     fn drag_source(
         &mut self,
-    ) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    ) -> Option<std::sync::Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         None
     }
 
     /// When the backend documents that its OS drag session starts (ADR-0211
     /// §11); the default is when the pointer leaves the window. The source's
     /// own answer must agree.
-    fn drag_start(&self) -> flui_platform::drag::OsDragStart {
-        flui_platform::drag::OsDragStart::OnLeavingWindow
+    fn drag_start(&self) -> flui_platform::transfer::drag::OsDragStart {
+        flui_platform::transfer::drag::OsDragStart::OnLeavingWindow
     }
 
     /// Focus `store` as the field the backend's input method edits, for the

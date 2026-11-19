@@ -8,7 +8,7 @@ use flui_interaction::{
 };
 use flui_platform::{
     EventTime,
-    pointer::{
+    input::pointer::{
         ButtonChange, DeviceId, PointerButton, PointerButtons, PointerEvent, PointerId,
         PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
         PointerSample, PointerSource,

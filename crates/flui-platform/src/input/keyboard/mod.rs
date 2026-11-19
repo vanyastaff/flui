@@ -7,7 +7,7 @@
 //! and [`Code`] are generated from the W3C value lists by `cargo xtask key-vocabulary`, so a key
 //! the specification adds after the last regeneration arrives as `Unidentified`, a documented
 //! loss rather than a silent one. Text input does not travel here: an input method edits the
-//! focused field's [`TextStore`](crate::text_store::TextStore) (ADR-0090).
+//! focused field's [`TextStore`](crate::text::text_store::TextStore) (ADR-0090).
 
 #[rustfmt::skip]
 mod code;
@@ -44,7 +44,7 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use flui_platform::keyboard::{Key, NamedKey};
+    /// use flui_platform::input::keyboard::{Key, NamedKey};
     ///
     /// assert!(matches!(Key::character("é"), Key::Character(text) if text.as_str() == "é"));
     /// assert_eq!(Key::character(""), Key::Named(NamedKey::Unidentified));
@@ -64,7 +64,7 @@ impl Key {
 /// an invalid payload. Only [`Key::character`] makes one:
 ///
 /// ```compile_fail
-/// use flui_platform::keyboard::Key;
+/// use flui_platform::input::keyboard::Key;
 ///
 /// let _ = Key::Character(String::new());
 /// ```
@@ -97,7 +97,7 @@ impl From<NamedKey> for Key {
 /// release cannot be built.
 ///
 /// ```compile_fail
-/// use flui_platform::keyboard::{KeyPress, KeyState};
+/// use flui_platform::input::keyboard::{KeyPress, KeyState};
 ///
 /// let _ = KeyState::Up(KeyPress::AutoRepeat);
 /// ```
@@ -177,7 +177,7 @@ pub enum ImeComposition {
 ///
 /// ```
 /// use flui_platform::EventTime;
-/// use flui_platform::keyboard::{
+/// use flui_platform::input::keyboard::{
 ///     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 /// };
 ///

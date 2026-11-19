@@ -14,8 +14,8 @@ use flui_native::{
 };
 use flui_platform::Availability;
 use flui_platform::WindowOptions;
-use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
-use flui_platform::pointer::{
+use flui_platform::input::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::input::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
     PointerPress, PointerSample, PointerSource,
 };
@@ -116,7 +116,7 @@ fn ime() -> PlatformInput {
 }
 
 fn key_at(at: u64) -> PlatformInput {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     PlatformInput::Keyboard(KeyEvent::new(
         KeyState::Down(KeyPress::First),
         Key::character("k"),

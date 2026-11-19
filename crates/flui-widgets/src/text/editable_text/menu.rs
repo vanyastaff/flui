@@ -15,7 +15,7 @@ use flui_foundation::geometry::Offset;
 use flui_view::prelude::*;
 
 use flui_interaction::focus::FocusNode;
-use flui_platform::text_store::OwnerCalls;
+use flui_platform::text::text_store::OwnerCalls;
 
 use super::{CompositionCommit, EditableText};
 use crate::interaction::{GestureCommand, GestureDetector, MenuCause};

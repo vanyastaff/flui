@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use flui_platform::WindowId;
-use flui_platform::text_store::{TextStore, TextStoreHost};
+use flui_platform::text::text_store::{TextStore, TextStoreHost};
 use flui_testing::text_store_kit::InMemoryTextStore;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;

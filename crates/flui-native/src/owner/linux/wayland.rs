@@ -1009,8 +1009,8 @@ mod event_loop {
 
     use cursor_icon::CursorIcon;
     use flui_foundation::panic::FirstPanic;
-    use flui_platform::data_transfer::DragTransport;
-    use flui_platform::drag::PlatformDragSource;
+    use flui_platform::transfer::data_transfer::DragTransport;
+    use flui_platform::transfer::drag::PlatformDragSource;
     use flui_platform::{
         Cursor, CursorError, CursorGrab, DisplaySnapshot, PlatformFailure, SessionEndAnswer,
         SessionEndPhase, SystemNotice, WindowId,

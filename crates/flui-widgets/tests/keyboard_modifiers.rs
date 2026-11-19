@@ -2,7 +2,9 @@
 use flui_interaction::focus::FocusNode;
 use flui_platform::{
     EventTime, PlatformInput,
-    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
+    input::keyboard::{
+        Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+    },
 };
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
@@ -241,7 +243,7 @@ pub(crate) fn locks_release_repeat_and_next_operation_preserve_existing_behavior
 
 pub(crate) fn lock_states_do_not_disable_slider_navigation() {
     use crate::common::{lay_out, tight};
-    use flui_platform::keyboard::NamedKey;
+    use flui_platform::input::keyboard::NamedKey;
     use flui_rendering::semantics::NumericRange;
     use flui_widgets::Slider;
     use std::cell::RefCell;
@@ -322,7 +324,7 @@ pub(crate) fn a_composing_key_does_not_fire_shortcuts() {
     let mut field_failures = Vec::new();
     for key in [
         Key::character("x"),
-        Key::Named(flui_platform::keyboard::NamedKey::Enter),
+        Key::Named(flui_platform::input::keyboard::NamedKey::Enter),
     ] {
         let controller = TextEditingController::with_text("seed");
         let node = FocusNode::with_debug_label("composing-source field");

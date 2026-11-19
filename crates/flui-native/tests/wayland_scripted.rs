@@ -35,8 +35,8 @@ mod cases {
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::capability::PortalParent;
-    use flui_platform::keyboard::{KeyPress, KeyState};
-    use flui_platform::pointer::{PointerEvent, TouchpadSwipePhase};
+    use flui_platform::input::keyboard::{KeyPress, KeyState};
+    use flui_platform::input::pointer::{PointerEvent, TouchpadSwipePhase};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};

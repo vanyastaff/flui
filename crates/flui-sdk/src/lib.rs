@@ -131,13 +131,13 @@ pub mod platform {
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
-    pub use flui_platform::text_store::Autofill;
-    pub use flui_platform::text_store::Capitalization;
-    pub use flui_platform::text_store::Correction;
-    pub use flui_platform::text_store::EnterAction;
-    pub use flui_platform::text_store::NumberFormat;
-    pub use flui_platform::text_store::TextInputOptions;
-    pub use flui_platform::text_store::TextInputPurpose;
+    pub use flui_platform::text::text_store::Autofill;
+    pub use flui_platform::text::text_store::Capitalization;
+    pub use flui_platform::text::text_store::Correction;
+    pub use flui_platform::text::text_store::EnterAction;
+    pub use flui_platform::text::text_store::NumberFormat;
+    pub use flui_platform::text::text_store::TextInputOptions;
+    pub use flui_platform::text::text_store::TextInputPurpose;
 
     /// The capability seam (ADR-0152): what a package declares, provides and
     /// registers a platform capability with, and the owner-thread result of a
@@ -178,8 +178,8 @@ pub mod platform {
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
         pub use flui_platform::Availability;
-        pub use flui_platform::input_capabilities::InputCapabilities;
-        pub use flui_platform::input_capabilities::PointerKindSet;
+        pub use flui_platform::input::input_capabilities::InputCapabilities;
+        pub use flui_platform::input::input_capabilities::PointerKindSet;
     }
 
     /// Haptic patterns, requests and outcomes (ADR-0210); the widget handle
@@ -283,8 +283,8 @@ pub mod interaction {
     pub use flui_interaction::text_input::PrimarySelectionHandle;
     pub use flui_interaction::text_input::SelectionText;
     pub use flui_platform::EventTime;
-    pub use flui_platform::input_capabilities::PointerKindSet;
-    pub use flui_platform::pointer::PointerKind;
+    pub use flui_platform::input::input_capabilities::PointerKindSet;
+    pub use flui_platform::input::pointer::PointerKind;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
     /// presentation's `DragAndDrop` and what a receiver answers, the surface
@@ -308,7 +308,7 @@ pub mod interaction {
         pub use flui_interaction::drag::DropReceiverSlot;
         pub use flui_interaction::drag::MoveOutcome;
         pub use flui_interaction::drag::SpringLoading;
-        pub use flui_platform::data_transfer::TransferActions;
+        pub use flui_platform::transfer::data_transfer::TransferActions;
     }
 
     /// What a text widget's store is built from (ADR-0151 §6): the lock

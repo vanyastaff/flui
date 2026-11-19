@@ -1,11 +1,11 @@
 //! A set of pointer kinds.
 
 use crate::flag_set::flag_set;
-use crate::pointer::PointerKind;
+use crate::input::pointer::PointerKind;
 
 flag_set! {
     /// A set of [`PointerKind`]s, by kind and not by the pen's tool: the devices attached to a
-    /// session ([`InputCapabilities::present`](crate::input_capabilities::InputCapabilities::present)), or the
+    /// session ([`InputCapabilities::present`](crate::input::input_capabilities::InputCapabilities::present)), or the
     /// kinds a recognizer admits.
     ///
     /// [`PointerKind::Unknown`] has no member: a device whose kind the platform does not say
@@ -14,8 +14,8 @@ flag_set! {
     /// # Examples
     ///
     /// ```
-    /// use flui_platform::input_capabilities::PointerKindSet;
-    /// use flui_platform::pointer::{PenTool, PointerKind};
+    /// use flui_platform::input::input_capabilities::PointerKindSet;
+    /// use flui_platform::input::pointer::{PenTool, PointerKind};
     ///
     /// let present = PointerKindSet::MOUSE | PointerKindSet::PEN;
     /// assert!(present.contains_kind(PointerKind::Pen { tool: PenTool::Eraser }));

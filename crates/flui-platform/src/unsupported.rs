@@ -6,12 +6,12 @@
 //! mean absence embeds it instead of a unit variant of its own:
 //! [`AdmissionError`](crate::AdmissionError),
 //! [`SubmitError`](crate::SubmitError),
-//! [`CursorError`](crate::CursorError), [`DragError`](crate::drag::DragError),
+//! [`CursorError`](crate::CursorError), [`DragError`](crate::transfer::drag::DragError),
 //! [`HapticOutcome`](crate::haptics::HapticOutcome),
 //! [`LaunchError`](crate::launch::LaunchError),
 //! [`StorageError`](crate::StorageError),
 //! [`PreferenceQueryError`](crate::PreferenceQueryError),
-//! [`TextStoreHostError`](crate::text_store::TextStoreHostError) and
+//! [`TextStoreHostError`](crate::text::text_store::TextStoreHostError) and
 //! `flui_system::dialog::DialogError` (its own test, in that crate). Each converts
 //! from it and answers [`unsupported`](crate::AdmissionError::unsupported)
 //! with it, so a caller asks any of them the same question.
@@ -302,7 +302,7 @@ impl Unsupported {
 ///
 /// Delivered is not present: [`Native`](Self::Native) with no matching device
 /// attached is a normal state, and
-/// [`InputCapabilities::present`](crate::input_capabilities::InputCapabilities::present)
+/// [`InputCapabilities::present`](crate::input::input_capabilities::InputCapabilities::present)
 /// says which devices are attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[expect(

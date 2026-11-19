@@ -39,7 +39,7 @@
 //! ```
 
 use crate::containment::keep_first;
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::input_capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -68,7 +68,7 @@ use crate::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
-use flui_platform::pointer::DeviceId;
+use flui_platform::input::pointer::DeviceId;
 
 // ============================================================================
 // Details types

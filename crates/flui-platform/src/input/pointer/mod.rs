@@ -37,8 +37,8 @@
 //! ```
 //! use flui_foundation::geometry::Point;
 //! use flui_platform::EventTime;
-//! use flui_platform::keyboard::Modifiers;
-//! use flui_platform::pointer::{
+//! use flui_platform::input::keyboard::Modifiers;
+//! use flui_platform::input::pointer::{
 //!     PointerButton, PointerButtons, PointerEvent, PointerId, PointerSource, PointerKind,
 //!     PointerPosition, PointerPress, PointerRole, PointerSample,
 //! };
@@ -87,7 +87,7 @@ pub use value::{
 pub use flui_foundation::PressId;
 
 use crate::EventTime;
-use crate::keyboard::Modifiers;
+use crate::input::keyboard::Modifiers;
 
 /// One contact: a finger, a pen, the mouse, a trackpad gesture.
 ///
@@ -99,7 +99,7 @@ use crate::keyboard::Modifiers;
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::PointerId;
+/// use flui_platform::input::pointer::PointerId;
 ///
 /// let finger = PointerId::try_from(7_u64)?;
 /// assert_eq!(finger.get().get(), 7);
@@ -158,7 +158,7 @@ impl TryFrom<u64> for PointerId {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::DeviceId;
+/// use flui_platform::input::pointer::DeviceId;
 ///
 /// let pen = DeviceId::try_from(0x2a_u64)?;
 /// assert_eq!(pen.get().get(), 0x2a);
@@ -302,7 +302,7 @@ pub enum PointerRole {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::{DeviceId, PenTool, PointerId, PointerSource, PointerKind, PointerRole};
+/// use flui_platform::input::pointer::{DeviceId, PenTool, PointerId, PointerSource, PointerKind, PointerRole};
 ///
 /// let pen = PointerSource::new(PointerId::try_from(3_u64)?, PointerKind::Pen { tool: PenTool::Eraser })
 ///     .with_device(DeviceId::try_from(9_u64)?)
@@ -407,7 +407,7 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 /// ```compile_fail
 /// # use flui_foundation::geometry::Point;
 /// # use flui_platform::EventTime;
-/// # use flui_platform::pointer::*;
+/// # use flui_platform::input::pointer::*;
 /// # let info = PointerSource::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
 /// # let at = PointerSample::new(EventTime::from_nanos(0), PointerPosition::try_new(Point::new(0.0, 0.0)).unwrap());
 /// let button = PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
@@ -419,7 +419,7 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 /// ```
 /// # use flui_foundation::geometry::Point;
 /// # use flui_platform::EventTime;
-/// # use flui_platform::pointer::*;
+/// # use flui_platform::input::pointer::*;
 /// # let info = PointerSource::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
 /// # let at = PointerSample::new(EventTime::from_nanos(0), PointerPosition::try_new(Point::new(0.0, 0.0)).unwrap());
 /// let button = PointerPress::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
@@ -525,7 +525,7 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
 
     /// Whether this is a press that brought its window forward: it landed while the window
     /// was not the active one, and the host delivered it because it lies in an
-    /// [`InputRegionKind::FirstClick`](crate::input_regions::InputRegionKind::FirstClick)
+    /// [`InputRegionKind::FirstClick`](crate::input::input_regions::InputRegionKind::FirstClick)
     /// region. The framework hands such a press to the widgets only when its hit path runs
     /// through the box that reported the region. Only the macOS host marks presses; on
     /// Windows, X11 and Wayland FLUI delivers the activating click unmarked. Always `false`

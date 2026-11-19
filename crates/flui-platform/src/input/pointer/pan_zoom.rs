@@ -3,7 +3,7 @@
 use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite, within};
 use crate::EventTime;
-use crate::keyboard::Modifiers;
+use crate::input::keyboard::Modifiers;
 
 /// The scale and rotation a trackpad gesture has accumulated **since its start**.
 ///
@@ -21,12 +21,12 @@ use crate::keyboard::Modifiers;
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::PanZoomTransform;
+/// use flui_platform::input::pointer::PanZoomTransform;
 ///
 /// let zoomed = PanZoomTransform::try_new(1.5, 0.1)?;
 /// assert_eq!(zoomed.scale(), 1.5);
 /// assert!(PanZoomTransform::try_new(0.0, 0.0).is_err());
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanZoomTransform {

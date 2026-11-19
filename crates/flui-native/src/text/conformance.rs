@@ -20,7 +20,7 @@
 
 use std::rc::Rc;
 
-use flui_platform::text_store::{TextStore, TextStoreHost};
+use flui_platform::text::text_store::{TextStore, TextStoreHost};
 
 /// A field focused on the Linux hosts' text input client, with a seat's
 /// `zwp_text_input_v3` in its window.
@@ -149,8 +149,8 @@ impl AppKitClient {
 }
 
 mod appkit {
-    use flui_platform::text_store::TextStoreStatus;
-    use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
+    use flui_platform::text::text_store::TextStoreStatus;
+    use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
 
     use crate::text::apple::client::{DocumentChange, InputContext, MarkedText};
 
@@ -207,7 +207,7 @@ impl AndroidMirror {
     #[must_use]
     pub fn focus(store: Rc<dyn TextStore>) -> Self {
         use crate::text::android::ime::{Change, EditorInfo, Ledger, Mirror};
-        use flui_platform::text_store::{LockGrant, LockTiming};
+        use flui_platform::text::text_store::{LockGrant, LockTiming};
 
         let ledger = Rc::new(Ledger::default());
         let editor = EditorInfo::of(store.status());
@@ -245,7 +245,7 @@ impl AndroidMirror {
     /// units. The edit it makes of the mirror is replayed into the store
     /// under an asynchronous read-write lock, as the owner replays it.
     pub fn report(&self, text: &str, selection: (usize, usize), composing: Option<(usize, usize)>) {
-        use flui_platform::text_store::{LockGrant, LockTiming};
+        use flui_platform::text::text_store::{LockGrant, LockTiming};
 
         let java = |offset: usize| i32::try_from(offset).unwrap_or(i32::MAX);
         let (composition_start, composition_end) =
@@ -280,9 +280,9 @@ impl std::fmt::Debug for AndroidMirror {
 /// backend runs the browser's edits.
 fn edit_store(
     store: &Rc<dyn TextStore>,
-    edit: impl FnOnce(&mut dyn flui_platform::text_store::TextStoreEdit) -> bool + 'static,
+    edit: impl FnOnce(&mut dyn flui_platform::text::text_store::TextStoreEdit) -> bool + 'static,
 ) {
-    use flui_platform::text_store::{LockGrant, LockTiming};
+    use flui_platform::text::text_store::{LockGrant, LockTiming};
 
     let grant = LockGrant::read_write(move |session| {
         let _taken = edit(session);
@@ -342,7 +342,7 @@ impl WebTextarea {
     /// When the store refuses a synchronous read, which a free store grants.
     #[must_use]
     pub fn focus(store: Rc<dyn TextStore>) -> Self {
-        use flui_platform::text_store::{LockGrant, LockTiming};
+        use flui_platform::text::text_store::{LockGrant, LockTiming};
 
         let read = Rc::new(std::cell::RefCell::new(Vec::new()));
         let out = Rc::clone(&read);
@@ -380,7 +380,7 @@ impl WebTextarea {
 }
 
 mod web {
-    use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
+    use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
 
     pub(super) fn range(range: std::ops::Range<usize>) -> Utf16Range {
         Utf16Range::try_new(Utf16Offset::new(range.start), Utf16Offset::new(range.end))
@@ -473,9 +473,9 @@ impl TsfSession<'_> {
     /// `OnStartComposition` or `OnUpdateComposition` with the composition's
     /// range from `start` to `end`.
     pub fn update_composition(&self, start: usize, end: usize) {
-        let span = flui_platform::text_store::utf16::Utf16Range::try_new(
-            flui_platform::text_store::utf16::Utf16Offset::new(start),
-            flui_platform::text_store::utf16::Utf16Offset::new(end),
+        let span = flui_platform::text::text_store::utf16::Utf16Range::try_new(
+            flui_platform::text::text_store::utf16::Utf16Offset::new(start),
+            flui_platform::text::text_store::utf16::Utf16Offset::new(end),
         )
         .expect("BUG: the table names ordered ranges");
         if let Err(error) = crate::text::windows::acp::set_composition(self.slot, Some(span)) {

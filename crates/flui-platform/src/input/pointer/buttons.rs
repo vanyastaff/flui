@@ -19,7 +19,7 @@ pub struct InvalidButtonNumber(pub u8);
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::PointerButton;
+/// use flui_platform::input::pointer::PointerButton;
 ///
 /// assert_eq!(PointerButton::try_from(1), Ok(PointerButton::PRIMARY));
 /// assert_eq!(PointerButton::try_from(7).map(|b| b.number().get()), Ok(7));
@@ -86,7 +86,7 @@ impl fmt::Debug for PointerButton {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::{PointerButton, PointerButtons};
+/// use flui_platform::input::pointer::{PointerButton, PointerButtons};
 ///
 /// let held = PointerButtons::only(PointerButton::PRIMARY).with(PointerButton::SECONDARY);
 /// assert!(held.contains(PointerButton::SECONDARY));

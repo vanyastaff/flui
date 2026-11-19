@@ -1,6 +1,6 @@
 //! FLUI's W3C key tables, generated from the `keyboard-types` the workspace pins (ADR-0089 §4).
 //!
-//! `flui_platform::keyboard::{NamedKey, Code}` are FLUI's own enums, so no `keyboard-types`
+//! `flui_platform::input::keyboard::{NamedKey, Code}` are FLUI's own enums, so no `keyboard-types`
 //! type reaches a Stable signature, but their variants are the W3C `key` and `code` value lists,
 //! which `keyboard-types` already transcribes from the specifications. This command reads the
 //! `keyboard-types` sources pinned by xtask (`named_key.rs` and `code.rs`) and writes
@@ -348,7 +348,7 @@ fn write_file(
         "# Examples".to_owned(),
         String::new(),
         "```".to_owned(),
-        format!("use flui_platform::keyboard::{name};"),
+        format!("use flui_platform::input::keyboard::{name};"),
         String::new(),
         format!("assert_eq!({name}::{example}.as_str(), \"{example}\");"),
         format!("assert_eq!({name}::from_w3c(\"{example}\"), Some({name}::{example}));"),

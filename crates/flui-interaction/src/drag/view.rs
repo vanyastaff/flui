@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data_transfer::{
     DataTransferOffer, DragTransport, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };
-use flui_platform::drag::DragSessionKey;
+use flui_platform::transfer::drag::DragSessionKey;
 
 use super::item::SessionData;
 use crate::events::PointerKind;

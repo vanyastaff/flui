@@ -21,10 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point, Size};
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect, Selection,
     TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, Utf16Offset, Utf16Range,
+    TextStoreStatus, utf16::Utf16Offset, utf16::Utf16Range,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 use windows::Win32::{
@@ -155,7 +155,7 @@ impl TextStore for LateLayoutStore {
     fn press_target_at(
         &self,
         at: Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         self.inner.press_target_at(at)
     }
     fn request_lock(
@@ -200,7 +200,7 @@ impl TextStore for LateLayoutStore {
 impl LateLayoutStore {
     /// The probe's "frame": lay out what the last sessions inserted and say so.
     fn tick(&self) {
-        let len = flui_platform::text_store::utf16::utf16_len(&self.inner.text()).get();
+        let len = flui_platform::text::text_store::utf16::utf16_len(&self.inner.text()).get();
         if self.laid_out.replace(len) != len
             && let Some(observer) = self.observer.borrow().clone()
         {
@@ -685,7 +685,7 @@ fn text_services_probe() {
         late.inner.text(),
         late.inner.composition()
     );
-    if shut == Ok(flui_platform::text_store::CompositionEnd::Abandoned) {
+    if shut == Ok(flui_platform::text::text_store::CompositionEnd::Abandoned) {
         crate::text::refusal::commit_in_place(&*late_store);
         println!("PROBE (7) owner commits the composition in place");
     }

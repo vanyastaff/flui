@@ -399,7 +399,7 @@ pub use flui_interaction::gesture::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
     TapDetails,
 };
-pub use flui_platform::pointer::PanZoomEvent;
+pub use flui_platform::input::pointer::PanZoomEvent;
 pub use flui_rendering::semantics::{
     ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
     HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal,
@@ -487,7 +487,7 @@ pub mod prelude {
     pub use flui_painting::paint::Clip;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::TextBaseline;
-    pub use flui_platform::pointer::PanZoomEvent;
+    pub use flui_platform::input::pointer::PanZoomEvent;
     pub use flui_platform::{InvalidLocale, Locale};
     pub use flui_rendering::constraints::AxisDirection;
     pub use flui_rendering::constraints::BoxConstraints;

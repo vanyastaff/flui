@@ -132,11 +132,11 @@ impl TransferFormat {
 
     /// Whether this format is offered under FLUI's private drag-session
     /// identity media type
-    /// ([`DragSessionKey::representation`](crate::drag::DragSessionKey::representation)),
+    /// ([`DragSessionKey::representation`](crate::transfer::drag::DragSessionKey::representation)),
     /// whatever its parameters and whichever variant carries it.
     #[must_use]
     pub fn is_drag_identity(&self) -> bool {
-        self.essence() == crate::drag::IDENTITY_ESSENCE
+        self.essence() == crate::transfer::drag::IDENTITY_ESSENCE
     }
 }
 
@@ -446,7 +446,7 @@ impl TransferRequest {
     ///
     /// ```compile_fail
     /// let (_slot, handle) = flui_foundation::claim_slot(std::sync::Arc::new(|| {}));
-    /// let _ = flui_platform::data_transfer::TransferRequest::pending(handle);
+    /// let _ = flui_platform::transfer::data_transfer::TransferRequest::pending(handle);
     /// ```
     #[must_use = "dropping the pair immediately resolves it as cancelled"]
     pub fn pending() -> (Self, TransferCompleter) {
@@ -549,7 +549,7 @@ impl TransferCompleter {
 /// `ClipboardHandle`, with no offer to poll (ADR-0312 §6).
 ///
 /// ```compile_fail,E0599
-/// fn poll(transport: &dyn flui_platform::data_transfer::DragTransport) {
+/// fn poll(transport: &dyn flui_platform::transfer::data_transfer::DragTransport) {
 ///     let _ = transport.clipboard_offer();
 /// }
 /// ```

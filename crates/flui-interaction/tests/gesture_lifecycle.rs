@@ -801,7 +801,7 @@ fn a_held_earlier_contest_cannot_end_the_next_contact() {
 /// `event` reporting `reading` as its pressure.
 fn with_pressure(mut event: PointerEvent, reading: f32) -> PointerEvent {
     let pressure =
-        flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture");
+        flui_platform::input::pointer::Pressure::try_new(reading).expect("valid pressure fixture");
     match &mut event {
         PointerEvent::Down(data) => data.sample.pressure = Some(pressure),
         PointerEvent::Up(data) => data.sample.pressure = Some(pressure),
@@ -1330,18 +1330,18 @@ fn selected_velocity_cases(family: &str) {
             // clock stays fixed. Scale must fit ratios from that history;
             // the other producers fit admitted positions.
             let sample = |millis: u64, x| {
-                flui_platform::pointer::PointerSample::new(
+                flui_platform::input::pointer::PointerSample::new(
                     flui_platform::EventTime::from_nanos(base + millis * 1_000_000),
-                    flui_platform::pointer::PointerPosition::try_new(
+                    flui_platform::input::pointer::PointerPosition::try_new(
                         flui_foundation::geometry::Point::new(x, 0.0),
                     )
                     .expect("finite position"),
                 )
             };
             let last = samples.last().expect("authored history");
-            let movement = flui_platform::pointer::PointerMove::new(
-                flui_platform::pointer::PointerSource::new(id(2), PointerKind::Touch),
-                flui_platform::pointer::PointerButtons::NONE.with(PointerButton::PRIMARY),
+            let movement = flui_platform::input::pointer::PointerMove::new(
+                flui_platform::input::pointer::PointerSource::new(id(2), PointerKind::Touch),
+                flui_platform::input::pointer::PointerButtons::NONE.with(PointerButton::PRIMARY),
                 sample(last.0, last.1),
             )
             .with_coalesced(

@@ -28,12 +28,12 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_foundation::{DragSessionId, UiRuntimeId};
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest,
 };
-use flui_platform::drag::{
+use flui_platform::transfer::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragParts, OsDragProvider, OsDragRequest, OsDragTerms,
     ProcessNonce,
 };
@@ -1032,8 +1032,8 @@ fn hold_mouse_buttons(buttons: u32) {
 }
 
 /// The pointer a pen press on `hwnd` opens in its window's registry.
-fn pen_pressed(hwnd: HWND) -> flui_platform::pointer::PressId {
-    use flui_platform::pointer::{PenTool, PointerButton, PointerKind};
+fn pen_pressed(hwnd: HWND) -> flui_platform::input::pointer::PressId {
+    use flui_platform::input::pointer::{PenTool, PointerButton, PointerKind};
 
     use crate::input::assembly::{NativeContact, NativeDevice, ReadingAction};
     press_of(&decode_reading(
@@ -1049,7 +1049,7 @@ fn pen_pressed(hwnd: HWND) -> flui_platform::pointer::PressId {
 fn decode_reading(
     hwnd: HWND,
     contact: crate::input::assembly::NativeContact,
-    kind: flui_platform::pointer::PointerKind,
+    kind: flui_platform::input::pointer::PointerKind,
     action: crate::input::assembly::ReadingAction,
     device: Option<crate::input::assembly::NativeDevice>,
 ) -> Vec<PlatformInput> {
@@ -1073,8 +1073,8 @@ fn decode_reading(
 }
 
 /// The press sequence the `Down` among `inputs` began.
-fn press_of(inputs: &[PlatformInput]) -> flui_platform::pointer::PressId {
-    use flui_platform::pointer::PointerEvent;
+fn press_of(inputs: &[PlatformInput]) -> flui_platform::input::pointer::PressId {
+    use flui_platform::input::pointer::PointerEvent;
     inputs
         .iter()
         .find_map(|input| match input {
@@ -1501,7 +1501,10 @@ fn hostile_request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
 }
 
 /// `request` begun by the press sequence `press`.
-fn pressed_by(request: OsDragRequest, press: flui_platform::pointer::PressId) -> OsDragRequest {
+fn pressed_by(
+    request: OsDragRequest,
+    press: flui_platform::input::pointer::PressId,
+) -> OsDragRequest {
     let OsDragParts {
         terms,
         provider,
@@ -1645,7 +1648,7 @@ fn pending(
 ) -> (
     WindowsPlatform,
     Window,
-    Arc<dyn flui_platform::drag::PlatformDragSource>,
+    Arc<dyn flui_platform::transfer::drag::PlatformDragSource>,
 ) {
     let platform = WindowsPlatform::try_new().expect("platform");
     let source = open(&platform, "flui pending drag", |_| {});
@@ -1665,7 +1668,7 @@ fn pending(
 /// that later press. Red-check: resolve the contact by its pointer id.
 fn a_request_from_a_press_the_window_does_not_hold_is_refused() {
     use crate::input::assembly::{NativeContact, ReadingAction};
-    use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
+    use flui_platform::input::pointer::{PointerButton, PointerEvent, PointerKind};
 
     let platform = WindowsPlatform::try_new().expect("platform");
     let source = open(&platform, "flui stale press", |_| {});
@@ -1763,7 +1766,7 @@ fn a_pending_session_ends_when_its_platform_unwinds() {
 /// context by handle alone in `press_kind`.
 fn a_drag_source_reads_only_its_own_windows_contacts() {
     use crate::owner::windows::WindowRef;
-    use flui_platform::pointer::{PenTool, PointerKind};
+    use flui_platform::input::pointer::{PenTool, PointerKind};
 
     let transport = OleTransfer::new();
     let platform = platform_over(&transport);

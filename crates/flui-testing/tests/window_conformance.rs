@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform};
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformSystemChrome,
     PlatformTextInput, PlatformWindow, WindowCommand, WindowFrame, WindowId, WindowMode,
@@ -192,7 +192,7 @@ impl PlatformWindow for Faulty {
 
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
         match (self.1, self.0.set_input_regions(regions)) {
             (Fault::VerbsIgnoreTheirCapabilities, _) => Ok(()),
@@ -219,7 +219,7 @@ impl PlatformWindow for Faulty {
     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
         self.0.system_chrome()
     }
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         self.0.drag_source()
     }
 }
@@ -516,7 +516,7 @@ impl WindowFixture for Fixture {
         true
     }
 
-    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+    fn input_capabilities(&self) -> flui_platform::input::input_capabilities::InputCapabilities {
         self.mock().window_system().input_capabilities
     }
 

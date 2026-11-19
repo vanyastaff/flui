@@ -20,7 +20,7 @@ use crate::EventTime;
 /// ```
 /// use flui_foundation::geometry::Point;
 /// use flui_platform::EventTime;
-/// use flui_platform::pointer::{PointerPosition, PointerSample, Pressure};
+/// use flui_platform::input::pointer::{PointerPosition, PointerSample, Pressure};
 ///
 /// let position = PointerPosition::try_new(Point::new(4.0, 8.0))?;
 /// let mouse = PointerSample::new(EventTime::from_nanos(10), position);
@@ -28,7 +28,7 @@ use crate::EventTime;
 ///
 /// let pen = mouse.with_pressure(Pressure::try_new(0.0)?);
 /// assert_eq!(pen.pressure.map(Pressure::get), Some(0.0)); // a sensor reading zero
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]

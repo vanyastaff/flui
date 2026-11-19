@@ -8,7 +8,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::Point;
 use flui_painting::styling::Color;
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
     PointerPress, PointerRelease, PointerSample, PointerSource,
 };

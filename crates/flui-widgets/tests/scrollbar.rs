@@ -11,7 +11,7 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Rect};
 use flui_painting::DrawOp;
 use flui_painting::styling::Color;
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 use flui_platform::{
     ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SystemPreferences,
 };
@@ -818,7 +818,7 @@ fn run(laid: &mut LaidOut, duration: Duration) {
 
 /// A wheel tick of one line at `(x, y)`.
 fn wheel_line(laid: &LaidOut, x: f64, y: f64) {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
         ScrollUnit,
     };

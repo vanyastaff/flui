@@ -38,14 +38,14 @@ mod cases {
     use flui_native::testing::keyboard_layout;
     use flui_native::testing::wayland::{cursor_report, last_input_serial, present, run_for};
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
-    use flui_platform::data_transfer::{
+    use flui_platform::input::keyboard::{Code, Key, KeyPress, KeyState};
+    use flui_platform::input::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
+    use flui_platform::transfer::data_transfer::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{
+    use flui_platform::transfer::drag::{
         DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
     };
-    use flui_platform::keyboard::{Code, Key, KeyPress, KeyState};
-    use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};

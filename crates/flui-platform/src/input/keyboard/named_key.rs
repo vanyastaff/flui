@@ -18,7 +18,7 @@
 /// # Examples
 ///
 /// ```
-/// use flui_platform::keyboard::NamedKey;
+/// use flui_platform::input::keyboard::NamedKey;
 ///
 /// assert_eq!(NamedKey::Enter.as_str(), "Enter");
 /// assert_eq!(NamedKey::from_w3c("Enter"), Some(NamedKey::Enter));

@@ -34,8 +34,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Bounds;
-use flui_platform::text_store::utf16::{self, Utf16Offset, Utf16Range};
-use flui_platform::text_store::{
+use flui_platform::text::text_store::utf16::{self, Utf16Offset, Utf16Range};
+use flui_platform::text::text_store::{
     Capitalization, Composition, CompositionEnd, Correction, LockGrant, LockOutcome, LockTiming,
     NumberFormat, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreHost,
     TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
@@ -219,7 +219,7 @@ fn text_within(
         };
         match session.text(range) {
             Ok(text) => return Some((text, range.start())),
-            Err(flui_platform::text_store::TextStoreError::Protected) => return None,
+            Err(flui_platform::text::text_store::TextStoreError::Protected) => return None,
             Err(_) => {}
         }
     }

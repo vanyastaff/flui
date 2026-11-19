@@ -3,7 +3,7 @@ use flui_interaction::{gesture::{ForcePressDetails, LongPressEndDetails, LongPre
         DoubleTapDetails, LongPressDetails, LongPressDownDetails, LongPressStartDetails,
         MultiDragEndDetails, MultiDragUpdateDetails, MultiTapDetails, TapDetails,
     }};
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 
 fn main() {
     let _ = TapDetails {

@@ -14,8 +14,8 @@
 use std::collections::VecDeque;
 
 use flui_interaction::events::PointerEventExt;
-use flui_platform::keyboard::{KeyEvent, KeyState};
-use flui_platform::pointer::{ButtonChange, PointerEvent, PointerKind};
+use flui_platform::input::keyboard::{KeyEvent, KeyState};
+use flui_platform::input::pointer::{ButtonChange, PointerEvent, PointerKind};
 use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::{
     events::Event, events::InputEvent, geometry::LogicalPoint, input::DeviceClass,

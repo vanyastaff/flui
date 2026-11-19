@@ -791,7 +791,7 @@ impl UiRuntime {
         &self,
         presentation: &PresentationState,
         tree_revision: crate::epoch::TreeRevision,
-        input_regions: &std::rc::Rc<[flui_platform::input_regions::InputRegion]>,
+        input_regions: &std::rc::Rc<[flui_platform::input::input_regions::InputRegion]>,
     ) -> FirstPanic {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),

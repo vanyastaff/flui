@@ -135,7 +135,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
-use flui_platform::pointer::{PanZoomEvent, ScrollEvent};
+use flui_platform::input::pointer::{PanZoomEvent, ScrollEvent};
 use smallvec::SmallVec;
 
 use self::{
@@ -172,7 +172,7 @@ use crate::{
 };
 
 /// The entries of the hit path `result` a press marked first click
-/// ([`PointerButtonEvent::is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click))
+/// ([`PointerButtonEvent::is_first_click`](flui_platform::input::pointer::PointerButtonEvent::is_first_click))
 /// reaches: the innermost box on the path that accepts the first click
 /// ([`FirstClickTarget`](crate::pointer::FirstClickTarget)) and the entries its subtree
 /// put on the path just before it
@@ -2435,15 +2435,17 @@ impl GestureBinding {
     /// Returns whether the pointer identities matched; a refusal changes
     /// neither move.
     ///
-    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT
+    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform::input::pointer::PointerMove::COALESCED_HISTORY_LIMIT
     fn fold_history(
-        newer: &mut flui_platform::pointer::PointerMove,
-        older: &mut flui_platform::pointer::PointerMove,
+        newer: &mut flui_platform::input::pointer::PointerMove,
+        older: &mut flui_platform::input::pointer::PointerMove,
     ) -> bool {
         if newer.try_coalesce_from(older).is_err() {
             return false;
         }
-        newer.retain_latest_coalesced(flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT);
+        newer.retain_latest_coalesced(
+            flui_platform::input::pointer::PointerMove::COALESCED_HISTORY_LIMIT,
+        );
         true
     }
 

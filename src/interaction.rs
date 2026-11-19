@@ -150,7 +150,7 @@ pub use flui_interaction::{
     },
     ids::PointerId,
 };
-pub use flui_platform::input_capabilities::PointerKindSet;
+pub use flui_platform::input::input_capabilities::PointerKindSet;
 // A drag's rail and a transform's locked components (ADR-0208 §4), which
 // `widgets::DragSlot` and `widgets::TransformSlot` take, and the swipe.
 pub use flui_interaction::gesture::{AxisLock, TransformLock};
@@ -168,7 +168,7 @@ pub mod drag {
         DragSession, DragStart, DragTrigger, DragView, DropReceiver, DropReceiverSlot, LazyPayload,
         MoveOutcome, SpringLoading,
     };
-    pub use flui_platform::data_transfer::TransferActions;
+    pub use flui_platform::transfer::data_transfer::TransferActions;
 }
 /// A widget's haptics capability, from `LifecycleContext::haptics`
 /// (ADR-0210); unstable, under the `unstable-input` feature.
@@ -176,7 +176,7 @@ pub mod drag {
 pub use flui_interaction::haptics::{HapticObserver, HapticsHandle};
 // Arena deadlines are points on the event timeline (ADR-0207 §2).
 pub use flui_platform::EventTime;
-pub use flui_platform::pointer::{
+pub use flui_platform::input::pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
     PointerSample, PointerSource, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase,

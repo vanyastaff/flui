@@ -56,7 +56,7 @@ use std::{
 };
 
 use flui_platform::WindowHandler;
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::input_capabilities::InputCapabilities;
 
 use super::owner_lane::{exec_after_on_owner, owner_queue};
 

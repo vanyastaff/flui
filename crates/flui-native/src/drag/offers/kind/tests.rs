@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use flui_platform::data_transfer::{Mime, TransferError, TransferFormat, TransferPayload};
+use flui_platform::transfer::data_transfer::{
+    Mime, TransferError, TransferFormat, TransferPayload,
+};
 
 use super::{Kind, representations, too_large};
 use crate::clipboard::text::TextForm;

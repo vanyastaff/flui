@@ -293,8 +293,8 @@ pub(super) enum QuitNotification {
 /// UI runtime the host builds so their drags name one platform instance.
 #[derive(Clone)]
 pub(crate) struct PlatformDataTransfer {
-    pub(crate) source: Arc<dyn flui_platform::data_transfer::DragTransport>,
-    pub(crate) nonce: flui_platform::drag::ProcessNonce,
+    pub(crate) source: Arc<dyn flui_platform::transfer::data_transfer::DragTransport>,
+    pub(crate) nonce: flui_platform::transfer::drag::ProcessNonce,
 }
 
 /// The loop-scoped composition root: installed host, platform event-loop
@@ -1453,13 +1453,13 @@ impl AppRuntime {
     /// retirement outside the caller's borrow.
     pub(super) fn set_platform_data_transfer(
         &self,
-        source: Arc<dyn flui_platform::data_transfer::DragTransport>,
+        source: Arc<dyn flui_platform::transfer::data_transfer::DragTransport>,
     ) -> Option<PlatformDataTransfer> {
         self.platform_data_transfer
             .borrow_mut()
             .replace(PlatformDataTransfer {
                 source,
-                nonce: flui_platform::drag::ProcessNonce::mint(),
+                nonce: flui_platform::transfer::drag::ProcessNonce::mint(),
             })
     }
 

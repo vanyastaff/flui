@@ -14,11 +14,11 @@ use super::{
 };
 use crate::drag::offers::{format_of, payload_of_bytes};
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferPayload,
 };
-use flui_platform::drag::{DragSessionKey, OsDragProvider, OsDragTerms, ProcessNonce};
+use flui_platform::transfer::drag::{DragSessionKey, OsDragProvider, OsDragTerms, ProcessNonce};
 
 fn effect_names_round_trip_the_actions() {
     for actions in [
@@ -261,7 +261,7 @@ fn a_provider_panic_at_dragstart_is_contained_and_reported() {
                 1 => Err(TransferError::SourceGone),
                 2 => Ok(TransferPayload::Text("https://example.com".to_owned())),
                 _ => Ok(TransferPayload::Custom {
-                    mime: Mime::new(flui_platform::drag::IDENTITY_ESSENCE),
+                    mime: Mime::new(flui_platform::transfer::drag::IDENTITY_ESSENCE),
                     bytes: Arc::from(Vec::new()),
                 }),
             }

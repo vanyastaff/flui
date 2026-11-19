@@ -7,8 +7,8 @@ use flui_foundation::geometry::{EdgeInsets, Offset, Point};
 use flui_interaction::pointer::{EventPropagation, HitTestBehavior};
 use flui_platform::{
     EventTime,
-    keyboard::Modifiers,
-    pointer::{
+    input::keyboard::Modifiers,
+    input::pointer::{
         DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerButton, PointerButtons,
         PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
         PointerRelease, PointerRole, PointerSample, PointerSource, ScrollDelta, ScrollEvent,
@@ -1057,7 +1057,7 @@ pub(crate) fn scroll_claim_preserves_owned_source_units_and_phase() {
 
 pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
     use flui_foundation::geometry::Size;
-    use flui_platform::pointer::{ContactSize, PenOrientation, PenTool, Pressure, Twist};
+    use flui_platform::input::pointer::{ContactSize, PenOrientation, PenTool, Pressure, Twist};
 
     let observed = Rc::new(RefCell::new(Vec::<PointerMove>::new()));
     let sink = observed.clone();

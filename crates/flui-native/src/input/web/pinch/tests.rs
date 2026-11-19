@@ -16,7 +16,7 @@ use crate::input::web::pinch::{
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
-use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
+use flui_platform::input::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 
 fn at(millis: u64) -> EventTime {
     EventTime::from_nanos(millis * 1_000_000)

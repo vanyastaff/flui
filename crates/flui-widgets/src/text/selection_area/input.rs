@@ -22,8 +22,8 @@ use flui_interaction::{
 use flui_objects::RenderParagraph;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{LineMetrics, TextAffinity, TextPosition};
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_view::BoxedView;

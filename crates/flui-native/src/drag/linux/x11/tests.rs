@@ -15,15 +15,15 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{DevicePixelRatio, Point};
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
-use flui_platform::data_transfer::{
+use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::transfer::data_transfer::{
     DragTransport as _, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
 };
-use flui_platform::drag::{
+use flui_platform::transfer::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragProvider, OsDragRequest, OsDragTerms, ProcessNonce,
 };
-use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput, WindowId};
 use flui_testing::window_handler::RecordingWindowHandler;
 use x11rb::connection::Connection as _;

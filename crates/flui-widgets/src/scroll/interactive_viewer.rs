@@ -102,11 +102,13 @@ use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyPress, KeyState, NamedKey};
-use flui_platform::pointer::TouchpadHoldPhase;
+use flui_platform::input::keyboard::{Code, ImeComposition, Key, KeyPress, KeyState, NamedKey};
+use flui_platform::input::pointer::TouchpadHoldPhase;
 use flui_platform::{
-    keyboard::Modifiers,
-    pointer::{PanZoomEvent, PanZoomPhase, PointerKind, ScrollEvent, ScrollPhase, ScrollUnit},
+    input::keyboard::Modifiers,
+    input::pointer::{
+        PanZoomEvent, PanZoomPhase, PointerKind, ScrollEvent, ScrollPhase, ScrollUnit,
+    },
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
@@ -590,7 +592,7 @@ impl StatefulView for InteractiveViewer {
         let keys = FocusNode::with_debug_label("InteractiveViewer");
         let cancelled = Rc::downgrade(&core);
         let key_cancel = keys.register_on_key_cancel(Rc::new(
-            move |press: &flui_platform::keyboard::KeyEvent| {
+            move |press: &flui_platform::input::keyboard::KeyEvent| {
                 if let Some(core) = cancelled.upgrade() {
                     core.leaf.key_released(press.code);
                 }
@@ -1314,7 +1316,7 @@ impl ViewerCore {
     }
 
     /// An arrow key: one step of the keyboard sequence its press began.
-    fn key_pan(&self, event: &flui_platform::keyboard::KeyEvent) -> KeyEventResult {
+    fn key_pan(&self, event: &flui_platform::input::keyboard::KeyEvent) -> KeyEventResult {
         if event.state == KeyState::Up {
             self.leaf.key_released(event.code);
             return KeyEventResult::Ignored;

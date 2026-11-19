@@ -36,7 +36,7 @@ use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription
 use flui_interaction::haptics::HapticsHandle;
 use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::input_capabilities::PointerKindSet;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
@@ -61,7 +61,7 @@ use crate::{
     Semantics, SemanticsRole, Shortcuts, SingleActivator,
 };
 use flui_objects::TransformMotion;
-use flui_platform::keyboard::NamedKey;
+use flui_platform::input::keyboard::NamedKey;
 use flui_rendering::hit_testing::HitTestBehavior;
 
 /// The largest distance from zero an anchor may lie at, in logical pixels:

@@ -30,9 +30,9 @@ use std::time::Duration;
 use cursor_icon::CursorIcon;
 use flui_foundation::IdMint;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::keyboard::{KeyEvent, KeyPress, KeyState};
-use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
+use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::keyboard::{KeyEvent, KeyPress, KeyState};
+use flui_platform::input::pointer::{PenTool, PointerEvent, PointerKind};
 use flui_platform::{
     Cursor, CursorError, CursorGrab, EventTime, PlatformFailure, PlatformInput, Unsupported,
     UnsupportedReason, WindowId,
@@ -1086,7 +1086,7 @@ impl Delivering {
     fn send_modifiers(&mut self, seat: SeatKey, time: WireTime) {
         let modifiers = self
             .keymap(seat)
-            .map_or(flui_platform::keyboard::Modifiers::NONE, |keymap| {
+            .map_or(flui_platform::input::keyboard::Modifiers::NONE, |keymap| {
                 keymap.keyboard.modifiers()
             });
         self.assembly.assemble(SeatWire {
@@ -2853,7 +2853,7 @@ mod tests {
     use std::time::Duration;
 
     use flui_platform::PlatformInput;
-    use flui_platform::keyboard::{KeyPress, KeyState};
+    use flui_platform::input::keyboard::{KeyPress, KeyState};
     use web_time::Instant;
 
     use super::{

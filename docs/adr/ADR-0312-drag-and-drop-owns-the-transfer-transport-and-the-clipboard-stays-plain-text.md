@@ -110,7 +110,7 @@ in `flui-native`'s drag model, ADR-0151 §7), inside its one `DragTransport`, an
 
 ### §3. The vocabulary
 
-Plain data in `flui_platform::data_transfer`, with no lock guard in a public signature. It is
+Plain data in `flui_platform::transfer::data_transfer`, with no lock guard in a public signature. It is
 the vocabulary of every transfer, the clipboard's later read included (§7):
 
 - `Mime`: type, subtype and parameter names lowercased, parameter values kept byte for byte
@@ -130,7 +130,7 @@ the vocabulary of every transfer, the clipboard's later read included (§7):
 ### §4. The transport trait
 
 ```rust
-// flui_platform::data_transfer
+// flui_platform::transfer::data_transfer
 pub trait DragTransport: Send + Sync {
     fn request(
         &self,
@@ -262,7 +262,7 @@ Until then no type of §7 exists; `docs/gaps.md` lists the section.
 - Bad, because rich clipboard formats stay absent until a widget needs them.
 - Neutral, because `DataTransferSource` and `NullDataTransferSource` are renamed
   `DragTransport` and `NullDragTransport`; `Platform::data_transfer()` and the
-  `flui_platform::data_transfer` module keep their names, since the vocabulary is shared.
+  `flui_platform::transfer::data_transfer` module keep their names, since the vocabulary is shared.
 
 ### Confirmation
 

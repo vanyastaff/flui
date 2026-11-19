@@ -1,6 +1,6 @@
 //! Owner code at every point a text store, its arbiter and its presentation
 //! run code they do not control, all contained by
-//! `flui_platform::text_store::OwnerCalls` (ADR-0142 item 8; its module
+//! `flui_platform::text::text_store::OwnerCalls` (ADR-0142 item 8; its module
 //! doc lists the points).
 //!
 //! One row per point and failure shape: a panic in the owner code, a
@@ -21,7 +21,7 @@ use flui_foundation::geometry::Bounds;
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::text_input::{TextInputBackend, TextInputClient, TextInputOwner};
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore,
     TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
     project_ime_event,
@@ -494,7 +494,7 @@ struct Platform;
 impl PlatformTextInput for Platform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -516,7 +516,7 @@ impl TextStore for DropHook {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -1941,9 +1941,9 @@ fn store_refusing_a_grant_when_its_flush_fails() {
     store.set_observer(Some(Rc::new(FailsOnText)));
     gate.set_open(false);
     store.app_replace(
-        flui_platform::text_store::Utf16Range::try_new(
-            flui_platform::text_store::Utf16Offset::new(0),
-            flui_platform::text_store::Utf16Offset::new(1),
+        flui_platform::text::text_store::utf16::Utf16Range::try_new(
+            flui_platform::text::text_store::utf16::Utf16Offset::new(0),
+            flui_platform::text::text_store::utf16::Utf16Offset::new(1),
         )
         .expect("ordered"),
         "x",
@@ -2249,7 +2249,7 @@ impl TextStore for RefusesGate {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         self.0.press_target_at(point)
     }
     fn request_lock(
@@ -2304,7 +2304,7 @@ impl TextStore for ParksTakingTheGate {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -2387,7 +2387,7 @@ impl TextStore for ParksWhileUnwinding {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -2505,7 +2505,7 @@ impl TextStore for Refuses {
     fn press_target_at(
         &self,
         _: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         Err(TextStoreError::NoLayout)
     }
     fn request_lock(&self, _: LockGrant, _: LockTiming) -> Result<LockOutcome, TextStoreError> {
@@ -2876,7 +2876,7 @@ fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
     let store = InMemoryTextStore::new("");
     store.set_commit_gate(gate.clone());
     gate.set_open(false);
-    for _ in 0..flui_platform::text_store::DEFERRED_LOCK_CAPACITY {
+    for _ in 0..flui_platform::text::text_store::DEFERRED_LOCK_CAPACITY {
         assert_eq!(
             store.request_lock(LockGrant::read(|_| {}), LockTiming::Async),
             Ok(LockOutcome::Deferred)
@@ -2916,7 +2916,7 @@ fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
     gate.set_open(true);
     assert_eq!(
         store.run_deferred_grants(),
-        flui_platform::text_store::DEFERRED_LOCK_CAPACITY
+        flui_platform::text::text_store::DEFERRED_LOCK_CAPACITY
     );
     assert_eq!(
         edit(&*store, "b"),
@@ -2996,7 +2996,7 @@ impl PlatformTextInput for FailsToEnable {
         );
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -3045,7 +3045,7 @@ impl PlatformTextInput for FailsToEnableOnce {
             .push(allowed);
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -3206,7 +3206,7 @@ impl PlatformTextInput for FailsToDisable {
         }
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -3310,7 +3310,7 @@ impl PlatformTextInput for ClosesOnCursor {
         }
         panic!("platform failure placing the cursor");
     }
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -3351,7 +3351,7 @@ struct ParksThenFailsToDiscard;
 impl PlatformTextInput for ParksThenFailsToDiscard {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {
         let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
@@ -3389,7 +3389,7 @@ impl PlatformTextInput for ParksThenFailsOnStatus {
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
     fn discard_composition(&self) {}
 
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {
         let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
         if let Some(store) = store {
             park_through(&store, "parked by the status");
@@ -3424,7 +3424,7 @@ thread_local! {
 /// A push platform that records the statuses it is told and runs
 /// [`ON_ENABLE`] from its next enable.
 #[derive(Default)]
-struct ReentersOnEnable(parking_lot::Mutex<Vec<flui_platform::text_store::TextStoreStatus>>);
+struct ReentersOnEnable(parking_lot::Mutex<Vec<flui_platform::text::text_store::TextStoreStatus>>);
 
 impl PlatformTextInput for ReentersOnEnable {
     fn set_ime_allowed(&self, allowed: bool) {
@@ -3436,7 +3436,7 @@ impl PlatformTextInput for ReentersOnEnable {
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
     fn discard_composition(&self) {}
 
-    fn set_field_status(&self, status: flui_platform::text_store::TextStoreStatus) {
+    fn set_field_status(&self, status: flui_platform::text::text_store::TextStoreStatus) {
         self.0.lock().push(status);
     }
 }
@@ -3477,7 +3477,7 @@ struct ClosesOnDiscard;
 impl PlatformTextInput for ClosesOnDiscard {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {
         let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
@@ -3557,9 +3557,9 @@ fn in_memory_grant_reading_and_editing_its_store() {
                 if let Some(store) = reentered.upgrade() {
                     *sink.borrow_mut() = store.text();
                     store.app_replace(
-                        flui_platform::text_store::Utf16Range::try_new(
-                            flui_platform::text_store::Utf16Offset::new(0),
-                            flui_platform::text_store::Utf16Offset::new(0),
+                        flui_platform::text::text_store::utf16::Utf16Range::try_new(
+                            flui_platform::text::text_store::utf16::Utf16Offset::new(0),
+                            flui_platform::text::text_store::utf16::Utf16Offset::new(0),
                         )
                         .expect("ordered"),
                         "app ",
@@ -3649,9 +3649,9 @@ fn app_edit_held_back(store: &Weak<InMemoryTextStore>, gate: &CommitGate) {
     if let Some(store) = store.upgrade() {
         gate.set_open(false);
         store.app_replace(
-            flui_platform::text_store::Utf16Range::try_new(
-                flui_platform::text_store::Utf16Offset::new(0),
-                flui_platform::text_store::Utf16Offset::new(0),
+            flui_platform::text::text_store::utf16::Utf16Range::try_new(
+                flui_platform::text::text_store::utf16::Utf16Offset::new(0),
+                flui_platform::text::text_store::utf16::Utf16Offset::new(0),
             )
             .expect("ordered"),
             "app ",
@@ -4017,7 +4017,7 @@ struct PanicsWhenDestroyed;
 impl PlatformTextInput for PanicsWhenDestroyed {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }

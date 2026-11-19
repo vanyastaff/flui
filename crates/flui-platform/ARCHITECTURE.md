@@ -50,29 +50,33 @@ this one path (ADR-0151 §9).
   luminance ratio that overflows. A profile change
   is a display change: a new revision of the same monotone snapshot, so an older sample
   never replaces a newer profile.
-- **Grouped by area, one path at the root.** The source is grouped by area
-  (ADR-0151 §2): `window/` (the window vocabulary in its `mod.rs`, the window
-  trait, state and commands, capabilities, placement, geometry, frame, insets,
-  the handler, the surface target, the cursor, brightness, frame requests and
-  `os_options`), `input/` (`PlatformInput` in its `mod.rs`, `pointer`,
-  `keyboard`, `input_capabilities`, `input_regions`, `EventTime`), `text/`
-  (`PlatformTextInput`, `ImeEvent`, `text_store`), `transfer/` (the
-  clipboard's vocabulary, `data_transfer`, `drag`), `preferences` (with the
-  locale and the regional formats), `haptics/` (with the tier-1
-  `HapticFeedback`), `display`, `capability/` and `notice`, beside the
-  modules that are not an area. `window`, `input`, `text` and `transfer` are
-  private: each item of theirs has one public path. The contract's everyday
-  names are re-exported at the crate root. A module is public where its other
-  types keep their module path because they are not everyone's vocabulary, and
-  one that sits inside a private area is re-exported at the root under its own
-  name: `os_options` (one operating system's window creation options),
-  `haptics` (`PlatformHaptics` and the second haptic tier, which the facade and
+- **Grouped by area, one path per item.** The crate is grouped by area
+  (ADR-0151 §2): `window` (the window vocabulary, the window trait, state and
+  commands, capabilities, placement, geometry, frame, insets, the handler,
+  the surface target, the cursor, brightness, frame requests and
+  `window::os_options`), `input` (`PlatformInput`, `input::pointer`,
+  `input::keyboard`, `input::input_capabilities`, `input::input_regions`,
+  `EventTime`), `text` (`PlatformTextInput`, `ImeEvent`, `text::text_store`),
+  `transfer` (the clipboard's vocabulary, `transfer::data_transfer`,
+  `transfer::drag`), `preferences` (with the locale and the regional
+  formats), `haptics` (with the tier-1 `HapticFeedback`), `display`,
+  `capability` and `notice`, beside the modules that are not an area. The
+  contract's everyday names are re-exported at the crate root from an area's
+  private modules, so `flui_platform::WindowOptions` is their one path. A
+  module is public where its types keep their module path because they are
+  not everyone's vocabulary: the eight above inside their areas, `haptics`
+  (`PlatformHaptics` and the second haptic tier, which the facade and
   `flui-sdk` re-export only under `unstable-input`, ADR-0210 §9, while
-  `HapticFeedback` is at the root), `data_transfer`, `drag`, `text_store`,
-  `pointer`, `keyboard`, `input_capabilities`, `input_regions`, `assets`,
-  `capability`, `executor`, `http`, `launch` and `sandbox`. The menu model's
-  area lands with its first implementation and its consumer (ADR-0151 §2's
-  table). `testing` exists only under
+  `HapticFeedback` is at the root), `assets`, `capability`, `executor`,
+  `http`, `launch` and `sandbox`. The UTF-16 offset types live in
+  `text::text_store::utf16` beside the conversions that take them. The areas
+  import in one direction (`lib.rs` names the edges): `window` names `input`,
+  `text`, `transfer`, `haptics`, `display` and `preferences`, `input` names
+  `text` and `transfer`, and `haptics` names `input`; `transfer::drag` takes
+  `PressId` from `flui-foundation`, which defines it, so `transfer` names no
+  other area. `window` and `capability` still name each other, an entry of
+  `docs/gaps.md`. The menu model's area lands with its first implementation
+  and its consumer (ADR-0151 §2's table). `testing` exists only under
   the `testing` feature and in this crate's own unit tests: the doubles of its contracts, among them the
   one window double, `MockWindow` (`flui-testing` re-exports it; no crate
   outside the core host and the kits implements `PlatformWindow`), and
@@ -727,7 +731,7 @@ application sets every system's options without a `cfg` of its own. Only that
 system's host reads its field. Another host (the headless host, another
 system's) opens the window without it, and the application sees that its
 options were not taken when that system's extension in `flui::native` has no
-view of the window. They sit in their own public module, `os_options`, not at
+view of the window. They sit in their own public module, `window::os_options`, not at
 the root: they are Stable like every item of this crate (ADR-0089 §1 gives no
 module a tier of its own), so they take the least committal shape, every
 struct and enum `#[non_exhaustive]` and no conversion to the system's own

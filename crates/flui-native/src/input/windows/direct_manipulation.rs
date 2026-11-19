@@ -863,7 +863,7 @@ pub mod manipulation {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::Point;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerPosition, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
         TouchpadHoldPhase,
     };
@@ -1232,7 +1232,7 @@ pub mod manipulation {
             let (x, y) = frame.position;
             let native = NativeReading::new(
                 contact,
-                flui_platform::pointer::PointerKind::Trackpad,
+                flui_platform::input::pointer::PointerKind::Trackpad,
                 action,
                 frame.time,
             )

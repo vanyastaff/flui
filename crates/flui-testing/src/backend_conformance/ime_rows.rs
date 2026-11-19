@@ -11,9 +11,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_interaction::testing::InMemoryTextStore;
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     CommitGate, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    TextStoreRead, TextStoreStatus, utf16::Utf16Offset, utf16::Utf16Range,
 };
 
 use super::rows::Outcome;
@@ -104,7 +104,7 @@ impl TextStore for Counted {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
         self.store.press_target_at(point)
     }
 

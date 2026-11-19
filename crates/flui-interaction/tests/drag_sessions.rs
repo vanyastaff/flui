@@ -30,16 +30,16 @@ use flui_interaction::{
         InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
     },
 };
-use flui_platform::data_transfer::{
+use flui_platform::input::pointer::PressId;
+use flui_platform::input::pointer::{PenTool, PointerSource};
+use flui_platform::transfer::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
     TransferCompleter, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
 };
-use flui_platform::drag::{
+use flui_platform::transfer::drag::{
     DragRequestError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };
-use flui_platform::pointer::PressId;
-use flui_platform::pointer::{PenTool, PointerSource};
 use flui_platform::{
     DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
@@ -416,7 +416,7 @@ impl Fixture {
     /// An OS offer of plain text, as another application would make it.
     fn text_offer(&self) -> DataTransferOffer {
         let representations: Arc<[_]> = Arc::from(vec![
-            flui_platform::data_transfer::RepresentationDescriptor {
+            flui_platform::transfer::data_transfer::RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             },
@@ -896,7 +896,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     // A refusal names the session by its full identity: the same session
                     // number in another runtime is not this drag.
                     let key = session.key().expect("live");
-                    let foreign = flui_platform::drag::DragSessionKey::new(
+                    let foreign = flui_platform::transfer::drag::DragSessionKey::new(
                         key.nonce(),
                         UiRuntimeId::new(9),
                         key.session(),
@@ -2428,7 +2428,7 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
             [
                 "text/plain",
                 "text/html",
-                flui_platform::drag::IDENTITY_ESSENCE
+                flui_platform::transfer::drag::IDENTITY_ESSENCE
             ],
             "each media type once, the identity last"
         );
@@ -2472,7 +2472,7 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
         let claimed = TransferFormat::Custom {
             mime: Mime::new(&format!(
                 "{};process=1;runtime=1.1;session=1",
-                flui_platform::drag::IDENTITY_ESSENCE
+                flui_platform::transfer::drag::IDENTITY_ESSENCE
             )),
         };
         let session = f.start_with(
@@ -2498,7 +2498,7 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
         let claimed = TransferFormat::Custom {
             mime: Mime::new(&format!(
                 "{};session=2",
-                flui_platform::drag::IDENTITY_ESSENCE
+                flui_platform::transfer::drag::IDENTITY_ESSENCE
             )),
         };
         let at_start = window(Some(OsDragStart::AtStart { eager_data: false }));

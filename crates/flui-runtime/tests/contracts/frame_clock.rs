@@ -657,7 +657,9 @@ fn background_deadline_case(unknown: bool) {
         panic_after_effect: true,
     });
     let contact = |value| {
-        flui_platform::pointer::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"))
+        flui_platform::input::pointer::PointerId::new(
+            std::num::NonZeroU64::new(value).expect("contact"),
+        )
     };
     if unknown {
         let _ = primary.arena.add(contact(71), &unknown_timer);
@@ -851,10 +853,10 @@ fn delivery_case(delivery: Delivery) {
     }
     if delivery == Delivery::Deadline {
         let down = flui_interaction::events::make_down_event_for_id_with_button(
-            flui_platform::pointer::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_platform::input::pointer::PointerId::new(std::num::NonZeroU64::MIN),
             flui_foundation::geometry::Offset::new(5.0, 5.0),
-            flui_platform::pointer::PointerKind::Touch,
-            flui_platform::pointer::PointerButton::PRIMARY,
+            flui_platform::input::pointer::PointerKind::Touch,
+            flui_platform::input::pointer::PointerButton::PRIMARY,
         )
         .expect("finite touch");
         runtime.enter(|runtime| {

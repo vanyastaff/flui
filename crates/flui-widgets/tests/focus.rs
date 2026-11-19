@@ -197,7 +197,7 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
     use flui_interaction::focus::{KeyEventResult, TraversalEdgeBehavior};
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
     use flui_widgets::interaction::FocusTraversalGroup;
     let origin = FocusNode::new();
@@ -684,10 +684,10 @@ fn reading_order_tree(
     )
 }
 
-fn tab_event(backward: bool) -> flui_platform::keyboard::KeyEvent {
+fn tab_event(backward: bool) -> flui_platform::input::keyboard::KeyEvent {
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
     };
     KeyEvent::new(
         KeyState::Down(KeyPress::First),

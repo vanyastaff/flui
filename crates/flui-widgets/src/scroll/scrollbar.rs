@@ -39,8 +39,8 @@ use flui_foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_interaction::events::{PointerEvent, PointerEventExt as _};
 use flui_interaction::pointer::EventPropagation;
 use flui_painting::{Canvas, paint::Paint, styling::Color};
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::ScrollEvent;
+use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::pointer::ScrollEvent;
 use flui_platform::{
     ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, WheelPreferences,
 };

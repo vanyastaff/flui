@@ -191,7 +191,7 @@ fn sample_delivery(
     use flui_interaction::pointer::InteractionLane;
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition,
             PointerSample, PointerSource, Pressure,
         },

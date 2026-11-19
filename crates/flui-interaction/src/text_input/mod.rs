@@ -67,7 +67,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     CommitGate, CompositionEnd, LockOutcome, OwnerCalls, SelectionUi, TextChange, TextStore,
     TextStoreError, TextStoreHost, TextStoreObserver, commit_composition_in_place,
     project_ime_event,
@@ -1637,7 +1637,7 @@ mod tests {
             self.calls.lock().push(PlatformCall::CursorArea(area));
         }
 
-        fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+        fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 
         fn discard_composition(&self) {
             self.calls.lock().push(PlatformCall::Discard);

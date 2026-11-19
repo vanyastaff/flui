@@ -112,7 +112,7 @@ fn wrap_turn(angle: f64) -> f64 {
 ///
 /// ```
 /// use flui_foundation::geometry::Point;
-/// use flui_platform::pointer::{InputValueError, PointerPosition, Quantity};
+/// use flui_platform::input::pointer::{InputValueError, PointerPosition, Quantity};
 ///
 /// let position = PointerPosition::try_new(Point::new(10.5, 20.0))?;
 /// assert_eq!(position.get(), Point::new(10.5, 20.0));
@@ -165,7 +165,7 @@ impl From<PointerPosition> for Point<f64> {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::Pressure;
+/// use flui_platform::input::pointer::Pressure;
 ///
 /// assert_eq!(Pressure::try_new(0.25).map(Pressure::get), Ok(0.25));
 /// assert!(Pressure::try_new(1.2).is_err());
@@ -211,7 +211,7 @@ impl Pressure {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::TangentialPressure;
+/// use flui_platform::input::pointer::TangentialPressure;
 ///
 /// assert_eq!(TangentialPressure::try_new(-0.5).map(TangentialPressure::get), Ok(-0.5));
 /// assert!(TangentialPressure::try_new(-1.5).is_err());
@@ -261,7 +261,7 @@ impl TangentialPressure {
 ///
 /// ```
 /// use core::f64::consts::{FRAC_PI_2, FRAC_PI_4};
-/// use flui_platform::pointer::PenOrientation;
+/// use flui_platform::input::pointer::PenOrientation;
 ///
 /// let leaning = PenOrientation::try_new(FRAC_PI_4, -FRAC_PI_2)?;
 /// assert_eq!(leaning.altitude(), Some(FRAC_PI_4));
@@ -270,7 +270,7 @@ impl TangentialPressure {
 /// assert_eq!(altitude_only.altitude(), Some(0.0)); // a reported zero
 /// assert_eq!(altitude_only.azimuth(), None); // no reading
 /// assert!(PenOrientation::try_new(2.0, 0.0).is_err()); // past perpendicular
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PenOrientation {
@@ -342,7 +342,7 @@ impl PenOrientation {
 ///
 /// ```
 /// use core::f64::consts::PI;
-/// use flui_platform::pointer::Twist;
+/// use flui_platform::input::pointer::Twist;
 ///
 /// assert_eq!(Twist::try_new(-PI).map(Twist::radians), Ok(PI));
 /// assert!(Twist::try_new(f64::INFINITY).is_err());
@@ -374,12 +374,12 @@ impl Twist {
 ///
 /// ```
 /// use flui_foundation::geometry::Size;
-/// use flui_platform::pointer::ContactSize;
+/// use flui_platform::input::pointer::ContactSize;
 ///
 /// let fingertip = ContactSize::try_new(Size::new(12.0, 9.5))?;
 /// assert_eq!(fingertip.get(), Size::new(12.0, 9.5));
 /// assert!(ContactSize::try_new(Size::new(-1.0, 4.0)).is_err());
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContactSize(Size<f64>);
@@ -419,7 +419,7 @@ impl TryFrom<Size<f64>> for ContactSize {
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::HoverDistance;
+/// use flui_platform::input::pointer::HoverDistance;
 ///
 /// assert_eq!(HoverDistance::try_new(0.4).map(HoverDistance::get), Ok(0.4));
 /// assert!(HoverDistance::try_new(1.5).is_err());

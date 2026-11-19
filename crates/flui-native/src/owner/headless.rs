@@ -16,8 +16,12 @@ use std::{
 use crate::host::MemoryClipboard;
 use flui_foundation::geometry::Point;
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
-use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
-use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
+use flui_platform::transfer::data_transfer::{
+    DropFeedback, RepresentationDescriptor, TransferActions,
+};
+use flui_platform::transfer::drag::{
+    OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource,
+};
 use parking_lot::Mutex;
 
 use crate::host;
@@ -44,7 +48,7 @@ type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 /// Shared with every window, so `Send + Sync`; what it builds is owner-thread
 /// state.
 pub(crate) type TextStoreHostFactory =
-    Arc<dyn Fn() -> std::rc::Rc<dyn flui_platform::text_store::TextStoreHost> + Send + Sync>;
+    Arc<dyn Fn() -> std::rc::Rc<dyn flui_platform::text::text_store::TextStoreHost> + Send + Sync>;
 
 /// What the headless host's table names for its loop (ADR-0151 §10): the
 /// displays a platform has before a test lays out its own, the channel its
@@ -82,8 +86,8 @@ pub(crate) struct HeldPresses(Mutex<Vec<HeldPress>>);
 /// One press sequence a headless window holds, and the contact holding it.
 #[derive(Debug, Clone, Copy)]
 struct HeldPress {
-    pointer: flui_platform::pointer::PointerId,
-    press: flui_platform::pointer::PressId,
+    pointer: flui_platform::input::pointer::PointerId,
+    press: flui_platform::input::pointer::PressId,
 }
 
 impl HeldPresses {
@@ -92,7 +96,7 @@ impl HeldPresses {
     /// its contact closes it.
     pub(crate) fn observe(&self, input: &flui_platform::PlatformInput) {
         use flui_platform::PlatformInput;
-        use flui_platform::pointer::PointerEvent;
+        use flui_platform::input::pointer::PointerEvent;
         let PlatformInput::Pointer(event) = input else {
             return;
         };
@@ -108,7 +112,7 @@ impl HeldPresses {
     }
 
     /// Whether the window holds the press sequence `press` now.
-    pub(crate) fn holds(&self, press: flui_platform::pointer::PressId) -> bool {
+    pub(crate) fn holds(&self, press: flui_platform::input::pointer::PressId) -> bool {
         self.0.lock().iter().any(|open| open.press == press)
     }
 }
@@ -122,20 +126,20 @@ pub(crate) trait SimulatedDevices: Send {
     /// hears, or `None` once device identities are exhausted.
     fn attach(
         &mut self,
-        kind: flui_platform::pointer::PointerKind,
+        kind: flui_platform::input::pointer::PointerKind,
         time: flui_platform::EventTime,
-    ) -> Option<flui_platform::pointer::PointerDeviceChange>;
+    ) -> Option<flui_platform::input::pointer::PointerDeviceChange>;
 
     /// Remove the device `id` at `time`: the change every open window hears,
     /// or `None` when no such device is attached.
     fn remove(
         &mut self,
-        id: flui_platform::pointer::DeviceId,
+        id: flui_platform::input::pointer::DeviceId,
         time: flui_platform::EventTime,
-    ) -> Option<flui_platform::pointer::PointerDeviceChange>;
+    ) -> Option<flui_platform::input::pointer::PointerDeviceChange>;
 
     /// The kinds of the devices attached now.
-    fn present(&self) -> flui_platform::input_capabilities::PointerKindSet;
+    fn present(&self) -> flui_platform::input::input_capabilities::PointerKindSet;
 }
 
 /// The table the simulated system mints its drag offers in, which the drag
@@ -335,7 +339,7 @@ pub(crate) struct HeadlessState {
     /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)); `None`: push-model.
     pub(crate) text_store_host: Option<TextStoreHostFactory>,
     /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
-    pub(crate) input_availability: flui_platform::input_capabilities::InputCapabilities,
+    pub(crate) input_availability: flui_platform::input::input_capabilities::InputCapabilities,
     /// The attached input devices, as the table made them
     /// ([`HeadlessHost::devices`]).
     pub(crate) devices: Box<dyn SimulatedDevices>,
@@ -713,9 +717,10 @@ impl host::Launch for HeadlessLoop {
 }
 
 /// What the headless backend implements unless a test says otherwise.
-const fn default_input_availability() -> flui_platform::input_capabilities::InputCapabilities {
+const fn default_input_availability() -> flui_platform::input::input_capabilities::InputCapabilities
+{
     use flui_platform::Availability::Native;
-    flui_platform::input_capabilities::InputCapabilities::builder()
+    flui_platform::input::input_capabilities::InputCapabilities::builder()
         .pen(Native)
         .precise_scroll(Native)
         .trackpad_gestures(Native)
@@ -1118,7 +1123,7 @@ mod tests {
         fn drag_source(
             _: &HeadlessState,
             _: Arc<HeldPresses>,
-        ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        ) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
             None
         }
     }
@@ -1129,22 +1134,22 @@ mod tests {
     impl SimulatedDevices for NoDevices {
         fn attach(
             &mut self,
-            _: flui_platform::pointer::PointerKind,
+            _: flui_platform::input::pointer::PointerKind,
             _: flui_platform::EventTime,
-        ) -> Option<flui_platform::pointer::PointerDeviceChange> {
+        ) -> Option<flui_platform::input::pointer::PointerDeviceChange> {
             None
         }
 
         fn remove(
             &mut self,
-            _: flui_platform::pointer::DeviceId,
+            _: flui_platform::input::pointer::DeviceId,
             _: flui_platform::EventTime,
-        ) -> Option<flui_platform::pointer::PointerDeviceChange> {
+        ) -> Option<flui_platform::input::pointer::PointerDeviceChange> {
             None
         }
 
-        fn present(&self) -> flui_platform::input_capabilities::PointerKindSet {
-            flui_platform::input_capabilities::PointerKindSet::empty()
+        fn present(&self) -> flui_platform::input::input_capabilities::PointerKindSet {
+            flui_platform::input::input_capabilities::PointerKindSet::empty()
         }
     }
 

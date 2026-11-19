@@ -3,7 +3,7 @@
 //! the projected pixels, the scale or the display changed.
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint, DeviceRect, Rect};
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
+use flui_platform::input::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
 use flui_platform::{DisplayKey, DisplayRegistry};
 
 use std::rc::Rc;

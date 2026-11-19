@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use flui_platform::data_transfer::TransferLimits;
+use flui_platform::transfer::data_transfer::TransferLimits;
 
 use crate::grant::Grant;
 

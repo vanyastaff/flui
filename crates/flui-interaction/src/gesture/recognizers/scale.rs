@@ -14,7 +14,7 @@
 //! - ends below that count; combined mode ends on the final contact.
 
 use crate::containment::keep_first;
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     f64::consts::{PI, TAU},
@@ -22,7 +22,7 @@ use std::{
 };
 
 use flui_foundation::geometry::{Axis, Offset};
-use flui_platform::pointer::{PanZoomPhase, PointerSource};
+use flui_platform::input::pointer::{PanZoomPhase, PointerSource};
 use web_time::Instant;
 
 use super::{

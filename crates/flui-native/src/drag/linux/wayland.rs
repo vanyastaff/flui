@@ -50,12 +50,12 @@ use std::time::Duration;
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::{FirstPanic, discard_payload};
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
     TransferRequest,
 };
-use flui_platform::drag::PlatformDragSource;
+use flui_platform::transfer::drag::PlatformDragSource;
 use flui_platform::{DragDropEvent, PlatformInput, WindowId};
 use parking_lot::Mutex;
 use wayland_client::Proxy as _;

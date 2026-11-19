@@ -11,7 +11,7 @@
 
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::DisplayId;
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion, NotProjected};
+use flui_platform::input::input_regions::{DeviceInputRegion, InputRegion, NotProjected};
 
 /// The device-pixel regions a backend last handed the OS for one window, and the scale and
 /// display they were projected for.

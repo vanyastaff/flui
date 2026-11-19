@@ -107,7 +107,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
-use flui_platform::input_regions::ResizeEdge;
+use flui_platform::input::input_regions::ResizeEdge;
 use flui_platform::{
     AdmittedCommand, ApplyError, AspectRatio, Brightness, CloseDecision, Cursor, CursorError,
     CursorGrab, DisplaySnapshot, PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported,
@@ -2057,7 +2057,7 @@ impl PlatformWindow for X11Window {
     /// edge gestures, so those regions are kept and never read.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
         if self.closed.get() {
             return Err(Unsupported::new(UnsupportedReason::NoWindow));
@@ -2087,7 +2087,7 @@ impl PlatformWindow for X11Window {
     }
 
     /// Its sessions run over XDND on the loop's transfer.
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         Some(Arc::clone(&self.drag).drag_source(self.window_ref()))
     }
 }
@@ -2121,7 +2121,7 @@ impl HostWindow for X11Window {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()

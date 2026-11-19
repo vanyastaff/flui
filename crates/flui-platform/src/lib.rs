@@ -5,7 +5,7 @@
 //!
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`](haptics::PlatformHaptics) and
 //!   the data-transfer transport
-//!   ([`data_transfer::DragTransport`], ADR-0312);
+//!   ([`transfer::data_transfer::DragTransport`], ADR-0312);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayDescription`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
@@ -13,11 +13,11 @@
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
 //!   the directory an application's values live in ([`AppDataDir`]);
-//! - the text store an input method pulls from ([`TextStore`](text_store::TextStore) and the rest of
-//!   [`text_store`], ADR-0090);
+//! - the text store an input method pulls from ([`TextStore`](text::text_store::TextStore) and the rest of
+//!   [`text::text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
-//!   ([`input_capabilities`], ADR-0213);
+//!   ([`input::input_capabilities`], ADR-0213);
 //! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`],
@@ -42,11 +42,11 @@
 //!
 //! The host-facing `Platform` trait, the owner-thread capability, the
 //! host-side window subtrait and every OS backend live in `flui-native`,
-//! which re-exports everything defined here at its old paths. Only
+//! which re-exports none of it: each item has its one path here. Only
 //! composition roots depend on `flui-native` (ADR-0082 §2).
 //!
 //! [`PlatformInput`] carries FLUI's owned vocabulary (ADR-0143), defined in
-//! [`pointer`](mod@pointer), [`keyboard`] and [`EventTime`]. Upstream translator
+//! [`input::pointer`], [`input::keyboard`] and [`EventTime`]. Upstream translator
 //! types stay behind the backend boundary.
 //!
 //! # Implementing a capability without a backend
@@ -73,7 +73,7 @@
 //!
 //!     fn discard_composition(&self) {}
 //!
-//!     fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+//!     fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {
@@ -114,10 +114,15 @@
 // `display`, `preferences`, `transfer`, `haptics` and `capability`, beside
 // the single modules that section keeps at the root (`unsupported`, `notice`,
 // `system_chrome`, `storage`, `target_platform`) and the services that are
-// not an area of their own. An area that is not itself a public module is
-// private: each item has one public path, at the root, and a public module
-// inside it (`pointer`, `text_store`, `drag`, …) is re-exported at the root
-// under its own name.
+// not an area of their own. Each item has one public path: the everyday names
+// are re-exported at the root from an area's private modules, and the rest
+// keep the path of the area's public module (`input::pointer`,
+// `text::text_store`, `transfer::drag`, `window::os_options`). The areas
+// import in one direction: `window` names `input`, `text`, `transfer`,
+// `haptics`, `display` and `preferences`; `input` names `text` and
+// `transfer`; `haptics` names `input`. `window` and `capability` still name
+// each other (docs/gaps.md, "The window and capability areas of
+// flui-platform import each other").
 pub mod assets;
 mod backoff;
 pub mod capability;
@@ -127,7 +132,7 @@ pub mod executor;
 mod flag_set;
 pub mod haptics;
 pub mod http;
-mod input;
+pub mod input;
 pub mod launch;
 mod launch_key;
 mod notice;
@@ -141,10 +146,10 @@ mod system_failure;
 mod target_platform;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-mod text;
-mod transfer;
+pub mod text;
+pub mod transfer;
 mod unsupported;
-mod window;
+pub mod window;
 
 pub use backoff::Backoff;
 /// The system cursor shapes a [`Cursor::Icon`] names: the
@@ -159,11 +164,10 @@ pub use display::{
 };
 pub use environment::{Environment, OsRelease};
 pub use haptics::feedback::HapticFeedback;
-pub use input::event_time::EventTime;
-pub use input::{
+pub use input::event::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
-pub use input::{input_capabilities, input_regions, keyboard, pointer};
+pub use input::event_time::EventTime;
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use notice::{
     HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
@@ -193,12 +197,10 @@ pub use system_failure::{BrowserException, SystemFailure};
 pub use target_platform::TargetPlatform;
 pub use text::ime::ImeEvent;
 pub use text::input::PlatformTextInput;
-pub use text::text_store;
 pub use transfer::clipboard::{
     ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
     ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
 };
-pub use transfer::{data_transfer, drag};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::brightness::Brightness;
 pub use window::capabilities::{
@@ -216,7 +218,10 @@ pub use window::handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHand
 pub use window::insets::{
     InsetCurve, InsetMotion, InvalidInsets, KeyboardPlacement, SoftKeyboard, WindowInsets,
 };
-pub use window::os_options;
+pub use window::options::{
+    InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,
+    WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
+};
 pub use window::placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
 pub use window::platform_window::{PlatformWindow, PreferenceQueryError, WindowAt};
 pub use window::state::{
@@ -228,8 +233,4 @@ pub use window::state::{
 pub use window::surface_target::{
     DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
     RedrawRequester, SurfaceTarget, SwapChainStatistics,
-};
-pub use window::{
-    InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,
-    WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };

@@ -9,7 +9,7 @@
 //! runs every backend's table.
 
 use flui_platform::Availability;
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::input_capabilities::InputCapabilities;
 
 use Availability::{Emulated, Native};
 
@@ -196,19 +196,19 @@ pub const fn x11(gestures: bool) -> InputCapabilities {
 /// it (ADR-0211 §2). Win32 starts them through OLE, X11 over XDND and Android
 /// through `startDragAndDrop` (ADR-0348); the other backends report outgoing
 /// drags `Unavailable` until their native session lands.
-pub const DESKTOP_DRAG_START: flui_platform::drag::OsDragStart =
-    flui_platform::drag::OsDragStart::OnLeavingWindow;
+pub const DESKTOP_DRAG_START: flui_platform::transfer::drag::OsDragStart =
+    flui_platform::transfer::drag::OsDragStart::OnLeavingWindow;
 
 /// When an OS drag session can start on iOS and iPadOS: at lift, through
 /// `UIDragInteraction`, and never mid-drag (ADR-0211 §11).
-pub const IOS_DRAG_START: flui_platform::drag::OsDragStart =
-    flui_platform::drag::OsDragStart::AtStart { eager_data: false };
+pub const IOS_DRAG_START: flui_platform::transfer::drag::OsDragStart =
+    flui_platform::transfer::drag::OsDragStart::AtStart { eager_data: false };
 
 /// When an OS drag session can start on the web: at `dragstart`, with the
 /// representations materialized, since the browser allows no lazy data
 /// (ADR-0211 §11).
-pub const WEB_DRAG_START: flui_platform::drag::OsDragStart =
-    flui_platform::drag::OsDragStart::AtStart { eager_data: true };
+pub const WEB_DRAG_START: flui_platform::transfer::drag::OsDragStart =
+    flui_platform::transfer::drag::OsDragStart::AtStart { eager_data: true };
 
 #[cfg(test)]
 mod tests;

@@ -7,12 +7,12 @@ use flui_foundation::geometry::Offset;
 
 /// The platform's owned pointer vocabulary.
 pub mod pointer {
-    pub use flui_platform::pointer::*;
+    pub use flui_platform::input::pointer::*;
 }
 
 /// The platform's owned keyboard vocabulary.
 pub mod keyboard {
-    pub use flui_platform::keyboard::*;
+    pub use flui_platform::input::keyboard::*;
 }
 
 pub use cursor_icon::CursorIcon;
@@ -366,7 +366,7 @@ pub fn make_pinch_gesture_event(
 ) -> Result<PointerEvent, InputValueError> {
     use flui_platform::{
         EventTime,
-        pointer::{PanZoomPhase, PanZoomTransform},
+        input::pointer::{PanZoomPhase, PanZoomTransform},
     };
     let pointer = PointerSource::new(
         PointerId::try_from(u64::MAX).expect("BUG: nonzero synthetic gesture identity"),
@@ -398,7 +398,7 @@ pub fn make_scroll_event_with_modifiers(
     delta: Offset<f64>,
     modifiers: Modifiers,
 ) -> Result<PointerEvent, InputValueError> {
-    use flui_platform::{EventTime, pointer::ScrollUnit};
+    use flui_platform::{EventTime, input::pointer::ScrollUnit};
     let pointer = PointerSource::new(test_pointer_id(), PointerKind::Mouse);
     let position = test_sample(position)?.position;
     let delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy)?;

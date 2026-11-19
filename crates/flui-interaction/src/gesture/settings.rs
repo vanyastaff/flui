@@ -22,7 +22,7 @@
 use std::{cell::RefCell, num::NonZeroU32, rc::Rc, time::Duration};
 
 use flui_foundation::geometry::{Offset, Size};
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 use flui_platform::{FlingSpeeds, GestureGeometry, GesturePreferences, TargetPlatform};
 
 use crate::gesture::{OneEuroTuning, VelocityEstimator};
@@ -60,7 +60,7 @@ pub(crate) const SLOT_KINDS: [PointerKind; KIND_SLOTS] = [
     PointerKind::Mouse,
     PointerKind::Touch,
     PointerKind::Pen {
-        tool: flui_platform::pointer::PenTool::Tip,
+        tool: flui_platform::input::pointer::PenTool::Tip,
     },
     PointerKind::Trackpad,
     PointerKind::Virtual,

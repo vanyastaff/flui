@@ -17,7 +17,7 @@
 /// # Examples
 ///
 /// ```
-/// use flui_platform::keyboard::Code;
+/// use flui_platform::input::keyboard::Code;
 ///
 /// assert_eq!(Code::KeyA.as_str(), "KeyA");
 /// assert_eq!(Code::from_w3c("KeyA"), Some(Code::KeyA));

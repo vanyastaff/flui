@@ -9,7 +9,7 @@ use std::{
 
 use flui_foundation::geometry::Point;
 use flui_foundation::{IdMint, InputSequenceId};
-use flui_platform::pointer::{ScrollEvent, ScrollPhase};
+use flui_platform::input::pointer::{ScrollEvent, ScrollPhase};
 
 use super::{
     SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS, scroll_contact::Arbitration,
@@ -210,7 +210,7 @@ impl ScrollSequences {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::pointer::{PointerId, PointerKind};
+    use flui_platform::input::pointer::{PointerId, PointerKind};
 
     use super::*;
 

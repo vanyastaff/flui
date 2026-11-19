@@ -55,7 +55,7 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_interaction::{events::PointerEvent, ids::PointerId};
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerMove, PointerPosition, PointerPress, PointerRelease,
     PointerRole, PointerSample, PointerSource, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,

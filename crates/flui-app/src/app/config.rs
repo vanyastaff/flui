@@ -114,8 +114,8 @@ pub struct AppConfig {
 
     /// What the window is created with on each operating system that has
     /// options of its own, each read only by that system's host (ADR-0254
-    /// §8); see [`OsWindowOptions`](flui_platform::os_options::OsWindowOptions).
-    pub os_options: flui_platform::os_options::OsWindowOptions,
+    /// §8); see [`OsWindowOptions`](flui_platform::window::os_options::OsWindowOptions).
+    pub os_options: flui_platform::window::os_options::OsWindowOptions,
 
     /// Whether to show the performance overlay — FPS, average frame time, and
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
@@ -346,7 +346,7 @@ impl Default for AppConfig {
             mode: WindowMode::Normal,
             resizable: true,
             frame: flui_platform::WindowFrame::System,
-            os_options: flui_platform::os_options::OsWindowOptions::default(),
+            os_options: flui_platform::window::os_options::OsWindowOptions::default(),
             show_performance_overlay: false,
             frame_latency: FrameLatency::Balanced,
             input_latency: flui_platform::InputLatency::Balanced,
@@ -585,7 +585,10 @@ impl AppConfig {
     /// Set what the window is created with on each operating system that has
     /// options of its own.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn os_options(mut self, os_options: flui_platform::os_options::OsWindowOptions) -> Self {
+    pub fn os_options(
+        mut self,
+        os_options: flui_platform::window::os_options::OsWindowOptions,
+    ) -> Self {
         self.os_options = os_options;
         self
     }
@@ -803,8 +806,8 @@ fn window_extent(width: u32, height: u32) -> flui_platform::WindowExtent {
 /// colour mode following the surface colour it asks for where the
 /// application set no Android options of its own: Android composes a window
 /// in a wide gamut or in HDR only when the window asks.
-fn os_options_for(config: &AppConfig) -> flui_platform::os_options::OsWindowOptions {
-    use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions};
+fn os_options_for(config: &AppConfig) -> flui_platform::window::os_options::OsWindowOptions {
+    use flui_platform::window::os_options::{AndroidColorMode, AndroidWindowOptions};
 
     let mut options = config.os_options.clone();
     let color_mode = match config.surface_color {
@@ -838,7 +841,9 @@ mod tests {
     /// in, and an application's own Android options are kept as they are.
     #[test]
     fn the_android_colour_mode_follows_the_requested_surface_colour() {
-        use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions, OsWindowOptions};
+        use flui_platform::window::os_options::{
+            AndroidColorMode, AndroidWindowOptions, OsWindowOptions,
+        };
 
         let mode = |config: &AppConfig| {
             config

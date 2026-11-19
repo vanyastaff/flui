@@ -340,7 +340,7 @@ pub mod native {
 /// [`interaction`]. A package reaches the rest of the crate through
 /// `flui-sdk`.
 ///
-/// [`input_capabilities`](flui_platform::input_capabilities) and
+/// [`input_capabilities`](flui_platform::input::input_capabilities) and
 /// [`haptics`](flui_platform::haptics), the second haptic tier with its
 /// requests and outcomes, are unstable and present only under the additive
 /// `unstable-input` feature (ADR-0213 §5, ADR-0210 §9). Without it the modules
@@ -414,7 +414,7 @@ pub mod platform {
     }
     /// Data a drag or a paste carries, in the formats its source offers.
     pub mod data_transfer {
-        pub use flui_platform::data_transfer::{
+        pub use flui_platform::transfer::data_transfer::{
             DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
             RepresentationIndex, TransferCompleter, TransferError, TransferFormat, TransferLimits,
             TransferPayload, TransferRequest,
@@ -422,7 +422,7 @@ pub mod platform {
     }
     /// An operating-system drag session, as the host runs it.
     pub mod drag {
-        pub use flui_platform::drag::{
+        pub use flui_platform::transfer::drag::{
             DragRequestError, DragSessionKey, OsDragEnd, OsDragEndHook, OsDragParts,
             OsDragProvider, OsDragRequest, OsDragStart, OsDragTerms, PlatformDragSource,
             ProcessNonce,
@@ -442,13 +442,13 @@ pub mod platform {
     }
     /// The regions of a window the system treats as caption, buttons or resize edges.
     pub mod input_regions {
-        pub use flui_platform::input_regions::{
+        pub use flui_platform::input::input_regions::{
             CaptionButton, InputRegion, InputRegionKind, ResizeEdge,
         };
     }
     /// Keyboard input beyond the keys `flui::interaction` names: composition and produced text.
     pub mod keyboard {
-        pub use flui_platform::keyboard::{ImeComposition, KeyText};
+        pub use flui_platform::input::keyboard::{ImeComposition, KeyText};
     }
     /// Opening a URI or a path with the system's handler.
     pub mod launch {
@@ -459,7 +459,7 @@ pub mod platform {
     }
     /// Pointer events as the host delivers them; the vocabulary widgets use is in `flui::interaction`.
     pub mod pointer {
-        pub use flui_platform::pointer::{
+        pub use flui_platform::input::pointer::{
             ButtonDirection, ContactSize, HoverDistance, InputValueError, InvalidButtonNumber,
             MismatchedPointerSource, MotionAcceleration, MotionDelta, PenOrientation,
             PointerButtonEvent, PointerCancel, PointerDeviceChange, PointerSignal, Press, Pressure,
@@ -469,7 +469,7 @@ pub mod platform {
     }
     /// The text store a text field shares with the system's input method.
     pub mod text_store {
-        pub use flui_platform::text_store::{
+        pub use flui_platform::text::text_store::{
             Autofill, Capitalization, CommitGate, Composition, CompositionEnd, Correction,
             EnterAction, LockGrant, LockKind, LockOutcome, LockTiming, NumberFormat, OwnerCalls,
             PointMode, RangeRect, Selection, TextChange, TextInputOptions, TextInputPurpose,
@@ -478,14 +478,16 @@ pub mod platform {
         };
         /// UTF-16 offsets, the unit the input method counts in.
         pub mod utf16 {
-            pub use flui_platform::text_store::utf16::{OffsetError, Utf16Offset, Utf16Range};
+            pub use flui_platform::text::text_store::utf16::{
+                OffsetError, Utf16Offset, Utf16Range,
+            };
         }
     }
-    pub use flui_platform::os_options;
+    pub use flui_platform::window::os_options;
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input_capabilities::{
+        pub use flui_platform::input::input_capabilities::{
             InputCapabilities, InputCapabilitiesBuilder, PointerKindSet,
         };
     }

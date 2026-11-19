@@ -7,8 +7,8 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use flui_foundation::IdMint;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::{DeviceId, PointerDeviceChange, PointerKind};
+use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::pointer::{DeviceId, PointerDeviceChange, PointerKind};
 use flui_platform::{EventTime, PlatformInput};
 
 use crate::host;
@@ -32,7 +32,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn with_input_availability(
         self,
-        availability: flui_platform::input_capabilities::InputCapabilities,
+        availability: flui_platform::input::input_capabilities::InputCapabilities,
     ) -> Self {
         self.owner()
             .with_state(|state| state.input_availability = availability);
@@ -78,11 +78,11 @@ impl std::fmt::Debug for HeadlessInputDevices {
 
 impl HeadlessInputDevices {
     /// Attach a device of `kind`: every open window receives
-    /// [`DeviceAdded`](flui_platform::pointer::PointerEvent::DeviceAdded),
+    /// [`DeviceAdded`](flui_platform::input::pointer::PointerEvent::DeviceAdded),
     /// then the capability change. The id its events carry; `None` once the
     /// platform is gone or device ids are exhausted.
     pub fn attach(&self, kind: PointerKind) -> Option<DeviceId> {
-        use flui_platform::pointer::PointerEvent;
+        use flui_platform::input::pointer::PointerEvent;
         let state = self.state.upgrade()?;
         let (change, windows, present) = {
             let mut state = state.borrow_mut();
@@ -122,12 +122,12 @@ impl HeadlessInputDevices {
     }
 
     /// Remove the device `id` named: every open window receives
-    /// [`DeviceRemoved`](flui_platform::pointer::PointerEvent::DeviceRemoved),
+    /// [`DeviceRemoved`](flui_platform::input::pointer::PointerEvent::DeviceRemoved),
     /// then the capability change. A simulated device has no contacts of its
     /// own to cancel: a test injects its pointer input already assembled.
     /// `false` when it was not attached.
     pub fn remove(&self, id: DeviceId) -> bool {
-        use flui_platform::pointer::PointerEvent;
+        use flui_platform::input::pointer::PointerEvent;
         let Some(state) = self.state.upgrade() else {
             return false;
         };

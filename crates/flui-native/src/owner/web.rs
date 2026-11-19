@@ -33,8 +33,8 @@ use crate::{
     owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
     platform::Platform,
 };
-use flui_platform::data_transfer::DragTransport;
-use flui_platform::drag::PlatformDragSource;
+use flui_platform::transfer::data_transfer::DragTransport;
+use flui_platform::transfer::drag::PlatformDragSource;
 use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowIdMint};
 
 use crate::owner::sources::SystemPreferenceSource;
@@ -100,7 +100,7 @@ pub(crate) trait HostDrag: DragTransport {
 pub(crate) trait HostInput {
     /// What the page's input path delivers (ADR-0213), with no device present
     /// yet: the window's first input capabilities.
-    fn availability(&self) -> flui_platform::input_capabilities::InputCapabilities;
+    fn availability(&self) -> flui_platform::input::input_capabilities::InputCapabilities;
 
     /// Listen, in `registration`, for the input of `canvas`, dispatching to
     /// the window's `callbacks`; `latency` picks the event a pointer's
@@ -125,7 +125,7 @@ pub(crate) trait HostInput {
 /// the canvas, or from the editor its text input keeps in the text-input host.
 pub(crate) trait CanvasKeys {
     /// Deliver `event` as a key `state`, answering it with the result.
-    fn deliver(&self, event: &web_sys::Event, state: flui_platform::keyboard::KeyState);
+    fn deliver(&self, event: &web_sys::Event, state: flui_platform::input::keyboard::KeyState);
 
     /// Whether the window's text input composes now: a key delivered while it
     /// does is the input method's.

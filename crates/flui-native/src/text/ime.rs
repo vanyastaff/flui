@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use flui_platform::text_store::{TextStoreRead, Utf16Offset, Utf16Range};
+use flui_platform::text::text_store::{TextStoreRead, utf16::Utf16Offset, utf16::Utf16Range};
 
 /// What a protected field's text reads as in a mirror: one bullet per code
 /// unit, so the input method's offsets still land where they do in the field.

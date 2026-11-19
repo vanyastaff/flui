@@ -177,7 +177,7 @@ pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {
 pub(crate) fn raw_button_activates_from_the_keyboard() {
     use std::cell::Cell;
 
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::interaction::{ButtonActivateIntent, Shortcuts, SingleActivator};
     use flui_widgets::{Row, SizedBox};
 
@@ -578,7 +578,7 @@ impl ViewState<Switched> for SwitchedState {
 /// press to run, so the pointer and action rows of the switch are checked
 /// on the node itself (`switch_tests` beside it).
 pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
 
     use crate::keyboard_focus::{press as press_key, tab};
 
@@ -769,7 +769,7 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
     // A pen is a second pointer: it hovers beside the mouse.
     let pen_hover = |app: &LaidOut, x: f64, y: f64| {
         use flui_interaction::events::{PointerEvent, make_move_event_for_id};
-        use flui_platform::pointer::{PenTool, PointerButtons, PointerId, PointerKind};
+        use flui_platform::input::pointer::{PenTool, PointerButtons, PointerId, PointerKind};
         let mut event = make_move_event_for_id(
             PointerId::try_from(2_u64).expect("non-zero"),
             flui_foundation::geometry::Offset::new(x, y),

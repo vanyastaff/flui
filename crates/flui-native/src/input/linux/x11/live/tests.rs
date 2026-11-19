@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
 use flui_platform::DispatchEventResult;
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::input_capabilities::InputCapabilities;
 use flui_platform::{
     CloseDecision, Cursor, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
     WindowId,

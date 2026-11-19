@@ -76,7 +76,7 @@ use flui_animation::{Animation, AnimationController, AnimationRunFuture, MotionS
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{Listenable, MutatedDuringBuild};
 use flui_interaction::pointer::EventPropagation;
-use flui_platform::pointer::ScrollEvent;
+use flui_platform::input::pointer::ScrollEvent;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition, ViewportOffset};
 
 /// A scrollable's handler for a wheel or trackpad tick.

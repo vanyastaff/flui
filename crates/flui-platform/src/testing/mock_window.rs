@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 
 use crate::capability::{PortalParent, Resolver};
-use crate::drag::PlatformDragSource;
 use crate::haptics::PlatformHaptics;
-use crate::input_regions::InputRegion;
+use crate::input::input_regions::InputRegion;
+use crate::transfer::drag::PlatformDragSource;
 use crate::{
     AdmittedCommand, ApplyError, CapabilityAbsence, Cursor, CursorError, DisplayId, FrameRateHint,
     GestureGeometry, PlatformSystemChrome, PlatformTextInput, PlatformWindow, PreferenceQueryError,
@@ -876,7 +876,7 @@ mod tests {
             let outcome = wrapper.set_input_regions(&[]);
 
             assert_eq!(outcome.is_ok(), honours);
-            let recorded: Vec<Vec<crate::input_regions::InputRegion>> =
+            let recorded: Vec<Vec<crate::input::input_regions::InputRegion>> =
                 if honours { vec![vec![]] } else { vec![] };
             assert_eq!(wrapper.input_regions(), recorded, "honoured: {honours}");
             assert_eq!(told.get(), usize::from(honours), "honoured: {honours}");

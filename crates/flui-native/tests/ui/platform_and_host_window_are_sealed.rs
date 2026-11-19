@@ -13,7 +13,7 @@ use flui_native::{
     AppHandler, HostWindow, NativeClipboard, NativePrimarySelection, OpenWindowError,
     Platform, PlatformError,
 };
-use flui_platform::data_transfer::DragTransport;
+use flui_platform::transfer::data_transfer::DragTransport;
 use flui_platform::{
     Cursor, CursorError, DisplaySnapshot, PlatformWindow,
     AppDataDir, LaunchKey, SystemPreferences,
@@ -125,7 +125,7 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn set_frame_rate_hint(&self, _: flui_platform::FrameRateHint) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
-    fn set_input_regions(&self, _: &[flui_platform::input_regions::InputRegion]) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
+    fn set_input_regions(&self, _: &[flui_platform::input::input_regions::InputRegion]) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
@@ -150,7 +150,7 @@ impl PlatformWindow for OutsideWindow {
         None
     }
 
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         None
     }
 

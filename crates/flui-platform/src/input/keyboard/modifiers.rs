@@ -15,7 +15,7 @@ use core::ops::{BitOr, BitOrAssign};
 /// # Examples
 ///
 /// ```
-/// use flui_platform::keyboard::Modifiers;
+/// use flui_platform::input::keyboard::Modifiers;
 ///
 /// let held = Modifiers::CONTROL | Modifiers::SHIFT;
 /// assert!(held.contains(Modifiers::CONTROL));

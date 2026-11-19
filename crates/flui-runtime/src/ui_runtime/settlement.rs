@@ -9,7 +9,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_interaction::haptics::HapticCut;
 use flui_layer::SceneVersionId;
 use flui_platform::SystemUiOverlayStyle;
-use flui_platform::input_regions::InputRegion;
+use flui_platform::input::input_regions::InputRegion;
 use flui_scheduler::{FramePhaseDurations, FrameTelemetryCut, Instant, PresentOutcome};
 use std::panic::resume_unwind;
 

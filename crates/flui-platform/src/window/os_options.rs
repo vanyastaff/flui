@@ -21,7 +21,7 @@
 //!
 //! ```
 //! use flui_platform::WindowOptions;
-//! use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
+//! use flui_platform::window::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 //!
 //! let options = WindowOptions::default().os_options(
 //!     OsWindowOptions::default().windows(

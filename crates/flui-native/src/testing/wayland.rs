@@ -158,7 +158,7 @@ pub fn suspend(window: &dyn HostWindow, suspended: bool) -> bool {
 #[must_use]
 pub fn text_store_host(
     window: &dyn HostWindow,
-) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+) -> Option<std::rc::Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
     let window = window.as_any().downcast_ref::<WaylandWindow>()?;
     crate::host_window::HostWindow::text_store_host(
         window,

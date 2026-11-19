@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::{PROTECTED_UNIT, TextDiff, diff, document_text, scalar_spans};
-use flui_platform::text_store::{LockGrant, LockTiming, TextStore};
+use flui_platform::text::text_store::{LockGrant, LockTiming, TextStore};
 use flui_testing::text_store_kit::InMemoryTextStore;
 
 fn units(text: &str) -> Vec<u16> {

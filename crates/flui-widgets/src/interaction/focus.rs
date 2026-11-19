@@ -40,7 +40,7 @@ use flui_interaction::focus::{
     FocusTraversalOverrides, KeyEventResult, RectProvider, TraversalEdgeBehavior,
 };
 use flui_objects::SubtreeAnchor;
-use flui_platform::keyboard::KeyEvent;
+use flui_platform::input::keyboard::KeyEvent;
 use flui_rendering::semantics::SemanticsConfiguration;
 use flui_view::element::ElementKind;
 use flui_view::environment::FocusTreeRoot;

@@ -62,9 +62,9 @@ use std::{
 };
 
 use flui_platform::CursorError;
-use flui_platform::data_transfer::DragTransport;
-use flui_platform::drag::PlatformDragSource;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::text_store::TextStoreHost;
+use flui_platform::transfer::data_transfer::DragTransport;
+use flui_platform::transfer::drag::PlatformDragSource;
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM},
@@ -267,15 +267,15 @@ pub(crate) trait WindowInputs {
     fn press_kind(
         &self,
         window: WindowRef,
-        press: flui_platform::pointer::PressId,
-    ) -> Option<flui_platform::pointer::PointerKind>;
+        press: flui_platform::input::pointer::PressId,
+    ) -> Option<flui_platform::input::pointer::PointerKind>;
 
     /// The OS's id of a pen contact in range of the window (touching or
     /// hovering): `device`'s, or with `None` the pen read most recently.
     fn pen_in_range(
         &self,
         window: WindowRef,
-        device: Option<flui_platform::pointer::DeviceId>,
+        device: Option<flui_platform::input::pointer::DeviceId>,
     ) -> Option<u64>;
 }
 

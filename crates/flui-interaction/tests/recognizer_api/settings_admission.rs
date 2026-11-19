@@ -23,7 +23,7 @@ use flui_interaction::{
 };
 use flui_platform::{
     EventTime, GestureGeometry, GesturePreferences,
-    pointer::{
+    input::pointer::{
         PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress, PointerRelease,
         PointerSample, PointerSource, Pressure,
     },
@@ -478,7 +478,7 @@ fn consecutive_candidates_do_not_cross_pointer_kinds() {
 }
 
 fn consecutive_candidates_compare_device_identity() {
-    use flui_platform::pointer::DeviceId;
+    use flui_platform::input::pointer::DeviceId;
     for (first, second, expected) in [
         (Some(9), Some(10), 0),
         (Some(9), None, 0),
@@ -1339,7 +1339,7 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
         gesture::{PanZoomDisposition, VelocityEstimator},
         pointer::PanZoomDispatch,
     };
-    use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
+    use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 
     let old = GestureSettings::default().with_velocity_estimator(VelocityEstimator::LeastSquares);
     let new = old

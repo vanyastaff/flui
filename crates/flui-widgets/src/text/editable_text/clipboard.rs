@@ -9,7 +9,7 @@ use std::{
 use flui_interaction::focus::{FocusAttachment, FocusNode};
 use flui_interaction::text_input::ClipboardHandle;
 use flui_platform::capability::Abandoned;
-use flui_platform::text_store::OwnerCalls;
+use flui_platform::text::text_store::OwnerCalls;
 use flui_platform::{ClipboardError, ClipboardRead, ClipboardWritten};
 use flui_view::EventContext;
 

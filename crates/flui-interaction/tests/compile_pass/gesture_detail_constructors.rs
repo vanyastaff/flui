@@ -3,7 +3,7 @@ use flui_interaction::{gesture::{DragUpdateDetails, ForcePressDetails, GestureAr
         DoubleTapDetails, DoubleTapGestureRecognizer, LongPressGestureRecognizer,
         MultiTapDetails, MultiTapGestureRecognizer,
     }};
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 
 fn main() {
     let global = Offset::new(40.0, 60.0);

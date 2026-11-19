@@ -1,7 +1,7 @@
 //! A scroll row's wire form: the step `ContactRegistry::scroll` replays, field by field.
 
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     ScrollDelta, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 use flui_protocol::native_recording as wire;

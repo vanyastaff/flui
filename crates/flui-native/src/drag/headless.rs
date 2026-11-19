@@ -19,11 +19,13 @@
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data_transfer::{
     DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferError,
     TransferLimits, TransferRequest,
 };
-use flui_platform::drag::{DragError, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::transfer::drag::{
+    DragError, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
+};
 use flui_platform::{Unsupported, UnsupportedReason};
 use parking_lot::Mutex;
 
@@ -40,10 +42,10 @@ use {
     crate::owner::headless::DragOver,
     crate::platform::HostPlatform,
     flui_foundation::geometry::Point,
-    flui_platform::data_transfer::{
+    flui_platform::transfer::data_transfer::{
         DataTransferOffer, TransferActions, TransferFormat, TransferPayload,
     },
-    flui_platform::drag::{OsDragEnd, OsDragProvider},
+    flui_platform::transfer::drag::{OsDragEnd, OsDragProvider},
     flui_platform::{DragDropEvent, PlatformInput, WindowId},
 };
 

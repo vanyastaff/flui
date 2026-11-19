@@ -10,7 +10,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///
 /// On macOS that click only activates the window by default, as AppKit's own controls do.
 /// A press marked
-/// [`is_first_click`](flui_platform::pointer::PointerButtonEvent::is_first_click) reaches
+/// [`is_first_click`](flui_platform::input::pointer::PointerButtonEvent::is_first_click) reaches
 /// the widgets only when its hit path runs through this widget: the press lands in the
 /// child, and no widget painted over the child took the hit first. It then reaches the
 /// child's widgets on that path, translucent ones included, and they see it as any other

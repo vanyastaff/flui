@@ -15,13 +15,12 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use flui_foundation::generation::Generation;
-use flui_foundation::{DragSessionId, IdExhausted, UiRuntimeId};
+use flui_foundation::{DragSessionId, IdExhausted, PressId, UiRuntimeId};
 
-use crate::data_transfer::{
+use crate::transfer::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferError, TransferFormat, TransferPayload,
 };
-use crate::pointer::PressId;
 use crate::{Unsupported, UnsupportedReason};
 
 /// Why a drag could not start, or could not continue as asked (ADR-0211 §6).
@@ -504,7 +503,7 @@ impl fmt::Debug for OsDragParts {
 ///
 /// Reached through [`PlatformWindow::drag_source`](crate::PlatformWindow::drag_source);
 /// a window whose backend has none answers `None`, and
-/// [`InputCapabilities::outgoing_drag`](crate::input_capabilities::InputCapabilities::outgoing_drag)
+/// [`InputCapabilities::outgoing_drag`](crate::input::input_capabilities::InputCapabilities::outgoing_drag)
 /// says `Unavailable` for it.
 pub trait PlatformDragSource: Send + Sync {
     /// When this backend can start a session.

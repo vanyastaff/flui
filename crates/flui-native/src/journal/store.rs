@@ -22,11 +22,11 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use flui_foundation::geometry::Point;
-use flui_platform::text_store::{
+use flui_platform::text::text_store::{
     Autofill, Capitalization, Composition, Correction, EnterAction, LockGrant, LockKind,
     LockOutcome, LockTiming, NumberFormat, PointMode, Selection, TextChange, TextInputOptions,
     TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus,
-    Utf16Offset, Utf16Range,
+    utf16::Utf16Offset, utf16::Utf16Range,
 };
 use flui_protocol::native_recording as wire;
 

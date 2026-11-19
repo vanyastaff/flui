@@ -23,7 +23,7 @@ fn key(code: Code) -> PlatformInput {
 /// HTML creates no replay obligation when the canvas owns the next press.
 fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     use flui_interaction::focus::FocusNode;
-    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
+    use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use flui_runtime::owner::WindowObservation;
     use flui_widgets::{
         Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator, SizedBox,
@@ -981,8 +981,9 @@ type NestedLocks = Rc<RefCell<Vec<String>>>;
 /// run when the dispatch returns.
 fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
     use flui_interaction::testing::InMemoryTextStore;
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    use flui_platform::text::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore, utf16::Utf16Offset,
+        utf16::Utf16Range,
     };
 
     let owner = OwnerHost::new();

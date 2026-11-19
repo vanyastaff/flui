@@ -7,7 +7,7 @@ use flui_foundation::geometry::Offset;
 use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite};
 use crate::EventTime;
-use crate::keyboard::Modifiers;
+use crate::input::keyboard::Modifiers;
 
 /// Where a touchpad hold is.
 ///
@@ -94,12 +94,12 @@ impl TouchpadHoldEvent {
 ///
 /// ```
 /// use flui_foundation::geometry::Offset;
-/// use flui_platform::pointer::SwipeOffset;
+/// use flui_platform::input::pointer::SwipeOffset;
 ///
 /// let travelled = SwipeOffset::try_new(Offset::new(-120.0, 4.0))?;
 /// assert_eq!(travelled.get().dx, -120.0);
 /// assert!(SwipeOffset::try_new(Offset::new(f64::NAN, 0.0)).is_err());
-/// # Ok::<(), flui_platform::pointer::InputValueError>(())
+/// # Ok::<(), flui_platform::input::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SwipeOffset(Offset<f64>);

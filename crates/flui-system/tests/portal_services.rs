@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use flui_platform::capability::Abandoned;
-use flui_platform::keyboard::{Key, Modifiers};
+use flui_platform::input::keyboard::{Key, Modifiers};
 use flui_platform::launch::{ExternalUri, LaunchError, LauncherCapability, Scheme};
 use flui_platform::{SystemFailure, UnsupportedReason};
 use flui_sdk::view::CloseReason;
