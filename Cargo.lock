@@ -2040,7 +2040,6 @@ dependencies = [
 name = "flui-layer"
 version = "0.2.0-dev"
 dependencies = [
- "bitflags",
  "criterion",
  "flui-foundation",
  "flui-layer",

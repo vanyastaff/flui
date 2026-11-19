@@ -21,39 +21,48 @@ A boundary's content is a run of entries: drawing chunks (sealed `DisplayList`s)
 layers that group them (clip, transform, opacity, filters, shader masks, backdrops, leaders and
 followers, annotated regions) and slots that place child boundaries.
 
-`LayerTree` and `SceneBuilder` build a whole layer tree by hand, for a hot-reload plugin's image,
-an example or the engine's GPU readback tests. `Scene::new` converts the tree into a version
+`SceneBuilder` builds a scene by hand, with `push`, `add` and `pop` as in `dart:ui`, for a hot-reload
+plugin's image, an example or the engine's GPU readback tests; `LayerTree` is the same layers as an
+append-only tree whose ids a caller keeps. `Scene::new` converts the tree into a version
 (`SceneVersion::from_tree`), so the raster side walks one form.
 
 ## Layer types
 
 | Kind | Variants |
 |------|----------|
-| Leaf | `PictureLayer` (sealed drawing commands, external textures among them), `PerformanceOverlayLayer` |
+| Leaf | `PictureLayer` (sealed drawing commands, external textures among them) |
 | Clip | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` |
 | Transform | `OffsetLayer`, `TransformLayer` |
 | Effect | `OpacityLayer`, `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` |
 | Link | `LeaderLayer`, `FollowerLayer` |
 | Annotation | `AnnotatedRegionLayer` |
 
+A retained scene's content opens every layer but a picture as an `Effect`
+(`ContentBuilder::push_effect`); what it draws is a chunk of recorded commands.
+
 `Layer::local_translation()` is the one place the set of translating variants is written down;
 the engine's pushes and the follower resolver's chain sums both read it.
 
-## A hand-built tree
+## A hand-built scene
 
 ```rust
 use flui_foundation::geometry::Offset;
-use flui_layer::{PictureLayer, Scene, SceneBuilder};
+use flui_layer::{Layer, LayerTree, OffsetLayer, PictureLayer, Scene, SceneBuilder};
 
 let mut builder = SceneBuilder::new();
-let offset = builder.push_offset(Offset::ZERO);
-builder.push_opacity(0.5);
-builder.add(PictureLayer::default());
-builder.pop();
-let tree = builder.build();
-assert_eq!(tree.parent(offset), Some(tree.root()));
+builder
+    .push_offset(Offset::new(10.0, 0.0))
+    .push_opacity(0.5)
+    .add(PictureLayer::default())
+    .pop()
+    .pop();
+let scene = builder.build(); // a version: no `&mut` path back
 
-let scene = Scene::new(tree); // a version now: no `&mut` path back
+// A tree keeps the ids of its layers for the caller.
+let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+let offset = tree.push_child(tree.root(), Layer::from(OffsetLayer::new(Offset::new(10.0, 0.0))));
+assert_eq!(tree.parent(offset), Some(tree.root()));
+let same = Scene::new(tree);
 ```
 
 A tree has one root for its whole life and is append-only: `push_child` mints the child's id in

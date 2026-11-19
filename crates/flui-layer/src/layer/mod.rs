@@ -1,9 +1,9 @@
 //! The closed [`Layer`] vocabulary: every compositor primitive the paint walk
 //! can emit and the GPU backend must lower.
 //!
-//! Leaf layers (`Picture`, `PerformanceOverlay`) draw; every other variant
-//! is a container that applies a clip, a transform, an effect, or a link to
-//! the subtree beneath it. The per-variant types live in the sibling modules
+//! A `Picture` draws; every other variant is a container that applies a
+//! clip, a transform, an effect, or a link to the subtree beneath it, and is
+//! what an [`Effect`] holds. The per-variant types live in the sibling modules
 //! and are re-exported from the crate root.
 //!
 //! An external texture is a draw in a picture (`DrawOp::Texture`, ADR-0233),
@@ -17,12 +17,12 @@ mod clip_rect;
 mod clip_rrect;
 mod clip_superellipse;
 mod color_filter;
+mod effect;
 mod follower;
 mod image_filter;
 mod leader;
 mod offset;
 mod opacity;
-mod performance_overlay;
 mod picture;
 mod shader_mask;
 mod transform;
@@ -34,15 +34,14 @@ pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
-use flui_foundation::geometry::{Offset, Rect};
+pub use effect::Effect;
+use flui_foundation::geometry::{Offset, Point, Rect};
+use flui_painting::paint::Clip;
 pub use follower::{FollowerLayer, LeaderClip};
 pub use image_filter::ImageFilterLayer;
 pub use leader::LeaderLayer;
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
-pub use performance_overlay::{
-    PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample,
-};
 pub use picture::PictureLayer;
 pub use shader_mask::ShaderMaskLayer;
 pub use transform::TransformLayer;
@@ -55,8 +54,7 @@ pub use transform::TransformLayer;
 /// and land its GPU lowering in the same change (this crate's
 /// `ARCHITECTURE.md`, mapping decision 1).
 ///
-/// Payloads are inline unless the variant would dominate the enum's footprint
-/// (`Canvas` carries a live recorder); the `From` impls hide the box.
+/// Every payload is inline.
 ///
 /// ```rust
 /// use flui_layer::{ClipRectLayer, Layer, OpacityLayer};
@@ -79,8 +77,6 @@ pub use transform::TransformLayer;
 pub enum Layer {
     /// Sealed drawing commands (the leaf the paint walk emits).
     Picture(PictureLayer),
-    /// Frame statistics drawn by the backend.
-    PerformanceOverlay(PerformanceOverlayLayer),
     /// Clips the subtree to a rectangle.
     ClipRect(ClipRectLayer),
     /// Clips the subtree to a rounded rectangle.
@@ -120,7 +116,6 @@ impl Layer {
     pub fn bounds(&self) -> Option<Rect<f64>> {
         match self {
             Layer::Picture(layer) => layer.bounds(),
-            Layer::PerformanceOverlay(layer) => Some(layer.bounds()),
             Layer::ClipRect(layer) => Some(layer.bounds()),
             Layer::ClipRRect(layer) => Some(layer.bounds()),
             Layer::ClipPath(layer) => Some(layer.bounds()),
@@ -160,7 +155,6 @@ impl Layer {
             Layer::ImageFilter(layer) => layer.offset(),
             Layer::Leader(layer) => layer.offset(),
             Layer::Picture(_)
-            | Layer::PerformanceOverlay(_)
             | Layer::ClipRect(_)
             | Layer::ClipRRect(_)
             | Layer::ClipPath(_)
@@ -173,13 +167,35 @@ impl Layer {
         }
     }
 
+    /// Whether `point`, in this layer's own space, survives the layer's clip:
+    /// a clip layer with `Clip::None` and every layer that does not clip keep
+    /// it. Hit-style reads (annotations, a follower's `LeaderClip::Hide`)
+    /// share this one answer.
+    pub(crate) fn clip_admits(&self, point: Point<f64>) -> bool {
+        let clips = |behavior: Clip| behavior != Clip::None;
+        match self {
+            Layer::ClipRect(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_rect().contains(point)
+            }
+            Layer::ClipRRect(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_rrect().contains(point)
+            }
+            Layer::ClipSuperellipse(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_superellipse().contains(point)
+            }
+            Layer::ClipPath(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_path().contains(point)
+            }
+            _ => true,
+        }
+    }
+
     /// The variant's name (`"Picture"`, `"ClipRect"`, …) for diagnostics and
     /// structural snapshots.
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
         match self {
             Layer::Picture(_) => "Picture",
-            Layer::PerformanceOverlay(_) => "PerformanceOverlay",
             Layer::ClipRect(_) => "ClipRect",
             Layer::ClipRRect(_) => "ClipRRect",
             Layer::ClipPath(_) => "ClipPath",
@@ -203,7 +219,7 @@ impl Layer {
     /// The question a damage differ asks of the layers above a repaint
     /// boundary: if an ancestor's opacity, clip or filter changed, the pixels
     /// the boundary's content lands on changed even though the content did
-    /// not. Leaves (`Picture`, `PerformanceOverlay`) apply no effect to a
+    /// not. A `Picture` applies no effect to a
     /// subtree and answer `false`;
     /// an `AnnotatedRegion` changes no pixel and answers `true` for any two.
     #[must_use]
@@ -244,15 +260,6 @@ impl Layer {
             _ => None,
         }
     }
-
-    /// The overlay payload, if this is a `PerformanceOverlay`.
-    #[inline]
-    pub fn as_performance_overlay(&self) -> Option<&PerformanceOverlayLayer> {
-        match self {
-            Layer::PerformanceOverlay(layer) => Some(layer),
-            _ => None,
-        }
-    }
 }
 
 /// Normalises a caller-supplied alpha into `0.0..=1.0`.
@@ -284,7 +291,6 @@ macro_rules! layer_from_impls {
 
 layer_from_impls! {
     Picture => PictureLayer;
-    PerformanceOverlay => PerformanceOverlayLayer;
     ClipRect => ClipRectLayer;
     ClipRRect => ClipRRectLayer;
     ClipPath => ClipPathLayer;

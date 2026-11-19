@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
+use flui_layer::Effect;
 use flui_layer::{
     AnnotatedRegionLayer, Applied, BoundaryContent, Bounds, Chunk, ContentVersion, EntryIndex,
-    Layer, Placement, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
+    Placement, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
 };
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, paint::Paint};
@@ -39,8 +40,8 @@ fn chunk(owner: usize, version: ContentVersion) -> Arc<Chunk> {
     ))
 }
 
-fn translate(dx: f64) -> Layer {
-    Layer::from(TransformLayer::new(Matrix4::translation(dx, 0.0, 0.0)))
+fn translate(dx: f64) -> Effect {
+    Effect::from(TransformLayer::new(Matrix4::translation(dx, 0.0, 0.0)))
 }
 
 /// A scene of `NODES` boundaries, each one transform over one chunk, slotted
@@ -206,8 +207,8 @@ impl Drop for Dropped {
     }
 }
 
-fn annotation(flag: &Arc<AtomicBool>) -> Layer {
-    Layer::from(AnnotatedRegionLayer::new(
+fn annotation(flag: &Arc<AtomicBool>) -> Effect {
+    Effect::from(AnnotatedRegionLayer::new(
         Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
         Arc::new(Dropped(Arc::clone(flag))),
     ))

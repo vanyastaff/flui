@@ -373,6 +373,7 @@ fn text_editing() {
             ("text_field_widget::the_return_key_submits_a_single_line_field_without_a_line_break", crate::text_field_widget::the_return_key_submits_a_single_line_field_without_a_line_break),
             ("text_field::unfocused_field_does_not_receive_key_events", crate::text_field::unfocused_field_does_not_receive_key_events),
             ("text::an_enclosing_default_text_style_styles_a_bare_run", crate::text::an_enclosing_default_text_style_styles_a_bare_run),
+            ("text::a_text_run_reads_the_ambient_direction_unless_it_names_one", crate::text::a_text_run_reads_the_ambient_direction_unless_it_names_one),
             ("text::the_system_text_scale_grows_each_span_once", crate::text::the_system_text_scale_grows_each_span_once),
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
             ("text::icon_text_sizing_keeps_box_and_glyph_together", crate::text::icon_text_sizing_keeps_box_and_glyph_together),

@@ -20,14 +20,18 @@
 //! - [`Layer`]: the closed vocabulary of compositor primitives, one variant
 //!   per leaf/clip/transform/effect/link kind, each with its payload type
 //!   (`PictureLayer`, `ClipRectLayer`, `OpacityLayer`, …).
-//! - [`LayerTree`] / [`LayerNode`] and [`SceneBuilder`]: a scene authored by
-//!   hand, an append-only arena born with its root ([`LayerTree::new`]) and
-//!   grown pre-order through [`LayerTree::push_child`]. [`Scene::new`]
-//!   converts it into a version ([`SceneVersion::from_tree`]).
-//! - [`resolve_follower_transform`]: the leader/follower chain math over a
-//!   hand-built tree, each chain layer contributing its matrix, a nested
+//! - [`SceneBuilder`]: a scene authored by hand with `push`, `add` and
+//!   `pop`. [`LayerTree`] / [`LayerNode`] hold the same layers as an
+//!   append-only arena born with its root ([`LayerTree::new`]) and grown
+//!   pre-order through [`LayerTree::push_child`], for a caller that keeps
+//!   their ids; [`Scene::new`] converts it into a version
+//!   ([`SceneVersion::from_tree`]).
+//! - [`SceneVersion::follower_transform`]: a follower's position under its
+//!   leader (ADR-0276), each chain layer contributing its matrix, a nested
 //!   follower's resolved transform or [`Layer::local_translation`], the one
-//!   place the set of translating variants is written down.
+//!   place the set of translating variants is written down. The
+//!   `testing` feature keeps the same rule over a hand-built tree
+//!   (`resolve_follower_transform`) as its oracle.
 //! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: the version the
 //!   raster side draws and the per-frame package that crosses the raster
 //!   boundary.
@@ -86,12 +90,11 @@ pub use damage::{
 pub use flui_foundation::LayerId;
 pub use layer::{
     AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, ClipPathLayer,
-    ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer,
-    ImageFilterLayer, Layer, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer,
-    PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample, PictureLayer,
+    ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, Effect, FollowerLayer,
+    ImageFilterLayer, Layer, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer,
     SemanticLabel, ShaderMaskLayer, TransformLayer,
 };
-pub use link::{LayerLink, leader_origin, resolve_follower_transform};
+pub use link::LayerLink;
 pub use scene::{
     Applied, BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
     EntryIndex, Lineage, Placement, Reclaimed, ReleasedContents, Scene, SceneError, SceneNode,
@@ -103,5 +106,5 @@ pub use texture_registry::{
     TextureIdsExhausted, TextureRegistration, TextureRegistry, TextureUpdates,
 };
 #[cfg(feature = "testing")]
-pub use tree::{BoundaryStamp, ContentToken};
+pub use tree::{BoundaryStamp, ContentToken, leader_origin, resolve_follower_transform};
 pub use tree::{LayerNode, LayerTree};

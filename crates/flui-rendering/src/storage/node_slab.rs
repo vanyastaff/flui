@@ -43,10 +43,14 @@ use super::node::RenderNode;
 /// id carries it and no id matches a retired slot.
 const RETIRED: NonZeroU32 = NonZeroU32::MAX;
 
-/// What a slot holds.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a vacant slot is the rare, short-lived state; boxing the node would put an allocation on every insert"
+/// What a slot holds. On a 32-bit target the node is under clippy's 200-byte variant gap, so
+/// the lint fires only where pointers are 64 bits.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "a vacant slot is the rare, short-lived state; boxing the node would put an allocation on every insert"
+    )
 )]
 enum SlotState {
     /// No node. `next_free` is the next vacant slot in the free list.

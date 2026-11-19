@@ -422,6 +422,10 @@ fn selection_control_contracts() {
             "data_table::checkbox margin override beats theme and retains default spacing",
             data_table::checkbox_margin_override_beats_the_theme_without_changing_default_spacing,
         ),
+        (
+            "data_table::a data table lays out from the reading start edge",
+            data_table::a_data_table_lays_out_from_the_reading_start_edge,
+        ),
     ]);
 }
 

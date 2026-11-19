@@ -79,10 +79,10 @@ mod gpu_tests {
                 builder.add_picture(picture(4.0, Color::rgb(255, 0, 0)));
                 builder.push_opacity(0.5);
                 builder.add_picture(picture(24.0, Color::rgb(0, 0, 255)));
-                let _ = builder.pop();
+                builder.pop();
                 builder.add_picture(picture(44.0, Color::rgb(0, 255, 0)));
                 let pixels = renderer
-                    .render_layer_tree(&builder.build(), (64, 64))
+                    .render_scene(&builder.build(), (64, 64))
                     .expect("an image-filter subtree must rasterize");
                 crate::readback_dump::dump_rgba_png(
                     &format!("nested_image_filter_{name}"),

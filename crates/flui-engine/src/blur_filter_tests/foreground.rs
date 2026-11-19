@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
-use flui_layer::{LayerTree, SceneBuilder};
+use flui_layer::{Scene, SceneBuilder};
 use flui_painting::{
     Canvas,
     paint::Paint,
@@ -567,7 +567,7 @@ fn draw_source(painter: &mut WgpuPainter, c: Case) {
     }
 }
 
-fn scene(c: Case, pad: f64, filtered: bool) -> LayerTree {
+fn scene(c: Case, pad: f64, filtered: bool) -> Scene {
     let mut builder = SceneBuilder::new();
     builder.push_offset(Offset::new(pad, pad));
     builder.push_transform(Matrix4::scaling(
@@ -729,12 +729,12 @@ fn render_recorded(renderer: &crate::HeadlessRenderer, c: Case, pad: f64, size: 
             .expect("external crop capture");
         capture.set_solid_texture(flui_painting::paint::TextureId::new(131), [0, 0, 0, 255]);
         capture
-            .render_unmanaged(&flui_layer::Scene::new(tree))
+            .render_unmanaged(&tree)
             .expect("recorded external source rasterizes");
         capture.read_rgba().expect("recorded external crop pixels")
     } else {
         renderer
-            .render_layer_tree(&tree, (size, size))
+            .render_scene(&tree, (size, size))
             .expect("recorded crop scene")
     }
 }
@@ -797,7 +797,7 @@ fn foreground_filter_viewport_crop_contract() {
             if matches!(c.name, "zero" | "zero_morph") {
                 let unfiltered = render_direct(&mut painter, c, 0.0, 32, false);
                 let replay_unfiltered = renderer
-                    .render_layer_tree(&scene(c, 0.0, false), (32, 32))
+                    .render_scene(&scene(c, 0.0, false), (32, 32))
                     .expect("unfiltered recorded scene");
                 assert_eq!(small, unfiltered, "zero sigma direct identity");
                 assert_eq!(
@@ -820,7 +820,7 @@ fn foreground_filter_viewport_crop_contract() {
     );
 }
 
-fn independent_chain_scene(filters: &[ImageFilter], nested: bool) -> LayerTree {
+fn independent_chain_scene(filters: &[ImageFilter], nested: bool) -> Scene {
     let mut builder = SceneBuilder::new();
     if nested {
         for filter in filters.iter().rev() {
@@ -872,10 +872,10 @@ fn foreground_filter_chains_match_independent_nested_layers() {
     for (name, filters) in rows {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let composed = renderer
-                .render_layer_tree(&independent_chain_scene(&filters, false), (96, 96))
+                .render_scene(&independent_chain_scene(&filters, false), (96, 96))
                 .expect("composed scene");
             let nested = renderer
-                .render_layer_tree(&independent_chain_scene(&filters, true), (96, 96))
+                .render_scene(&independent_chain_scene(&filters, true), (96, 96))
                 .expect("independent nested scene");
             assert_pixels_close(name, &composed, &nested);
             assert!(
@@ -946,7 +946,7 @@ fn foreground_filter_invalid_parameters_refuse_and_recover() {
                 visible: true,
             };
             let recorded_error = renderer
-                .render_layer_tree(&scene(c, 0.0, true), (32, 32))
+                .render_scene(&scene(c, 0.0, true), (32, 32))
                 .expect_err("invalid filter must be refused through replay");
             assert!(
                 matches!(recorded_error, crate::EngineError::InvalidGeometry(_)),
@@ -982,7 +982,7 @@ fn foreground_filter_invalid_parameters_refuse_and_recover() {
             };
             let direct = render_direct(&mut painter, healthy, 0.0, 32, true);
             let replay = renderer
-                .render_layer_tree(&scene(healthy, 0.0, true), (32, 32))
+                .render_scene(&scene(healthy, 0.0, true), (32, 32))
                 .expect("recorded frame recovers after invalid filter");
             assert_eq!(direct, replay, "{name}: recovery routes differ");
             assert_eq!(

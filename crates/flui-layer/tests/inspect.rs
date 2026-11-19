@@ -9,7 +9,7 @@ use flui_foundation::inspect::{
 };
 use flui_layer::{
     AnnotatedRegionLayer, BackdropFilterLayer, BackdropGroupKey, BoundaryContent, Chunk,
-    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
+    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, Effect,
     FollowerLayer, ImageFilterLayer, Layer, LayerLink, OffsetLayer, OpacityLayer, PictureLayer,
     SceneOp, SceneOwner, SurfaceKey,
 };
@@ -291,20 +291,23 @@ fn scene(layers: impl IntoIterator<Item = Layer>, nesting: Nesting) -> SnapshotN
     let mut content = BoundaryContent::builder();
     let owner_id = RenderId::new(1);
     for (ordinal, layer) in (0..).zip(layers) {
-        if let Layer::Picture(picture) = layer {
-            let version = writer
-                .next_content_version()
-                .expect("a fresh owner has content versions");
-            content.chunk(Arc::new(Chunk::new(
-                owner_id,
-                ordinal,
-                version,
-                picture.picture().clone(),
-            )));
-        } else {
-            content.push_effect(layer, owner_id, ordinal);
-            if nesting == Nesting::Siblings {
-                content.pop_effect();
+        match Effect::try_from(layer) {
+            Err(picture) => {
+                let version = writer
+                    .next_content_version()
+                    .expect("a fresh owner has content versions");
+                content.chunk(Arc::new(Chunk::new(
+                    owner_id,
+                    ordinal,
+                    version,
+                    picture.picture().clone(),
+                )));
+            }
+            Ok(effect) => {
+                content.push_effect(effect, owner_id, ordinal);
+                if nesting == Nesting::Siblings {
+                    content.pop_effect();
+                }
             }
         }
     }

@@ -33,7 +33,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
 | Waker | A `Waker` that counts its wakes, runs an action, drops its captures when it retires, or panics | `flui_foundation::testing::{CountingWaker, panicking_waker}` | `flui-foundation/testing` |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
-| Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
+| Layer | Structural walkers over a `LayerTree` (built with `push_child`, or a scene's `SceneVersion::flatten`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessHost` | dev-dependency |
 | Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::ScriptedSink` and the window double `flui_testing::MockWindow` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |

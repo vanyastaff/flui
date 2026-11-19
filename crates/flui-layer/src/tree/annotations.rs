@@ -3,9 +3,8 @@
 use std::{any::Any, sync::Arc};
 
 use flui_foundation::{LayerId, geometry::Point};
-use flui_painting::paint::Clip;
 
-use crate::{Layer, LayerTree, link::resolve_follower_transform};
+use crate::{Layer, LayerTree, tree::follower::resolve_follower_transform};
 
 impl LayerTree {
     /// Every `T` an [`AnnotatedRegionLayer`](crate::AnnotatedRegionLayer)
@@ -43,7 +42,7 @@ impl LayerTree {
         let Some(local) = self.point_in_layer(id, layer, point) else {
             return;
         };
-        if !clip_admits(layer, local) {
+        if !layer.clip_admits(local) {
             return;
         }
         for &child in node.children().iter().rev() {
@@ -71,19 +70,5 @@ impl LayerTree {
         let inverse = transform.try_inverse()?;
         let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
         Some(Point::new(x, y))
-    }
-}
-
-/// Whether a clipping layer keeps `point`; non-clipping layers keep it.
-pub(crate) fn clip_admits(layer: &Layer, point: Point<f64>) -> bool {
-    let clips = |behavior: Clip| behavior != Clip::None;
-    match layer {
-        Layer::ClipRect(clip) => !clips(clip.clip_behavior()) || clip.clip_rect().contains(point),
-        Layer::ClipRRect(clip) => !clips(clip.clip_behavior()) || clip.clip_rrect().contains(point),
-        Layer::ClipSuperellipse(clip) => {
-            !clips(clip.clip_behavior()) || clip.clip_superellipse().contains(point)
-        }
-        Layer::ClipPath(clip) => !clips(clip.clip_behavior()) || clip.clip_path().contains(point),
-        _ => true,
     }
 }

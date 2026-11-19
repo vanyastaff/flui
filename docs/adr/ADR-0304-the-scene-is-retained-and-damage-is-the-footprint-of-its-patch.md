@@ -265,8 +265,9 @@ the depths below it recomputed, counted as `scene_depth_updates`. The indexes ch
 `Publish` whose link, texture or filter entries differ from the old content's (the old ones leave,
 the new ones enter) and on `Retire`, and on nothing else; an unattached node's links resolve to nothing. Two leaders on one link resolve to the
 one indexed last, and a debug build asserts, as `LayerTree::push` does today
-(`layer_tree.rs:226-234`). `flui_layer::resolve_follower_transform` takes the version and the
-follower's address (node and entry) and keeps ADR-0276's rule.
+(`layer_tree.rs:226-234`). `SceneVersion::follower_transform` takes the follower's address in the version
+(node and entry) and keeps ADR-0276's rule; `resolve_follower_transform` over a hand-built tree
+is its oracle, behind `flui-layer`'s `testing` feature.
 
 A later operation that writes one effect property without republishing content is a new `SceneOp`
 variant: §4 already stores the subtree bounds and §6 the footprints its damage needs.
@@ -666,8 +667,10 @@ damage and its texture updates into the survivor (`raster_executor/sender.rs`), 
 executor does not show (`NotShown`, a render error or panic) leaves the slot owing a full redraw
 (`owe_full(RESET)`), which its next frame draws with the updates it applied. A platform view is damaged on every frame it is drawn, because the platform gives
 no signal when its content changes; a per-view frame signal that damages it the way a texture
-frame does is a follow-up, not part of this decision. A canvas layer's display
-list and the performance overlay are versioned content, and no longer damaged every frame.
+frame does is a follow-up, not part of this decision. The performance overlay is versioned
+content: the runtime publishes its readout as one chunk at a node of its own and records it
+again only when the readout changes (`the_overlay_records_its_readout_only_when_it_changes`), so
+a frame whose numbers hold still damages nothing.
 
 §10. **Failure paths.**
 
@@ -693,8 +696,8 @@ consecutive versions. The patch damage must cover the diff damage.
 
 - Good, because a frame costs O(patch) in paint, damage and recording, plus O(followers × depth)
   for follower resolution and O(filtered × depth) for the closure; nothing walks the whole scene.
-- Good, because two distant changes repaint two rects, and a boundary holding a follower, a canvas
-  layer and the performance overlay stop being repainted or damaged every frame.
+- Good, because two distant changes repaint two rects, and a boundary holding a follower and the
+  performance overlay stop being repainted or damaged every frame.
 - Good, because the pixels redrawn, the damage reported and the filter reads come from one function.
 - Good, because owed damage survives superseded, refused, failed and unshown frames through the
   base, by construction.

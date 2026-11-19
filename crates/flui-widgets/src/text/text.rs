@@ -27,21 +27,21 @@ pub struct Text {
     data: String,
     style: Option<TextStyle>,
     align: Option<TextAlign>,
-    direction: TextDirection,
+    direction: Option<TextDirection>,
     max_lines: Option<u32>,
     site: CreationSite,
 }
 
 impl Text {
-    /// Create text displaying `data` with default style, start alignment, and
-    /// left-to-right direction.
+    /// Create text displaying `data` with default style and start alignment, in
+    /// the ambient [`Directionality`](crate::Directionality)'s reading direction.
     #[track_caller]
     pub fn new(data: impl Into<String>) -> Self {
         Self {
             data: data.into(),
             style: None,
             align: None,
-            direction: TextDirection::Ltr,
+            direction: None,
             max_lines: None,
             site: CreationSite::here(),
         }
@@ -63,10 +63,11 @@ impl Text {
         self
     }
 
-    /// Set the reading direction (default left-to-right).
+    /// Set the reading direction. Unset, the ambient
+    /// [`Directionality`](crate::Directionality) applies, then left-to-right.
     #[must_use]
     pub fn direction(mut self, direction: TextDirection) -> Self {
-        self.direction = direction;
+        self.direction = Some(direction);
         self
     }
 
@@ -113,7 +114,10 @@ impl StatelessView for Text {
 
         let align = self.align.or(ambient_align).unwrap_or(TextAlign::Start);
 
-        let mut rich = RichText::new(span).align(align).direction(self.direction);
+        let mut rich = RichText::new(span).align(align);
+        if let Some(direction) = self.direction {
+            rich = rich.direction(direction);
+        }
         if let Some(max_lines) = self.max_lines.or(ambient_max_lines) {
             rich = rich.max_lines(max_lines);
         }

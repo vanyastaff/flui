@@ -32,8 +32,6 @@ flui-foundation = { workspace = true }
 # Layers carry recorded painting (`DisplayList`, `Canvas`).
 flui-painting = { workspace = true }
 
-# `PerformanceOverlayOption` flag set.
-bitflags = { workspace = true }
 # The external-texture registry is fed from producer threads.
 parking_lot = { workspace = true }
 # A chunk names the one texture it usually draws inline (ADR-0304 §2).

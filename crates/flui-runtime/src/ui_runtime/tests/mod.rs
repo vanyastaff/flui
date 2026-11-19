@@ -567,6 +567,12 @@ fn frame_failure_containment_matrix() {
 mod text_context;
 
 // ========================================================================
+// The debug overlay is a node of its own: a clip over one chunk of the
+// readout, recorded anew each painted frame.
+// ========================================================================
+mod performance_overlay;
+
+// ========================================================================
 // A face registered on the app's collection re-lays out every ui_runtime's text
 // at its next frame (ADR-0092 §10 step 3b).
 // ========================================================================
