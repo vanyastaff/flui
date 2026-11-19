@@ -31,11 +31,13 @@
 //! deadline (`LoopControl`, [`WakePump::after_owner_turn`]). A window's run is
 //! what follows a delivery up: the frame AppKit runs for a request, whenever
 //! its display pass comes, may leave the deadline due again or arm a new one;
-//! a state change (a window covered) reaches the application in the window's
-//! callback and can leave a deadline no redraw request starts the pump for,
-//! the frame a covered window owes its surface (ADR-0357); input can arm a
+//! a state change reaches the application in the window's callback and can
+//! leave a deadline no redraw request starts the pump for; input can arm a
 //! gesture deadline with no frame asked. No owner turn of the loop need
-//! follow any of them.
+//! follow any of them. The frame a covered window owes its surface is no part
+//! of this deadline: its window serves it as a timed request of its own
+//! (`PlatformWindow::request_frame_at`, ADR-0389), since a delivery here asks
+//! every window and arms again after a frame of any.
 //!
 //! Each look arms and takes the deadline by the rule every native host shares
 //! (`WakeDeadline::turn`): a due instant is delivered once, as a frame request
@@ -56,7 +58,7 @@ use std::{
 };
 
 use flui_platform::WindowHandler;
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 
 use super::owner_lane::{exec_after_on_owner, owner_queue};
 
@@ -205,9 +207,8 @@ impl WakePump {
     /// schedule a tick for it only when one is armed earlier than the tick
     /// queued, so a turn that leaves nothing due, or only an instant already
     /// delivered that no frame has run for since, costs no wake. A turn can
-    /// leave a deadline no redraw request starts the pump for: the frame a
-    /// covered window owes its surface, whose window asks for no frame while
-    /// it cannot be seen (ADR-0357).
+    /// leave a deadline no redraw request starts the pump for: a deadline a
+    /// task sleeps until.
     pub(crate) fn after_owner_turn(self: &Arc<Self>) {
         let answer = self.consult();
         let frames = self.frames.get();
@@ -463,7 +464,7 @@ mod tests {
         let window = RecordingWindowHandler::new();
         window.react_to_frame(|_| {});
         let delivery = pump
-            .window_delivery(window.clone(), InputCapabilities::UNAVAILABLE)
+            .window_delivery(window, InputCapabilities::UNAVAILABLE)
             .into_inner();
         let fire = || pump.fire(pump.generation.load(Ordering::Acquire));
 

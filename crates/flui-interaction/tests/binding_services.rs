@@ -23,7 +23,7 @@ use flui_interaction::{
         RenderId,
     },
 };
-use flui_platform::pointer::ScrollPhase;
+use flui_platform::input::pointer::ScrollPhase;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 assert_not_impl_any!(GestureBinding: Send, Sync);
@@ -422,7 +422,7 @@ fn a_drain_callback_that_closes_again_settles_once() {
 type Heard = Rc<RefCell<Vec<&'static str>>>;
 
 fn heard_name(event: &PointerEvent) -> &'static str {
-    use flui_platform::pointer::CancelReason;
+    use flui_platform::input::pointer::CancelReason;
     match event {
         PointerEvent::Down(_) => "down",
         PointerEvent::Move(_) => "move",

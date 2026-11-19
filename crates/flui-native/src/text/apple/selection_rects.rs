@@ -15,8 +15,8 @@
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::text_store::utf16::{OffsetError, Utf16Offset, Utf16Range};
-use flui_platform::text_store::{PressTarget, TextStoreError, TextStoreRead};
+use flui_platform::text::store::utf16::{OffsetError, Utf16Offset, Utf16Range};
+use flui_platform::text::store::{PressTarget, TextStoreError, TextStoreRead};
 
 /// The most rectangles one answer holds: the lines from the last one on are
 /// covered by the last rectangle, so one UIKit query reads a bounded number
@@ -340,8 +340,8 @@ fn is_finite(bounds: Bounds<f64>) -> bool {
 mod tests {
     use flui_foundation::TextDirection;
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::text_store::utf16::{self, Utf16Offset, Utf16Range};
-    use flui_platform::text_store::{
+    use flui_platform::text::store::utf16::{self, Utf16Offset, Utf16Range};
+    use flui_platform::text::store::{
         Composition, PointMode, PressTarget, RangeRect, Selection, TextStoreError, TextStoreRead,
     };
 

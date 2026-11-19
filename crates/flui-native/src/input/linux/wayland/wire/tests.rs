@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use flui_platform::pointer::{PanZoomPhase, PenTool, PointerEvent, TouchpadSwipePhase};
+use flui_platform::input::pointer::{PanZoomPhase, PenTool, PointerEvent, TouchpadSwipePhase};
 
 use super::*;
 
@@ -88,7 +88,7 @@ fn describe(input: &PlatformInput) -> String {
 }
 
 fn pointer(event: &PointerEvent) -> String {
-    let head = |verb: &str, info: &flui_platform::pointer::PointerSource| {
+    let head = |verb: &str, info: &flui_platform::input::pointer::PointerSource| {
         format!("{verb} p{} {:?}", info.id.get(), info.kind)
     };
     match event {
@@ -185,7 +185,7 @@ fn pointer(event: &PointerEvent) -> String {
             motion.acceleration,
             motion
                 .position
-                .map(flui_platform::pointer::PointerPosition::get)
+                .map(flui_platform::input::pointer::PointerPosition::get)
         ),
         PointerEvent::DeviceAdded(change) => format!("added {:?}", change.kind),
         PointerEvent::DeviceRemoved(change) => format!("removed {:?}", change.kind),
@@ -414,7 +414,7 @@ fn a_wheel_frame_is_one_step_in_detents() {
 /// keeps it, and a seat that never says leaves it unknown.
 #[test]
 fn a_scroll_carries_the_direction_the_compositor_reports() {
-    use flui_platform::pointer::ScrollInversion;
+    use flui_platform::input::pointer::ScrollInversion;
 
     let directions = |frames: &[&[PointerWire]]| {
         let mut assembly = seated();

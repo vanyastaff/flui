@@ -618,9 +618,13 @@ reverted. The one place the protocols genuinely diverge is the
 never sets `transform`, so the transform arm of `own_effect_layers` stays
 unexercised for slivers.
 
-The static opacity objects retain child semantics; neither exposes an
-`always_include_semantics` flag. The animated box and sliver variants visit
-child semantics when their accepted opacity is positive or that flag is set.
+Every opacity object, static or animated, box or sliver, visits its child's
+semantics when its opacity is positive or its `always_include_semantics` flag
+is set, so a fully transparent child is hidden from assistive technology as it
+is from sight unless the widget keeps it (`Opacity`, `SliverOpacity` and
+`FadeTransition` expose the flag; `AnimatedOpacity` leaves it off). The static rows are
+`harness_static_opacity_visibility_controls_semantics_and_actions` and the
+widget table `transparent_opacity_hides_semantics_unless_always_included`.
 A zero crossing publishes the sample and admits all required paint, compositing and
 semantics work together before waking the owner. The public harness row
 `harness_animated_opacity_semantics_follow_accepted_visibility` covers both
@@ -1284,7 +1288,6 @@ The remaining phase-misuse variants — `LayoutDuringPaint`, `LayoutDetached`, `
 The structural shape of individual components in this crate is designed for Rust and has been informed by multiple Rust-side audited references as recorded in prior plans:
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
-- `Weak<RwLock<PipelineOwner>>` parent back-reference replacing a raw pointer — [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 - Lock-free atomic dirty tracking (`AtomicRenderFlags`); the offset lives in an `OffsetCell` (`Cell<Offset>`, two `f64` components; the tree is `!Send + !Sync`); geometry/constraints as `Option<T>` mutated via `&mut RenderState`) — documented in [`src/storage/state/mod.rs`](src/storage/state/mod.rs) module docstring.
 - Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases when the structural pattern fits Rust idioms better.
 
@@ -1695,8 +1698,8 @@ control, checking published extents and the cached items' committed geometry.
 | `RenderState<P>::flags` (`src/storage/state/mod.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
 | `RenderState<P>::geometry`, `constraints` (`src/storage/state/mod.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state/offset.rs`) | `OffsetCell` | `Cell` (single-threaded tree) | Paint position. |
-| `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed: locks may guard shared infrastructure. Off the per-node hot path. |
-| `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
+| `PipelineCell` / `WeakPipelineCell` (`src/pipeline/owner/cell.rs`) | `Rc` slot holding the presentation's `PipelineOwner`; `WeakPipelineCell` is its `rc::Weak`, which stops upgrading once the presentation closes | Owner-thread shared infrastructure | One presentation's pipeline, owned by that presentation on its one thread (ADR-0043); clones share the owner. `PipelineCell` and `PipelineOwner` are `!Send + !Sync`, pinned by `assert_not_impl_any!` in `cell.rs`. A render object never stores a cell (it would close an `Rc` cycle) and the tree holds no back-reference to its owner. No lock guards the pipeline. |
+| `RenderInvalidationHandle` (`src/pipeline/handle.rs`) | `DirtySender` plus `RenderId` and `AttachmentEpoch` | Cross-thread dirty marks | The one part of the pipeline that leaves the owner thread: it marks one render object dirty for the attachment interval it was minted in. `Send + Sync`, pinned by `assert_impl_all!` in `handle.rs`. |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
 | Viewport listener list (`OffsetListeners`, `src/view/viewport_offset.rs`, held by `ScrollPosition`) | `Notifier` on the owner thread | Listener registry | Off layout/paint hot path. A fixed offset never notifies, so `FixedViewportOffset` has no list. |
 | `PipelineOwner::frame_arena` (`src/pipeline/owner/mod.rs`) | `flui_foundation::arena::FrameArena` (`Cell` bump cursor) | Owner-thread scratch | ADR-0328. The semantics pass resets it as it begins and takes its fragment lists, conflict marks and reading-order scratch from it, and the nodes it builds (their child lists, the rebuilt root, the graft list) from `PipelineOwner::built_arena`, a second `FrameArena` reset with it, so a built list never sits above scratch the walk frees after it; each list borrows the arena, so none outlives the reset. `!Send`, like the owner. |

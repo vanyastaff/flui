@@ -22,10 +22,10 @@ use flui_native::{
 };
 use flui_objects::RenderMetaData;
 use flui_platform::WindowOptions;
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
-use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::transfer::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
     DispatchEventResult, PlatformInput, PlatformWindow, Unsupported, UnsupportedReason,
     WindowExecutionState,

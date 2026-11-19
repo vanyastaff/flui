@@ -11,7 +11,7 @@
 //! the backend's: AppKit and Wayland deliver a zero step in the event's unit,
 //! the Web, Android and X11 drop the event.
 
-use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
+use flui_platform::input::pointer::{InputValueError, ScrollDelta, ScrollUnit};
 
 use crate::input::assembly::WHEEL_DETENT;
 
@@ -107,8 +107,8 @@ pub(crate) fn wheel_step(
 #[cfg(test)]
 mod mapping {
     use flui_platform::PlatformInput;
-    use flui_platform::pointer::{PointerEvent, ScrollDelta};
-    use flui_platform::{EventTime, keyboard::Modifiers};
+    use flui_platform::input::pointer::{PointerEvent, ScrollDelta};
+    use flui_platform::{EventTime, input::keyboard::Modifiers};
 
     use crate::input::android::scroll::AxisPolicy;
     use crate::input::assembly::{

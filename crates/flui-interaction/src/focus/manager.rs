@@ -15,7 +15,7 @@ use std::{
 use flui_foundation::panic::{PanicRecovery, RecoveryScope};
 use flui_foundation::{Notifier, Subscription};
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 
 use crate::containment::{FirstPanic, caught, try_run};
 use crate::focus::focus_scope::{
@@ -1476,7 +1476,7 @@ mod tests {
     fn key_event() -> KeyEvent {
         use flui_platform::{
             EventTime,
-            keyboard::{Code, Key, KeyPress, KeyState},
+            input::keyboard::{Code, Key, KeyPress, KeyState},
         };
 
         KeyEvent::new(

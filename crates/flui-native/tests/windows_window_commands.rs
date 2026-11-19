@@ -538,7 +538,7 @@ fn an_app_title_bar_drops_the_caption_and_keeps_the_content() {
 
 fn the_system_hit_test_answers_from_the_chrome_regions() {
     use flui_foundation::geometry::Rect;
-    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{CaptionButton, InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, SystemControls};
     use windows::Win32::UI::WindowsAndMessaging::{
         HTCAPTION, HTCLIENT, HTMAXBUTTON, HTTOP, WM_NCHITTEST,
@@ -1614,8 +1614,8 @@ fn a_scale_change_keeps_the_contents_logical_size() {
 /// they stay the system's.
 fn caption_buttons_take_the_legacy_mouse_messages_over_them() {
     use flui_foundation::geometry::Rect;
-    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
-    use flui_platform::pointer::PointerEvent;
+    use flui_platform::input::pointer::PointerEvent;
+    use flui_platform::input::regions::{CaptionButton, InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, PlatformInput, SystemControls};
     use windows::Win32::UI::WindowsAndMessaging::{
         HTMAXBUTTON, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
@@ -1714,8 +1714,8 @@ fn caption_buttons_take_the_legacy_mouse_messages_over_them() {
 /// leave, at the button, for the first such move, and none for the next.
 fn a_move_off_a_caption_button_ends_the_hover_it_saw() {
     use flui_foundation::geometry::Rect;
-    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
-    use flui_platform::pointer::PointerEvent;
+    use flui_platform::input::pointer::PointerEvent;
+    use flui_platform::input::regions::{CaptionButton, InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, PlatformInput, SystemControls};
     use windows::Win32::UI::WindowsAndMessaging::{
         HTCAPTION, HTMINBUTTON, HTRIGHT, WM_NCMOUSEMOVE,
@@ -2672,7 +2672,7 @@ impl WindowFixture for Win32Fixture {
 
     /// The Win32 input table: whatever its touchpad, a Win32 window hands the
     /// system no input region.
-    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+    fn input_capabilities(&self) -> flui_platform::input::capabilities::InputCapabilities {
         flui_native::input::availability::windows(false)
     }
 

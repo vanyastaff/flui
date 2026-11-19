@@ -18,7 +18,7 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{AtomicIdMint, ChangeNotifier};
-use flui_platform::keyboard::KeyEvent;
+use flui_platform::input::keyboard::KeyEvent;
 use thiserror::Error;
 
 use super::manager::FocusClosePanic;

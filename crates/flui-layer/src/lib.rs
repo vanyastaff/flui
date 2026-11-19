@@ -1,12 +1,11 @@
-//! # flui-layer — the compositor layer tree
+//! # flui-layer — the compositor scene
 //!
-//! The fourth of FLUI's five trees (View → Element → Render → **Layer** →
-//! Semantics). The paint walk in `flui-rendering` writes the repaint boundaries
-//! a frame repaints into the retained scene ([`SceneOwner`]) through a
+//! The paint walk in `flui-rendering` writes the repaint boundaries a frame
+//! repaints into the retained scene ([`SceneOwner`]) through a
 //! [`SceneWriter`], whose patch `flui-runtime` applies all or nothing; the
-//! published [`SceneVersion`] is frozen into a [`Scene`],
-//! stamped into a [`SceneSnapshot`], moved by value to the raster side, and
-//! lowered to GPU work by `flui-engine`.
+//! published [`SceneVersion`] is held by a [`Scene`], stamped into a
+//! [`SceneSnapshot`], moved by value to the raster side, and lowered to GPU
+//! work by `flui-engine`.
 //!
 //! ```text
 //! RenderObject::paint  ──►  SceneWriter  ──►  SceneVersion  ──►  Scene  ──►  SceneSnapshot  ──►  flui-engine
@@ -15,32 +14,31 @@
 //!
 //! ## What is here
 //!
-//! - [`Layer`]: the closed vocabulary of compositor primitives, one variant
-//!   per leaf/clip/transform/effect/link kind, each with its payload type
-//!   (`PictureLayer`, `ClipRectLayer`, `OpacityLayer`, …).
-//! - [`LayerTree`] / [`LayerNode`]: an append-only arena born with its root
-//!   ([`LayerTree::new`]) and grown pre-order through
-//!   [`LayerTree::push_child`]; the
-//!   tree also indexes every [`LeaderLayer`] by its [`LayerLink`].
-//! - [`resolve_follower_transform`]: the leader/follower chain math, each
-//!   chain layer contributing its matrix, a nested follower's resolved
-//!   transform or [`Layer::local_translation`], the one place the set of
-//!   translating variants is written down.
-//! - [`SceneBuilder`]: push/pop construction for hand-authored scenes.
-//! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: a frozen version or tree and
-//!   the per-frame package that crosses the raster boundary.
 //! - [`SceneOwner`] and [`SceneVersion`]: the retained scene (ADR-0304), a
 //!   persistent version changed by [`SceneOp`] patches applied all or
 //!   nothing.
+//! - [`Layer`]: the closed vocabulary of compositor primitives, one variant
+//!   per leaf/clip/transform/effect/link kind, each with its payload type
+//!   (`PictureLayer`, `ClipRectLayer`, `OpacityLayer`, …).
+//! - [`LayerTree`] / [`LayerNode`] and [`SceneBuilder`]: a scene authored by
+//!   hand, an append-only arena born with its root ([`LayerTree::new`]) and
+//!   grown pre-order through [`LayerTree::push_child`]. [`Scene::new`]
+//!   converts it into a version ([`SceneVersion::from_tree`]).
+//! - [`resolve_follower_transform`]: the leader/follower chain math over a
+//!   hand-built tree, each chain layer contributing its matrix, a nested
+//!   follower's resolved transform or [`Layer::local_translation`], the one
+//!   place the set of translating variants is written down.
+//! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: the version the
+//!   raster side draws and the per-frame package that crosses the raster
+//!   boundary.
 //! - `testing::inspect` (feature `testing`): structural walkers for tests.
 //!
 //! ## Design
 //!
 //! A closed `enum` (the GPU backend's exhaustive `match` is the contract); a
-//! per-frame arena keyed by 1-based [`LayerId`] with no removal; a leader
-//! index on the tree; and a `Scene` that is a frozen version or tree, not an engine
-//! handle. The reference-parity accounting is in this crate's
-//! `ARCHITECTURE.md`.
+//! persistent version that shares every boundary a patch did not change; and
+//! a `Scene` that holds one version, not an engine handle. The
+//! reference-parity accounting is in this crate's `ARCHITECTURE.md`.
 //!
 //! ```rust
 //! use flui_layer::{Layer, LayerTree, OffsetLayer, PictureLayer, Scene};
@@ -49,7 +47,8 @@
 //! tree.push_child(tree.root(), Layer::from(PictureLayer::default()));
 //!
 //! let scene = Scene::new(tree);
-//! assert_eq!(scene.tree().map(LayerTree::len), Some(2));
+//! let root = scene.version().node(scene.version().root()).expect("a root");
+//! assert_eq!(root.content().entries().len(), 2);
 //! ```
 
 #![cfg_attr(
@@ -63,6 +62,8 @@
 // and a consuming builder that returns `Self` is `#[must_use]`.
 #![deny(missing_docs)]
 #![warn(clippy::return_self_not_must_use)]
+// A table keyed by ids the process mints hashes with FxHash, not SipHash.
+#![warn(clippy::disallowed_types)]
 
 mod compositor;
 mod damage;
@@ -78,9 +79,9 @@ mod tree;
 
 pub use compositor::SceneBuilder;
 #[cfg(feature = "testing")]
-pub use damage::LayerDiffer;
+pub use damage::{Closure, Closures, LayerDiffer, MAX_CLOSURE_ROUNDS, close_over, read_closure};
 pub use damage::{
-    Closure, Closures, DamageMode, MAX_CLOSURE_ROUNDS, RasterBase, close_over, read_closure,
+    DamageMode, DamageRect, DamageRegion, FullReason, NonFinite, RasterBase, Region, ResyncReason,
 };
 pub use flui_foundation::LayerId;
 pub use layer::{
@@ -94,13 +95,11 @@ pub use layer::{
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::{
     Applied, BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
-    EntryIndex, Lineage, Placement, Reclaimed, ReleasedContents, Scene, SceneContent, SceneError,
-    SceneNode, SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
+    EntryIndex, Lineage, Placement, Reclaimed, ReleasedContents, Scene, SceneError, SceneNode,
+    SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
     SceneVersionId, SceneWriter, SubtreeCull, SurfaceKey, TextureDamageScratch,
 };
-pub use scene_snapshot::{
-    DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,
-};
+pub use scene_snapshot::SceneSnapshot;
 pub use texture_registry::{
     TextureIdsExhausted, TextureRegistration, TextureRegistry, TextureUpdates,
 };

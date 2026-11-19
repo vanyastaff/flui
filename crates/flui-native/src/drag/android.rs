@@ -48,11 +48,11 @@
 mod clip {
     use std::sync::Arc;
 
-    use flui_platform::data_transfer::{
+    use flui_platform::transfer::data::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
         TransferLimits, TransferPayload,
     };
-    use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
+    use flui_platform::transfer::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
     use crate::drag::offers::{PathStyle, TransferUri};
 
@@ -387,7 +387,7 @@ mod drops {
 
     use flui_foundation::{DataTransferId, IdMint, geometry::Point, panic::FirstPanic};
     use flui_platform::DragDropEvent;
-    use flui_platform::data_transfer::{
+    use flui_platform::transfer::data::{
         DataTransferOffer, DropFeedback, RepresentationDescriptor, RepresentationIndex,
         TransferActions, TransferCompleter, TransferError, TransferLimits, TransferRequest,
     };
@@ -1158,11 +1158,13 @@ use flui_foundation::{DataTransferId, panic::FirstPanic};
 #[cfg(target_os = "android")]
 use flui_platform::{
     Unsupported, UnsupportedReason,
-    data_transfer::{
+    transfer::data::{
         DragTransport, DropFeedback, RepresentationIndex, TransferActions, TransferError,
         TransferLimits, TransferPayload, TransferRequest,
     },
-    drag::{DragError, OsDragEndHook, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
+    transfer::drag::{
+        DragError, OsDragEndHook, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
+    },
 };
 #[cfg(target_os = "android")]
 use jni::{
@@ -1651,7 +1653,7 @@ impl ActivityDragSource for AndroidDragSource {
     fn retire(&self) {
         if let Some(Running { on_end, .. }) = self.running.take() {
             self.view.transfer().set_own(None);
-            contain_owner_callback(|| on_end(flui_platform::drag::OsDragEnd::Cancelled));
+            contain_owner_callback(|| on_end(flui_platform::transfer::drag::OsDragEnd::Cancelled));
         }
     }
 }
@@ -1659,7 +1661,7 @@ impl ActivityDragSource for AndroidDragSource {
 /// Serve representation `index` through `provider`, containing a panic.
 #[cfg(target_os = "android")]
 fn serve(
-    provider: &mut flui_platform::drag::OsDragProvider,
+    provider: &mut flui_platform::transfer::drag::OsDragProvider,
     index: RepresentationIndex,
 ) -> Option<TransferPayload> {
     #[expect(
@@ -1747,7 +1749,7 @@ impl PlatformDragSource for AndroidDragSource {
         }
         self.view.transfer().set_own(Some(allowed));
         let session = match key.representation().format {
-            flui_platform::data_transfer::TransferFormat::Custom { mime } => {
+            flui_platform::transfer::data::TransferFormat::Custom { mime } => {
                 mime.as_str().to_owned()
             }
             _ => String::new(),

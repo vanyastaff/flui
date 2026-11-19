@@ -51,14 +51,14 @@ mod cases {
 
     use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
     use flui_native::Platform as _;
-    use flui_platform::data_transfer::{
+    use flui_platform::transfer::data::{
         DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
         TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
     };
-    use flui_platform::drag::{
+    use flui_platform::transfer::drag::{
         DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
     };
-    use flui_platform::{DragDropEvent, PlatformInput, pointer::PointerEvent};
+    use flui_platform::{DragDropEvent, PlatformInput, input::pointer::PointerEvent};
     use flui_testing::window_commands::AdmitAndApply as _;
     use wayland_client::protocol::wl_data_device_manager::DndAction;
 
@@ -538,7 +538,7 @@ mod cases {
     fn session_ending(
         text: &str,
         served: &Rc<Cell<u32>>,
-        on_end: flui_platform::drag::OsDragEndHook,
+        on_end: flui_platform::transfer::drag::OsDragEndHook,
     ) -> OsDragRequest {
         let key = DragSessionKey::new(
             ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),

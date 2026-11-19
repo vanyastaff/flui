@@ -15,7 +15,7 @@ use flui_interaction::focus::{
 use flui_interaction::ids::FocusNodeId;
 use flui_platform::{
     EventTime,
-    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey},
+    input::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey},
 };
 
 fn run_rows(rows: &[(&str, fn())]) {

@@ -15,7 +15,7 @@ use flui_native::input::assembly::{
     NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
 use flui_platform::EventTime;
-use flui_platform::pointer::{PointerButton, PointerKind};
+use flui_platform::input::pointer::{PointerButton, PointerKind};
 
 /// Two device pixels per logical pixel.
 const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {

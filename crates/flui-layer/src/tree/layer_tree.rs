@@ -12,8 +12,7 @@
 //!
 //! [`Scene`]: crate::Scene
 
-use std::collections::HashMap;
-use std::num::NonZeroU64;
+use rustc_hash::FxHashMap;
 
 use flui_foundation::{LayerId, RenderId};
 
@@ -23,7 +22,7 @@ use super::stamp::ContentToken;
 use crate::{LayerLink, layer::Layer};
 
 /// A [`Layer`] plus its position in the tree.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerNode {
     parent: Option<LayerId>,
     children: Vec<LayerId>,
@@ -137,7 +136,7 @@ impl From<Layer> for LayerNode {
 /// assert_eq!(tree.parent(leaf), Some(root));
 /// assert_eq!(tree.children(root), Some(&[leaf][..]));
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerTree {
     /// Never empty: slot 0 is the root, placed by [`LayerTree::new`].
     nodes: Vec<LayerNode>,
@@ -146,10 +145,7 @@ pub struct LayerTree {
     /// The link is a `Copy` token, so the tree holds the index. Two leaders on
     /// one link in one frame is a widget-tree error; a debug build trips on
     /// it, a release build keeps the later leader.
-    leaders: HashMap<LayerLink, LayerId>,
-    /// Which scene this tree is, counted by its producer; ids are minted per tree, so inspection
-    /// pairs them with it.
-    scene: NonZeroU64,
+    leaders: FxHashMap<LayerLink, LayerId>,
 }
 
 #[inline]
@@ -185,8 +181,7 @@ impl LayerTree {
     pub fn new(root: impl Into<LayerNode>) -> Self {
         let mut tree = Self {
             nodes: Vec::new(),
-            leaders: HashMap::new(),
-            scene: NonZeroU64::MIN,
+            leaders: FxHashMap::default(),
         };
         let id = tree.push(root.into(), None);
         debug_assert_eq!(id, ROOT);
@@ -197,20 +192,6 @@ impl LayerTree {
     #[inline]
     pub fn root(&self) -> LayerId {
         ROOT
-    }
-
-    /// Which scene this tree is: 1 unless its producer numbered it with [`Self::with_scene`].
-    #[inline]
-    pub fn scene(&self) -> NonZeroU64 {
-        self.scene
-    }
-
-    /// Numbers the tree as its producer's `scene`th, so a layer id kept from an earlier scene
-    /// is told apart from the same slot here.
-    #[must_use]
-    pub fn with_scene(mut self, scene: NonZeroU64) -> Self {
-        self.scene = scene;
-        self
     }
 
     /// Appends `node` as the last child of `parent` and returns its id.
@@ -261,7 +242,7 @@ impl LayerTree {
 
     /// The layer behind `id`.
     #[inline]
-    pub fn get_layer(&self, id: LayerId) -> Option<&Layer> {
+    pub fn layer(&self, id: LayerId) -> Option<&Layer> {
         self.get(id).map(LayerNode::layer)
     }
 
@@ -425,7 +406,7 @@ mod tests {
         assert_eq!(tree.children(root), Some(&[a, b][..]));
         assert_eq!(tree.children(a), Some(&[c][..]));
         assert_eq!(tree.children(b), Some(&[][..]));
-        assert!(matches!(tree.get_layer(b), Some(Layer::Picture(_))));
+        assert!(matches!(tree.layer(b), Some(Layer::Picture(_))));
     }
 
     #[cfg(debug_assertions)]

@@ -132,8 +132,8 @@ pub use gesture_alternatives::{
 };
 pub use host::{
     HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
-    HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, StartedOsDrag, UnshownFrame,
-    WindowSystemMismatch,
+    HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, ScriptedTextSizing, StartedOsDrag,
+    UnshownFrame, WindowSystemMismatch,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::widget_state::WidgetStatesController;
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
-use flui_platform::pointer::PointerSource;
+use flui_platform::input::pointer::PointerSource;
 use flui_rendering::hit_testing::{
     Cursor, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,

@@ -627,7 +627,7 @@ impl AndroidLoop {
         window: &dyn ActivityWindow,
         events: &[flui_platform::PlatformInput],
     ) {
-        use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
+        use flui_platform::input::pointer::{PenTool, PointerEvent, PointerKind};
         if self.api.since::<StylusHandwriting>().is_none() {
             return;
         }
@@ -1360,9 +1360,9 @@ impl host::Clipboard<AndroidLoop> for AndroidLoop {
 /// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0348), the
 /// transport the host's [`AndroidHost::transfer`] made for the view.
 impl host::Drag<AndroidLoop> for AndroidLoop {
-    fn data_transfer(owner: &AndroidLoop) -> Arc<dyn flui_platform::data_transfer::DragTransport> {
+    fn data_transfer(owner: &AndroidLoop) -> Arc<dyn flui_platform::transfer::data::DragTransport> {
         Arc::clone(owner.java_view.transfer())
-            as Arc<dyn flui_platform::data_transfer::DragTransport>
+            as Arc<dyn flui_platform::transfer::data::DragTransport>
     }
 }
 

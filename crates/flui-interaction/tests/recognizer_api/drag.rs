@@ -321,7 +321,7 @@ fn fling_row(
     use flui_interaction::gesture::Velocity;
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress,
             PointerRelease, PointerSample, PointerSource,
         },
@@ -513,7 +513,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
 
 fn continuation_does_not_take_a_rejected_or_other_device_contact() {
     use flui_interaction::gesture::DragPointerStrategy;
-    use flui_platform::pointer::DeviceId;
+    use flui_platform::input::pointer::DeviceId;
     for secondary_device in [Some(1_u64), Some(2), None] {
         let arena =
             GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
@@ -626,7 +626,7 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
     use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress,
             PointerRelease, PointerSample, PointerSource,
         },

@@ -1744,7 +1744,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         ManualClock, MonotonicClock,
         geometry::{DevicePixelRatio, Point},
     };
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
         PointerPress, PointerRelease, PointerSample, PointerSource,
     };
@@ -3116,7 +3116,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
 }
 
 fn wheel_preferences_reach_the_next_mounted_input() {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
@@ -3884,7 +3884,7 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
 /// were accepted, and no frame separates them: each wheel input scrolls by the
 /// step of the revision accepted just before it, not of an earlier or later one.
 fn queued_preferences_are_not_coalesced_across_an_input() {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };

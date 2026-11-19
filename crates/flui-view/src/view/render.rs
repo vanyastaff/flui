@@ -243,7 +243,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_scroll(
         &self,
         handler: impl Fn(
-            &flui_platform::pointer::ScrollEvent,
+            &flui_platform::input::pointer::ScrollEvent,
         ) -> flui_interaction::pointer::EventPropagation
         + 'static,
     ) -> Result<flui_interaction::pointer::ScrollTarget, RenderObjectContextError> {
@@ -261,7 +261,7 @@ impl<'a> RenderObjectContext<'a> {
         &self,
         target: flui_interaction::pointer::ScrollTarget,
         handler: impl Fn(
-            &flui_platform::pointer::ScrollEvent,
+            &flui_platform::input::pointer::ScrollEvent,
         ) -> flui_interaction::pointer::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {

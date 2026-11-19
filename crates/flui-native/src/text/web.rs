@@ -29,9 +29,10 @@ pub(crate) mod ime {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         Autofill, Capitalization, Composition, Correction, EnterAction, NumberFormat, Selection,
-        TextInputPurpose, TextStoreEdit, TextStoreStatus, Utf16Offset, Utf16Range,
+        TextInputPurpose, TextStoreEdit, TextStoreStatus,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     /// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the
@@ -508,11 +509,11 @@ mod input {
 
     use std::rc::{Rc, Weak};
 
-    use flui_platform::keyboard::{KeyPress, KeyState};
-    use flui_platform::text_store::{
+    use flui_platform::input::keyboard::{KeyPress, KeyState};
+    use flui_platform::text::store::{
         CompositionEnd, LockGrant, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
-        TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus, Utf16Offset,
-        Utf16Range,
+        TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+        utf16::{Utf16Offset, Utf16Range},
     };
     use wasm_bindgen::{JsCast, prelude::*};
 

@@ -5,10 +5,10 @@
 //! Two halves:
 //!
 //! - the tables, pure and compiled on every host: an evdev key code's
-//!   [`Code`](flui_platform::keyboard::Code) ([`code_of`]), a keysym's
-//!   [`NamedKey`](flui_platform::keyboard::NamedKey) ([`keysym_key`]), the
-//!   [`Key`](flui_platform::keyboard::Key) a press means from its keysym and the text it spells
-//!   ([`key_of`]), the [`Modifiers`](flui_platform::keyboard::Modifiers) the named XKB modifiers hold
+//!   [`Code`](flui_platform::input::keyboard::Code) ([`code_of`]), a keysym's
+//!   [`NamedKey`](flui_platform::input::keyboard::NamedKey) ([`keysym_key`]), the
+//!   [`Key`](flui_platform::input::keyboard::Key) a press means from its keysym and the text it spells
+//!   ([`key_of`]), the [`Modifiers`](flui_platform::input::keyboard::Modifiers) the named XKB modifiers hold
 //!   ([`modifiers_of`]) and a layout's name in a keymap's text
 //!   ([`group_names`]);
 //! - `keyboard`, a keymap, its state and compose over libxkbcommon, loaded at
@@ -16,7 +16,7 @@
 //!   from a `KeymapSource`, which names where a host reads it: the X server's
 //!   core keyboard (the X11 host, whose server keeps the state and reports it
 //!   in XKB's `StateNotify`). A press feeds compose: a dead key or a sequence in
-//!   progress is [`Key::Dead`](flui_platform::keyboard::Key::Dead) with the accent its keysym names,
+//!   progress is [`Key::Dead`](flui_platform::input::keyboard::Key::Dead) with the accent its keysym names,
 //!   and the key that completes it carries the composed text; a window losing
 //!   the keyboard ends the sequence.
 //!
@@ -30,7 +30,7 @@ mod meaning {
 
     use std::ops::Range;
 
-    use flui_platform::keyboard::{Code, Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Code, Key, Modifiers, NamedKey};
 
     use crate::input::keys::scancode_to_code;
 
@@ -547,7 +547,7 @@ mod keyboard {
     use std::sync::Arc;
 
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
+    use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use xkbcommon_dl::{
         XkbCommon, XkbCommonCompose, xkb_compose_feed_result, xkb_compose_state,
         xkb_compose_status, xkb_compose_table, xkb_context, xkb_keymap, xkb_mod_index_t, xkb_state,
@@ -1131,7 +1131,7 @@ mod keyboard {
     #[cfg(all(test, wayland_host))]
     mod tests {
         use flui_platform::EventTime;
-        use flui_platform::keyboard::{Key, KeyPress, KeyState};
+        use flui_platform::input::keyboard::{Key, KeyPress, KeyState};
 
         use super::{Keyboard, KeymapSource, MAX_HELD_KEYS};
         use crate::input::linux::xkb::EVDEV_OFFSET;
@@ -1275,7 +1275,7 @@ xkb_symbols \"flui\" { };
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::keyboard::{Code, Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Code, Key, Modifiers, NamedKey};
 
     use super::*;
 

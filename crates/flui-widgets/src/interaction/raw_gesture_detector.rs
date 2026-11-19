@@ -17,7 +17,7 @@ use flui_interaction::{
     },
     pointer::PointerDispatch,
 };
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;

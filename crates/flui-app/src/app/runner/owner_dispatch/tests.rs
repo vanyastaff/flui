@@ -66,9 +66,9 @@ fn reentrant_identity_window(
                     queried.store(true, std::sync::atomic::Ordering::SeqCst);
                     assert!(matches!(
                         crate::app::runner::request_presentation_close(probe),
-                        Err(crate::app::PresentationCloseError::Close(
+                        Err(crate::app::runner::PresentationCloseError::Close(
                             crate::app::CloseRequestError::UnknownPresentation { .. }
-                        ) | crate::app::PresentationCloseError::NoHostedRuntime)
+                        ) | crate::app::runner::PresentationCloseError::NoHostedRuntime)
                     ));
                 } else if matches!(call, flui_testing::WindowCall::State)
                     && let Some(on_scale) = &on_scale
@@ -330,9 +330,9 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
                 }
                 assert!(matches!(
                     crate::app::runner::request_presentation_close(probe),
-                    Err(crate::app::PresentationCloseError::Close(
+                    Err(crate::app::runner::PresentationCloseError::Close(
                         crate::app::CloseRequestError::UnknownPresentation { .. }
-                    ) | crate::app::PresentationCloseError::NoHostedRuntime)
+                    ) | crate::app::runner::PresentationCloseError::NoHostedRuntime)
                 ));
                 if close_authorizer {
                     close_this_window(primary);

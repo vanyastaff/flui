@@ -372,7 +372,7 @@ pub fn lay_out_with_selection_ui_on(
     root: impl View,
     constraints: BoxConstraints,
     platform: flui_platform::TargetPlatform,
-    ui: flui_platform::text_store::SelectionUi,
+    ui: flui_platform::text::store::SelectionUi,
 ) -> LaidOut {
     mount_laid_out(root, constraints, None, platform, KitInput::Pull(ui))
 }
@@ -427,7 +427,7 @@ enum KitInput {
     Push,
     /// Pulled through a recording store host that answers this for who
     /// draws the selection UI.
-    Pull(flui_platform::text_store::SelectionUi),
+    Pull(flui_platform::text::store::SelectionUi),
 }
 
 fn mount_laid_out(
@@ -1949,7 +1949,7 @@ impl LaidOut {
 
     /// Dispatch a key event through the UI runtime's input path, as platform
     /// input arrives: the runtime sees it before focus does.
-    pub fn dispatch_key(&self, event: flui_platform::keyboard::KeyEvent) {
+    pub fn dispatch_key(&self, event: flui_platform::input::keyboard::KeyEvent) {
         self.host.dispatch_key(event);
     }
 

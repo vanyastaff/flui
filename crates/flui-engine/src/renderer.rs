@@ -249,7 +249,7 @@ impl DeviceLostSlot {
     }
 }
 
-/// GPU context available during layer tree rendering.
+/// GPU context available while a scene renders.
 ///
 /// Bundled GPU stack rebuilt by `new` (windowed path) and `recover`.
 ///
@@ -1781,7 +1781,7 @@ impl Renderer {
     /// Renders `scene` with the damage the tracker holds, which the unmanaged
     /// entry points around it mark full.
     ///
-    /// Traverses the scene's LayerTree depth-first, dispatching each layer's
+    /// Walks the scene's version depth-first, dispatching each entry's
     /// DisplayList commands through the GPU backend (WgpuPainter). For scenes
     /// containing `BackdropFilterLayer`, painter batches are submitted early
     /// so the target can be copied, blurred, and composited before
@@ -1984,10 +1984,8 @@ impl Renderer {
     /// state and walks the scene, once for a full frame and once per rect of
     /// the region `partial` redraws. Each pass opens
     /// with `damage::begin_partial` (its rect's scissor and the clear inside
-    /// it) and walks the scene culled by its own rect. Answers whether an
-    /// advanced shape straddles the rect of the pass that drew it, in which
-    /// case the caller forces its next frame full, and what its walk and
-    /// recording did.
+    /// it) and walks the scene culled by its own rect. Answers what its walk
+    /// and recording did.
     ///
     /// The windowed renderer and the crate's headless retained capture both
     /// record through this, so the partial-frame protocol a readback test
@@ -2000,7 +1998,7 @@ impl Renderer {
         scene: &flui_layer::Scene,
         partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
-    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
+    ) -> EngineResult<crate::frame_protocol::RasterCounters> {
         let recorded = Self::record_passes(painter, scene, partial, reads)?;
         painter.settle_recording_cache();
         Ok(recorded)
@@ -2012,7 +2010,7 @@ impl Renderer {
         scene: &flui_layer::Scene,
         partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
-    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
+    ) -> EngineResult<crate::frame_protocol::RasterCounters> {
         use crate::layer_dispatcher::LayerDispatcher;
 
         let Some(region) = partial else {
@@ -2020,14 +2018,9 @@ impl Renderer {
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
             backend.painter_mut().begin_frame_in_scope();
-            let counters =
-                crate::layer_walk::record_scene(scene.content(), None, reads, &mut backend)?;
-            return Ok(crate::frame_protocol::RecordedContent {
-                straddled: false,
-                counters,
-            });
+            return crate::layer_walk::record_scene(scene.version(), None, reads, &mut backend);
         };
-        let mut recorded = crate::frame_protocol::RecordedContent::default();
+        let mut recorded = crate::frame_protocol::RasterCounters::default();
         for (pass, &rect) in (0_u32..).zip(region.rects()) {
             // A dispatcher per pass: its Drop calls flush_active_transform(),
             // which balances any deferred lazy-coalescing save left by
@@ -2036,7 +2029,6 @@ impl Renderer {
             let mut backend = LayerDispatcher::new(painter);
             backend.painter_mut().begin_frame_in_scope();
             backend.painter_mut().begin_region_pass(pass);
-            let first_item = backend.painter().recorded_items();
             // The walk culls by the whole pixels the scissor admits: a
             // boundary that reaches only the edge pixel still draws its share
             // of that pixel, which the clear wiped.
@@ -2054,34 +2046,14 @@ impl Renderer {
             // it, the retained target (created with it) otherwise. A
             // version's walk skips the boundaries and chunks this rect cannot
             // reach.
-            recorded.counters += crate::layer_walk::record_scene(
-                scene.content(),
+            recorded += crate::layer_walk::record_scene(
+                scene.version(),
                 Some(redrawn),
                 reads,
                 &mut backend,
             )?;
 
-            // An advanced shape (one that reads the destination) whose bounds
-            // straddle the pass's rect was drawn clipped, so outside the rect
-            // the retained pixels under it may be stale: the caller repaints
-            // the next frame in full. A retained version needs no such check:
-            // the damage of a chunk that reads the destination is closed over
-            // what it shows (ADR-0304 §6), which a clip over it cuts, while
-            // the shape's bounds here are uncut, so the check would repaint a
-            // correct frame
-            // (`a_clipped_destination_reading_chunk_redraws_inside_its_clip`).
-            // A tree built by hand carries no such guarantee and keeps it.
-            if scene.version().is_none()
-                && backend
-                    .painter()
-                    .has_advanced_shape_straddling(redrawn, first_item)
-            {
-                tracing::debug!(
-                    "Advanced shape straddles partial damage; scheduling full repaint next frame"
-                );
-                recorded.straddled = true;
-            }
-            recorded.counters.region_passes = recorded.counters.region_passes.saturating_add(1);
+            recorded.region_passes = recorded.region_passes.saturating_add(1);
         }
         Ok(recorded)
     }
@@ -2513,7 +2485,7 @@ mod tests {
         // Recorded on the frames that admit its chunk.
         for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
             renderer.painter.begin_frame().expect("a frame opens");
-            let _recorded: crate::frame_protocol::RecordedContent = Renderer::record_frame_content(
+            let _recorded: crate::frame_protocol::RasterCounters = Renderer::record_frame_content(
                 &mut renderer.painter,
                 &first,
                 None,
@@ -3032,7 +3004,7 @@ mod tests {
         let mut backend = LayerDispatcher::new(&mut painter);
 
         crate::layer_walk::record_scene(
-            flui_layer::SceneContent::Tree(&tree),
+            &flui_layer::SceneVersion::from_tree(&tree),
             None,
             crate::recording_cache::CacheReads::On,
             &mut backend,
@@ -3147,7 +3119,7 @@ mod tests {
         let mut backend = LayerDispatcher::new(&mut painter);
 
         crate::layer_walk::record_scene(
-            flui_layer::SceneContent::Tree(&tree),
+            &flui_layer::SceneVersion::from_tree(&tree),
             None,
             crate::recording_cache::CacheReads::On,
             &mut backend,
@@ -3357,7 +3329,7 @@ mod tests {
             builder.add(PictureLayer::new(canvas.finish()));
             let scene = Scene::new(builder.build());
             painter.begin_frame().expect("optimized FXC frame opens");
-            let _recorded: crate::frame_protocol::RecordedContent = Renderer::record_frame_content(
+            let _recorded: crate::frame_protocol::RasterCounters = Renderer::record_frame_content(
                 &mut painter,
                 &scene,
                 None,

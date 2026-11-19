@@ -14,7 +14,7 @@
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{DevicePoint, DeviceSize};
-use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, ResizeEdge, chrome_hit};
+use flui_platform::input::regions::{ChromeHit, DeviceInputRegion, ResizeEdge, chrome_hit};
 
 /// The longest wait between the two presses of a double-click on the bar.
 /// Neither X11 nor Wayland reads a system setting for it; 500 ms is the
@@ -253,7 +253,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::{DevicePoint, DeviceRect, DeviceSize};
-    use flui_platform::input_regions::{DeviceInputRegion, InputRegionKind, ResizeEdge};
+    use flui_platform::input::regions::{DeviceInputRegion, InputRegionKind, ResizeEdge};
 
     use super::{ChromePress, ChromePresses, PressButton, ResizeBand, device_point};
 

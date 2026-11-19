@@ -2,8 +2,8 @@
 
 - `flui_assets::ImageCache` takes one request shape: `load(&ImageSource, &LoadServices)` and the
   probe `get(&ImageSource)` replace `load_image`, `load_network_image` and `cached_image`. A
-  source is built with `ImageSource::asset(path)` or `ImageSource::network(url, &http)`, which
-  carries the client that fetches it; `LoadServices` carries only lanes, set with `lanes(…)`
+  source is built with `ImageSource::asset(key, &bundle)` or `ImageSource::network(url, &http)`, which
+  carries the reader that fetches it; `LoadServices` carries only lanes, set with `lanes(…)`
   (ADR-0386).
 - A failed load answers `ImageLoadError` (its source and an `ImageLoadErrorKind`: `NotFound`,
   `NotAFile`, `TooLarge`, `Io`, `Decode`, `Http`, `HttpStatus`, `LanesRefused`, `Panicked`,

@@ -9,7 +9,7 @@ use std::rc::Rc;
 use flui_interaction::focus::FocusManager;
 use flui_interaction::focus::FocusNode;
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers, NamedKey};
+use flui_platform::input::keyboard::{Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_view::EventContext;
 use flui_widgets::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, BackIntent, CallbackAction, DismissIntent,

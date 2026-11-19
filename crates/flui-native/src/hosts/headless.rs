@@ -67,7 +67,7 @@ impl HeadlessHost for Headless {
     fn drag_source(
         state: &HeadlessState,
         held: Arc<HeldPresses>,
-    ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    ) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         HeadlessDragSource::of(state, held)
     }
 }

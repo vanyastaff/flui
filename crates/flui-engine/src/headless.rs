@@ -181,20 +181,21 @@ impl HeadlessRenderer {
         scene: &flui_layer::Scene,
         size: (u32, u32),
     ) -> EngineResult<Vec<u8>> {
-        self.render_content(scene.content(), size)
+        self.render_content(scene.version(), size)
     }
 
-    /// [`render_scene`](Self::render_scene) for a tree the caller keeps.
+    /// [`render_scene`](Self::render_scene) for a tree the caller keeps, made
+    /// a version as [`Scene::new`](flui_layer::Scene::new) makes it.
     ///
     /// # Errors
     /// As [`render_scene`](Self::render_scene).
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
-        self.render_content(flui_layer::SceneContent::Tree(tree), size)
+        self.render_content(&flui_layer::SceneVersion::from_tree(tree), size)
     }
 
     fn render_content(
         &self,
-        content: flui_layer::SceneContent<'_>,
+        content: &flui_layer::SceneVersion,
         size: (u32, u32),
     ) -> EngineResult<Vec<u8>> {
         let mut capture = self
@@ -783,7 +784,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
+    ) -> EngineResult<crate::frame_protocol::RasterCounters> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }

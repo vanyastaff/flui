@@ -14,8 +14,8 @@ use std::{
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size, device_size, snap};
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::input::regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text::store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, DispatchEventResult,
     DisplayDescription, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
@@ -419,7 +419,7 @@ pub struct HeadlessWindowSystem {
     /// The input regions the simulated system honours for the window, as
     /// the platform's input availability says
     /// ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
-    pub input_capabilities: flui_platform::input_capabilities::InputCapabilities,
+    pub input_capabilities: flui_platform::input::capabilities::InputCapabilities,
     /// The material the simulated system draws behind the window: the last
     /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
     pub material: WindowMaterial,
@@ -487,7 +487,7 @@ pub struct HeadlessHostWindow {
     /// and whose layout [`PlatformWindow::window_at`] reads. `Weak`, as above.
     windows: Weak<HeadlessWindows>,
     /// The OS drag session this window can start, when the platform was given one.
-    drag: Option<Arc<dyn flui_platform::drag::PlatformDragSource>>,
+    drag: Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>>,
     /// The presses the input injected into the window holds, which its drag
     /// source checks a request's press against.
     held: Arc<HeldPresses>,
@@ -687,6 +687,8 @@ struct HeadlessWindowSetup {
 struct HeadlessHostWindowState {
     /// Every [`PlatformWindow::set_frame_rate_hint`] the window took, in order.
     frame_rate_hints: Vec<flui_platform::FrameRateHint>,
+    /// Every [`PlatformWindow::request_frame_at`] the window took, in order.
+    timed_frame_requests: Vec<Option<flui_platform::EventTime>>,
     /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
     materials: Vec<WindowMaterial>,
     title: String,
@@ -1016,6 +1018,7 @@ impl HeadlessHostWindow {
         let frame = display.as_ref().map(DesktopFrame::of);
         let mut model = HeadlessHostWindowState {
             frame_rate_hints: Vec::new(),
+            timed_frame_requests: Vec::new(),
             materials: Vec::new(),
             title: options.title.clone(),
             position,
@@ -1313,6 +1316,14 @@ impl HeadlessHostWindow {
         self.state.borrow_mut().frame_rate_hints.clone()
     }
 
+    /// Every timed frame request the window took
+    /// ([`PlatformWindow::request_frame_at`]), oldest first: an instant asked
+    /// for, or `None` for a withdrawal.
+    #[must_use]
+    pub fn timed_frame_requests(&self) -> Vec<Option<flui_platform::EventTime>> {
+        self.state.borrow().timed_frame_requests.clone()
+    }
+
     /// Every material the window applied, oldest first.
     #[must_use]
     pub fn materials(&self) -> Vec<WindowMaterial> {
@@ -1572,6 +1583,13 @@ impl PlatformWindow for HeadlessHostWindow {
         flui_platform::RedrawRequester::request_redraw(&self.redraw);
     }
 
+    /// Recorded for a test to read ([`Self::timed_frame_requests`]), and
+    /// served by none: the headless host keeps no surface while covered
+    /// (`occluded_surface`), and its frames come from the test that drives it.
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.state.borrow_mut().timed_frame_requests.push(at);
+    }
+
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         Arc::new(self.redraw.clone())
     }
@@ -1700,7 +1718,7 @@ impl PlatformWindow for HeadlessHostWindow {
     }
 
     /// Taken while the window's
-    /// [`InputCapabilities::honours_input_regions`](flui_platform::input_capabilities::InputCapabilities::honours_input_regions)
+    /// [`InputCapabilities::honours_input_regions`](flui_platform::input::capabilities::InputCapabilities::honours_input_regions)
     /// says the simulated system honours some kind of region, as it does unless a test said
     /// otherwise; the regions of a kind it does not honour are dropped.
     fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
@@ -1743,7 +1761,7 @@ impl PlatformWindow for HeadlessHostWindow {
         Some(Arc::clone(&self.facets.haptics))
     }
 
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         self.drag.clone()
     }
 

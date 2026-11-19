@@ -58,7 +58,7 @@ fn hover() -> PointerEvent {
     let mut event =
         make_move_event(Offset::new(8.0, 9.0), PointerKind::Mouse).expect("finite test position");
     if let PointerEvent::Move(update) = &mut event {
-        update.buttons = flui_platform::pointer::PointerButtons::default();
+        update.buttons = flui_platform::input::pointer::PointerButtons::default();
     }
     event
 }
@@ -75,7 +75,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::keyboard::Code;
+    use flui_platform::input::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
 
     for policy in [PointerResampling::Disabled, PointerResampling::FrameAligned] {
@@ -164,7 +164,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
 pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change() {
     use flui_interaction::focus::{FocusNode, KeyEventResult};
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::keyboard::Code;
+    use flui_platform::input::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
     use flui_widgets::Focus;
     use std::rc::Weak;
@@ -379,7 +379,7 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::keyboard::Code;
+    use flui_platform::input::keyboard::Code;
     use std::rc::Weak;
 
     let mut realm = UiRuntime::for_test();
@@ -438,7 +438,8 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
                         )
                         .expect("hover");
                         if let PointerEvent::Move(event) = &mut hover {
-                            event.buttons = flui_platform::pointer::PointerButtons::default();
+                            event.buttons =
+                                flui_platform::input::pointer::PointerButtons::default();
                         }
                         dispatch(&realm, primary, hover);
                     }
@@ -449,7 +450,7 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
                     };
                     assert_eq!(
                         event.reason,
-                        flui_platform::pointer::CancelReason::CaptureLost
+                        flui_platform::input::pointer::CancelReason::CaptureLost
                     );
                     cancels.borrow_mut().push(("cancel", event.pointer.id, 0.0));
                 })
@@ -518,7 +519,7 @@ fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::keyboard::Code;
+    use flui_platform::input::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
     use std::rc::Weak;
 
@@ -683,7 +684,7 @@ fn assert_motion_keyboard_order(
 ) {
     use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::keyboard::Code;
+    use flui_platform::input::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
 
     let mut realm = UiRuntime::for_test();
@@ -833,7 +834,7 @@ pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
 
 pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
     use flui_platform::EventTime;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress, PointerRelease,
         PointerSample, PointerSource,
     };
@@ -1305,7 +1306,7 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
     )
     .expect("finite test position");
     if let PointerEvent::Move(update) = &mut motion {
-        update.buttons = flui_platform::pointer::PointerButtons::default();
+        update.buttons = flui_platform::input::pointer::PointerButtons::default();
     }
     dispatch(&realm, primary, motion.clone());
     assert_eq!(hovers.get(), 0, "the mouse move is still queued");

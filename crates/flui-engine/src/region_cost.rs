@@ -16,7 +16,7 @@
 //! `(rects − 1) · C` more in commands than the box, where `C` is every
 //! command of the version: when the box's extra pixels and the rects' extra
 //! passes already outweigh that, the rects are taken without the walk
-//! ([`shape`]).
+//! ([`shape`](crate::region_cost::shape)).
 //!
 //! An effect costs only through the commands under it: what a pass pays
 //! for each effect it reaches (a backdrop snapshot, a save-layer's
@@ -118,11 +118,7 @@ pub(crate) fn predict(version: &SceneVersion, region: &Region) -> RegionCost {
         commands: 0.0,
         commands_per_pass: 0.0,
     };
-    crate::layer_walk::walk_scene(
-        flui_layer::SceneContent::Version(version),
-        Some(bounds),
-        &mut counter,
-    );
+    crate::layer_walk::walk_scene(version, Some(bounds), &mut counter);
     let passes = rects.len() as f64;
     RegionCost {
         rects: counter.commands_per_pass + PIXEL_COST * region.area() as f64 + PASS_COST * passes,

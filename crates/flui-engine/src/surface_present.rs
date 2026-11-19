@@ -431,9 +431,9 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         Ok(())
     }
 
-    /// Traverses the scene's layer tree, once per pass of a partial frame,
-    /// and flushes all painter batches to the GPU, reporting the
-    /// damage-straddle check and what the walk and recording did.
+    /// Walks the scene's version, once per pass of a partial frame,
+    /// and flushes all painter batches to the GPU, reporting what the walk
+    /// and recording did.
     fn content(
         &mut self,
         render_view: &wgpu::TextureView,
@@ -442,7 +442,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
+    ) -> EngineResult<crate::frame_protocol::RasterCounters> {
         let recorded =
             crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
         let painter = &mut *self.painter;

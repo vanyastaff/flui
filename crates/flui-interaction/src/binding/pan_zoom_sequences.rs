@@ -13,7 +13,7 @@ use std::{
 };
 
 use flui_foundation::{IdMint, InputSequenceId};
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
+use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{

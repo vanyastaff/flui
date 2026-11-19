@@ -12,7 +12,7 @@ use flui_layer::{
     ContentToken, ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, EntryAddress,
     EntryIndex, FollowerLayer, ImageFilterLayer, Layer, LayerDiffer, LayerLink, LayerNode,
     LayerTree, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, Placement, Region,
-    Scene, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer,
+    SceneNodeId, SceneOp, SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer,
     close_over, resolve_follower_transform,
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter, ImageSampling, ImageTransform};
@@ -1751,7 +1751,7 @@ impl Oracle {
         bake(&stamped, stamped.root(), &mut baked, root);
         let mut closures = Closures::new();
         backdrops(&baked, baked.root(), Matrix4::IDENTITY, &mut closures);
-        (self.differ.diff(&Scene::new(baked), SURFACE.size), closures)
+        (self.differ.diff(&baked, SURFACE.size), closures)
     }
 
     fn stamped(&mut self, version: &SceneVersion) -> LayerTree {
@@ -1869,7 +1869,7 @@ fn covers(patch: DamageRegion, diff: DamageRegion, closures: &Closures) -> bool 
 
 /// What each backdrop of `tree` reads and writes.
 fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Closures) {
-    let layer = tree.get_layer(id).expect("a node of the tree");
+    let layer = tree.layer(id).expect("a node of the tree");
     let ctm = if let Layer::Transform(transform) = layer {
         parent * *transform.transform()
     } else {

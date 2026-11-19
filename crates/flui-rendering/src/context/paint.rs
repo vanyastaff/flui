@@ -648,7 +648,7 @@ impl<'a, A: Arity> PaintContext<'a, A> {
 
     /// Annotates this node's box with `value` around everything recorded
     /// inside `f`, for readers of the composited scene
-    /// ([`LayerTree::find_annotations`](flui_layer::LayerTree::find_annotations)).
+    /// ([`SceneVersion::find_annotation`](flui_layer::SceneVersion::find_annotation)).
     pub fn with_annotated_region(
         &mut self,
         value: flui_layer::AnnotationValue,

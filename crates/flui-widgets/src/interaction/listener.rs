@@ -18,7 +18,7 @@ use flui_interaction::{
     pointer::{PointerDispatch, PointerTarget, PointerTargetHandler},
 };
 use flui_objects::RenderListener;
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
+use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase};
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{

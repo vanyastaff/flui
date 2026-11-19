@@ -36,8 +36,8 @@ use flui_interaction::{
     ids::PointerId,
 };
 use flui_painting::styling::Color;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::PointerKind;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::environment::GestureArenaScope;
 use flui_view::prelude::*;

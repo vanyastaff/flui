@@ -45,11 +45,11 @@
 /// while the data itself is still out of reach.
 #[forbid(unsafe_code)]
 mod mapping {
-    use flui_platform::data_transfer::{
+    use flui_platform::transfer::data::{
         DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
         TransferPayload,
     };
-    use flui_platform::drag::{OsDragProvider, OsDragTerms};
+    use flui_platform::transfer::drag::{OsDragProvider, OsDragTerms};
 
     use crate::drag::offers::{
         MAX_OFFERED_TYPES, MAX_TYPE_LEN, format_of, offered_types, payload_of_bytes,
@@ -286,12 +286,14 @@ use flui_foundation::{DataTransferId, geometry::Point};
 #[cfg(target_arch = "wasm32")]
 use flui_platform::{
     DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
-    data_transfer::{
+    transfer::data::{
         DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
         RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
         TransferPayload, TransferRequest,
     },
-    drag::{DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
+    transfer::drag::{
+        DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
+    },
 };
 #[cfg(target_arch = "wasm32")]
 use parking_lot::Mutex;
@@ -559,7 +561,7 @@ enum Outgoing {
     /// The browser's drag runs.
     Running {
         allowed: TransferActions,
-        on_end: flui_platform::drag::OsDragEndHook,
+        on_end: flui_platform::transfer::drag::OsDragEndHook,
     },
 }
 

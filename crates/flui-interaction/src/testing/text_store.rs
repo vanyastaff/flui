@@ -21,11 +21,11 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
-use flui_platform::text_store::{
+use flui_platform::text::store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode,
     PressTarget, RangeRect, Selection, TextChange, TextInputOptions, TextStore, TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
-    Utf16Range, utf16,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, utf16,
+    utf16::{Utf16Offset, Utf16Range},
 };
 
 use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};

@@ -24,7 +24,7 @@ use flui_interaction::{
 use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
@@ -46,7 +46,7 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
-use crate::occluded_frame::{OccludedFrame, Session, Sight};
+use crate::occluded_frame::{AskedFrame, OccludedFrame, OwedFrameRequest, Session, Sight};
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -66,7 +66,7 @@ fn show_cursor(
     window: &dyn PlatformWindow,
     cursor: &Cursor,
     id: PresentationId,
-    device_id: flui_platform::pointer::PointerSource,
+    device_id: flui_platform::input::pointer::PointerSource,
 ) {
     let refused = match window.set_cursor(cursor) {
         Ok(()) => return,
@@ -505,10 +505,10 @@ pub struct PresentationState {
     held_pointer_input: RefCell<HeldPointerQueue>,
     /// The input regions collected when this frames scene was built, handed to the
     /// window once the sink accepts the scene (ADR-0217 §5).
-    staged_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
+    staged_input_regions: RefCell<Rc<[flui_platform::input::regions::InputRegion]>>,
     /// The input regions of the last committed frame, handed to the window again when
     /// it moves, so its backend can re-project them for a new display.
-    published_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
+    published_input_regions: RefCell<Rc<[flui_platform::input::regions::InputRegion]>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -615,6 +615,14 @@ pub struct PresentationState {
     /// Whether this presentation owes its surface a frame while it cannot be
     /// seen, and since when it has drawn none ([`OccludedFrame`]).
     occluded_frame: Cell<OccludedFrame>,
+    /// What the window was last asked for the frame it owes (ADR-0389), and
+    /// whether that frame was held once its instant came. Shared with the
+    /// [`OwedFrameRequest`] that records a delivery.
+    owed_frame_asked: Rc<Cell<AskedFrame>>,
+    /// Whether a frame of this presentation's window, delivered since its
+    /// owed instant came, serves the frame it owes and no attempt has taken
+    /// it yet (ADR-0389).
+    owed_frame_served: Cell<bool>,
     /// What the window system does with the window's last frame while it
     /// keeps the window off the screen, as the host named it.
     occluded_surface: flui_platform::OccludedSurface,
@@ -1202,6 +1210,8 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            owed_frame_asked: Rc::default(),
+            owed_frame_served: Cell::new(false),
             occluded_surface,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
@@ -1357,6 +1367,8 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            owed_frame_asked: Rc::default(),
+            owed_frame_served: Cell::new(false),
             occluded_surface: flui_platform::OccludedSurface::Discarded,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
@@ -1739,13 +1751,13 @@ impl PresentationState {
         // A frame whose regions did not change keeps the staged slice, so a
         // steady frame allocates no new one.
         if **staged != *regions {
-            *staged = Rc::<[flui_platform::input_regions::InputRegion]>::from(regions);
+            *staged = Rc::<[flui_platform::input::regions::InputRegion]>::from(regions);
         }
     }
 
     /// The input regions the frame about to be submitted carries: the slice the window gets
     /// once that frame is shown ([`Self::publish_input_regions`]).
-    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input_regions::InputRegion]> {
+    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input::regions::InputRegion]> {
         Rc::clone(&self.staged_input_regions.borrow())
     }
 
@@ -1757,7 +1769,7 @@ impl PresentationState {
     /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(
         &self,
-        regions: Rc<[flui_platform::input_regions::InputRegion]>,
+        regions: Rc<[flui_platform::input::regions::InputRegion]>,
     ) {
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.hand_input_regions(&regions);
@@ -1774,7 +1786,7 @@ impl PresentationState {
     /// Hands `regions` to the window. A window whose input capabilities leave input regions
     /// `Unavailable` refuses them on every frame; the regions then have no effect, which
     /// those capabilities already say, so the refusal is only traced.
-    fn hand_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+    fn hand_input_regions(&self, regions: &[flui_platform::input::regions::InputRegion]) {
         if let Some(Err(refused)) = self.with_window(|window| window.set_input_regions(regions)) {
             tracing::trace!(%refused, "the window takes no input regions");
         }
@@ -1915,20 +1927,79 @@ impl PresentationState {
         self.has_retained_frame_work().then_some(due)
     }
 
-    /// At `now`, grant the owed frame of a presentation whose frame is due,
-    /// if it would still be shown (the window may have been locked since,
-    /// which only its sight says): the clock produces it at the first poll
-    /// that can. A hold before then (text preparation, a full sink) leaves it
-    /// due; the quiet period starts again only when it runs
-    /// ([`Self::occluded_frame_drawn`]).
-    pub(crate) fn grant_occluded_frame(&self, session: Session, now: Instant) {
-        if self.occluded_frame_at().is_none_or(|due| now < due) {
-            return;
+    /// What this presentation's window is to be asked for the frame it owes
+    /// its surface ([`Self::occluded_frame_at`], on the event timeline counted
+    /// from `epoch`), when that is not what it was last asked: the instant, or
+    /// the withdrawal of the one asked. `None` when the window was asked
+    /// exactly that, so a window hears an instant once (ADR-0389); an instant
+    /// whose frame was held ([`Self::hold_owed_frame`]) is asked again once its
+    /// text preparation releases it. A pure read: weighing the hold changes
+    /// nothing.
+    pub(crate) fn owed_frame_request(&self, epoch: Instant) -> Option<OwedFrameRequest> {
+        let at = self
+            .occluded_frame_at()
+            .map(|at| crate::occluded_frame::event_time(epoch, at));
+        OwedFrameRequest::of(&self.window, at, &self.owed_frame_asked, || {
+            crate::ui_runtime::text_preparation::outcome(self)
+        })
+    }
+
+    /// The frame this presentation owes was served and is held, its text
+    /// preparation waiting: the request drew nothing, so the window is asked
+    /// again once the preparation releases it, not while it waits. Records the
+    /// preparation's outcome generation now and nothing else.
+    pub(crate) fn hold_owed_frame(&self) {
+        let generation = crate::ui_runtime::text_preparation::outcome(self).generation;
+        self.owed_frame_asked
+            .set(self.owed_frame_asked.get().hold(generation));
+    }
+
+    /// This presentation's window delivered a frame (`note_frame_request`):
+    /// when the frame it owes its surface has come due, that frame serves it
+    /// (ADR-0389). Only a frame of its own window serves it, so the frames of
+    /// other windows, and work due elsewhere, never run it.
+    pub(crate) fn note_owed_frame_served(&self) {
+        if self
+            .occluded_frame_at()
+            .is_some_and(|due| self.clock.now() >= due)
+        {
+            self.owed_frame_served.set(true);
+        }
+    }
+
+    /// Whether a frame of this presentation's window serves the frame it owes
+    /// its surface now: delivered since its owed instant came, and not yet
+    /// taken by an attempt ([`Self::grant_occluded_frame`]).
+    pub(crate) fn serves_owed_frame(&self) -> bool {
+        self.owed_frame_served.get() && self.occluded_frame_at().is_some()
+    }
+
+    /// Forget a served owed frame no attempt took (a pump that rendered
+    /// nothing for this presentation): only a later frame of its window
+    /// serves it again.
+    pub(crate) fn forget_served_owed_frame(&self) {
+        self.owed_frame_served.set(false);
+    }
+
+    /// At `now`, grant the owed frame a frame of this presentation's window
+    /// served, if it would still be shown (the window may have been locked
+    /// since, which only its sight says): the clock produces it at the first
+    /// poll that can. The serve is taken whatever comes of it, so a frame held
+    /// past it (text preparation) is not served again by the next pump. The
+    /// quiet period starts again only when it runs
+    /// ([`Self::occluded_frame_drawn`]). Answers whether it was granted.
+    pub(crate) fn grant_occluded_frame(&self, session: Session, now: Instant) -> bool {
+        if !self.owed_frame_served.replace(false)
+            || self.occluded_frame_at().is_none_or(|due| now < due)
+        {
+            return false;
         }
         if self.occluded_sight(session).is_some_and(Sight::owes) {
             self.clock.grant_hidden_frame();
+            true
         } else {
             self.occluded_frame.set(OccludedFrame::NotOwed);
+            false
         }
     }
 

@@ -5,7 +5,7 @@ use std::io::{BufRead, Write};
 
 use flui_interaction::gesture::GestureProfiles;
 use flui_platform::WindowId;
-use flui_platform::pointer::{DeviceId, PointerKind};
+use flui_platform::input::pointer::{DeviceId, PointerKind};
 use flui_protocol::input_recording as rec;
 use flui_runtime::__runtime::{
     WireError, device_from_wire, device_to_wire, preferences_row_from_wire,

@@ -15,8 +15,8 @@ use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Spares, Table, TableCost};
+use crate::damage::DamageRegion;
 use crate::link::LayerLink;
-use crate::scene_snapshot::DamageRegion;
 
 /// Where an entry sits: its boundary's node and its index in that content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -492,7 +492,7 @@ impl SceneVersion {
     #[must_use]
     pub fn close_damage(&self, region: DamageRegion, surface: (u32, u32)) -> DamageRegion {
         let mut cost = super::footprint::FootprintCost::default();
-        let mut closures = crate::damage::Closures::new();
+        let mut closures = crate::damage::closure::Closures::new();
         super::footprint::close_filtered(
             region,
             &[(Geometry::shown(&self.0), &self.0)],
@@ -894,8 +894,7 @@ mod flatten {
             let root = self
                 .node(self.root())
                 .expect("BUG: a version holds its root");
-            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(root.placement().offset())))
-                .with_scene(self.id().seq());
+            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(root.placement().offset())));
             let at = tree.root();
             self.fill(&mut tree, self.root(), at, 0);
             tree
@@ -917,8 +916,7 @@ mod flatten {
                 && let Some(Entry::Effect { owner, .. }) = entries.first()
                 && let Some((_, layer)) = content.effect_layers().next()
             {
-                let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner))
-                    .with_scene(self.id().seq());
+                let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner));
                 let at = tree.root();
                 // An effect over one child at its origin holds that child's
                 // content directly: the root boundary under a frame's
@@ -934,8 +932,7 @@ mod flatten {
                 }
                 return Some(tree);
             }
-            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(held.placement().offset())))
-                .with_scene(self.id().seq());
+            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(held.placement().offset())));
             let at = tree.root();
             self.fill(&mut tree, node, at, 0);
             Some(tree)

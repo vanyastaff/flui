@@ -12,7 +12,7 @@ use super::WindowTextInput;
 #[cfg(feature = "scripted")]
 use {
     crate::{host::Host, owner::headless::HeadlessLoop, platform::HostPlatform},
-    flui_platform::text_store::TextStoreHost,
+    flui_platform::text::store::TextStoreHost,
     std::rc::Rc,
 };
 
@@ -80,7 +80,7 @@ impl PlatformTextInput for FakeTextInput {
     }
 
     /// No input method learns from or shows a headless window's field.
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 
     /// No input method composes in a headless window.
     fn discard_composition(&self) {}
@@ -144,7 +144,9 @@ mod tests {
     use std::rc::Rc;
 
     use flui_platform::WindowOptions;
-    use flui_platform::text_store::{CompositionEnd, TextStore, TextStoreHost, TextStoreHostError};
+    use flui_platform::text::store::{
+        CompositionEnd, TextStore, TextStoreHost, TextStoreHostError,
+    };
 
     use crate::HeadlessPlatform;
     use crate::platform::Platform;

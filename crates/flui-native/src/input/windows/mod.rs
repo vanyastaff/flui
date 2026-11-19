@@ -63,7 +63,7 @@ use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
 #[cfg(windows)]
 use flui_foundation::geometry::DevicePixelRatio;
 #[cfg(windows)]
-use flui_platform::keyboard::Modifiers;
+use flui_platform::input::keyboard::Modifiers;
 
 #[cfg(windows)]
 use keystroke_queue::{
@@ -476,8 +476,8 @@ impl WindowInputs for InputWindows {
     fn press_kind(
         &self,
         window: WindowRef,
-        press: flui_platform::pointer::PressId,
-    ) -> Option<flui_platform::pointer::PointerKind> {
+        press: flui_platform::input::pointer::PressId,
+    ) -> Option<flui_platform::input::pointer::PointerKind> {
         let input = self.of(window)?;
         let registry = input.registry.try_borrow().ok()?;
         registry.press_origin(press).map(|origin| origin.kind)
@@ -487,7 +487,7 @@ impl WindowInputs for InputWindows {
     fn pen_in_range(
         &self,
         window: WindowRef,
-        device: Option<flui_platform::pointer::DeviceId>,
+        device: Option<flui_platform::input::pointer::DeviceId>,
     ) -> Option<u64> {
         let input = self.of(window)?;
         let registry = input.registry.try_borrow().ok()?;
@@ -1204,7 +1204,7 @@ impl InputWindow {
                 && matches!(
                     input,
                     flui_platform::PlatformInput::Pointer(
-                        flui_platform::pointer::PointerEvent::Move(_)
+                        flui_platform::input::pointer::PointerEvent::Move(_)
                     )
                 )
             {
@@ -1227,7 +1227,7 @@ impl InputWindow {
     /// last, which the system has already accelerated. A report that is not
     /// the mouse's, or moved nothing, delivers nothing.
     fn raw_mouse_motion(&self, lparam: LPARAM) {
-        use flui_platform::pointer::{MotionAcceleration, MotionDelta};
+        use flui_platform::input::pointer::{MotionAcceleration, MotionDelta};
         use windows::Win32::UI::Input::{
             GetRawInputData, HRAWINPUT, MOUSE_MOVE_ABSOLUTE, MOUSE_VIRTUAL_DESKTOP, RAWINPUT,
             RAWINPUTHEADER, RID_INPUT, RIM_TYPEMOUSE,
@@ -1317,7 +1317,7 @@ impl InputWindow {
     /// `WM_POINTERDEVICECHANGE`: a removed device ends its contacts and
     /// leaves; an arriving one is announced.
     fn pointer_device_changed(&self, wparam: WPARAM, lparam: LPARAM) {
-        use flui_platform::{EventTime, PlatformInput, pointer::PointerEvent};
+        use flui_platform::{EventTime, PlatformInput, input::pointer::PointerEvent};
         use windows::Win32::{
             Foundation::HANDLE,
             UI::WindowsAndMessaging::{PDC_ARRIVAL, PDC_REMOVAL},
@@ -1426,9 +1426,9 @@ mod raw {
 
     use flui_platform::{
         EventTime,
-        keyboard::Modifiers as KeyboardModifiers,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
-        pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
+        input::keyboard::Modifiers as KeyboardModifiers,
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
+        input::pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
     };
     use windows::Win32::{
         Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
@@ -1559,8 +1559,8 @@ mod raw {
     }
 
     /// When `event` happened; `None` for a variant not named here.
-    fn pointer_time(event: &flui_platform::pointer::PointerEvent) -> Option<EventTime> {
-        use flui_platform::pointer::{ButtonChange, PointerEvent};
+    fn pointer_time(event: &flui_platform::input::pointer::PointerEvent) -> Option<EventTime> {
+        use flui_platform::input::pointer::{ButtonChange, PointerEvent};
         Some(match event {
             PointerEvent::Down(press)
             | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => press.sample.time,

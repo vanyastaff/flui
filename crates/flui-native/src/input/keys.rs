@@ -38,8 +38,8 @@
 //! is queued by `TranslateMessage` of the Alt *keyup* — and is assembled by
 //! [`assemble_stray_wm_char`] into its own event instead of being dropped.
 
-use flui_platform::keyboard::{Code, Key, Location, NamedKey};
-use flui_platform::pointer::PointerButton;
+use flui_platform::input::keyboard::{Code, Key, Location, NamedKey};
+use flui_platform::input::pointer::PointerButton;
 
 #[cfg(any(
     wayland_host,
@@ -693,7 +693,7 @@ pub(crate) mod adapter {
     //! are converted here into the owned FLUI contract; pointer input never passes
     //! through upstream event values.
 
-    use flui_platform::keyboard::{Code, Location, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Code, Location, Modifiers, NamedKey};
     use keyboard_types as upstream;
 
     pub(crate) fn modifiers(value: upstream::Modifiers) -> Modifiers {
@@ -795,7 +795,7 @@ pub(crate) mod adapter {
 /// row's location.
 #[cfg(test)]
 mod mapping {
-    use flui_platform::keyboard::{Code, Location};
+    use flui_platform::input::keyboard::{Code, Location};
 
     use super::{CHARACTER_WITHOUT_A_KEY, location_for_code, location_of_number, scancode_to_code};
     use crate::input::apple::keys::{keycode_to_code, kvk};

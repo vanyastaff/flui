@@ -7,7 +7,7 @@
 - `flui_protocol` names say what each type is: `session::AppInfo` is `AppDescription`,
   `session::SessionInfo` is `Attached` (what `session.launch` and `session.attach` answer),
   `capture::CaptureMeta` is `Screenshot`, `method::MethodInfo` is `MethodRow`, and the input
-  recording's `PointerInfo` is `PointerSource`, as in `flui_platform::pointer`. The JSON on the
+  recording's `PointerInfo` is `PointerSource`, as in `flui_platform::input::pointer`. The JSON on the
   wire and the published schema are unchanged.
 - `flui_protocol` builders have bare names: `ReadQuery::root`, `max_depth` and `max_nodes`,
   `Tree::diagnostics` and `revision`, `Hello::client`, `HelloReply::app` and `capabilities`,

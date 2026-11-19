@@ -63,7 +63,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `pub use android_activity` (`crates/flui-app/src/lib.rs:116`, re-exported again by the facade at
   `src/lib.rs:157`).
 - **Raw handles.** `PlatformWindow` already exposes only the borrowed
-  `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform/src/platform_window.rs`),
+  `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform/src/window/platform_window.rs`),
   which [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) moved the renderer to. The
   legacy `Window` trait (since removed by ADR-0237) still has
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`), returning a crate-local
@@ -92,7 +92,7 @@ facts of [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) instead.
 The promise follows the item, not its crate. A Stable signature already names types from
 internal crates (`flui-platform`'s window contract takes `Size` and `EdgeInsets`
 from `flui-geometry`/`flui-types`, `PlatformWindow::resize` and `safe_area_insets` in
-`crates/flui-platform/src/platform_window.rs`), and the
+`crates/flui-platform/src/window/platform_window.rs`), and the
 facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib.rs:150`). Every
 item reachable from a Stable crate's public API therefore carries the Stable promise, whatever
 its crate's `tier-kind`; the `internal` kind's "no promise" covers only items outside that

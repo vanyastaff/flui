@@ -52,7 +52,7 @@ use std::time::Instant;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::MAX_SURFACE_EXTENT;
-use flui_platform::input_regions::ResizeEdge;
+use flui_platform::input::regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
 use super::scale::BufferScale;
@@ -1664,7 +1664,7 @@ pub(crate) mod surfaces {
     use cursor_icon::CursorIcon;
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_painting::FontCollection;
-    use flui_platform::input_regions::InputRegion;
+    use flui_platform::input::regions::InputRegion;
     use wayland_client::protocol::wl_buffer::{self, WlBuffer};
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_seat::WlSeat;

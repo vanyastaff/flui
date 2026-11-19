@@ -1,5 +1,5 @@
 use flui_interaction::testing::InMemoryTextStore;
-use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError};
+use flui_platform::text::store::{LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError};
 
 use super::*;
 
@@ -146,7 +146,7 @@ pub(crate) fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_dr
 #[derive(Default)]
 struct FocusLog(std::cell::RefCell<Vec<bool>>);
 
-impl flui_platform::text_store::TextStoreHost for FocusLog {
+impl flui_platform::text::store::TextStoreHost for FocusLog {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         self.0.borrow_mut().push(store.is_some());
     }
@@ -155,10 +155,10 @@ impl flui_platform::text_store::TextStoreHost for FocusLog {
         &self,
         _: &Rc<dyn TextStore>,
     ) -> Result<
-        flui_platform::text_store::CompositionEnd,
-        flui_platform::text_store::TextStoreHostError,
+        flui_platform::text::store::CompositionEnd,
+        flui_platform::text::store::TextStoreHostError,
     > {
-        Ok(flui_platform::text_store::CompositionEnd::Committed)
+        Ok(flui_platform::text::store::CompositionEnd::Committed)
     }
 
     fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
@@ -172,7 +172,7 @@ impl flui_platform::text_store::TextStoreHost for FocusLog {
 /// host hears nothing.
 pub(crate) fn a_window_with_a_text_store_host_takes_input_through_it() {
     let log = Rc::new(FocusLog::default());
-    let host: Rc<dyn flui_platform::text_store::TextStoreHost> = log.clone();
+    let host: Rc<dyn flui_platform::text::store::TextStoreHost> = log.clone();
     let ui_runtime = UiRuntime::try_new(
         super::test_window().with_text_store_host(Some(host)),
         1.0,
@@ -363,11 +363,11 @@ pub(crate) fn a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn()
         .attach(client)
         .expect("headless presentation supports text input");
     store.set_owner_listener(Some(Rc::new(|| panic!("the field's on_changed panics"))));
-    let end = flui_platform::text_store::Utf16Offset::new(3);
+    let end = flui_platform::text::store::utf16::Utf16Offset::new(3);
     assert_eq!(
         store.request_lock(
             LockGrant::read_write(move |session| {
-                let at = flui_platform::text_store::Utf16Range::try_new(end, end)
+                let at = flui_platform::text::store::utf16::Utf16Range::try_new(end, end)
                     .expect("a caret is a range");
                 session.replace(at, "d").expect("the end is a position");
             }),

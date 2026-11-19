@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
 };

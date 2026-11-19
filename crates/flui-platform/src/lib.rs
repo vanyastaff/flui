@@ -5,7 +5,7 @@
 //!
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`](haptics::PlatformHaptics) and
 //!   the data-transfer transport
-//!   ([`data_transfer::DragTransport`], ADR-0312);
+//!   ([`transfer::data::DragTransport`], ADR-0312);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayDescription`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
@@ -13,11 +13,11 @@
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
 //!   the directory an application's values live in ([`AppDataDir`]);
-//! - the text store an input method pulls from ([`TextStore`](text_store::TextStore) and the rest of
-//!   [`text_store`], ADR-0090);
+//! - the text store an input method pulls from ([`TextStore`](text::store::TextStore) and the rest of
+//!   [`text::store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
-//!   ([`input_capabilities`], ADR-0213);
+//!   ([`input::capabilities`], ADR-0213);
 //! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`],
@@ -42,11 +42,11 @@
 //!
 //! The host-facing `Platform` trait, the owner-thread capability, the
 //! host-side window subtrait and every OS backend live in `flui-native`,
-//! which re-exports everything defined here at its old paths. Only
+//! which re-exports none of it: each item has its one path here. Only
 //! composition roots depend on `flui-native` (ADR-0082 §2).
 //!
 //! [`PlatformInput`] carries FLUI's owned vocabulary (ADR-0143), defined in
-//! [`pointer`](mod@pointer), [`keyboard`] and [`EventTime`]. Upstream translator
+//! [`input::pointer`], [`input::keyboard`] and [`EventTime`]. Upstream translator
 //! types stay behind the backend boundary.
 //!
 //! # Implementing a capability without a backend
@@ -73,7 +73,7 @@
 //!
 //!     fn discard_composition(&self) {}
 //!
-//!     fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+//!     fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {
@@ -110,66 +110,53 @@
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
 
+// The contract is grouped by area (ADR-0151 §2): `window`, `input`, `text`,
+// `display`, `preferences`, `transfer`, `haptics` and `capability`, beside
+// the single modules that section keeps at the root (`unsupported`, `notice`,
+// `system_chrome`, `storage`, `target_platform`) and the services that are
+// not an area of their own. Each item has one public path: the everyday names
+// are re-exported at the root from an area's private modules, and the rest
+// keep the path of the area's public module (`input::pointer`,
+// `text::store`, `transfer::drag`, `window::os_options`). The exceptions are
+// items another crate defines and this contract's signatures name, re-exported
+// so a reader of the contract finds them beside it: `flui-foundation`'s
+// `PressId` (`input::pointer::PressId`), `FirstPanic` (`capability::FirstPanic`)
+// and `MemoryPressureLevel` (at the root), and `cursor-icon`'s `CursorIcon` (at
+// the root, ADR-0089). The areas
+// import in one direction: `window` names `input`, `text`, `transfer`,
+// `haptics`, `display` and `preferences`; `input` names `text` and
+// `transfer`; `haptics` names `input`. `window` and `capability` still name
+// each other (docs/gaps.md, "The window and capability areas of
+// flui-platform import each other").
 pub mod assets;
 mod backoff;
-mod brightness;
 pub mod capability;
-mod clipboard;
-mod cursor;
-pub mod data_transfer;
 mod display;
-pub mod drag;
 mod environment;
-mod event_time;
 pub mod executor;
 mod flag_set;
-mod frame_request;
-mod haptic_feedback;
 pub mod haptics;
-mod host_notice;
 pub mod http;
-mod ime;
-mod input;
-pub mod input_capabilities;
-pub mod input_regions;
-pub mod keyboard;
+pub mod input;
 pub mod launch;
 mod launch_key;
-mod locale;
+mod notice;
 mod opened;
-pub mod os_options;
 mod owner_wait;
-mod placement;
-mod platform_window;
-pub mod pointer;
 mod preferences;
-mod regional;
 pub mod sandbox;
 mod storage;
-mod surface_target;
 mod system_chrome;
 mod system_failure;
 mod target_platform;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-mod text_input;
-pub mod text_store;
+pub mod text;
+pub mod transfer;
 mod unsupported;
-mod window;
-mod window_capabilities;
-mod window_frame;
-mod window_geometry;
-mod window_handler;
-mod window_insets;
-mod window_state;
+pub mod window;
 
 pub use backoff::Backoff;
-pub use brightness::Brightness;
-pub use clipboard::{
-    ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
-    ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
-};
-pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};
 /// The system cursor shapes a [`Cursor::Icon`] names: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
@@ -181,69 +168,74 @@ pub use display::{
     WindowDisplay,
 };
 pub use environment::{Environment, OsRelease};
-pub use event_time::EventTime;
-pub use frame_request::{FramePresented, FrameRequest};
-pub use haptic_feedback::HapticFeedback;
-pub use host_notice::{
+pub use haptics::feedback::HapticFeedback;
+pub use input::event::{
+    DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
+};
+pub use input::event_time::EventTime;
+pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
+pub use notice::{
     HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
     SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
 };
-pub use ime::ImeEvent;
-pub use input::{
-    DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
-};
-pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
-pub use locale::{InvalidLocale, Locale};
 pub use opened::{
     Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
 };
 pub use owner_wait::OwnerWait;
-pub use placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
-pub use platform_window::{PlatformWindow, WindowAt};
+pub use preferences::locale::{InvalidLocale, Locale};
+pub use preferences::regional::{
+    HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
+    RegionalFormats, RegionalParts, Weekday,
+};
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
-    PreferenceQueryError, ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility,
-    ScrollTrackClick, SrgbColor, SystemPreferences, TextWeightPreference, WheelParts,
-    WheelPreferences, WheelStep,
-};
-pub use regional::{
-    HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
-    RegionalFormats, RegionalParts, Weekday,
+    ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor,
+    SystemPreferences, TextWeightPreference, WheelParts, WheelPreferences, WheelStep,
 };
 pub use storage::{
     AppDataDir, CopiedAside, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName,
     Stored, StoredVersion, WriteMode,
 };
-pub use surface_target::{
-    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
-    RedrawRequester, SurfaceTarget, SwapChainStatistics,
-};
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use system_failure::{BrowserException, SystemFailure};
 pub use target_platform::TargetPlatform;
-pub use text_input::PlatformTextInput;
+pub use text::ime::ImeEvent;
+pub use text::input::PlatformTextInput;
+pub use transfer::clipboard::{
+    ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
+    ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
+};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
-pub use window::{
+pub use window::brightness::Brightness;
+pub use window::capabilities::{
+    CapabilityParts, OccludedSurface, PublicationMint, WindowCapabilities, WindowCapability,
+};
+pub use window::cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};
+pub use window::frame::{
+    AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
+};
+pub use window::frame_request::{FramePresented, FrameRequest};
+pub use window::geometry::{
+    InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry, WindowPosition,
+};
+pub use window::handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
+pub use window::insets::{
+    InsetCurve, InsetMotion, InvalidInsets, KeyboardPlacement, SoftKeyboard, WindowInsets,
+};
+pub use window::options::{
     InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,
     WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };
-pub use window_capabilities::{
-    CapabilityParts, OccludedSurface, PublicationMint, WindowCapabilities, WindowCapability,
-};
-pub use window_frame::{
-    AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
-};
-pub use window_geometry::{
-    InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry, WindowPosition,
-};
-pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
-pub use window_insets::{
-    InsetCurve, InsetMotion, InvalidInsets, KeyboardPlacement, SoftKeyboard, WindowInsets,
-};
-pub use window_state::{
+pub use window::placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
+pub use window::platform_window::{PlatformWindow, PreferenceQueryError, WindowAt};
+pub use window::state::{
     AdmissionError, AdmittedCommand, ApplyError, AspectRatio, CommandRefusal, PlatformFailure,
     SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFocus, WindowInteraction,
     WindowLevel, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
     WindowStateParts,
+};
+pub use window::surface_target::{
+    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
+    RedrawRequester, SurfaceTarget, SwapChainStatistics,
 };

@@ -1,14 +1,13 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 129 закрыты и 5 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `4793762dd` и закрытиями LY100 и LY69); открытые — неотмеченные записи раздела «Ход
+  Из 134 задач серии 130 закрыты и 4 открыты (сверено с отметками записей «Хода исполнения» на
+  `main` @ `bc2f0ec33` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
   исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
-  - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
-  - LY102 — модули `flui-platform` по областям (не начата).
+  - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -6364,14 +6363,50 @@ GPU-память простаивающего или невидимого окн
   `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown`: `-p flui-native --lib` с фичами по умолчанию и без них,
   `-p flui-platform -p flui-system --lib`, `--tests` трёх крейтов под нативные цели и `-p flui-system --lib --tests --features testing` под wasm32 — ни одного предупреждения: каждое `expect(dead_code)` исполнено.
 
-- [ ] **LY102** (открыта, не начата) — `crates/flui-platform/src/lib.rs:113–161`
-  объявляет плоские модули; каталоги есть у `capability/`, `haptics/`, `input_capabilities/`,
-  `keyboard/`, `pointer/`, `preferences/`, `text_store/` и `testing/`. Остаётся код: модули окна
-  (`window*.rs`, `platform_window.rs`, `placement.rs`, `surface_target.rs`, `brightness.rs`) —
-  в `window/`; ввод — в `input/`; текст (`ime.rs`, `text_input.rs`, `text_store/`) — в `text/`;
-  `display.rs` — в `display/`; перенос (`clipboard.rs`, `data_transfer.rs`, `drag.rs`) — в
-  `transfer/`; резерв `menu/`. Корневые реэкспорты, которыми пользуются фасад и `flui-sdk`, не
-  меняются (`api/flui.txt` без разницы), `docs/crates.md` описывает раскладку.
+- [x] **LY102** — #2878. **Что сделано.** `flui-platform` разложен по областям `git mv`
+  (история идёт за файлами): `window` — `options` (бывший `window.rs`: идентичность и опции
+  создания), `platform_window`, `state`, `capabilities`, `placement`, `geometry`, `frame`,
+  `insets`, `handler`, `surface_target`, `cursor`, `brightness`, `frame_request`,
+  `os_options`; `input` — `event` (бывший `input.rs`: `PlatformInput`), `pointer`,
+  `keyboard`, `capabilities` (бывший `input_capabilities/`), `regions` (бывший
+  `input_regions.rs`), `event_time`; `text` — `ime`, `input` (бывший `text_input.rs`), `store`
+  (бывший `text_store/`, его `store.rs` стал `contract.rs`, чтобы модуль не звался как
+  родитель); `transfer` — `clipboard`, `data` (бывший `data_transfer.rs`), `drag`;
+  `preferences` — с `locale` и `regional`; `haptics` — с `feedback` (бывший
+  `haptic_feedback.rs`); `host_notice.rs` стал `notice.rs`. Модуль, имя которого повторяло
+  путь области, стал короче (`window_state` → `window::state`, `input_capabilities` →
+  `input::capabilities`). **Публичные пути.** Области `input`, `text`, `transfer`, `window` —
+  публичные модули, в их `mod.rs` только объявления; восемь публичных модулей переехали в свои
+  области и реэкспорта в корне не имеют: `flui_platform::input::{pointer, keyboard,
+  capabilities, regions}`, `flui_platform::text::store`, `flui_platform::transfer::{data,
+  drag}`, `flui_platform::window::os_options`. Имена, реэкспортированные в корне, остались
+  (`flui_platform::WindowOptions`), и у каждого это единственный путь: они реэкспортируются из
+  приватных модулей областей. Исключения названы в `lib.rs` и `ARCHITECTURE.md`: предметы
+  других крейтов, которые называют подписи контракта, — `PressId`
+  (`input::pointer::PressId`), `FirstPanic` (`capability::FirstPanic`), `MemoryPressureLevel`
+  (в корне) из `flui-foundation` и `CursorIcon` из `cursor-icon` (в корне, ADR-0089).
+  `Utf16Offset`, `Utf16Range` и `OffsetError` имеют один путь, `text::store::utf16`. Пути фасада
+  `flui::platform` и `flui-sdk` не изменились; в их исходниках сменились только пути источника,
+  а в списке `flui-sdk/tests/surface.rs` — те же строки на новом месте сортировки. Все
+  пользователи в 15 крейтах переписаны (ast-grep для групп `use`, sed для прямых путей),
+  ожидающие выпуска фрагменты `changelog.d` называют новые пути, новый фрагмент —
+  `changelog.d/platform-contract-by-area.md`. **Направление импортов.** `window` → `input`,
+  `text`, `transfer`, `haptics`, `display`, `preferences`; `input` → `text`, `transfer`;
+  `haptics` → `input`. Цикл `input` ↔ `transfer` снят: `transfer::drag` берёт `PressId` из
+  `flui-foundation`, где он определён, а не через `input::pointer`. `PreferenceQueryError`,
+  ошибка `PlatformWindow::gesture_geometry`, перенесена к трейту в `window/platform_window.rs`,
+  чтобы `preferences` не называла `window`. Цикл `window` ↔ `capability` (`portal_parent`,
+  `WindowRef`) был до переноса и записан в `docs/gaps.md` («The window and capability areas of
+  flui-platform import each other»). `display` остался одним файлом `display.rs`; `menu/` не
+  заведён: по таблице ADR-0151 §2 модель меню приходит с первой реализацией и потребителем. В
+  корне остались модули вне областей строки: `assets`, `backoff`, `environment`, `executor`,
+  `flag_set`, `http`, `launch`, `launch_key`, `opened`, `owner_wait`, `sandbox`,
+  `system_failure`, `testing`. Ссылки ADR на файлы с номерами строк, которые описывают код на
+  момент решения, названы по предмету и коммиту (ADR-0254, ADR-0151, ADR-0090, ADR-0305), а
+  таблицы улик, привязанные к коммиту (ADR-0305, ADR-0312), сохраняют пути того коммита.
+  **Как проверено.** `cargo public-api -p flui-platform --all-features` до (`origin/main` @ `bc2f0ec33`, 4119 строк) и после (4101 строка): если в списке «до» заменить восемь старых путей модулей новыми и три пути `text_store::{Utf16Offset, Utf16Range, OffsetError}` путями `text::store::utf16`, наборы строк совпадают, кроме четырёх новых `pub mod flui_platform::{input, text, transfer, window}`; под старыми путями было 525 строк списка: `pointer` 164, `keyboard` 44, `input_capabilities` 57, `input_regions` 13, `text_store` 130, `data_transfer` 63, `drag` 47, `os_options` 7. Два trybuild `.stderr` меняют только путь исходника в
+  примечании rustc (`src/window.rs` → `src/window/options.rs`, `src/platform_window.rs` →
+  `src/window/platform_window.rs`). На Windows `cargo heli clippy --workspace --all-targets -- -D warnings` с `--all-features` и без — чисто; rustdoc `-p flui-platform` с `-D warnings`, с фичами и без, — чисто; doctests `flui-platform` (`--all-features`) — зелёные; nextest `flui-platform --features testing` 91/91, `flui-sdk` 14/14 (с `the_public_surface_is_the_measured_list` и `compiler_guards`). В WSL (Ubuntu, cargo без heli) `clippy --workspace --all-targets --features flui-native/native-capture -- -D warnings` — чисто; nightly `check --locked --lib` `flui-platform` и `flui-native` под `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown` и `--lib --tests` с `flui-system` под Android — ни предупреждения; trybuild `flui-platform`: оба изменённых случая проходят, три нетронутых расходятся одинаково на ветке и на `origin/main` (окружение). До переименования четырёх модулей (тот же перенос с путями `input::input_capabilities`, `text::text_store`, …) прогнаны прямые зависимые (`flui-animation`, `flui-app`, `flui-assets`, `flui-cli`, `flui-engine`, `flui-interaction`, `flui-native`, `flui-rendering`, `flui-runtime`, `flui-sdk`, `flui-system`, `flui-testing`, `flui-view`, `flui-widgets`, `flui-devtools`, `flui-hot-reload`) без вложенных наборов — 3085 из 3089 (три `agent::browser` у `flui-cli` и `the_driver_agent_contains_every_failure` у `flui-app` падают так же на `origin/main`), набор фасада `thread_boundary_ui` и doctests `flui-interaction`; переименование меняет только пути, и clippy со всеми целями компилирует каждый их тест. `cargo heli xtask checks` (`key-vocabulary`, `recording-vocabulary` читают новые пути), `typos` и `lychee` по изменённым документам — чисто.
 - [x] **LY113** — #2639 (строки
   LY104–LY113, граф, счёт в шапке) и #2642. **Что запись говорит.** У каждой строки LY20–LY103,
   у которой на `main` есть работа, есть запись со слитыми PR, тестами и остатком; у LY58, LY60,
@@ -6870,9 +6905,9 @@ GPU-память простаивающего или невидимого окн
   `MacOSWindow::try_new` берёт `FollowedDelivery`, `AndroidWindow::new` — `CountedDelivery`, иных
   способов их получить нет (`WindowDelivery::new` на месте вызова не компилируется). Крюк конца
   прогона — `OwnerSlot<Rc<dyn Fn()>>`. `RedrawPoll` не несёт срок, `PostPollRedraw` не подделать.
-  Открыто ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit)):
-  должный кадр закрытого окна рядом с показанным окном AppKit доставляется снова после каждого
-  кадра показанного окна — ответ приложения не называет окно. Тесты:
+  Должный кадр закрытого окна в срок приложения не входит: его просят у самого окна
+  (`PlatformWindow::request_frame_at`, ADR-0389), и кадры показанного окна рядом не доставляют
+  его снова. Тесты:
   `a_second_layout_callback_replaces_the_first` (X11,
   Wayland), `a_panicking_exit_policy_is_terminal`,
   `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one`,
@@ -8978,8 +9013,9 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   приостановленного окна) и сеанс показывает окна (блокировка и сон машины — два флага
   `occluded_frame::Session`, так что блокировка, пережившая сон, остаётся). После
   `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше повтора отброшенного кадра, окно
-  рисует один кадр через `FrameClock::grant_hidden_frame`; срок — в `next_wake`, раннеры и
-  headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
+  рисует один кадр через `FrameClock::grant_hidden_frame`; срок просится у самого окна
+  (`PlatformWindow::request_frame_at`, ADR-0389), не в `next_wake`; раннеры и headless-хост
+  спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
   остаётся должным, пока не исполнится, как бы поздно ни пришло пробуждение; удержание (отсрочка,
   подготовка текста) его не снимает, а при полном приёмнике срок не просится (будит
   урегулирование); следующая тишина начинается только с исполненного кадра. Долг пересчитывается

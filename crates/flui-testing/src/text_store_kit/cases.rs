@@ -5,11 +5,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::text_store::{
+use flui_platform::text::store::{
     CommitGate, Composition, DEFERRED_LOCK_CAPACITY, LockGrant, LockOutcome, LockTiming,
-    OffsetError, OwnerCalls, PointMode, Selection, TextChange, TextStore, TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, Utf16Offset, Utf16Range,
-    utf16,
+    OwnerCalls, PointMode, Selection, TextChange, TextStore, TextStoreChange, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, utf16,
+    utf16::{OffsetError, Utf16Offset, Utf16Range},
 };
 
 use super::{Case, TextStoreFixture};

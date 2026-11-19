@@ -23,7 +23,7 @@ use std::time::Duration;
 use flui_platform::haptics::{
     HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern, PatternPlayback,
 };
-use flui_platform::{HapticFeedback, Unsupported, UnsupportedReason, pointer::DeviceId};
+use flui_platform::{HapticFeedback, Unsupported, UnsupportedReason, input::pointer::DeviceId};
 
 /// The pulse a backend that can only switch its actuator on and off plays
 /// for a transient: one `EFFECT_TICK`-length tap.

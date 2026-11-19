@@ -2,7 +2,7 @@
 
 use flui_foundation::geometry::Point;
 use flui_platform::EventTime;
-use flui_platform::pointer::{PointerMove, PointerPosition, PointerSample};
+use flui_platform::input::pointer::{PointerMove, PointerPosition, PointerSample};
 
 use super::clock::{ClockChoice, NativeClock};
 use super::registry::sample;

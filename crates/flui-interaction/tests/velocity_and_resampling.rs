@@ -532,7 +532,7 @@ fn invalid_settings_are_rejected() {
     let base = || {
         GestureSettings::preset(
             flui_platform::TargetPlatform::Unknown,
-            flui_platform::pointer::PointerKind::Mouse,
+            flui_platform::input::pointer::PointerKind::Mouse,
         )
     };
     let invalid = |field, value| Err(GestureSettingsError::InvalidValue { field, value });
@@ -613,7 +613,7 @@ fn interpolation_uses_the_bracketing_samples() {
 
 fn interpolation_does_not_publish_future_sensor_readings() {
     use flui_interaction::events::{PointerButtons, PointerMove, PointerSample};
-    use flui_platform::{EventTime, pointer::Pressure};
+    use flui_platform::{EventTime, input::pointer::Pressure};
 
     for (previous, next) in [(Some(0.2), Some(0.9)), (None, Some(0.9)), (Some(0.2), None)] {
         let at = origin();
@@ -653,7 +653,7 @@ fn interpolation_does_not_publish_future_sensor_readings() {
 }
 
 fn queued_leave_does_not_starve_accepted_boundaries() {
-    use flui_platform::{EventTime, pointer::PointerSignal};
+    use flui_platform::{EventTime, input::pointer::PointerSignal};
     for contact_sequence in [false, true] {
         let at = origin();
         let resampler = PointerEventResampler::new(contact());
@@ -1250,7 +1250,7 @@ fn binding_terminal_withdrawal_cancels_prepared_contact_output() {
 
 fn binding_reentry_orders_motion_before_observing_input() {
     use flui_foundation::MonotonicClock;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         ButtonChange, PointerButton, PointerButtons, PointerPress, PointerSample,
     };
     for button_edge in [false, true] {
@@ -1337,7 +1337,7 @@ fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
     use flui_foundation::geometry::Point;
     use flui_platform::{
         EventTime,
-        pointer::{PointerButtons, PointerMove, PointerSample},
+        input::pointer::{PointerButtons, PointerMove, PointerSample},
     };
     for (contact_active, before_input) in
         [(false, false), (true, false), (false, true), (true, true)]

@@ -4,7 +4,7 @@ use flui_interaction::{
     focus::{FocusManager, FocusNode},
     text_input::{TextInputError, TextInputHandle},
 };
-use flui_platform::{PlatformTextInput, text_store::TextStore};
+use flui_platform::{PlatformTextInput, text::store::TextStore};
 
 fn close_frame_reports(ui_runtime: &UiRuntime) -> Arc<parking_lot::Mutex<Vec<String>>> {
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -141,7 +141,7 @@ impl PlatformTextInput for CloseTextInput {
         self.recorder.set_ime_cursor_area(area);
     }
 
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 
     fn discard_composition(&self) {
         self.recorder.discard_composition();

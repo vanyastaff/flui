@@ -11,8 +11,10 @@ use std::time::Duration;
 use cursor_icon::CursorIcon;
 use flui_native::testing::keyboard_layout;
 use flui_native::testing::x11::run_for;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
-use flui_platform::pointer::{ButtonChange, PointerEvent};
+use flui_platform::input::keyboard::{
+    Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+};
+use flui_platform::input::pointer::{ButtonChange, PointerEvent};
 use flui_platform::{Cursor, PlatformInput, UnsupportedReason, WindowCommand};
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_conformance::WindowFixture as _;
@@ -286,7 +288,7 @@ fn a_burst_of_motion_is_one_move_through_it() {
 /// it removes is taken away. The server reports a removed device with no
 /// use, so only the flag says a master pointer went.
 fn a_master_pointer_comes_and_goes_with_the_hierarchy() {
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
     use x11rb::protocol::xinput::{
         self, ChangeMode, ConnectionExt as _, HierarchyChange, HierarchyChangeData,
         HierarchyChangeDataAddMaster, HierarchyChangeDataRemoveMaster,
@@ -918,7 +920,7 @@ fn a_window_shows_the_cursor_it_asks_for() {
 /// motion, unaccelerated, and as no move; let go, nothing holds it.
 fn a_focused_window_holds_the_pointer_as_it_asks() {
     use flui_platform::CursorGrab;
-    use flui_platform::pointer::MotionAcceleration;
+    use flui_platform::input::pointer::MotionAcceleration;
 
     park_pointer();
     let handler = RecordingWindowHandler::new();
@@ -1351,10 +1353,10 @@ fn an_xtest_drag_from_the_window_drops_on_another_client() {
     use std::num::NonZeroU64;
 
     use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
-    use flui_platform::data_transfer::{
+    use flui_platform::transfer::data::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{
+    use flui_platform::transfer::drag::{
         DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
     };
 
@@ -1462,10 +1464,10 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
     use std::num::NonZeroU64;
 
     use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
-    use flui_platform::data_transfer::{
+    use flui_platform::transfer::data::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{
+    use flui_platform::transfer::drag::{
         DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
     };
 
@@ -1535,7 +1537,7 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
 /// on its content does (ADR-0286 §10).
 fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager() {
     use flui_foundation::geometry::{Rect, Size};
-    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, WindowFrame, WindowMode, WindowOptions};
 
     park_pointer();
@@ -1637,7 +1639,7 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
 /// the drag widens the window as far as the pointer went.
 fn openbox_paces_an_interactive_resize_by_the_windows_counter() {
     use flui_foundation::geometry::{Rect, Size};
-    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
 
     use crate::cases::{counter_reader, counter_value, resize_counters};

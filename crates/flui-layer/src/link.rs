@@ -10,43 +10,51 @@
 //! [`LeaderLayer`]: crate::LeaderLayer
 //! [`FollowerLayer`]: crate::FollowerLayer
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::num::NonZeroU64;
 
-use flui_foundation::LayerId;
 use flui_foundation::geometry::{Matrix4, Point};
+use flui_foundation::{AtomicIdMint, LayerId};
 
 use crate::tree::annotations::clip_admits;
 use crate::{Layer, LayerTree, LeaderClip};
 
 /// The identity shared by one leader and any number of followers.
 ///
-/// Minted from a process-wide counter: a link is a `Copy` token a widget in
-/// one UI runtime may hand to a widget in another, so a UI runtime-scoped counter would
-/// invite collisions where a global one cannot. `Ordering::Relaxed` is enough
-/// because uniqueness is the only requirement — the read-modify-write is
-/// atomic under every ordering, and no other memory is published through it.
+/// Minted from a process-wide mint: a link is a `Copy` token a widget in one
+/// UI runtime may hand to a widget in another, so a UI runtime-scoped counter
+/// would invite collisions where a global one cannot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayerLink {
-    id: u64,
+    id: NonZeroU64,
 }
+
+/// Links, minted from every thread that builds a widget holding one.
+static NEXT_LINK: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
 
 impl LayerLink {
     /// Mints a link no other call has returned.
+    ///
+    /// # Panics
+    ///
+    /// After 2^64 - 1 links in one process, which a process minting one a
+    /// nanosecond reaches in 584 years; the mint never wraps, so a link is
+    /// never issued twice.
     #[expect(
         clippy::new_without_default,
         reason = "a Default that minted a fresh unique link per call would read as the zero value"
     )]
     pub fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            id: NEXT_LINK
+                .next()
+                .expect("BUG: a process mints fewer than 2^64 - 1 layer links"),
         }
     }
 
     /// The raw identity, for diagnostics.
     #[inline]
     pub fn id(&self) -> u64 {
-        self.id
+        self.id.get()
     }
 }
 
@@ -126,7 +134,7 @@ pub fn leader_origin(tree: &LayerTree, link: LayerLink) -> Option<Point<f64>> {
     let leader_id = tree.leader(link)?;
     let mut chain = Matrix4::IDENTITY;
     for id in tree.ancestors(leader_id) {
-        let layer = tree.get_layer(id)?;
+        let layer = tree.layer(id)?;
         chain = chain_transform(tree, id, layer, 0).ok()? * chain;
     }
     let (x, y) = chain.project_plane_point(0.0, 0.0)?;
@@ -142,7 +150,7 @@ fn resolve_at_depth(
         return Err(Unresolved::TooDeep);
     }
     let follower = tree
-        .get_layer(follower_layer_id)
+        .layer(follower_layer_id)
         .and_then(Layer::as_follower)
         .ok_or(Unresolved::Hidden)?;
     let unlinked_fallback = || {
@@ -157,7 +165,7 @@ fn resolve_at_depth(
     let Some(leader_id) = tree.leader(follower.link()) else {
         return unlinked_fallback();
     };
-    let Some(leader) = tree.get_layer(leader_id).and_then(Layer::as_leader) else {
+    let Some(leader) = tree.layer(leader_id).and_then(Layer::as_leader) else {
         return unlinked_fallback();
     };
 
@@ -189,7 +197,7 @@ fn resolve_at_depth(
         if id == common_ancestor {
             break;
         }
-        let layer = tree.get_layer(id).ok_or(Unresolved::Hidden)?;
+        let layer = tree.layer(id).ok_or(Unresolved::Hidden)?;
         if hide_when_clipped && id != leader_id {
             let (x, y) = leader_chain
                 .project_plane_point(anchor.dx, anchor.dy)
@@ -207,7 +215,7 @@ fn resolve_at_depth(
             if id == common_ancestor {
                 break;
             }
-            let layer = tree.get_layer(id).ok_or(Unresolved::Hidden)?;
+            let layer = tree.layer(id).ok_or(Unresolved::Hidden)?;
             follower_chain = chain_transform(tree, id, layer, depth)? * follower_chain;
         }
     }

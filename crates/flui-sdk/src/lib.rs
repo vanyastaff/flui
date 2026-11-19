@@ -131,13 +131,13 @@ pub mod platform {
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
-    pub use flui_platform::text_store::Autofill;
-    pub use flui_platform::text_store::Capitalization;
-    pub use flui_platform::text_store::Correction;
-    pub use flui_platform::text_store::EnterAction;
-    pub use flui_platform::text_store::NumberFormat;
-    pub use flui_platform::text_store::TextInputOptions;
-    pub use flui_platform::text_store::TextInputPurpose;
+    pub use flui_platform::text::store::Autofill;
+    pub use flui_platform::text::store::Capitalization;
+    pub use flui_platform::text::store::Correction;
+    pub use flui_platform::text::store::EnterAction;
+    pub use flui_platform::text::store::NumberFormat;
+    pub use flui_platform::text::store::TextInputOptions;
+    pub use flui_platform::text::store::TextInputPurpose;
 
     /// The capability seam (ADR-0152): what a package declares, provides and
     /// registers a platform capability with, and the owner-thread result of a
@@ -178,8 +178,8 @@ pub mod platform {
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
         pub use flui_platform::Availability;
-        pub use flui_platform::input_capabilities::InputCapabilities;
-        pub use flui_platform::input_capabilities::PointerKindSet;
+        pub use flui_platform::input::capabilities::InputCapabilities;
+        pub use flui_platform::input::capabilities::PointerKindSet;
     }
 
     /// Haptic patterns, requests and outcomes (ADR-0210); the widget handle
@@ -283,8 +283,8 @@ pub mod interaction {
     pub use flui_interaction::text_input::PrimarySelectionHandle;
     pub use flui_interaction::text_input::SelectionText;
     pub use flui_platform::EventTime;
-    pub use flui_platform::input_capabilities::PointerKindSet;
-    pub use flui_platform::pointer::PointerKind;
+    pub use flui_platform::input::capabilities::PointerKindSet;
+    pub use flui_platform::input::pointer::PointerKind;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
     /// presentation's `DragAndDrop` and what a receiver answers, the surface
@@ -308,7 +308,7 @@ pub mod interaction {
         pub use flui_interaction::drag::DropReceiverSlot;
         pub use flui_interaction::drag::MoveOutcome;
         pub use flui_interaction::drag::SpringLoading;
-        pub use flui_platform::data_transfer::TransferActions;
+        pub use flui_platform::transfer::data::TransferActions;
     }
 
     /// What a text widget's store is built from (ADR-0151 §6): the lock
@@ -393,9 +393,10 @@ pub mod pipeline {
 ///   ADR-0088's move 4.
 /// - the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6): the
 ///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
-///   on, the [`Scene`](hooks::Scene) and [`LayerTree`](hooks::LayerTree) it
-///   hands back, and the [`TextContextHandle`](hooks::TextContextHandle) it
-///   measures with. They leave with that path (ADR-0311 §7).
+///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
+///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
+///   the [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from,
+///   which `Scene::new` makes a version. They leave with that path (ADR-0311 §7).
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.

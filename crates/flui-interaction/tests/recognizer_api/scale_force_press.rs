@@ -29,17 +29,20 @@ fn pressure(mut event: PointerEvent, reading: f32) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(data) => {
             data.sample.pressure = Some(
-                flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture"),
+                flui_platform::input::pointer::Pressure::try_new(reading)
+                    .expect("valid pressure fixture"),
             );
         }
         PointerEvent::Up(data) => {
             data.sample.pressure = Some(
-                flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture"),
+                flui_platform::input::pointer::Pressure::try_new(reading)
+                    .expect("valid pressure fixture"),
             );
         }
         PointerEvent::Move(data) => {
             let sample = data.current().with_pressure(
-                flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture"),
+                flui_platform::input::pointer::Pressure::try_new(reading)
+                    .expect("valid pressure fixture"),
             );
             *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
                 .with_modifiers(data.modifiers)
@@ -457,7 +460,11 @@ fn force_history_preserves_thresholds_and_first_failure() {
     }
 }
 
-fn force_sample(reading: Option<f32>, x: f64, time: u64) -> flui_platform::pointer::PointerSample {
+fn force_sample(
+    reading: Option<f32>,
+    x: f64,
+    time: u64,
+) -> flui_platform::input::pointer::PointerSample {
     let PointerEvent::Move(movement) =
         make_move_event_for_id(pointer(1), Offset::new(x, 0.0), PointerKind::Touch)
             .expect("valid measured position")
@@ -467,12 +474,12 @@ fn force_sample(reading: Option<f32>, x: f64, time: u64) -> flui_platform::point
     let mut sample = *movement.current();
     sample.time = flui_platform::EventTime::from_nanos(time);
     sample.pressure = reading.map(|reading| {
-        flui_platform::pointer::Pressure::try_new(reading).expect("valid measured pressure")
+        flui_platform::input::pointer::Pressure::try_new(reading).expect("valid measured pressure")
     });
     sample
 }
 
-fn force_packet(samples: &[flui_platform::pointer::PointerSample]) -> PointerEvent {
+fn force_packet(samples: &[flui_platform::input::pointer::PointerSample]) -> PointerEvent {
     let PointerEvent::Move(movement) =
         make_move_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("Move")
     else {

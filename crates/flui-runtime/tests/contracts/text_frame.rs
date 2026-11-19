@@ -558,11 +558,14 @@ fn clean_presentation_completion_keeps_the_tree_clean() {
 
 #[derive(Debug)]
 struct ImeGeometryRead {
-    caret: Result<flui_platform::text_store::RangeRect, flui_platform::text_store::TextStoreError>,
+    caret:
+        Result<flui_platform::text::store::RangeRect, flui_platform::text::store::TextStoreError>,
     bounds:
-        Result<flui_foundation::geometry::Bounds<f64>, flui_platform::text_store::TextStoreError>,
-    index:
-        Result<flui_platform::text_store::Utf16Offset, flui_platform::text_store::TextStoreError>,
+        Result<flui_foundation::geometry::Bounds<f64>, flui_platform::text::store::TextStoreError>,
+    index: Result<
+        flui_platform::text::store::utf16::Utf16Offset,
+        flui_platform::text::store::TextStoreError,
+    >,
     document_len: usize,
     edited: bool,
 }
@@ -576,15 +579,15 @@ struct PartialTextFrame {
     focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
     rebuild: std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>,
     store: std::rc::Rc<
-        std::cell::RefCell<Option<std::rc::Rc<dyn flui_platform::text_store::TextStore>>>,
+        std::cell::RefCell<Option<std::rc::Rc<dyn flui_platform::text::store::TextStore>>>,
     >,
     grant: std::rc::Rc<std::cell::RefCell<Option<ImeGeometryRead>>>,
     lock_outcome: std::rc::Rc<
         std::cell::RefCell<
             Option<
                 Result<
-                    flui_platform::text_store::LockOutcome,
-                    flui_platform::text_store::TextStoreError,
+                    flui_platform::text::store::LockOutcome,
+                    flui_platform::text::store::TextStoreError,
                 >,
             >,
         >,
@@ -614,8 +617,9 @@ impl ViewState<PartialTextFrame> for PartialTextFrameState {
     }
 
     fn build(&self, view: &PartialTextFrame, _: &dyn BuildContext) -> impl IntoView {
-        use flui_platform::text_store::{
-            LockGrant, LockTiming, PointMode, Utf16Offset, Utf16Range,
+        use flui_platform::text::store::{
+            LockGrant, LockTiming, PointMode,
+            utf16::{Utf16Offset, Utf16Range},
         };
 
         if view.pending.get() {
@@ -676,8 +680,9 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     use std::rc::Rc;
 
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
-    use flui_platform::text_store::{
-        LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        LockGrant, LockOutcome, LockTiming, TextStoreError,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let native_store_host = flui_testing::RecordingTextStoreHost::new();
@@ -743,7 +748,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let initial_hit = runtime.enter(|_| {
         hit_test.hit_test_at(
             flui_foundation::geometry::Offset::new(1.0, 1.0),
-            flui_platform::pointer::PointerKind::Touch,
+            flui_platform::input::pointer::PointerKind::Touch,
         )
     });
     assert!(
@@ -835,7 +840,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let unavailable_hit = runtime.enter(|_| {
         hit_test.hit_test_at(
             flui_foundation::geometry::Offset::new(1.0, 1.0),
-            flui_platform::pointer::PointerKind::Touch,
+            flui_platform::input::pointer::PointerKind::Touch,
         )
     });
     assert!(
@@ -859,7 +864,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let recovered_hit = runtime.enter(|_| {
         hit_test.hit_test_at(
             flui_foundation::geometry::Offset::new(1.0, 1.0),
-            flui_platform::pointer::PointerKind::Touch,
+            flui_platform::input::pointer::PointerKind::Touch,
         )
     });
     assert!(
@@ -884,7 +889,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
                     session
                         .index_at_point(
                             flui_foundation::geometry::Point::new(0.0, 0.0),
-                            flui_platform::text_store::PointMode::NEAREST,
+                            flui_platform::text::store::PointMode::NEAREST,
                         )
                         .is_ok()
                 );
@@ -1093,7 +1098,10 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
 
     use flui_animation::Animation as _;
     use flui_foundation::{TextScaleProfile, TextSizingIntent};
-    use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range};
+    use flui_platform::text::store::{
+        LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
+    };
     use flui_runtime::frame_failure::{FrameFailureKind, SamplingFailureOrigin, SamplingStage};
     use flui_runtime::ui_runtime::TextSizingSettlement;
 
@@ -1273,9 +1281,9 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
         })
         .build();
         let down = flui_interaction::events::make_down_event_for_id(
-            flui_platform::pointer::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_platform::input::pointer::PointerId::new(std::num::NonZeroU64::MIN),
             flui_foundation::geometry::Offset::new(10.0, 10.0),
-            flui_platform::pointer::PointerKind::Touch,
+            flui_platform::input::pointer::PointerKind::Touch,
         )
         .expect("finite retained contact");
         recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
@@ -1493,7 +1501,7 @@ struct PendingEditable {
     runtime: flui_runtime::ui_runtime::UiRuntime,
     sink: PreparedTextSink,
     writer: flui_painting::TextSizingAdmission,
-    store: std::rc::Rc<dyn flui_platform::text_store::TextStore>,
+    store: std::rc::Rc<dyn flui_platform::text::store::TextStore>,
     completed: std::rc::Rc<std::cell::Cell<usize>>,
     work: flui_runtime::ui_runtime::TextSizingWork,
 }
@@ -1592,8 +1600,9 @@ fn a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barr
 
 fn retained_deadline_failure_case(background: bool, fail_query: bool) {
     use flui_foundation::MonotonicClock as _;
-    use flui_platform::text_store::{
-        LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        LockGrant, LockOutcome, LockTiming, TextStoreError,
+        utf16::{Utf16Offset, Utf16Range},
     };
     use flui_runtime::frame_failure::{
         FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
@@ -1647,7 +1656,9 @@ fn retained_deadline_failure_case(background: bool, fail_query: bool) {
         fail_query,
     });
     let _entry = runtime.gestures().arena().add(
-        flui_platform::pointer::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
+        flui_platform::input::pointer::PointerId::new(
+            std::num::NonZeroU64::new(99).expect("contact"),
+        ),
         &member,
     );
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1807,8 +1818,9 @@ fn a_dropped_receipt_retries_only_after_its_deadline_and_completes() {
 }
 
 fn a_held_receipt_parks_geometry_but_a_late_answer_heals_it() {
-    use flui_platform::text_store::{
-        LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        LockGrant, LockOutcome, LockTiming, TextStoreError,
+        utf16::{Utf16Offset, Utf16Range},
     };
     use flui_runtime::ui_runtime::TextSizingSettlement;
     use std::cell::RefCell;
@@ -2939,7 +2951,10 @@ fn sampling_report_replacement_case(late_preparation: bool) {
 
 fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime() {
     use flui_animation::Animation as _;
-    use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range};
+    use flui_platform::text::store::{
+        LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
+    };
     use flui_runtime::ui_runtime::TextSizingSettlement;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;

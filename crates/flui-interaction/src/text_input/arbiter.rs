@@ -1,6 +1,6 @@
 //! The lock state machine a widget's text store embeds: when a grant the
 //! platform asked for runs (ADR-0151 §6; the grant, its outcome and the commit
-//! gate are `flui_platform::text_store`'s contract).
+//! gate are `flui_platform::text::store`'s contract).
 //!
 //! [`LockArbiter`] decides when a grant runs, following TSF's
 //! `ITextStoreACP::RequestLock`:
@@ -19,7 +19,7 @@
 //! it, so a later request never overtakes an earlier one.
 //!
 //! The arbiter reads the gate itself: a store installs the gate its owner
-//! hands it ([`TextStore::set_commit_gate`](flui_platform::text_store::TextStore::set_commit_gate))
+//! hands it ([`TextStore::set_commit_gate`](flui_platform::text::store::TextStore::set_commit_gate))
 //! with [`LockArbiter::set_gate`], and has no flag of its own to forget.
 //!
 //! # Settling
@@ -46,7 +46,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-use flui_platform::text_store::{
+use flui_platform::text::store::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockOutcome, LockTiming, OwnerCalls,
     TextStoreError,
 };
@@ -409,8 +409,9 @@ mod tests {
     use flui_foundation::geometry::{Bounds, Point};
 
     use super::*;
-    use flui_platform::text_store::{
-        Composition, PointMode, RangeRect, Selection, TextStoreRead, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, PointMode, RangeRect, Selection, TextStoreRead,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     /// Makes grants whose only effect is recording a label when they run,

@@ -985,6 +985,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_fields_runs_keep_their_identities_until_their_text_changes", crate::semantics::a_fields_runs_keep_their_identities_until_their_text_changes),
             ("semantics::a_clip_behavior_switch_republishes_what_the_clip_hides", crate::semantics::a_clip_behavior_switch_republishes_what_the_clip_hides as fn()),
             ("semantics::retained_visibility_hides_child_semantics_by_default", crate::semantics::retained_visibility_hides_child_semantics_by_default as fn()),
+            ("semantics::transparent_opacity_hides_semantics_unless_always_included", crate::semantics::transparent_opacity_hides_semantics_unless_always_included),
             ("semantics::retained_visibility_updates_semantics_without_changing_layout", crate::semantics::retained_visibility_updates_semantics_without_changing_layout as fn()),
             ("semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer", crate::semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer as fn()),
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),

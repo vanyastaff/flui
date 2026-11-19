@@ -1,8 +1,8 @@
 //! The contract's own flag sets: the part of the `bitflags` API the workspace
 //! uses, under the same names, with no upstream type in their signatures.
 
-use flui_platform::data_transfer::TransferActions;
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::transfer::data::TransferActions;
 
 #[test]
 fn debug_names_the_flags_or_prints_the_empty_bits() {

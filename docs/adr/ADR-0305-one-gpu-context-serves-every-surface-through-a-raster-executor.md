@@ -386,7 +386,7 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's
-  visible, minimised and occluded state (`crates/flui-platform/src/window_state.rs:150-166`). A
+  visible, minimised and occluded state (`WindowState::visible`, `mode` and `occluded`). A
   frame for a slot that is not shown applies its scene state and settles `NotShown`; the slot
   redraws in full when it is shown again. On one raster thread an acquire on a hidden window can
   wait out wgpu's second for every other window, and Metal ignores that timeout

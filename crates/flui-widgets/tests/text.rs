@@ -772,14 +772,14 @@ fn links_between_buttons(
 }
 
 /// Press `key` (or Shift+Tab) as the platform delivers it; then a frame.
-fn press_key(laid: &mut crate::common::LaidOut, pressed: flui_platform::keyboard::Key) {
+fn press_key(laid: &mut crate::common::LaidOut, pressed: flui_platform::input::keyboard::Key) {
     let manager = laid.focus_manager();
     laid.enter_owner_scope(|| crate::keyboard_focus::press(&manager, &pressed));
     laid.pump();
 }
 
 fn shift_tab(laid: &mut crate::common::LaidOut) {
-    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
 
     let manager = laid.focus_manager();
     laid.enter_owner_scope(|| {
@@ -796,7 +796,7 @@ fn shift_tab(laid: &mut crate::common::LaidOut) {
 /// Red-check: drop the per-link `Focus` (Tab goes from the first button to
 /// the second, and Enter presses it).
 pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let after = Rc::new(std::cell::Cell::new(0));
@@ -848,7 +848,7 @@ pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
 pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
     use flui_painting::DrawOp;
     use flui_painting::styling::Color;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle};
 
     const STYLE: FocusRingStyle = FocusRingStyle {
@@ -929,7 +929,7 @@ pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
 /// Red-check: drop the Focus action from the link node (the request is
 /// refused and Enter opens nothing).
 pub(crate) fn assistive_technology_focuses_a_link() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
@@ -978,7 +978,7 @@ pub(crate) fn assistive_technology_focuses_a_link() {
 /// paragraph's top is already visible, so nothing scrolls).
 pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::{RichText, SingleChildScrollView, SizedBox};
 
     const VIEWPORT: f64 = 120.0;
@@ -1030,7 +1030,7 @@ pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
 /// label "Read " is not published).
 pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_testing::a11y::Role;
     use flui_view::ViewExt;
     use flui_widgets::{Column, RawButton, RichText};
@@ -1093,7 +1093,7 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
 /// button).
 pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::{RawButton, RichText};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
@@ -1130,7 +1130,7 @@ pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
 /// Enter opens it).
 pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_view::ViewExt;
     use flui_widgets::{Column, RawButton, RichText, SizedBox};
 
@@ -1198,7 +1198,7 @@ fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widget
 /// place in the text (Enter opens the link now at the focused place, and the
 /// press opens the link that took the pressed one's place).
 pub(crate) fn links_keep_their_focus_and_presses_when_links_before_them_change() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let last = || opened.borrow().last().cloned();

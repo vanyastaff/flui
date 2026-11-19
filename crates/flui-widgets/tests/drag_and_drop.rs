@@ -20,9 +20,9 @@ use flui_interaction::drag::{
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_platform::data_transfer::{TransferActions, TransferFormat};
-use flui_platform::drag::OsDragEnd;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::transfer::data::{TransferActions, TransferFormat};
+use flui_platform::transfer::drag::OsDragEnd;
 use flui_platform::{Cursor, CursorIcon, EventTime, HapticFeedback, TargetPlatform};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
 use flui_testing::widgets::SharedSignal;
@@ -453,7 +453,7 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
             .build(),
         Pointer::Virtual => flui_testing::replay::VirtualScript::new(
             "virtual press",
-            flui_platform::pointer::DeviceId::try_from(7_u64).expect("a nonzero device id"),
+            flui_platform::input::pointer::DeviceId::try_from(7_u64).expect("a nonzero device id"),
         )
         .press(at)
         .wait(wait)

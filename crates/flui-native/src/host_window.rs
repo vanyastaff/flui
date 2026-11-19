@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_platform::PlatformWindow;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use flui_semantics::platform::PlatformAccessibility;
 
 mod sealed {

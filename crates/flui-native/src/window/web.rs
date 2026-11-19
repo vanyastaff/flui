@@ -1307,7 +1307,7 @@ impl crate::host_window::HostWindow for WebWindow {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.text_input_of().and_then(WindowTextInput::store_host)
     }
 }
@@ -1497,6 +1497,10 @@ impl PlatformWindow for WebWindow {
         }
     }
 
+    /// Never asked: a page tells no covering and keeps no covered canvas's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     /// The same request as [`request_redraw`](PlatformWindow::request_redraw),
     /// from the page's only thread or any other.
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
@@ -1599,12 +1603,12 @@ impl PlatformWindow for WebWindow {
     /// `pointer-events` decides which element takes input, which is not that.
     fn set_input_regions(
         &self,
-        _regions: &[flui_platform::input_regions::InputRegion],
+        _regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), Unsupported> {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         self.drag.borrow().as_ref().map(|drag| drag.source())
     }
 

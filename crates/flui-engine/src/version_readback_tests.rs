@@ -2157,17 +2157,35 @@ fn a_repainted_boundary_replays_the_chunks_that_did_not_change() {
     );
 }
 
-/// An empty layer tree, drawn in full between two frames of a version: a
-/// tree draws no scene owner, so the owner drawn before keeps its
-/// recordings, where a version of another owner would drop them.
-fn empty_frame(capture: &mut RetainedCapture) {
+/// A partial frame of `version` between two full ones, damaging a corner
+/// none of its chunks reaches: it records and replays nothing and keeps the
+/// lineage drawn before, where a frame of another owner's version (a
+/// hand-built tree included) would drop that lineage's recordings. The
+/// capture renders through its retained target, so the frame is partial.
+fn a_frame_beside_the_chunks(capture: &mut RetainedCapture, version: &SceneVersion) {
+    let corner = Rect::from_xywh(f64::from(SIDE) - 4.0, f64::from(SIDE) - 4.0, 2.0, 2.0);
     apply(
         capture,
-        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        DamageRegion::Region(flui_layer::Region::new(
+            flui_layer::DamageRect::try_covering(corner, (SIDE, SIDE))
+                .expect("a finite rect")
+                .expect("the corner is on the surface"),
+        )),
     );
     capture
-        .render_scene(&Scene::new(flui_layer::LayerTree::default()))
-        .expect("an empty frame renders");
+        .render_scene(&Scene::of_version(version.clone()))
+        .expect("the frame beside the chunks renders");
+    assert!(
+        matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+        "{:?}",
+        capture.last_plan()
+    );
+    let counters = drawn(capture).counters;
+    assert_eq!(
+        (counters.chunks_recorded, counters.recording_cache_hits),
+        (0, 0),
+        "the frame beside the chunks draws none of them"
+    );
 }
 
 /// A kept recording names glyph and image texels, so each event that moves
@@ -2184,21 +2202,21 @@ fn an_atlas_reset_misses_every_cached_recording() {
     };
     // (row, what happens between the frames, whether the second frame and
     // the fresh one draw through the plugin font source, whether it hits)
-    type Between = fn(&mut RetainedCapture);
+    type Between = fn(&mut RetainedCapture, &SceneVersion);
     let rows: [(&str, Between, bool, bool); 4] = [
-        ("a frame between", empty_frame, false, true),
+        ("a frame between", a_frame_beside_the_chunks, false, true),
         (
             "a critical reclaim",
-            |capture| capture.reclaim(MemoryPressureLevel::Critical),
+            |capture, _| capture.reclaim(MemoryPressureLevel::Critical),
             false,
             false,
         ),
-        ("a font-source switch", |_| {}, true, false),
+        ("a font-source switch", |_, _| {}, true, false),
         (
             "an image-atlas reset",
-            |capture| {
+            |capture, version| {
                 capture.mark_image_atlas_full();
-                empty_frame(capture);
+                a_frame_beside_the_chunks(capture, version);
             },
             false,
             false,
@@ -2219,13 +2237,14 @@ fn an_atlas_reset_misses_every_cached_recording() {
     for (row, between, plugin, hits) in rows {
         let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         capture.keep_recorded_ir();
+        capture.require_intermediate();
         draw_until_admitted(&mut capture, &version);
         let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
         assert_eq!(
             first.counters.chunks_recorded, MIXED_CHUNKS,
             "{row}: the first frame records every chunk"
         );
-        between(&mut capture);
+        between(&mut capture, &version);
         let second = second_frame(&mut capture, plugin);
         let expected = if hits {
             (0, MIXED_CHUNKS)

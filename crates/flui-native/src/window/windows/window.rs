@@ -41,7 +41,7 @@ use flui_platform::{
     WindowPosition, WindowReveal, WindowState,
 };
 
-use flui_platform::os_options::WindowsCornerPreference;
+use flui_platform::window::os_options::WindowsCornerPreference;
 
 use super::material::SystemBackdrop;
 use super::mode::NativeMode;
@@ -114,7 +114,7 @@ pub struct WindowsWindow {
     facets: WindowFacets,
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
-    drag_source: Arc<dyn flui_platform::drag::PlatformDragSource>,
+    drag_source: Arc<dyn flui_platform::transfer::drag::PlatformDragSource>,
 
     /// What the window delivers to its handler, shared with its owner-thread
     /// context, which raises every delivery from the window procedure. The
@@ -534,7 +534,7 @@ impl WindowsWindow {
             // devices attached before the handler hears its snapshot.
             let delivery = Arc::new(WindowDelivery::counting_frames(
                 handler,
-                flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+                flui_platform::input::capabilities::InputCapabilities::UNAVAILABLE,
                 frames.counter(),
             ));
             // What the window posts to itself goes to the owner thread's
@@ -1399,11 +1399,11 @@ impl crate::host_window::HostWindow for WindowsWindow {
     /// destroyed; a host read before that answers
     /// [`TextStoreHostError::Unsupported`] from then on.
     ///
-    /// [`TextStoreHostError::Unsupported`]: flui_platform::text_store::TextStoreHostError::Unsupported
+    /// [`TextStoreHostError::Unsupported`]: flui_platform::text::store::TextStoreHostError::Unsupported
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()
@@ -1431,7 +1431,7 @@ impl PlatformWindow for WindowsWindow {
         Some(Arc::clone(&self.facets.chrome))
     }
 
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         Some(Arc::clone(&self.drag_source))
     }
 
@@ -1519,6 +1519,10 @@ impl PlatformWindow for WindowsWindow {
         // not this window, which asks for nothing.
         flui_platform::RedrawRequester::request_redraw(&self.surface());
     }
+
+    /// Never asked: Win32 tells no covering and keeps no covered window's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
 
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         Arc::new(self.surface())
@@ -1693,7 +1697,7 @@ impl PlatformWindow for WindowsWindow {
     /// another window by then.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), Unsupported> {
         let gone = Unsupported::new(UnsupportedReason::NoWindow);
         if !self.handle_is_its_window() {

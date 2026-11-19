@@ -1,8 +1,8 @@
 //! The raster side's half of the damage contract (ADR-0304 §7): the version
 //! whose image it holds, and whether a publication's damage applies to it.
 
+use super::{DamageRegion, FullReason, ResyncReason};
 use crate::scene::{ScenePublication, SceneVersionId, SurfaceKey};
-use crate::scene_snapshot::{DamageRegion, FullReason, ResyncReason};
 
 use super::DamageMode;
 

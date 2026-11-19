@@ -44,10 +44,6 @@ AppRuntime (loop-scoped composition root)
   auto-wraps it in an outer `GestureArenaScope` plus `VsyncScope`, so competing
   detectors share the UI runtime arena and implicit-animation widgets tick with
   zero boilerplate.
-- **`run_direct`** — an **experimental, direct-engine** escape hatch that
-  bypasses the widget tree for raw `SceneBuilder`-callback rendering. It is
-  not a supported cross-platform entry point: it has no input handling and
-  does no damage tracking.
 - **Lifecycle** — `flui_scheduler::AppLifecycleState` (resumed, inactive,
   hidden, paused, detached) is the canonical state; the
   runner drives `UpdateScheduler::handle_app_lifecycle_state_change` directly at

@@ -10,11 +10,11 @@ use std::task::{Context, Poll, Waker};
 
 use flui_foundation::DataTransferId;
 use flui_platform::{
-    data_transfer::DataTransferOffer, data_transfer::DragTransport, data_transfer::DropFeedback,
-    data_transfer::RepresentationDescriptor, data_transfer::RepresentationIndex,
-    data_transfer::TransferActions, data_transfer::TransferCompleter, data_transfer::TransferError,
-    data_transfer::TransferFormat, data_transfer::TransferLimits, data_transfer::TransferPayload,
-    data_transfer::TransferRequest,
+    transfer::data::DataTransferOffer, transfer::data::DragTransport, transfer::data::DropFeedback,
+    transfer::data::RepresentationDescriptor, transfer::data::RepresentationIndex,
+    transfer::data::TransferActions, transfer::data::TransferCompleter,
+    transfer::data::TransferError, transfer::data::TransferFormat, transfer::data::TransferLimits,
+    transfer::data::TransferPayload, transfer::data::TransferRequest,
 };
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use parking_lot::Mutex;

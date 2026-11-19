@@ -42,7 +42,7 @@ replaces it as a whole and decides those rules instead.
 
 The platform side already has more than the widget side can reach:
 
-- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform/src/platform_window.rs`),
+- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform/src/window/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
   (`crates/flui-runtime/src/presentation.rs:970`), but that method and its forwarder
   `UiRuntime::perform_haptic_feedback` (`crates/flui-runtime/src/ui_runtime/frame_clock.rs:466`) carry
@@ -306,7 +306,7 @@ that rule. The class holds:
 
 - **clipboard** and **data transfer**: `Platform::clipboard()` and `Platform::data_transfer()`
   (`crates/flui-native/src/traits/platform.rs:423,435`), already required;
-- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform/src/platform_window.rs`),
+- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform/src/window/platform_window.rs`),
   already required;
 - **text input and IME**: `PlatformWindow::text_input()`, today a defaulted method returning
   `None` (same file), becomes required;

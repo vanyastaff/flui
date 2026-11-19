@@ -644,8 +644,11 @@ is inserted only after its recording completed and placed every glyph it asked f
 capture starts its key over as a candidate. Eviction is least recently rastered first under a byte budget (a hypothesis), and a presentation's
 entries go when its slot detaches. Counters: `recording_cache_bytes`, `recording_cache_hits`,
 `recording_cache_evictions`. A chunk has one parent entry, so it never straddles an effect scope,
-so a version's frame skips the renderer's straddle self-heal (`record_passes` in
-`crates/flui-engine/src/renderer.rs`), which only a hand-built tree keeps.
+and a destination-reading chunk across a pass's rect is redrawn whole because the damage is
+closed over it (§6): the renderer keeps no straddle self-heal. The raster side draws one form. A
+scene authored by hand is a `LayerTree` that `Scene::new` converts into a version
+(`SceneVersion::from_tree`: one node, each picture without children a chunk, every other layer an
+effect), so the walk, the damage closure and the cull above are the only ones the engine has.
 
 A texture frame or retirement drained with a publication (`RasterHost::submit`; when nothing else
 changed, the held version §8 publishes for it) damages the device

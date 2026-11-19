@@ -10,10 +10,10 @@ use super::{
     FieldValue, autocapitalize, autocomplete, composition_end, correction, enter_key_hint,
     field_change, field_edit, input_mode, range, text_update,
 };
-use flui_platform::text_store::{
+use flui_platform::text::store::{
     Autofill, Capitalization, Composition, Correction, EnterAction, LockGrant, LockTiming,
     NumberFormat, Selection, TextInputOptions, TextInputPurpose, TextStore, TextStoreEdit,
-    TextStoreStatus, Utf16Offset,
+    TextStoreStatus, utf16::Utf16Offset,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 

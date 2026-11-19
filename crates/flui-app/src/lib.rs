@@ -123,9 +123,6 @@ pub use app::{
 // The app's font registration door (ADR-0092 §2).
 pub use app::EXIT_CODE_HUNG;
 pub use app::{FontRegistrationError, register_font};
-// `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
-#[cfg(not(target_os = "ios"))]
-pub use app::run_direct;
 // Host-injected execution seam: an embedded host provides its
 // own worker pools via `AppConfig::executors`, and the runtime's
 // default pools are then never constructed. `DeterministicExecutors` is the
@@ -223,8 +220,6 @@ pub mod prelude {
     // FLUI crate emits from. Nothing in the prelude installs a subscriber.
     pub use tracing::{debug, error, info, trace, warn};
 
-    #[cfg(not(target_os = "ios"))]
-    pub use crate::run_direct;
     pub use crate::{AppConfig, Application, LaunchError, run_app};
     // Bindings
     pub use crate::{

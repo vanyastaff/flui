@@ -33,8 +33,8 @@ impl UiRuntime {
     // Frame production (moved from the retired `AppBinding`)
     // ========================================================================
 
-    /// Draw a frame and return the version it produced, flattened into a
-    /// `Scene`, if any. Test-only —
+    /// Draw a frame and return the [`Scene`](flui_layer::Scene) holding the
+    /// version it produced, if any. Test-only —
     /// production drives frames through [`Self::pump`].
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
@@ -55,7 +55,7 @@ impl UiRuntime {
             // concern for `render_frame`; this test helper only
             // reports what was painted)
             FramePaintOutcome::Painted(publication) => {
-                Some(flui_layer::Scene::new(publication.scene.flatten()))
+                Some(flui_layer::Scene::of_version(publication.scene))
             }
             FramePaintOutcome::Idle | FramePaintOutcome::Errored { .. } => None,
         }
@@ -796,7 +796,7 @@ impl UiRuntime {
         &self,
         presentation: &PresentationState,
         tree_revision: crate::epoch::TreeRevision,
-        input_regions: &std::rc::Rc<[flui_platform::input_regions::InputRegion]>,
+        input_regions: &std::rc::Rc<[flui_platform::input::regions::InputRegion]>,
     ) -> FirstPanic {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),

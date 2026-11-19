@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
-use flui_platform::data_transfer::DragTransport;
+use flui_platform::transfer::data::DragTransport;
 use flui_platform::{
     AppDataDir, DisplaySnapshot, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowCapabilities, WindowHandler, WindowOptions,
@@ -392,7 +392,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// independently minted tables would split the id space and let
     /// cross-table ids pass each other's generation checks, ADR-0312 §2).
     /// Backends without a drag transport return
-    /// [`flui_platform::data_transfer::NullDragTransport`] (inert,
+    /// [`flui_platform::transfer::data::NullDragTransport`] (inert,
     /// honest — not fake success).
     fn data_transfer(&self) -> Arc<dyn DragTransport>;
 

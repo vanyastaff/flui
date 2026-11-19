@@ -47,8 +47,9 @@ impl PipelineOwner<Idle> {
     /// Resolve an accessibility request against this presentation's current
     /// semantics tree.
     ///
-    /// The returned invocation contains a cloned handler. Callers holding an
-    /// `RwLock<PipelineOwner>` must release its guard before invoking it.
+    /// The returned invocation contains a cloned handler. Callers inside a
+    /// [`PipelineCell`](super::PipelineCell) borrow return from it before
+    /// invoking the handler, which is user code.
     pub fn resolve_semantics_action(
         &self,
         request: SemanticsActionRequest,

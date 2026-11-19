@@ -793,7 +793,7 @@ mod cases {
 
         /// An X11 window takes the chrome regions (ADR-0286 §10), as its input
         /// capabilities say.
-        fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+        fn input_capabilities(&self) -> flui_platform::input::capabilities::InputCapabilities {
             flui_native::input::availability::x11(false)
         }
 
