@@ -47,6 +47,7 @@ use crate::version::gate::android::AndroidApi;
 
 use super::{ActivityWindow, ActivityWindowId};
 use crate::owner::android::activity::with_activity;
+use crate::window::pointer_capture::{CaptureCall, CaptureOwner, CaptureStep};
 
 /// The binary name of the view class.
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
@@ -169,17 +170,25 @@ pub(crate) enum ViewEvent {
     KeyboardMotion(KeyboardReport),
     /// The keyboard's motion ended or was cancelled (API 30).
     KeyboardSettled,
-    /// The window took the mouse or let it go (API 26): the system's answer
-    /// to [`JavaView::capture_pointer`], its release, or the focus leaving
-    /// the window; or a release that never reached the view (`held` false).
+    /// Whether the system holds the pointer capture for `window` changed, as
+    /// the capture owner attributes it ([`CaptureOwner`]).
     PointerCaptureChanged {
-        /// The window the answer is for: the one that last asked for the
-        /// mouse when the answer came, or the one whose release was dropped;
-        /// `None` when no window asked.
-        window: Option<ActivityWindowId>,
-        /// Whether the window has the mouse.
+        /// The window whose capture changed.
+        window: ActivityWindowId,
+        /// Whether the system holds the capture for it now.
         held: bool,
     },
+}
+
+/// What a window tells the capture owner, which runs on the Java main thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureCommand {
+    /// The window asks for the mouse.
+    Request(ActivityWindowId),
+    /// The window lets go: its release command, or its retirement.
+    Release(ActivityWindowId),
+    /// The Activity lost the focus: the system ended the capture.
+    FocusLost,
 }
 
 /// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
@@ -345,10 +354,13 @@ pub(crate) struct JavaView {
     /// pixel coordinates. A lock held only to copy the value: its type, not a
     /// check at each read, keeps it a ratio.
     scale: Mutex<DevicePixelRatio>,
-    /// The window that last asked for the mouse, recorded on the Java main
-    /// thread as the request is made there, where the system's answers come
-    /// too: an answer that comes after a newer request is that request's.
-    capture_asker: Mutex<Option<ActivityWindowId>>,
+    /// The Activity's pointer capture, which every window's commands and
+    /// every system answer go through on the Java main thread. A lock, though
+    /// that one thread runs every step: the bridge is shared with the owner
+    /// thread, this crate has no cell bound to the Java main thread, and a
+    /// call that never reached the main thread is settled where its post
+    /// failed. No JNI call runs under it.
+    capture: Mutex<CaptureOwner<ActivityWindowId>>,
 }
 
 impl std::fmt::Debug for JavaView {
@@ -380,7 +392,7 @@ impl JavaView {
             events: Mutex::new(VecDeque::new()),
             composing: AtomicBool::new(false),
             scale: Mutex::new(DevicePixelRatio::ONE),
-            capture_asker: Mutex::new(None),
+            capture: Mutex::new(CaptureOwner::default()),
         });
         let (installing, unsettled) = (Arc::clone(&view), Arc::clone(&view));
         main_thread::post(
@@ -535,39 +547,58 @@ impl JavaView {
         });
     }
 
-    /// Ask for the mouse for `window` (`View.requestPointerCapture`, API 26)
-    /// or give it back (`releasePointerCapture`). The system answers through
-    /// the view's `onPointerCaptureChange`, reported as
-    /// [`ViewEvent::PointerCaptureChanged`] for the window that last asked;
-    /// it gives the mouse only to a window with the focus, and takes it back
-    /// when the focus goes. A call that never reaches the view (not
-    /// installed, failed, dropped) holds no capture: it is reported for
-    /// `window` as none held. Owner thread; the call runs on the Java main
+    /// Hand `command` to the capture owner on the Java main thread
+    /// (API 26), which makes the one call it calls for and reports each
+    /// window whose capture changed as [`ViewEvent::PointerCaptureChanged`].
+    /// A command that never reaches the main thread changes nothing. Owner
     /// thread.
-    pub(crate) fn capture_pointer(
-        self: &Arc<Self>,
-        window: Option<ActivityWindowId>,
-        capture: bool,
-    ) {
+    pub(crate) fn capture_command(self: &Arc<Self>, command: CaptureCommand) {
         let this = Arc::clone(self);
-        self.post_or(
-            move |env, view| {
-                let method = if capture {
-                    *this.capture_asker.lock() = window;
-                    jni_str!("requestPointerCapture")
-                } else {
-                    jni_str!("releasePointerCapture")
-                };
-                env.call_method(view, method, jni_sig!("()V"), &[])
-                    .map(|_| true)
-            },
-            move |view| {
-                view.push_event(ViewEvent::PointerCaptureChanged {
-                    window,
-                    held: false,
-                });
-            },
-        );
+        main_thread::run(&self.app, "a pointer capture command", move || {
+            let step = {
+                let mut owner = this.capture.lock();
+                match command {
+                    CaptureCommand::Request(window) => owner.request(window),
+                    CaptureCommand::Release(window) => owner.release(window),
+                    CaptureCommand::FocusLost => owner.focus_lost(),
+                }
+            };
+            this.carry_out_capture(step);
+        });
+    }
+
+    /// The system answered (`onPointerCaptureChange`). Java main thread.
+    fn capture_answered(self: &Arc<Self>, has_capture: bool) {
+        let step = self.capture.lock().answered(has_capture);
+        self.carry_out_capture(step);
+    }
+
+    /// Report each window whose capture changed, then make the call `step`
+    /// calls for; a call that does not reach the system (no view, or it
+    /// threw) is told to the owner, which changes nothing for it. Java main
+    /// thread, with the owner's lock let go.
+    fn carry_out_capture(self: &Arc<Self>, step: CaptureStep<ActivityWindowId>) {
+        for (window, held) in step.changed.into_iter().flatten() {
+            self.push_event(ViewEvent::PointerCaptureChanged { window, held });
+        }
+        let Some(call) = step.call else {
+            return;
+        };
+        let method = match call {
+            CaptureCall::Request(_) => jni_str!("requestPointerCapture"),
+            CaptureCall::Release => jni_str!("releasePointerCapture"),
+        };
+        let made = self.view().is_some_and(|view| {
+            self.attached(|env| {
+                env.call_method(view.as_ref(), method, jni_sig!("()V"), &[])
+                    .map(drop)
+            })
+            .is_ok()
+        });
+        if !made {
+            let step = self.capture.lock().call_failed(call);
+            debug_assert!(step.call.is_none(), "BUG: a failed call makes no other");
+        }
     }
 
     /// The bridge answering the node provider, cloned out of the lock so no
@@ -1180,13 +1211,7 @@ extern "system" fn native_pointer_capture_changed<'local>(
         |()| (),
         |_| {
             if let Some(view) = bridge(handle) {
-                // Read on this thread, where requests are recorded as they
-                // are made.
-                let window = *view.capture_asker.lock();
-                view.push_event(ViewEvent::PointerCaptureChanged {
-                    window,
-                    held: has_capture,
-                });
+                view.capture_answered(has_capture);
             }
             Ok(())
         },

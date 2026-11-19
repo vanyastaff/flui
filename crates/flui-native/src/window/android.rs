@@ -26,6 +26,7 @@ use parking_lot::Mutex;
 use crate::display::scale::{RefusedScale, ScaleStreak};
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::input::regions::ProjectedInputRegions;
+use crate::owner::android::java_view::CaptureCommand;
 use crate::owner::android::java_view::{ActivityDragSource, JavaView, KeyboardReport};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
@@ -447,16 +448,18 @@ impl ActivityWindow for AndroidWindow {
         self.facets.text.invalidate_sizing();
     }
 
-    /// The window is going away: its field and its drag are detached, and the
-    /// mouse it holds or asked for is given back (a release of nothing is
-    /// nothing to the system), the snapshot published without the grab.
+    /// The window is going away: its field and its drag are detached, and it
+    /// lets go of the mouse through the capture owner. The owner's answers
+    /// reach the loop's window only, which this one is no longer, so the
+    /// window's own copy is let go and published here.
     fn retire_java_view(&self) {
         self.facets.text.detach();
         self.facets.accessibility.detach();
         self.drag_source.retire();
         if self.api.since::<PointerCapture>().is_some() {
-            self.java_view.capture_pointer(Some(self.id), false);
-            if self.pointer_capture.retire() {
+            self.java_view
+                .capture_command(CaptureCommand::Release(self.id));
+            if self.pointer_capture.report(false) {
                 ActivityWindow::publish_state(self);
             }
         }
@@ -924,7 +927,8 @@ impl PlatformWindow for AndroidWindow {
                     self.java_view.is_ready(),
                 ) {
                     CaptureRequest::Ask => {
-                        self.java_view.capture_pointer(Some(self.id), true);
+                        self.java_view
+                            .capture_command(CaptureCommand::Request(self.id));
                         Ok(())
                     }
                     CaptureRequest::Nothing => Ok(()),
@@ -935,16 +939,15 @@ impl PlatformWindow for AndroidWindow {
                 ActivityWindow::publish_state(self);
                 asked
             }
-            // The release is the system's to answer as well (or, where the
-            // view never gets it, reported as none held); the snapshot is
-            // published on this exit too, and again when the answer comes.
+            // The release is the capture owner's to carry out and the
+            // system's to answer; the snapshot is published on this exit
+            // too, and again when the owner reports the change.
             flui_platform::WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => {
                 if self.api.since::<PointerCapture>().is_some() {
-                    self.java_view.capture_pointer(Some(self.id), false);
+                    self.java_view
+                        .capture_command(CaptureCommand::Release(self.id));
                 }
-                if CaptureMirror::release_publishes() {
-                    ActivityWindow::publish_state(self);
-                }
+                ActivityWindow::publish_state(self);
                 Ok(())
             }
             flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal)

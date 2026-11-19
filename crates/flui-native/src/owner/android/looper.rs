@@ -67,7 +67,7 @@ use crate::owner::android::{
     HostDisplays,
 };
 use crate::owner::android::{java_host, java_view};
-use crate::window::pointer_capture::{CaptureAnswer, route_answer};
+use crate::version::gate::android::PointerCapture;
 
 use crate::{
     error::BootstrapError,
@@ -416,6 +416,12 @@ impl AndroidLoop {
     /// state is published first, so an observer reads the new value.
     fn publish_activity_fact(&self, signal: ActivitySignal) {
         self.activity.record(signal);
+        // The system ends the pointer capture with the focus, and drops a
+        // request it had not answered: the capture owner forgets both.
+        if signal == ActivitySignal::Focus(false) && self.api.since::<PointerCapture>().is_some() {
+            self.java_view
+                .capture_command(java_view::CaptureCommand::FocusLost);
+        }
         let window = self.window.borrow().clone();
         if let Some(window) = window {
             window.publish_state();
@@ -564,21 +570,16 @@ impl AndroidLoop {
                         window.keyboard_settled();
                     }
                 }
+                // The capture owner attributed it: a window replaced since
+                // is reached no more.
                 java_view::ViewEvent::PointerCaptureChanged {
-                    window: asker,
+                    window: changed,
                     held,
                 } => {
-                    // Matched to the window that asked, never to the current
-                    // one: a late grant for a replaced window is given back.
-                    let current = window.as_ref().map(|window| window.activity_id());
-                    match route_answer(asker, current, held) {
-                        CaptureAnswer::Deliver => {
-                            if let Some(window) = &window {
-                                window.pointer_capture_changed(held);
-                            }
-                        }
-                        CaptureAnswer::Release => self.java_view.capture_pointer(asker, false),
-                        CaptureAnswer::Ignore => {}
+                    if let Some(window) = &window
+                        && window.activity_id() == changed
+                    {
+                        window.pointer_capture_changed(held);
                     }
                 }
             }

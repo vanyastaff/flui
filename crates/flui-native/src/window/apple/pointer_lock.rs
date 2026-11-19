@@ -3,33 +3,38 @@
 //! from UIKit and GameController, so every host's tests run them.
 //!
 //! A window asks for the lock (its root controller then prefers it), and the
-//! system answers per scene. The system locks one scene at a time; the
-//! mouse's motion goes to the window whose scene it locked, and to no other.
-//! A window lets go when the application asks, when it loses the focus, and
-//! when it leaves its scene ([`lets_go`]); once the system lets its lock go,
-//! it stops asking, so nothing takes the pointer again unasked (ADR-0354 §2).
+//! system answers per scene. The two are apart: an ask is the application's
+//! and ends only when the application lets go, the window loses the focus or
+//! leaves its scene (ADR-0354 §2); a hold is the system's, which its reports
+//! change and nothing else. The system locks one scene at a time; the mouse's
+//! motion goes to the window whose scene it locked, and to no other. A lock
+//! the system lets go of while the window still asks (the scene left full
+//! screen) is asked for again, so UIKit takes it when it can, without the
+//! window ever having lost the focus.
 
 #![forbid(unsafe_code)]
 
 use smallvec::SmallVec;
 
-/// The lock as the owner keeps it, over windows named by `W`.
-///
-/// Invariant: the window that holds the lock is one that asks for it
-/// ([`held_is_asked`](Self::held_is_asked)); every step keeps it.
+/// One window that asks for the lock, and whether the system holds its
+/// scene's pointer locked: a hold exists only on an ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Ask<W> {
+    window: W,
+    held: bool,
+}
+
+/// The lock as the owner keeps it, over windows named by `W`: the windows
+/// that ask, at most one of them held.
 #[derive(Debug, Clone)]
 pub(crate) struct LockLedger<W: Copy + Eq> {
-    /// The windows whose controller prefers the lock now.
-    asked: SmallVec<[W; 2]>,
-    /// The window whose scene the system last said it locked.
-    held_by: Option<W>,
+    asks: SmallVec<[Ask<W>; 2]>,
 }
 
 impl<W: Copy + Eq> Default for LockLedger<W> {
     fn default() -> Self {
         Self {
-            asked: SmallVec::new(),
-            held_by: None,
+            asks: SmallVec::new(),
         }
     }
 }
@@ -38,8 +43,9 @@ impl<W: Copy + Eq> Default for LockLedger<W> {
 /// GameController after the ledger is let go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LockStep<W> {
-    /// The window whose controller's preference changed: UIKit is asked to
-    /// read it again.
+    /// The window whose controller UIKit is to ask again for its
+    /// preference: it changed, or the system let a lock go that the window
+    /// still asks for.
     pub(crate) preference: Option<W>,
     /// The windows whose published grab changed, at most two (the window
     /// that took the lock and the one that lost it).
@@ -56,25 +62,19 @@ impl<W> LockStep<W> {
 impl<W: Copy + Eq> LockLedger<W> {
     /// Whether `window`'s controller prefers the lock.
     pub(crate) fn prefers(&self, window: W) -> bool {
-        self.asked.contains(&window)
+        self.asks.iter().any(|ask| ask.window == window)
     }
 
     /// Whether the system holds `window`'s scene's pointer locked, as it last
     /// said: what the window's snapshot publishes.
     pub(crate) fn holds(&self, window: W) -> bool {
-        self.held_by == Some(window)
+        self.asks.iter().any(|ask| ask.window == window && ask.held)
     }
 
     /// The window the locked mouse's motion goes to; `None` while the system
     /// holds no lock, when no motion goes anywhere.
     pub(crate) fn holder(&self) -> Option<W> {
-        self.held_by
-    }
-
-    /// Whether the ledger keeps its invariant: no window holds the lock, or
-    /// the one that holds it asks for it.
-    pub(crate) fn held_is_asked(&self) -> bool {
-        self.held_by.is_none_or(|held| self.prefers(held))
+        self.asks.iter().find(|ask| ask.held).map(|ask| ask.window)
     }
 
     /// `window` asks for the lock: its controller prefers it from now on.
@@ -86,7 +86,10 @@ impl<W: Copy + Eq> LockLedger<W> {
         let preference = if self.prefers(window) {
             None
         } else {
-            self.asked.push(window);
+            self.asks.push(Ask {
+                window,
+                held: false,
+            });
             Some(window)
         };
         let granted = if locked_now {
@@ -101,88 +104,47 @@ impl<W: Copy + Eq> LockLedger<W> {
     }
 
     /// `window` lets go: the application asked, it lost the focus or it left
-    /// its scene. It stops preferring the lock, and a lock it held is no
-    /// longer its own, whatever the system says later of a scene it left:
-    /// a grant to a window that no longer asks is not taken.
+    /// its scene. It asks no more, and a lock it held is no longer its own,
+    /// whatever the system says later of a scene it left.
     pub(crate) fn withdraw(&mut self, window: W) -> LockStep<W> {
-        let preference = self.forget_preference(window).then_some(window);
-        let released = (self.held_by == Some(window)).then(|| {
-            self.held_by = None;
-            window
-        });
-        debug_assert!(self.held_is_asked(), "BUG: the holder asks for the lock");
+        let Some(index) = self.asks.iter().position(|ask| ask.window == window) else {
+            return LockStep::NOTHING;
+        };
+        let ask = self.asks.remove(index);
         LockStep {
-            preference,
-            published: [released, None],
+            preference: Some(window),
+            published: [ask.held.then_some(window), None],
         }
     }
 
-    /// The system said whether it holds `window`'s scene's pointer locked.
-    /// A lock it grants moves the motion to `window`, from the window that
-    /// held it before. A lock it lets go of is `window`'s to lose alone, and
-    /// `window` stops preferring it; another window's lock stands. A grant
-    /// to a window that no longer asks (it let go meanwhile) is not taken.
+    /// The system said whether it holds `window`'s scene's pointer locked; it
+    /// changes the hold and never the ask. A lock it grants a window that
+    /// asks moves the motion there, from the window that held it before; a
+    /// grant to a window that does not ask (it let go meanwhile) is not
+    /// taken. A lock it lets go of is `window`'s to lose alone, and the
+    /// window, still asking, is asked about again.
     pub(crate) fn reported(&mut self, window: W, locked: bool) -> LockStep<W> {
-        if locked {
-            if self.held_by == Some(window) || !self.prefers(window) {
-                return LockStep::NOTHING;
-            }
-            let previous = self.held_by.replace(window);
-            debug_assert!(self.held_is_asked(), "BUG: the holder asks for the lock");
-            return LockStep {
-                preference: None,
-                published: [Some(window), previous],
-            };
-        }
-        if self.held_by != Some(window) {
+        let Some(index) = self.asks.iter().position(|ask| ask.window == window) else {
+            return LockStep::NOTHING;
+        };
+        if self.asks[index].held == locked {
             return LockStep::NOTHING;
         }
-        self.held_by = None;
-        LockStep {
-            preference: self.forget_preference(window).then_some(window),
-            published: [Some(window), None],
+        if !locked {
+            self.asks[index].held = false;
+            return LockStep {
+                preference: Some(window),
+                published: [Some(window), None],
+            };
         }
-    }
-
-    /// Take `window` out of the windows that prefer the lock; whether it was
-    /// one.
-    fn forget_preference(&mut self, window: W) -> bool {
-        let before = self.asked.len();
-        self.asked.retain(|asked| *asked != window);
-        self.asked.len() != before
-    }
-}
-
-/// What happens to a window that can end its hold of the pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LockPassage {
-    /// Its scene became active (`sceneDidBecomeActive:`).
-    Activated,
-    /// Its scene came to the foreground.
-    Foregrounded,
-    /// Its scene became inactive: an alert, Control Center, the app switcher.
-    Deactivated,
-    /// Its scene went to the background.
-    Backgrounded,
-    /// Its scene was detached.
-    SceneDetached,
-    /// The window left its scene: a disconnect, a re-attach or its close.
-    LeftItsScene,
-    /// The window is dropped.
-    Dropped,
-}
-
-/// Whether `passage` lets go of the lock: everything that takes the focus or
-/// the scene from the window does, since a window holds the pointer only
-/// while it has the focus (ADR-0354 §2).
-pub(crate) const fn lets_go(passage: LockPassage) -> bool {
-    match passage {
-        LockPassage::Activated | LockPassage::Foregrounded => false,
-        LockPassage::Deactivated
-        | LockPassage::Backgrounded
-        | LockPassage::SceneDetached
-        | LockPassage::LeftItsScene
-        | LockPassage::Dropped => true,
+        let previous = self.holder();
+        for ask in &mut self.asks {
+            ask.held = ask.window == window;
+        }
+        LockStep {
+            preference: None,
+            published: [Some(window), previous],
+        }
     }
 }
 
@@ -202,7 +164,9 @@ pub(crate) fn routable_delta(on_main_thread: bool, dx: f32, dy: f32) -> Option<(
 }
 
 /// The mice FLUI put its motion handler on, each with the handler it found
-/// there (`H`), which the application's code may have set.
+/// there (`H`), which the application's code may have set. A copy of the
+/// application's handler is never destroyed here: its last release runs the
+/// application's code, which the owner runs after it published, contained.
 #[derive(Debug)]
 pub(crate) struct HandlerSwaps<M, H> {
     swaps: Vec<(M, Option<H>)>,
@@ -214,28 +178,46 @@ impl<M, H> Default for HandlerSwaps<M, H> {
     }
 }
 
+/// What a release of the handlers does: the handler to put back on each
+/// mouse that still carries FLUI's, and every copy, put back or not, for the
+/// owner to destroy once it is done.
+#[derive(Debug)]
+pub(crate) struct Restoration<M, H> {
+    /// Each mouse that still carries FLUI's handler and the one FLUI found.
+    pub(crate) put_back: Vec<(M, Option<H>)>,
+    /// The mice whose handler was replaced since, with the copy FLUI kept.
+    pub(crate) left: Vec<(M, Option<H>)>,
+}
+
 impl<M: PartialEq, H> HandlerSwaps<M, H> {
     /// FLUI put its handler on `mouse`, which had `previous`. A mouse FLUI
-    /// already holds keeps the handler it found first.
-    pub(crate) fn installed(&mut self, mouse: M, previous: Option<H>) {
-        if !self.swaps.iter().any(|(known, _)| *known == mouse) {
-            self.swaps.push((mouse, previous));
+    /// already holds keeps the handler it found first, and `previous` is
+    /// handed back.
+    #[must_use = "a refused copy is destroyed by the owner, after it is done"]
+    pub(crate) fn installed(&mut self, mouse: M, previous: Option<H>) -> Option<Option<H>> {
+        if self.swaps.iter().any(|(known, _)| *known == mouse) {
+            return Some(previous);
         }
+        self.swaps.push((mouse, previous));
+        None
     }
 
-    /// `mouse` went: nothing is put back on it.
-    pub(crate) fn forget(&mut self, mouse: &M) {
-        self.swaps.retain(|(known, _)| known != mouse);
+    /// `mouse` went: nothing is put back on it, and its copy is handed back.
+    #[must_use = "the copy is destroyed by the owner, after it is done"]
+    pub(crate) fn forget(&mut self, mouse: &M) -> Option<(M, Option<H>)> {
+        let index = self.swaps.iter().position(|(known, _)| known == mouse)?;
+        Some(self.swaps.remove(index))
     }
 
-    /// The handler to put back on each mouse that still carries FLUI's
-    /// (`still_ours`): the one FLUI found, or none. A mouse whose handler
-    /// was replaced since keeps the new one.
-    pub(crate) fn restore(self, still_ours: impl Fn(&M) -> bool) -> Vec<(M, Option<H>)> {
-        self.swaps
+    /// Split the mice between those that still carry FLUI's handler
+    /// (`still_ours`), which get back the one FLUI found, and those whose
+    /// handler was replaced since, which keep it.
+    pub(crate) fn restore(self, still_ours: impl Fn(&M) -> bool) -> Restoration<M, H> {
+        let (put_back, left) = self
+            .swaps
             .into_iter()
-            .filter(|(mouse, _)| still_ours(mouse))
-            .collect()
+            .partition(|(mouse, _)| still_ours(mouse));
+        Restoration { put_back, left }
     }
 }
 
@@ -249,9 +231,9 @@ pub(crate) fn fills_its_screen(own: (f64, f64), screen: (f64, f64)) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HandlerSwaps, LockLedger, LockPassage, LockStep, fills_its_screen, lets_go, routable_delta,
-    };
+    use std::rc::Rc;
+
+    use super::{HandlerSwaps, LockLedger, LockStep, fills_its_screen, routable_delta};
 
     const A: u8 = 1;
     const B: u8 = 2;
@@ -260,9 +242,9 @@ mod tests {
         step.published.into_iter().flatten().collect()
     }
 
-    /// A lock is the system's answer to a request: asking prefers it and
-    /// holds nothing, the grant holds it for the window that asked, and the
-    /// motion goes there alone.
+    /// A lock is the system's answer to an ask: asking prefers it and holds
+    /// nothing, the grant holds it for the window that asked, and the motion
+    /// goes there alone.
     fn a_lock_is_held_from_the_systems_grant() {
         let mut ledger = LockLedger::default();
         assert_eq!(ledger.ask(A, false).preference, Some(A));
@@ -272,52 +254,54 @@ mod tests {
             "asking twice changes nothing"
         );
         assert!(!ledger.holds(A) && ledger.holder().is_none());
-
         assert_eq!(published(ledger.reported(A, true)), [A]);
-        assert!(ledger.holds(A) && ledger.held_is_asked());
         assert_eq!(ledger.holder(), Some(A));
     }
 
-    /// The system letting a lock go ends the request too: the controller
-    /// stops preferring it, so the scene coming back to full screen or the
-    /// app becoming active again takes no pointer.
-    fn a_lock_the_system_lets_go_is_not_asked_for_again() {
+    /// The system letting a lock go changes the hold, not the ask: the
+    /// window still asks and UIKit is asked about it again.
+    fn a_lock_the_system_lets_go_is_asked_for_again() {
         let mut ledger = LockLedger::default();
         ledger.ask(A, false);
         ledger.reported(A, true);
         let step = ledger.reported(A, false);
         assert_eq!((step.preference, published(step)), (Some(A), vec![A]));
-        assert!(!ledger.prefers(A) && !ledger.holds(A));
-        assert_eq!(
-            ledger.reported(A, true),
-            LockStep::NOTHING,
-            "an unasked grant is not taken"
-        );
-        assert!(ledger.held_is_asked());
+        assert!(ledger.prefers(A) && !ledger.holds(A));
+        assert_eq!(published(ledger.reported(A, true)), [A], "taken again");
     }
 
-    /// Leaving the scene, losing the focus or the application letting go
-    /// drops the lock at once: the snapshot and the motion stop, whatever the
-    /// system says later of a scene the window left.
+    /// An ask that overlaps an unlock in flight is kept: the grant read as
+    /// the window asks again, then the system's late unlock, leave the window
+    /// asking, and the next grant holds it.
+    fn an_ask_over_an_unlock_in_flight_is_kept() {
+        let mut ledger = LockLedger::default();
+        ledger.ask(A, false);
+        ledger.reported(A, true);
+        ledger.withdraw(A);
+        assert_eq!(published(ledger.ask(A, true)), [A]);
+        let unlocked = ledger.reported(A, false);
+        assert_eq!(unlocked.preference, Some(A), "UIKit asked again");
+        assert!(ledger.prefers(A), "the ask survives the system's unlock");
+        assert_eq!(published(ledger.reported(A, true)), [A]);
+    }
+
+    /// Letting go ends the ask and the hold at once: the snapshot and the
+    /// motion stop, and a grant for a window that no longer asks is not
+    /// taken.
     fn a_window_that_lets_go_holds_nothing() {
         let mut ledger = LockLedger::default();
         ledger.ask(A, false);
         ledger.reported(A, true);
         let step = ledger.withdraw(A);
         assert_eq!((step.preference, published(step)), (Some(A), vec![A]));
-        assert!(ledger.holder().is_none() && ledger.held_is_asked());
+        assert!(ledger.holder().is_none() && !ledger.prefers(A));
         assert_eq!(ledger.reported(A, true), LockStep::NOTHING);
-        assert_eq!(
-            ledger.withdraw(A),
-            LockStep::NOTHING,
-            "letting go twice changes nothing"
-        );
+        assert_eq!(ledger.withdraw(A), LockStep::NOTHING, "letting go twice");
     }
 
     /// Letting go and asking again before UIKit reads the preference in
     /// between leaves the system's lock in place with no notification: the
-    /// scene's lock as the window asks holds it again at once, published and
-    /// with the motion routed.
+    /// scene's lock as the window asks holds it again at once.
     fn asking_again_finds_a_lock_the_system_never_let_go() {
         let mut ledger = LockLedger::default();
         ledger.ask(A, false);
@@ -326,12 +310,11 @@ mod tests {
         let step = ledger.ask(A, true);
         assert_eq!((step.preference, published(step)), (Some(A), vec![A]));
         assert_eq!(ledger.holder(), Some(A));
-        assert!(ledger.held_is_asked());
     }
 
     /// Two scenes: the system locks one at a time, a grant to the second
     /// moves the motion and unpublishes the first, and the first's later
-    /// unlock leaves the second's lock standing.
+    /// unlock or release leaves the second's lock standing.
     fn one_scenes_unlock_leaves_the_other_scenes_lock() {
         let mut ledger = LockLedger::default();
         ledger.ask(A, false);
@@ -339,29 +322,9 @@ mod tests {
         ledger.reported(A, true);
         assert_eq!(published(ledger.reported(B, true)), [B, A]);
         assert_eq!(ledger.holder(), Some(B));
-
         assert_eq!(ledger.reported(A, false), LockStep::NOTHING);
-        assert!(ledger.holds(B) && ledger.prefers(A));
         assert_eq!(ledger.withdraw(A).published, [None, None]);
         assert!(ledger.holds(B), "A letting go never clears B's lock");
-        assert!(ledger.held_is_asked());
-    }
-
-    /// Every passage that takes the focus or the scene from a window lets go
-    /// of its lock; becoming active or coming to the foreground does not.
-    fn every_passage_out_of_the_focus_lets_go() {
-        let rows = [
-            (LockPassage::Activated, false),
-            (LockPassage::Foregrounded, false),
-            (LockPassage::Deactivated, true),
-            (LockPassage::Backgrounded, true),
-            (LockPassage::SceneDetached, true),
-            (LockPassage::LeftItsScene, true),
-            (LockPassage::Dropped, true),
-        ];
-        for (passage, expected) in rows {
-            assert_eq!(lets_go(passage), expected, "{passage:?}");
-        }
     }
 
     /// GameController's deltas become FLUI's motion: down positive, nothing
@@ -374,17 +337,27 @@ mod tests {
     }
 
     /// FLUI puts back the handler it found on each mouse that still carries
-    /// its own, and leaves a handler set since and a mouse that went alone.
-    fn the_handler_flui_replaced_is_put_back() {
+    /// its own, leaves a handler set since alone, and destroys no copy of the
+    /// application's handler itself: every one comes back to the owner.
+    fn the_handler_flui_replaced_is_put_back_and_no_copy_is_destroyed() {
+        let app = Rc::new(());
         let mut swaps = HandlerSwaps::default();
-        swaps.installed("trackpad", Some("the app's"));
-        swaps.installed("mouse", None);
-        swaps.installed("trackpad", None);
-        swaps.installed("gone", Some("the app's"));
-        swaps.forget(&"gone");
-        let mut restored = swaps.restore(|mouse| *mouse != "mouse");
-        restored.sort_unstable();
-        assert_eq!(restored, [("trackpad", Some("the app's"))]);
+        assert!(swaps.installed("trackpad", Some(Rc::clone(&app))).is_none());
+        assert!(swaps.installed("mouse", Some(Rc::clone(&app))).is_none());
+        let refused = swaps.installed("trackpad", Some(Rc::clone(&app)));
+        let gone = swaps.forget(&"mouse");
+        assert!(swaps.installed("pen", Some(Rc::clone(&app))).is_none());
+        let restoration = swaps.restore(|mouse| *mouse == "trackpad");
+        assert_eq!(Rc::strong_count(&app), 5, "every copy is handed back");
+        let put_back: Vec<_> = restoration
+            .put_back
+            .iter()
+            .map(|(mouse, _)| *mouse)
+            .collect();
+        let left: Vec<_> = restoration.left.iter().map(|(mouse, _)| *mouse).collect();
+        assert_eq!((put_back, left), (vec!["trackpad"], vec!["pen"]));
+        drop((refused, gone, restoration));
+        assert_eq!(Rc::strong_count(&app), 1);
     }
 
     /// Only a scene that fills its screen is a scene UIKit locks: Split View,
@@ -410,8 +383,12 @@ mod tests {
                     a_lock_is_held_from_the_systems_grant,
                 ),
                 (
-                    "a_lock_the_system_lets_go_is_not_asked_for_again",
-                    a_lock_the_system_lets_go_is_not_asked_for_again,
+                    "a_lock_the_system_lets_go_is_asked_for_again",
+                    a_lock_the_system_lets_go_is_asked_for_again,
+                ),
+                (
+                    "an_ask_over_an_unlock_in_flight_is_kept",
+                    an_ask_over_an_unlock_in_flight_is_kept,
                 ),
                 (
                     "a_window_that_lets_go_holds_nothing",
@@ -426,16 +403,12 @@ mod tests {
                     one_scenes_unlock_leaves_the_other_scenes_lock,
                 ),
                 (
-                    "every_passage_out_of_the_focus_lets_go",
-                    every_passage_out_of_the_focus_lets_go,
-                ),
-                (
                     "the_locked_mouses_deltas_point_down_and_stay_on_the_main_thread",
                     the_locked_mouses_deltas_point_down_and_stay_on_the_main_thread,
                 ),
                 (
-                    "the_handler_flui_replaced_is_put_back",
-                    the_handler_flui_replaced_is_put_back,
+                    "the_handler_flui_replaced_is_put_back_and_no_copy_is_destroyed",
+                    the_handler_flui_replaced_is_put_back_and_no_copy_is_destroyed,
                 ),
                 (
                     "only_a_full_screen_scene_is_locked",

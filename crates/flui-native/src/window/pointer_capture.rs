@@ -1,13 +1,23 @@
-//! An Activity window's pointer capture, the Android lock (ADR-0354 §2): the
-//! pure rules `AndroidWindow` and the loop follow, apart from the JNI calls,
-//! so every host's tests run them.
+//! An Activity's pointer capture, the Android lock (ADR-0354 §2): the one
+//! owner that reconciles what FLUI's windows want with what the system holds,
+//! pure, so every host's tests run it.
 //!
-//! The window asks for the mouse only while it has the focus and `FluiView`
-//! is in the window, and publishes the system's answer
-//! (`onPointerCaptureChange`) as its grab: the snapshot says what the system
-//! holds, never what was asked. The view serves one window at a time, but an
-//! answer can come after the window that asked was replaced: it is matched to
-//! the window that asked ([`route_answer`]), never to "the current one".
+//! Capture is the Activity window's, one bit the system keeps
+//! (`ViewRootImpl.mPointerCapture`), while FLUI's windows replace one another
+//! over the one `FluiView`. The owner holds what the windows want (`wanted`,
+//! set by their lock and release commands) and what the system holds
+//! (`held`, changed only by the system's answers and the focus leaving), and
+//! after every command and answer makes at most the one call
+//! (`requestPointerCapture` or `releasePointerCapture`) that moves `held`
+//! toward `wanted`, never a second while one is unanswered: from API 26 to 30
+//! `ViewRootImpl.requestPointerCapture` returns at once when its last answer
+//! already says the asked state, so a call made while another is unanswered
+//! is dropped without an answer (`aosp-mirror/platform_frameworks_base`,
+//! `android11-release` @ `8551ec36`, `core/java/android/view/ViewRootImpl.java`
+//! lines 4551–4556; the focus leaving answers `false` at once, lines
+//! 3283–3285). An answer is attributed to the window the owner asked for,
+//! never to "the current one", and the windows' published grabs come from
+//! `held` alone.
 
 #![forbid(unsafe_code)]
 
@@ -18,7 +28,7 @@ use flui_platform::CursorGrab;
 /// What a lock command does on an Activity window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CaptureRequest {
-    /// Ask the system for the mouse (`View.requestPointerCapture`).
+    /// Ask the owner for the mouse.
     Ask,
     /// Ask nothing: a window without the focus holds no grab, as its
     /// snapshot says.
@@ -38,36 +48,166 @@ pub(crate) const fn capture_request(focused: bool, view_ready: bool) -> CaptureR
     }
 }
 
-/// Where the system's answer goes.
+/// The call the owner makes of the view, for the window `W` it asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CaptureAnswer {
-    /// To the window that asked, which is the loop's window.
-    Deliver,
-    /// Nowhere, and the capture is given back: the system holds the mouse for
-    /// a window that is gone (or for no window that asked).
+pub(crate) enum CaptureCall<W> {
+    /// `View.requestPointerCapture`, for `W`.
+    Request(W),
+    /// `View.releasePointerCapture`.
     Release,
-    /// Nowhere: the system let go of a mouse no current window holds.
-    Ignore,
 }
 
-/// Where an answer (`held`) goes, given the window that last asked for the
-/// mouse when the view made the request (`asker`, recorded on the thread the
-/// answers come on, so an answer that comes after a newer request is the
-/// newer request's) and the loop's window now (`current`).
-pub(crate) fn route_answer<W: Eq>(
-    asker: Option<W>,
-    current: Option<W>,
-    held: bool,
-) -> CaptureAnswer {
-    match (asker, current) {
-        (Some(asker), Some(current)) if asker == current => CaptureAnswer::Deliver,
-        _ if held => CaptureAnswer::Release,
-        _ => CaptureAnswer::Ignore,
+/// What the system holds, as its last answer said, and for whom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held<W> {
+    /// No capture.
+    Free,
+    /// Capture granted to the request the owner made for `W`.
+    For(W),
+    /// Capture no request of the owner's asked for: it is released.
+    Unattributed,
+}
+
+impl<W: Copy> Held<W> {
+    fn holder(self) -> Option<W> {
+        match self {
+            Self::For(window) => Some(window),
+            Self::Free | Self::Unattributed => None,
+        }
     }
 }
 
-/// The system's last word on whether the window has the mouse, and what the
-/// window publishes on each exit that changes it.
+/// What one command or answer changed: the call to make now, and the windows
+/// whose published grab changed, with what each holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CaptureStep<W> {
+    /// The one call that moves what is held toward what is wanted.
+    pub(crate) call: Option<CaptureCall<W>>,
+    /// At most the window that lost the capture and the one that took it.
+    pub(crate) changed: [Option<(W, bool)>; 2],
+}
+
+/// The Activity's pointer capture (see the module doc).
+#[derive(Debug, Clone)]
+pub(crate) struct CaptureOwner<W> {
+    wanted: Option<W>,
+    held: Held<W>,
+    /// The call made and not yet answered.
+    unanswered: Option<CaptureCall<W>>,
+}
+
+impl<W> Default for CaptureOwner<W> {
+    fn default() -> Self {
+        Self {
+            wanted: None,
+            held: Held::Free,
+            unanswered: None,
+        }
+    }
+}
+
+impl<W: Copy + Eq> CaptureOwner<W> {
+    /// The window the system holds the capture for: the one whose snapshot
+    /// publishes the lock (the steps report each change of it).
+    #[cfg(test)]
+    pub(crate) fn holder(&self) -> Option<W> {
+        self.held.holder()
+    }
+
+    /// `window` asks for the mouse.
+    pub(crate) fn request(&mut self, window: W) -> CaptureStep<W> {
+        self.wanted = Some(window);
+        self.settle(self.held)
+    }
+
+    /// `window` lets go (its release command, or its retirement); a window
+    /// that does not want the mouse changes nothing.
+    pub(crate) fn release(&mut self, window: W) -> CaptureStep<W> {
+        if self.wanted == Some(window) {
+            self.wanted = None;
+        }
+        self.settle(self.held)
+    }
+
+    /// The system answered (`onPointerCaptureChange`): the capture is held or
+    /// not. A grant is the window the owner requested for while it still
+    /// wants the mouse, and held for no window (published for none, then
+    /// released) once it let go meanwhile; a refusal of a request, or a
+    /// capture the system ends on its own, ends what the windows wanted too,
+    /// so nothing takes the mouse again unasked.
+    pub(crate) fn answered(&mut self, has_capture: bool) -> CaptureStep<W> {
+        let before = self.held;
+        let unanswered = self.unanswered.take();
+        self.held = match (has_capture, unanswered) {
+            (true, Some(CaptureCall::Request(window))) if self.wanted == Some(window) => {
+                Held::For(window)
+            }
+            (true, _) => match before {
+                Held::For(window) => Held::For(window),
+                Held::Free | Held::Unattributed => Held::Unattributed,
+            },
+            (false, Some(CaptureCall::Release)) => Held::Free,
+            (false, _) => {
+                self.wanted = None;
+                Held::Free
+            }
+        };
+        self.settle(before)
+    }
+
+    /// The focus left the Activity window: the system ended the capture (and
+    /// drops an unanswered request without an answer), and no window wants
+    /// the mouse until it asks again.
+    pub(crate) fn focus_lost(&mut self) -> CaptureStep<W> {
+        let before = self.held;
+        self.wanted = None;
+        self.held = Held::Free;
+        self.unanswered = None;
+        self.settle(before)
+    }
+
+    /// `call` never reached the system (the view is gone, or the call
+    /// threw): it changed nothing, and is not made again until the next
+    /// command or answer.
+    pub(crate) fn call_failed(&mut self, call: CaptureCall<W>) -> CaptureStep<W> {
+        if self.unanswered == Some(call) {
+            self.unanswered = None;
+        }
+        CaptureStep {
+            call: None,
+            changed: [None, None],
+        }
+    }
+
+    /// The call that moves `held` toward `wanted`, unless one is unanswered,
+    /// and the publications from `before` to now.
+    fn settle(&mut self, before: Held<W>) -> CaptureStep<W> {
+        let call = if self.unanswered.is_some() {
+            None
+        } else {
+            match (self.wanted, self.held) {
+                (Some(window), Held::Free) => Some(CaptureCall::Request(window)),
+                (Some(window), Held::For(holder)) if holder == window => None,
+                (None, Held::Free) => None,
+                _ => Some(CaptureCall::Release),
+            }
+        };
+        self.unanswered = call;
+        let (was, now) = (before.holder(), self.held.holder());
+        let changed = if was == now {
+            [None, None]
+        } else {
+            [
+                was.map(|window| (window, false)),
+                now.map(|window| (window, true)),
+            ]
+        };
+        CaptureStep { call, changed }
+    }
+}
+
+/// A window's copy of whether the owner's `held` is its own, which its
+/// snapshot reads on the owner thread.
 ///
 /// Written and read on the owner thread alone. It is atomic only because the
 /// loop keeps its window as an `ActivityWindow`, which is `Send + Sync`: the
@@ -80,27 +220,11 @@ pub(crate) struct CaptureMirror {
 }
 
 impl CaptureMirror {
-    /// Record the system's answer, or a release that never reached the view
-    /// (the view is not in the window: no capture is held); whether the
-    /// published grab changes, so the window publishes.
+    /// Record whether the window holds the capture; whether its published
+    /// grab changes, so the window publishes.
     #[must_use = "a changed grab is published"]
     pub(crate) fn report(&self, held: bool) -> bool {
         self.held.swap(held, Ordering::AcqRel) != held
-    }
-
-    /// Whether the release command's exit publishes: it does, whatever is
-    /// held meanwhile, as the release is the system's to answer (ADR-0354
-    /// §2: every exit of a grab command publishes).
-    #[must_use = "the release command's exit publishes"]
-    pub(crate) const fn release_publishes() -> bool {
-        true
-    }
-
-    /// The window is retired: it gives the mouse back, and holds nothing from
-    /// now on; whether the published grab changes, so it publishes.
-    #[must_use = "a changed grab is published"]
-    pub(crate) fn retire(&self) -> bool {
-        self.report(false)
     }
 
     /// The grab the window's snapshot publishes (kept only while it has the
@@ -116,52 +240,130 @@ impl CaptureMirror {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::CursorGrab;
+    use super::{CaptureCall, CaptureOwner, CaptureRequest, capture_request};
 
-    use super::{CaptureAnswer, CaptureMirror, CaptureRequest, capture_request, route_answer};
+    const W1: u8 = 1;
+    const W2: u8 = 2;
 
-    /// The system's answer is the published grab: a capture it gives is
-    /// `Locked` and changes the snapshot once, a capture it takes back is
-    /// `None`.
-    fn the_systems_capture_is_the_published_grab() {
-        let mirror = CaptureMirror::default();
-        assert_eq!(mirror.grab(), CursorGrab::None);
-        assert!(mirror.report(true), "a capture given changes the grab");
-        assert_eq!(mirror.grab(), CursorGrab::Locked);
-        assert!(
-            !mirror.report(true),
-            "the same answer again changes nothing"
+    /// A grant holds the capture for the window asked for, publishing it.
+    fn a_grant_holds_the_capture_for_the_window_asked_for() {
+        let mut owner = CaptureOwner::default();
+        assert_eq!(owner.request(W1).call, Some(CaptureCall::Request(W1)));
+        assert_eq!(owner.holder(), None, "nothing held before the answer");
+        let granted = owner.answered(true);
+        assert_eq!(
+            (granted.call, granted.changed),
+            (None, [None, Some((W1, true))])
         );
-        assert!(
-            mirror.report(false),
-            "a capture taken back changes the grab"
-        );
-        assert_eq!(mirror.grab(), CursorGrab::None);
+        assert_eq!(owner.holder(), Some(W1));
     }
 
-    /// Every exit that changes the grab publishes: the release command's,
-    /// a release the view never got (reported as no capture), and the
-    /// window's retirement.
-    fn every_exit_that_changes_the_grab_publishes() {
-        let mirror = CaptureMirror::default();
-        assert!(mirror.report(true));
-        assert!(
-            CaptureMirror::release_publishes(),
-            "the release command publishes"
-        );
+    /// A release for a replaced window cannot cancel its successor's request:
+    /// the successor's request waits for the release's answer, then is made.
+    fn a_replaced_windows_release_does_not_cancel_its_successors_request() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        owner.answered(true);
+        let released = owner.release(W1);
+        assert_eq!(released.call, Some(CaptureCall::Release));
+        assert_eq!(owner.request(W2).call, None, "the release is unanswered");
+        let freed = owner.answered(false);
+        assert_eq!(freed.call, Some(CaptureCall::Request(W2)));
+        assert_eq!(freed.changed, [Some((W1, false)), None]);
+        assert_eq!(owner.answered(true).changed, [None, Some((W2, true))]);
+        assert_eq!(owner.holder(), Some(W2));
+    }
 
-        assert!(
-            mirror.report(false),
-            "an undelivered release publishes none held"
-        );
-        assert_eq!(mirror.grab(), CursorGrab::None);
+    /// A release asked while the request is unanswered is not dropped
+    /// (API 26–30 ignores it then): the grant is released once it comes, and
+    /// nothing is ever published as held.
+    fn a_release_before_the_grant_ends_free() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        assert_eq!(owner.release(W1).call, None, "the request is unanswered");
+        let granted = owner.answered(true);
+        assert_eq!(granted.call, Some(CaptureCall::Release));
+        assert_eq!(granted.changed, [None, None], "held for no window");
+        assert_eq!(owner.answered(false).changed, [None, None]);
+        assert_eq!(owner.holder(), None);
+    }
 
-        assert!(mirror.report(true));
-        assert!(mirror.retire(), "retirement publishes the grab let go");
-        assert_eq!(mirror.grab(), CursorGrab::None);
-        assert!(
-            !mirror.retire(),
-            "a window that holds nothing changes nothing"
+    /// A window that asks while the previous holder's release is unanswered
+    /// gets the mouse once the release is answered.
+    fn an_ask_during_a_release_gets_the_mouse_after_it() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        owner.answered(true);
+        owner.release(W1);
+        owner.request(W2);
+        assert_eq!(owner.answered(false).call, Some(CaptureCall::Request(W2)));
+        owner.answered(true);
+        assert_eq!(owner.holder(), Some(W2));
+    }
+
+    /// A grant that comes after the window that asked was replaced is held
+    /// for no window: its successor is not published as holding a capture it
+    /// did not ask for, and asks for its own once that one is released.
+    fn a_late_grant_for_a_replaced_window_goes_to_no_window() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        owner.release(W1);
+        owner.request(W2);
+        let late = owner.answered(true);
+        assert_eq!(
+            (late.call, late.changed),
+            (Some(CaptureCall::Release), [None, None])
+        );
+        assert_eq!(owner.holder(), None);
+        assert_eq!(owner.answered(false).call, Some(CaptureCall::Request(W2)));
+        assert_eq!(owner.answered(true).changed, [None, Some((W2, true))]);
+    }
+
+    /// A call that never reached the system changes nothing: a held capture
+    /// stays published as held, and nothing is made again by itself.
+    fn a_failed_call_changes_nothing() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        owner.answered(true);
+        let release = owner.release(W1).call.expect("a release is made");
+        let failed = owner.call_failed(release);
+        assert_eq!((failed.call, failed.changed), (None, [None, None]));
+        assert_eq!(owner.holder(), Some(W1), "the system still holds it");
+        assert_eq!(
+            owner.request(W1).call,
+            None,
+            "wanted and held agree again, nothing to call"
+        );
+    }
+
+    /// The focus leaving ends the capture and what was wanted: an unanswered
+    /// request is forgotten, and a late grant is released.
+    fn the_focus_leaving_ends_the_capture() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        owner.answered(true);
+        assert_eq!(owner.focus_lost().changed, [Some((W1, false)), None]);
+        owner.request(W2);
+        owner.focus_lost();
+        let late = owner.answered(true);
+        assert_eq!(
+            late.call,
+            Some(CaptureCall::Release),
+            "a late grant is released"
+        );
+        assert_eq!(late.changed, [None, None], "and published for no window");
+    }
+
+    /// A capture the system ends on its own (another window took the focus
+    /// at once) is not asked for again.
+    fn a_capture_the_system_ends_is_not_asked_for_again() {
+        let mut owner = CaptureOwner::default();
+        owner.request(W1);
+        owner.answered(true);
+        let ended = owner.answered(false);
+        assert_eq!(
+            (ended.call, ended.changed),
+            (None, [Some((W1, false)), None])
         );
     }
 
@@ -174,53 +376,46 @@ mod tests {
         assert_eq!(capture_request(true, false), CaptureRequest::Refuse);
     }
 
-    /// An answer goes to the window that asked: a late grant for a window
-    /// replaced since gives the mouse back instead of locking its successor,
-    /// and a late release for it changes nothing.
-    fn an_answer_goes_to_the_window_that_asked() {
-        const W1: u8 = 1;
-        const W2: u8 = 2;
-        assert_eq!(
-            route_answer(Some(W2), Some(W2), true),
-            CaptureAnswer::Deliver
-        );
-        assert_eq!(
-            route_answer(Some(W2), Some(W2), false),
-            CaptureAnswer::Deliver
-        );
-        assert_eq!(
-            route_answer(Some(W1), Some(W2), true),
-            CaptureAnswer::Release
-        );
-        assert_eq!(
-            route_answer(Some(W1), Some(W2), false),
-            CaptureAnswer::Ignore
-        );
-        assert_eq!(route_answer(Some(W1), None, true), CaptureAnswer::Release);
-        assert_eq!(route_answer(None, Some(W2), true), CaptureAnswer::Release);
-        assert_eq!(route_answer::<u8>(None, None, false), CaptureAnswer::Ignore);
-    }
-
     #[test]
     fn android_pointer_capture() {
         crate::table_test::run_table(
             "android_pointer_capture",
             &[
                 (
-                    "the_systems_capture_is_the_published_grab",
-                    the_systems_capture_is_the_published_grab,
+                    "a_grant_holds_the_capture_for_the_window_asked_for",
+                    a_grant_holds_the_capture_for_the_window_asked_for,
                 ),
                 (
-                    "every_exit_that_changes_the_grab_publishes",
-                    every_exit_that_changes_the_grab_publishes,
+                    "a_replaced_windows_release_does_not_cancel_its_successors_request",
+                    a_replaced_windows_release_does_not_cancel_its_successors_request,
+                ),
+                (
+                    "a_release_before_the_grant_ends_free",
+                    a_release_before_the_grant_ends_free,
+                ),
+                (
+                    "an_ask_during_a_release_gets_the_mouse_after_it",
+                    an_ask_during_a_release_gets_the_mouse_after_it,
+                ),
+                (
+                    "a_late_grant_for_a_replaced_window_goes_to_no_window",
+                    a_late_grant_for_a_replaced_window_goes_to_no_window,
+                ),
+                (
+                    "a_failed_call_changes_nothing",
+                    a_failed_call_changes_nothing,
+                ),
+                (
+                    "the_focus_leaving_ends_the_capture",
+                    the_focus_leaving_ends_the_capture,
+                ),
+                (
+                    "a_capture_the_system_ends_is_not_asked_for_again",
+                    a_capture_the_system_ends_is_not_asked_for_again,
                 ),
                 (
                     "only_a_focused_window_with_its_view_asks_for_the_mouse",
                     only_a_focused_window_with_its_view_asks_for_the_mouse,
-                ),
-                (
-                    "an_answer_goes_to_the_window_that_asked",
-                    an_answer_goes_to_the_window_that_asked,
                 ),
             ],
         );

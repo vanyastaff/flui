@@ -65,7 +65,6 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::window_delivery::{Retirement, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
-use crate::window::apple::pointer_lock::{LockPassage, lets_go};
 use crate::window::capabilities::{pointer_absence, pointer_lock_absence, scene_capabilities};
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::keyboard;
@@ -1877,9 +1876,7 @@ impl IOSWindow {
         // A window out of its scene holds no lock: the owner lets it go, and
         // takes the mouse's motion back from it, whatever the system says
         // later of the scene it left.
-        if lets_go(LockPassage::LeftItsScene) {
-            self.locks.withdraw(self.id, marker);
-        }
+        self.locks.withdraw(self.id, marker);
     }
 
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
@@ -1927,14 +1924,7 @@ impl IOSWindow {
         // lets it go as the focus goes (the controller stops preferring it,
         // so the system does not take it again when the focus comes back,
         // and the mouse's motion stops), before the revision below.
-        let passage = match observation {
-            Active => LockPassage::Activated,
-            Foreground => LockPassage::Foregrounded,
-            Inactive => LockPassage::Deactivated,
-            Background => LockPassage::Backgrounded,
-            Detached => LockPassage::SceneDetached,
-        };
-        if lets_go(passage)
+        if matches!(observation, Inactive | Background | Detached)
             && let Some(marker) = MainThreadMarker::new()
         {
             failure.contain(|| self.locks.withdraw(self.id, marker));
@@ -2385,9 +2375,7 @@ impl Drop for IOSWindow {
         }
         // The lock owner reaches the window no more, and a lock it held is
         // let go of.
-        if lets_go(LockPassage::Dropped)
-            && let Some(marker) = MainThreadMarker::new()
-        {
+        if let Some(marker) = MainThreadMarker::new() {
             self.locks.unregister(self.id, marker);
         }
     }

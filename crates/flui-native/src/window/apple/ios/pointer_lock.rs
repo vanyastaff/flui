@@ -186,7 +186,7 @@ impl PointerLocks {
     /// publication is the handler's code: the first panic resumes after
     /// every window published.
     fn carry_out(&self, step: LockStep<WindowId>, mtm: MainThreadMarker) {
-        self.follow_holder(mtm);
+        let remains = self.follow_holder(mtm);
         if let Some(id) = step.preference
             && let Some(status_bar) = self
                 .window(id, |window| window.status_bar.upgrade())
@@ -203,6 +203,12 @@ impl PointerLocks {
                 failure.contain(|| delivery.publish_state());
             }
         }
+        // The copies of the application's handlers go last, once the state
+        // is committed, the preference refreshed and every window published:
+        // their last release is the application's code (ADR-0287).
+        failure.contain(|| {
+            flui_foundation::panic::commit(&self.mice, |_, outbox| outbox.release(remains));
+        });
         failure.resume();
     }
 
@@ -228,24 +234,26 @@ impl PointerLocks {
     }
 
     /// Install the handlers once a window holds the lock, and take them back
-    /// once none does.
-    fn follow_holder(&self, mtm: MainThreadMarker) {
+    /// once none does; what is left to destroy is handed back.
+    fn follow_holder(&self, mtm: MainThreadMarker) -> Remains {
         let wanted = self.ledger.borrow().holder().is_some();
         let watching = self.mice.borrow().is_some();
+        let mut remains = Remains::new();
         if wanted && !watching {
-            let watch = self.watch(mtm);
+            let watch = self.watch(mtm, &mut remains);
             *self.mice.borrow_mut() = Some(watch);
         } else if !wanted && watching {
             let watch = self.mice.borrow_mut().take();
             if let Some(watch) = watch {
-                unwatch(watch);
+                unwatch(watch, &mut remains);
             }
         }
+        remains
     }
 
     /// The handler on every connected mouse, and observers that put it on a
     /// mouse that connects and forget one that goes.
-    fn watch(&self, mtm: MainThreadMarker) -> MouseWatch {
+    fn watch(&self, mtm: MainThreadMarker, remains: &mut Remains) -> MouseWatch {
         // The owner is reached through a main-thread binding: the blocks may
         // be run and let go of on another thread, where the `Rc` behind it is
         // neither touched nor dropped.
@@ -274,8 +282,10 @@ impl PointerLocks {
             });
         let mut installed = HandlerSwaps::default();
         for mouse in mice() {
-            if let Some(previous) = swap_moved_handler(&mouse, &moved) {
-                installed.installed(Mouse(mouse), previous);
+            if let Some(previous) = swap_moved_handler(&mouse, &moved)
+                && let Some(Some(refused)) = installed.installed(Mouse(mouse), previous)
+            {
+                remains.push(refused);
             }
         }
         let mut observers = Vec::new();
@@ -334,10 +344,16 @@ impl PointerLocks {
     /// forgotten. Outside a lock nothing is watched.
     fn mouse_changed(&self, mouse: Retained<AnyObject>, connected: bool) {
         let mouse = Mouse(mouse);
+        // A copy of the application's handler this lets go of is destroyed
+        // once the watch is committed (ADR-0287).
         if !connected {
-            if let Some(watch) = self.mice.borrow_mut().as_mut() {
-                watch.installed.forget(&mouse);
-            }
+            flui_foundation::panic::commit(&self.mice, |mice, outbox| {
+                if let Some(watch) = mice.as_mut()
+                    && let Some((_, Some(copy))) = watch.installed.forget(&mouse)
+                {
+                    outbox.release(copy);
+                }
+            });
             return;
         }
         // Cloned out first: no borrow is held while GameController is
@@ -346,17 +362,30 @@ impl PointerLocks {
         let Some(moved) = moved else {
             return;
         };
-        if let Some(previous) = swap_moved_handler(&mouse.0, &moved)
-            && let Some(watch) = self.mice.borrow_mut().as_mut()
-        {
-            watch.installed.installed(mouse, previous);
-        }
+        let Some(previous) = swap_moved_handler(&mouse.0, &moved) else {
+            return;
+        };
+        flui_foundation::panic::commit(&self.mice, |mice, outbox| {
+            let refused = match mice.as_mut() {
+                Some(watch) => watch.installed.installed(mouse, previous),
+                None => Some(previous),
+            };
+            if let Some(Some(copy)) = refused {
+                outbox.release(copy);
+            }
+        });
     }
 }
 
+/// What the owner destroys once it published: copies of the application's
+/// handlers, whose last release runs the application's code, and FLUI's own
+/// block.
+type Remains = Vec<RcBlock<Moved>>;
+
 /// Give each mouse that still carries FLUI's handler back the one FLUI found
-/// on it (another handler set since is left alone), and stop observing.
-fn unwatch(watch: MouseWatch) {
+/// on it (another handler set since is left alone), and stop observing; every
+/// copy and FLUI's block go to `remains`.
+fn unwatch(watch: MouseWatch, remains: &mut Remains) {
     let MouseWatch {
         moved,
         installed,
@@ -365,9 +394,13 @@ fn unwatch(watch: MouseWatch) {
     let ours = |mouse: &Mouse| {
         moved_handler(&mouse.0).is_some_and(|current| std::ptr::eq(current, &*moved))
     };
-    for (mouse, previous) in installed.restore(ours) {
+    let restoration = installed.restore(ours);
+    for (mouse, previous) in restoration.put_back {
         set_moved_handler(&mouse.0, previous.as_deref());
+        remains.extend(previous);
     }
+    remains.extend(restoration.left.into_iter().filter_map(|(_, copy)| copy));
+    remains.push(moved);
     let center = NSNotificationCenter::defaultCenter();
     for observer in &observers {
         // SAFETY: `observer` is a token `addObserverForName:` returned.

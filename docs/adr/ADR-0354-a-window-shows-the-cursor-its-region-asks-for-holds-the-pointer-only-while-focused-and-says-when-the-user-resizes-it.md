@@ -161,17 +161,24 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   and its `native_capability_absences`, where UIKit locks from iPadOS 14 on an iPad and an
   Activity from API 26).
 - Android: `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests`
-  (`crates/flui-native/src/input/android/motion/tests.rs`), and the table `android_pointer_capture`
-  (`crates/flui-native/src/window/pointer_capture.rs`): `the_systems_capture_is_the_published_grab`,
-  `every_exit_that_changes_the_grab_publishes` (release, undelivered release, retirement) and
-  `an_answer_goes_to_the_window_that_asked` (a late grant for a replaced window is given back).
+  (`crates/flui-native/src/input/android/motion/tests.rs`), and the capture owner's table
+  `android_pointer_capture` (`crates/flui-native/src/window/pointer_capture.rs`): a grant is
+  published for the window asked for (`a_grant_holds_the_capture_for_the_window_asked_for`); the
+  grab ends with the focus (`the_focus_leaving_ends_the_capture`) and with the system
+  (`a_capture_the_system_ends_is_not_asked_for_again`); a replaced window's release or late grant
+  never reaches its successor (`a_replaced_windows_release_does_not_cancel_its_successors_request`,
+  `a_late_grant_for_a_replaced_window_goes_to_no_window`); no call is dropped while another is
+  unanswered (`a_release_before_the_grant_ends_free`,
+  `an_ask_during_a_release_gets_the_mouse_after_it`); a failed call changes nothing
+  (`a_failed_call_changes_nothing`).
 - UIKit, the table `ios_pointer_lock_ledger` (`crates/flui-native/src/window/apple/pointer_lock.rs`):
-  `a_lock_is_held_from_the_systems_grant`; the hold ending with the scene or the focus is
-  `every_passage_out_of_the_focus_lets_go` (which passages let go) with
-  `a_window_that_lets_go_holds_nothing` (what letting go does);
-  `a_lock_the_system_lets_go_is_not_asked_for_again`;
+  `a_lock_is_held_from_the_systems_grant`; letting go (the window's release, its focus or its
+  scene leaving, each a call of the owner's `withdraw`) ends the hold at once
+  (`a_window_that_lets_go_holds_nothing`); the system's unlock changes the hold and not the ask
+  (`a_lock_the_system_lets_go_is_asked_for_again`, `an_ask_over_an_unlock_in_flight_is_kept`);
   `asking_again_finds_a_lock_the_system_never_let_go`;
-  `one_scenes_unlock_leaves_the_other_scenes_lock`.
+  `one_scenes_unlock_leaves_the_other_scenes_lock`. Which lifecycle steps let go is read at
+  `IOSWindow::apply_lifecycle`, with no test of its own.
 - A region's cursor reaches the window: `mouse_region_cursor_reaches_the_window_through_the_ui_runtime`
   and `a_refused_image_cursor_shows_the_arrow`
   (`crates/flui-testing/tests/runtime_driver.rs`).
