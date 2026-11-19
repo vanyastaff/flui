@@ -352,11 +352,10 @@ fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
     drop(held);
 }
 
-/// A key that names no regular file is refused before it is opened: a FIFO
-/// or a device could block the shared IO lane in `open`.
+/// A key that names no regular file is refused as `NotAFile`: the bundle
+/// opens only a regular file (ADR-0384 §2), and the cache keeps its kind.
 ///
-/// Red-check: drop the regular-file check (the directory opens and its read
-/// fails with an OS error instead).
+/// Red-check: map `AssetLoadError::NotAFile` to `Io` in `from_asset`.
 fn a_path_that_is_not_a_regular_file_is_refused() {
     let refused = block_on(registry().load(
         &ImageSource::asset(
@@ -420,8 +419,9 @@ fn two_bundles_never_share_an_image_under_one_key() {
     );
 }
 
-/// A file over the 256 MiB encoded-image cap fails with a typed error before
-/// it is buffered. `set_len` makes the file without writing its bytes.
+/// An asset over the 256 MiB encoded-image cap fails with `TooLarge`: the
+/// cache asks the bundle for at most that many bytes, and the bundle refuses
+/// before it buffers. `set_len` makes the file without writing its bytes.
 fn an_oversized_file_is_refused_before_it_is_read() {
     let files = FixtureCopies::new("oversized");
     let path = files.directory.join("huge.png");
@@ -568,6 +568,7 @@ fn decoded_images_stay_within_their_byte_budget_and_give_back_under_pressure() {
 fn image_loads_run_on_their_lanes_and_survive_the_requests_that_leave() {
     crate::cases::run_cases(&[
         ("on the given lanes", loads_on_the_given_lanes),
+        ("a bundle that panics", a_bundle_that_panics),
         (
             "without lanes",
             without_lanes_the_load_runs_where_it_is_polled,
@@ -629,4 +630,58 @@ fn image_loads_run_on_their_lanes_and_survive_the_requests_that_leave() {
             two_bundles_never_share_an_image_under_one_key,
         ),
     ]);
+}
+
+/// A source whose `load` itself panics, before it returns a future,
+/// counting its calls.
+struct PanickingAssets {
+    loads: std::sync::atomic::AtomicUsize,
+}
+
+impl flui_platform::assets::AssetSource for PanickingAssets {
+    fn load(&self, _key: &AssetKey, _limit: u64) -> flui_platform::assets::AssetFuture<Vec<u8>> {
+        self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        panic!("the bundle failed");
+    }
+}
+
+/// A bundle whose `load` panics fails the load with `Panicked` and its
+/// message, on lanes and without them, unwinding through neither the lane
+/// nor the request, and nothing reads before the load is run.
+///
+/// Red-check: call `bundle.load` in `fetch` rather than inside the future
+/// it returns (the panic unwinds out of `ImageCache::load` without lanes).
+fn a_bundle_that_panics() {
+    let source = Arc::new(PanickingAssets {
+        loads: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let bundle =
+        AssetBundle::new(Arc::clone(&source) as Arc<dyn flui_platform::assets::AssetSource>);
+    let key = AssetKey::try_new("logo.png").expect("a valid key");
+    let panicked = |answered: &Result<Image, ImageLoadError>| {
+        matches!(
+            answered,
+            Err(error) if matches!(
+                error.kind(),
+                ImageLoadErrorKind::Panicked { message: Some(message) }
+                    if message.as_ref() == "the bundle failed"
+            )
+        )
+    };
+
+    let cache = registry();
+    let lanes = QueuedLanes::new();
+    let pending = cache.load(&ImageSource::asset(key.clone(), &bundle), &lanes.services());
+    assert_eq!(
+        source.loads.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing is read before the load runs"
+    );
+    lanes.run_until_idle();
+    let answered = block_on(pending);
+    assert!(panicked(&answered), "on lanes: {answered:?}");
+
+    let answered = block_on(cache.load(&ImageSource::asset(key, &bundle), &LoadServices::new()));
+    assert!(panicked(&answered), "without lanes: {answered:?}");
+    assert_eq!(source.loads.load(std::sync::atomic::Ordering::SeqCst), 2);
 }

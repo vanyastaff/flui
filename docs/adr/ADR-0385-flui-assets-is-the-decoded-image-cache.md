@@ -51,7 +51,7 @@ Chosen option: 2. `flui-assets` exports one cache and what a load needs:
 ```rust
 pub struct ImageCache;                 // new(ImageCacheConfig), Default, ReclaimMemory
 pub struct ImageCacheConfig;           // Default; budget(bytes), decode_threads(n)
-pub struct ImageSource;                // a path, or a URL with its client (ADR-0386)
+pub struct ImageSource;                // an asset key with its bundle, or a URL with its client (ADR-0386, ADR-0384 §6)
 pub struct LoadServices;               // the caller's lanes
 pub struct ImageLoad;                  // Future<Output = Result<Image, ImageLoadError>>
 ```

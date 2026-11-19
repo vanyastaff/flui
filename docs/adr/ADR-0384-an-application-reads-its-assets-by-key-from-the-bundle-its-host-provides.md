@@ -12,13 +12,13 @@
 
 ## Context and problem statement
 
-An application ships files with itself: images, fonts, data. `flui create` writes
-`[assets] directories = ["assets"]` into every new project's `flui.toml`, but nothing reads that
-section: `flui build` puts no file into any package, and `ImageSource::Asset` in `flui-assets`
-opens its path with `std::fs` relative to the process's current directory
-(`crates/flui-assets/src/registry/images.rs`, `read_in_chunks`). So on Android (an APK), iOS (an
-application bundle) and the Web (a page) `Image::asset` cannot read an application's own image,
-and on the desktop it reads one only when the process happens to start in the project directory.
+An application ships files with itself: images, fonts, data. `flui create` wrote
+`[assets] directories = ["assets"]` into every new project's `flui.toml`, but nothing read that
+section: `flui build` put no file into any package, and `flui-assets` opened an asset image's
+path with `std::fs` relative to the process's current directory. So on Android (an APK), iOS (an
+application bundle) and the Web (a page) `Image::asset` could not read an application's own
+image, and on the desktop it read one only when the process happened to start in the project
+directory.
 Flutter's answer is `AssetBundle`: the tool copies the declared files into the platform's
 package, and `rootBundle.load(key)` reads them back by the key they were declared under, through
 the platform's own reader (`AAssetManager`, the main bundle, a URL relative to the page, a

@@ -67,13 +67,14 @@ Option 1.
    runtime's, as before.
 3. **`Image` acquires it with its other services.** In `init_state` it acquires
    `ImageCacheCapability` beside `BackgroundCapability` and `HttpCapability` and hands it to its
-   provider in `ImageServices` (`image_cache()`, `with_image_cache`). `AssetImage::new(path)` and
+   provider in `ImageServices` (`image_cache()`, `with_image_cache`), and `AssetBundleCapability`
+   for an asset image (ADR-0384 §6). `AssetImage::new(key)` and
    `NetworkImage::new(url)` take no cache. Without one, a load answers
    `ImageProviderError::ImageCacheUnavailable { image }` and reads nothing, as a network image
    without a client answers `HttpUnavailable`.
-4. **A built-in key is its source.** `ImageCacheKey` for `AssetImage` is the path and for
-   `NetworkImage` the URL. The cache an `Image` acquired does not change while it is mounted, so
-   the key need not name it, as it already leaves out the client (ADR-0280 §6).
+4. **A built-in key is its source.** `ImageCacheKey` for `AssetImage` is the asset key as written
+   and for `NetworkImage` the URL. The cache, the bundle and the client an `Image` acquired do not
+   change while it is mounted, so the key need not name them (ADR-0280 §6, ADR-0384 §6).
 
 ```rust
 pub enum ImageCacheCapability {}

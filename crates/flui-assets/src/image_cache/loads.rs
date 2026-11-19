@@ -211,7 +211,7 @@ impl std::fmt::Debug for ImageSource {
 impl std::fmt::Display for ImageSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.key {
-            SourceKey::Asset { key, .. } => key.fmt(f),
+            SourceKey::Asset { key, .. } => std::fmt::Display::fmt(key, f),
             SourceKey::Network { url, .. } => f.write_str(url),
         }
     }
@@ -887,8 +887,15 @@ impl DecodedImages {
 fn fetch(source: &ImageSource) -> Fetch {
     match (&source.key, &source.reader) {
         (SourceKey::Asset { key, .. }, Reader::Bundle(bundle)) => {
-            let read = bundle.load(key, MAX_ENCODED_IMAGE_BYTES);
-            Box::pin(async move { read.await.map_err(ImageLoadErrorKind::from_asset) })
+            // The read is made inside the future: a source's `load` is host
+            // code, and only the run's polls are contained.
+            let (key, bundle) = (key.clone(), bundle.clone());
+            Box::pin(async move {
+                bundle
+                    .load(&key, MAX_ENCODED_IMAGE_BYTES)
+                    .await
+                    .map_err(ImageLoadErrorKind::from_asset)
+            })
         }
         (SourceKey::Network { url, .. }, Reader::Http(http)) => {
             Box::pin(fetch_over_http(Arc::clone(url), http.clone()))

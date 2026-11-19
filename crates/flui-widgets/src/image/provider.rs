@@ -427,6 +427,7 @@ pub enum ImageProviderError {
 
     /// An asset image was requested where the host provides no asset bundle
     /// (`flui_platform::assets::AssetBundleCapability`); nothing was read.
+    #[cfg(feature = "asset-images")]
     #[error("no asset bundle to read `{key}` from")]
     AssetBundleUnavailable {
         /// The asset key that was not read.
@@ -471,6 +472,7 @@ impl ImageProviderError {
             Self::AssetLoadFailed { .. } => "asset-load-failed",
             Self::HttpUnavailable { .. } => "http-unavailable",
             Self::ImageCacheUnavailable { .. } => "image-cache-unavailable",
+            #[cfg(feature = "asset-images")]
             Self::AssetBundleUnavailable { .. } => "asset-bundle-unavailable",
             #[cfg(feature = "asset-images")]
             Self::InvalidAssetKey { .. } => "invalid-asset-key",
