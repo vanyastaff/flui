@@ -28,9 +28,6 @@ pub struct PlannedFile {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectPlan {
     files: Vec<PlannedFile>,
-    /// Directories to create even when they hold no planned file (e.g. an
-    /// empty `assets/`).
-    dirs: Vec<PathBuf>,
 }
 
 impl ProjectPlan {
@@ -50,14 +47,7 @@ impl ProjectPlan {
         self
     }
 
-    /// Ensure a directory exists even if no file is planned inside it.
-    #[must_use]
-    pub fn dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.dirs.push(path.into());
-        self
-    }
-
-    /// Append another plan's files and directories, keeping this plan's
+    /// Append another plan's files, keeping this plan's
     /// entries first.
     ///
     /// Used to compose the hot-reload workspace from its three member
@@ -65,7 +55,6 @@ impl ProjectPlan {
     #[must_use]
     pub fn merge(mut self, other: Self) -> Self {
         self.files.extend(other.files);
-        self.dirs.extend(other.dirs);
         self
     }
 
@@ -75,24 +64,13 @@ impl ProjectPlan {
         &self.files
     }
 
-    /// The directories this plan creates in addition to file parents.
-    #[must_use]
-    pub fn dirs(&self) -> &[PathBuf] {
-        &self.dirs
-    }
-
-    /// Write every planned file and directory under `root`, which must
+    /// Write every planned file under `root`, which must
     /// already exist.
     ///
     /// # Errors
     ///
     /// Returns an error if any directory or file cannot be created.
     pub fn write(&self, root: &Path) -> CliResult<()> {
-        for dir in &self.dirs {
-            let target = root.join(dir);
-            std::fs::create_dir_all(&target)
-                .with_context(|| format!("failed to create directory '{}'", target.display()))?;
-        }
         for file in &self.files {
             let target = root.join(&file.path);
             if let Some(parent) = target.parent() {

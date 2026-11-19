@@ -111,6 +111,7 @@ impl WebBuilder {
             .first()
             .ok_or_else(|| BuildError::Other("the wasm build produced no artifact".into()))?;
         let dist = &ctx.output_dir;
+        let assets = crate::build::assets::of_project(&self.workspace_root)?;
         let pkg = dist.join(PKG_DIR);
         std::fs::create_dir_all(&pkg)?;
 
@@ -170,6 +171,8 @@ impl WebBuilder {
                 }
             }
         }
+        // Beside the page, where the page-relative URL reaches them (ADR-0384 §3).
+        crate::build::assets::stage(&assets, dist)?;
         let size_bytes = std::fs::read_dir(&pkg)?
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "wasm"))

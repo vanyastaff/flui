@@ -437,9 +437,11 @@ executor runs each command under its own catch, in both placements.
   and path caches, the scratch pools and the chunk recordings derived from them, so no recording
   outlives the caches it was derived from and none needs an epoch of the context's. A destructor
   in that drop that panics too costs the library as well; the frame's panic stays the one the
-  slot's record gets. The panicking slot redraws in full; a slot whose retained scene the panic
-  tore is rebuilt from the owner's next scene as ADR-0304 decides. The other slots keep their
-  committed images, which only a completed commit changes (ADR-0100).
+  slot's record gets. The panicking slot keeps the image its last completed frame left on its
+  target, since a slot's frame records its clear in the frame's own encoder (a target a resize or
+  a rebuild replaced since holds no image yet), and redraws in full; a slot whose retained scene
+  the panic tore is rebuilt from the owner's next scene as ADR-0304 decides. The other slots keep
+  their committed images, which only a completed commit changes (ADR-0100).
 - The pipeline library is kept: an entry is inserted after its pipeline is built
   (`pipeline_cache.rs:551-552`), so a panic leaves a complete entry or none.
 - A panic inside a submission quarantines the device domain, which is a device loss (ADR-0100;
@@ -743,7 +745,7 @@ the facade. Every production use of `with_backend` becomes:
   - `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format`: several slots,
     counting instances, devices, atlases and pipeline builds;
   - `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`: the panicking frame
-    settles `Retry`, another slot's committed image is unchanged, no pipeline is built again;
+    settles `Retry` and keeps its committed image, no pipeline is built again;
   - `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`;
   - `the_first_slots_attach_builds_its_pipelines_on_a_worker_once`,
     `a_warm_up_that_panics_fails_the_frame_that_joins_it_and_the_next_builds_inline` and

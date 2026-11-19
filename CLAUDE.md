@@ -6,6 +6,12 @@ The project guide is shared by every agent runtime and lives in one place:
 
 @AGENTS.md
 
+`.claude/settings.json` turns off four rust-studio prompts: the recall of memory notes at
+session start and on each prompt, the nudge toward its own skills, and its handoff and
+memory-capture reminders. Its session-start briefing (its team of roles, "skills first") has no
+switch and still appears; like any other plugin's process it yields to AGENTS.md ("Working
+here"). A value a contributor saved for those options through `/plugin` wins over this file.
+
 ## Delegating
 
 The session keeps what needs the whole picture: the decomposition, the design decisions and the
