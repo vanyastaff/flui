@@ -224,6 +224,26 @@ pub(crate) fn reconcile_with_recovery(
     !compatible
 }
 
+/// Whether the next frame of `presentation` may get past its saved segment:
+/// none is saved, its answer came ([`can_run`]), or what it was sampled from
+/// changed (a build is pending, the pipeline has invalidations, or its
+/// premises no longer hold), which the next frame's reconciliation withdraws
+/// it for. A segment parked or waiting on its answer with nothing changed may
+/// not, so a frame asked for it would draw nothing.
+pub(crate) fn may_proceed(presentation: &PresentationState) -> bool {
+    can_run(presentation)
+        || presentation.widgets().has_pending_builds()
+        || presentation
+            .pipeline()
+            .with(PipelineOwner::has_pending_invalidations)
+        || presentation
+            .text_preparation
+            .borrow()
+            .segment
+            .as_ref()
+            .is_some_and(|saved| !accepts(presentation, saved))
+}
+
 pub(crate) fn can_run(presentation: &PresentationState) -> bool {
     presentation
         .text_preparation

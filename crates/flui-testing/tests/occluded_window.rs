@@ -398,6 +398,33 @@ fn a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone() {
     assert_eq!(painted.load(Ordering::SeqCst), 3, "and it draws its change");
 }
 
+/// A covered window whose content changes between two pumps, with no pump,
+/// observation or notice after the change: the host's loop still waits for
+/// the owed frame and draws it, as a runner's owner delivery asks at the end
+/// of the work item that made the change. Fails when the host asks for owed
+/// frames only after its own turns: the loop finds nothing to wait for,
+/// `pump_until_settled` settles at once, and the change is never drawn.
+#[test]
+fn a_change_between_pumps_is_still_owed_its_frame() {
+    let (mut host, number, painted) = mounted(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    host.set_window_occluded(host.primary_window(), true);
+    let _ = host.pump(FRAME);
+    number.set(2);
+    let wait = host
+        .time_to_next_frame()
+        .expect("the change leaves the covered window owing its frame");
+    assert!(wait > FRAME, "after its quiet period: {wait:?}");
+    let frames = host
+        .pump_until_settled(FRAME, 200)
+        .expect("the owed frame settles the host");
+    assert!(frames > 0, "the host pumped for the owed frame");
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        2,
+        "the owed frame draws the change"
+    );
+}
+
 /// Every timed frame request `window` took, oldest first.
 fn host_requests(
     host: &HeadlessHost,

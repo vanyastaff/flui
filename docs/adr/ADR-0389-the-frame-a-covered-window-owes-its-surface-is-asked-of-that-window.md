@@ -74,20 +74,33 @@ blocks) and the runtime does not.
    instant, or a withdrawal once nothing is owed (seen again, drawn with nothing left, refused, a
    full sink, closing). `OwedFrameRequest::deliver` calls the window's `request_frame_at` and then
    records the instant as asked, so a host that panics is offered the same instant by the next
-   call, and an instant once asked is never asked again whatever other windows draw.
+   call, and an instant once asked is not asked again whatever other windows draw.
    `UiRuntime::next_wake` no longer carries the owed instant; `runs_frames` and
    `has_pending_due_work` still count it once due, so the window's frame, when served, runs it.
+   **A held frame is asked again once its hold may end.** When the instant has come and the
+   presentation's frame is held (its text preparation waits on an answer or is parked), the frame
+   the served request brought draws nothing; the presentation marks what its window was asked as
+   held (`AskedFrame::hold`), and the same instant is asked again once the preparation may proceed
+   (`text_preparation::may_proceed`: none saved, its answer came, or a build, an invalidation or a
+   changed premise the next frame's reconciliation withdraws it for). Not before: a preparation
+   parked with nothing changed would otherwise be asked for at the frame rate of its own held
+   frames.
 3. **Every host delivers at the end of a work item.** `OwnerDelivery` takes the requests under the
    lease of each runtime work item that is not terminal, and after an installation that succeeded,
    and delivers them once the runtime is back, each contained in the work item's `FirstPanic`.
-   `flui_testing::HeadlessHost` delivers after each pump, window observation and system notice.
+   `flui_testing::HeadlessHost` delivers after each pump, window observation and system notice, and
+   before it decides how long its loop waits (`time_to_next_frame`) or whether it has settled
+   (`pump_until_settled`), so a change written between two pumps is asked for as the work item
+   that wrote it would ask on a runner.
 4. **The host serves a request for its window alone.** AppKit keeps the window's pending instant
-   (`TimedFrame`) and schedules a tick on the owner lane for it: a tick serves only the instant it
-   was scheduled for while that is still the one asked, makes the window's `request_redraw`, and
-   clears it; a tick that runs early waits out the rest; one for a replaced or withdrawn instant
-   does nothing. Nothing of it reaches the wake pump's deadline. The headless host's loop waits no
-   later than the earliest unserved instant of an open window, and the first pump at or after it
-   serves it.
+   (`TimedFrame`) and keeps one tick on the owner lane live for it: a request for the instant the
+   live tick serves arms none; a tick serves only the instant it was armed for while that is still
+   the one asked, makes the window's `request_redraw`, and clears it, so the same instant asked
+   again (a held frame) is armed again; a tick that runs early waits out the rest; one for a
+   replaced or withdrawn instant does nothing. Nothing of it reaches the wake pump's deadline. The
+   headless host's loop waits no later than the earliest unserved instant of an open window, and
+   the first pump at or after it serves it; the owed frame is not work its loop wakes for in any
+   other way, so a covered window alone gets its frame only through the request, as on AppKit.
 
 ### Consequences
 
@@ -96,11 +109,17 @@ blocks) and the runtime does not.
 - Good, because the application's wake deadline again holds only work any window's frame serves.
 - Good, because the headless host serves the request through the same runtime seam a runner does,
   so a test drives it through the public API.
-- Bad, because a window whose host serves the request and whose frame then does not run (AppKit
-  running no display pass for a covered window) is not asked again for that instant: its surface
-  keeps the content of before the covering until what it owes changes, for one when it is
-  uncovered. No loop turns for it. Whether AppKit runs that pass is owed a run on a Mac
-  (`docs/platform-parity.md`).
+- Good, because a frame held when its served request came (text preparation in flight) is asked
+  for again once the hold may end, and a hold that lasts asks nothing meanwhile.
+- Bad, because a window whose host serves the request and whose frame then does not run at all
+  (AppKit running no display pass for a covered window) is not asked again for that instant: no
+  frame of it ran, so nothing marks it held. Its surface keeps the content of before the covering
+  until what it owes changes, for one when it is uncovered, and no loop turns for it. Whether
+  AppKit runs that pass is owed a run on a Mac (`docs/platform-parity.md`).
+- Neutral, because headless pumps every presentation of its one runtime at each frame, so a covered
+  window beside a shown one has its owed frame granted by the shown window's frames as soon as it
+  is due, as in a runtime of several presentations on a runner; a covered window alone is served
+  only through its request.
 - Neutral, because every window type gains one method, and the hosts that keep no covered surface
   state their absence in one line.
 
@@ -108,12 +127,16 @@ blocks) and the runtime does not.
 
 - The compiler: `request_frame_at` has no default, so every window type states what it does.
 - `the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline`,
-  `a_hold_leaves_the_owed_frame_due` and
-  `an_owner_work_item_asks_the_covered_window_for_its_owed_frame` (`flui-runtime`,
-  `occluded_frame`).
-- `a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone` (`flui-testing`,
-  `occluded_window`), with the other `occluded_window` cases.
-- `a_timed_request_is_served_once_at_its_instant` and
+  `a_hold_leaves_the_owed_frame_due`,
+  `an_owner_work_item_asks_the_covered_window_for_its_owed_frame` and
+  `a_window_installed_covered_is_asked_for_its_owed_frame_by_the_install` (`flui-runtime`,
+  `occluded_frame`); `a_held_instant_is_asked_again_once_its_hold_may_have_ended` (its unit
+  tests).
+- `a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone` and
+  `a_change_between_pumps_is_still_owed_its_frame` (`flui-testing`, `occluded_window`), with the
+  other `occluded_window` cases.
+- `a_timed_request_is_served_once_at_its_instant`,
+  `a_served_instant_asked_again_is_served_again` and
   `a_shown_windows_frames_do_not_serve_a_covered_windows_request_again` (`flui-native`, AppKit's
   `timed_frame`, run on every host).
 

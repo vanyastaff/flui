@@ -1607,21 +1607,17 @@ impl PlatformWindow for MacOSWindow {
 
     /// Served for this window alone: a tick on its owner lane at `at` makes
     /// the request [`request_redraw`](PlatformWindow::request_redraw) makes,
-    /// once, and the tick of an instant replaced or withdrawn since does
+    /// once. One tick is live at a time: a request for the instant it serves
+    /// arms none, and the tick of an instant replaced or withdrawn since does
     /// nothing ([`TimedFrame`]). Nothing here reaches the wake pump's
     /// deadline, whose deliveries ask every window.
     fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
         let mut timed = self.timed_frame.get();
-        let scheduled = timed.request(at);
+        let delay = timed.request(at, flui_platform::EventTime::now());
         self.timed_frame.set(timed);
-        if let Some(at) = scheduled {
+        if let (Some(at), Some(delay)) = (at, delay) {
             let redraw = self.redraw();
-            schedule_timed_frame(
-                redraw.owner,
-                Arc::clone(&redraw.window),
-                at,
-                at.saturating_duration_since(flui_platform::EventTime::now()),
-            );
+            schedule_timed_frame(redraw.owner, Arc::clone(&redraw.window), at, delay);
         }
     }
 

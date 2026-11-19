@@ -287,8 +287,10 @@ this one path (ADR-0151 §9).
   (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::honours_input_regions`)
   says none, has no default body, and the window conformance checks
   both. A verb answers its reason itself: nothing admits it against the
-  capabilities, so the capabilities keep no second copy of it. A test double whose window system takes neither writes them with
-  `window_takes_no_frame_verbs!`.
+  capabilities, so the capabilities keep no second copy of it. A test double whose window system
+  takes neither writes them with `window_takes_no_frame_verbs!`, which also writes its timed frame
+  request (`request_frame_at`, ADR-0389) as returning at once: such a double keeps no surface
+  while covered, so no frame is owed to it.
 - **The window stays on its owner thread; other threads get a target and a
   requester (ADR-0254 §5).** `PlatformWindow` is neither `Send` nor `Sync`, so
   no window, nor any `Rc`, `Arc` or borrow of one, crosses a thread

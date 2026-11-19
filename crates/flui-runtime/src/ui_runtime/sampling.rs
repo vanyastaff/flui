@@ -195,6 +195,7 @@ impl<'runtime> PresentationSampling<'runtime> {
         self.run(SamplingStage::Preparation, |recovery| {
             let resuming = presentation.text_preparation.borrow().segment.is_some();
             if !text_preparation::can_run(presentation) {
+                presentation.hold_owed_frame();
                 return;
             }
             presentation.reconcile_semantics_enablement();

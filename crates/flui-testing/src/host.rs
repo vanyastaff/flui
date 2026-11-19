@@ -2896,16 +2896,23 @@ impl HeadlessHost {
             }
             return self.scenario_wait();
         };
+        // What changed since the last turn (a signal written between pumps)
+        // may leave a covered window owing a frame: its window is asked first,
+        // as a runner's owner delivery asks at the end of the work item that
+        // changed it, and the wait below counts the request.
+        self.ask_owed_frames();
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         // A dropped frame waiting for its retry runs nothing sooner, though a
         // gesture deadline before it still wakes the loop.
         let retrying = runtime
             .failure_retry_deadline()
             .is_some_and(|retry| retry > now);
-        // A runtime whose frames do not run (no window seen, none owing a
-        // frame) has no frame to run now: its pump is a background turn, which
-        // its deadlines, background work and observations still ask for.
-        let frame_owed = runtime.runs_frames()
+        // A runtime whose frames are off (no window seen) has no frame to run
+        // now: its pump is a background turn, which its deadlines, background
+        // work and observations still ask for. The frame a covered window owes
+        // is served only through its window's timed request, as on a native
+        // host, never as work pending here.
+        let frame_owed = runtime.scheduler().frames_enabled()
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
                 || runtime.has_pending_work());
@@ -3029,10 +3036,14 @@ impl HeadlessHost {
         max_frames: usize,
     ) -> Result<usize, NotSettled> {
         for frames in 0..=max_frames {
+            // A covered window owing a frame is asked before the host decides
+            // it has nothing to do, as `time_to_next_frame` asks.
+            self.ask_owed_frames();
             // A retired host owes only its background work and the scenario.
-            // A runtime whose frames do not run owes no frame, only its deadlines.
+            // A runtime whose frames are off owes no frame, only its deadlines
+            // and the timed requests of its windows.
             let runtime_idle = self.ui_runtime.as_ref().is_none_or(|runtime| {
-                (!runtime.runs_frames()
+                (!runtime.scheduler().frames_enabled()
                     || (!runtime.needs_redraw()
                         && !runtime.scheduler().is_frame_scheduled()
                         && !runtime.has_pending_work()))

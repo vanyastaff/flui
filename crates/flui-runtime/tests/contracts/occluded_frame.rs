@@ -320,8 +320,17 @@ fn the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline() {
     );
 }
 
-/// An owner that runs work and nothing else.
-struct WorkOnly;
+/// An owner that runs work, and commits the install it holds when its
+/// delivery asks it to.
+#[derive(Default)]
+struct WorkOnly {
+    install: std::cell::RefCell<
+        Option<(
+            flui_runtime::owner::OwnerHost,
+            flui_runtime::owner::PreparedInstall,
+        )>,
+    >,
+}
 
 impl flui_runtime::owner::OwnerEffects for WorkOnly {
     fn finish_install(
@@ -341,10 +350,20 @@ impl flui_runtime::owner::OwnerEffects for WorkOnly {
     fn frame(&self, _: PresentationAddress, _: &mut UiRuntime) {}
     fn commit_install(
         &self,
-        _: flui_runtime::owner::InstallToken,
+        token: flui_runtime::owner::InstallToken,
         _: flui_runtime::owner::RecoveryState,
     ) -> Option<flui_runtime::owner::InstallInitialization> {
-        panic!("no pending install");
+        let (owner, prepared) = self.install.borrow_mut().take().expect("a pending install");
+        let address = owner
+            .publication(prepared)
+            .expect("no runtime is checked out at the commit")
+            .commit();
+        assert_eq!(address, token.address());
+        Some(flui_runtime::owner::InstallInitialization {
+            address,
+            observations: Vec::new(),
+            lifecycle: None,
+        })
     }
     fn retire_host(&self, _: &[PresentationAddress], _: flui_runtime::owner::RecoveryState) {}
     fn cancel_install(
@@ -390,7 +409,7 @@ fn an_owner_work_item_asks_the_covered_window_for_its_owed_frame() {
         dispatcher
             .test_callback(
                 Box::new(|runtime: &UiRuntime| runtime.mark_primary_needs_full_repaint()),
-                &WorkOnly,
+                &WorkOnly::default(),
             )
             .expect("the owner runs the work");
     };
@@ -405,5 +424,40 @@ fn an_owner_work_item_asks_the_covered_window_for_its_owed_frame() {
         headless(&window).timed_frame_requests(),
         [Some(owed)],
         "the next work item asks nothing for the same instant"
+    );
+}
+
+/// A window installed covered, its content changed before the install,
+/// owes its frame from the start: the installation asks its window for it,
+/// with no later work item to do so. Fails when the install's delivery drops
+/// the owed frame requests it took: the window is asked for nothing until
+/// some other work reaches its runtime.
+#[test]
+fn a_window_installed_covered_is_asked_for_its_owed_frame_by_the_install() {
+    let mut sink = Queues::holding(2);
+    let mut covering = Covering::open(OccludedSurface::Kept, &mut sink);
+    covering.settle(sink.last(), SubmitVerdict::Presented);
+    let owed = covering.event_now() + Duration::from_secs(1);
+    covering.cover();
+    covering.change();
+    let Covering {
+        runtime, window, ..
+    } = covering;
+    let owner = flui_runtime::owner::OwnerHost::new();
+    let mut prepared = owner.prepare_runtime(runtime);
+    let token = prepared.take_delivery().expect("one delivery token");
+    let effects = WorkOnly::default();
+    *effects.install.borrow_mut() = Some((owner.clone(), prepared));
+    let _ = owner
+        .queue_install(token, &effects)
+        .expect("the owner admits the install");
+    assert!(
+        effects.install.borrow().is_none(),
+        "the install was committed"
+    );
+    assert_eq!(
+        headless(&window).timed_frame_requests(),
+        [Some(owed)],
+        "the installed covered window is asked for its owed frame"
     );
 }

@@ -8,9 +8,9 @@
 //! The look after a run is what follows a delivery up: a frame AppKit runs in
 //! a display pass may leave the deadline due again or arm a new one, a state
 //! change reaches the application in a window callback, and input may arm a
-//! deadline with no frame asked (a gesture's). No owner turn of the loop need follow any of them, so without
-//! that look the deadline they leave would be unseen. A look is one owner-
-//! queue post, coalesced with any already queued.
+//! deadline with no frame asked (a gesture's). No owner turn of the loop need
+//! follow any of them, so without that look the deadline they leave would be
+//! unseen. A look is one owner-queue post, coalesced with any already queued.
 
 use std::rc::Rc;
 use std::sync::Arc;
