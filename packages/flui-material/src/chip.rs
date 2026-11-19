@@ -1,6 +1,7 @@
 //! [`Chip`] and [`FilterChip`] — the M3 chip family V1: a compact,
 //! outlined/filled information element with an optional leading avatar and
 //! trailing delete affordance.
+//! The leading and trailing edges are those of the ambient `Directionality`.
 //!
 //! # V1 scope: a reduced chip family
 //!
@@ -129,9 +130,6 @@
 //!   `deleteButtonTooltipMessage` as the tooltip and names the delete
 //!   button's node with it; no localization substrate supplies it yet, so
 //!   the delete button is an unnamed button node.
-//! - **RTL** — the content `Row` always lays out left-to-right; no
-//!   `Directionality` ambient in this substrate yet (the same gap
-//!   [`flui_sdk::widgets::Icon`]'s own docs already name).
 //! - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
 //!   hook yet, matching every other selection-control's own deferred list.
 //! - **Avatar/delete-icon box constraints** — the avatar
@@ -890,6 +888,11 @@ fn delete_button(
 /// Assembles a chip's `leading? / label / delete?` content row. Shared by
 /// [`Chip`] and [`FilterChip`] — the only difference between the two is
 /// what `leading` resolves to.
+///
+/// A `Row` orders its children from the ambient
+/// [`Directionality`](flui_sdk::widgets::Directionality)'s start edge, so in
+/// right-to-left the leading slot sits on the right and the delete affordance,
+/// with its tap target, on the left.
 fn build_chip_row(
     leading: Option<BoxedView>,
     label: BoxedView,
