@@ -4,14 +4,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::{AssetRegistry, ImageSource};
+use flui_assets::{ImageCache, ImageSource};
 use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 
 /// An [`ImageProvider`] that loads and decodes an asset file through a
-/// `flui-assets` [`AssetRegistry`], off the calling thread.
+/// `flui-assets` [`ImageCache`], off the calling thread.
 ///
 /// # The registry is an argument
 ///
@@ -27,14 +27,14 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 /// Prefer [`Image::asset`](crate::Image::asset) as the ergonomic constructor.
 #[derive(Debug, Clone)]
 pub struct AssetImage {
-    registry: Arc<AssetRegistry>,
+    registry: Arc<ImageCache>,
     path: Arc<str>,
 }
 
 impl AssetImage {
     /// Creates a provider that loads `path` through `registry` on a decoded
     /// cache miss during asynchronous resolution.
-    pub fn new(registry: Arc<AssetRegistry>, path: impl Into<String>) -> Self {
+    pub fn new(registry: Arc<ImageCache>, path: impl Into<String>) -> Self {
         Self {
             registry,
             path: Arc::from(path.into()),
@@ -47,7 +47,7 @@ impl AssetImage {
     }
 
     fn source(&self) -> ImageSource {
-        ImageSource::Asset(Arc::clone(&self.path))
+        ImageSource::asset(Arc::clone(&self.path))
     }
 }
 
@@ -62,7 +62,7 @@ impl ImageProvider for AssetImage {
     /// [`cache_key`](ImageProvider::cache_key)).
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
         self.registry
-            .cached_image(&self.source())
+            .get(&self.source())
             .ok_or(ImageProviderError::RequiresAsyncResolve {
                 provider_name: "AssetImage",
             })
@@ -81,16 +81,15 @@ impl ImageProvider for AssetImage {
     {
         let load = self
             .registry
-            .load_image(Arc::clone(&self.path), services.load_services());
-        let path = Arc::clone(&self.path);
+            .load(&self.source(), &services.load_services());
         Box::pin(async move {
             load.await
-                .map_err(|error| ImageProviderError::from_asset_error(path.to_string(), error))
+                .map_err(|error| ImageProviderError::from_load_error(&error))
         })
     }
 
     fn cached(&self, _services: &ImageServices) -> Option<PixelImage> {
-        self.registry.cached_image(&self.source())
+        self.registry.get(&self.source())
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {

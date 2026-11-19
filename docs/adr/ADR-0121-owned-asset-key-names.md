@@ -1,7 +1,8 @@
 # ADR-0121: Asset names have shared ownership
 
-- **Status:** Accepted (2026-10-04)
+- **Status:** Superseded (2026-11-19)
 - **Date:** 2026-10-04
+- **Superseded-by:** [ADR-0385](ADR-0385-flui-assets-is-the-decoded-image-cache.md) in full: `flui-assets` is the decoded-image cache and has no typed asset framework. The decoded-image rules are ADR-0250, ADR-0279 and ADR-0280.
 - **Implements:** ADR-0097's proposed removal of the asset interner
 - **Related:** ADR-0107 (asset sources), ADR-0120 (typed cache retention)
 

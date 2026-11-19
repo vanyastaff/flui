@@ -67,6 +67,11 @@ testing = ["scripted"]
 # `flui-testing` (ADR-0154 §10).
 scripted = []
 
+# `O_NONBLOCK`, with which `assets::DirectoryAssets` opens a file, so a FIFO swapped in
+# for an asset cannot block the IO lane before the open file is checked (ADR-0384 §2).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 # A browser page's entropy for `ProcessNonce::mint`: wasm32-unknown-unknown's
 # std has none, so `RandomState` alone mints the same nonce on every page.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

@@ -1,160 +1,25 @@
-//! High-performance asset management with smart caching, type safety, and async I/O.
+//! The decoded images a FLUI application shows, and the loads that fill them.
 //!
-//! This crate provides a production-ready asset system for the FLUI framework with efficient
-//! caching, type-safe APIs, and extensible architecture for custom asset types.
+//! An [`ImageCache`] keeps completed images within a byte budget, shares one
+//! load among every request for the same [`ImageSource`], reads each source on
+//! the IO lane of the caller's lanes and decodes it on their compute lane
+//! (ADR-0279), and fetches network images with the host's HTTP client
+//! (ADR-0280). It starts no runtime or thread of its own: [`LoadServices`]
+//! names the lanes and the client a load runs on.
 //!
-//! # Features
+//! `flui-widgets` resolves `Image::asset` and `Image::network` through it.
 //!
-//! - 🚀 **High Performance** - Concurrent caching with TinyLFU admission and LRU eviction
-//! - 🔒 **Thread-Safe** - Built on tokio, parking_lot, and moka for concurrent access
-//! - 💾 **Smart Caching** - Explicit entry retention and expiration
-//! - 🎯 **Type-Safe** - Generic `Asset<T>` trait for compile-time guarantees
-//! - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
-//! - 🔑 **Efficient Keys** - Owned shared names with content equality
-//! - 📦 **Arc-Based Handles** - Cheap cloning with automatic cleanup via weak references
-//! - 🎨 **Built-in Assets** - Images (optional), fonts, with extensible system
-//!
-//! # Quick Start
-//!
-//! ```rust,no_run
-//! use flui_assets::{AssetRegistryBuilder, FontAsset};
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create a registry
-//! let registry = AssetRegistryBuilder::new().default_capacity().build();
-//!
-//! // Load a font
-//! let font = FontAsset::file("assets/font.ttf");
-//! let handle = registry.load(font).await?;
-//!
-//! println!("Font loaded: {} bytes", handle.bytes.len());
-//! # Ok(())
-//! # }
 //! ```
+//! use flui_assets::{ImageCache, ImageCacheConfig, ImageSource, LoadServices};
 //!
-//! # Architecture
-//!
-//! The system uses a three-layer architecture:
-//!
-//! ```text
-//! AssetRegistry (per app)
-//!     ↓
-//! AssetCache<T> (Per Type) - Moka TinyLFU cache
-//!     ↓
-//! AssetHandle<T, K> (Arc) - Smart handles with weak references
+//! let cache = ImageCache::new(ImageCacheConfig::default().budget(64 * 1024 * 1024));
+//! // Nothing is kept before a load completes.
+//! let logo = ImageSource::asset("logo.png");
+//! assert!(cache.get(&logo).is_none());
+//! // With no lanes, the load runs where the returned future is polled.
+//! let load = cache.load(&logo, &LoadServices::new());
+//! drop(load); // the last waiter left: the load is cancelled
 //! ```
-//!
-//! ## Type State Builder
-//!
-//! The registry uses a type-state builder for compile-time validation:
-//!
-//! ```rust
-//! use flui_assets::AssetRegistryBuilder;
-//!
-//! // ✅ This compiles
-//! let registry = AssetRegistryBuilder::new()
-//!     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
-//!     .build();
-//!
-//! // ❌ This doesn't compile - cannot build without capacity
-//! // let registry = AssetRegistryBuilder::new().build();
-//! ```
-//!
-//! ## Extension Traits
-//!
-//! Convenience methods are provided via extension traits:
-//!
-//! ```rust,no_run
-//! use flui_assets::{AssetHandle, AssetHandleExt, AssetCache, AssetCacheExt, FontAsset};
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let registry = flui_assets::AssetRegistryBuilder::new().default_capacity().build();
-//! # let font = FontAsset::file("assets/font.ttf");
-//! let handle = registry.load(font).await?;
-//!
-//! // Handle extensions
-//! if handle.is_unique() {
-//!     println!("Only reference!");
-//! }
-//! let size = handle.map(|font| font.bytes.len());
-//! println!("Total refs: {}", handle.total_ref_count());
-//!
-//! // Cache extensions
-//! let cache: AssetCache<FontAsset> = AssetCache::new(flui_assets::CacheCapacity::default());
-//! println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # Custom Asset Types
-//!
-//! Implement the [`Asset`] trait for custom types:
-//!
-//! ```rust
-//! use flui_assets::{Asset, AssetKey, AssetError, AssetMetadata};
-//!
-//! pub struct AudioAsset {
-//!     path: String,
-//! }
-//!
-//! #[derive(Debug, Clone)]
-//! pub struct AudioData {
-//!     pub samples: Vec<f32>,
-//!     pub sample_rate: u32,
-//! }
-//!
-//! impl Asset for AudioAsset {
-//!     type Data = AudioData;
-//!     type Key = AssetKey;
-//!     type Error = AssetError;
-//!
-//!     fn key(&self) -> AssetKey {
-//!         AssetKey::new(&self.path)
-//!     }
-//!
-//!     async fn load(&self) -> Result<AudioData, AssetError> {
-//!         let bytes = tokio::fs::read(&self.path).await?;
-//!         // Decode audio...
-//!         Ok(AudioData { samples: vec![], sample_rate: 44100 })
-//!     }
-//!
-//!     fn metadata(&self) -> Option<AssetMetadata> {
-//!         Some(AssetMetadata {
-//!             format: Some("Audio".to_string()),
-//!             ..Default::default()
-//!         })
-//!     }
-//! }
-//! ```
-//!
-//! # Performance
-//!
-//! ## Memory Efficiency
-//!
-//! - **AssetKey**: shared name ownership; clones retain the string allocation
-//! - **AssetHandle**: stores a key and an `Arc` sharing the loaded data
-//! - **Cache**: Moka manages entries and admission; statistics use a separate lock
-//!
-//! ## Thread Safety
-//!
-//! All public types implement `Send + Sync`:
-//!
-//! ```rust
-//! # use flui_assets::*;
-//! fn assert_send_sync<T: Send + Sync>() {}
-//!
-//! assert_send_sync::<AssetKey>();
-//! assert_send_sync::<AssetHandle<FontData, AssetKey>>();
-//! assert_send_sync::<AssetCache<FontAsset>>();
-//! assert_send_sync::<AssetRegistry>();
-//! ```
-//!
-//! # Feature Flags
-//!
-//! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
-//! - `full` - Enable all stable features
 
 #![cfg_attr(
     test,
@@ -163,61 +28,10 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Ship bar: crate is doc-complete — keep it that way.
 #![deny(missing_docs)]
 
-// Core traits and interfaces
-pub mod core;
+mod error;
+mod image_cache;
 
-// Optimized types
-pub mod types;
-
-// Error handling
-pub mod error;
-
-// Caching system
-pub mod cache;
-
-// Asset loaders
-pub mod loaders;
-
-// Concrete asset types
-pub mod assets;
-
-// Asset registry and orchestration
-pub mod registry;
-
-// Optional: Asset bundles
-// TODO: Implement bundle module
-// #[cfg(feature = "bundles")]
-// pub mod bundle;
-
-// Optional: Hot reload
-// TODO: Implement hot_reload module
-// #[cfg(feature = "hot-reload")]
-// pub mod hot_reload;
-
-// Re-exports for convenience
-pub use crate::cache::{
-    AssetCache, AssetCacheConfig, AssetCacheCore, AssetCacheExt, CacheCapacity, CacheExpiration,
-    ExpirationTooLong,
-};
-pub use crate::core::{Asset, AssetMetadata};
-pub use crate::error::{AssetError, Result};
-pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};
-#[cfg(feature = "images")]
-pub use crate::registry::{ImageLoad, ImageSource, LoadServices, NetworkSource};
-pub use crate::types::{
-    AssetHandle, AssetHandleCore, AssetHandleExt, AssetKey, FontData, LoadState,
-};
-
-// Re-export loaders
-pub use crate::loaders::BytesFileLoader;
-
-// Re-export concrete asset types
-pub use crate::assets::font::FontAsset;
-#[cfg(feature = "images")]
-pub use crate::assets::image::ImageAsset;
-
-// Re-export Image from flui_painting
-pub use flui_painting::paint::Image;
+pub use crate::error::{ImageLoadError, ImageLoadErrorKind};
+pub use crate::image_cache::{ImageCache, ImageCacheConfig, ImageLoad, ImageSource, LoadServices};

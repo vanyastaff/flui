@@ -64,7 +64,7 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
+| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders) and its `RegionPlan` (one pass under the bounding box or one per rect, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
@@ -205,9 +205,10 @@ Ok under a finite affine transform whose translation is below 2^23.
 `RecordingKey` holds the chunk's `ContentVersion`, the transform's bits
 (`RasterKey`: the linear part and the fraction of the translation, so a chunk
 moved by a fraction of a pixel records again), what the IR bakes from outside
-the chunk (`AmbientKey`: the scissor relative to the chunk's `PixelOrigin` or
-`Covers`, the inherited opacity, and the target's size, which a fill of the
-whole target records) and the painter's `ResourceEpoch`. The whole pixels of
+the chunk (`AmbientKey`: the inherited opacity and the target's size, which a
+fill of the whole target records) and the painter's `ResourceEpoch`. The
+scissor, SDF clip and clip chain the chunk is entered under are not in it
+(ADR-0306 §2). The whole pixels of
 the translation are the `PixelOrigin` a recording keeps: a chunk moved by whole
 device pixels hits when the fraction of its translation keeps its bits, as a
 translation on a dyadic grid (whole or quarter pixels) does at every magnitude
@@ -221,12 +222,21 @@ position (`ShapedRun::placed_glyphs`), so a replay places the glyphs a fresh
 recording at the new origin does while the paragraph is drawn under the
 chunk's own translation; under a translation pushed inside the chunk, which
 is composed at the device magnitude, a glyph at a rounding boundary can land a
-bin or a row away. A scissor that cuts the chunk
-moves with it only when its clip does, so a chunk moved under a fixed clip that
-cuts it records again. A recording holds no clip chain or scissor: the splice
-gives it the entry's clip and scissor, rebases every arena offset onto the
-segment as it stands, runs the merge rules on its first element only, and
-charges the frame's `RecordingBudget`. Whatever moves texels a recording
+bin or a row away. A recording holds no clip chain, and it culls no glyph:
+a chunk captured for the cache records every glyph it places
+(`GlyphCull::None`), whatever its entry scissor hides. The splice gives it
+the entry's clip chain, scissor and SDF clip, leaves out the glyphs wholly
+outside the entry scissor by the rule recording culls with
+(`batches::outside_scissor`), shortening the runs and regions that held them,
+rebases every arena offset onto the segment as it stands, runs the merge
+rules on its first element and on the run and tessellated batch after one
+the cull emptied, skips the glyph pass when the entry scissor holds the
+recording's grid glyphs (`GridExtent`), and
+charges the frame's `RecordingBudget`. A kept chunk opens no clip of its own,
+so each of its regions held the entry scissor alone and takes the new
+entry's; one recording serves a chunk scrolled under a fixed clip that cuts
+it (`scroll_one_row_under_fixed_clip`) and a chunk drawn under two clips
+(`a_chunk_under_two_clips_draws_each_from_one_recording`). Whatever moves texels a recording
 names (a glyph slot evicted or dropped, a glyph-atlas reset, a font-source
 switch, an image evicted, the image atlas reset, a reclaim) advances the epoch,
 which drops every entry, as a raster panic does (ADR-0304 §10). The target
@@ -393,8 +403,9 @@ drivers stay local runs.
 
 ## Ownership and thread safety
 
-`flui-engine` runs on the render thread, and one worker builds the first format's pipelines
-on the shared device while the first frame is built (ADR-0305 §1). No `Arc<Mutex<_>>` guards any
+`flui-engine` runs on the render thread; one worker builds the first format's pipelines
+on the shared device while the first frame is built (ADR-0305 §1), and another asks for a lost
+device's replacement (§8). No `Arc<Mutex<_>>` guards any
 engine subsystem, and none should come back; every
 shared handle is a wgpu ref-count.
 
@@ -405,6 +416,7 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
+| `GpuContext::requested` | `Option<DeviceWorker<(Adapter, Device, Queue)>>` over an `mpsc::Receiver` | Owned. The worker asks the adapter for its device and hands the answer, or the payload of its panic, over once; it is deliberately not joined, so a driver that hangs holds no owner: dropping the request (a newer one, an adoption, the context's retirement) leaves the worker to drop its device when it finds nobody to take it, and an answer already handed over is dropped with the request, on the dropping thread |
 | `GpuContext::warmup` | `Option<PipelineWarmup>` over a `JoinHandle<PipelineLibrary>` | Owned. The worker holds its own `Arc<DeviceDomain>` and hands the library back whole at the join; dropping the warm-up joins the worker, so no build outlives the context or the device a rebuild let go |
 | `GpuContext::pipeline_store` | `Option<PipelineStore>`: a `wgpu::PipelineCache`, its adapter key and an `Arc<dyn Storage>` | Owned; cloned into the warm-up worker, which saves the cache once its library is built. Every pipeline is created through it (`PipelineDevice`); a structure that builds pipelines on first use keeps a clone of the cache handle. A rebuild replaces it with a cold cache on the new device, unsaved from the lost one; nothing saves at retirement, since the runners stop admitting storage writes before the context drops. `Storage::publish` accepts the bytes before returning and writes them on the store's threads, so no save waits on a disk or takes a lock on the frame path |
 | `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics take no lock, and the executor only `try_recv`s the queue and waits on no lock |

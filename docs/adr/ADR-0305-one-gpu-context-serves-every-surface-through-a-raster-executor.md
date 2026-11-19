@@ -460,8 +460,8 @@ executor runs each command under its own catch, in both placements.
   (`renderer.rs:1641`). Every slot's frames settle `DeviceLost` until the rebuild succeeds.
 - One `DeviceRebuilds` per executor, which owns the one context, holds ADR-0267's backoff (16 ms
   doubling to a one-second ceiling) and its ceiling (ten failures at it) on the clock the executor
-  is built with, so a manual clock walks it; a failed attempt's wait runs from when the attempt
-  ended, since the request blocks for as long as the driver takes. The executor's record
+  is built with, so a manual clock walks it; a failed attempt's wait runs from when its answer
+  was taken, since the driver may take hundreds of milliseconds to answer. The executor's record
   publishes the state as
   `DeviceHealth { Healthy, Rebuilding { attempts }, GivenUp { attempts } }`, which the host maps to
   ADR-0267's `DeviceRecovery { Pending, Failed, Abandoned }` (an executor's death is `Dead`, §9),
@@ -470,12 +470,31 @@ executor runs each command under its own catch, in both placements.
   (`RasterSender::take_device_failure`); that record is what `is_device_lost` reads instead of the
   backend (`raster_lane.rs:289`). A loss that this turn's own frames meet is published after the
   slots are served, with its first rebuild due now (`device_retry_at` answers the current instant),
-  so the owner runs the next turn. A rebuild that panics counts as a failure and its panic is
+  so the owner runs the next turn.
+  The rebuild asks for its adapter on the executor's thread, since the adapter must present to a
+  slot's surface and the request only enumerates the instance's adapters, and for its device on
+  a worker of its own (`crates/flui-engine/src/device_worker.rs`), since a driver may take
+  hundreds of milliseconds to answer after a reset. The turn that starts the request does not
+  wait for it. The device stays lost meanwhile, and the owner's deadline (`device_retry_at`) is
+  the request's own, `DEVICE_REQUEST_DEADLINE` (five seconds) after it started: a request
+  unanswered by then is a failed attempt, so a driver that hangs inside it walks the backoff to
+  the give-up instead of holding the device lost with no attempt counted, and its worker is left
+  to end on its own. The worker's answer calls the executor's `DeviceAnswered` wake from the
+  answering thread: inline, the raster host asks every window it attached for a frame (every
+  window lists its redraw requester), and the frame gate counts the request's deadline, so that
+  frame's turn installs the device; threaded, it rings the raster thread, whose turn installs it
+  and wakes the owner. Each request carries a `DeviceTicket` the executor mints; it installs only the
+  answer to the ticket it waits for, and it stops waiting when the attempt fails or the streak
+  ends (the device came back, an adoption, a give-up), so a late answer installs nothing, and a
+  retiring context drops its worker's answer without waiting for it. A request that answers no
+  device, or panics on its worker, is a failed attempt; the panic is resumed on the executor's
+  thread when the answer is taken. A rebuild that panics counts as a failure and its panic is
   resumed once the turn has served every slot; the context counts its device lost until every
   slot is on the new one, so a rebuild that unwinds part way is asked for again from the start
   (what an unwound attempt refused is kept and answered by the attempt that finishes),
   and the executor restamps every slot whenever a lost device renders again, whichever way it
-  came back. A backend that cannot rebuild where the executor runs (the web, below) is given up
+  came back. A backend whose device requests cannot be answered where the executor runs (the web,
+  below) is given up
   at the first due attempt. After `GivenUp` the context stays given up until
   the application asks again; nothing retries on its own.
   That retry runs ADR-0244 decision 1's probe again in fresh instances, because the backend whose
@@ -796,7 +815,15 @@ the facade. Every production use of `with_backend` becomes:
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,
   `a_lost_device_waits_out_its_rebuild_backoff`,
   `a_dead_renderer_is_reported_once_and_its_frames_go_on` (§9) and
-  `a_given_up_device_renders_again_when_the_application_asks`.
+  `a_given_up_device_renders_again_when_the_application_asks`; the device request off the turn
+  (§8): `a_device_request_answered_after_its_turn_is_installed_by_the_next`,
+  `a_device_request_unanswered_past_its_deadline_fails_its_attempt`,
+  `an_answer_nobody_waits_for_installs_nothing` and
+  `a_failed_device_request_waits_its_backoff_from_its_answer`, with `device_worker.rs`'s
+  `a_worker_hands_over_its_answer_or_its_panic_and_wakes_the_executor` and
+  `a_request_nobody_waits_for_holds_nobody`; the raster host's
+  `an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it`, and `gpu_context.rs`'s
+  `a_slot_detached_while_its_device_is_requested_is_not_served_by_the_new_device`.
 - Runs: a platform's placement becomes threaded only with its run recorded in
   `docs/platform-parity.md` (§10, the row `frames-drawn-on-a-raster-thread`). Wayland is threaded
   on this run of two windows, one occluded, on lavapipe and on no device:

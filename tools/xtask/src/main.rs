@@ -50,14 +50,8 @@ struct Cli {
 enum Command {
     /// Run the source checks that need no workspace build (the CI `checks` job).
     Checks(tasks::ChecksArgs),
-    /// Clippy every feature on its own (cargo-hack).
-    FeatureMatrix(tasks::FeatureMatrixArgs),
-    /// Build each supported facade feature combination on its own.
-    FacadeCombos(tasks::FacadeCombosArgs),
     /// Clippy the Win32, AppKit, Android and iOS backends without linking.
     CrossTypecheck(tasks::CrossTypecheckArgs),
-    /// Check and clippy the workspace for wasm32.
-    WasmCheck(tasks::WasmCheckArgs),
     /// Link the wasm demos and check their imports.
     WasmLink(tasks::WasmLinkArgs),
     /// Run the wasm32 tests under wasm-bindgen-test-runner.
@@ -112,10 +106,7 @@ fn main() -> ExitCode {
     }
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
-        Command::FeatureMatrix(args) => tasks::feature_matrix(&args),
-        Command::FacadeCombos(args) => tasks::facade_combos(&args),
         Command::CrossTypecheck(args) => tasks::cross_typecheck(&args),
-        Command::WasmCheck(args) => tasks::wasm_check(&args),
         Command::WasmLink(args) => tasks::wasm_link(&args),
         Command::WasmTest(args) => tasks::wasm_test(&args),
         Command::Fuzz(args) => tasks::fuzz(&args),

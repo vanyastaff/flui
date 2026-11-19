@@ -55,7 +55,7 @@ impl ImageCacheKey {
 
     /// The key of the asset at `path` loaded through `registry`.
     #[cfg(feature = "asset-images")]
-    pub(super) fn asset(registry: &Arc<flui_assets::AssetRegistry>, path: Arc<str>) -> Self {
+    pub(super) fn asset(registry: &Arc<flui_assets::ImageCache>, path: Arc<str>) -> Self {
         Self(Repr::Registry(RegistryImageKey {
             registry: Arc::downgrade(registry),
             entry: RegistryEntry::Asset(path),
@@ -67,7 +67,7 @@ impl ImageCacheKey {
     /// `Image`'s client does not change while it is mounted, so the key need
     /// not name it, while the registry keeps two clients' images apart.
     #[cfg(feature = "asset-images")]
-    pub(super) fn network(registry: &Arc<flui_assets::AssetRegistry>, url: Arc<str>) -> Self {
+    pub(super) fn network(registry: &Arc<flui_assets::ImageCache>, url: Arc<str>) -> Self {
         Self(Repr::Registry(RegistryImageKey {
             registry: Arc::downgrade(registry),
             entry: RegistryEntry::Network(url),
@@ -83,7 +83,7 @@ impl ImageCacheKey {
 #[cfg(feature = "asset-images")]
 #[derive(Debug, Clone)]
 struct RegistryImageKey {
-    registry: std::sync::Weak<flui_assets::AssetRegistry>,
+    registry: std::sync::Weak<flui_assets::ImageCache>,
     entry: RegistryEntry,
 }
 

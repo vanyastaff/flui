@@ -32,7 +32,7 @@ fn rig() -> Rig {
 
 fn rig_on(clock: std::rc::Rc<dyn flui_foundation::MonotonicClock>) -> Rig {
     let backend = ScriptedSlots::new();
-    let (executor, sender) = RasterExecutor::new(backend.clone(), clock, || {});
+    let (executor, sender) = RasterExecutor::new(backend.clone(), clock, || {}, || {});
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     Rig {
         executor,
@@ -458,10 +458,20 @@ impl flui_engine::RasterBackend for ReentersOwner {
         self.inner.device_lost()
     }
 
-    fn rebuild_device(
+    fn request_device(
         &mut self,
-    ) -> flui_engine::EngineResult<Vec<(flui_engine::SlotId, flui_engine::EngineError)>> {
-        self.inner.rebuild_device()
+        ticket: flui_engine::DeviceTicket,
+        answered: flui_engine::DeviceAnswered,
+    ) -> flui_engine::EngineResult<()> {
+        self.inner.request_device(ticket, answered)
+    }
+
+    fn install_requested_device(
+        &mut self,
+        ticket: flui_engine::DeviceTicket,
+    ) -> Option<flui_engine::EngineResult<Vec<(flui_engine::SlotId, flui_engine::EngineError)>>>
+    {
+        self.inner.install_requested_device(ticket)
     }
 
     fn adopt_device(
@@ -471,8 +481,8 @@ impl flui_engine::RasterBackend for ReentersOwner {
         self.inner.adopt_device(device)
     }
 
-    fn rebuilds_inline(&self) -> bool {
-        self.inner.rebuilds_inline()
+    fn requests_devices(&self) -> bool {
+        self.inner.requests_devices()
     }
 }
 
@@ -496,6 +506,7 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
     let (executor, sender) = RasterExecutor::new(
         backend,
         std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
         || {},
     );
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
@@ -992,14 +1003,14 @@ fn a_panicked_adoption_still_asks_every_window_for_a_surface() {
     let mut rig = rig();
     let (slot, _) = rig.sized_window();
     // Where the executor cannot rebuild, it gives the device up at once.
-    rig.backend.cannot_rebuild_inline();
+    rig.backend.cannot_request_devices();
     rig.backend.lose_device();
     let _ = rig.executor.turn();
     assert!(matches!(
         rig.sender.device_health(),
         DeviceHealth::GivenUp { .. }
     ));
-    rig.backend.can_rebuild_inline();
+    rig.backend.can_request_devices();
     let _given_up = rig.sender.take_device_failure();
 
     rig.backend.script_rebuild(ScriptedAnswer::Panic);
@@ -1333,6 +1344,7 @@ fn a_resize_answer_is_matched_to_its_send_by_generation() {
     let (mut executor, sender) = RasterExecutor::new(
         backend,
         std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
         || {},
     );
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);

@@ -91,15 +91,13 @@ impl ImageServices {
         self.http.as_ref()
     }
 
-    /// The services as an asset registry's load takes them.
+    /// The lanes as a `flui-assets` load takes them; the HTTP client goes
+    /// into the network source instead.
     #[cfg(feature = "asset-images")]
     pub(crate) fn load_services(&self) -> flui_assets::LoadServices {
         let mut services = flui_assets::LoadServices::new();
         if let Some(background) = &self.background {
-            services = services.with_lanes(Arc::clone(background.executor()));
-        }
-        if let Some(http) = &self.http {
-            services = services.with_http(http.clone());
+            services = services.lanes(Arc::clone(background.executor()));
         }
         services
     }
@@ -352,7 +350,7 @@ pub enum ImageProviderError {
     ///
     /// Distinct from [`FileNotFound`](Self::FileNotFound): this variant
     /// covers `AssetImage`/`NetworkImage`'s asynchronous sources, backed by
-    /// a `flui-assets::AssetError::NotFound`. `path` may be a URL, not
+    /// a missing file in `flui-assets`. `path` may be a URL, not
     /// necessarily a filesystem path, so a `PathBuf` would misrepresent it.
     #[error("image source not found: {path}")]
     SourceNotFound {
@@ -370,8 +368,16 @@ pub enum ImageProviderError {
     /// a refused network connection is not a decode problem).
     #[error("failed to load image source: {reason}")]
     AssetLoadFailed {
-        /// The underlying `flui-assets::AssetError`'s message.
+        /// The `flui_assets::ImageLoadError`'s message.
         reason: String,
+    },
+
+    /// A network image was requested where the host provides no HTTP
+    /// client; nothing was sent.
+    #[error("no HTTP client to fetch `{url}`")]
+    HttpUnavailable {
+        /// The URL that was not fetched.
+        url: String,
     },
 
     /// A [`DecodeJob`] step ended without an answer: its lane refused it, it
@@ -398,34 +404,31 @@ impl ImageProviderError {
             Self::RequiresAsyncResolve { .. } => "requires-async-resolve",
             Self::SourceNotFound { .. } => "source-not-found",
             Self::AssetLoadFailed { .. } => "asset-load-failed",
+            Self::HttpUnavailable { .. } => "http-unavailable",
             Self::Background(_) => "background",
         }
     }
 }
 
-/// Maps a `flui-assets::AssetError` onto the closest honest
-/// [`ImageProviderError`] — never [`DecodeFailed`](ImageProviderError::DecodeFailed),
-/// since a `flui-assets` load failure (missing file, refused connection,
-/// unsupported format, …) happens before any bytes reach a decoder. Shared by
-/// `AssetImage` and `NetworkImage`.
-///
-/// As of `flui-assets` 0.2, `ImageAsset::load`'s file-read branch wraps I/O
-/// errors — including "not found" — as `AssetError::LoadFailed`, not
-/// `AssetError::NotFound`, so [`SourceNotFound`](ImageProviderError::SourceNotFound)
-/// is not reachable through a missing local file today; a missing file
-/// currently surfaces as [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed)
-/// with the underlying I/O message preserved. The match here still handles
-/// `NotFound` correctly so this stays honest if that upstream distinction is
-/// added later — the important, load-bearing guarantee this function makes
-/// today is only "never mislabel a load failure as `DecodeFailed`".
+/// Maps a failed `flui-assets` load onto the [`ImageProviderError`] its kind
+/// names: a missing file is [`SourceNotFound`](ImageProviderError::SourceNotFound),
+/// bytes that did not decode are [`DecodeFailed`](ImageProviderError::DecodeFailed),
+/// and every other failure (a read error, a failed request, refused lanes, a
+/// panic) is [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed) with the
+/// error's message. Shared by `AssetImage` and `NetworkImage`.
 #[cfg(feature = "asset-images")]
 impl ImageProviderError {
-    pub(crate) fn from_asset_error(source: String, error: flui_assets::AssetError) -> Self {
-        if matches!(error, flui_assets::AssetError::NotFound { .. }) {
-            return Self::SourceNotFound { path: source };
-        }
-        Self::AssetLoadFailed {
-            reason: error.to_string(),
+    pub(crate) fn from_load_error(error: &flui_assets::ImageLoadError) -> Self {
+        match error.kind() {
+            flui_assets::ImageLoadErrorKind::NotFound => Self::SourceNotFound {
+                path: error.image().to_string(),
+            },
+            flui_assets::ImageLoadErrorKind::Decode(decode) => Self::DecodeFailed {
+                reason: decode.to_string(),
+            },
+            _ => Self::AssetLoadFailed {
+                reason: error.to_string(),
+            },
         }
     }
 }
