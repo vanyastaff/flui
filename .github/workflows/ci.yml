@@ -228,12 +228,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
+          # a file still in the index but deleted from the working tree has
+          # nothing to read; grep finding no line is the empty list below
           files=$(git -c core.quotepath=off ls-files --cached --others --exclude-standard -- '*.md' \
-            | grep -v '^docs/plans/')
-          [ -n "$files" ] || { echo "no markdown file listed"; exit 1; }
-          # a file still in the index but deleted from the working tree has nothing to read
+            | { grep -v '^docs/plans/' || [ "$?" -eq 1 ]; } \
+            | while IFS= read -r file; do if [ -f "$file" ]; then printf '%s\n' "$file"; fi; done)
+          # lychee given no file exits 0, which looks like every link resolving
+          [ -n "$files" ] || { echo "::error::no markdown file listed"; exit 1; }
           printf '%s\n' "$files" \
-            | while IFS= read -r file; do if [ -f "$file" ]; then printf '%s\n' "$file"; fi; done \
             | lychee --offline --no-progress --include-fragments=anchor-only \
                 --root-dir "$PWD" \
                 --remap "^https://github\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)\$ file://$PWD/\$1" \
