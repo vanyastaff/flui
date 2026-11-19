@@ -370,7 +370,7 @@ pub struct GpuContext {
     #[cfg(test)]
     rebuilds_failing: u32,
     /// What the next device request waits on, on its worker, before it asks.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     request_hold: Option<std::sync::mpsc::Receiver<()>>,
     _one_mutator: PhantomData<Cell<()>>,
 }
@@ -527,7 +527,7 @@ impl GpuContext {
             panic_in_warmup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
-            #[cfg(test)]
+            #[cfg(all(test, not(target_arch = "wasm32")))]
             request_hold: None,
             _one_mutator: PhantomData,
         }
@@ -1383,7 +1383,7 @@ impl GpuContext {
 
     /// Hold the next device request on its worker until the answer this
     /// returns is sent (or dropped), so a test acts while it is under way.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn hold_next_device_request(&mut self) -> std::sync::mpsc::Sender<()> {
         let (release, held) = std::sync::mpsc::channel();
         self.request_hold = Some(held);
@@ -1392,7 +1392,7 @@ impl GpuContext {
 
     /// Wait until the device request under way answered, so the executor's
     /// next turn installs its device; nothing when none is under way.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn await_device_request(&mut self) {
         if let Some(worker) = self.requested.as_mut() {
             worker.wait();
@@ -3788,6 +3788,7 @@ mod tests {
     /// Red-check: skip `GpuContext::detach` in the backend's `detach`, so the
     /// closed slot stays in the context's table, and the install serves it.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_slot_detached_while_its_device_is_requested_is_not_served_by_the_new_device() {
         use crate::raster_executor::DeviceHealth;
 
