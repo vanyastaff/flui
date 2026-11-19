@@ -318,6 +318,14 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// # Errors
     ///
     /// Hands `value` back off the owner thread.
+    #[cfg_attr(
+        not(feature = "scripted"),
+        allow(
+            dead_code,
+            reason = "the macOS host and the headless host's deferred opens insert: another \
+                      target built without the test controls never does"
+        )
+    )]
     pub(crate) fn insert(&self, key: K, value: V) -> Result<Option<V>, V> {
         let mut value = Some(value);
         self.cell

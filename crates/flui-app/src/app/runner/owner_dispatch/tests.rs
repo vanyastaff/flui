@@ -50,95 +50,33 @@ fn observe_runtime<T: 'static>(
         .expect("observation completed synchronously")
 }
 
-struct ReentrantIdentityWindow {
-    inner: crate::app::window_test_support::TestWindow,
+/// A window that, once asked its identity, asks the owner to close a
+/// presentation that is not installed and checks the owner refuses. Assembly reads the
+/// window's state, where `on_scale` runs.
+fn reentrant_identity_window(
     probe: flui_foundation::PresentationAddress,
     queried: Arc<std::sync::atomic::AtomicBool>,
     on_scale: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    capabilities: flui_platform::WindowCapabilities,
-}
-
-impl PlatformWindow for ReentrantIdentityWindow {
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn id(&self) -> flui_platform::WindowId {
-        self.queried
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        assert!(matches!(
-            crate::app::runner::request_presentation_close(self.probe),
-            Err(crate::app::PresentationCloseError::Close(
-                crate::app::CloseRequestError::UnknownPresentation { .. }
-            ) | crate::app::PresentationCloseError::NoHostedRuntime)
-        ));
-        self.inner.id()
-    }
-
-    fn request_redraw(&self) {
-        self.inner.request_redraw();
-    }
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        self.inner.redraw_requester()
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        self.inner.surface_target()
-    }
-    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        self.inner.set_cursor(cursor)
-    }
-    fn set_frame_rate_hint(
-        &self,
-        hint: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_frame_rate_hint(hint)
-    }
-    fn set_input_regions(
-        &self,
-        regions: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_input_regions(regions)
-    }
-    /// Assembly reads the window's scale from here: the hook runs inside it.
-    fn state(&self) -> flui_platform::WindowState {
-        if let Some(on_scale) = &self.on_scale {
-            on_scale();
-        }
-        self.inner.state().with_capabilities(self.capabilities)
-    }
-
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.capabilities)?;
-        Ok(())
-    }
-
-    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-
-    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
+) -> Rc<dyn PlatformWindow> {
+    Rc::new(
+        flui_testing::MockWindow::new()
+            .with_id(flui_platform::WindowId::try_from_raw(100).expect("a nonzero window id"))
+            .with_observer(move |call| {
+                if matches!(call, flui_testing::WindowCall::Id) {
+                    queried.store(true, std::sync::atomic::Ordering::SeqCst);
+                    assert!(matches!(
+                        crate::app::runner::request_presentation_close(probe),
+                        Err(crate::app::PresentationCloseError::Close(
+                            crate::app::CloseRequestError::UnknownPresentation { .. }
+                        ) | crate::app::PresentationCloseError::NoHostedRuntime)
+                    ));
+                } else if matches!(call, flui_testing::WindowCall::State)
+                    && let Some(on_scale) = &on_scale
+                {
+                    on_scale();
+                }
+            }),
+    )
 }
 
 fn native_identity_is_observed_before_registry_publication() {
@@ -162,16 +100,7 @@ fn native_identity_is_observed_before_registry_publication() {
         };
         drop(uninstalled);
         let queried = Arc::new(AtomicBool::new(false));
-        let window: Rc<dyn PlatformWindow> = Rc::new(ReentrantIdentityWindow {
-            inner: crate::app::window_test_support::TestWindow::new()
-                .with_id(flui_platform::WindowId::try_from_raw(100).expect("a nonzero window id")),
-            probe,
-            queried: Arc::clone(&queried),
-            on_scale: None,
-            capabilities: flui_platform::WindowCapabilities::NONE
-                .publish()
-                .expect("the process has publications left"),
-        });
+        let window = reentrant_identity_window(probe, Arc::clone(&queried), None);
         let installed = match mode {
             Install::ReplaceRuntime => {
                 install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window)
@@ -379,7 +308,7 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         let primary = install_test_ui_runtime();
         let sibling = keep_sibling.then(|| {
             let window: Rc<dyn PlatformWindow> =
-                Rc::new(crate::app::window_test_support::TestWindow::new().with_id(
+                Rc::new(flui_testing::MockWindow::new().with_id(
                     flui_platform::WindowId::try_from_raw(99).expect("a nonzero window id"),
                 ));
             install_presentation_alongside(primary, window).expect("initial sibling installs")
@@ -392,12 +321,10 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         drop(uninstalled);
         let assembled = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&assembled);
-        let window: Rc<dyn PlatformWindow> = Rc::new(ReentrantIdentityWindow {
-            inner: crate::app::window_test_support::TestWindow::new()
-                .with_id(flui_platform::WindowId::try_from_raw(100).expect("a nonzero window id")),
+        let window = reentrant_identity_window(
             probe,
-            queried: Arc::new(AtomicBool::new(false)),
-            on_scale: Some(Arc::new(move || {
+            Arc::new(AtomicBool::new(false)),
+            Some(Arc::new(move || {
                 if observed.swap(true, Ordering::SeqCst) {
                     return;
                 }
@@ -411,10 +338,7 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
                     close_this_window(primary);
                 }
             })),
-            capabilities: flui_platform::WindowCapabilities::NONE
-                .publish()
-                .expect("the process has publications left"),
-        });
+        );
         let result = install_presentation_alongside(primary, Rc::clone(&window));
         assert!(
             assembled.load(Ordering::SeqCst),
@@ -1358,7 +1282,6 @@ fn preferences_wake_each_isolated_window() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_native::{HeadlessPlatform, Platform};
     use flui_view::prelude::*;
-    use std::sync::atomic::Ordering;
 
     #[derive(Clone, StatelessView)]
     struct Reader(Rc<RefCell<Vec<TextSizing>>>);
@@ -1377,11 +1300,10 @@ fn preferences_wake_each_isolated_window() {
         .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             for id in [101, 102] {
-                let window = crate::app::window_test_support::TestWindow::new().with_id(
+                let mock = Rc::new(flui_testing::MockWindow::new().with_id(
                     flui_platform::WindowId::try_from_raw(id).expect("a nonzero window id"),
-                );
-                let redraws = window.redraw_calls_handle();
-                let window: Rc<dyn PlatformWindow> = Rc::new(window);
+                ));
+                let window: Rc<dyn PlatformWindow> = mock.clone();
                 let observed = Rc::new(RefCell::new(Vec::new()));
                 let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
                 runtime.attach_root_widget_with_size(
@@ -1412,14 +1334,16 @@ fn preferences_wake_each_isolated_window() {
                 .expect("initial frame");
                 installed
                     .borrow_mut()
-                    .push((dispatcher, frame.binding, window, redraws, observed));
+                    .push((dispatcher, frame.binding, window, mock, observed));
             }
             Ok(())
         }))
         .expect("bootstrap");
-    for (_, _, _, redraws, _) in outputs.borrow().iter() {
-        redraws.store(0, Ordering::SeqCst);
-    }
+    let redraws_before: Vec<usize> = outputs
+        .borrow()
+        .iter()
+        .map(|(_, _, _, mock, _)| mock.redraw_requests())
+        .collect();
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
     host.logical()
         .update_preferences(
@@ -1429,9 +1353,11 @@ fn preferences_wake_each_isolated_window() {
             host.effects(),
         )
         .expect("preferences");
-    for (dispatcher, frame, _, redraws, observed) in outputs.borrow().iter() {
+    for ((dispatcher, frame, _, mock, observed), before) in
+        outputs.borrow().iter().zip(redraws_before)
+    {
         assert!(
-            redraws.load(Ordering::SeqCst) > 0,
+            mock.redraw_requests() > before,
             "each isolated native window must be woken"
         );
         dispatch_platform_ui_runtime(

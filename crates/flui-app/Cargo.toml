@@ -58,15 +58,19 @@ native = []
 unstable-windows = []
 
 # The `testing` module (ADR-0243): an application run on the headless platform,
-# driven from the test thread. Off by default and not part of the release API;
-# this crate's tests turn it on through the dev-dependency on itself.
-testing = ["flui-engine/testing"]
+# driven from the test thread, through the headless host's doubles and
+# controls (`flui-native`'s `scripted`). Off by default and not part of the
+# release API; this crate's tests turn it on through the dev-dependency on
+# itself.
+testing = ["flui-engine/testing", "flui-native/scripted"]
 
 # The driver agent (ADR-0239) in an optimized build: a debug build always
 # carries it. It serves the app's windows only when the launch names an
-# endpoint (`flui_protocol::launch`); with none, nothing is created. The facade's
-# `driver` feature forwards here.
-driver = []
+# endpoint (`flui_protocol::launch`); with none, nothing is created. With it
+# comes the contract's scenario primitive (`flui_platform::capability::scripted`,
+# ADR-0154 §10), which a driver substitutes a dialog's or a permission's answer
+# with. The facade's `driver` feature forwards here.
+driver = ["flui-platform/scripted"]
 
 [dependencies]
 flui-platform = { workspace = true }

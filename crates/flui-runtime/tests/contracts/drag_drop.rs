@@ -1229,85 +1229,17 @@ impl PlatformDragSource for FirstStartPanics {
     }
 }
 
-/// A headless window that starts OS drags through `source`.
-struct WithDragSource {
-    window: Rc<dyn PlatformWindow>,
-    source: Arc<dyn PlatformDragSource>,
-}
-
-impl PlatformWindow for WithDragSource {
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn id(&self) -> flui_platform::WindowId {
-        self.window.id()
-    }
-    fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        self.window.redraw_requester()
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        self.window.surface_target()
-    }
-    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        self.window.set_cursor(cursor)
-    }
-    fn set_frame_rate_hint(
-        &self,
-        hint: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.window.set_frame_rate_hint(hint)
-    }
-    fn set_input_regions(
-        &self,
-        regions: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.window.set_input_regions(regions)
-    }
-    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
-        Some(Arc::clone(&self.source))
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        self.window.state()
-    }
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        self.window.apply(command)
-    }
-    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        self.window.text_input()
-    }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        self.window.haptics()
-    }
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        self.window.system_chrome()
-    }
-}
-
 /// Two drags leave their window and the backend's first start panics: that
 /// drag goes back to its window as a refused one does, the start after it
 /// still runs, and the panic propagates once both are done.
 fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
     let platform = HeadlessPlatform::new();
     let (host, _) = open(&platform);
-    let window: Rc<dyn PlatformWindow> = Rc::new(WithDragSource {
-        window: as_platform(&host),
-        source: Arc::new(FirstStartPanics::default()),
-    });
+    // A headless window that starts OS drags through the panicking source.
+    let window: Rc<dyn PlatformWindow> = Rc::new(
+        flui_testing::MockWindow::over(as_platform(&host))
+            .with_drag_source(Arc::new(FirstStartPanics::default())),
+    );
     let runtime = runtime_over(
         &platform,
         PresentationWindow::new(Rc::clone(&window), None),

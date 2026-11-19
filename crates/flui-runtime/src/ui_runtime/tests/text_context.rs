@@ -66,7 +66,7 @@ fn a_second_presentation_adds_no_text_context() {
     assert_eq!(font_collection_holders(&fonts), 2);
 
     let window_b: Rc<dyn PlatformWindow> = Rc::new(
-        crate::testing::TestWindow::new()
+        flui_testing::MockWindow::new()
             .with_id(flui_platform::WindowId::try_from_raw(42).expect("42 is a nonzero window id")),
     );
     let presentation_b = ui_runtime.assemble_presentation(window_b);
@@ -143,7 +143,7 @@ fn every_presentation_pipeline_holds_the_ui_runtimes_text_context() {
     let fonts = FontCollection::new();
     let mut ui_runtime = ui_runtime_over(&fonts);
     let window_b: Rc<dyn PlatformWindow> = Rc::new(
-        crate::testing::TestWindow::new()
+        flui_testing::MockWindow::new()
             .with_id(flui_platform::WindowId::try_from_raw(42).expect("42 is a nonzero window id")),
     );
     let presentation_b = ui_runtime.assemble_presentation(window_b);

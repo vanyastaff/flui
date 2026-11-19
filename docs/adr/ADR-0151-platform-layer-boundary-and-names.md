@@ -760,8 +760,10 @@ secrets in diagnostics) are decided by the records the table cites.
 - **Scripted providers are reachable from a driven app.** The scripting primitive of ADR-0154 sits
   behind the contract's `scripted` feature, which `flui-testing` and `flui-app` under `driver`
   both enable, so a driver scenario can answer a dialog or a permission without the OS. The
-  window double is one, `flui-testing`'s (ADR-0243); the 15 implementations of `PlatformWindow`
-  outside the core host collapse into it when ADR-0254's shape lands.
+  window double is one: `flui_platform::testing::MockWindow`, the double of the contract crate's
+  own trait (ADR-0243), which `flui-testing` re-exports as `flui_testing::MockWindow`; no crate
+  outside the core host and the kits implements `PlatformWindow`. The core host's doubles and
+  the headless host's controls are named at its root only with its own `scripted` feature.
 
 These are properties of areas already on the closed list (displays, input, text, lifecycle, data
 directories). They add no area to it.

@@ -9,8 +9,6 @@
 - `WindowCapabilities::unavailable` and `WindowCapabilities::refusal`: a capability marked
   with where it is missing (`CapabilityAbsence`; this device lacks it: `NotOnThisDevice`) is
   refused at admission with that reason.
-- `flui_platform::window_takes_no_frame_verbs!`, the per-frame verbs of a window test double
-  whose window system takes neither.
 
 ### Changed
 

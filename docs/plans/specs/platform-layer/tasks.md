@@ -1,20 +1,16 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 122 закрыты и 12 открыты (сверено с `main` @ `5b4e3202b` и закрытием
-  LY139, LY61, LY148 и LY145); записи — в разделе «Ход исполнения». Прогоны на устройствах,
-  которых ждут закрытые задачи, — строки
+  Из 134 задач серии 125 закрыты и 9 открыты (сверено с отметками записей «Хода исполнения» на
+  `main` @ `e7e0d43c1` и закрытием LY100); записи — в разделе «Ход исполнения». Прогоны на
+  устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
-  - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
-  - LY100 — `flui-app[driver]` включает `scripted`, один двойник окна вместо шестнадцати, двойники
-    ядра за фичей;
-  - LY102 — модули `flui-platform` по областям (не начата, после LY100);
+  - LY102 — модули `flui-platform` по областям (не начата);
   - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
@@ -6235,25 +6231,38 @@ GPU-память простаивающего или невидимого окн
   правило — `crates/flui-widgets/ARCHITECTURE.md`, «An obscured field copies nothing»). Прогоны
   защищённого ввода на macOS, iOS, Android и Windows и скрытой записи на macOS, iOS и Android —
   заметки строк parity «Secure text entry…» и «Concealed clipboard entries…».
-- [ ] **LY100** (открыта) — фича `scripted` у `flui-platform` есть (`capability::scripted`, LY54):
-  её включает `testing` контракта, `flui-testing` получает её через `flui-platform/testing`,
-  фасадный `testing` — через `flui-platform/scripted`. Остаётся код: (1) фича `driver` у
-  `flui-app` (`crates/flui-app/Cargo.toml:69`, сейчас пустая) включает `flui-platform/scripted`;
-  (2) шестнадцать `impl PlatformWindow for` вне ядра и kit сводятся к одному двойнику окна kit:
-  `crates/flui-interaction/tests/{interaction_lane,drag_sessions,deadline_recovery,arena_ownership}.rs`,
-  `crates/flui-runtime/tests/contracts/{owner_metrics,drag_drop,display_timing}.rs` (в
-  `owner_metrics` два), `crates/flui-runtime/src/ui_runtime/tests/closing_one_presentation_is_invisible_to_siblings.rs`,
-  `crates/flui-runtime/src/ui_runtime/preferences/tests.rs` (два),
-  `crates/flui-app/src/app/window_control_tests.rs`,
-  `crates/flui-app/src/app/runner/owner_dispatch/tests.rs`, `crates/flui-system/src/web/tests.rs`;
-  `flui_runtime::testing::TestWindow` — второй двойник kit рядом с окном `flui_testing`, а
-  неисправное окно `crates/flui-testing/tests/window_conformance.rs` — фикстура conformance;
-  (3) двойники и управления headless-хоста в корне `flui-native` (`FakeAccessibility`,
-  `FakeTextInput`, `Headless*`, `crates/flui-native/src/lib.rs:283–316`) уходят за фичу; хост
-  `HeadlessPlatform` выбирает и `current_platform` при `FLUI_HEADLESS=1`. Тест строки: `rg "impl
-  .*PlatformWindow for"` вне ядра и kit пуст; сценарий диалога через агента драйвера на headless.
+- [x] **LY100** — ветка `platform/scripted-feature-one-window-double`. **Что сделано.**
+  (1) `flui-app`: `driver` включает `flui-platform/scripted` (сценарный примитив, ADR-0154 п. 10),
+  `testing` — `flui-native/scripted`. (2) Один двойник окна —
+  `flui_platform::testing::MockWindow`, двойник трейта своего крейта (ADR-0243 D4), который
+  `flui-testing` реэкспортирует как `flui_testing::MockWindow` (с `WindowCall`): сам по себе или
+  поверх окна хоста (`over`), строители того, что задаёт тест, записи (`redraw_requests`,
+  `applied`, `input_regions`), наблюдатель каждого вызова (`with_observer`), крючок перерисовки и
+  значения, падающие вместе с окном (`keeping`). Удалены `flui_runtime::testing::TestWindow`,
+  макрос `window_takes_no_frame_verbs!` и шестнадцать окон тестов: `CaptureWakeWindow`,
+  `DragWindow`, `WakeWindow`, `RedrawCounter` (`flui-interaction`), `GeometryWindow`,
+  `RegionWindow`, `WithDragSource`, `CountingWindow`, `OwnershipWindow`, `Window` и
+  `HapticWindow` (`flui-runtime`), `RecordingWindow` и `ReentrantIdentityWindow` (`flui-app`),
+  `TestWindow` и `CanvasHostWindow` (`flui-system`), `Named` (`flui-platform`). (3) Ядро: у
+  `flui-native` фича `scripted` (её включает `testing`); корневые реэкспорты
+  `HeadlessPlatform`, `HeadlessHostWindow`, `FakeTextInput`, `FakeAccessibility`, `DisplaySpec`,
+  `DisplayChange`, `DisplayChangeError`, `UnknownDisplay` и `Headless*` и методы управления
+  headless-хостом на `HostPlatform<H>` — только с ней; хост работает и без неё (`FLUI_HEADLESS`,
+  `headless_platform()` отдаёт `dyn Platform`). Поля, которые читают только управления, —
+  `cfg_attr(not(feature = "scripted"), expect(dead_code, …))` на месте. Dev-зависимости
+  `flui-runtime` и `flui-testing` на `flui-native` включают `scripted`. **Решения сверх
+  строки:** двойник определён в `flui-platform`, а не в `flui-testing`: так его видят юнит-тесты
+  самого контракта (`Named`) и крейтов под kit; окно `HeadlessHost` (`flui_testing::HeadlessWindow`)
+  и неисправное окно conformance (`Faulty`, `crates/flui-testing/tests/window_conformance.rs`)
+  остаются в kit — первое окно хоста kit, второе нарочно нарушает контракт.
+  **Тесты.** `a_dialog_a_tap_through_the_agent_opens_is_answered_by_the_script`
+  (`flui-system`, `system_it`): нажатие через агента окна — путь драйвера — открывает диалог
+  виджета, сценарная система отвечает на headless, виджет показывает ответ; compile-fail
+  `tests/ui/native/headless_doubles_need_scripted.rs` (`thread_boundary_ui`): без `scripted` ни
+  одно из имён двойников ядра не разрешается. **Проверки.** `rg --multiline
+  "^\s*impl[^{;/]*PlatformWindow\s+for"` вне `crates/flui-native` и kit — ноль.
 
-- [ ] **LY102** (открыта, не начата; ждёт LY100) — `crates/flui-platform/src/lib.rs:113–161`
+- [ ] **LY102** (открыта, не начата) — `crates/flui-platform/src/lib.rs:113–161`
   объявляет плоские модули; каталоги есть у `capability/`, `haptics/`, `input_capabilities/`,
   `keyboard/`, `pointer/`, `preferences/`, `text_store/` и `testing/`. Остаётся код: модули окна
   (`window*.rs`, `platform_window.rs`, `placement.rs`, `surface_target.rs`, `brightness.rs`) —

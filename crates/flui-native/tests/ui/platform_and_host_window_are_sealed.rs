@@ -124,8 +124,8 @@ impl PlatformWindow for OutsideWindow {
         Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
     }
 
-    flui_platform::window_takes_no_frame_verbs!();
-
+    fn set_frame_rate_hint(&self, _: flui_platform::FrameRateHint) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
+    fn set_input_regions(&self, _: &[flui_platform::input_regions::InputRegion]) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {

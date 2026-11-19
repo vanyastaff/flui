@@ -302,12 +302,12 @@ impl From<&Rc<dyn PlatformWindow>> for PresentationWindow {
 pub(crate) fn test_platform_window(
     platform_text_input: Option<Arc<dyn PlatformTextInput>>,
 ) -> Rc<dyn PlatformWindow> {
-    use crate::testing::TestWindow;
-    Rc::new(
-        TestWindow::new()
-            .focused(true)
-            .with_text_input(platform_text_input),
-    )
+    use flui_platform::testing::MockWindow;
+    let window = MockWindow::new().focused(true);
+    Rc::new(match platform_text_input {
+        Some(text_input) => window.with_text_input(text_input),
+        None => window,
+    })
 }
 
 /// Lifecycle of the owner-thread half of a presentation.

@@ -1,18 +1,20 @@
 //! The headless host's text input: a recorder of the IME requests a window's
 //! presentation sends, and the text-store host a test makes its windows offer.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
 use super::WindowTextInput;
-use crate::host::Host;
-use crate::owner::headless::HeadlessLoop;
-use crate::platform::HostPlatform;
+// The text-store host a test makes its windows offer, built with `scripted`.
+#[cfg(feature = "scripted")]
+use {
+    crate::{host::Host, owner::headless::HeadlessLoop, platform::HostPlatform},
+    flui_platform::text_store::TextStoreHost,
+    std::rc::Rc,
+};
 
 /// Recording fake for [`PlatformTextInput`], backing the headless backend's
 /// [`PlatformWindow::text_input`](flui_platform::PlatformWindow::text_input).
@@ -115,6 +117,7 @@ impl crate::host::Text<()> for FakeTextInput {
 
 /// The headless platform's text-store host: the pull model a window offers
 /// when a test asks for it.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Make every window this platform opens pull-model: its
     /// [`HostWindow::text_store_host`](crate::HostWindow::text_store_host)

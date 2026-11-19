@@ -568,7 +568,15 @@ impl AppDelivery {
     }
 
     /// Ask the handler for its turn deadline ([`AppHandler::turn_deadline`]);
-    /// vacant with no handler to ask. Every host asks it.
+    /// vacant with no handler to ask. Every host with a loop asks it.
+    #[cfg_attr(
+        not(feature = "scripted"),
+        allow(
+            dead_code,
+            reason = "a build whose only host is the headless one, without its test controls, has \
+                      no loop that asks"
+        )
+    )]
     pub(crate) fn turn_deadline(&self) -> Asked<Option<web_time::Instant>> {
         self.question(<dyn AppHandler>::turn_deadline)
     }

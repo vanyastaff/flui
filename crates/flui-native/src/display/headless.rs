@@ -7,20 +7,24 @@
 //! source uses, so identity, revision and delivery behave as they do on a real
 //! platform. The loop holds the snapshot itself: it is all the double keeps.
 
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DisplayColor, DisplayDescription, DisplayId, DisplayKey,
-    DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
+    CapabilityAbsence, ColorGamut, DisplayColor, DisplayDescription, DisplayKey, DisplayRegistry,
+    DisplaySnapshot,
 };
-use parking_lot::Mutex;
-
-use crate::host::Host;
-use crate::owner::headless::{HeadlessLoop, SimulatedDisplays};
-use crate::owner::signal::OwnerSignal;
-use crate::platform::HostPlatform;
+// What a test changes the displays with, built with `scripted`.
+#[cfg(feature = "scripted")]
+use {
+    crate::host::Host,
+    crate::owner::headless::{HeadlessLoop, SimulatedDisplays},
+    crate::owner::signal::OwnerSignal,
+    crate::platform::HostPlatform,
+    flui_platform::{DisplayId, DisplayRevisionExhausted},
+    parking_lot::Mutex,
+    std::sync::{Arc, Weak},
+};
 
 /// One display a [`HeadlessPlatform`](crate::HeadlessPlatform) is built with.
 ///
@@ -51,7 +55,11 @@ impl DisplaySpec {
             color: Ok(DisplayColor::Standard(ColorGamut::Srgb)),
         }
     }
+}
 
+/// What a test sets on a display it names.
+#[cfg(feature = "scripted")]
+impl DisplaySpec {
     /// The display's colour profile, as [`DisplayDescription::color`] reports it: a
     /// colour space and headroom, or the reason a platform would give none.
     #[must_use]
@@ -93,6 +101,7 @@ impl Default for DisplaySpec {
 }
 
 /// A change to one display, as an operating system would report it.
+#[cfg(feature = "scripted")]
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DisplayChange {
@@ -109,6 +118,7 @@ pub enum DisplayChange {
 }
 
 /// Why a simulated display change or move was refused.
+#[cfg(feature = "scripted")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DisplayChangeError {
@@ -161,6 +171,7 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
 /// [`DisplayChangeError::UnknownDisplay`] for an id the snapshot does not
 /// hold; [`DisplayChangeError::RevisionExhausted`] when the revision cannot
 /// advance.
+#[cfg(feature = "scripted")]
 fn apply(
     snapshot: &mut DisplaySnapshot,
     id: DisplayId,
@@ -203,6 +214,7 @@ fn apply(
 }
 
 /// What the headless platform offers for its displays beyond [`Platform`](crate::Platform).
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Replace the displays this platform reports with `displays`, laid out
     /// left to right; the first is primary. Windows opened afterwards start on
@@ -235,12 +247,14 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 /// A change commits to the platform's snapshot and then wakes the owner, as a
 /// native source does when the OS reports a mode switch, and so works from any
 /// thread: the owner re-samples `Platform::display_snapshot` on its next turn.
+#[cfg(feature = "scripted")]
 #[derive(Clone)]
 pub struct HeadlessDisplayControls {
     signal: Weak<OwnerSignal>,
     displays: Weak<Mutex<SimulatedDisplays>>,
 }
 
+#[cfg(feature = "scripted")]
 impl std::fmt::Debug for HeadlessDisplayControls {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadlessDisplayControls")
@@ -248,6 +262,7 @@ impl std::fmt::Debug for HeadlessDisplayControls {
     }
 }
 
+#[cfg(feature = "scripted")]
 impl HeadlessDisplayControls {
     /// The platform's current snapshot, `None` once the platform is gone.
     #[must_use]

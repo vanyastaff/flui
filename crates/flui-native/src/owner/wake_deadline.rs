@@ -16,6 +16,13 @@
 /// The turn deadline of one loop: the instant armed, and the time of the
 /// last turn delivered for it.
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(
+    not(feature = "scripted"),
+    allow(
+        dead_code,
+        reason = "a build whose only host is the headless one, without its test controls, has no loop that turns at a deadline"
+    )
+)]
 pub(crate) struct TurnDeadline {
     armed: Option<web_time::Instant>,
     /// The time of the last turn delivered for the deadline: that turn served
@@ -23,6 +30,13 @@ pub(crate) struct TurnDeadline {
     served: Option<web_time::Instant>,
 }
 
+#[cfg_attr(
+    not(feature = "scripted"),
+    allow(
+        dead_code,
+        reason = "a build whose only host is the headless one, without its test controls, has no loop that turns at a deadline"
+    )
+)]
 impl TurnDeadline {
     /// The application's handler answered `answer`: arm it unless a turn
     /// delivered for the deadline already served it, that is unless it is not

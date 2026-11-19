@@ -21,8 +21,8 @@ workspace = true
 [features]
 # Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
 # that has no production caller yet, and `ExecutionServices::with_limits`/
-# `default_pools_started`), and the `testing` module's `TestWindow` and
-# `ScriptedSink` doubles, and decoding a recording's rows (`__runtime::record_from_wire`,
+# `default_pools_started`), and the `testing` module's `ScriptedSink` and
+# `SceneTotals`, and decoding a recording's rows (`__runtime::record_from_wire`,
 # which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
 testing = ["flui-platform/testing", "flui-layer/testing"]
@@ -106,11 +106,11 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 # The UI runtime tests: the headless platform's windows and capability fakes
-# (`headless_platform`, `FakeTextInput`, `FakeAccessibility`),
+# (`headless_platform`, and with `scripted` `FakeTextInput`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.
-flui-native = { workspace = true }
+flui-native = { workspace = true, features = ["scripted"] }
 flui-objects = { workspace = true }
 static_assertions = { workspace = true }
 # Exact diagnostics for owner-thread and frame-entry boundaries.

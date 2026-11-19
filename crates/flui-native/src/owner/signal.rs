@@ -564,6 +564,14 @@ impl OwnerSignal {
     /// One finite turn over `slot`, begun and driven at once: for a loop that
     /// reads nothing of its own first. `true` asks the native owner to perform
     /// its quit path.
+    #[cfg_attr(
+        not(feature = "scripted"),
+        allow(
+            dead_code,
+            reason = "the Windows display source and the headless host's test controls drive a \
+                      turn at once: another target built without the controls never does"
+        )
+    )]
     pub(crate) fn drive_in(&self, slot: &OwnerTurnSlot) -> bool {
         self.begin_turn().drive_in(slot)
     }

@@ -4,9 +4,10 @@
 use flui_platform::AppDataDir;
 
 use super::{DataDirs, DataStore};
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::headless::HeadlessLoop;
-use crate::platform::HostPlatform;
+#[cfg(feature = "scripted")]
+use crate::{host::Host, platform::HostPlatform};
 
 /// Where a headless platform keeps an application's values: under the root
 /// [`HostPlatform::with_data_root`] names, else in the platform's memory.
@@ -27,6 +28,7 @@ impl host::Storage<HeadlessLoop> for HeadlessData {
     }
 }
 
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Keep each application's values on disk under `root`, in
     /// `<root>/roaming/<app>` and `<root>/local/<app>`, for a test that reads

@@ -34,90 +34,22 @@ fn wake() {
     }
 }
 
-struct WakeWindow {
-    drops: Arc<std::sync::atomic::AtomicUsize>,
-    panic_on_drop: bool,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    capabilities: flui_platform::WindowCapabilities,
+/// A focused 1 × 1 window whose redraw request runs the wake action this
+/// thread armed.
+fn wake_window() -> flui_testing::MockWindow {
+    flui_testing::MockWindow::new()
+        .with_size(1.0, 1.0)
+        .focused(true)
+        .with_redraw_hook(wake)
 }
 
-impl flui_platform::PlatformWindow for WakeWindow {
-    fn id(&self) -> flui_platform::WindowId {
-        flui_platform::WindowId::try_from_raw(1).expect("a nonzero window id")
-    }
-    fn request_redraw(&self) {
-        wake();
-    }
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        Arc::new(wake)
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::testing::NoNativeSurface)
-    }
-    flui_platform::window_takes_no_frame_verbs!();
+/// What a window keeps so its drop is counted and then fails.
+struct FailingDrop(Arc<std::sync::atomic::AtomicUsize>);
 
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        Ok(())
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        let size = flui_foundation::geometry::Size::new(1.0, 1.0);
-        flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::try_new(None, size).expect("a finite size"),
-            flui_platform::WindowExtent::try_new(size).expect("a finite size"),
-        )
-        .with_focus(flui_platform::WindowFocus::Focused)
-        .with_metrics(
-            flui_foundation::geometry::WindowMetrics::from_logical(
-                size,
-                flui_foundation::geometry::DevicePixelRatio::ONE,
-            )
-            .ok(),
-        )
-        .with_capabilities(self.capabilities)
-    }
-
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.capabilities)?;
-        Ok(())
-    }
-
-    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-
-    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
-}
-
-impl Drop for WakeWindow {
+impl Drop for FailingDrop {
     fn drop(&mut self) {
-        self.drops
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        assert!(!self.panic_on_drop, "wake backend capture Drop failure");
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        panic!("wake backend capture Drop failure");
     }
 }
 
@@ -709,13 +641,7 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::pointer::PointerDispatch;
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
-        drops: Arc::default(),
-        panic_on_drop: false,
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(wake_window());
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
     let notices = Rc::new(Cell::new(0));
     let captured = Rc::clone(&notices);
@@ -749,13 +675,8 @@ fn a_wake_failure_destroys_the_last_backend_owner_before_unwind() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
     let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
-        drops: Arc::clone(&drops),
-        panic_on_drop: true,
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+    let window: Rc<dyn flui_platform::PlatformWindow> =
+        Rc::new(wake_window().keeping(FailingDrop(Arc::clone(&drops))));
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
     let owner = Rc::new(RefCell::new(Some(window)));
     let released = Rc::clone(&owner);

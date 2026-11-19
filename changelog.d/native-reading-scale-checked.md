@@ -11,8 +11,8 @@
 - `WindowMetrics::try_new` and `WindowMetrics::from_logical` take a `DevicePixelRatio` instead
   of an `f64`; `InvalidMetrics::InvalidScale` is gone, since the ratio is checked where a host
   reads it.
-- `HeadlessHost::try_set_scale_factor`, the widget tester's `try_set_scale_factor` and
-  `TestWindow::with_scale_factor` take a `DevicePixelRatio`.
+- `HeadlessHost::try_set_scale_factor` and the widget tester's `try_set_scale_factor`
+  take a `DevicePixelRatio`.
 - A native pointer reading, wheel reading and touchpad frame carry their scale as a
   `DevicePixelRatio` instead of an `f64`; `DecodeFault::Scale` is gone, since no reading can
   hold a scale no screen has.

@@ -786,7 +786,7 @@ pub(crate) fn a_surface_that_keeps_withholding_frames_is_reported_once() {
     // A window that reports no covering (`WindowCapabilities::NONE`), kept alive here: the
     // presentation holds it weakly.
     let window: std::rc::Rc<dyn flui_platform::PlatformWindow> =
-        std::rc::Rc::new(crate::testing::TestWindow::new());
+        std::rc::Rc::new(flui_testing::MockWindow::new());
     let ui_runtime = UiRuntime::for_test_with_window(std::rc::Rc::clone(&window));
     ui_runtime
         .attach_root_widget(&SizedBox::new(20.0, 20.0))

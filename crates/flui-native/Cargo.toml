@@ -682,6 +682,14 @@ single-instance = []
 # release build with the feature compiles none of the journal (ADR-0151 §16).
 native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 
+# The headless host's doubles and controls at the crate root: `HeadlessPlatform`,
+# `HeadlessHostWindow`, `FakeTextInput`, `FakeAccessibility` and the other
+# `Headless*` handles a test drives the headless host with. Off, the headless
+# host still runs (`FLUI_HEADLESS`, `headless_platform`) and the crate's public
+# paths name no double. `testing` turns it on, as do flui-app's `testing` and
+# the dev-dependencies of the crates whose tests drive the headless host.
+scripted = []
+
 # The `testing` module (ADR-0243): what a test of a native host's windows
 # needs from the host itself, such as turns of the AppKit event loop, and the
 # native recording codec the tests replay recordings through. Off by
@@ -690,6 +698,7 @@ native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 # the Wayland crates and the descriptor primitives the kit's compositor
 # (`testing::wayland_compositor`) runs on, a server that needs no host.
 testing = [
+    "scripted",
     "dep:flui-protocol",
     "dep:serde",
     "dep:serde_json",
