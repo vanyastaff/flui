@@ -1,8 +1,8 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 125 закрыты и 9 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `e7e0d43c1` и закрытием LY100); записи — в разделе «Ход исполнения». Прогоны на
+  Из 134 задач серии 127 закрыты и 7 открыты (сверено с отметками записей «Хода исполнения» на
+  `main` @ `f4755bb30` и закрытием LY100); записи — в разделе «Ход исполнения». Прогоны на
   устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
@@ -11,8 +11,6 @@
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
   - LY102 — модули `flui-platform` по областям (не начата);
-  - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
-  - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -6746,8 +6744,8 @@ GPU-память простаивающего или невидимого окн
   support I/O timeouts»).
   Не запущено: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на этом
   хосте не компилируется); Linux и wasm32 — на CI.
-- [ ] **LY107** (открыта: правило срока на AppKit и Android) — ветка `platform/owner-core` на
-  `main`. Построено: обработчик раскладки — один `owner::layout_callback::LayoutCallback`
+- [x] **LY107** — ветки `platform/owner-core` (на `main`) и `native/wake-deadline-appkit-android`.
+  Построено: обработчик раскладки — один `owner::layout_callback::LayoutCallback`
   (`HandlerSlot`) у headless, Win32, X11 и Wayland, `OwnerTurnSlot` реализует `HandlerSlot`; паника
   `exit_policy` терминальна и решается в `AppDelivery::exit_policy` на всех хостах (ADR-0258 §2);
   `question` хранит ответ, когда падает отчёт после него; у `Services::page_origin` и
@@ -6755,20 +6753,46 @@ GPU-память простаивающего или невидимого окн
   `bind` ставит `delivering`; `owner/frame_timing.rs`, тесты `OwnerSignal` —
   `owner/signal/tests.rs`; лестница хостов в `lib.rs` — `target_os` и псевдонимы `build.rs`; ход
   после паники обработчика — `crates/flui-native/ARCHITECTURE.md` («A turn after a handler's
-  panic»). Win32 с модальным циклом, X11, Wayland и UIKit берут срок через
-  `WakeDeadline::{arm, take_due}`. Тесты: `a_second_layout_callback_replaces_the_first` (X11,
+  panic»). Все родные циклы берут срок пробуждения по одному правилу `WakeDeadline`: Win32, X11,
+  Wayland и UIKit — `arm` до ожидания и `take_due` в начале хода, насос AppKit, цикл Android и
+  модальные циклы Win32 — `WakeDeadline::turn` (`Due | Wait | Idle`). Насос AppKit смотрит на срок
+  после запроса перерисовки, после каждого прогона доставки окна, как цикл UIKit
+  (`WakePump::window_delivery`, `WindowDelivery::after_each_run`: кадр, пришедший поздно, окно,
+  ставшее закрытым, и ввод, поставивший срок жеста без кадра, — все смотрят) и после хода
+  владельца, оставившего срок; эвристики
+  `FOLLOW_UP` нет. Цикл Android доставляет наступивший срок запросом кадра окну и пробуждением
+  владельца, `LoopTurn::wake` — `WakeTurn`, и доставленный срок не ограничивает ожидание. Окна
+  AppKit и Android строятся только из доставки, считающей кадры в счётчик цикла:
+  `MacOSWindow::try_new` берёт `FollowedDelivery`, `AndroidWindow::new` — `CountedDelivery`, иных
+  способов их получить нет (`WindowDelivery::new` на месте вызова не компилируется). Крюк конца
+  прогона — `OwnerSlot<Rc<dyn Fn()>>`. `RedrawPoll` не несёт срок, `PostPollRedraw` не подделать.
+  Открыто ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit)):
+  должный кадр закрытого окна рядом с показанным окном AppKit доставляется снова после каждого
+  кадра показанного окна — ответ приложения не называет окно. Тесты:
+  `a_second_layout_callback_replaces_the_first` (X11,
   Wayland), `a_panicking_exit_policy_is_terminal`,
   `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one`,
   `a_question_keeps_its_answer_when_a_report_after_it_panics`,
   `a_report_between_bind_and_ready_waits_for_ready`,
   `a_due_deadline_gets_one_modal_frame_per_generation`,
-  `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`. Остаётся код: насос AppKit
-  (`owner/apple/macos/wake_pump.rs`, `TickPlan`) и цикл Android (`owner/android/poll.rs`,
-  `DueDeadline`) переходят на `WakeDeadline`, для чего окна AppKit и Android получают `FrameCount`
-  цикла в своём `WindowDelivery`; `TickPlan` и `DueDeadline` удаляются
-  ([gaps](../../../gaps.md#the-appkit-pump-and-the-android-loop-keep-their-own-due-deadline-rule)).
-  Прогон на Mac и на Android-устройстве (отклонённый кадр не держит цикл бодрствующим) — условие
-  закрытия той же записи.
+  `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`;
+  `a_look_delivers_a_due_deadline_once_per_frame_generation` (`owner::wake_deadline`),
+  `each_window_run_asks_the_pump_for_a_look` (`owner::apple::pump_delivery`),
+  `the_run_hook_follows_each_run_whatever_it_delivered` (`owner::window_delivery`),
+  `a_window_frame_raises_the_loop_count` (`owner::android`),
+  `a_declined_frame_does_not_keep_the_loop_awake` (`owner::android::poll`), на macOS
+  `a_frame_of_a_pump_window_lets_the_deadline_be_delivered_again`; каждый падает при откате своей
+  правки (прежнее правило «срок не позже `now` — доставить»; в обёртках доставки —
+  `WindowDelivery::new` вместо счёта кадров, крюк, пропускающий прогон одного ввода).
+  `a_deadline_delivered_while_stopped_blocks_the_loop` (`owner::android::poll`) — страховка
+  поведения, которое не менялось: остановленный цикл блокировался и прежде. Проверки на Windows: clippy и nextest
+  `-p flui-native` (кроме trybuild `owner_platform_is_not_send`, чей вывод на Windows расходится
+  с ожидаемым; файл не затронут), `cargo doc -p flui-native --document-private-items` с
+  `RUSTDOCFLAGS=-D warnings`, `xtask checks`; в WSL Ubuntu 24.04:
+  clippy `-p flui-native` на Linux и `cargo +nightly check -p flui-native --lib --tests` для
+  `aarch64-apple-darwin` и `aarch64-linux-android`. Прогон на Mac и на Android-устройстве (отклонённый кадр не держит
+  цикл бодрствующим) — примечание строки «Event loop, startup and wake-ups»
+  `crates/flui-native/platform-parity.toml`.
 
 - [x] **LY110** — ветка `platform/escape-hatch`, PR #2649, слит (`9e77cea15`). Остаётся прогон на
   Mac: команды `AppKitWindow` и `examples/native_window.rs` на macOS; его называют примечание
@@ -7632,8 +7656,9 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
-- [ ] **LY121** (открыта: захват на iOS и Android, курсор из виджета) — решение ADR-0354, на
-  `main`. Построено: курсор области `set_cursor(&Cursor)` (`Icon`, `Image(CursorImage)`, `Hidden`;
+- [x] **LY121** — решение ADR-0354, на `main`; остаток — ветка
+  `platform/pointer-lock-mobile-cursor-request`. Построено раньше: курсор области
+  `set_cursor(&Cursor)` (`Icon`, `Image(CursorImage)`, `Hidden`;
   способность `cursor_image`); `SetCursorGrab(CursorGrab::{None, Confined, Locked})` со слотами
   `confines_cursor`/`locks_cursor`, факт `WindowState::cursor_grab`, который `successor` сбрасывает
   у окна без фокуса, движение при `Locked` — `PointerEvent::RawMotion`; `SetLevel(WindowLevel)`,
@@ -7643,13 +7668,60 @@ GPU-память простаивающего или невидимого окн
   `a_grab_is_published_only_for_a_focused_window`, `a_grab_kept_after_the_focus_went_is_caught`,
   `a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends`,
   `a_frame_drag_keeps_the_steps_and_the_proportion`, живые случаи `x11_input` и `wayland_input`.
-  Остаётся код: `Locked` на iOS (`prefersPointerLocked`) и Android (`View.requestPointerCapture`),
-  сейчас `NOT_YET_ON_THIS_HOST` (`crates/flui-native/src/window/capabilities.rs:62`, `:255`);
-  просьба виджета об образе и скрытом курсоре — `CursorRequest`
-  (`crates/flui-interaction/src/pointer/hit_test.rs:214`) несёт только иконку
-  ([gaps](../../../gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)).
-  Прогоны — заметки строк parity `cursor-shapes`, `pointer-grab-confined-and-locked`,
-  `window-level-resize-steps-and-proportion`.
+  Построено в остатке. Курсор из виджета: `CursorRequest::{Defer, Show(Cursor)}` вместо
+  `Icon(CursorIcon)`, `MouseRegion::cursor(impl Into<Cursor>)`, трекер мыши публикует весь
+  `Cursor` (`CursorChangeCallback` берёт `&Cursor`, `device_cursor` отдаёт `Cursor`);
+  презентация показывает стрелку при любом отказе окна в образе (`Unsupported` или `Platform`;
+  политика на шве, у всех хостов); тестовые окна `flui-testing` и `flui-runtime` отказывают образу ровно при
+  недоступной `cursor_image`, `HeadlessWindow::without_cursor_images` играет такую платформу.
+  iOS: корневой контроллер отвечает `prefersPointerLocked` и зовёт
+  `setNeedsUpdateOfPrefersPointerLocked`; способность `locks_cursor` — iPad с iPadOS 14
+  (`pointer_lock_absence`, ворота `PointerLock`), иначе `NOT_ON_THIS_DEVICE`; сцена, не
+  занимающая экран, получает `ApplyError::Platform` (иначе оставленное предпочтение взяло бы
+  указатель позже без просьбы); без фокуса — не просит. Один владелец захвата на процесс
+  (`PointerLocks` над чистой моделью `LockLedger`): запись просьбы окна несёт флаг «система
+  держит захват», так что держатель — всегда из просящих; просьбу снимают только приложение и
+  жизненный цикл (выход из сцены, потеря фокуса), ответ системы меняет только флаг, и после
+  снятия системой, пока окно просит, владелец просит UIKit перечитать предпочтение; снятие у
+  одной сцены не трогает другую; повторная просьба читает текущее состояние захвата сцены (UIKit
+  не сообщает о захвате, который не кончался). Один набор обработчиков `GCMouse` (и на мыши,
+  подключённые во время захвата), движение — только окну с захватом и только на главном потоке;
+  FLUI возвращает мыши найденный на ней обработчик, если на ней всё ещё его собственный, а копии
+  обработчиков приложения отпускаются через `commit`/`Outbox` после фиксации, обновления и
+  публикации. Имена уведомлений
+  UIKit и GameController читаются из загруженных фреймворков (`dlsym`), без ссылки на символ
+  (пол iOS 13); нет уведомления — способность недоступна. Движение →
+  `ViewTouches::locked_motion` → `ContactRegistry::raw_motion`, `MotionAcceleration::None`.
+  Android: `FluiView.onPointerCaptureChange` → `nativePointerCaptureChanged` и
+  `FluiView.onWindowFocusChanged` и вход вида в окно → `nativeWindowFocusChanged` (протокол 9, dex
+  пересобран `android-dex --write`, JDK 21.0.12 и build-tools 35.0.0 записи), один
+  владелец захвата на главном потоке Java (`CaptureOwner`, чистая модель): `wanted` — из команд
+  окон, `held` — только из ответов системы, не больше одного вызова JNI
+  (`requestPointerCapture`/`releasePointerCapture`) без ответа, и после ответа владелец снова
+  сводит `held` к `wanted`; ответ приписывается окну, которое владелец считает держателем или
+  просившим, а не текущему окну; неудавшийся вызов ничего не меняет; окно публикует только
+  `held`. Фокус приходит на главный поток Java в обе стороны; без фокуса владелец не вызывает
+  ничего (система роняет просьбу окна без фокуса без ответа), просьба тогда ничего не меняет, а
+  возврат фокуса ничего не берёт (ADR-0354 §2), только отпускает захват, не нужный ни одному окну,
+  и забывает ожидание `false` системы; потеря фокуса
+  снимает `wanted` и вызов без ответа, а `held` снимает `false` системы, до или после сообщения о
+  фокусе; вызов, на который система не ответила вовсе при фокусе (такой случай не известен),
+  держит следующие команды до следующей смены фокуса. AOSP android11-release `ViewRootImpl`
+  (строки 4551–4556) молча выходит из `requestPointerCapture`, когда состояние уже то же, а
+  потеря фокуса окна сначала доходит до видов (строка 3257), затем снимает захват (строки
+  3283–3285); просит только окно в фокусе, без `FluiView` — `ApplyError::Platform`; ворота
+  `PointerCapture` (API 26). События `SOURCE_MOUSE_RELATIVE` очереди — `RawMotion` по каждому
+  сэмплу пачки, клики и колесо — там, где указатель покоится. Тесты:
+  `mouse_region_cursor_reaches_the_window_through_the_ui_runtime` (таблица иконка/образ/скрыт;
+  без запроса `Show(Cursor)` не компилируется, без публикации `Cursor` окно получает иконку),
+  `a_refused_image_cursor_shows_the_arrow` (без запасной стрелки окно оставляет руку),
+  `hidden_and_image_cursors_resolve_as_icons_do`,
+  `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests` (без ветки захвата —
+  `Move` вместо `RawMotion`), таблицы `ios_pointer_lock_ledger` и `android_pointer_capture`,
+  строки `native_capability_absences` и ворот. iOS и Android только
+  проверены типами (WSL nightly); прогоны на устройствах — заметки строк parity
+  `cursor-shapes`, `pointer-grab-confined-and-locked`, `window-level-resize-steps-and-proportion`
+  ([gaps](../../../gaps.md#the-pointer-grabs-and-the-cursor-images-have-run-on-no-device)).
 
 - [x] **LY125** — ветка `native/win32-idle-and-reentry`. Все три находки подтверждены на `main`
   @ `9e309039d` тестами, падающими на старом коде. Модальный цикл: без срока таймер ставился

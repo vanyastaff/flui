@@ -48,10 +48,11 @@ use flui_foundation::{
 use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
 
 pub use backend::RasterBackend;
+pub(crate) use command::GpuFrameTime;
 pub use command::{
-    DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, GpuFrameTime, LIFECYCLE_CAPACITY,
-    RasterCommand, RasterSendError, RasterVerdict, SendReceipt, SlotChange, SlotConfig,
-    SlotSettlement, SlotTarget, SlotVisibility,
+    DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand,
+    RasterSendError, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotSettlement,
+    SlotTarget, SlotVisibility,
 };
 pub use device_health::DeviceHealth;
 pub use device_request::{DeviceAnswered, DeviceTicket};

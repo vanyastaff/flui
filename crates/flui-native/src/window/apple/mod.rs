@@ -18,6 +18,8 @@ pub(crate) mod geometry;
 pub(crate) mod ios;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod pointer_lock;
 
 /// Where a value of the main thread is let go of when the thread that drops
 /// it may be another one: on the main thread, now; elsewhere, in a turn of

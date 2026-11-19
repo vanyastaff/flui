@@ -2,7 +2,7 @@
 
 use std::{cell::Cell, rc::Rc, time::Duration};
 
-use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
+use flui_foundation::{FrameEpoch, PresentationAddress, PresentationId, UiRuntimeId};
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     DemandKind, FrameClock, FrameId, FramePhase, FramePhaseDurations, FrameTimes, Instant,
@@ -80,6 +80,7 @@ fn a_late_frame_names_its_slowest_phase() {
     let snapshot = clock.record_frame(
         clock.telemetry_cut(),
         address(),
+        FrameEpoch::ZERO,
         FrameTimes {
             clock_timestamp: start,
             segment_start: start,
@@ -125,6 +126,7 @@ fn frame_pace_ignores_idle_gaps() {
             clock.record_frame(
                 clock.telemetry_cut(),
                 address(),
+                FrameEpoch::ZERO,
                 FrameTimes {
                     clock_timestamp: begun,
                     segment_start: begun,
@@ -171,8 +173,20 @@ fn a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs() {
     );
     let second = clock.telemetry_cut();
 
-    let one = clock.record_frame(first, address(), times, PresentOutcome::Presented);
-    let two = clock.record_frame(second, address(), times, PresentOutcome::Presented);
+    let one = clock.record_frame(
+        first,
+        address(),
+        FrameEpoch::ZERO,
+        times,
+        PresentOutcome::Presented,
+    );
+    let two = clock.record_frame(
+        second,
+        address(),
+        FrameEpoch::ZERO,
+        times,
+        PresentOutcome::Presented,
+    );
     assert!(
         one.frame_id < two.frame_id,
         "each frame keeps its own produce's id"
@@ -225,14 +239,26 @@ fn a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one() {
     );
     let failed = clock.telemetry_cut();
 
-    let later = clock.record_frame(failed, address(), times, PresentOutcome::Errored);
+    let later = clock.record_frame(
+        failed,
+        address(),
+        FrameEpoch::ZERO,
+        times,
+        PresentOutcome::Errored,
+    );
     let seen = clock.frames_since(None);
     assert_eq!(
         seen.last().map(|frame| frame.frame_id),
         Some(later.frame_id)
     );
 
-    let settled = clock.record_frame(queued, address(), times, PresentOutcome::Presented);
+    let settled = clock.record_frame(
+        queued,
+        address(),
+        FrameEpoch::ZERO,
+        times,
+        PresentOutcome::Presented,
+    );
     assert!(
         settled.frame_id < later.frame_id,
         "the queued frame was produced first"
@@ -271,16 +297,34 @@ fn an_evicted_cursor_resumes_in_recording_order_and_repeats_none() {
     };
     let first = cut();
     let cursor = clock
-        .record_frame(first, address(), times, PresentOutcome::Presented)
+        .record_frame(
+            first,
+            address(),
+            FrameEpoch::ZERO,
+            times,
+            PresentOutcome::Presented,
+        )
         .frame_id;
     let cuts = (0..=flui_scheduler::FRAME_HISTORY_CAPACITY)
         .map(|_| cut())
         .collect::<Vec<_>>();
     let (late, rest) = cuts.split_first().expect("cuts were taken");
     for each in rest {
-        let _ = clock.record_frame(*each, address(), times, PresentOutcome::Presented);
+        let _ = clock.record_frame(
+            *each,
+            address(),
+            FrameEpoch::ZERO,
+            times,
+            PresentOutcome::Presented,
+        );
     }
-    let late = clock.record_frame(*late, address(), times, PresentOutcome::Presented);
+    let late = clock.record_frame(
+        *late,
+        address(),
+        FrameEpoch::ZERO,
+        times,
+        PresentOutcome::Presented,
+    );
 
     let pulled = clock.frames_since(Some(cursor));
     assert_eq!(
@@ -292,5 +336,108 @@ fn an_evicted_cursor_resumes_in_recording_order_and_repeats_none() {
     assert!(
         clock.frames_since(next).is_empty(),
         "a pull from the last snapshot received repeats none"
+    );
+}
+
+/// A frame's GPU time arrives after its snapshot was recorded and lands on
+/// that snapshot by the stamp it was handed to its sink under; a second
+/// answer for the frame, an unstamped frame and one the ring dropped take
+/// nothing (ADR-0388).
+#[test]
+fn a_gpu_time_lands_on_the_snapshot_of_the_frame_its_stamp_names() {
+    let clock = FrameClock::new();
+    let start = Instant::now();
+    let times = FrameTimes {
+        clock_timestamp: start,
+        segment_start: start,
+        segment_end: start,
+        submit_at: start,
+        phases: FramePhaseDurations::default(),
+    };
+    let record = |epoch: u64| {
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(
+            clock
+                .poll(start, flui_scheduler::FramesInFlight::NONE)
+                .should_run_segment()
+        );
+        clock.record_frame(
+            clock.telemetry_cut(),
+            address(),
+            FrameEpoch::from_raw(epoch),
+            times,
+            PresentOutcome::Presented,
+        )
+    };
+    let first = record(1);
+    let second = record(2);
+    assert_eq!(first.gpu_time, None, "no answer yet");
+
+    let gpu = Duration::from_micros(700);
+    let timed = clock
+        .record_gpu_time(FrameEpoch::from_raw(1), gpu)
+        .expect("the ring holds the frame");
+    assert_eq!(
+        (timed.frame_id, timed.gpu_time),
+        (first.frame_id, Some(gpu))
+    );
+    let pulled = clock.frames_since(None);
+    assert_eq!(
+        pulled
+            .iter()
+            .map(|snapshot| (snapshot.frame_id, snapshot.gpu_time))
+            .collect::<Vec<_>>(),
+        [(first.frame_id, Some(gpu)), (second.frame_id, None)],
+        "a later pull sees the time on its own frame only"
+    );
+    assert!(
+        clock
+            .record_gpu_time(FrameEpoch::from_raw(1), Duration::from_micros(9))
+            .is_none(),
+        "a frame keeps its first time"
+    );
+    let unstamped = record(0);
+    assert!(
+        clock.record_gpu_time(FrameEpoch::ZERO, gpu).is_none(),
+        "an unstamped frame takes no time"
+    );
+
+    // A queued frame is recorded when its settlement is drained, which can come after its time.
+    let early = Duration::from_micros(300);
+    assert!(
+        clock
+            .record_gpu_time(FrameEpoch::from_raw(50_000), early)
+            .is_none(),
+        "the frame is not recorded yet"
+    );
+    assert!(
+        clock
+            .record_gpu_time(FrameEpoch::from_raw(50_000), Duration::from_micros(5))
+            .is_none(),
+        "a second answer for a waiting frame is not taken"
+    );
+    let settled = record(50_000);
+    assert_eq!(
+        settled.gpu_time,
+        Some(early),
+        "the held time rides on its frame"
+    );
+    assert_eq!(
+        clock
+            .frames_since(Some(unstamped.frame_id))
+            .iter()
+            .map(|snapshot| snapshot.gpu_time)
+            .collect::<Vec<_>>(),
+        [Some(early)]
+    );
+
+    for epoch in 3..=(2 + flui_scheduler::FRAME_HISTORY_CAPACITY as u64) {
+        let _ = record(epoch);
+    }
+    assert!(
+        clock
+            .record_gpu_time(FrameEpoch::from_raw(2), gpu)
+            .is_none(),
+        "the ring dropped the frame"
     );
 }

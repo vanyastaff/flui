@@ -574,6 +574,18 @@ pub(crate) mod android {
         const SINCE: u64 = 24;
     }
 
+    /// `View.requestPointerCapture`, `releasePointerCapture` and
+    /// `onPointerCaptureChange` (API 26): the window takes the mouse, which
+    /// then reports relative motion (`SOURCE_MOUSE_RELATIVE`). Without them
+    /// nothing holds the pointer.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct PointerCapture;
+
+    impl Gate for PointerCapture {
+        type Version = AndroidApi;
+        const SINCE: u64 = 26;
+    }
+
     /// `Window.setBackgroundBlurRadius` and `WindowManager.isCrossWindowBlurEnabled`
     /// (API 31). Without them the system blurs nothing behind a window, and the
     /// window draws no material.
@@ -754,10 +766,10 @@ mod tests {
     use super::android::{
         AndroidApi, BackgroundBlur, ClearPrimaryClip, ClipExtras, ContextDisplay,
         DecorFitsSystemWindows, DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion,
-        HapticComposition, InsetsByType, InsetsController, LocaleList, PointerIcons,
-        RoundPrimitives, ScaledScrollFactor, SegmentFeedback, StylusHandwriting, SystemContrast,
-        SystemGestureInsets, TextWeight, TouchpadGestures, UnbufferedDispatch, VibrationTouchUsage,
-        WindowColorMode,
+        HapticComposition, InsetsByType, InsetsController, LocaleList, PointerCapture,
+        PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback, StylusHandwriting,
+        SystemContrast, SystemGestureInsets, TextWeight, TouchpadGestures, UnbufferedDispatch,
+        VibrationTouchUsage, WindowColorMode,
     };
     use super::testing::row;
 
@@ -825,6 +837,12 @@ mod tests {
             "PointerIcons",
             api(23),
             api(24),
+            unknown,
+        ));
+        failures.extend(row::<PointerCapture>(
+            "PointerCapture",
+            api(25),
+            api(26),
             unknown,
         ));
         failures.extend(row::<BackgroundBlur>(

@@ -517,10 +517,18 @@ impl PlatformWindow for MockWindow {
         }
     }
 
+    /// A window of its own takes every cursor but an image, which it refuses
+    /// exactly when its capabilities make no cursor image, as the contract
+    /// says; over another window, that window answers.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         self.observe(WindowCall::SetCursor(cursor));
         match &self.inner {
             Some(inner) => inner.set_cursor(cursor),
+            None if matches!(cursor, Cursor::Image(_))
+                && !self.capabilities.cursor_image().is_available() =>
+            {
+                Err(Unsupported::from(crate::CapabilityAbsence::NOT_ON_THIS_PLATFORM).into())
+            }
             None => Ok(()),
         }
     }

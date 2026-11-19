@@ -485,7 +485,10 @@ impl flui_engine::RasterBackend for ReentersOwner {
         self.inner.requests_devices()
     }
 
-    fn take_gpu_time(&mut self, slot: flui_engine::SlotId) -> Option<flui_engine::GpuFrameTime> {
+    fn take_gpu_time(
+        &mut self,
+        slot: flui_engine::SlotId,
+    ) -> Option<flui_foundation::GpuFrameTime> {
         self.inner.take_gpu_time(slot)
     }
 }
