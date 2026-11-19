@@ -390,15 +390,14 @@ impl SceneVersion {
     }
 
     /// The transform the renderer applies at the follower entry `at` so its
-    /// content lands on its leader: what [`resolve_follower_transform`]
-    /// answers over [`Self::flatten`]'s tree, read off the version without
-    /// building one. `None` when nothing is drawn or hit there: `at` is not an
-    /// attached follower of this version, it is unlinked and hidden, a clip
+    /// content lands on its leader under ADR-0276's rule, read off the version
+    /// in place; the `testing` feature's `resolve_follower_transform` answers
+    /// the same over `Self::flatten`'s tree. `None` when nothing is drawn or
+    /// hit there: `at` is not an attached follower of this version, it is
+    /// unlinked and hidden, a clip
     /// on the leader's chain leaves out its anchor under
     /// [`LeaderClip::Hide`](crate::LeaderClip::Hide), a chain is singular or
     /// not finite, or followers nest past the limit.
-    ///
-    /// [`resolve_follower_transform`]: crate::resolve_follower_transform
     #[must_use]
     pub fn follower_transform(&self, at: EntryAddress) -> Option<Matrix4> {
         if at.node.lineage() != self.lineage() {
@@ -427,8 +426,8 @@ impl SceneVersion {
     }
 
     /// Where the leader publishing `link` has its top-left corner on the
-    /// surface, as [`leader_origin`](crate::leader_origin) answers over
-    /// [`Self::flatten`]'s tree: `None` without an attached leader, or when a
+    /// surface, as the `testing` feature's `leader_origin` answers over
+    /// `Self::flatten`'s tree: `None` without an attached leader, or when a
     /// transform on its chain is singular or not finite, or a follower on it
     /// resolves to nothing.
     #[must_use]
@@ -438,7 +437,7 @@ impl SceneVersion {
 
     /// The size of the leader publishing `link` that a follower resolves
     /// against, the last attached one, as [`LayerTree::leaders`]' leader
-    /// answers over [`Self::flatten`]'s tree; `None` without one.
+    /// answers over `Self::flatten`'s tree; `None` without one.
     ///
     /// [`LayerTree::leaders`]: crate::LayerTree::leaders
     #[must_use]
@@ -1004,15 +1003,12 @@ mod annotations {
     use crate::layer::Layer;
     use crate::scene::content::{Entry, EntryIndex};
     use crate::scene::id::SceneNodeId;
-    use crate::tree::annotations::clip_admits;
 
     impl SceneVersion {
         /// The topmost `T` an annotated region holds at `point` on the
-        /// surface, as [`LayerTree::find_annotation`] answers over
-        /// [`Self::flatten`]'s tree, read off the version without building
-        /// it.
-        ///
-        /// [`LayerTree::find_annotation`]: crate::LayerTree::find_annotation
+        /// surface, as the `testing` feature's `LayerTree::find_annotation`
+        /// answers over `Self::flatten`'s tree, read off the version without
+        /// building it.
         #[must_use]
         pub fn find_annotation<T: Any + Send + Sync>(&self, point: Point<f64>) -> Option<Arc<T>> {
             let root = self.node(self.root())?;
@@ -1045,7 +1041,7 @@ mod annotations {
                         .effect_layer(EntryIndex::at(index))
                         .and_then(|layer| {
                             self.point_in_effect(node, index, layer, under)
-                                .filter(|at| clip_admits(layer, *at))
+                                .filter(|at| layer.clip_admits(*at))
                         }),
                     _ => None,
                 });

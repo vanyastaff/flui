@@ -34,7 +34,8 @@ pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
-use flui_foundation::geometry::{Offset, Rect};
+use flui_foundation::geometry::{Offset, Point, Rect};
+use flui_painting::paint::Clip;
 pub use follower::{FollowerLayer, LeaderClip};
 pub use image_filter::ImageFilterLayer;
 pub use leader::LeaderLayer;
@@ -170,6 +171,29 @@ impl Layer {
             | Layer::BackdropFilter(_)
             | Layer::Follower(_)
             | Layer::AnnotatedRegion(_) => Offset::ZERO,
+        }
+    }
+
+    /// Whether `point`, in this layer's own space, survives the layer's clip:
+    /// a clip layer with `Clip::None` and every layer that does not clip keep
+    /// it. Hit-style reads (annotations, a follower's `LeaderClip::Hide`)
+    /// share this one answer.
+    pub(crate) fn clip_admits(&self, point: Point<f64>) -> bool {
+        let clips = |behavior: Clip| behavior != Clip::None;
+        match self {
+            Layer::ClipRect(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_rect().contains(point)
+            }
+            Layer::ClipRRect(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_rrect().contains(point)
+            }
+            Layer::ClipSuperellipse(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_superellipse().contains(point)
+            }
+            Layer::ClipPath(clip) => {
+                !clips(clip.clip_behavior()) || clip.clip_path().contains(point)
+            }
+            _ => true,
         }
     }
 

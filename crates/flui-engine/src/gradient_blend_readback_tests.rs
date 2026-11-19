@@ -174,7 +174,7 @@ fn render_gradient_over_destination(
         builder.build()
     };
     renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("the headless capture path must rasterize the scene")
 }
 
@@ -315,7 +315,7 @@ fn gradient_rrect_keeps_per_corner_radii() {
         builder.build()
     };
     let pixels = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("the headless capture path must rasterize the scene");
 
     let covered = blend(
@@ -361,7 +361,7 @@ fn gradient_and_solid_follow_painter_order(gradient_first: bool) {
         }
         builder.add_picture(canvas.finish());
         let pixels = renderer
-            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .render_scene(&builder.build(), (SIDE, SIDE))
             .expect("ordered gradient and solid scene must render");
         assert_pixel(
             pixel_at(&pixels, (8, 8)),
@@ -420,7 +420,7 @@ fn distinct_gradient_tables_survive_opacity_boundary() {
     builder.add_picture(right.finish());
     builder.pop();
     let pixels = renderer
-        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .render_scene(&builder.build(), (SIDE, SIDE))
         .expect("distinct gradient tables across opacity must render");
     assert_pixel(
         pixel_at(&pixels, (8, 32)),
@@ -465,7 +465,7 @@ fn repeated_gradient_kinds_keep_distinct_tables_and_order() {
     }
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .render_scene(&builder.build(), (SIDE, SIDE))
         .expect("repeated gradient kinds must render in recorded order");
     for (point, expected, label) in [
         ((8, 8), [1.0, 0.0, 0.0, 1.0], "first linear only"),
@@ -533,7 +533,7 @@ fn gradient_stops_past_the_first_texture_row_read_back() {
     }
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .render_scene(&builder.build(), (SIDE, SIDE))
         .expect("gradients spanning two stop rows must render");
     for (point, expected, label) in [
         ((10, 32), [1.0, 0.0, 0.0, 1.0], "first row, first draw"),
@@ -638,7 +638,7 @@ fn render(renderer: &HeadlessRenderer, draw: impl FnOnce(&mut Canvas)) -> Vec<u8
     draw(&mut canvas);
     builder.add_picture(canvas.finish());
     renderer
-        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .render_scene(&builder.build(), (SIDE, SIDE))
         .expect("the headless capture path must rasterize the scene")
 }
 

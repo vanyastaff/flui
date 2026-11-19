@@ -17,9 +17,9 @@ Citations below name symbols, not line numbers.
 | `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
 | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
-| `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
-| `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
-| `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
+| `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink`; `SceneVersion::follower_transform` resolves a follower (`src/scene/geometry.rs`), and `resolve_follower_transform` over a hand-built tree (`src/tree/follower.rs`, feature `testing`) is its oracle; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
+| `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `SceneVersion::find_annotation`, whose oracle over a hand-built tree is `LayerTree::find_annotations` (`src/tree/annotations.rs`, feature `testing`); see [Producers](#producers). |
+| `SceneBuilder` push/pop, `build` to a `Scene` | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
 | `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | One `SceneVersion`; `Scene::new` converts a hand-built `LayerTree` (decision 6). |
 | Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
 | Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary and each chunk a partial frame's damage cannot reach (`SceneVersion::subtree_cull`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
@@ -73,8 +73,9 @@ That `push_child` under an unknown parent panics: **Unasserted:** no test pins t
 The chain math needs one dispatch point for "this layer translates its children". Flattening `OffsetLayer` into per-variant `offset` fields had lost it: the engine pushed translations for `Offset`, `Transform`, `Opacity`, `ImageFilter`
 and `Leader`, while the resolver summed only `Offset` and `Transform` — so a follower nested under
 its own leader rendered double-translated. `Layer::local_translation` is now the one place the set
-of translating variants is written down. `resolve_follower_transform` walks both chains from the
-common ancestor (exclusive) and multiplies, per layer, the `Transform`'s whole matrix, a nested
+of translating variants is written down. `SceneVersion::follower_transform`, and its oracle over a
+hand-built tree `resolve_follower_transform`, walk both chains from the
+common ancestor (exclusive) and multiply, per layer, the `Transform`'s whole matrix, a nested
 `Follower`'s own resolved transform, or the translation `local_translation` answers
 ([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
@@ -105,9 +106,12 @@ Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 
 `flui-rendering`'s `FragmentComposer` writes each repainted boundary's content through
 `ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine walks the applied version in place
-(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for hand-authored trees (hot-reload plugins, examples,
-the GPU readback tests). `pop` returns `Option<LayerId>` — an empty stack is absence, the
-`Vec::pop` contract — so the crate has no error type. The builder's typed `push_*`/`add_*` are
+(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for a hand-authored scene
+(hot-reload plugins, examples, the GPU readback tests), as `dart:ui`'s `SceneBuilder` is: `push`,
+`add` and `pop` return the builder for chaining and no layer ids, since `build` hands back a
+`Scene` whose version names its own nodes; a caller that keeps ids builds a `LayerTree` with
+`push_child`. A `pop` with nothing open is the caller's bug, which a debug build asserts, so the
+crate has no error type. The builder's typed `push_*`/`add_*` are
 one-line conveniences over `push(impl Into<Layer>)` / `add(..)`; a variant without one is reached
 through `push(SomeLayer::new(..))`.
 
@@ -252,8 +256,8 @@ damages the moved subtree at both placements. After the operations every followe
 again in both versions against its link's last attached leader (a published node no slot
 reaches draws nothing and never shadows it), and one whose transform changed damages its subtree
 under both. Both chains of a follower stop at the lowest common ancestor of it and its leader, as
-`resolve_follower_transform` walks them, so nested followers cost their unshared chains. A picture
-or canvas effect changes its display list's damage extent. A subtree carries, beside its local
+`SceneVersion::follower_transform` walks them, so nested followers cost their unshared chains. A picture
+effect changes its display list's damage extent. A subtree carries, beside its local
 bounds, the device-pixel kernel its filters spread by (the renderer takes a kernel in physical
 pixels, which bounds in a boundary's space would shrink under a shrinking ancestor; a filter adds
 its own to the maximum of its children's, a sum along a chain), and a
@@ -350,12 +354,13 @@ form in the scene: the ADR that brings one decides its compositing, hit-testing 
 ([`docs/gaps.md`](../../docs/gaps.md)). `Picture` is what a hand-built tree and
 `SceneVersion::flatten` draw a chunk as. `ColorFilter` and
 `ImageFilter` are lowered by `flui-engine` (`layer_render.rs`), but no `FragmentScope` produces
-them: a widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
+them ([`docs/gaps.md`](../../docs/gaps.md), "No widget filters its subtree's colours or pixels"): a
+widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
 `flui-painting`) inside a picture. `AnnotatedRegion` has both halves: the writer above and the
 reader `SceneVersion::find_annotation`, which `flui-runtime`'s `overlay_style.rs` asks for the
 system UI overlay style under a probe point; `LayerTree::find_annotations`
-(`src/tree/annotations.rs`, tested in `tests/annotations.rs`) answers the same for a hand-built
-tree. Whether each unproduced variant is "not wired yet" or
+(`src/tree/annotations.rs`, feature `testing`, tested in `tests/annotations.rs`) answers the same for a hand-built
+tree, the oracle of the version's read. Whether each unproduced variant is "not wired yet" or
 "never" is a roadmap decision, not a crate one — recorded here so it is not re-derived.
 
 ---

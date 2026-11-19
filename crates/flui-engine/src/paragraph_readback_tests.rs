@@ -82,7 +82,7 @@ fn paragraph_scene(
     size: f64,
     color: Color,
     decorate: impl FnOnce(&mut Canvas, &mut dyn FnMut(&mut Canvas)),
-) -> flui_layer::LayerTree {
+) -> flui_layer::Scene {
     let style = TextStyle::new().with_font_size(size).with_color(color);
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
@@ -118,7 +118,7 @@ fn glyph_colour_lands_as_recorded() {
     let grey = Color::rgb(128, 128, 128);
     let tree = paragraph_scene("I", 80.0, grey, |canvas, paint| paint(canvas));
     let pixels = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("the headless capture path must rasterize a paragraph");
 
     let inked: Vec<[u8; 4]> = (0..SIDE)
@@ -246,7 +246,7 @@ fn read_back(
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     renderer
-        .render_layer_tree(&builder.build(), WIDE)
+        .render_scene(&builder.build(), WIDE)
         .expect("the headless capture path rasterizes a paragraph")
 }
 
@@ -558,7 +558,7 @@ fn selection_highlights_the_second_line(renderer: &crate::headless::HeadlessRend
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), WIDE)
+        .render_scene(&builder.build(), WIDE)
         .expect("the headless capture path rasterizes a paragraph");
 
     let columns = ORIGIN.dx + highlight.left() + 1.0..ORIGIN.dx + highlight.right() - 1.0;
@@ -631,7 +631,7 @@ fn colliding_font_scene(text: &str, family: &str) -> flui_layer::Scene {
     canvas.draw_paragraph(&paragraph, Offset::new(8.0, 8.0), Color::BLACK);
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
-    flui_layer::Scene::new(builder.build())
+    builder.build()
 }
 
 #[derive(Clone, Copy)]
@@ -1130,7 +1130,7 @@ fn a_huge_text_shadow_blur_does_not_fail_the_frame(renderer: &crate::headless::H
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     renderer
-        .render_layer_tree(&builder.build(), (2048, 1024))
+        .render_scene(&builder.build(), (2048, 1024))
         .expect("a shadow's blur layer is sized to its text, not the window");
 
     let painter = laid_out(&fonts, "H", black(32.0), TextDirection::Ltr, f64::INFINITY);
@@ -1146,7 +1146,7 @@ fn a_huge_text_shadow_blur_does_not_fail_the_frame(renderer: &crate::headless::H
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), WIDE)
+        .render_scene(&builder.build(), WIDE)
         .expect("a sigma too small to weigh does not fail the frame");
     assert!(
         redness(&pixels) > 200,
