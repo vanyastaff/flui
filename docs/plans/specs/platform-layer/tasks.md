@@ -7639,8 +7639,8 @@ GPU-память простаивающего или невидимого окн
   Построено в остатке. Курсор из виджета: `CursorRequest::{Defer, Show(Cursor)}` вместо
   `Icon(CursorIcon)`, `MouseRegion::cursor(impl Into<Cursor>)`, трекер мыши публикует весь
   `Cursor` (`CursorChangeCallback` берёт `&Cursor`, `device_cursor` отдаёт `Cursor`);
-  презентация показывает стрелку, когда окно отказывает образу `Unsupported` (политика на шве,
-  у всех хостов); тестовые окна `flui-testing` и `flui-runtime` отказывают образу ровно при
+  презентация показывает стрелку при любом отказе окна в образе (`Unsupported` или `Platform`;
+  политика на шве, у всех хостов); тестовые окна `flui-testing` и `flui-runtime` отказывают образу ровно при
   недоступной `cursor_image`, `HeadlessWindow::without_cursor_images` играет такую платформу.
   iOS: корневой контроллер отвечает `prefersPointerLocked` и зовёт
   `setNeedsUpdateOfPrefersPointerLocked`; способность `locks_cursor` — iPad с iPadOS 14
@@ -7649,26 +7649,28 @@ GPU-память простаивающего или невидимого окн
   указатель позже без просьбы); без фокуса — не просит. Один владелец захвата на процесс
   (`PointerLocks` над чистой моделью `LockLedger`): кто просит, у кого система держит захват,
   один набор обработчиков `GCMouse` (и на мыши, подключённые во время захвата), движение — только
-  окну с захватом; выход из сцены, потеря фокуса и снятие системой отпускают, снятие у одной
-  сцены не трогает другую, FLUI снимает только поставленный им обработчик. Имена уведомлений
+  окну с захватом и только на главном потоке; выход из сцены, потеря фокуса и снятие системой
+  отпускают (`lets_go`), снятие у одной сцены не трогает другую; повторная просьба читает
+  текущее состояние захвата сцены (UIKit не сообщает о захвате, который не кончался); FLUI
+  возвращает мыши найденный на ней обработчик, если на ней всё ещё его собственный. Имена уведомлений
   UIKit и GameController читаются из загруженных фреймворков (`dlsym`), без ссылки на символ
   (пол iOS 13); нет уведомления — способность недоступна. Движение →
   `ViewTouches::locked_motion` → `ContactRegistry::raw_motion`, `MotionAcceleration::None`.
   Android: `FluiView.onPointerCaptureChange` → `nativePointerCaptureChanged` (протокол 9, dex
   пересобран `android-dex --write`, JDK 21.0.12 и build-tools 35.0.0 записи), окно публикует
-  ответ системы; `requestPointerCapture`/`releasePointerCapture` — вызовы JNI на главном потоке
-  Java, просит только окно в фокусе, без `FluiView` — `ApplyError::Platform`; ворота
+  ответ системы, сопоставленный с окном, которое просило (запоминается на главном потоке Java;
+  поздний захват для заменённого окна возвращается системе); `requestPointerCapture`/
+  `releasePointerCapture` — вызовы JNI на главном потоке Java, недошедший вызов сообщается как
+  «захвата нет»; просит только окно в фокусе, без `FluiView` — `ApplyError::Platform`; ворота
   `PointerCapture` (API 26). События `SOURCE_MOUSE_RELATIVE` очереди — `RawMotion` по каждому
   сэмплу пачки, клики и колесо — там, где указатель покоится. Тесты:
   `mouse_region_cursor_reaches_the_window_through_the_ui_runtime` (таблица иконка/образ/скрыт;
   без запроса `Show(Cursor)` не компилируется, без публикации `Cursor` окно получает иконку),
-  `an_image_cursor_over_a_window_without_images_shows_the_arrow` (без запасной стрелки окно
-  оставляет руку), `hidden_and_image_cursors_resolve_as_icons_do`,
+  `a_refused_image_cursor_shows_the_arrow` (без запасной стрелки окно оставляет руку),
+  `hidden_and_image_cursors_resolve_as_icons_do`,
   `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests` (без ветки захвата —
-  `Move` вместо `RawMotion`), `ios_pointer_lock_ledger`,
-  `the_systems_capture_is_the_published_grab`,
-  `only_a_focused_window_with_its_view_asks_for_the_mouse`, строки `native_capability_absences`
-  и ворот. iOS и Android только
+  `Move` вместо `RawMotion`), таблицы `ios_pointer_lock_ledger` и `android_pointer_capture`,
+  строки `native_capability_absences` и ворот. iOS и Android только
   проверены типами (WSL nightly); прогоны на устройствах — заметки строк parity
   `cursor-shapes`, `pointer-grab-confined-and-locked`, `window-level-resize-steps-and-proportion`
   ([gaps](../../../gaps.md#the-pointer-grabs-and-the-cursor-images-have-run-on-no-device)).

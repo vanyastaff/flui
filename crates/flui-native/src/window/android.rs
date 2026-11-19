@@ -455,8 +455,8 @@ impl ActivityWindow for AndroidWindow {
         self.facets.accessibility.detach();
         self.drag_source.retire();
         if self.api.since::<PointerCapture>().is_some() {
-            self.java_view.capture_pointer(false);
-            if self.pointer_capture.report(false) {
+            self.java_view.capture_pointer(Some(self.id), false);
+            if self.pointer_capture.retire() {
                 ActivityWindow::publish_state(self);
             }
         }
@@ -924,7 +924,7 @@ impl PlatformWindow for AndroidWindow {
                     self.java_view.is_ready(),
                 ) {
                     CaptureRequest::Ask => {
-                        self.java_view.capture_pointer(true);
+                        self.java_view.capture_pointer(Some(self.id), true);
                         Ok(())
                     }
                     CaptureRequest::Nothing => Ok(()),
@@ -935,13 +935,16 @@ impl PlatformWindow for AndroidWindow {
                 ActivityWindow::publish_state(self);
                 asked
             }
-            // The release is the system's to answer as well; the snapshot is
+            // The release is the system's to answer as well (or, where the
+            // view never gets it, reported as none held); the snapshot is
             // published on this exit too, and again when the answer comes.
             flui_platform::WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => {
                 if self.api.since::<PointerCapture>().is_some() {
-                    self.java_view.capture_pointer(false);
+                    self.java_view.capture_pointer(Some(self.id), false);
                 }
-                ActivityWindow::publish_state(self);
+                if CaptureMirror::release_publishes() {
+                    ActivityWindow::publish_state(self);
+                }
                 Ok(())
             }
             flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal)

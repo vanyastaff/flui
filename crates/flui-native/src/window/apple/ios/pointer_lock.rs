@@ -4,11 +4,13 @@
 //! controller prefers the lock and whether the system holds its scene's
 //! pointer locked ([`LockLedger`]), and the one set of `GCMouse` handlers the
 //! locked mouse's motion comes through: installed on every mouse, those that
-//! connect during a lock included, while some window holds the lock, and
-//! taken back from the mice FLUI set them on once none does. The motion goes
-//! to the window that holds the lock. The window asks and lets go through
-//! the owner; the content view tells it what the system said; the controller
-//! answers `prefersPointerLocked` from it.
+//! connect during a lock included, while some window holds the lock. Once
+//! none does, each mouse that still carries FLUI's handler gets back the one
+//! FLUI found on it (the application's, or none); a mouse whose handler was
+//! replaced since keeps the new one ([`HandlerSwaps`]). The motion goes to
+//! the window that holds the lock, on the main thread only. The window asks
+//! and lets go through the owner; the content view tells it what the system
+//! said; the controller answers `prefersPointerLocked` from it.
 //!
 //! UIKit's and GameController's notification names are read from the loaded
 //! frameworks at run time ([`exported_string`]): their symbols exist from
@@ -32,9 +34,10 @@ use flui_platform::WindowId;
 
 use super::FluiView;
 use super::status_bar::StatusBar;
+use crate::owner::apple::ios::NativeOwner;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
-use crate::window::apple::pointer_lock::{LockLedger, LockStep, locked_delta};
+use crate::window::apple::pointer_lock::{HandlerSwaps, LockLedger, LockStep, routable_delta};
 
 // GameController's classes and notification names are found by name only
 // once it is loaded.
@@ -55,12 +58,21 @@ struct LockWindow {
     delivery: std::sync::Weak<WindowDelivery>,
 }
 
+/// A mouse, compared by identity.
+struct Mouse(Retained<AnyObject>);
+
+impl PartialEq for Mouse {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(Retained::as_ptr(&self.0), Retained::as_ptr(&other.0))
+    }
+}
+
 /// The handlers FLUI installed while a window holds the lock.
 struct MouseWatch {
     /// The one handler every mouse gets.
     moved: RcBlock<Moved>,
-    /// The mice FLUI set `moved` on.
-    installed: Vec<Retained<AnyObject>>,
+    /// The mice FLUI set `moved` on, each with the handler it found there.
+    installed: HandlerSwaps<Mouse, RcBlock<Moved>>,
     /// The connect and disconnect observers.
     observers: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
 }
@@ -145,13 +157,18 @@ impl PointerLocks {
     }
 
     /// `id` asks for the lock: its controller prefers it, and UIKit reads it
-    /// again.
-    pub(crate) fn ask(&self, id: WindowId, mtm: MainThreadMarker) {
-        let step = self.ledger.borrow_mut().ask(id);
+    /// again. `locked_now` is the scene's lock as UIKit holds it now: a lock
+    /// the window let go of and asks for again before UIKit read the
+    /// preference in between never ended, and UIKit posts nothing of it, so
+    /// the window holds it at once ([`LockLedger::ask`]).
+    pub(crate) fn ask(&self, id: WindowId, locked_now: bool, mtm: MainThreadMarker) {
+        let step = self.ledger.borrow_mut().ask(id, locked_now);
         self.carry_out(step, mtm);
     }
 
-    /// `id` lets go: asked, lost the focus, or left its scene.
+    /// `id` lets go: asked, lost the focus, or left its scene. The system's
+    /// lock of its scene is not read after: the window no longer asks, so no
+    /// answer of the system's could make it hold the lock again.
     pub(crate) fn withdraw(&self, id: WindowId, mtm: MainThreadMarker) {
         let step = self.ledger.borrow_mut().withdraw(id);
         self.carry_out(step, mtm);
@@ -169,7 +186,7 @@ impl PointerLocks {
     /// publication is the handler's code: the first panic resumes after
     /// every window published.
     fn carry_out(&self, step: LockStep<WindowId>, mtm: MainThreadMarker) {
-        self.follow_holder();
+        self.follow_holder(mtm);
         if let Some(id) = step.preference
             && let Some(status_bar) = self
                 .window(id, |window| window.status_bar.upgrade())
@@ -199,11 +216,9 @@ impl PointerLocks {
     }
 
     /// The locked mouse moved: the window that holds the lock delivers it;
-    /// no window does while none holds one.
-    fn route(&self, dx: f32, dy: f32) {
-        let Some(delta) = locked_delta(dx, dy) else {
-            return;
-        };
+    /// no window does while none holds one. Called on the main thread only
+    /// (`routable_delta`).
+    fn route(&self, delta: (f64, f64)) {
         let Some(holder) = self.ledger.borrow().holder() else {
             return;
         };
@@ -214,11 +229,11 @@ impl PointerLocks {
 
     /// Install the handlers once a window holds the lock, and take them back
     /// once none does.
-    fn follow_holder(&self) {
+    fn follow_holder(&self, mtm: MainThreadMarker) {
         let wanted = self.ledger.borrow().holder().is_some();
         let watching = self.mice.borrow().is_some();
         if wanted && !watching {
-            let watch = self.watch();
+            let watch = self.watch(mtm);
             *self.mice.borrow_mut() = Some(watch);
         } else if !wanted && watching {
             let watch = self.mice.borrow_mut().take();
@@ -230,8 +245,11 @@ impl PointerLocks {
 
     /// The handler on every connected mouse, and observers that put it on a
     /// mouse that connects and forget one that goes.
-    fn watch(&self) -> MouseWatch {
-        let owner = self.this.clone();
+    fn watch(&self, mtm: MainThreadMarker) -> MouseWatch {
+        // The owner is reached through a main-thread binding: the blocks may
+        // be run and let go of on another thread, where the `Rc` behind it is
+        // neither touched nor dropped.
+        let owner = NativeOwner::new(self.this.clone(), mtm);
         let moved: RcBlock<Moved> =
             RcBlock::new(move |_input: *mut AnyObject, dx: f32, dy: f32| {
                 os_entry(
@@ -239,16 +257,27 @@ impl PointerLocks {
                     (),
                     AfterPanic::Answer(|()| ()),
                     || {
-                        if let Some(owner) = owner.upgrade() {
-                            owner.route(dx, dy);
+                        // The handler runs on the mouse's `handlerQueue`,
+                        // the application's to set: off the main thread the
+                        // owner and the views are not touched, and the motion
+                        // is dropped (`routable_delta`); FLUI does not set the
+                        // queue over the application's.
+                        let main = MainThreadMarker::new();
+                        if let Some(delta) = routable_delta(main.is_some(), dx, dy)
+                            && let Some(main) = main
+                            && let Some(owner) = owner.get(main).upgrade()
+                        {
+                            owner.route(delta);
                         }
                     },
                 );
             });
-        let installed = mice()
-            .into_iter()
-            .filter(|mouse| set_moved_handler(mouse, Some(&moved)))
-            .collect();
+        let mut installed = HandlerSwaps::default();
+        for mouse in mice() {
+            if let Some(previous) = swap_moved_handler(&mouse, &moved) {
+                installed.installed(Mouse(mouse), previous);
+            }
+        }
         let mut observers = Vec::new();
         for (symbol, connected) in [
             (c"GCMouseDidConnectNotification", true),
@@ -257,17 +286,24 @@ impl PointerLocks {
             let Some(name) = exported_string(symbol) else {
                 continue;
             };
-            let owner = self.this.clone();
+            let owner = NativeOwner::new(self.this.clone(), mtm);
             let block = RcBlock::new(move |note: NonNull<NSNotification>| {
                 os_entry(
                     "a GCMouse connection",
                     (),
                     AfterPanic::Answer(|()| ()),
                     || {
+                        // The main queue runs the block; a marker it lacks
+                        // would mean another queue, where nothing is touched.
+                        let Some(main) = MainThreadMarker::new() else {
+                            return;
+                        };
                         // SAFETY: the center hands the block a live
                         // notification for the call.
                         let note = unsafe { note.as_ref() };
-                        if let (Some(owner), Some(mouse)) = (owner.upgrade(), note.object()) {
+                        if let (Some(owner), Some(mouse)) =
+                            (owner.get(main).upgrade(), note.object())
+                        {
                             owner.mouse_changed(mouse, connected);
                         }
                     },
@@ -297,11 +333,10 @@ impl PointerLocks {
     /// A mouse connected during a lock gets the handler; one that went is
     /// forgotten. Outside a lock nothing is watched.
     fn mouse_changed(&self, mouse: Retained<AnyObject>, connected: bool) {
+        let mouse = Mouse(mouse);
         if !connected {
             if let Some(watch) = self.mice.borrow_mut().as_mut() {
-                watch.installed.retain(|known| {
-                    !std::ptr::eq(Retained::as_ptr(known), Retained::as_ptr(&mouse))
-                });
+                watch.installed.forget(&mouse);
             }
             return;
         }
@@ -311,24 +346,30 @@ impl PointerLocks {
         let Some(moved) = moved else {
             return;
         };
-        if set_moved_handler(&mouse, Some(&moved))
+        if let Some(previous) = swap_moved_handler(&mouse.0, &moved)
             && let Some(watch) = self.mice.borrow_mut().as_mut()
         {
-            watch.installed.push(mouse);
+            watch.installed.installed(mouse, previous);
         }
     }
 }
 
-/// Take the handler back from each mouse FLUI set it on and that still has
-/// it (another handler set since is left alone), and stop observing.
+/// Give each mouse that still carries FLUI's handler back the one FLUI found
+/// on it (another handler set since is left alone), and stop observing.
 fn unwatch(watch: MouseWatch) {
-    for mouse in &watch.installed {
-        if moved_handler(mouse).is_some_and(|current| std::ptr::eq(current, &*watch.moved)) {
-            set_moved_handler(mouse, None);
-        }
+    let MouseWatch {
+        moved,
+        installed,
+        observers,
+    } = watch;
+    let ours = |mouse: &Mouse| {
+        moved_handler(&mouse.0).is_some_and(|current| std::ptr::eq(current, &*moved))
+    };
+    for (mouse, previous) in installed.restore(ours) {
+        set_moved_handler(&mouse.0, previous.as_deref());
     }
     let center = NSNotificationCenter::defaultCenter();
-    for observer in &watch.observers {
+    for observer in &observers {
         // SAFETY: `observer` is a token `addObserverForName:` returned.
         let observer: &AnyObject = (**observer).as_ref();
         unsafe { center.removeObserver(observer) };
@@ -349,6 +390,24 @@ fn mice() -> Vec<Retained<AnyObject>> {
 fn mouse_input(mouse: &AnyObject) -> Option<Retained<AnyObject>> {
     // SAFETY: `mouseInput` is `GCMouse`'s getter of its `GCMouseInput`.
     unsafe { msg_send![mouse, mouseInput] }
+}
+
+/// Put `moved` on `mouse`, answering the handler it had (`Some(None)` for
+/// none), copied so it can be put back; `None` where the mouse has no input
+/// to set a handler on.
+fn swap_moved_handler(
+    mouse: &AnyObject,
+    moved: &block2::Block<Moved>,
+) -> Option<Option<RcBlock<Moved>>> {
+    let input = mouse_input(mouse)?;
+    // SAFETY: the getter of the copied block property `mouseMovedHandler`;
+    // the block it answers is live for the call, and copying it keeps it.
+    let previous = unsafe {
+        let current: *mut block2::Block<Moved> = msg_send![&*input, mouseMovedHandler];
+        RcBlock::copy(current)
+    };
+    set_moved_handler(mouse, Some(moved));
+    Some(previous)
 }
 
 /// Set `mouse`'s motion handler, `None` to remove it; whether the mouse has
@@ -375,12 +434,6 @@ fn moved_handler(mouse: &AnyObject) -> Option<*const block2::Block<Moved>> {
 
 /// The name of UIKit's lock notification, read from the loaded UIKit.
 const LOCK_CHANGED: &CStr = c"UIPointerLockStateDidChangeNotification";
-
-/// Whether the loaded UIKit tells when it locks a scene's pointer: where it
-/// does not, no window locks one (`pointer_lock_absence`).
-pub(crate) fn uikit_tells_locks() -> bool {
-    exported_string(LOCK_CHANGED).is_some()
-}
 
 /// The string a loaded framework exports as `symbol` (an
 /// `NSString *const`), or `None` where none does.

@@ -67,6 +67,7 @@ use crate::owner::android::{
     HostDisplays,
 };
 use crate::owner::android::{java_host, java_view};
+use crate::window::pointer_capture::{CaptureAnswer, route_answer};
 
 use crate::{
     error::BootstrapError,
@@ -563,9 +564,21 @@ impl AndroidLoop {
                         window.keyboard_settled();
                     }
                 }
-                java_view::ViewEvent::PointerCaptureChanged(held) => {
-                    if let Some(window) = &window {
-                        window.pointer_capture_changed(held);
+                java_view::ViewEvent::PointerCaptureChanged {
+                    window: asker,
+                    held,
+                } => {
+                    // Matched to the window that asked, never to the current
+                    // one: a late grant for a replaced window is given back.
+                    let current = window.as_ref().map(|window| window.activity_id());
+                    match route_answer(asker, current, held) {
+                        CaptureAnswer::Deliver => {
+                            if let Some(window) = &window {
+                                window.pointer_capture_changed(held);
+                            }
+                        }
+                        CaptureAnswer::Release => self.java_view.capture_pointer(asker, false),
+                        CaptureAnswer::Ignore => {}
                     }
                 }
             }

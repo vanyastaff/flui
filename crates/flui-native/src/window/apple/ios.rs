@@ -65,6 +65,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::window_delivery::{Retirement, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
+use crate::window::apple::pointer_lock::{LockPassage, lets_go};
 use crate::window::capabilities::{pointer_absence, pointer_lock_absence, scene_capabilities};
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::keyboard;
@@ -1719,7 +1720,14 @@ impl IOSWindow {
                 "UIKit locks the pointer only for a scene that fills its screen".to_owned(),
             ));
         }
-        self.locks.ask(self.id, marker);
+        // The scene's lock as UIKit holds it now: one let go of and asked for
+        // again before UIKit read the preference in between never ended, and
+        // UIKit posts nothing of it.
+        let locked_now = window
+            .windowScene()
+            .and_then(|scene| scene.pointerLockState())
+            .is_some_and(|state| state.isLocked());
+        self.locks.ask(self.id, locked_now, marker);
         Ok(())
     }
 
@@ -1869,7 +1877,9 @@ impl IOSWindow {
         // A window out of its scene holds no lock: the owner lets it go, and
         // takes the mouse's motion back from it, whatever the system says
         // later of the scene it left.
-        self.locks.withdraw(self.id, marker);
+        if lets_go(LockPassage::LeftItsScene) {
+            self.locks.withdraw(self.id, marker);
+        }
     }
 
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
@@ -1917,7 +1927,14 @@ impl IOSWindow {
         // lets it go as the focus goes (the controller stops preferring it,
         // so the system does not take it again when the focus comes back,
         // and the mouse's motion stops), before the revision below.
-        if matches!(observation, Inactive | Background | Detached)
+        let passage = match observation {
+            Active => LockPassage::Activated,
+            Foreground => LockPassage::Foregrounded,
+            Inactive => LockPassage::Deactivated,
+            Background => LockPassage::Backgrounded,
+            Detached => LockPassage::SceneDetached,
+        };
+        if lets_go(passage)
             && let Some(marker) = MainThreadMarker::new()
         {
             failure.contain(|| self.locks.withdraw(self.id, marker));
@@ -2061,11 +2078,15 @@ impl host::Window<IOSLoop> for IOSWindow {
         Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
     }
 
-    fn capabilities(owner: &IOSLoop, _: &IOSWindows) -> WindowCapabilities {
+    /// What every scene's window honours; the lock where the windows' lock
+    /// owner, read on the main thread the loop runs on, is told of locks.
+    fn capabilities(owner: &IOSLoop, windows: &IOSWindows) -> WindowCapabilities {
+        let tells_locks =
+            MainThreadMarker::new().is_some_and(|marker| windows.locks(marker).tells_locks());
         scene_capabilities(pointer_lock_absence(
             owner.displays.version(),
             owner.displays.shows_a_pointer(),
-            pointer_lock::uikit_tells_locks(),
+            tells_locks,
         ))
     }
 
@@ -2364,7 +2385,9 @@ impl Drop for IOSWindow {
         }
         // The lock owner reaches the window no more, and a lock it held is
         // let go of.
-        if let Some(marker) = MainThreadMarker::new() {
+        if lets_go(LockPassage::Dropped)
+            && let Some(marker) = MainThreadMarker::new()
+        {
             self.locks.unregister(self.id, marker);
         }
     }

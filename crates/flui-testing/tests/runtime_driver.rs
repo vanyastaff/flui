@@ -509,7 +509,7 @@ fn mouse_region_cursor_reaches_the_window_through_the_ui_runtime() {
 /// Fails without the fallback: the window keeps the pointing hand; and, with
 /// a fallback for `Unsupported` alone, in the `Platform` case.
 #[test]
-fn an_image_cursor_over_a_window_without_images_shows_the_arrow() {
+fn a_refused_image_cursor_shows_the_arrow() {
     let windows = [
         (
             "shows no image",

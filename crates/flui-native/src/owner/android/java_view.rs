@@ -169,10 +169,17 @@ pub(crate) enum ViewEvent {
     KeyboardMotion(KeyboardReport),
     /// The keyboard's motion ended or was cancelled (API 30).
     KeyboardSettled,
-    /// The window took the mouse (`true`) or let it go (API 26): the
-    /// system's answer to [`JavaView::capture_pointer`], its release, or the
-    /// focus leaving the window.
-    PointerCaptureChanged(bool),
+    /// The window took the mouse or let it go (API 26): the system's answer
+    /// to [`JavaView::capture_pointer`], its release, or the focus leaving
+    /// the window; or a release that never reached the view (`held` false).
+    PointerCaptureChanged {
+        /// The window the answer is for: the one that last asked for the
+        /// mouse when the answer came, or the one whose release was dropped;
+        /// `None` when no window asked.
+        window: Option<ActivityWindowId>,
+        /// Whether the window has the mouse.
+        held: bool,
+    },
 }
 
 /// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
@@ -338,6 +345,10 @@ pub(crate) struct JavaView {
     /// pixel coordinates. A lock held only to copy the value: its type, not a
     /// check at each read, keeps it a ratio.
     scale: Mutex<DevicePixelRatio>,
+    /// The window that last asked for the mouse, recorded on the Java main
+    /// thread as the request is made there, where the system's answers come
+    /// too: an answer that comes after a newer request is that request's.
+    capture_asker: Mutex<Option<ActivityWindowId>>,
 }
 
 impl std::fmt::Debug for JavaView {
@@ -369,6 +380,7 @@ impl JavaView {
             events: Mutex::new(VecDeque::new()),
             composing: AtomicBool::new(false),
             scale: Mutex::new(DevicePixelRatio::ONE),
+            capture_asker: Mutex::new(None),
         });
         let (installing, unsettled) = (Arc::clone(&view), Arc::clone(&view));
         main_thread::post(
@@ -523,23 +535,39 @@ impl JavaView {
         });
     }
 
-    /// Ask the window for the mouse (`View.requestPointerCapture`, API 26) or
-    /// give it back (`releasePointerCapture`). The system answers through the
-    /// view's `onPointerCaptureChange`, reported as
-    /// [`ViewEvent::PointerCaptureChanged`]; it gives the mouse only to a
-    /// window with the focus, and takes it back when the focus goes. Owner
-    /// thread; the call runs on the Java main thread, and one the view finds
-    /// gone changes nothing.
-    pub(crate) fn capture_pointer(self: &Arc<Self>, capture: bool) {
-        self.post(move |env, view| {
-            let method = if capture {
-                jni_str!("requestPointerCapture")
-            } else {
-                jni_str!("releasePointerCapture")
-            };
-            env.call_method(view, method, jni_sig!("()V"), &[])
-                .map(drop)
-        });
+    /// Ask for the mouse for `window` (`View.requestPointerCapture`, API 26)
+    /// or give it back (`releasePointerCapture`). The system answers through
+    /// the view's `onPointerCaptureChange`, reported as
+    /// [`ViewEvent::PointerCaptureChanged`] for the window that last asked;
+    /// it gives the mouse only to a window with the focus, and takes it back
+    /// when the focus goes. A call that never reaches the view (not
+    /// installed, failed, dropped) holds no capture: it is reported for
+    /// `window` as none held. Owner thread; the call runs on the Java main
+    /// thread.
+    pub(crate) fn capture_pointer(
+        self: &Arc<Self>,
+        window: Option<ActivityWindowId>,
+        capture: bool,
+    ) {
+        let this = Arc::clone(self);
+        self.post_or(
+            move |env, view| {
+                let method = if capture {
+                    *this.capture_asker.lock() = window;
+                    jni_str!("requestPointerCapture")
+                } else {
+                    jni_str!("releasePointerCapture")
+                };
+                env.call_method(view, method, jni_sig!("()V"), &[])
+                    .map(|_| true)
+            },
+            move |view| {
+                view.push_event(ViewEvent::PointerCaptureChanged {
+                    window,
+                    held: false,
+                });
+            },
+        );
     }
 
     /// The bridge answering the node provider, cloned out of the lock so no
@@ -1152,7 +1180,13 @@ extern "system" fn native_pointer_capture_changed<'local>(
         |()| (),
         |_| {
             if let Some(view) = bridge(handle) {
-                view.push_event(ViewEvent::PointerCaptureChanged(has_capture));
+                // Read on this thread, where requests are recorded as they
+                // are made.
+                let window = *view.capture_asker.lock();
+                view.push_event(ViewEvent::PointerCaptureChanged {
+                    window,
+                    held: has_capture,
+                });
             }
             Ok(())
         },

@@ -161,11 +161,17 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   and its `native_capability_absences`, where UIKit locks from iPadOS 14 on an iPad and an
   Activity from API 26).
 - Android: `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests`
-  (`crates/flui-native/src/input/android/motion/tests.rs`) and
-  `the_systems_capture_is_the_published_grab` (`crates/flui-native/src/window/pointer_capture.rs`).
-- UIKit: `ios_pointer_lock_ledger` (`crates/flui-native/src/window/apple/pointer_lock.rs`): a lock
-  held from the system's grant, let go with the scene or the focus and not asked for again, one
-  scene's unlock leaving another's lock.
+  (`crates/flui-native/src/input/android/motion/tests.rs`), and the table `android_pointer_capture`
+  (`crates/flui-native/src/window/pointer_capture.rs`): `the_systems_capture_is_the_published_grab`,
+  `every_exit_that_changes_the_grab_publishes` (release, undelivered release, retirement) and
+  `an_answer_goes_to_the_window_that_asked` (a late grant for a replaced window is given back).
+- UIKit, the table `ios_pointer_lock_ledger` (`crates/flui-native/src/window/apple/pointer_lock.rs`):
+  `a_lock_is_held_from_the_systems_grant`; the hold ending with the scene or the focus is
+  `every_passage_out_of_the_focus_lets_go` (which passages let go) with
+  `a_window_that_lets_go_holds_nothing` (what letting go does);
+  `a_lock_the_system_lets_go_is_not_asked_for_again`;
+  `asking_again_finds_a_lock_the_system_never_let_go`;
+  `one_scenes_unlock_leaves_the_other_scenes_lock`.
 - A region's cursor reaches the window: `mouse_region_cursor_reaches_the_window_through_the_ui_runtime`
-  and `an_image_cursor_over_a_window_without_images_shows_the_arrow`
+  and `a_refused_image_cursor_shows_the_arrow`
   (`crates/flui-testing/tests/runtime_driver.rs`).
