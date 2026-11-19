@@ -6791,8 +6791,11 @@ fn harness_a_moved_region_painter_retires_its_draft_handlers_after_the_phase() {
 
 fn harness_accepted_semantics_drafts_retire_filtered_callbacks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    // Both regions register Click under one merge: the first in reading order
+    // keeps it, so the second region's handler is the one the fold leaves
+    // behind and retires after the phase.
     for (custom, blocked, expected) in [
-        (false, false, [1, 0]),
+        (false, false, [0, 1]),
         (false, true, [1, 1]),
         (true, false, [0, 0]),
         (true, true, [1, 1]),
