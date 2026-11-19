@@ -18,11 +18,11 @@ export const meta = {
 //   head      the reviewed commit (default: HEAD)
 //   since     the head an earlier read covered; this read starts from the fix after it
 //   unread    lenses the earlier read could not run; they read the whole change, not the fix
-//   mutants   a directory holding a cargo-gamma run over this change (AGENTS.md "Before each
-//             push" item 10, docs/testing.md "A change's own lines"): `head`, the commit the run
-//             read and when it started, `change.diff`, the diff it took with `--in-diff`, and
-//             `gamma-report.json`, its report; each mutant that survived or that no test reached
-//             is a finding
+//   mutants   a worktree checked out detached at the reviewed head for a cargo-gamma run over this
+//             change (AGENTS.md "Before each push" item 10, docs/testing.md "A change's own
+//             lines"): its `change.diff` is the diff the run took with `--in-diff`, and its
+//             `target/cargo-gamma/gamma-report.json` the report; each mutant that survived or
+//             that no test reached is a finding
 const opts = args || {}
 const checkout = opts.checkout || '.'
 const notes = []
@@ -90,19 +90,20 @@ const MUTANT = {
 const MUTANTS_SCHEMA = {
   type: 'object',
   properties: {
-    run_head: { type: 'string', description: 'the first word of the head file' },
-    head_written_at: { type: 'integer', description: 'the second word of the head file' },
-    started_at: { type: 'integer', description: "the report's config.startedAt" },
+    run_head: { type: 'string', description: "the run worktree's HEAD" },
+    extra_files: { type: 'array', items: { type: 'string' }, description: 'status lines other than the change.diff one' },
+    report_is_newer: { type: 'boolean', description: 'whether the report was written after change.diff' },
     diff_matches: { type: 'boolean', description: 'whether the run took exactly this diff' },
     counts: {
       type: 'object',
       properties: {
+        killed: { type: 'integer' },
         survived: { type: 'integer' },
         uncovered: { type: 'integer' },
         timed_out: { type: 'integer' },
         ignored: { type: 'integer' },
       },
-      required: ['survived', 'uncovered', 'timed_out', 'ignored'],
+      required: ['killed', 'survived', 'uncovered', 'timed_out', 'ignored'],
     },
     survived: { type: 'array', items: MUTANT },
     uncovered: { type: 'array', items: MUTANT },
@@ -110,7 +111,7 @@ const MUTANTS_SCHEMA = {
     ignored: { type: 'array', items: MUTANT },
     error: { type: 'string', description: 'a file or command that failed, and its error, or empty' },
   },
-  required: ['run_head', 'head_written_at', 'started_at', 'diff_matches', 'counts', 'survived', 'uncovered', 'timed_out', 'ignored', 'error'],
+  required: ['run_head', 'extra_files', 'report_is_newer', 'diff_matches', 'counts', 'survived', 'uncovered', 'timed_out', 'ignored', 'error'],
 }
 
 // cargo-gamma mutates only the sources of library and binary targets and refuses a diff that
@@ -122,13 +123,14 @@ const MUTATION_PATHSPEC = `':(glob)**/src/**/*.rs'`
 const MAX_MUTANT_FINDINGS = 40
 const MAX_MUTANT_NOTES = 10
 // cargo-gamma writes a mutant that timed out or ran out of memory as "Survived" and says which in
-// `statusReason` (cargo-gamma-lib 0.2.1, `elements::report::status_of`); flakes and mutants the
-// build never compiled are "Ignored".
+// `statusReason`; flakes, mutants the build never compiled and ones never judged are "Ignored" or
+// "Pending" (cargo-gamma-lib 0.2.1, `elements::report::status_of`).
 const GAMMA_SELECTIONS = {
+  killed: '.status == "Killed"',
   survived: '.status == "Survived" and ((.statusReason // "") | test("^(timed out|out of memory): ") | not)',
   timed_out: '.status == "Survived" and ((.statusReason // "") | test("^(timed out|out of memory): "))',
   uncovered: '.status == "NoCoverage"',
-  ignored: '.status == "Ignored"',
+  ignored: '.status == "Ignored" or .status == "Pending"',
 }
 
 const VERDICT_SCHEMA = {
@@ -414,20 +416,22 @@ Your lens: ${lens.focus}`
 }
 
 phase('Read')
-// The mutation run is read beside the readers. It counts only when it read this head, took this
-// head's diff, and started after its head file was written: a run over another commit reports on
-// code this head may not have, and a report left in target/ from an earlier run reports on none.
-const gammaReport = `'${mutantsDir}/gamma-report.json'`
+// The mutation run is read beside the readers. It ran in a worktree of its own, detached at the
+// commit it read, so the worktree itself says which head the report belongs to: its HEAD, a tree
+// holding nothing but change.diff, and a report written after that diff.
+const runTree = `'${mutantsDir}'`
+const gammaReport = `'${mutantsDir}/target/cargo-gamma/gamma-report.json'`
 const gammaList = (key, limit) => `jq -r '.files | to_entries[] | .key as $f | .value.mutants[] | select(${GAMMA_SELECTIONS[key]}) | "\\($f)\\t\\(.location.start.line)\\t\\(.description) [\\(.mutatorName)]"' ${gammaReport} | head -n ${limit}`
 const gammaCount = (key) => `jq '[.files[].mutants[] | select(${GAMMA_SELECTIONS[key]})] | length' ${gammaReport}`
 const mutantsRead = mutantsDir
   ? attempt(
-      `Read the report of a cargo-gamma run. Run only these commands, each exactly as written, and copy their output; do not transcribe by hand.
-1. run_head and head_written_at: the two words of \`cat '${mutantsDir}/head'\`.
-2. started_at: \`jq '.config.startedAt' ${gammaReport}\`
-3. diff_matches: whether \`git -C ${dir} diff ${scope.base} ${scope.head} -- ${MUTATION_PATHSPEC} | cmp -s - '${mutantsDir}/change.diff'\` exits 0 (1 is false, an answer; any other exit is an error).
-4. counts: survived \`${gammaCount('survived')}\`, uncovered \`${gammaCount('uncovered')}\`, timed_out \`${gammaCount('timed_out')}\`, ignored \`${gammaCount('ignored')}\`.
-5. survived: the lines of \`${gammaList('survived', MAX_MUTANT_FINDINGS)}\`; uncovered: \`${gammaList('uncovered', MAX_MUTANT_FINDINGS)}\`; timed_out: \`${gammaList('timed_out', MAX_MUTANT_NOTES)}\`; ignored: \`${gammaList('ignored', MAX_MUTANT_NOTES)}\`. Each line splits at its two tabs into file, line and mutation.
+      `Read a cargo-gamma run made in its own worktree. Run only these commands, each exactly as written, and copy their output; do not transcribe by hand.
+1. run_head: \`git -C ${runTree} rev-parse HEAD\`
+2. extra_files: the lines of \`git -C ${runTree} status --porcelain --untracked-files=all\` other than "?? change.diff".
+3. report_is_newer: whether \`test ${gammaReport} -nt '${mutantsDir}/change.diff'\` exits 0.
+4. diff_matches: whether \`git -C ${dir} diff ${scope.base} ${scope.head} -- ${MUTATION_PATHSPEC} | cmp -s - '${mutantsDir}/change.diff'\` exits 0 (1 is false, an answer; any other exit is an error).
+5. counts: killed \`${gammaCount('killed')}\`, survived \`${gammaCount('survived')}\`, uncovered \`${gammaCount('uncovered')}\`, timed_out \`${gammaCount('timed_out')}\`, ignored \`${gammaCount('ignored')}\`.
+6. survived: the lines of \`${gammaList('survived', MAX_MUTANT_FINDINGS)}\`; uncovered: \`${gammaList('uncovered', MAX_MUTANT_FINDINGS)}\`; timed_out: \`${gammaList('timed_out', MAX_MUTANT_NOTES)}\`; ignored: \`${gammaList('ignored', MAX_MUTANT_NOTES)}\`. Each line splits at its two tabs into file, line and mutation.
 When a file cannot be read or a command fails, put the command and its error in "error".`,
       { phase: 'Read', label: 'read:mutants', schema: MUTANTS_SCHEMA, model: 'haiku', effort: 'low' },
     )
@@ -473,15 +477,19 @@ if (!mutantsDir) {
 } else {
   const m = await mutantsRead
   const v = m.value
+  const judged = v ? v.counts.killed + v.counts.survived + v.counts.uncovered + v.counts.timed_out : 0
   if (m.error || v.error) {
     mutation = 'unreadable'
     notes.push(`The mutation run at ${mutantsDir} could not be read: ${m.error || v.error}.`)
   } else if (v.run_head !== scope.head) {
     mutation = 'over another head'
-    notes.push(`The mutation run at ${mutantsDir} read ${v.run_head || 'no recorded head'}, not ${scope.head}; its results were left out.`)
-  } else if (!(v.started_at >= v.head_written_at)) {
-    mutation = 'older than its head file'
-    notes.push(`The report at ${mutantsDir} started before its head file was written, so it is an earlier run's; its results were left out.`)
+    notes.push(`The mutation run at ${mutantsDir} is checked out at ${v.run_head || 'no commit'}, not ${scope.head}; its results were left out.`)
+  } else if (v.extra_files.length) {
+    mutation = 'over an edited tree'
+    notes.push(`The mutation run's worktree at ${mutantsDir} holds more than change.diff (${v.extra_files.join('; ')}); its results were left out.`)
+  } else if (!v.report_is_newer) {
+    mutation = 'older than its diff'
+    notes.push(`The report in ${mutantsDir} was written before its change.diff, so it is not the run over that diff; its results were left out.`)
   } else if (!v.diff_matches) {
     mutation = 'over another diff'
     notes.push(`The mutation run at ${mutantsDir} took another diff than ${scope.base.slice(0, 9)}..${scope.head.slice(0, 9)} over ${MUTATION_PATHSPEC}; its results were left out.`)
@@ -490,9 +498,13 @@ if (!mutantsDir) {
     || v.uncovered.length !== Math.min(v.counts.uncovered, MAX_MUTANT_FINDINGS)
   ) {
     mutation = 'miscounted'
-    notes.push(`The mutation report counts ${v.counts.survived} survivors and ${v.counts.uncovered} uncovered mutants, but ${v.survived.length} and ${v.uncovered.length} were read; its results were left out, and the author reads gamma-report.json.`)
+    notes.push(`The mutation report counts ${v.counts.survived} survivors and ${v.counts.uncovered} uncovered mutants, but ${v.survived.length} and ${v.uncovered.length} were read; its results were left out, and the author reads the report.`)
+  } else if (!judged) {
+    // A run whose build failed still writes a report, with every mutant ignored: it judged nothing.
+    mutation = 'judged nothing'
+    notes.push(`The mutation run at ${mutantsDir} judged no mutant (${v.counts.ignored} ignored or pending); a run that judges them is still owed.`)
   } else {
-    mutation = `${v.counts.survived} survived, ${v.counts.uncovered} uncovered`
+    mutation = `${v.counts.killed} killed, ${v.counts.survived} survived, ${v.counts.uncovered} uncovered`
     const finding = (x, wrong) => ({
       title: `No test notices \`${x.mutation}\``,
       file: x.file,
@@ -500,15 +512,15 @@ if (!mutantsDir) {
       state: `the change's line ${x.file}:${x.line} mutated: ${x.mutation}`,
       operation: 'the test packages of the mutation run ran against it',
       wrong_result: wrong,
-      evidence: `${mutantsDir}/gamma-report.json`,
+      evidence: `${mutantsDir}/target/cargo-gamma/gamma-report.json`,
     })
     for (const x of v.survived) mutantFindings.push(finding(x, 'every test that reached it passed (cargo-gamma: survived)'))
     for (const x of v.uncovered) mutantFindings.push(finding(x, 'no test reached it (cargo-gamma: no coverage)'))
     for (const [key, count] of [['survived', v.counts.survived], ['uncovered', v.counts.uncovered]]) {
-      if (count > MAX_MUTANT_FINDINGS) notes.push(`${count - MAX_MUTANT_FINDINGS} more ${key} mutants are in ${mutantsDir}/gamma-report.json than the ${MAX_MUTANT_FINDINGS} the judge was given; the author answers them from the report.`)
+      if (count > MAX_MUTANT_FINDINGS) notes.push(`${count - MAX_MUTANT_FINDINGS} more ${key} mutants are in the report than the ${MAX_MUTANT_FINDINGS} the judge was given; the author answers them from it.`)
     }
     if (v.counts.timed_out) notes.push(`Mutants the tests timed out or ran out of memory on, neither caught nor passed: ${listed(v.timed_out, v.counts.timed_out)}.`)
-    if (v.counts.ignored) notes.push(`Mutants the run established nothing about (a flake, or not built): ${listed(v.ignored, v.counts.ignored)}.`)
+    if (v.counts.ignored) notes.push(`Mutants the run established nothing about (a flake, not built, or never judged): ${listed(v.ignored, v.counts.ignored)}.`)
   }
 }
 
@@ -536,7 +548,7 @@ For each finding:
 2. Verify it in the source at the reviewed head: open the cited lines and follow the scenario. It is rejected only when a line or a test shows the scenario cannot happen; name that line. That it seems unlikely is not a rejection.
 3. Rank it by REVIEW.md "What Important means here": important, or nit. Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
 
-A finding from the "mutants" lens is a change cargo-gamma made to one line of the diff that every test reaching it passed with. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant), and say why from the code.
+A finding from the "mutants" lens is a change cargo-gamma made to one line of the diff that either every test reaching it passed with (survived) or that no test reached (no coverage); its "wrong_result" says which. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant) or, for one no test reached, when the line is built only for another target than the run's; say why from the code.
 
 Every finding is numbered ("n"). Each entry of "confirmed", "rejected" and "not_kept" lists in "sources" the numbers it accounts for, and every number appears in one of them.
 

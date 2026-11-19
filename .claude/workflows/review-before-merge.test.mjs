@@ -131,16 +131,16 @@ for (const since of ['', null]) {
   assert.deepEqual(result.not_kept.map((e) => e.title), ['nit 6'])
 }
 
-// 9. A cargo-gamma run over this head: each survivor and each uncovered mutant is a finding the
-//    judge sees; a run that cannot be trusted (unreadable, refused, another head, a report older
-//    than its head file, another diff, miscounted) is left out and says why; lists past their
-//    bound are counted; timed-out and ignored mutants are listed, not judged; an empty or null
-//    mutants is no run; a path a shell cannot hold is refused; with no reader back the read is
-//    unavailable and the mutants are listed.
+// 9. A cargo-gamma run in its own worktree at this head: each survivor and each uncovered mutant
+//    is a finding the judge sees; a run that cannot be trusted (unreadable, refused, another head,
+//    an edited tree, a report older than its diff, another diff, miscounted, nothing judged) is
+//    left out and says why; lists past their bound are counted; timed-out and ignored mutants are
+//    listed, not judged; an empty or null mutants is no run; a path a shell cannot hold is
+//    refused; with no reader back the read is unavailable and the mutants are listed.
 const mutant = (line, mutation = 'replace - with + [arith.sub_to_add]') => ({ file: 'crates/a/src/lib.rs', line, mutation })
+const counts = (extra = {}) => ({ killed: 1, survived: 1, uncovered: 0, timed_out: 0, ignored: 0, ...extra })
 const gamma = (extra = {}) => ({
-  run_head: SHA('b'), head_written_at: 100, started_at: 101, diff_matches: true,
-  counts: { survived: 1, uncovered: 0, timed_out: 0, ignored: 0 },
+  run_head: SHA('b'), extra_files: [], report_is_newer: true, diff_matches: true, counts: counts(),
   survived: [mutant(7)], uncovered: [], timed_out: [], ignored: [], error: '', ...extra,
 })
 async function withRun(report, readers = () => ({ findings: [], tried: ['t'] }), mutants = 'D:/m') {
@@ -156,22 +156,26 @@ async function withRun(report, readers = () => ({ findings: [], tried: ['t'] }),
   return { ...out, judgePrompt, mutantsPrompt }
 }
 {
-  const { result, judgePrompt } = await withRun(gamma({ counts: { survived: 1, uncovered: 1, timed_out: 0, ignored: 0 }, uncovered: [mutant(9, 'u')] }))
+  const { result, judgePrompt } = await withRun(gamma({ counts: counts({ uncovered: 1 }), uncovered: [mutant(9, 'u')] }))
   assert.deepEqual(result.findings.map((f) => [f.n, f.lens, f.line]), [[1, 'mutants', 7], [2, 'mutants', 9]])
-  assert.equal(result.findings[0].evidence, 'D:/m/gamma-report.json')
+  assert.equal(result.findings[0].evidence, 'D:/m/target/cargo-gamma/gamma-report.json')
   assert.match(result.findings[1].wrong_result, /no test reached it/)
   assert.match(judgePrompt, /No test notices `replace - with \+ \[arith\.sub_to_add\]`/)
   assert.match(judgePrompt, /readers and a mutation run reported/)
-  assert.match(result.markdown, /Mutation run: 1 survived, 1 uncovered\./)
+  assert.match(judgePrompt, /built only for another target/)
+  assert.match(result.markdown, /Mutation run: 1 killed, 1 survived, 1 uncovered\./)
 }
 for (const [report, label, why] of [
   [gamma({ error: 'jq: error' }), 'unreadable', /could not be read: jq: error/],
   [null, 'unreadable', /could not be read: no result/],
   [() => { throw new Error('budget spent') }, 'unreadable', /could not be read: budget spent/],
-  [gamma({ run_head: SHA('c') }), 'over another head', /read c{40}, not b{40}/],
-  [gamma({ started_at: 99 }), 'older than its head file', /started before its head file/],
+  [gamma({ run_head: SHA('c') }), 'over another head', /checked out at c{40}, not b{40}/],
+  [gamma({ extra_files: [' M crates/a/src/lib.rs'] }), 'over an edited tree', /holds more than change\.diff \( M crates\/a\/src\/lib\.rs\)/],
+  [gamma({ report_is_newer: false }), 'older than its diff', /written before its change\.diff/],
   [gamma({ diff_matches: false }), 'over another diff', /took another diff .*left out/],
-  [gamma({ counts: { survived: 3, uncovered: 0, timed_out: 0, ignored: 0 } }), 'miscounted', /counts 3 survivors and 0 uncovered .* but 1 and 0 were read/],
+  [gamma({ counts: counts({ survived: 3 }) }), 'miscounted', /counts 3 survivors and 0 uncovered .* but 1 and 0 were read/],
+  [gamma({ counts: counts({ uncovered: 2 }) }), 'miscounted', /counts 1 survivors and 2 uncovered .* but 1 and 0 were read/],
+  [gamma({ counts: counts({ killed: 0, survived: 0, ignored: 37 }), survived: [] }), 'judged nothing', /judged no mutant \(37 ignored or pending\)/],
 ]) {
   const { result } = await withRun(report)
   assert.equal(result.findings.length, 0, label)
@@ -179,15 +183,22 @@ for (const [report, label, why] of [
   assert.match(result.markdown, why)
 }
 {
-  const many = Array.from({ length: 40 }, (_, i) => mutant(i + 1))
+  const many = (from) => Array.from({ length: 40 }, (_, i) => mutant(from + i))
   const { result } = await withRun(gamma({
-    counts: { survived: 52, uncovered: 0, timed_out: 12, ignored: 1 },
-    survived: many, timed_out: Array.from({ length: 10 }, (_, i) => mutant(100 + i, 't')), ignored: [mutant(200, 'i')],
+    counts: counts({ survived: 52, uncovered: 41, timed_out: 12, ignored: 1 }),
+    survived: many(1), uncovered: many(500), timed_out: Array.from({ length: 10 }, (_, i) => mutant(100 + i, 't')), ignored: [mutant(200, 'i')],
   }))
-  assert.equal(result.findings.length, 40)
-  assert.match(result.markdown, /12 more survived mutants are in D:\/m\/gamma-report\.json/)
+  assert.equal(result.findings.length, 80)
+  assert.match(result.markdown, /12 more survived mutants are in the report than the 40/)
+  assert.match(result.markdown, /1 more uncovered mutants are in the report than the 40/)
   assert.match(result.markdown, /timed out or ran out of memory on, neither caught nor passed: .*lib\.rs:109 t; and 2 more in the report/)
-  assert.match(result.markdown, /established nothing about \(a flake, or not built\): crates\/a\/src\/lib\.rs:200 i\./)
+  assert.match(result.markdown, /established nothing about \(a flake, not built, or never judged\): crates\/a\/src\/lib\.rs:200 i\./)
+}
+{
+  // Exactly at the bound: nothing more to count.
+  const { result } = await withRun(gamma({ counts: counts({ survived: 40 }), survived: Array.from({ length: 40 }, (_, i) => mutant(i + 1)) }))
+  assert.equal(result.findings.length, 40)
+  assert.doesNotMatch(result.markdown, /more survived mutants/)
 }
 for (const mutants of ['', null]) {
   const { result, calls } = await withRun(gamma(), undefined, mutants)
@@ -195,8 +206,8 @@ for (const mutants of ['', null]) {
   assert.ok(!calls.includes('read:mutants'))
   assert.match(result.markdown, /Mutation run: none supplied\./)
 }
-{
-  const { result, calls } = await withRun(gamma(), undefined, "D:/it's")
+for (const mutants of ["D:/it's", 42]) {
+  const { result, calls } = await withRun(gamma(), undefined, mutants)
   assert.match(result.markdown, /^Independent read unavailable: the mutants path/)
   assert.equal(calls.length, 0)
 }
@@ -213,31 +224,31 @@ for (const mutants of ['', null]) {
 }
 
 // 10. The commands the mutation reader is given, run for real with jq over a report holding every
-//     status cargo-gamma 0.2.1 writes: the selections, the fields and the bounds are the report's.
+//     status cargo-gamma 0.2.1 writes, at the path a run worktree holds it: the selections, the
+//     fields and the bounds are the report's.
 {
-  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const { execSync } = await import('node:child_process')
   const dir = mkdtempSync(join(tmpdir(), 'gamma-')).replaceAll('\\', '/')
+  mkdirSync(join(dir, 'target', 'cargo-gamma'), { recursive: true })
   const at = (status, line, statusReason) => ({ id: `m${line}`, mutatorName: 'arith.sub_to_add', location: { start: { line, column: 1 }, end: { line, column: 2 } }, status, ...(statusReason ? { statusReason } : {}), replacement: 'x', description: `mutant at ${line}` })
-  writeFileSync(join(dir, 'gamma-report.json'), JSON.stringify({
+  const survivors = Array.from({ length: 45 }, (_, i) => at('Survived', 1000 + i))
+  writeFileSync(join(dir, 'target', 'cargo-gamma', 'gamma-report.json'), JSON.stringify({
     schemaVersion: 2, config: { startedAt: 1795044795 },
     files: { 'crates/a/src/lib.rs': { language: 'rust', source: '', mutants: [
       at('Killed', 1), at('Survived', 2), at('Survived', 3, 'timed out: test x'), at('Survived', 4, 'out of memory: test y'),
-      at('NoCoverage', 5), at('Ignored', 6, 'flaky: test z'), at('CompileError', 7),
+      at('NoCoverage', 5), at('Ignored', 6, 'flaky: test z'), at('Pending', 8), at('CompileError', 7), ...survivors,
     ] } },
   }))
   const { mutantsPrompt } = await withRun(gamma(), undefined, dir)
-  const command = (field) => {
-    const line = mutantsPrompt.split('\n').find((l) => l.includes(`${field} \``) || l.includes(`${field}: \``))
-    return line.slice(line.indexOf(`${field}`)).match(/`([^`]+)`/)[1]
-  }
   const sh = (c) => execSync(c, { shell: process.env.SHELL || 'bash', encoding: 'utf8' }).trim()
-  assert.equal(sh(command('started_at')), '1795044795')
-  for (const [field, count, lines] of [['survived', 1, [2]], ['uncovered', 1, [5]], ['timed_out', 2, [3, 4]], ['ignored', 1, [6]]]) {
+  const survivedLines = [2, ...survivors.map((m) => m.location.start.line)].slice(0, 40)
+  for (const [field, count, lines] of [['killed', 1, null], ['survived', 46, survivedLines], ['uncovered', 1, [5]], ['timed_out', 2, [3, 4]], ['ignored', 2, [6, 8]]]) {
     const countCommand = mutantsPrompt.match(new RegExp(`${field} \`(jq '\\[[^\`]+)\``))[1]
     assert.equal(sh(countCommand), String(count), field)
+    if (!lines) continue
     const listCommand = mutantsPrompt.match(new RegExp(`${field}: (?:the lines of )?\`(jq -r [^\`]+)\``))[1]
     assert.deepEqual(sh(listCommand).split('\n').map((l) => Number(l.split('\t')[1])), lines, field)
   }
