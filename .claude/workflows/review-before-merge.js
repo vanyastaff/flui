@@ -49,10 +49,12 @@ const SCOPE_SCHEMA = {
 const DIFF_CHECK_SCHEMA = {
   type: 'object',
   properties: {
+    head: { type: 'string', description: 'full sha the head ref names' },
+    base: { type: 'string', description: 'full sha of the merge base of head and the base ref' },
     exit_status: { type: 'integer', description: 'the exit status of git diff --quiet' },
-    error: { type: 'string', description: 'the command and its error when it did not run, or empty' },
+    error: { type: 'string', description: 'the command and its error when one did not run, or empty' },
   },
-  required: ['exit_status', 'error'],
+  required: ['head', 'base', 'exit_status', 'error'],
 }
 
 const FINDINGS_SCHEMA = {
@@ -391,12 +393,13 @@ if (mode !== 'change' && mode !== 'design') {
 }
 const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
 
-// An agent asked for an empty string sometimes writes the quotes themselves (`""` or `''`, padded or
-// not). Every value an agent returns is read through `blankQuotes`: such a string is empty, and a
-// list drops its blank strings, so a list holding only a blank entry is empty.
+// A scope agent asked for an empty field sometimes writes the quotes themselves (`""` or `''`) or
+// only whitespace. The scope steps' answers are read through `blankQuotes`: a string that is
+// whitespace, with or without one pair of quotes, is empty, and a list drops its empty strings, so a
+// list holding only a blank entry is empty. Readers and the judge are read as they wrote.
 function blankQuotes(value) {
-  if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
-  if (Array.isArray(value)) return value.map(blankQuotes).filter((x) => typeof x !== 'string' || x.trim())
+  if (typeof value === 'string') return /^\s*(""|'')?\s*$/.test(value) ? '' : value
+  if (Array.isArray(value)) return value.map(blankQuotes).filter((x) => x !== '')
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
   return value
 }
@@ -407,7 +410,7 @@ function blankQuotes(value) {
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
-    return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
+    return value ? { value } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
     return { error: String(e && e.message ? e.message : e) }
   }
@@ -476,7 +479,7 @@ Return full 40-character shas. When step 2, 3 or 5 fails, put the command and it
   { phase: 'Scope', label: 'scope', schema: SCOPE_SCHEMA, model: 'haiku', effort: 'low' },
 )
 if (scoped.error) return unavailable(`the scope step failed: ${scoped.error}`)
-const scope = scoped.value
+const scope = blankQuotes(scoped.value)
 notes.push(...scope.warnings.map((w) => `Scope: ${w}.`))
 if (scope.error) return unavailable(`the scope step failed: ${scope.error}`)
 if (!SHA.test(scope.head) || !SHA.test(scope.base)) {
@@ -485,14 +488,22 @@ if (!SHA.test(scope.head) || !SHA.test(scope.base)) {
 const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
 const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
 // An empty file list is an agent's answer, and an agent can return one for a change it did not list.
-// A second agent, which never sees the first one's answer, runs the diff's own test, and "no change"
-// holds only when `git diff --quiet` exits 0.
+// A second agent, which never sees the first one's answer, works the range out again from the refs
+// and runs the diff's own test: "no change" holds only when it names the same base and head and
+// `git diff --quiet` exits 0.
 if (!scope.files.length) {
   const checked = await attempt(
-    `Run exactly \`git -C ${dir} diff --quiet ${scope.base} ${scope.head}\` and report its exit status: 0 means the two commits have the same tree, 1 that they differ. If the command does not run, report its error.`,
+    `Run only these git commands, each exactly as written, in the checkout ${dir}.
+1. head: \`git -C ${dir} rev-parse '${headRef}'\`
+2. base: \`git -C ${dir} merge-base <head> '${baseRef}'\`
+3. exit_status: the exit status of \`git -C ${dir} diff --quiet <base> <head>\`; 0 means the two commits have the same tree, 1 that they differ.
+Return full 40-character shas. If a command does not run, put it and its error in "error".`,
     { phase: 'Scope', label: 'scope:diff', schema: DIFF_CHECK_SCHEMA, model: 'sonnet', effort: 'low' },
   )
-  const failure = checked.error || checked.value.error || (checked.value.exit_status === 0 ? '' : `git diff --quiet exited ${checked.value.exit_status}`)
+  const check = checked.error ? null : blankQuotes(checked.value)
+  const failure = checked.error || check.error
+    || (check.head !== scope.head || check.base !== scope.base ? `it worked out ${check.base}..${check.head} where the scope step gave ${scope.base}..${scope.head}` : '')
+    || (check.exit_status === 0 ? '' : `git diff --quiet exited ${check.exit_status}`)
   if (failure) return unavailable(`the scope step listed no files, and the diff's own test did not confirm that the change is empty (${failure})`)
   log('The merge base and the head have the same tree.')
   return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }

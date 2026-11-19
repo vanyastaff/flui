@@ -42,15 +42,20 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
 }
 
 // 2b. An empty file list (or one holding only a blank entry) is "no change" only when a second agent,
-//     which never sees the first answer, reports that `git diff --quiet` exited 0; any other answer
-//     leaves the read unavailable, and no reader runs.
+//     which never sees the first answer, works the range out again from the refs, names the same
+//     base and head, and reports that `git diff --quiet` exited 0; any other answer leaves the read
+//     unavailable, and no reader runs.
 {
+  const ok = { head: SHA('b'), base: SHA('a'), exit_status: 0, error: '' }
   for (const [files, check, expected] of [
-    [[], { exit_status: 1, error: '' }, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(git diff --quiet exited 1\)/],
+    [[], { ...ok, exit_status: 1 }, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(git diff --quiet exited 1\)/],
     [[], null, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(no result/],
-    [[], { exit_status: 0, error: 'git: not found' }, /did not confirm that the change is empty \(git: not found\)/],
-    [[], { exit_status: 0, error: '' }, /No change to review: the merge base and the head have the same tree/],
-    [['""', ' '], { exit_status: 0, error: '' }, /No change to review/],
+    [[], { ...ok, error: 'git: not found' }, /did not confirm that the change is empty \(git: not found\)/],
+    [[], { ...ok, base: SHA('b') }, /did not confirm that the change is empty \(it worked out b{40}\.\.b{40} where the scope step gave a{40}\.\.b{40}\)/],
+    [[], { ...ok, head: SHA('c') }, /did not confirm that the change is empty \(it worked out/],
+    [[], ok, /No change to review: the merge base and the head have the same tree/],
+    [[], { ...ok, error: ' "" ' }, /No change to review/],
+    [['""', ' '], ok, /No change to review/],
   ]) {
     let checkPrompt = ''
     const { result, calls } = await run({ since: SHA('c') }, (p, o) => {
@@ -60,7 +65,11 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
     })
     assert.match(result.markdown, expected, JSON.stringify(check))
     assert.deepEqual(calls, ['scope', 'scope:diff'])
-    assert.match(checkPrompt, new RegExp(`diff --quiet ${SHA('a')} ${SHA('b')}`))
+    // The check works the range out from the refs, not from the first answer's shas.
+    assert.match(checkPrompt, /rev-parse 'HEAD'/)
+    assert.match(checkPrompt, /merge-base <head> 'origin\/main'/)
+    assert.match(checkPrompt, /diff --quiet <base> <head>/)
+    assert.doesNotMatch(checkPrompt, new RegExp(`${SHA('a')}|${SHA('b')}`))
     // No reader ran, so no note says the readers read the whole change.
     assert.doesNotMatch(result.markdown, /the readers read the whole change/)
   }
@@ -132,10 +141,12 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
 for (const since of ['', null]) {
   const { result } = await run({ since }, (p, o) => {
     if (o.label === 'scope') return scope()
-    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['""'] }
     return { confirmed: [], rejected: [], not_kept: [] }
   })
   assert.equal(result.unavailable, undefined)
+  // Readers are read as they wrote: only the scope steps' answers are blanked.
+  assert.match(result.markdown, /it tried: ""/)
   assert.equal(result.judge, 'fable')
 }
 
