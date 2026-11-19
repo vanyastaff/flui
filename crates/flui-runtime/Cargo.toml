@@ -133,7 +133,7 @@ flui-painting = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
-# pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to
+# pinned by lib tests that run on wasm32 (CI's `wasm-check`). Pinned to
 # the release that pairs with the locked wasm-bindgen; the unpinned "0.3"
 # resolves to one requiring a newer wasm-bindgen and would bump the workspace
 # lock as a side effect of adding a dev-dependency. flui-foundation carries the

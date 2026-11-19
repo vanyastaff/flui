@@ -30,7 +30,7 @@
 #
 # `wasm-bindgen-test-runner` must be on PATH and its version must match the
 # LOCKED `wasm-bindgen` exactly, or it refuses with "must exactly match".
-# `cargo xtask locked-version wasm-bindgen` prints that version, and
+# CI's `wasm-check` job reads that version from `cargo metadata`, and
 # `cargo xtask doctor full` checks the installed one; this line only says which
 # runner to use, so a plain `cargo build --target wasm32-...` is unaffected.
 runner = "wasm-bindgen-test-runner"

@@ -895,7 +895,7 @@ name = "wasm32"
 path = "tests/wasm32.rs"
 
 # The web backend's producer in a real browser (headless Chrome). Its own
-# target because `cargo xtask wasm-test` runs `wasm32` on node, which has no DOM.
+# target because CI's `wasm-check` runs `wasm32` on node, which has no DOM.
 [[test]]
 name = "web_browser"
 path = "tests/web_browser.rs"

@@ -379,7 +379,7 @@ the dispatch layer moves there too.
   contexts present to the canvas, and the slot attached on the new one starts
   healthy and draws in full; its texture images come from the slot it
   replaces. A build that fails is asked again at the next animation frame and
-  never given up (`docs/gaps.md`). wasm-only: CI's `wasm-check` and `wasm-test`
+  never given up (`docs/gaps.md`). wasm-only: CI's `wasm-check` job
   compile it; nothing on this host runs it.
 - **A window reaches a UI runtime with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the

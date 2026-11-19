@@ -1396,11 +1396,11 @@ jobs:
   #                test targets, `flui-hot-reload` with every feature and the
   #                facade's `wasm_consumer`. It is the only lint over
   #                flui-native's wasm32-only web backend.
-  #   wasm-link  — really links the two web demos and checks their import
-  #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
-  #                on wasm32 an undefined symbol becomes an import, not a link
+  #   build      — really links the two web demos and checks their import
+  #                surface against .github/wasm-import-allowlist.txt: on
+  #                wasm32 an undefined symbol becomes an import, not a link
   #                error.
-  #   wasm-test  — EXECUTES the wasm32 tests on node. Everything before it only
+  #   test       — EXECUTES the wasm32 tests on node. Everything before it only
   #                compiles; swapping `web_time::Instant` for std's stays green
   #                there and panics at run time (issue #985).
   #   then the DOM tests in headless Chrome, which node is not (below).
@@ -1411,6 +1411,10 @@ jobs:
     if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    env:
+      # `cargo test -p xtask` holds `cargo xtask doctor`'s install hint to
+      # this line.
+      WASM_TOOLS_VERSION: 1.263.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1449,17 +1453,58 @@ jobs:
           cargo check -p flui-hot-reload --locked --target "$target" --all-features
           cargo clippy -p flui --test wasm_consumer --locked --target "$target" -- -D warnings
 
-      - name: cargo xtask wasm-link
-        run: cargo xtask wasm-link
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-tools@${{ env.WASM_TOOLS_VERSION }}
+
+      # `cargo check` does not link, and on wasm32 a link does not fail on an
+      # undefined symbol either: rust-lld turns it into an import, which no
+      # host provides (`env` is the catch-all for an accidental native
+      # extern). So both demos are linked and the modules they import from
+      # are a reviewed list, .github/wasm-import-allowlist.txt: a pull
+      # request that needs a new one adds it there.
+      - name: cargo build the web demos and check their imports
+        run: |
+          set -o pipefail
+          target=wasm32-unknown-unknown
+          cargo build --locked --target "$target" -p flui-web-demo -p flui-painting-demo
+          target_dir=$(cargo metadata --locked --no-deps --format-version 1 | jq -r .target_directory)
+          allowed=$(sort -u .github/wasm-import-allowlist.txt)
+          status=0
+          for artifact in flui_web_demo flui_painting_demo; do
+            module="$target_dir/$target/debug/$artifact.wasm"
+            wasm-tools validate "$module"
+            imports=$(wasm-tools print "$module" | sed -n 's/^ *(import "\([^"]*\)".*/\1/p' | sort -u)
+            # a module that imports nothing would mean the pattern above no
+            # longer matches wasm-tools' output: wasm-bindgen always imports
+            if [ -z "$imports" ]; then
+              echo "::error::no import read from $module"
+              status=1
+              continue
+            fi
+            unexpected=$(comm -23 <(printf '%s\n' "$imports") <(printf '%s\n' "$allowed"))
+            if [ -n "$unexpected" ]; then
+              echo "::error::$artifact imports from modules not in .github/wasm-import-allowlist.txt: $(paste -sd " " <<< "$unexpected")"
+              status=1
+            else
+              echo "$artifact imports only from: $(paste -sd " " <<< "$imports")"
+            fi
+          done
+          exit "$status"
 
       # The test runner must equal the LOCKED wasm-bindgen exactly or it
-      # refuses to start. Installing the prebuilt binary here saves
-      # `cargo xtask wasm-test` from compiling it.
+      # refuses to start, so its version comes from Cargo.lock: a dependency
+      # bump moves the tool with the lock.
       - name: Resolve the locked wasm-bindgen version
         id: wasm_bindgen_version
         run: |
-          set -euo pipefail
-          version="$(cargo xtask locked-version wasm-bindgen)"
+          set -o pipefail
+          version=$(cargo metadata --locked --format-version 1 | jq -er '
+            [.packages[] | select(.name == "wasm-bindgen") | .version] | unique
+            | if length == 1 then .[0]
+              else error("Cargo.lock pins \(length) wasm-bindgen versions, the runner matches one")
+              end')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "locked wasm-bindgen: $version"
 
@@ -1468,12 +1513,55 @@ jobs:
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
-      - name: cargo xtask wasm-test
-        run: cargo xtask wasm-test
+      # `.cargo/config.toml` names `wasm-bindgen-test-runner` as the wasm32
+      # runner, so `cargo test` runs the tests on node. A crate opts in with a
+      # wasm32 dev-dependency on wasm-bindgen-test, where its author already
+      # declares the intent: its lib test runs, and its `tests/wasm32.rs` when
+      # it has one. Everything before this step only compiles; swapping
+      # `web_time::Instant` for std's stays green there and panics here
+      # (issue #985). A crate whose run executes no assertion fails: it opted
+      # in to nothing, and a healthy sibling would hide it in a total.
+      - name: cargo test for wasm32 on node
+        env:
+          # the wasm lib-test build has dead code (its callers are the
+          # native-only test modules); the shipping build is linted above
+          CARGO_BUILD_WARNINGS: warn
+        run: |
+          set -o pipefail
+          list=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '
+            .packages[]
+            | select(any(.dependencies[]; .name == "wasm-bindgen-test" and .kind == "dev"
+                and ((.target // "") | test("wasm32"))))
+            | [.name, any(.targets[]; .name == "wasm32" and (.kind | index("test")))]
+            | @tsv')
+          # a loop over nothing passes, which looks exactly like success
+          [ -n "$list" ] || { echo "::error::no crate declares a wasm32 wasm-bindgen-test dev-dependency"; exit 1; }
+          log="$RUNNER_TEMP/wasm-test.log"
+          status=0
+          while IFS=$'\t' read -r package integration; do
+            targets=(--lib)
+            if [ "$integration" = true ]; then targets+=(--test wasm32); fi
+            echo "::group::$package ${targets[*]}"
+            # stdin is the crate list: the runner must not read it
+            if ! cargo test -p "$package" --locked --target wasm32-unknown-unknown "${targets[@]}" \
+                < /dev/null 2>&1 | tee "$log"; then
+              echo "::error::$package failed on wasm32"
+              status=1
+            fi
+            echo "::endgroup::"
+            passed=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' "$log" \
+              | awk '{ sum += $1 } END { print sum + 0 }')
+            echo "$package: $passed wasm32 assertions passed"
+            if [ "$passed" -eq 0 ]; then
+              echo "::error::$package opted in to wasm32 tests but executed none"
+              status=1
+            fi
+          done <<< "$list"
+          exit "$status"
 
       # The web backend's DOM side needs a browser, which node is not, so
-      # `wasm-test` leaves `flui-native` alone and its `web_browser` target
-      # runs here in headless Chrome. It reuses this job's wasm dependency
+      # the node step runs only flui-native's lib and `wasm32` tests, and its
+      # `web_browser` target runs here in headless Chrome. It reuses this job's wasm dependency
       # build, and the suite itself runs in about a second.
       - name: Install Chrome + matching ChromeDriver
         id: chrome

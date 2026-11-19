@@ -13,12 +13,33 @@ use std::io::Write as _;
 use std::process::{Command, ExitCode, Stdio};
 
 use crate::fonts::find_python;
-use crate::util::repo_root;
-use crate::wasm::repo_locked_version;
+use anyhow::Context as _;
+
+use crate::util::{read, repo_root};
 
 /// The lychee CI's `checks` job installs (its `LYCHEE_VERSION`), which the
 /// install hint names.
 const LYCHEE_VERSION: &str = "0.24.2";
+
+/// The wasm-tools CI's `wasm-check` job installs (its `WASM_TOOLS_VERSION`),
+/// which the install hint names.
+const WASM_TOOLS_VERSION: &str = "1.263.0";
+
+/// The version of the first `[[package]]` named `name` in a Cargo.lock: the
+/// wasm-bindgen CLI must match the locked `wasm-bindgen` exactly, or
+/// `wasm-bindgen-test-runner` refuses to start.
+fn locked_package_version(lock: &str, name: &str) -> anyhow::Result<Option<String>> {
+    let parsed: toml::Table = lock.parse().context("parsing Cargo.lock")?;
+    let packages = parsed
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .context("Cargo.lock has no [[package]] array")?;
+    Ok(packages
+        .iter()
+        .find(|pkg| pkg.get("name").and_then(toml::Value::as_str) == Some(name))
+        .and_then(|pkg| pkg.get("version")?.as_str())
+        .map(str::to_owned))
+}
 
 /// Which set of tools is required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -413,7 +434,16 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     for (sub, krate) in HEAVY_CARGO_SUBS {
         doctor.check_cargo_sub(Scope::Full, sub, &format!("cargo install --locked {krate}"));
     }
-    let want = repo_locked_version("wasm-bindgen").ok().flatten();
+    doctor.check_bin(
+        Scope::Full,
+        "wasm-tools",
+        &format!("cargo install --locked wasm-tools --version {WASM_TOOLS_VERSION}"),
+        &["--version"],
+    );
+    let want = read("Cargo.lock")
+        .and_then(|lock| locked_package_version(&lock, "wasm-bindgen"))
+        .ok()
+        .flatten();
     let have = succeeded_first_line("wasm-bindgen", &["--version"])
         .and_then(|line| line.split(' ').nth(1).map(str::to_owned));
     match (&want, &have) {
@@ -553,15 +583,34 @@ mod tests {
         );
     }
 
-    /// The install hint names the lychee CI installs.
-    fn the_lychee_hint_names_the_version_ci_installs() {
+    /// Each install hint that names a version names the one CI installs.
+    fn each_pinned_hint_names_the_version_ci_installs() {
         let ci =
             std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("ci.yml");
-        assert!(
-            ci.lines()
-                .any(|line| line.trim() == format!("LYCHEE_VERSION: {LYCHEE_VERSION}")),
-            "ci.yml's LYCHEE_VERSION is not {LYCHEE_VERSION}"
+        for (variable, version) in [
+            ("LYCHEE_VERSION", LYCHEE_VERSION),
+            ("WASM_TOOLS_VERSION", WASM_TOOLS_VERSION),
+        ] {
+            assert!(
+                ci.lines()
+                    .any(|line| line.trim() == format!("{variable}: {version}")),
+                "ci.yml's {variable} is not {version}"
+            );
+        }
+    }
+
+    fn the_locked_version_is_the_named_packages() {
+        let lock = "version = 4\n\n[[package]]\nname = \"wasm-bindgen-macro\"\nversion = \"9.9.9\"\n\n\
+                    [[package]]\nname = \"wasm-bindgen\"\nversion = \"0.2.1\"\n";
+        assert_eq!(
+            locked_package_version(lock, "wasm-bindgen").expect("parses"),
+            Some("0.2.1".to_owned())
         );
+        assert_eq!(
+            locked_package_version(lock, "absent").expect("parses"),
+            None
+        );
+        assert!(locked_package_version("[[package]\n", "wasm-bindgen").is_err());
     }
 
     fn only_apple_hosts_require_the_ios_target() {
@@ -586,8 +635,12 @@ mod tests {
             "doctor_contract",
             &[
                 (
-                    "the_lychee_hint_names_the_version_ci_installs",
-                    the_lychee_hint_names_the_version_ci_installs as fn(),
+                    "each_pinned_hint_names_the_version_ci_installs",
+                    each_pinned_hint_names_the_version_ci_installs as fn(),
+                ),
+                (
+                    "the_locked_version_is_the_named_packages",
+                    the_locked_version_is_the_named_packages as fn(),
                 ),
                 (
                     "only_apple_hosts_require_the_ios_target",

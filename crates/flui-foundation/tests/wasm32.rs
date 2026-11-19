@@ -6,9 +6,9 @@
 //! rested on the linker succeeding (issue #985). The whole point of the file is
 //! that a green here is produced by running code in a wasm VM.
 //!
-//! Run it with `cargo xtask wasm-test`, which resolves the `wasm-bindgen-cli` version
-//! out of `Cargo.lock` — it must match the locked `wasm-bindgen` exactly or the
-//! runner refuses to start.
+//! Run it with `cargo test -p flui-foundation --target wasm32-unknown-unknown --test wasm32`,
+//! with the `wasm-bindgen-cli` of the version `Cargo.lock` pins — it must match the locked
+//! `wasm-bindgen` exactly or the runner refuses to start.
 //!
 //! What belongs here: behaviour that DIFFERS on wasm32, or a native-target
 //! substitution whose whole purpose is to keep wasm32 working. A test that
