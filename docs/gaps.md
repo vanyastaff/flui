@@ -598,9 +598,9 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Applications that ship images or other files with their package, above all on Android, iOS and the Web · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
-- `Image::asset(cache, path)` reads `path` with `std::fs`, relative to the process's working directory, through `flui_assets::ImageCache` (ADR-0385). Nothing maps an asset key to the bytes a package carries: an Android APK's assets, an iOS or macOS bundle's resources and a Web build's served files are not reached, and on the Web every read fails, since `std::fs` has no file system there.
+- Every host provides the application's asset bundle (ADR-0384, `AssetBundleCapability`), reading `flui_assets/` in its package: an Android APK's assets, an iOS or macOS bundle's resources, a Web build's served files, the directory beside a desktop executable. `Image::asset(cache, path)` does not read through it yet: it reads `path` with `std::fs`, relative to the process's working directory, through `flui_assets::ImageCache` (ADR-0385), so on the Web every read fails.
 - `flui create` writes an `[assets]` table into `flui.toml` that no build step reads, and `flui build` packages no asset.
-- An application reads its other files (fonts, data) itself, so the path it gives differs by platform.
+- An application that reads its other files (fonts, data) through the bundle names them by one key on every platform; until `flui build` packages them, the bundle holds none.
 - The check is one application that shows a packaged image through one asset key on desktop, Android, iOS and the Web.
 
 ### The Web host embeds only as the whole viewport or the page's own canvas
