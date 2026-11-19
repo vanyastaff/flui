@@ -41,7 +41,9 @@ lints (bare `unwrap()` included), spelling, links, workflow lint, and every rule
 These paths get findings only when near-certain and severe:
 
 - `docs/plans/specs/`, the live specs, whose task IDs and status tables are their purpose: a
-  finding there is a spec that contradicts an accepted ADR or a status the diff makes false;
+  finding there is a spec that contradicts an accepted ADR or a status the diff makes false. A
+  spec's `design.md` is read in full by the design read of `AGENTS.md` "Before a merge", which
+  ranks its own findings;
 - files marked `@generated`, and `Cargo.lock`;
 - expectation files (`*.snap`, `*.stderr`, protocol schemas, perf baselines), checked
   only against the PR body: an edit the body does not justify by saying why the old
