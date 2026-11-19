@@ -23,6 +23,7 @@
 
 mod background;
 mod dialogs;
+mod grants;
 mod launcher;
 mod launcher_entry;
 mod request;
@@ -42,6 +43,7 @@ use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use crate::autostart::{Autostart, AutostartCapability};
 use crate::dialog::{FileDialogCapability, FileDialogs};
+use crate::grant::{GrantCapability, Grants};
 use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
 use crate::taskbar::{TaskbarCapability, TaskbarEntry};
 use crate::user_dirs::{UserDirCapability, UserDirs};
@@ -435,7 +437,7 @@ impl Bus {
 /// Whether the process runs in a sandbox that names it to the portal
 /// itself: Flatpak (`/.flatpak-info`) or Snap (`SNAP` set by `snap run`).
 fn is_sandboxed() -> bool {
-    std::path::Path::new("/.flatpak-info").exists() || std::env::var_os("SNAP").is_some()
+    flui_platform::sandbox::is_flatpak() || std::env::var_os("SNAP").is_some()
 }
 
 /// `mutex`'s guard: a panic while one is held leaves only a value that is
@@ -642,9 +644,13 @@ pub(crate) fn register(
         let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
         LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
     });
-    let dirs = configure;
+    let dirs = configure.clone();
     registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
+    });
+    let grants = configure;
+    registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(Grants::new(grants::PortalGrants::new(grants(ctx)), ctx))
     });
     // No portal shows a message box or a share sheet, and the jump list is
     // Windows': refused for good, never faked.

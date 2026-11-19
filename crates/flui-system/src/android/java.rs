@@ -41,7 +41,7 @@ use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 
 pub(crate) use alert::BoxOnScreen;
-use saf::JavaPicker;
+use saf::{JavaPicker, JavaReach};
 pub(crate) use starts::{Started, view};
 
 use super::documents::{self, MAX_NAME_UNITS};
@@ -49,6 +49,7 @@ use super::workers::Workers;
 use super::{CALLBACK_CLASS, DOCUMENTS_CLASS, PROTOCOL};
 use crate::autostart::AutostartCapability;
 use crate::dialog::{FileDialogCapability, MessageBoxCapability, MessageBoxes};
+use crate::grant::{GrantCapability, Grants};
 use crate::jump_list::JumpListCapability;
 use crate::os::{Os, OsCapability};
 use crate::owner::android::native_call::jni_native;
@@ -715,6 +716,16 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
     });
     registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(Os::new(super::os::AndroidOs::read(), ctx))
+    });
+    registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
+        let (_activity, java) = host::<GrantCapability>(ctx, Reach::FrameworkOnly)?;
+        Ok::<_, Unsupported>(Grants::new(
+            super::grants::AndroidGrants::new(
+                std::rc::Rc::new(JavaReach(java)),
+                ctx.runtime_local::<Workers>(),
+            ),
+            ctx,
+        ))
     });
     not_on_android::<AutostartCapability>(registrar);
     not_on_android::<GlobalShortcutCapability>(registrar);

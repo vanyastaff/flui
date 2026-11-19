@@ -487,13 +487,17 @@ pub trait Platform: sealed::Sealed + 'static {
     /// is opened; `None` on every other platform.
     fn page_origin(&self) -> Option<String>;
 
-    /// Where the application `app` keeps its data on this platform, or `None`
-    /// when it has nowhere to keep it.
+    /// Where the application `app` keeps its data on this platform.
     ///
-    /// Every host but Android and headless answers with the current user's data
-    /// directories ([`crate::storage::data_dirs`]); Android's process has no
-    /// such directories, so it answers with its own; headless keeps the values
-    /// in memory unless a test gives it a root
+    /// Every host but Android and headless answers with a store under the
+    /// current user's data directories, its container's for a sandboxed
+    /// process ([`crate::storage::DataStore::of_process`]): they are found at
+    /// the store's first call, on the thread the host runs it on, never the
+    /// owner thread, and a platform that names
+    /// none refuses each call (`StorageError::Inaccessible`), so such a host
+    /// never answers `None`. Android answers with its process's own folders,
+    /// and `None` only when the Activity reports no internal data path;
+    /// headless keeps the values in memory unless a test gives it a root
     /// ([`HeadlessPlatform::with_data_root`](crate::HeadlessPlatform::with_data_root)).
     fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore>;
 }

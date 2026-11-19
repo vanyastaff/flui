@@ -6,6 +6,9 @@
 //!   framework widgets name it (ADR-0154 §3); this crate provides it.
 //! - **Dialogs**: [`dialog::FileDialogs`] and [`dialog::MessageBoxes`],
 //!   modal to the acquiring widget's window, one dialog per window.
+//! - **Grants**: [`grant::Grants`], a picked file reacquired after a restart
+//!   through the access its pick carried, never as a path the process's
+//!   [`sandbox::Sandbox`] keeps it from opening.
 //! - **Sharing**: [`share::Share`], the system's share sheet.
 //! - **Autostart**: [`autostart::Autostart`], starting the application when
 //!   the user logs in.
@@ -53,6 +56,7 @@ mod android;
 mod apple;
 pub mod autostart;
 pub mod dialog;
+pub mod grant;
 #[cfg(any(target_os = "ios", test))]
 mod ios;
 pub mod jump_list;
@@ -69,6 +73,7 @@ pub mod os;
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
+pub mod sandbox;
 pub mod share;
 pub mod shortcuts;
 pub mod taskbar;
@@ -163,6 +168,7 @@ mod refusals {
         {
             use crate::autostart::AutostartCapability;
             use crate::dialog::{FileDialogCapability, MessageBoxCapability};
+            use crate::grant::GrantCapability;
             use crate::jump_list::JumpListCapability;
             use crate::share::ShareCapability;
             use crate::shortcuts::GlobalShortcutCapability;
@@ -172,6 +178,7 @@ mod refusals {
 
             refuse::<LauncherCapability>(registrar, not_yet);
             refuse::<FileDialogCapability>(registrar, not_yet);
+            refuse::<GrantCapability>(registrar, not_yet);
             refuse::<MessageBoxCapability>(registrar, not_yet);
             refuse::<ShareCapability>(registrar, not_yet);
             refuse::<AutostartCapability>(registrar, not_yet);
