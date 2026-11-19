@@ -6363,7 +6363,7 @@ GPU-память простаивающего или невидимого окн
   `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown`: `-p flui-native --lib` с фичами по умолчанию и без них,
   `-p flui-platform -p flui-system --lib`, `--tests` трёх крейтов под нативные цели и `-p flui-system --lib --tests --features testing` под wasm32 — ни одного предупреждения: каждое `expect(dead_code)` исполнено.
 
-- [x] **LY102** — PR #LY102PR. **Что сделано.** Исходники `flui-platform` разложены по
+- [x] **LY102** — #2878. **Что сделано.** Исходники `flui-platform` разложены по
   областям `git mv` (история идёт за файлами): `window/` — словарь окна (`window.rs` стал
   `window/mod.rs`), `platform_window`, `state`, `capabilities`, `placement`, `geometry`,
   `frame`, `insets`, `handler`, `surface_target`, `cursor`, `brightness`, `frame_request`,
