@@ -215,21 +215,28 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
 
     let (mut documents, steps) = steps_of(vec![png(), text()]);
     assert_eq!(
-        read_picks(&mut documents, &[images()], true, 100, &LetGo::default()),
+        read_picks(
+            &mut documents,
+            &[images()],
+            true,
+            100,
+            &LetGo::default(),
+            false
+        ),
         Err(DialogError::NotInFilter)
     );
     assert_eq!(steps.taken(), described_only(2), "nothing was read");
 
     let (mut documents, steps) = steps_of(vec![png(), nameless()]);
     assert_eq!(
-        read_picks(&mut documents, &[], true, 100, &LetGo::default()),
+        read_picks(&mut documents, &[], true, 100, &LetGo::default(), false),
         malformed()
     );
     assert_eq!(steps.taken(), described_only(2));
 
     let (mut documents, steps) = steps_of(vec![png(), text()]);
     assert_eq!(
-        read_picks(&mut documents, &[], false, 100, &LetGo::default()),
+        read_picks(&mut documents, &[], false, 100, &LetGo::default(), false),
         malformed()
     );
     assert!(
@@ -239,7 +246,7 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
 
     let (mut documents, steps) = steps_of(Vec::new());
     assert_eq!(
-        read_picks(&mut documents, &[], true, 100, &LetGo::default()),
+        read_picks(&mut documents, &[], true, 100, &LetGo::default(), false),
         malformed()
     );
     assert!(
@@ -249,14 +256,14 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
 
     let (mut documents, steps) = steps_of(vec![png(), text()]);
     assert_eq!(
-        read_picks(&mut documents, &[], true, 7, &LetGo::default()),
+        read_picks(&mut documents, &[], true, 7, &LetGo::default(), false),
         too_large(8, 7)
     );
     assert_eq!(steps.taken(), described_only(2), "declared past the limit");
 
     let (mut documents, steps) = steps_of(vec![understated(), text()]);
     assert_eq!(
-        read_picks(&mut documents, &[], true, 4, &LetGo::default()),
+        read_picks(&mut documents, &[], true, 4, &LetGo::default(), false),
         too_large(5, 4)
     );
     assert_eq!(
@@ -266,7 +273,7 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
     );
 
     let (mut documents, steps) = steps_of(vec![png(), undeclared()]);
-    let picks = read_picks(&mut documents, &[], true, 8, &LetGo::default())
+    let picks = read_picks(&mut documents, &[], true, 8, &LetGo::default(), false)
         .expect("within the limit")
         .expect("two picks");
     assert_eq!(
@@ -295,7 +302,7 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
     let (mut documents, _) = steps_of(vec![Document::new("IMG_0001", "image/jpeg", b"1")]);
     let typed = [FileFilter::new("Pictures").with_mime_type("image/*")];
     assert!(matches!(
-        read_picks(&mut documents, &typed, false, 8, &LetGo::default()),
+        read_picks(&mut documents, &typed, false, 8, &LetGo::default(), false),
         Ok(Some(_))
     ));
 }
@@ -776,5 +783,66 @@ fn an_earlier_activitys_answers_are_claimed_once_and_hold_nothing() {
         bench.activity.reattachments(),
         5,
         "claimed once per runtime"
+    );
+}
+
+#[test]
+fn a_kept_pick_carries_its_uri_once_every_pick_was_read() {
+    let persistable = |name: &str| Document {
+        persisted: true,
+        ..Document::new(name, "text/plain", b"abc")
+    };
+    let (mut documents, steps) = steps_of(vec![
+        persistable("a.txt"),
+        Document::new("b.txt", "text/plain", b"def"),
+    ]);
+    let picks = read_picks(&mut documents, &[], true, 8, &LetGo::default(), true)
+        .expect("within the limit")
+        .expect("two picks");
+    let grants = picks
+        .iter()
+        .map(|pick| pick.grant().map(|grant| grant.payload().to_vec()))
+        .collect::<Vec<Option<Vec<u8>>>>();
+    assert_eq!(
+        grants,
+        [Some(b"content://stand-in/document/0".to_vec()), None],
+        "a provider that offers no persistable permission leaves its pick without a grant"
+    );
+    assert_eq!(
+        steps.taken()[2..],
+        [Step::Read(0, 9), Step::Read(1, 6), Step::Kept(0)],
+        "the permission is persisted after every pick was read"
+    );
+
+    let (mut documents, steps) = steps_of(vec![persistable("a.txt"), persistable("b.txt")]);
+    assert!(read_picks(&mut documents, &[], true, 5, &LetGo::default(), true).is_err());
+    assert!(
+        !steps.taken().contains(&Step::Kept(0)),
+        "an answer refused midway persists nothing"
+    );
+
+    let (mut documents, steps) = steps_of(vec![persistable("a.txt")]);
+    let picks = read_picks(&mut documents, &[], false, 8, &LetGo::default(), false)
+        .expect("within the limit")
+        .expect("a pick");
+    assert_eq!(picks.first().grant(), None);
+    assert!(
+        !steps.taken().contains(&Step::Kept(0)),
+        "nothing kept unasked"
+    );
+
+    let unholdable = Document {
+        uri: Some(format!("content://x/{}", "a".repeat(64 * 1024))),
+        ..persistable("a.txt")
+    };
+    let (mut documents, steps) = steps_of(vec![unholdable]);
+    let picks = read_picks(&mut documents, &[], false, 8, &LetGo::default(), true)
+        .expect("within the limit")
+        .expect("a pick");
+    assert_eq!(picks.first().grant(), None, "a URI no grant holds");
+    assert_eq!(
+        steps.taken()[1..],
+        [Step::Read(0, 9), Step::Kept(0), Step::Released(0)],
+        "a permission no grant can carry is given back"
     );
 }

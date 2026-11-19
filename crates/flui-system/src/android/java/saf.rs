@@ -16,6 +16,7 @@ use super::super::documents::{
     self, Described, DocumentPicker, Interrupt, LetGo, MAX_NAME_UNITS, NotOpened, PickedDocuments,
     PickerIntent,
 };
+use super::super::grants::DocumentReach;
 use super::{Java, bounded_string, in_frame, is_a, put_string, string_array, thrown, with_string};
 use crate::dialog::DialogError;
 
@@ -451,5 +452,186 @@ impl PickedDocuments for JavaDocuments {
                 .map(drop)
             })
         });
+    }
+
+    fn keep(&mut self, index: usize) -> Option<String> {
+        let kept = self.java.attached(|env| {
+            env.with_local_frame(8, |env| -> jni::errors::Result<Option<String>> {
+                let uri = self.uris.get_element(env, index)?;
+                // The text first: a URI too long to keep is never persisted,
+                // so nothing is taken that no grant could name.
+                let text = env
+                    .call_method(
+                        &uri,
+                        jni_str!("toString"),
+                        jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )?
+                    .l()?;
+                let Some(text) = bounded_string(env, text, MAX_URI_UNITS)? else {
+                    return Ok(None);
+                };
+                // A provider that offers no persistable permission throws
+                // `SecurityException`: the pick carries no grant. The last
+                // call: nothing after it can fail and leave it persisted.
+                let taken = env.call_method(
+                    &self.java.resolver,
+                    jni_str!("takePersistableUriPermission"),
+                    jni_sig!("(Landroid/net/Uri;I)V"),
+                    &[
+                        JValue::Object(&uri),
+                        JValue::Int(FLAG_GRANT_READ_URI_PERMISSION),
+                    ],
+                );
+                if taken.is_err() {
+                    // Cleared within the frame: the next document's call
+                    // must not find it pending.
+                    env.exception_clear();
+                    return Ok(None);
+                }
+                Ok(Some(text))
+            })
+        });
+        kept.ok().flatten()
+    }
+
+    fn release(&mut self, index: usize) {
+        // A permission Android no longer holds has nothing to release.
+        let _ = self.java.attached(|env| {
+            env.with_local_frame(4, |env| {
+                let uri = self.uris.get_element(env, index)?;
+                env.call_method(
+                    &self.java.resolver,
+                    jni_str!("releasePersistableUriPermission"),
+                    jni_sig!("(Landroid/net/Uri;I)V"),
+                    &[
+                        JValue::Object(&uri),
+                        JValue::Int(FLAG_GRANT_READ_URI_PERMISSION),
+                    ],
+                )
+                .map(drop)
+            })
+        });
+    }
+
+    fn is_kept(&mut self, index: usize) -> bool {
+        let held = self.java.attached(|env| {
+            env.with_local_frame(16, |env| -> jni::errors::Result<bool> {
+                let uri = self.uris.get_element(env, index)?;
+                let permissions = env
+                    .call_method(
+                        &self.java.resolver,
+                        jni_str!("getPersistedUriPermissions"),
+                        jni_sig!("()Ljava/util/List;"),
+                        &[],
+                    )?
+                    .l()?;
+                let count = env
+                    .call_method(&permissions, jni_str!("size"), jni_sig!("()I"), &[])?
+                    .i()?;
+                for at in 0..count {
+                    let found = env.with_local_frame(4, |env| -> jni::errors::Result<bool> {
+                        let permission = env
+                            .call_method(
+                                &permissions,
+                                jni_str!("get"),
+                                jni_sig!("(I)Ljava/lang/Object;"),
+                                &[JValue::Int(at)],
+                            )?
+                            .l()?;
+                        let granted = env
+                            .call_method(
+                                &permission,
+                                jni_str!("getUri"),
+                                jni_sig!("()Landroid/net/Uri;"),
+                                &[],
+                            )?
+                            .l()?;
+                        let same = env
+                            .call_method(
+                                &granted,
+                                jni_str!("equals"),
+                                jni_sig!("(Ljava/lang/Object;)Z"),
+                                &[JValue::Object(&uri)],
+                            )?
+                            .z()?;
+                        Ok(same
+                            && env
+                                .call_method(
+                                    &permission,
+                                    jni_str!("isReadPermission"),
+                                    jni_sig!("()Z"),
+                                    &[],
+                                )?
+                                .z()?)
+                    })?;
+                    if found {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+        });
+        // A resolver that fails the question answers no permission held;
+        // the exception it threw was cleared with the call.
+        held.unwrap_or(false)
+    }
+}
+
+/// `Intent.FLAG_GRANT_READ_URI_PERMISSION`.
+const FLAG_GRANT_READ_URI_PERMISSION: i32 = 1;
+
+/// The longest content URI a grant is made of, in UTF-16 units; a longer
+/// one is not kept.
+const MAX_URI_UNITS: usize = 8 * 1024;
+
+/// [`DocumentReach`] through the application's content resolver: a URI
+/// parsed (`Uri.parse`) into one document, read under a cancellation signal
+/// of its own.
+pub(crate) struct JavaReach(pub(crate) Arc<Java>);
+
+impl DocumentReach for JavaReach {
+    type Documents = JavaDocuments;
+
+    fn reach(&self, uri: &str) -> Option<(JavaDocuments, Interrupt)> {
+        let reached = self.0.attached(|env| {
+            env.with_local_frame(8, |env| -> jni::errors::Result<_> {
+                let text = env.new_string(uri)?;
+                let parsed = env
+                    .call_static_method(
+                        jni_str!("android/net/Uri"),
+                        jni_str!("parse"),
+                        jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"),
+                        &[JValue::Object(&text)],
+                    )?
+                    .l()?;
+                let uris = env.new_object_array(1, jni_str!("android/net/Uri"), JObject::null())?;
+                uris.set_element(env, 0, &parsed)?;
+                let signal = env.new_object(
+                    jni_str!("android/os/CancellationSignal"),
+                    jni_sig!("()V"),
+                    &[],
+                )?;
+                Ok((env.new_global_ref(&uris)?, env.new_global_ref(&signal)?))
+            })
+        });
+        let (uris, signal) = reached.ok()?;
+        let signal = Arc::new(signal);
+        let documents = JavaDocuments {
+            java: Arc::clone(&self.0),
+            uris,
+            count: 1,
+            signal: Arc::clone(&signal),
+        };
+        let java = Arc::clone(&self.0);
+        let interrupt: Interrupt = Box::new(move || {
+            // `CancellationSignal.cancel` tells the provider through a
+            // one-way call, so the owner thread never waits for it.
+            let _ = java.attached(|env| {
+                env.call_method(&*signal, jni_str!("cancel"), jni_sig!("()V"), &[])
+                    .map(drop)
+            });
+        });
+        Some((documents, interrupt))
     }
 }
