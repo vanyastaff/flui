@@ -243,8 +243,8 @@ pub(crate) mod motion {
     use flui_platform::EventTime;
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
-        PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta,
-        ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
+        MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerButtons, PointerEvent,
+        PointerKind, ScrollDelta, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
     };
     use web_time::Instant;
 
@@ -258,6 +258,10 @@ pub(crate) mod motion {
 
     /// `InputDevice.SOURCE_MOUSE`. A touchpad in pointer mode reports from it.
     pub const SOURCE_MOUSE: u32 = 0x0000_2002;
+
+    /// `InputDevice.SOURCE_MOUSE_RELATIVE` (API 26): the mouse while the
+    /// window holds pointer capture; its axes are motion, not a position.
+    pub const SOURCE_MOUSE_RELATIVE: u32 = 0x0002_0004;
 
     /// How long a hover exit waits for the press it may continue into before it
     /// is delivered as a leave: a few owner turns at the backend's 16 ms poll,
@@ -726,6 +730,10 @@ pub(crate) mod motion {
                 time: delivery_time,
                 received: now,
             };
+            if motion.source & SOURCE_MOUSE_RELATIVE == SOURCE_MOUSE_RELATIVE {
+                self.captured(&event, wheel, &mut output);
+                return output;
+            }
             let touchpad = motion
                 .pointers
                 .first()
@@ -755,6 +763,82 @@ pub(crate) mod motion {
                     .collect()]));
             }
             output
+        }
+
+        /// Decode an event of the captured mouse (`SOURCE_MOUSE_RELATIVE`,
+        /// while the window holds the pointer locked): each move, its
+        /// batched samples included, is one raw motion by the mouse's own
+        /// counts, right and down positive, before the system's pointer speed.
+        /// Its buttons and wheel act at the place the pointer rests, where
+        /// the mouse last hovered; with no such place (the mouse never
+        /// hovered the window) they deliver nothing, as a press needs a
+        /// position.
+        fn captured(
+            &mut self,
+            event: &Event<'_, '_>,
+            wheel: &dyn Fn(f32, f32) -> Option<ScrollDelta>,
+            output: &mut Vec<PlatformInput>,
+        ) {
+            let motion = event.motion;
+            let Some(pointer) = motion.pointers.first() else {
+                return;
+            };
+            let Ok(label) = u64::try_from(pointer.id) else {
+                return;
+            };
+            let contact = NativeContact(label);
+            if matches!(motion.action, MotionAction::Move | MotionAction::HoverMove) {
+                let samples = pointer
+                    .history
+                    .iter()
+                    .map(|(time, axes)| (*time, axes))
+                    .chain(std::iter::once((event.time, &pointer.axes)));
+                for (time, axes) in samples {
+                    let (dx, dy) = (f64::from(axes.x), f64::from(axes.y));
+                    if dx == 0.0 && dy == 0.0 {
+                        continue;
+                    }
+                    let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+                        continue;
+                    };
+                    output.extend(self.contacts.raw_motion(
+                        SURFACE,
+                        event.device,
+                        contact,
+                        ReadingTime::epoch(time),
+                        delta,
+                        MotionAcceleration::None,
+                    ));
+                }
+                return;
+            }
+            let Some((_, rest)) = self.contacts.position(SURFACE, event.device, contact) else {
+                return;
+            };
+            let resting = [PointerFacts {
+                id: pointer.id,
+                tool: Tool::Mouse,
+                axes: Axes {
+                    x: rest.x as f32,
+                    y: rest.y as f32,
+                    ..pointer.axes
+                },
+                history: Vec::new(),
+            }];
+            let at_rest = Motion {
+                source: SOURCE_MOUSE,
+                pointers: &resting,
+                ..motion.clone()
+            };
+            let event = Event {
+                motion: &at_rest,
+                device: event.device,
+                capabilities: event.capabilities,
+                scale: event.scale,
+                time: event.time,
+                received: event.received,
+            };
+            self.pointer(&event, &resting[0], false, wheel, output);
         }
 
         /// Decode `pointer` of a pointer event; a touchpad's is its cursor.

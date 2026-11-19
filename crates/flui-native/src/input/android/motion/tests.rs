@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use crate::input::android::motion::{
     AndroidMotion, Axes, DeviceCapabilities, DeviceDiscovery, EXIT_GRACE, Motion, MotionAction,
-    PointerFacts, SOURCE_MOUSE, SOURCE_TOUCHSCREEN, Tool, axis, button, native_buttons,
-    native_device, native_sensors, needs_device_query, pen_angles, pointer_kind, touch_exploration,
+    PointerFacts, SOURCE_MOUSE, SOURCE_MOUSE_RELATIVE, SOURCE_TOUCHSCREEN, Tool, axis, button,
+    native_buttons, native_device, native_sensors, needs_device_query, pen_angles, pointer_kind,
+    touch_exploration,
 };
 use crate::input::assembly::{NativeCancel, PenAngles};
 use flui_foundation::geometry::DevicePixelRatio;
@@ -15,8 +16,8 @@ use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    CancelReason, PanZoomPhase, PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
-    ScrollDelta, ScrollPhase,
+    CancelReason, MotionAcceleration, PanZoomPhase, PenTool, PointerButton, PointerButtons,
+    PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
 };
 use web_time::Instant;
 
@@ -551,6 +552,80 @@ fn a_wheel_scrolls_unphased_from_the_cursor() {
     );
     assert_eq!(scroll.position.get().x, 20.0);
 }
+/// The captured mouse (`SOURCE_MOUSE_RELATIVE`) reports motion, not a
+/// position: each move and each of its batched samples is one raw motion by
+/// the mouse's counts, of the pointer that hovered, at the place it rests,
+/// and never a move; a click acts at that place.
+fn a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests() {
+    let mut feed = Feed::new();
+    let hovering = feed.event(
+        SOURCE_MOUSE,
+        MotionAction::HoverMove,
+        1,
+        0,
+        &[pointer(0, Tool::Mouse, at(40.0, 20.0))],
+    );
+    let mouse = hovering
+        .iter()
+        .filter_map(PlatformInput::as_pointer)
+        .find_map(|event| match event {
+            PointerEvent::Move(movement) => Some(movement.pointer.id),
+            _ => None,
+        })
+        .expect("the hover is a move");
+
+    let mut captured = pointer(0, Tool::Mouse, at(3.0, -1.0));
+    captured
+        .history
+        .push((EventTime::from_nanos(1_500_000), at(2.0, 0.0)));
+    let events = feed.event(SOURCE_MOUSE_RELATIVE, MotionAction::Move, 2, 0, &[captured]);
+    let motions: Vec<_> = events
+        .iter()
+        .filter_map(PlatformInput::as_pointer)
+        .map(|event| match event {
+            PointerEvent::RawMotion(raw) => (
+                raw.pointer.id,
+                raw.delta.x(),
+                raw.delta.y(),
+                raw.acceleration,
+                raw.position.map(|at| at.get().x),
+            ),
+            other => panic!("a captured mouse moves by raw motion only, not {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        motions,
+        [
+            (mouse, 2.0, 0.0, MotionAcceleration::None, Some(20.0)),
+            (mouse, 3.0, -1.0, MotionAcceleration::None, Some(20.0)),
+        ]
+    );
+
+    let pressed = feed.event(
+        SOURCE_MOUSE_RELATIVE,
+        MotionAction::Down,
+        3,
+        button::PRIMARY,
+        &[pointer(0, Tool::Mouse, at(0.0, 0.0))],
+    );
+    let press = pressed
+        .iter()
+        .filter_map(PlatformInput::as_pointer)
+        .find_map(|event| match event {
+            PointerEvent::Down(press) => {
+                let at = press.sample.position.get();
+                Some((press.pointer.id, at.x, at.y))
+            }
+            _ => None,
+        })
+        .expect("a captured click presses");
+    assert_eq!(
+        press,
+        (mouse, 20.0, 10.0),
+        "the click acts where the pointer rests, not at the motion's zero"
+    );
+}
+
 /// An `ACTION_MOVE` carries every finger: the contacts it reports are one
 /// frame, and a move of a lone finger stays a plain event.
 fn the_fingers_of_one_move_are_one_frame() {
@@ -692,6 +767,10 @@ fn android_motion_translation() {
             (
                 "a_wheel_scrolls_unphased_from_the_cursor",
                 a_wheel_scrolls_unphased_from_the_cursor,
+            ),
+            (
+                "a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests",
+                a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests,
             ),
             (
                 "the_fingers_of_one_move_are_one_frame",

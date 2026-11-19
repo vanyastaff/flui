@@ -63,7 +63,7 @@ use crate::{
 /// may add itself to the hit-test path, and it may return `true` to stop
 /// sibling traversal behind it. `HitTestBehavior::Translucent` relies on that
 /// split: it contributes an entry but can still let lower siblings be tested.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HitTestOutcome {
     /// Whether the pipeline should append this render object to the global
     /// hit-test path.
