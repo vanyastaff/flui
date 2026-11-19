@@ -109,7 +109,9 @@ impl std::fmt::Debug for AndroidWindow {
 
 impl AndroidWindow {
     /// The Activity's window `window` names, with what `positions` make of the
-    /// table's window-level positions for it.
+    /// table's window-level positions for it, delivering to `delivery`, whose
+    /// frames count into the loop's count: a delivery that does not cannot be
+    /// passed.
     fn new(
         window: &ActivityRef,
         positions: &WindowPositions<ActivityRef>,
@@ -117,8 +119,9 @@ impl AndroidWindow {
         displays: Arc<dyn crate::owner::android::HostDisplays>,
         preferences: Arc<dyn ActivityPreferences>,
         drag_source: Arc<dyn ActivityDragSource>,
-        handler: Rc<dyn flui_platform::WindowHandler>,
+        delivery: crate::owner::android::CountedDelivery,
     ) -> Self {
+        let delivery = Arc::new(delivery.into_inner());
         let ActivityRef {
             id,
             app,
@@ -127,10 +130,6 @@ impl AndroidWindow {
             owner,
             signal: owner_signal,
         } = window.clone();
-        let delivery = Arc::new(WindowDelivery::new(
-            handler,
-            input_capabilities(api, java_view.is_ready()),
-        ));
         // What another thread raises for the window waits for a looper turn.
         if let Some(signal) = owner_signal.upgrade() {
             delivery.resume_through_signal(&signal);
@@ -736,7 +735,13 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             Arc::clone(&owner.displays),
             Arc::clone(&owner.preferences),
             drag_source,
-            handler,
+            // Each frame the handler runs counts into the loop's count, which
+            // arms a delivered wake deadline again only after a frame ran.
+            crate::owner::android::window_delivery(
+                handler,
+                input_capabilities(owner.api, owner.java_view.is_ready()),
+                owner.frames.counter(),
+            ),
         ));
         window
             .delivery

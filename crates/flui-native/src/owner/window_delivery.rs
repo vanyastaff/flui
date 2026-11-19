@@ -373,9 +373,13 @@ pub struct WindowDelivery {
     /// with no handler to run, leaves it unchanged. Shareable so a backend can count frames across every window
     /// it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
-    /// Called on the owner thread after each run of the FIFO, one that
-    /// unwinds included (`after_each_run`); runs no user code.
-    after_run: Option<fn()>,
+    /// Called on the owner thread, the only one it is reached from, at the
+    /// end of each run of the FIFO, one that unwinds included
+    /// (`after_each_run`). Runs no user code.
+    run_hook: OwnerSlot<Rc<dyn Fn()>>,
+    /// Whether `run_hook` holds a hook: a run of a window without one does
+    /// not reach the slot for nothing.
+    run_hook_installed: bool,
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
     close_answer: Mutex<Option<CloseDecision>>,
@@ -447,7 +451,8 @@ impl WindowDelivery {
                 dispatching: false,
             }),
             frames_run,
-            after_run: None,
+            run_hook: OwnerSlot::new(),
+            run_hook_installed: false,
             close_answer: Mutex::new(None),
             close_granted: AtomicBool::new(false),
             state_publisher: Mutex::new(None),
@@ -501,13 +506,29 @@ impl WindowDelivery {
 
     /// Call `hook` on the owner thread after each run of the window's FIFO,
     /// a run that unwinds included. A loop that no owner turn follows a
-    /// native delivery on (UIKit's: a display-link frame, a touch batch)
-    /// asks for its wake deadline again there, since the run may have left
-    /// a new one. `hook` runs no user code: it may run while a panic unwinds.
-    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
+    /// native delivery on asks for its wake deadline again there, since any
+    /// run may have served it or left a new one: a frame left due again, a
+    /// window covered that now owes a frame, input that armed a gesture
+    /// deadline with no frame asked. UIKit's loop (a display-link frame, a
+    /// touch batch) and AppKit's wake pump (a display pass, a window
+    /// callback) both do. `hook` runs no user code: it may run while a panic
+    /// unwinds.
+    #[cfg(any(
+        target_os = "ios",
+        target_os = "macos",
+        all(test, not(target_arch = "wasm32"))
+    ))]
     #[must_use]
-    pub(crate) fn after_each_run(mut self, hook: fn()) -> Self {
-        self.after_run = Some(hook);
+    pub(crate) fn after_each_run(mut self, hook: impl Fn() + 'static) -> Self {
+        let hook: Rc<dyn Fn()> = Rc::new(hook);
+        if self.run_hook.replace(hook).is_err() {
+            tracing::error!(
+                "a window's run hook was installed off its owner thread or with owner slots \
+                 exhausted; the runs end in no hook"
+            );
+            return self;
+        }
+        self.run_hook_installed = true;
         self
     }
 
@@ -767,7 +788,11 @@ impl WindowDelivery {
     /// is delivered first, and an input among it was answered where it was
     /// raised, so its answer is not this caller's.
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
-        let _after = AfterRun(self.after_run);
+        let _after = AfterRun(
+            self.run_hook_installed
+                .then(|| self.run_hook.cloned())
+                .flatten(),
+        );
         let mut own_answer = None;
         let failure = loop {
             let Some(taken) = drain.next() else {
@@ -1133,13 +1158,13 @@ impl std::fmt::Debug for WindowDelivery {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
-/// Calls a window's `WindowDelivery::after_each_run` hook when a run of
-/// its FIFO ends, by return or by unwinding.
-struct AfterRun(Option<fn()>);
+/// Calls a window's run hook (`WindowDelivery::after_each_run`), if it has
+/// one, when a run of its FIFO ends, by return or by unwinding.
+struct AfterRun(Option<Rc<dyn Fn()>>);
 
 impl Drop for AfterRun {
     fn drop(&mut self) {
-        if let Some(hook) = self.0 {
+        if let Some(hook) = self.0.as_ref() {
             hook();
         }
     }

@@ -1,10 +1,10 @@
 export const meta = {
   name: 'review-before-merge',
-  description: 'Seven readers, one lens each, read a change to break it; a judge merges, verifies and ranks what they find',
-  whenToUse: 'The independent read AGENTS.md "Before a merge" asks for, on a branch or a checkout, and again on each fix pushed after it',
+  description: 'Readers, one lens each, read a change or a design to break it; a judge merges, verifies and ranks what they find',
+  whenToUse: 'The independent read AGENTS.md "Before a merge" asks for, on a branch or a checkout, and again on each fix pushed after it; with mode "design", the read of an ADR or a spec design before its code',
   phases: [
     { title: 'Scope', detail: 'merge base, reviewed head and changed files' },
-    { title: 'Read', detail: 'records, tests, obligations, unwinding, boundaries, seams, rules in parallel' },
+    { title: 'Read', detail: 'one reader per lens, in parallel' },
     { title: 'Judge', detail: 'merge duplicates, verify each finding in the source, rank' },
   ],
 }
@@ -18,6 +18,8 @@ export const meta = {
 //   head      the reviewed commit (default: HEAD)
 //   since     the head an earlier read covered; this read starts from the fix after it
 //   unread    lenses the earlier read could not run; they read the whole change, not the fix
+//   mode      "design" reads an ADR or a spec's design with the design lenses, before its code;
+//             anything else (the default) reads a change
 //   mutants   a worktree checked out detached at the reviewed head for a cargo-gamma run over this
 //             change (AGENTS.md "Before each push" item 10, docs/testing.md "A change's own
 //             lines"): its `change.diff` is the diff the run took with `--in-diff`, and its
@@ -290,6 +292,96 @@ from its "Not" column), "Review guidelines" and "Definition of Done".`,
   },
 ]
 
+// A design (an ADR, a spec's design.md) is read before the code it decides is written: the defects
+// that cost the most review rounds are ones a design allows, an order of events it never names or
+// state it spreads over several records, and a reader of the document can find them there.
+const DESIGN_LENSES = [
+  {
+    key: 'alternatives',
+    model: 'sonnet',
+    focus: `Options and prior art.
+- Is each considered option real and judged against the stated drivers, with its pros and cons? Is
+  there an option missing that meets the drivers better, or a driver the chosen option fails?
+- How do other frameworks and platform toolkits solve the same problem (Flutter, Compose, SwiftUI,
+  GPUI, Xilem, egui, Chromium, the platform SDKs)? Read their source or issue trackers with \`gh\`,
+  pinned to a commit, and list the defects they record for this behaviour: a design written from a
+  reference repeats its known bugs unless they are on its checklist.
+- A choice justified by "it is so already" or by matching another framework, not by a driver.`,
+  },
+  {
+    key: 'ownership',
+    model: 'opus',
+    fallback: 'sonnet',
+    focus: `Owners of state.
+- List every piece of state the design introduces or touches (a flag, a mark, a counter, a queue, a
+  cache, a handle, a retry, a refusal) and who owns it. State whose rules live in several records,
+  or that two owners write, is the design defect each review round of its code will find another
+  order for: name the one owner it should have.
+- Every copy or mirror of state: which operation of its source can leave it stale?
+- The thread and owner model: the frame path stays synchronous, state only the owner thread touches
+  is not behind a lock, and a value crosses a thread only where the compiler can prove it may.`,
+  },
+  {
+    key: 'orders',
+    model: 'opus',
+    fallback: 'sonnet',
+    focus: `Orders of events and failures.
+- For each request, answer, frame or obligation the design defines: how is an answer matched to
+  what asked for it (a ticket, a stamp, a generation)? Walk an answer that is late, duplicated, or
+  arrives after a write, a cancel, a close or the owner's retirement.
+- Walk each failure the design must survive: a panic in code it does not own and two at once, a lost
+  device or resource, a peer that is slow, wedged or dead, a full queue, a refused request, an
+  unwind in the middle of the operation. What happens to work already accepted on each exit, and is
+  it delivered or refused with a typed error?
+- Production against consumption: what bounds the work in flight, and what wakes a waiter so that
+  nothing spins and nothing waits forever?`,
+  },
+  {
+    key: 'seams',
+    model: 'sonnet',
+    focus: `Seams and hosts.
+- Where does each policy the design states live (a limit, a normalization, a refusal, a version
+  floor)? At the seam, or in one host or caller? Check every host it concerns: Windows, macOS,
+  Linux, Android, iOS, the web, headless and the scripted doubles.
+- A capability a host lacks: is its absence typed, or left to a default that pretends to work?
+- A layer boundary the design crosses: does it keep the tiers (AGENTS.md "Rules a reader holds")
+  and keep host and OS types out of the crates that must not name them?`,
+  },
+  {
+    key: 'records',
+    model: 'sonnet',
+    focus: `Records against records.
+- Every accepted ADR, spec and ARCHITECTURE.md the design touches: does it contradict one without
+  naming it under Supersedes, and does its reversal reach every record that states the old rule?
+- AGENTS.md "Current forms", "Rules a reader holds" and docs/gaps.md: does the design use a form on
+  its way out, or leave a gap entry stating something it changes?
+- The shape docs/adr/README.md asks for: drivers, every option with pros and cons, the decision as
+  a Rust shape, and how compliance is confirmed. Counts, citations and claims about the current code
+  checked against the code at the reviewed head.`,
+  },
+  {
+    key: 'confirmation',
+    model: 'sonnet',
+    focus: `How each decision is held and how the old form goes.
+- For each decision: which rung holds it (the compiler, a clippy lint, a test of the owning crate),
+  or is it only text? Name the test through the public API from tests/ that fails when the decision
+  is broken, or say none can be written as designed.
+- A decision that replaces a form (a primitive, an API, a rule): does the design move every user of
+  the old form and delete it in the same change, or name its deprecation and gap entry?
+- A behaviour the design asks for that no headless test can observe, and the native run it is then
+  owed.`,
+  },
+]
+
+// `mode: 'design'` reads a design; any other value reads a change.
+// A value that names neither read is refused rather than read as a change, which would record a
+// design read that never happened.
+const mode = opts.mode === undefined || opts.mode === null || opts.mode === '' ? 'change' : opts.mode
+if (mode !== 'change' && mode !== 'design') {
+  return unavailable(`mode ${JSON.stringify(opts.mode)} is neither "change" nor "design"`)
+}
+const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
+
 // An agent that a usage limit or a skip refuses resolves to null, and one started past the turn's
 // token target throws; the runtime does not say which. Each is a failure the result names, and
 // none may read as an empty answer.
@@ -309,7 +401,7 @@ const unknownUnread = []
 if (opts.unread !== undefined) {
   const given = Array.isArray(opts.unread) ? opts.unread : [opts.unread]
   for (const key of given) {
-    if (LENSES.some((l) => l.key === key)) unread.push(key)
+    if (lenses.some((l) => l.key === key)) unread.push(key)
     else unknownUnread.push(key)
   }
 }
@@ -375,7 +467,17 @@ if (!SHA.test(scope.head) || !SHA.test(scope.base)) {
 // the whole change, and the scope warnings above say why.
 const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
 if (sinceArg && !since) notes.push(`The earlier head ${sinceArg} could not be placed against ${baseRef}; the readers read the whole change.`)
-const header = `Read at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
+const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
+// A decision and code in one diff owe both reads: each read names the other when the diff asks
+// for it, so neither is taken for the whole.
+const decisionFiles = scope.files.filter((f) => /^docs\/adr\/ADR-\d+[^/]*\.md$|^docs\/plans\/specs\/[^/]+\/design\.md$/.test(f))
+const codeFiles = scope.files.filter((f) => !/\.md$/.test(f))
+if (mode === 'design' && codeFiles.length) {
+  notes.push(`The diff also changes ${codeFiles.length} files that are not documents; the change read (no mode) is owed beside this one (AGENTS.md "Before a merge").`)
+}
+if (mode === 'change' && decisionFiles.length) {
+  notes.push(`The diff changes a decision (${decisionFiles.join(', ')}); the design read (mode "design") is owed beside this one (AGENTS.md "Before a merge").`)
+}
 if (!scope.files.length) {
   log('The merge base and the head have the same tree.')
   return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }
@@ -392,7 +494,7 @@ const fixRange = !since
     ? `\`git -C ${dir} diff ${since} ${scope.head}\``
     : `\`git -C ${dir} range-diff ${scope.since_base}..${since} ${scope.base}..${scope.head}\` (the branch took main's commits after the earlier read)`
 if (unknownUnread.length) {
-  notes.push(`"unread" names ${unknownUnread.map((k) => JSON.stringify(k)).join(', ')}, not a lens (${LENSES.map((l) => l.key).join(', ')}); ${fixRange ? 'no lens was spared the fix note for it.' : 'there was no fix note to spare it from.'}`)
+  notes.push(`"unread" names ${unknownUnread.map((k) => JSON.stringify(k)).join(', ')}, not a lens (${lenses.map((l) => l.key).join(', ')}); ${fixRange ? 'no lens was spared the fix note for it.' : 'there was no fix note to spare it from.'}`)
 }
 // The checkout's working tree may move while the readers run (the author keeps working), so
 // everyone reads the head from git.
@@ -402,15 +504,25 @@ function readerPrompt(lens) {
   const fixNote = fixRange && !unread.includes(lens.key)
     ? `An earlier read covered up to ${since}. Start from ${fixRange}: the fix is where the next defect usually is. Judge the whole change, not only the fix.`
     : ''
-  return `You are one of ${LENSES.length} independent readers of a change to FLUI before it merges. You have seen none of the author's conversation, plan or pull-request body; do not look for them.
+  const preamble = mode === 'design'
+    ? `You are one of ${lenses.length} independent readers of a design for FLUI (an ADR, a spec's design) before the code it decides is written or changed. You have seen none of the author's conversation, plan or pull-request body; do not look for them.
+
+The design: ${range} (${scope.files.length} files; the reviewed head is ${scope.head}). Read each design document in full as that head has it, and the code it governs as it stands there. ${whereToRead} ${fixNote}
+
+Assume the design allows a defect of the kinds your lens names and find the order of events, the state or the input it permits, from the documents and from the code they govern. Other readers cover the other kinds; stay in your lens.`
+    : `You are one of ${lenses.length} independent readers of a change to FLUI before it merges. You have seen none of the author's conversation, plan or pull-request body; do not look for them.
 
 The change: ${range} (${scope.files.length} files; the reviewed head is ${scope.head}). ${whereToRead} ${fixNote}
 
-Assume the change has a defect of the kinds your lens names and find the input, the order of events or the state that shows it, in the code around the diff as much as in the changed lines. Other readers cover the other kinds; stay in your lens.
+Assume the change has a defect of the kinds your lens names and find the input, the order of events or the state that shows it, in the code around the diff as much as in the changed lines. Other readers cover the other kinds; stay in your lens.`
+  const findingRule = mode === 'design'
+    ? 'A finding is a failure scenario the design permits: the state, the operation, the wrong result, and the section (file:line) that permits it or that should have ruled it out, with the code it governs where it exists. When you find nothing, list in "tried" the scenarios you tried and the section or line that rules each out.'
+    : 'A finding is a failure scenario: the state, the operation, the wrong result, and the file:line that produces it, read in the source rather than inferred from a name. When you find nothing, list in "tried" the scenarios you tried and the line that rules each out.'
+  return `${preamble}
 
 Do not edit anything, and do not build or run tests: the other readers share this host, and a build would queue them all. Do not fix, and do not sum up what is good.
 
-A finding is a failure scenario: the state, the operation, the wrong result, and the file:line that produces it, read in the source rather than inferred from a name. When you find nothing, list in "tried" the scenarios you tried and the line that rules each out.
+${findingRule}
 
 Your lens: ${lens.focus}`
 }
@@ -423,7 +535,7 @@ const runTree = `'${mutantsDir}'`
 const gammaReport = `'${mutantsDir}/target/cargo-gamma/gamma-report.json'`
 const gammaList = (key, limit) => `jq -r '.files | to_entries[] | .key as $f | .value.mutants[] | select(${GAMMA_SELECTIONS[key]}) | "\\($f)\\t\\(.location.start.line)\\t\\(.description) [\\(.mutatorName)]"' ${gammaReport} | head -n ${limit}`
 const gammaCount = (key) => `jq '[.files[].mutants[] | select(${GAMMA_SELECTIONS[key]})] | length' ${gammaReport}`
-const mutantsRead = mutantsDir
+const mutantsRead = mutantsDir && mode === 'change'
   ? attempt(
       `Read a cargo-gamma run made in its own worktree. Run only these commands, each exactly as written, and copy their output; do not transcribe by hand.
 1. run_head: \`git -C ${runTree} rev-parse HEAD\`
@@ -437,7 +549,7 @@ When a file cannot be read or a command fails, put the command and its error in 
     )
   : null
 const reads = await parallel(
-  LENSES.map((lens) => async () => {
+  lenses.map((lens) => async () => {
     const options = { phase: 'Read', label: `read:${lens.key}`, schema: FINDINGS_SCHEMA, model: lens.model, effort: 'high' }
     let read = await attempt(readerPrompt(lens), options)
     let model = lens.model
@@ -457,7 +569,7 @@ const reads = await parallel(
   }),
 )
 const done = reads.filter((r) => r && !r.error)
-const failed = LENSES.filter((l) => !done.some((r) => r.lens === l.key)).map((l) => {
+const failed = lenses.filter((l) => !done.some((r) => r.lens === l.key)).map((l) => {
   const r = reads.find((x) => x && x.lens === l.key)
   if (!r) return { lens: l.key, error: 'the reader threw' }
   return { lens: l.key, error: r.first ? `${r.first}; then ${r.model}: ${r.error}` : `${r.model}: ${r.error}` }
@@ -472,7 +584,11 @@ notes.push(
 let mutation = 'none supplied'
 const mutantFindings = []
 const listed = (xs, count) => `${xs.map((x) => `${x.file}:${x.line} ${x.mutation}`).join('; ')}${count > xs.length ? `; and ${count - xs.length} more in the report` : ''}`
-if (!mutantsDir) {
+if (mode === 'design') {
+  // A design has no lines of Rust to mutate; a run passed beside it is not read.
+  mutation = 'not used for a design'
+  if (mutantsDir) notes.push(`A design is read without a mutation run; the one at ${mutantsDir} was not read.`)
+} else if (!mutantsDir) {
   notes.push('No mutation run was supplied (AGENTS.md "Before each push" item 10).')
 } else {
   const m = await mutantsRead
@@ -537,16 +653,16 @@ const reported = [
   ...done.flatMap((r) => r.findings.map((f) => ({ ...f, lens: r.lens }))),
   ...mutantFindings.map((f) => ({ ...f, lens: 'mutants' })),
 ].map((f, i) => ({ ...f, n: i + 1 }))
-log(`${reported.length} findings from ${done.length} of ${LENSES.length} readers and the mutation run (${mutation})`)
+log(`${reported.length} findings from ${done.length} of ${lenses.length} readers and the mutation run (${mutation})`)
 
 phase('Judge')
 const judgePrompt =
-  `You judge the findings ${done.length} independent readers${mutantFindings.length ? ' and a mutation run' : ''} reported on a change to FLUI: ${range}, reviewed head ${scope.head}. ${whereToRead} You have not seen the author's account of the change and need none.
+  `You judge the findings ${done.length} independent readers${mutantFindings.length ? ' and a mutation run' : ''} reported on a ${mode} to FLUI: ${range}, reviewed head ${scope.head}. ${whereToRead} You have not seen the author's account of the change and need none.
 
 For each finding:
 1. Merge it with the others that share its root cause; keep the clearest scenario and list every lens that reported it.
-2. Verify it in the source at the reviewed head: open the cited lines and follow the scenario. It is rejected only when a line or a test shows the scenario cannot happen; name that line. That it seems unlikely is not a rejection.
-3. Rank it by REVIEW.md "What Important means here": important, or nit. Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
+2. Verify it at the reviewed head: open the cited lines and follow the scenario. It is rejected only when ${mode === 'design' ? 'a section of the design, an accepted ADR, or a line of the code it governs' : 'a line or a test'} shows the scenario cannot happen; name it. That it seems unlikely is not a rejection.
+3. Rank it: important, or nit. ${mode === 'design' ? 'For a design, important is a scenario the design permits that a user or the code built from it would hit (any AGENTS.md "Recurring defects" class), a decision no test or rung can hold, or a contradiction of an accepted ADR; REVIEW.md\'s narrower scope for docs/plans/specs/ does not apply to this read.' : 'By REVIEW.md "What Important means here".'} Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
 
 A finding from the "mutants" lens is a change cargo-gamma made to one line of the diff that either every test reaching it passed with (survived) or that no test reached (no coverage); its "wrong_result" says which. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant) or, for one no test reached, when the line is built only for another target than the run's; say why from the code.
 
