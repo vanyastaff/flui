@@ -16,6 +16,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
+use smallvec::SmallVec;
 
 use crate::element::ElementKind;
 use crate::owner::LifecycleHook;
@@ -159,7 +160,10 @@ pub struct ElementNode {
     /// Ordering is meaningful: entry `i` is the element occupying child
     /// slot `i` after the most recent id-reconcile, matching the new
     /// view order.
-    pub(crate) child_ids: Vec<ElementId>,
+    ///
+    /// Two ids sit inline, in the bytes a `Vec` header takes, so a leaf, a
+    /// single-child wrapper and a pair allocate no list.
+    pub(crate) child_ids: SmallVec<[ElementId; 2]>,
     /// The set of [`InheritedView`](crate::view::InheritedView) providers in
     /// scope at this node — `provider view TypeId → provider ElementId` — so
     /// `BuildContext::depend_on_inherited` / `get_inherited` resolve the
@@ -204,7 +208,7 @@ impl ElementNode {
             slot,
             key: None,
             registered_global_key: None,
-            child_ids: Vec::new(),
+            child_ids: SmallVec::new(),
             // Empty until the tree sets the real scope against the parent's
             // map (insert / mount_root_*), mirroring how `key`/`depth` are
             // finalised by the caller right after construction.
@@ -374,7 +378,7 @@ impl ElementNode {
     pub(crate) fn set_child_ids(&mut self, ids: &[ElementId]) {
         let capacity = self.child_ids.capacity();
         if capacity < ids.len() || capacity / 4 > ids.len() {
-            self.child_ids = ids.to_vec();
+            self.child_ids = SmallVec::from_slice(ids);
         } else {
             self.child_ids.clear();
             self.child_ids.extend_from_slice(ids);

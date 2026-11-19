@@ -1110,7 +1110,9 @@ struct PressRecognizers {
     shape: PressShape,
     live: Rc<dyn PressLive>,
     ctx: RecognizerContext,
-    members: OnceCell<PressMembers>,
+    /// Boxed, so a group no contact reached holds one null pointer in place
+    /// of the members' set and handles.
+    members: OnceCell<Box<PressMembers>>,
 }
 
 struct PressMembers {
@@ -1242,7 +1244,7 @@ impl PressRecognizers {
     /// The members, built now if no contact was offered before.
     fn members(&self) -> &PressMembers {
         self.members
-            .get_or_init(|| PressMembers::build(self.shape, &self.live, &self.ctx))
+            .get_or_init(|| Box::new(PressMembers::build(self.shape, &self.live, &self.ctx)))
     }
 }
 
