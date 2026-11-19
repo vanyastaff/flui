@@ -336,17 +336,20 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
         })
     }
     // Where an overflow box places its 40×40 child in its 200×200 slot.
-    fn child_offset(laid: &LaidOut, render_type: &str) -> Option<(f64, f64)> {
+    fn child_offset(laid: &LaidOut, render_type: &str) -> (f64, f64) {
         let id = laid.find_by_render_type(render_type);
         let offset = laid.offset(laid.only_child(id));
-        Some((offset.dx, offset.dy))
+        (offset.dx, offset.dy)
     }
 
     // Each row builds the box with `alignment`, or with none at all.
     type Make = fn(Option<AlignmentGeometry>) -> BoxedView;
     type Read = fn(&LaidOut) -> Option<(f64, f64)>;
     type Reading = Option<(f64, f64)>;
-    let cases: [(&str, Make, Read, (Reading, Reading, Reading)); 6] = [
+    // A row: its name, how to build it, how to read it, and the readings in
+    // LTR, in RTL and with no alignment.
+    type Case = (&'static str, Make, Read, (Reading, Reading, Reading));
+    let cases: [Case; 6] = [
         (
             "FittedBox",
             |alignment| {
@@ -425,7 +428,7 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
                     .map_or(overflow.clone(), |alignment| overflow.alignment(alignment))
                     .boxed()
             },
-            |laid| child_offset(laid, "RenderConstrainedOverflowBox"),
+            |laid| Some(child_offset(laid, "RenderConstrainedOverflowBox")),
             (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
         ),
         (
@@ -437,7 +440,7 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
                     .map_or(overflow.clone(), |alignment| overflow.alignment(alignment))
                     .boxed()
             },
-            |laid| child_offset(laid, "RenderSizedOverflowBox"),
+            |laid| Some(child_offset(laid, "RenderSizedOverflowBox")),
             (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
         ),
     ];
