@@ -124,8 +124,9 @@ pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
 /// write to (headless, unless a test gives it a root).
 ///
 /// Its calls are the [`FileStore`]'s: blocking on native targets, so the
-/// host runs them on threads it shares with nothing else (`flui-app`'s
-/// storage host: the IO runtime's blocking threads), and futures on wasm32.
+/// host runs them off the owner thread (`flui-app`'s storage host: on the IO
+/// runtime's blocking threads on FLUI's default pools, in the IO task on a
+/// host's own IO pool), and futures on wasm32.
 #[derive(Debug)]
 pub struct DataStore {
     backing: Backing,
@@ -185,12 +186,12 @@ impl DataStore {
     /// The values of `app` under the process's own data folders
     /// ([`data_dirs`]), found at the store's first call, on the thread that
     /// makes it: the owner thread never reads the file system for them, and
-    /// calls that arrive while one finds wait for its answer. A packaged
-    /// Windows application's store kept under `%APPDATA%` before it was
-    /// packaged is copied into the package's folders then, once: only into a
-    /// root that holds no store, within a bound, nothing overwritten, one
-    /// instance at a time (another waits for it, as long as it takes: the
-    /// calls block, so a host runs them off any thread it shares). A store
+    /// calls that arrive while one finds wait for it and take its outcome. A
+    /// packaged Windows application's store kept under `%APPDATA%` before it
+    /// was packaged is copied into the package's folders then, once: only
+    /// into a root that holds no store, within a bound, nothing overwritten,
+    /// one instance at a time (another waits for it, as long as it takes:
+    /// the calls block the thread the host runs them on). A store
     /// that was not copied stays where it is and stays the store, the calls
     /// reading and writing it there: one whose copy failed is copied again
     /// at a later start, one past the bound never. A package folder that

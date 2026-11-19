@@ -6291,9 +6291,10 @@ crashed holder's lock), then judges the root again and takes the one the holder
 put in place. The wait blocks: one find runs at a time (`process_store`'s
 `FindState`), every call that arrives meanwhile waits for its outcome, and
 `flui-app`'s storage host runs the store's calls on the IO runtime's blocking
-threads, so the wait holds none of the IO workers other work shares; what a
-stalled holder still holds back is that instance's storage answers
-(`docs/gaps.md`). A failed copy or rename
+threads on FLUI's default pools, so there the wait holds none of the IO workers
+other work shares; on a host's own IO pool (an embedder's) the calls run in its
+IO task, and the wait holds that task. What a stalled holder still holds back
+is that instance's storage answers (`docs/gaps.md`). A failed copy or rename
 removes its staging folder and reports its own error, and a root another
 instance placed first is kept. The old store stays the store only where the new
 root was shown to hold none (`roots_after_migration`): after a failed copy,

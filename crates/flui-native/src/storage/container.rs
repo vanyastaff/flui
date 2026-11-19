@@ -21,7 +21,9 @@
 //!
 //! Reading `/.flatpak-info` (on Linux alone) and copying a store touch the
 //! file system: this runs at the store's first call, on the thread the host
-//! runs it on, which is never the owner thread or a shared IO worker.
+//! runs it on, never the owner thread. On FLUI's default pools that is one
+//! of the IO runtime's blocking threads, off the IO workers; on a host's own
+//! IO pool (an embedder's) it is that pool's IO task.
 
 use std::path::{Path, PathBuf};
 

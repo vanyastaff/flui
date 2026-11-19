@@ -153,8 +153,8 @@ download or a fresher grant of another kind (`MalformedAnswer`), whichever backe
 the macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application Support`; a packaged
 Windows application's `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`. A
 host's store (`DataStore::of_process`) finds them at its first call that can read the
-container, on the thread the host runs the call on, never the owner thread nor a shared IO
-worker; one find runs at a time, and the calls that arrive meanwhile share its outcome, a
+container, on the thread the host runs the call on, never the owner thread; one find runs at a
+time, and each call that arrives meanwhile takes the outcome of the find it waited for, a
 refusal included. A packaged application whose new root
 holds no store and whose redirected `%APPDATA%` location holds one has it copied over once,
 within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the
@@ -165,10 +165,11 @@ system never roams; its folder is made before it is opened. An instance that fin
 for it with no deadline, and the system releases the lock of a holder that crashed. It then
 judges the root again and takes the one the holder put in place, so no session is left writing
 to an old store a copy has replaced. The wait blocks the thread that finds the store: one find
-runs at a time and every storage call that arrives meanwhile waits for its answer, and the
-storage host runs the store's calls on the IO runtime's blocking threads (`spawn_blocking`), so
-the wait never holds the IO workers HTTP, image loads and background work share, nor the owner
-thread. What a stalled holder still holds back is that instance's storage answers, the limit
+runs at a time and every storage call that arrives meanwhile waits for its answer. On FLUI's
+default pools the storage host runs the store's calls on the IO runtime's blocking threads
+(`spawn_blocking`), so the wait never holds the IO workers HTTP, image loads and background work
+share; on a host's own IO pool (an embedder's) they run in its IO task, which the wait then
+holds. It never holds the owner thread. What a stalled holder still holds back is that instance's storage answers, the limit
 [gaps](../gaps.md#sandbox-aware-file-access-is-partial) names. Staging folders an
 earlier copy left are removed first, under that lock, by their exact name, folders only and no
 link followed, at most `MAX_SWEPT` at a time. A copy or rename that fails removes its staging
@@ -240,6 +241,8 @@ manifest does not expose.
   `the_lock_is_taken_where_local_state_is_not_made_yet`,
   `calls_that_arrive_while_the_store_is_found_wait_for_one_find_and_one_migration`,
   `the_calls_that_waited_for_a_failed_find_share_its_refusal`,
+  `the_calls_that_waited_for_a_find_that_panicked_find_again`,
+  `a_call_takes_the_outcome_of_the_find_it_waited_for`,
   `a_store_call_that_waits_holds_no_io_worker` and
   `a_write_the_shutdown_lets_finish_answers_what_landed` (`flui-app`'s `host_storage_matrix`),
   `a_new_root_that_cannot_be_read_stays_the_store`,

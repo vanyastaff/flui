@@ -21,8 +21,9 @@
 - `flui_native::storage::data_dirs` answers a sandboxed process its container: a Flatpak's
   `~/.var/app/<id>/data`, the macOS App Sandbox's container, and a packaged Windows application's
   `LocalState` and `RoamingState`. A host's store finds them at its first call, one find for
-  every call that arrives meanwhile, and the host runs the store's calls off the IO workers it
-  shares with HTTP, image loads and background work.
+  every call that arrives meanwhile. On FLUI's default pools the host runs the store's calls on
+  the IO runtime's blocking threads, off the IO workers HTTP, image loads and background work
+  share; on a host's own IO pool (an embedder's) they run in its IO task.
   A packaged application that kept a store under `%APPDATA%` before has it copied into the
   package's folders once, at that first call, when the package's folder holds no store yet: files
   are copied, never moved or overwritten, and the copy is put in place whole, by one instance at a
