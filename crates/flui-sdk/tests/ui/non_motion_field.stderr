@@ -1,10 +1,10 @@
-error[E0277]: the trait bound `String: TwoWayConverter` is not satisfied
+error[E0277]: the trait bound `String: MotionValue` is not satisfied
  --> tests/ui/non_motion_field.rs:5:14
   |
 5 |     content: String,
-  |              ^^^^^^ the trait `TwoWayConverter` is not implemented for `String`
+  |              ^^^^^^ the trait `MotionValue` is not implemented for `String`
   |
-  = help: the following other types implement trait `TwoWayConverter`:
+  = help: the following other types implement trait `MotionValue`:
             Edges
             Text
             TranslationFraction
@@ -14,20 +14,3 @@ error[E0277]: the trait bound `String: TwoWayConverter` is not satisfied
             flui_sdk::geometry::Size
             flui_sdk::painting::Alignment
             flui_sdk::painting::Color
-
-error[E0277]: the trait bound `String: Lerp` is not satisfied
- --> tests/ui/non_motion_field.rs:5:14
-  |
-5 |     content: String,
-  |              ^^^^^^ the trait `Lerp` is not implemented for `String`
-  |
-  = help: the following other types implement trait `Lerp`:
-            Angle
-            BoxDecoration
-            Corners<T>
-            Edges
-            Matrix4
-            Radius
-            RelativeRect
-            Text
-          and $N others

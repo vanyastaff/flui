@@ -181,7 +181,24 @@ image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
 
-`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) keeps the recording of a
+`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) captures a chunk's
+recording only on the second frame that draws it under one key, as Flutter's
+raster cache admits a picture after `access_threshold` frames: a chunk drawn
+once, every chunk of a first frame and content that changes each frame, is
+recorded and never copied (`a_chunk_drawn_once_is_not_captured`). Until then
+its key is a candidate (`recording_cache/admission.rs`): at most 4096, in a
+`RecencyList` by last draw and found through a `TalliedMap`. When the table
+is full a new key displaces the least recently drawn candidate if that one
+was drawn on an earlier frame, and is not tracked if it was drawn on this
+one; a frame's end takes out up to two candidates it did not draw. A draw
+costs a few steps, a frame that draws more keys than the table holds admits
+the first ones on their next draw (`the_candidate_table_stays_bounded`), and
+keys drawn after the churn of earlier frames are tracked and admitted while
+it goes on (`stable_keys_are_admitted_under_churn`); a frame whose first
+4096 new keys come before a repeated one leaves that one untracked. The
+candidates of a lineage no target draws age out the same way. An epoch
+advance drops the candidates with the recordings, and an admitted capture
+that is refused starts its key over. The cache keeps the recording of a
 chunk that stayed one fragment of the open segment: no external texture, no
 draw item, layer or clip of its own, every glyph it asked for placed, recorded
 Ok under a finite affine transform whose translation is below 2^23.

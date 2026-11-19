@@ -21,20 +21,20 @@ use std::time::Duration;
 
 use flui_animation::{
     AnimatedValue, Animation, AnimationController, Keyframes, LinearStop, MotionClock, MotionSpec,
-    PiecewiseLinear, ReverseAnimation, SharedCurve, SpringCurve, SpringDescription, Tolerance,
-    TwoWayConverter, Vsync, curves,
+    MotionValue, PiecewiseLinear, ReverseAnimation, SharedCurve, SpringCurve, SpringDescription,
+    Tolerance, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{EdgeInsets, Offset};
 use flui_painting::styling::Color;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, MotionValue)]
 struct Appearance {
     position: Offset<f64>,
     color: Color,
 }
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, MotionValue)]
 struct CardMotion(Appearance, f64);
 
 // `Cell<usize>` in a const-initialised thread-local has no drop glue and no
