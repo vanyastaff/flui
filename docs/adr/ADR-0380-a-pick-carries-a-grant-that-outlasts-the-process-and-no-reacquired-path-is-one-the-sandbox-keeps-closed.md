@@ -158,8 +158,13 @@ holds no store and whose redirected `%APPDATA%` location holds one has it copied
 within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the
 root, made with `create_dir` (one already at the name is an error, never a shared folder) and
 renamed into place whole. One instance migrates at a time: the sweep, the copy and the rename run
-under an exclusive lock on `.<name>.migrating.lock` beside the root (`File::try_lock`), and an
-instance that finds it held neither sweeps nor copies and stays on the old store this session.
+under an exclusive lock on `.<name>.migrating.lock` beside the root (`File::try_lock`). An
+instance that finds it held tries again for up to `MIGRATION_LOCK_WAIT` (two seconds, on the
+store's IO thread; a migration takes milliseconds), then judges the root again and takes the one
+the holder put in place. Only an instance still locked out after that neither sweeps nor copies
+and stays on the old store this session; what it writes then stays there, and the next start,
+which finds the holder's root in place, no longer reads it. That is the known limit
+([gaps](../gaps.md#sandbox-aware-file-access-is-partial)).
 Staging folders an earlier copy left are removed first, under that lock, by their exact name,
 folders only and no link followed, at most `MAX_SWEPT` at a time. A copy or rename that
 fails removes its staging folder and reports its own error, and a root another instance put in
@@ -220,7 +225,8 @@ manifest does not expose.
   `a_rename_that_fails_removes_its_staging_and_reports_its_own_error`,
   `staging_folders_an_earlier_copy_left_are_swept_by_exact_name_within_a_bound`,
   `a_sweep_follows_no_link` (Unix),
-  `a_second_instance_while_the_lock_is_held_neither_sweeps_nor_copies`,
+  `a_second_instance_waits_for_the_lock_and_takes_the_root_put_in_place`,
+  `a_second_instance_locked_out_past_the_wait_neither_sweeps_nor_copies`,
   `a_staging_folder_already_there_is_an_error_not_a_shared_folder` and
   `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made` (`flui-native`);
   `a_picks_path_is_its_grant_and_resolves_while_the_file_is_there` against the stand-in portal on

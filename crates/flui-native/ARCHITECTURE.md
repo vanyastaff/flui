@@ -6282,7 +6282,10 @@ store from before it was packaged is copied over then, once, within
 copy left are swept by their exact name (folders only, no link followed, at most
 `MAX_SWEPT`). One instance migrates at a time, under an exclusive `try_lock` on a
 lock file beside the root held for the sweep, the copy and the rename; an
-instance that finds it held stays on the old store this session. A failed copy or rename removes its staging folder and reports its
+instance that finds it held tries again for up to `MIGRATION_LOCK_WAIT` (two
+seconds) and takes the root the holder put in place, and only one still locked
+out after that stays on the old store this session (the limit `docs/gaps.md`
+names). A failed copy or rename removes its staging folder and reports its
 own error, and a root another instance placed first is kept. A store that was not
 copied (a failure, or past the bound) stays the store: the session reads and
 writes it where it is (`roots_after_migration`), so no new root orphans it, and
