@@ -23,7 +23,7 @@ late present.
 - The time is the frame's: the owner matches it to the frame it rendered by the frame's epoch,
   never by "the latest".
 - No device loses a feature or fails to start because of it. Where the adapter has no timestamp
-  queries (the web, some mobile GPUs) the time is `None`, with no error.
+  queries (WebGL2, some mobile GPUs) the time is `None`, with no error.
 - An idle frame allocates nothing (ADR-0328), and a rendered frame allocates nothing that grows
   with the number of frames timed.
 - Nothing on the frame path waits for the GPU to answer.
@@ -83,22 +83,26 @@ impl RasterSender {
 4. **A ring of three, nothing waits.** An entry is free, encoded into a frame, or submitted
    with one. A frame that finds every entry in flight goes untimed. An entry still encoded when
    the slot's next frame begins belonged to a frame that failed or unwound before submission,
-   and is freed. A readback that fails to map (the device was lost) frees its entry with no
+   and gets a new readback, since a panic after the queue took the frame may have left its
+   mapping live. A readback that fails to map (the device was lost) frees its entry with no
    time.
 5. **Collected at the slot's next frame.** After each frame the timer reads back every entry
    whose mapping completed and publishes its time under its epoch, oldest first, three at
    most. So the last frame before an idle period has its time only once the slot renders
-   again.
-6. **Bounded on the way to the owner.** After each command, the executor takes the backend's
-   times for the slot outside the inbox lock and holds them in the slot's inbox. The inbox
-   keeps the eight newest undrained times and drops the oldest. The owner drains them with
+   again. Two equal stamps, or two never written, are no time.
+6. **Bounded on the way to the owner.** After each frame it renders, the executor takes the
+   backend's times for the slot outside the inbox lock, contained as every backend call is,
+   and holds them in the slot's inbox. It takes at most 32 per frame, and the inbox keeps the
+   eight newest undrained times and drops the oldest. The owner drains them with
    `drain_gpu_times` into a buffer it keeps.
 7. **Allocation.** A slot allocates its ring and its inbox capacity once. A frame the plan
-   skips is not timed and allocates nothing. A timed frame allocates only the mapping callback
-   wgpu boxes, one per frame, freed when the callback runs.
+   skips is not timed and allocates nothing. A timed frame adds two passes, a resolve, a copy
+   and a mapping to its encoder, whose callback wgpu boxes: a constant per frame, which grows
+   with nothing. An entry reclaimed from a frame that never submitted allocates a new readback.
 8. **Tile GPUs give an approximation.** On a tile-based GPU (Apple, Mali) the passes between
    the two timestamps are not guaranteed to execute between them, so the time is an estimate
-   of the frame's GPU work, not a bound. A run on such a device is owed before the number is
+   of the frame's GPU work, not a bound. A run on such a device (the `gpu-frame-time` row of
+   `crates/flui-native/platform-parity.toml`) is owed before the number is
    used as a gate.
 9. **The profiler is gone.** The `gpu-profiler` feature, the `wgpu-profiler` dependency,
    `Renderer::latest_gpu_frame_profile`, `GpuFrameProfile` and `PassTiming` are removed.
@@ -113,8 +117,15 @@ impl RasterSender {
 - `a_backends_gpu_times_reach_the_owner_after_the_frame_that_read_them`
   (`tests/raster_executor.rs`) checks that the owner drains a backend's times under their
   epochs and that an undrained record keeps the eight newest.
-- `perf_an_idle_frame_leaves_the_retained_scene_alone` keeps asserting zero allocations on an
-  idle frame.
+- `the_ticks_are_the_second_stamp_less_the_first` checks the byte order, and that equal,
+  unwritten or wrapped stamps are no time.
+- `a_backend_that_panics_handing_out_a_gpu_time_leaves_its_frame_settled` checks that a
+  backend's panic while its times are taken is held and its frame still settles.
+- `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full` draws timed frames
+  across a rebuild, which fails if the old device's timers outlive it.
+- An idle frame's plan is a skip, which returns before the timer's `begin`;
+  `perf_an_idle_frame_leaves_the_retained_scene_alone` keeps asserting zero allocations on the
+  retained scene's idle frame.
 
 ## Pros and cons of the options
 

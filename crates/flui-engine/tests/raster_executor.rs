@@ -2742,3 +2742,50 @@ fn a_backends_gpu_times_reach_the_owner_after_the_frame_that_read_them() {
         "a record nobody drained drops its oldest"
     );
 }
+
+/// A backend that panics while the executor takes its GPU times has its
+/// panic held in the slot's record; the frame whose render read the times
+/// still settles, and the slot's next frame renders and hands its times on
+/// (ADR-0388).
+///
+/// Red-check: take the times outside a containment and the panic unwinds
+/// out of the turn with the frame unsettled.
+#[test]
+fn a_backend_that_panics_handing_out_a_gpu_time_leaves_its_frame_settled() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend
+        .time_frame(at.slot, FrameEpoch::from_raw(1), Duration::from_micros(5));
+    rig.backend.panic_taking_gpu_time(at.slot);
+    let _ = rig.sender.send(frame(at, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)]
+    );
+    assert!(
+        matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Panicked(_))
+        ),
+        "the panic is held in the slot's record"
+    );
+    let mut times = Vec::new();
+    assert_eq!(
+        rig.sender.drain_gpu_times(at.slot, &mut times),
+        1,
+        "the time taken before the panic is kept"
+    );
+
+    rig.backend
+        .time_frame(at.slot, FrameEpoch::from_raw(2), Duration::from_micros(6));
+    let _ = rig.sender.send(frame(at, 3)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(3, RasterVerdict::Presented)]
+    );
+    times.clear();
+    assert_eq!(rig.sender.drain_gpu_times(at.slot, &mut times), 1);
+    assert_eq!(times[0].epoch.get(), 2);
+}

@@ -44,7 +44,7 @@ enum Use {
     Free,
     /// Encoded into the frame of `epoch`, not submitted yet. An entry still
     /// here when the slot's next frame begins belonged to a frame that never
-    /// reached its submission: its encoder was dropped with the mapping.
+    /// reported its submission, and gets a new readback.
     Encoded(FrameEpoch),
     /// Submitted with the frame of `epoch`: its readback maps once the GPU
     /// finished the frame.
@@ -67,6 +67,9 @@ pub(crate) struct TimedFrame(usize);
 /// One slot's frame timer. Built for a device that has
 /// `Features::TIMESTAMP_QUERY`, and dropped with the device or the slot.
 pub(crate) struct FrameGpuTimer {
+    /// The device the entries are on, where a reclaimed entry's new readback
+    /// is created.
+    device: wgpu::Device,
     entries: [Entry; GPU_TIMER_RING],
     /// Nanoseconds per timestamp tick (`Queue::get_timestamp_period`).
     period_ns: f64,
@@ -75,9 +78,14 @@ pub(crate) struct FrameGpuTimer {
 }
 
 impl FrameGpuTimer {
-    /// A timer on `device`, or `None` when it cannot write timestamps.
+    /// A timer on `device`, or `None` when it cannot write timestamps or its
+    /// queue reports no positive, finite tick period.
     pub(crate) fn try_new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return None;
+        }
+        let period_ns = f64::from(queue.get_timestamp_period());
+        if !(period_ns.is_finite() && period_ns > 0.0) {
             return None;
         }
         let entry = || Entry {
@@ -92,18 +100,14 @@ impl FrameGpuTimer {
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
-            readback: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("FLUI Frame GPU Timestamps Readback"),
-                size: RESOLVED_BYTES,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            readback: readback_buffer(device),
             mapped: Arc::new(AtomicU8::new(MAP_PENDING)),
             in_use: Use::Free,
         };
         Some(Self {
+            device: device.clone(),
             entries: [entry(), entry(), entry()],
-            period_ns: f64::from(queue.get_timestamp_period()),
+            period_ns,
             ready: [None; GPU_TIMER_RING],
         })
     }
@@ -117,6 +121,12 @@ impl FrameGpuTimer {
     ) -> Option<TimedFrame> {
         for entry in &mut self.entries {
             if matches!(entry.in_use, Use::Encoded(_)) {
+                // Its frame never reported a submission. Usually its encoder
+                // was dropped with the mapping, but a panic after the queue
+                // took it leaves the mapping live: a new readback and flag
+                // leave whatever that mapping does to the old ones.
+                entry.readback = readback_buffer(&self.device);
+                entry.mapped = Arc::new(AtomicU8::new(MAP_PENDING));
                 entry.in_use = Use::Free;
             }
         }
@@ -204,6 +214,16 @@ impl FrameGpuTimer {
     }
 }
 
+/// A readback the resolved timestamps are copied into and mapped from.
+fn readback_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("FLUI Frame GPU Timestamps Readback"),
+        size: RESOLVED_BYTES,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 /// An empty compute pass that writes timestamp `index` of `queries` at its
 /// start: a pass timestamp, which needs no `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
 fn timestamp_pass(encoder: &mut wgpu::CommandEncoder, queries: &wgpu::QuerySet, index: u32) {
@@ -218,14 +238,15 @@ fn timestamp_pass(encoder: &mut wgpu::CommandEncoder, queries: &wgpu::QuerySet, 
 }
 
 /// The ticks from the first to the second of the two little-endian
-/// timestamps in `resolved`; `None` when the second is earlier (a counter
-/// that wrapped or was reset between the passes).
+/// timestamps in `resolved`; `None` unless the second is later (a counter
+/// that wrapped or was reset between the passes, or two stamps that were
+/// never written and resolved as zero).
 fn ticks_between(resolved: &[u8]) -> Option<u64> {
     let tick = |at: usize| -> Option<u64> {
         let word: [u8; 8] = resolved.get(at..at + 8)?.try_into().ok()?;
         Some(u64::from_le_bytes(word))
     };
-    tick(8)?.checked_sub(tick(0)?)
+    tick(8)?.checked_sub(tick(0)?).filter(|&ticks| ticks > 0)
 }
 
 /// `ticks` of `period_ns` nanoseconds each, or `None` when the product is not
@@ -234,7 +255,7 @@ fn ticks_between(resolved: &[u8]) -> Option<u64> {
 fn duration_of(ticks: u64, period_ns: f64) -> Option<std::time::Duration> {
     #[expect(
         clippy::cast_precision_loss,
-        reason = "a frame's ticks are far below 2^53, where f64 is exact"
+        reason = "a frame's ticks are far below 2^53, where f64 is exact; past it the rounding is one part in 2^53"
     )]
     let nanos = ticks as f64 * period_ns;
     if !(nanos.is_finite() && period_ns > 0.0) {
@@ -245,7 +266,7 @@ fn duration_of(ticks: u64, period_ns: f64) -> Option<std::time::Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::duration_of;
+    use super::{duration_of, ticks_between};
 
     #[test]
     fn ticks_convert_through_the_queues_period() {
@@ -260,6 +281,26 @@ mod tests {
         );
         assert_eq!(duration_of(10, 0.0), None, "no period, no time");
         assert_eq!(duration_of(10, f64::NAN), None);
+    }
+
+    #[test]
+    fn the_ticks_are_the_second_stamp_less_the_first() {
+        let resolved = |first: u64, second: u64| {
+            let mut bytes = [0_u8; 16];
+            bytes[..8].copy_from_slice(&first.to_le_bytes());
+            bytes[8..].copy_from_slice(&second.to_le_bytes());
+            bytes
+        };
+        assert_eq!(ticks_between(&resolved(1_000, 1_250)), Some(250));
+        assert_eq!(
+            ticks_between(&resolved(0x0102, 0x0304)),
+            Some(0x0202),
+            "little-endian, the first stamp at offset 0"
+        );
+        assert_eq!(ticks_between(&resolved(7, 7)), None, "no time passed");
+        assert_eq!(ticks_between(&resolved(0, 0)), None, "stamps never written");
+        assert_eq!(ticks_between(&resolved(9, 3)), None, "a wrapped counter");
+        assert_eq!(ticks_between(&[0; 12]), None, "a short readback");
     }
 }
 

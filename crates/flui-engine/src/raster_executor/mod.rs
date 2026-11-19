@@ -1062,12 +1062,28 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let discarded_render = join(&mut failure, render_failure);
         // The GPU times this frame's render read back for earlier frames,
         // taken before the lock, since a backend is not called under it. The
-        // newest the record can hold are kept, the oldest first.
+        // newest the record can hold are kept, the oldest first. A backend
+        // answers a few per frame; one that keeps answering is cut off at
+        // `GPU_TIMES_PER_FRAME`, and the panic of one that panics is held for
+        // the owner, as a render's is.
         let mut gpu_times = [None; inbox::UNDRAINED_GPU_TIMES];
-        while let Some(time) = backend.take_gpu_time(slot.id) {
-            gpu_times.rotate_left(1);
-            gpu_times[inbox::UNDRAINED_GPU_TIMES - 1] = Some(time);
-        }
+        let mut caught = FirstPanic::new();
+        let taken = caught.contain(|| {
+            for _ in 0..GPU_TIMES_PER_FRAME {
+                let Some(time) = backend.take_gpu_time(slot.id) else {
+                    break;
+                };
+                gpu_times.rotate_left(1);
+                gpu_times[inbox::UNDRAINED_GPU_TIMES - 1] = Some(time);
+            }
+        });
+        let discarded_gpu_times = match taken {
+            Some(()) => None,
+            None => join(
+                &mut failure,
+                caught.into_payload().map(SlotFailure::Panicked),
+            ),
+        };
         let extra = {
             let mut state = slot.inbox.lock();
             // The answer counts only while no newer size was sent since the
@@ -1090,6 +1106,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         retire(Some(frame), extra, first);
         retire(None, discarded, first);
         retire(None, discarded_render, first);
+        retire(None, discarded_gpu_times, first);
         report_each([resize_report, textures_report, render_report], first);
         1
     }
@@ -1130,6 +1147,11 @@ fn over_limit(error: &EngineError) -> Option<DeviceSize> {
         _ => None,
     }
 }
+
+/// How many GPU times the executor takes from a backend after one frame: a
+/// timer publishes at most its ring per frame, so a backend past this bound
+/// is answering without end.
+const GPU_TIMES_PER_FRAME: usize = 4 * inbox::UNDRAINED_GPU_TIMES;
 
 /// The full repaint a slot owes after the raster side lost what it showed.
 const RESET: FullReason = FullReason::Resync(ResyncReason::RasterReset);

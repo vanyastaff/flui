@@ -380,8 +380,8 @@ pub struct SlotSettlement {
 /// finished (ADR-0388).
 ///
 /// It arrives after the frame's settlement, at a later frame of the slot, so
-/// it names the frame by its epoch. A device without timestamp queries (the
-/// web, some mobile GPUs) times no frame, and a frame the GPU had not
+/// it names the frame by its epoch. A device without timestamp queries
+/// (WebGL2, some mobile GPUs) times no frame, and a frame the GPU had not
 /// answered by then is not timed either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

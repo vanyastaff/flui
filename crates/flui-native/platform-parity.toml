@@ -459,6 +459,13 @@ note = "On Vulkan the GPU context creates its pipelines through a `wgpu::Pipelin
 evidence = "`gpu_context::tests` on lavapipe: a finished warm-up saves an envelope for the adapter's key, the next context is seeded from it, a corrupt value is emptied and the context starts cold, a device rebuild starts a cold cache; `pipeline_store::tests` refuse a truncated, extended, altered, other-adapter or oversized value. lavapipe's cache data is the 96-byte header alone, so no launch has been timed."
 
 [[group.section.row]]
+id = "gpu-frame-time"
+feature = 'GPU time of each frame'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+note = "Where the adapter has `TIMESTAMP_QUERY`, each window and offscreen slot of the GPU context times its frame between two empty timestamp passes and hands the owner the time under the frame's epoch (`RasterSender::drain_gpu_times`, ADR-0388); without it, as on WebGL2 and some mobile GPUs, no time is reported. Run on lavapipe only. On a tile-based GPU (Apple, Mali) the passes between the two stamps need not run between them, so the time there is approximate. Owed: on an Apple GPU and on a Mali device, the time compared with the platform's GPU trace (Xcode Metal System Trace, Android GPU Inspector or Arm Streamline); a hardware desktop GPU on Windows, X11 and Wayland; WebGPU in a browser that grants `timestamp-query`."
+evidence = "`gpu_context::tests::a_slot_frame_is_timed_on_the_gpu_under_its_epoch` on lavapipe reads back a nonzero time for each frame under its epoch; `gpu_timer::frame_tests::frames_that_never_submit_give_their_entries_back` times the frames after ones that failed or unwound before their submission."
+
+[[group.section.row]]
 id = "presentation-feedback-when-each-frame-reached-the-screen"
 feature = 'Presentation feedback: when each frame reached the screen'
 status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "yes" }

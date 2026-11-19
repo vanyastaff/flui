@@ -89,9 +89,6 @@ crossbeam-channel = { workspace = true }
 # flui-rendering etc.
 static_assertions = { workspace = true }
 
-# GPU profiling (optional, feature-gated, excluded from wasm32 via feature design)
-
-
 # === Per-platform default GPU backends ===
 # wgpu compiles only the backends named in its Cargo features. These
 # target-scoped entries are feature-unified with the base `wgpu` dependency
