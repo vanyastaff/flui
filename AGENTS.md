@@ -368,8 +368,17 @@ change read it to break it, all at once, and a judge decides what the author mus
   pushed after the review gets the same lenses, starting from the fix (the workflow's `since`,
   set to the head the review read).
 
-The implementer does not review and the reviewer does not implement. A pull request the `docs`
-lane takes (documentation only) skips the step; its body says so under `## Review`.
+The implementer does not review and the reviewer does not implement.
+
+**A design is read before its code.** A pull request that adds or changes a decision (an ADR's
+decision or options, a spec's `design.md`) gets the same step with the design lenses (the
+workflow's `mode: "design"`): *alternatives* (options against the drivers, and the defects other
+frameworks record for the same behaviour), *ownership* (one owner for each piece of state),
+*orders* (how each answer finds what asked for it, and every failure and late arrival), *seams*
+(where each policy lives, every host), *records* (the accepted ADRs it contradicts or supersedes)
+and *confirmation* (the test or rung that holds each decision, and how the replaced form goes).
+The defects a design allows cost the most rounds once they are code. Any other pull request the
+`docs` lane takes skips the step; its body says so under `## Review`.
 
 The step never holds a green pull request. A lens that cannot be started (the runtime refuses a
 subagent, a usage limit) is named under `## Review` with its reason, the author reads the diff

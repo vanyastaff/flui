@@ -253,4 +253,28 @@ for (const mutants of ["D:/it's", 42]) {
     assert.deepEqual(sh(listCommand).split('\n').map((l) => Number(l.split('\t')[1])), lines, field)
   }
 }
+// 11. mode "design" reads with the design lenses and their wording, validates `unread` against
+//     them, and neither starts nor reads a mutation run.
+{
+  const prompts = {}
+  let judgePrompt = ''
+  const { result, calls } = await run({ mode: 'design', mutants: 'D:/m', unread: ['orders', 'tests'], since: 'old' }, (p, o) => {
+    if (o.label === 'scope') return scope({ since: SHA('c'), since_base: SHA('a') })
+    if (o.label === 'read:mutants') assert.fail('a design reads no mutation run')
+    if (o.label.startsWith('read:')) { prompts[o.label] = p; return { findings: [], tried: ['t'] } }
+    judgePrompt = p
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.deepEqual(Object.keys(prompts).sort(), ['read:alternatives', 'read:confirmation', 'read:orders', 'read:ownership', 'read:records', 'read:seams'])
+  assert.ok(!calls.includes('read:mutants'))
+  assert.match(prompts['read:ownership'], /^You are one of 6 independent readers of a design for FLUI/)
+  assert.match(prompts['read:ownership'], /the section \(file:line\) that permits it/)
+  assert.doesNotMatch(prompts['read:orders'], /An earlier read covered/)
+  assert.match(prompts['read:ownership'], /An earlier read covered/)
+  assert.match(judgePrompt, /reported on a design to FLUI/)
+  assert.match(judgePrompt, /a section of the design, an accepted ADR, or a line of the code it governs/)
+  assert.match(result.markdown, /"unread" names "tests", not a lens \(alternatives, ownership, orders, seams, records, confirmation\)/)
+  assert.match(result.markdown, /Mutation run: not used for a design\./)
+  assert.match(result.markdown, /the one at D:\/m was not read/)
+}
 console.log('all branches behave')
