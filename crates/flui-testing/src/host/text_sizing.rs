@@ -81,8 +81,10 @@ impl ScriptedTextSizingState {
 pub(super) fn serve(provider: &RefCell<ScriptedTextSizingState>, runtime: &UiRuntime) {
     let source = provider.borrow().writer.source();
     // Only the frontiers of the provider's own captured source: another
-    // source's work is no answer of this provider's to give, and dropped it
-    // stalls as a receipt nobody serves, as on a host with no producer for it.
+    // source's work is no answer of this provider's to give. Dropped, its
+    // receipt is gone, so the runtime exports the frontier again once its retry
+    // time passes, up to eight attempts, and then stalls it, as on a host with
+    // no producer for that source.
     let work: Vec<TextSizingWork> = runtime
         .take_text_sizing_frontiers()
         .into_iter()

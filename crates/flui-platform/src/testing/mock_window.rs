@@ -177,8 +177,8 @@ impl Base for Standalone {
 
     fn request_redraw(&self) {}
 
-    /// Never asked: a standalone double keeps no surface while covered, so no
-    /// frame is owed to it (ADR-0389).
+    /// Never asked: a standalone double's state is never occluded, so no
+    /// frame is owed to it while covered (ADR-0389).
     fn request_frame_at(&self, _: Option<crate::EventTime>) {}
 
     fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {

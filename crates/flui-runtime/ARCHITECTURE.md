@@ -787,17 +787,19 @@ that can produce it. The owed frame is no due work otherwise (`has_pending_due_w
 out): the passing of its instant never runs it, and the attempt takes the serve whatever comes of
 it. A grant a held preparation kept stays in the clock, so once the preparation can run the next
 poll of the presentation produces it, a frame another window delivered included in a runtime of
-several presentations. The frame stays owed until it runs, however late the host
-serves its request. A hold leaves it owed: the dropped-frame backoff moves the instant to the
-retry; while the sink holds as many frames as it may the request is withdrawn, the settlement that
-frees a place asking for it again; and a served frame held by its text preparation marks what the
-window was asked as held at the preparation's outcome generation (`hold_owed_frame`,
-`text_preparation::outcome_generation`), so the same instant is asked again only once the
-generation moved on (an answer made the segment resumable, the segment left, or its premises no
-longer accept it: a build, the layout, the text-sizing policy or the scale moved, which
-`outcome_generation` finds once when it weighs the held instant, so the frame asked for withdraws
-the segment in reconciliation), never while it waits. Only a frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing
-follows every
+several presentations. The frame stays owed until it runs, however late the host serves its
+request. A hold leaves it owed: the dropped-frame backoff moves the instant to the retry; while the
+sink holds as many frames as it may the request is withdrawn, the settlement that frees a place
+asking for it again; and a served frame held by its text preparation marks what the window was
+asked as held at the preparation's outcome generation (`hold_owed_frame`), so the same instant is
+asked again only once the preparation releases it (`PreparationOutcome::releases`, read by
+`text_preparation::outcome` with no side effect): the generation moved on (an answer made the
+segment resumable, or the segment left), or the segment's premises do not accept it now (a build,
+the layout, the text-sizing policy or the scale moved since the frame that held it), so the frame
+asked for withdraws the segment in reconciliation. A premise moved during the holding frame's own
+sampling is found by that frame's revalidation before drawing (`reconcile_for_segment`), which
+withdraws the segment and moves the generation. Never while it waits. Only a frame that runs
+starts the next quiet period (`occluded_frame_drawn`). The owing follows every
 change of sight (`follow_sight`: each window snapshot, the visibility edge, each session notice):
 a window whose frame would no longer be shown owes nothing, one that owes keeps its quiet period
 through any snapshot, and one that owed nothing starts one. A frame drawn while the window is

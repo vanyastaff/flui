@@ -109,7 +109,8 @@ impl PlatformWindow for OutsideWindow {
         WindowIdMint::new().next().expect("a fresh mint issues an id")
     }
 
-    fn request_redraw(&self) {} fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+    fn request_redraw(&self) {}
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
 
     fn state(&self) -> WindowState {
         WindowState::new(WindowGeometry::EMPTY, flui_platform::WindowExtent::ZERO)

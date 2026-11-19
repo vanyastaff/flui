@@ -473,6 +473,21 @@ fn held_owed_frame(
     window: flui_testing::HeadlessWindowId,
     number: &SharedSignal<u32>,
 ) -> (flui_testing::ScriptedTextSizing, u64) {
+    let sizing = parked_owed_frame(host, window, number);
+    host.request_frame();
+    host.pump_until_settled(FRAME, 200)
+        .expect("the held frame keeps no loop turning");
+    (sizing, host.sink().submits())
+}
+
+/// [`held_owed_frame`] up to the hold: `window`'s text waits on the held
+/// provider, its owed frame drawn with the text parked. The next owed frame,
+/// once something owes it, meets the waiting preparation.
+fn parked_owed_frame(
+    host: &mut HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+    number: &SharedSignal<u32>,
+) -> flui_testing::ScriptedTextSizing {
     let sizing = host.script_text_sizing(window);
     host.attach_to(
         window,
@@ -502,10 +517,7 @@ fn held_owed_frame(
         1,
         "the owed frame's text waits on the provider"
     );
-    host.request_frame();
-    host.pump_until_settled(FRAME, 200)
-        .expect("the held frame keeps no loop turning");
-    (sizing, host.sink().submits())
+    sizing
 }
 
 /// A covered window's served owed frame held by its text preparation is not
@@ -577,51 +589,164 @@ fn a_held_owed_frame_keeps_no_loop_turning() {
 }
 
 /// A covered window's served owed frame held by its text preparation, whose
-/// premises then move (a signal its view reads is written, or the window's
-/// scale changes): the provider's answer to the old segment is refused and no
-/// export serves it, so the move itself asks the window for the frame again,
-/// whose reconciliation withdraws the segment and draws. The rows differ in
-/// what moves. Fails when a moved premise is no change of the preparation's
-/// outcome: the answer is refused, nothing is asked, and the window draws
-/// nothing until it is seen.
+/// premises move: after the hold, a signal its view reads is written or the
+/// window's scale changes; or, in the frame that serves the held instant, the
+/// shown window beside it writes that signal from its animation, which ticks
+/// as that window is sampled, after the covered window's reconciliation and
+/// before its admission, so the frame is held on a segment already refused.
+/// The provider's answer to the old segment is refused and no export serves
+/// it, so the move asks the window for the frame again, whose reconciliation
+/// withdraws the segment and draws. The rows differ in what moves, and when:
+/// in the last, the frame's revalidation before drawing withdraws the segment
+/// the hold kept, so the preparation's outcome moves on in the hold's own
+/// frame. Fails when a held frame is not asked again at all (every row: the
+/// answer is refused, nothing is asked, and the window draws nothing until it
+/// is seen), and when only a moved outcome releases the hold (the first two).
 #[test]
 fn a_moved_premise_asks_a_held_owed_frame_again() {
-    type Move = fn(&mut HeadlessHost, flui_testing::HeadlessWindowId, &SharedSignal<u32>);
-    let rows: [(&str, Move); 2] = [
-        ("a signal the view reads is written", |_, _, number| {
-            number.set(3);
-        }),
-        ("the window's scale changes", |host, window, _| {
+    // (case, whether the premise moves in the frame that holds, the move)
+    let rows: [(&str, bool, Move); 3] = [
+        (
+            "a signal the view reads is written",
+            false,
+            |_, _, number| number.set(3),
+        ),
+        ("the window's scale changes", false, |host, windows, _| {
             host.set_scale_factor(
-                window,
+                windows.covered,
                 flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
                     .expect("a ratio in range"),
             );
         }),
+        (
+            "the shown window's animation writes the signal between reconciliation and admission",
+            true,
+            |host, windows, _| {
+                windows.start.notify_listeners();
+                // The run anchors at the next frame and advances at the one
+                // after, the frame that serves the held instant.
+                let _ = host.pump(FRAME);
+                let _ = host.pump(Duration::from_secs(2));
+            },
+        ),
     ];
     let failed: Vec<&str> = rows
         .iter()
-        .filter(|(name, moved)| {
+        .filter(|(name, in_hold, moved)| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                moved_premise_case(name, *moved);
+                moved_premise_case(name, *in_hold, *moved);
             }))
             .is_err()
         })
-        .map(|(name, _)| *name)
+        .map(|(name, ..)| *name)
         .collect();
     assert!(failed.is_empty(), "failing cases: {failed:?}");
 }
 
-fn moved_premise_case(
-    name: &str,
-    moved: fn(&mut HeadlessHost, flui_testing::HeadlessWindowId, &SharedSignal<u32>),
-) {
+/// The windows of a moved-premise row.
+struct Windows {
+    /// The primary, covered, its text held on the provider; sampled first.
+    covered: flui_testing::HeadlessWindowId,
+    /// What starts the shown window's animation, which writes the covered
+    /// window's signal as it ticks.
+    start: flui_foundation::ChangeNotifier,
+}
+
+/// What a moved-premise row moves.
+type Move = fn(&mut HeadlessHost, &Windows, &SharedSignal<u32>);
+
+/// A box whose animation, once `start` notifies, writes 3 into `written` at
+/// its first tick that advances it: inside the sampling of its window.
+#[derive(Clone, StatefulView)]
+struct SignalAnimator {
+    start: flui_foundation::ChangeNotifier,
+    written: SharedSignal<u32>,
+}
+
+struct SignalAnimatorState {
+    start: flui_foundation::ChangeNotifier,
+    written: SharedSignal<u32>,
+    /// The start and tick subscriptions, dropped before the run they observe,
+    /// which the window's frame registry drives.
+    driven: Option<(
+        [flui_foundation::Subscription; 2],
+        flui_animation::DrivenController,
+    )>,
+}
+
+impl StatefulView for SignalAnimator {
+    type State = SignalAnimatorState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        SignalAnimatorState {
+            start: self.start.clone(),
+            written: self.written.clone(),
+            driven: None,
+        }
+    }
+}
+
+impl ViewState<SignalAnimator> for SignalAnimatorState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        use flui_animation::Animation as _;
+        use flui_foundation::Listenable as _;
+
+        let vsync = flui_view::environment::VsyncScope::maybe_of(ctx);
+        assert!(vsync.is_some(), "the runtime installs a frame registry");
+        let driven = flui_animation::AnimationController::builder(Duration::from_millis(1500))
+            .build_on(vsync.as_ref());
+        let started = driven.controller().clone();
+        let on_start = self.start.listen(std::rc::Rc::new(move || {
+            let _ = started.forward();
+        }));
+        let ticked = driven.controller().clone();
+        let written = self.written.clone();
+        let wrote = std::cell::Cell::new(false);
+        let on_tick = driven.controller().listen(std::rc::Rc::new(move || {
+            if ticked.value() > 0.0 && !wrote.replace(true) {
+                written.set(3);
+            }
+        }));
+        self.driven = Some(([on_start, on_tick], driven));
+    }
+
+    fn build(&self, _view: &SignalAnimator, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+fn moved_premise_case(name: &str, in_hold: bool, moved: Move) {
     let mut host = HeadlessHost::new(HeadlessWindow::new(200, 100).with_occlusion_reports());
     let window = host.primary_window();
     let number = SharedSignal::new(1);
-    let (sizing, before) = held_owed_frame(&mut host, window, &number);
+    let start = flui_foundation::ChangeNotifier::new();
+    let shown = host.open_window(HeadlessWindow::new(40, 40));
+    host.attach_to(
+        shown,
+        &SignalAnimator {
+            start: start.clone(),
+            written: number.clone(),
+        },
+    )
+    .expect("the shown window has no root");
+    let (sizing, before) = if in_hold {
+        // The held instant asked, not yet served: the move's frame serves it.
+        let sizing = parked_owed_frame(&mut host, window, &number);
+        host.request_frame();
+        let _ = host.time_to_next_frame();
+        (sizing, host.sink().submits())
+    } else {
+        held_owed_frame(&mut host, window, &number)
+    };
     let asked = host_requests(&host, window).len();
-    moved(&mut host, window, &number);
+    moved(
+        &mut host,
+        &Windows {
+            covered: window,
+            start,
+        },
+        &number,
+    );
     // The provider answers what it holds, and from now on at once.
     sizing.answer_at_once();
     let _ = host.answer_text_sizing();

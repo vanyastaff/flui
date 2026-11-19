@@ -1911,22 +1911,23 @@ impl PresentationState {
     /// the withdrawal of the one asked. `None` when the window was asked
     /// exactly that, so a window hears an instant once (ADR-0389); an instant
     /// whose frame was held ([`Self::hold_owed_frame`]) is asked again once its
-    /// text preparation's outcome may have changed.
+    /// text preparation releases it. A pure read: weighing the hold changes
+    /// nothing.
     pub(crate) fn owed_frame_request(&self, epoch: Instant) -> Option<OwedFrameRequest> {
         let at = self
             .occluded_frame_at()
             .map(|at| crate::occluded_frame::event_time(epoch, at));
         OwedFrameRequest::of(&self.window, at, &self.owed_frame_asked, || {
-            crate::ui_runtime::text_preparation::outcome_generation(self)
+            crate::ui_runtime::text_preparation::outcome(self)
         })
     }
 
     /// The frame this presentation owes was served and is held, its text
     /// preparation waiting: the request drew nothing, so the window is asked
-    /// again once the preparation's outcome may have changed, not while it
-    /// waits.
+    /// again once the preparation releases it, not while it waits. Records the
+    /// preparation's outcome generation now and nothing else.
     pub(crate) fn hold_owed_frame(&self) {
-        let generation = crate::ui_runtime::text_preparation::outcome_generation(self);
+        let generation = crate::ui_runtime::text_preparation::outcome(self).generation;
         self.owed_frame_asked
             .set(self.owed_frame_asked.get().hold(generation));
     }

@@ -86,21 +86,28 @@ blocks) and the runtime does not.
    (`FrameClock::grant_hidden_frame`), so once a held preparation can run, the next poll of the
    presentation draws it: in a runtime of several presentations that may be a frame another window
    delivered, after the serve its own window's request made.
-   **A held frame is asked again once its preparation's outcome moves on.** When the served frame
-   is held (its text preparation waits on an answer or is parked), it draws nothing; the
-   presentation marks what its window was asked as held at the preparation's outcome generation
-   (`AskedFrame::hold`, `text_preparation::outcome_generation`), and the same instant is asked again
-   only once that generation moved on. It moves on when an answer makes the saved segment
-   resumable, when the segment leaves (withdrawn, replaced, finished), and when the saved segment's
-   premises no longer accept it: a build, the layout, the text-sizing policy or the scale moved
-   since it was saved, which no answer settles (`settle_text_sizing` refuses it) and no export
-   serves. `outcome_generation`, the one reader, finds that last change, once per segment, when a
-   held instant is weighed for its request; the frame then asked for withdraws the segment in its
-   reconciliation and lays the text out again. Nothing else, a pending build whose premise did not
-   move included, counts: a preparation that waits with nothing observable changed would otherwise
-   be asked for at the frame rate of its own held frames. Both generations, the preparation's and
-   the AppKit tick's below, come from an `IdMint`; an exhausted mint mints no more, so a held frame
-   waits for its window to be seen and a request arms no tick.
+   **A held frame is asked again once its preparation releases it.** When the served frame is held
+   (its text preparation waits on an answer or is parked), it draws nothing; the presentation marks
+   what its window was asked as held at the preparation's outcome generation (`AskedFrame::hold`),
+   and the same instant is asked again only once the preparation releases it
+   (`PreparationOutcome::releases`, read by `text_preparation::outcome`, the one reader, with no
+   side effect, so `owed_frame_requests` stays a pure read). It releases it when the generation
+   moved on (an answer made the saved segment resumable, or the segment left: withdrawn, replaced,
+   finished), or when the saved segment's premises do not accept it now: a build, the layout, the
+   text-sizing policy or the scale moved since it was saved. A premise that moves during the hold's
+   own sampling (another presentation's animation or input, after this presentation's
+   reconciliation and before its admission) is found by the frame's revalidation before drawing
+   (`PresentationSampling::reconcile_for_segment`, which every presentation the frame sampled and
+   did not reject passes), which withdraws the segment and so moves the generation; one that moves
+   after that frame is found by the premises. No answer settles such a segment
+   (`settle_text_sizing` refuses it) and no export serves it; the frame asked for withdraws it in
+   its reconciliation and lays the text out again, and the request that asked cleared the hold, so
+   a premise that keeps not accepting asks once per held frame, never per weigh. Nothing else, a
+   pending build whose premise did not move included, counts: a
+   preparation that waits with nothing observable changed would otherwise be asked for at the frame
+   rate of its own held frames. Both generations, the preparation's and the AppKit tick's below,
+   come from an `IdMint`; an exhausted mint mints no more, so a frame held by a segment its
+   premises still accept waits for its window to be seen, and a request arms no tick.
 3. **Every host delivers at the end of a work item.** `OwnerDelivery` takes the requests under the
    lease of each runtime work item that is not terminal, and after an installation that succeeded,
    and delivers them once the runtime is back, each contained in the work item's `FirstPanic`.

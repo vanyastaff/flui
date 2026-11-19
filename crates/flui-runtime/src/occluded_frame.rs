@@ -36,6 +36,8 @@ use std::time::Duration;
 use flui_platform::{EventTime, PlatformWindow};
 use web_time::Instant;
 
+use crate::ui_runtime::text_preparation::PreparationOutcome;
+
 /// How long a covered window with work waiting draws nothing before it draws
 /// the frame it owes its surface: the cost of a covered window that keeps
 /// changing (one frame per period) against how old its surface may be when
@@ -192,7 +194,8 @@ pub(crate) struct AskedFrame {
     at: Option<EventTime>,
     /// That instant's frame was served and held by its text preparation, so
     /// it drew nothing: the preparation's outcome generation then. The instant
-    /// is asked again once the generation moved on, never while it stands.
+    /// is asked again once the preparation releases it
+    /// ([`PreparationOutcome::releases`]), never while it holds.
     held: Option<u64>,
 }
 
@@ -222,17 +225,19 @@ impl OwedFrameRequest {
     /// of `window` when it owes a frame at `at` (`None`: nothing), or `None`
     /// when that is what the window was last asked: a window asked for nothing
     /// has nothing to withdraw. An instant whose frame was held is asked again
-    /// only once the preparation's outcome `generation` moved on from the one
-    /// it was held at, so a hold that lasts asks nothing in the meantime;
-    /// `generation` is read only for a held instant.
+    /// only once the preparation's `outcome` releases it (its generation moved
+    /// on from the one the frame was held at, or its segment's premises no
+    /// longer accept it), so a hold that lasts asks nothing in the meantime;
+    /// `outcome` is read only for a held instant.
     pub(crate) fn of(
         window: &Weak<dyn PlatformWindow>,
         at: Option<EventTime>,
         asked: &Rc<Cell<AskedFrame>>,
-        generation: impl FnOnce() -> u64,
+        outcome: impl FnOnce() -> PreparationOutcome,
     ) -> Option<Self> {
         let last = asked.get();
-        let ask_again = at.is_some() && last.held.is_some_and(|held_at| held_at != generation());
+        let ask_again =
+            at.is_some() && last.held.is_some_and(|held_at| outcome().releases(held_at));
         (last.at != at || ask_again).then(|| Self {
             window: Weak::clone(window),
             at,
@@ -275,24 +280,29 @@ mod tests {
     use flui_platform::{EventTime, PlatformWindow};
 
     use super::{AskedFrame, OwedFrameRequest};
+    use crate::ui_runtime::text_preparation::PreparationOutcome;
 
     /// What the window is asked, given what it was asked before: an instant
-    /// once, again only after its frame was held and the preparation's outcome
-    /// generation moved on, never while it stands; and the generation is read
-    /// only for a held instant. Red-check: ask a held instant again whatever
-    /// the generation, and a hold that lasts asks the window at the frame rate
-    /// of its own held frames; or never ask it again, and a frame held past
-    /// its served request is never asked for.
+    /// once, again only after its frame was held and the preparation released
+    /// it (the generation moved on, or the segment's premises do not accept it
+    /// now), never while it holds; and the outcome is read only for a held
+    /// instant. Red-check: ask a held instant again whatever the outcome, and
+    /// a hold that lasts asks the window at the frame rate of its own held
+    /// frames; or compare only the generation, and a frame whose premises move
+    /// after its hold is never asked for again.
     #[test]
     fn a_held_instant_is_asked_again_once_its_outcome_moved_on() {
         let window: Weak<dyn PlatformWindow> = Weak::<flui_platform::testing::MockWindow>::new();
         let asked = Rc::new(Cell::new(AskedFrame::default()));
         let at = Some(EventTime::from_nanos(1_000));
         let reads = Cell::new(0_u32);
-        let ask = |owed: Option<EventTime>, generation: u64| {
+        let ask = |owed: Option<EventTime>, generation: u64, premises_hold: bool| {
             OwedFrameRequest::of(&window, owed, &asked, || {
                 reads.set(reads.get() + 1);
-                generation
+                PreparationOutcome {
+                    generation,
+                    premises_hold,
+                }
             })
             .map(|request| {
                 let at = request.at;
@@ -300,34 +310,67 @@ mod tests {
                 at
             })
         };
-        // (case, owed, the generation now, hold the frame at it first, asked)
+        // (case, owed, the generation now, the premises hold, hold the frame
+        // at that generation first, asked)
         let rows = [
-            ("nothing owed, nothing asked", None, 0, false, None),
-            ("a new instant is asked", at, 0, false, Some(at)),
-            ("and once", at, 0, false, None),
-            ("its frame held, the outcome standing", at, 0, true, None),
-            ("still standing", at, 0, false, None),
-            ("the outcome moved on: asked again", at, 1, false, Some(at)),
-            ("and once", at, 1, false, None),
+            ("nothing owed, nothing asked", None, 0, true, false, None),
+            ("a new instant is asked", at, 0, true, false, Some(at)),
+            ("and once", at, 0, true, false, None),
+            (
+                "its frame held, the outcome standing",
+                at,
+                0,
+                true,
+                true,
+                None,
+            ),
+            ("still standing", at, 0, true, false, None),
+            (
+                "the outcome moved on: asked again",
+                at,
+                1,
+                true,
+                false,
+                Some(at),
+            ),
+            ("and once", at, 1, true, false, None),
+            ("held again", at, 1, true, true, None),
+            (
+                "its premises moved: asked again",
+                at,
+                1,
+                false,
+                false,
+                Some(at),
+            ),
+            (
+                "held while its premises had already moved: asked again",
+                at,
+                1,
+                false,
+                true,
+                Some(at),
+            ),
             (
                 "held again, then nothing owed: withdrawn",
                 None,
                 1,
                 true,
+                true,
                 Some(None),
             ),
-            ("a hold of nothing asked is none", None, 2, true, None),
+            ("a hold of nothing asked is none", None, 2, true, true, None),
         ];
-        for (case, owed, generation, hold, found) in rows {
+        for (case, owed, generation, premises_hold, hold, found) in rows {
             if hold {
                 asked.set(asked.get().hold(generation));
             }
-            assert_eq!(ask(owed, generation), found, "{case}");
+            assert_eq!(ask(owed, generation, premises_hold), found, "{case}");
         }
         assert_eq!(
             reads.get(),
-            3,
-            "the generation is read only while an instant is held"
+            6,
+            "the outcome is read only while an instant is held"
         );
     }
 }

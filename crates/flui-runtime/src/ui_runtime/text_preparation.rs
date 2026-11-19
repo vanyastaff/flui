@@ -110,9 +110,6 @@ pub(crate) struct SavedTextSegment {
     wait: Wait,
     serviced: bool,
     service_attempts: u8,
-    /// Whether [`outcome_generation`] found the segment's premises no longer
-    /// accepting it, and moved the generation on for it once.
-    premise_moved: bool,
 }
 
 /// The exact retained attempt that supplied a sampling operation's frozen tick.
@@ -154,19 +151,20 @@ pub(crate) struct TextPreparation {
     retired_cohort: Option<RetiredTextSizingCohort>,
     /// The outcome generation: a new one each time a frame held by the saved
     /// segment may now get past it, `None` before the first. A covered
-    /// window's owed frame held here is asked for again only once it moved on
-    /// ([`outcome_generation`], ADR-0389).
+    /// window's owed frame held here is asked for again once it moved on, or
+    /// once the segment's premises no longer accept it ([`outcome`],
+    /// ADR-0389).
     outcome: Option<NonZeroU64>,
     /// Mints [`Self::outcome`]. Exhausted, 2^64 changes away, it mints no
-    /// more and the generation stands: a held owed frame then waits for its
-    /// window to be seen, as the AppKit tick mint's exhaustion arms no tick.
+    /// more and the generation stands: a frame held by a segment its premises
+    /// still accept then waits for its window to be seen, as the AppKit tick
+    /// mint's exhaustion arms no tick.
     outcomes: IdMint<NonZeroU64>,
 }
 
 impl TextPreparation {
     /// A frame held by the saved segment may now get past it: an answer made
-    /// it resumable, the segment left (withdrawn, replaced, finished), or its
-    /// premises no longer accept it.
+    /// it resumable, or the segment left (withdrawn, replaced, finished).
     fn outcome_moved(&mut self) {
         if let Ok(next) = self.outcomes.next() {
             self.outcome = Some(next);
@@ -245,27 +243,44 @@ pub(crate) fn reconcile_with_recovery(
     !compatible
 }
 
-/// The generation of what a frame of `presentation` would meet in its text
-/// preparation, 0 before its first change: it moves on when an answer makes
-/// the saved segment resumable, when the segment leaves, and when the saved
-/// segment's premises no longer accept it (a build, the layout, the text-sizing
-/// policy or the scale moved since it was saved), which no answer and no export
-/// gets past and only a frame's reconciliation withdraws. That last change is
-/// found here, the one reader of "may a held frame get past the preparation
-/// now" (ADR-0389), once per segment: a frame asked for then withdraws it. It
-/// stands while the segment waits on its answer or is parked with its premises
-/// holding, whatever else is pending.
-pub(crate) fn outcome_generation(presentation: &PresentationState) -> u64 {
-    let mut state = presentation.text_preparation.borrow_mut();
-    let moved = state.segment.as_mut().is_some_and(|saved| {
-        let moved = !saved.premise_moved && !accepts(presentation, saved);
-        saved.premise_moved |= moved;
-        moved
-    });
-    if moved {
-        state.outcome_moved();
+/// What a frame of a presentation would meet in its text preparation, as a
+/// held owed frame weighs it (ADR-0389): read by [`outcome`], with no side
+/// effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreparationOutcome {
+    /// Moves on when an answer makes the saved segment resumable or the
+    /// segment leaves (withdrawn, replaced, finished); 0 before the first.
+    pub(crate) generation: u64,
+    /// Whether the saved segment's premises still accept it, `true` with no
+    /// segment saved. A segment they no longer accept (a build, the layout,
+    /// the text-sizing policy or the scale moved since it was saved) holds no
+    /// frame for long: no answer settles it and no export serves it, and the
+    /// next frame's reconciliation withdraws it.
+    pub(crate) premises_hold: bool,
+}
+
+impl PreparationOutcome {
+    /// Whether a frame held at `generation` may now get past the
+    /// preparation: the generation moved on, or the segment holding it is no
+    /// longer accepted. A premise moved during the holding frame's own
+    /// sampling moves the generation, through that frame's revalidation
+    /// before drawing; one moved after it is found by the premises.
+    pub(crate) fn releases(self, generation: u64) -> bool {
+        self.generation != generation || !self.premises_hold
     }
-    state.outcome.map_or(0, NonZeroU64::get)
+}
+
+/// What a frame of `presentation` would meet in its text preparation now: the
+/// one reader of "may a held frame get past the preparation" (ADR-0389).
+pub(crate) fn outcome(presentation: &PresentationState) -> PreparationOutcome {
+    let state = presentation.text_preparation.borrow();
+    PreparationOutcome {
+        generation: state.outcome.map_or(0, NonZeroU64::get),
+        premises_hold: state
+            .segment
+            .as_ref()
+            .is_none_or(|saved| accepts(presentation, saved)),
+    }
 }
 
 pub(crate) fn can_run(presentation: &PresentationState) -> bool {
@@ -358,7 +373,6 @@ pub(crate) fn admit(
         wait: Wait::Running,
         serviced: false,
         service_attempts: 0,
-        premise_moved: false,
     };
     let mut state = presentation.text_preparation.borrow_mut();
     state.segment = Some(saved);
