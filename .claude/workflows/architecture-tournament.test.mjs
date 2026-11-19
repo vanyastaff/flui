@@ -255,6 +255,17 @@ const noAgent = () => assert.fail('no agent may run')
     // A design's own list past its bound is a gap, not an agent failure.
     assert.doesNotMatch(prompts[label].split('Agents that returned nothing')[1], /debt items past the bound/, label)
   }
+  for (const line of ['research failures: no result', 'attacks by c: no result']) assert.match(prompts['judge:opus'].split('Agents that returned nothing')[1], new RegExp(`- ${line}`), line)
+  // A failed proposal and a failed second round reach the judge as failures too.
+  const { prompts: lost } = await run({ topic: 'T', stances }, happy({ 'propose:c': null, 'second-round': null }))
+  for (const line of ['proposal c: no result', 'second round: no result']) assert.match(lost.judge.split('Agents that returned nothing')[1], new RegExp(`- ${line}`), line)
+  // A unit whose own handling throws on a value the schema let through is contained: the run goes on,
+  // the design keeps its first form, and the throw is named as a failure.
+  const { result: thrown } = await run({ topic: 'T', stances }, happy({ 'revise:a': { answers: 'not a list', design: design('a revised') } }))
+  assert.equal(thrown.error, undefined)
+  assert.equal(thrown.proposals.find((p) => p.stance === 'a').design.title, 'a')
+  assert.ok(thrown.open.filter((x) => x.stance === 'a').every((x) => x.why === 'revision failed'))
+  assert.ok(thrown.gaps.some((g) => /^revision of a: .*filter/.test(g)))
   assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
   assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('research failures: no result (refused by a usage limit, skipped, or failed after retries)'))
@@ -266,8 +277,13 @@ const noAgent = () => assert.fail('no agent may run')
   const { result: none } = await run({ topic: 'T', stances }, happy({ judge: null, 'judge:opus': () => { throw new Error('budget spent') } }))
   assert.match(none.error, /no judge \(budget spent\)/)
   // A failed agent's error text is cut before it reaches a gap and the later prompts.
-  const { result: long } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw new Error('x'.repeat(5000)) } }))
+  const { result: long, prompts: longPrompts } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw new Error('x'.repeat(5000)) } }))
   assert.equal(long.gaps.find((g) => g.startsWith('research prior-art: ')).length, 'research prior-art: '.length + 300)
+  assert.match(longPrompts.judge, new RegExp(`- research prior-art: x{300}\n`))
+  assert.doesNotMatch(longPrompts.judge, /x{301}/)
+  // The cut counts code points, so a character above U+FFFF at the edge stays whole.
+  const { result: wide } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw new Error('x'.repeat(299) + '\u{1F600}tail') } }))
+  assert.ok(wide.gaps.find((g) => g.startsWith('research prior-art: ')).endsWith('\u{1F600}'))
   assert.ok(none.gaps.some((g) => g.startsWith('no judge: fable returned no result')))
   assert.ok(!none.gaps.some((g) => g.startsWith('judged on opus')))
   assert.equal(none.proposals.length, 3)

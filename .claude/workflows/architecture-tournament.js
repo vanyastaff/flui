@@ -115,8 +115,27 @@ async function attempt(prompt, options) {
     const value = await agent(prompt, options)
     return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
-    // An error's text reaches later prompts, so it is cut to a line's worth.
-    return { error: String(e && e.message ? e.message : e).slice(0, 300) }
+    return { error: errorText(e) }
+  }
+}
+
+// An error's text reaches later prompts, so it is cut to a line's worth, by code point so a cut never
+// splits a surrogate pair.
+function errorText(e) {
+  return Array.from(String(e && e.message ? e.message : e)).slice(0, 300).join('')
+}
+
+// A phase's own handling of an agent's value can throw on a shape the schema let through. Each
+// parallel unit is contained: its throw is named as an agent that returned nothing, and the unit
+// yields its fallback, so the run keeps the material the other units produced.
+function contained(who, unit, fallback = () => null) {
+  return async () => {
+    try {
+      return await unit()
+    } catch (e) {
+      agentFailed(`${who}: ${errorText(e)}`)
+      return fallback()
+    }
   }
 }
 
@@ -155,13 +174,13 @@ const RESEARCH = [
 ]
 
 phase('Research')
-const research = await parallel(RESEARCH.map((r) => async () => {
+const research = await parallel(RESEARCH.map((r) => contained(`research ${r.key}`, async () => {
   const got = await attempt(`${brief}\n\nYour research task: ${r.task}\n\nReturn at most ${MAX_FACTS} facts with their evidence, and a summary a designer can act on.`, {
     phase: 'Research', label: `research:${r.key}`, schema: RESEARCH_SCHEMA, model: 'sonnet', effort: 'high',
   })
   if (got.error) agentFailed(`research ${r.key}: ${got.error}`)
   return got.error ? null : { key: r.key, summary: got.value.summary, facts: got.value.facts.slice(0, MAX_FACTS), dropped: Math.max(0, got.value.facts.length - MAX_FACTS) }
-}))
+})))
 const found = research.filter(Boolean)
 if (!found.length) return { error: `no research returned (${gaps.join('; ')})`, gaps }
 for (const r of found) if (r.dropped) gaps.push(`research ${r.key}: ${r.dropped} facts past the bound of ${MAX_FACTS} were left out`)
@@ -190,13 +209,13 @@ function boundDesign(who, design) {
 }
 
 phase('Propose')
-const proposals = (await parallel(stances.map((s) => async () => {
+const proposals = (await parallel(stances.map((s) => contained(`proposal ${s.key}`, async () => {
   const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou design from one school: ${s.focus}\n\nPropose the best architecture you can for this problem from that school, aiming higher than the stated target where the numbers allow. Be concrete: Rust shapes, the hot path, the owner of each piece of state, the predicted numbers with their arithmetic, the migration and what it deletes. Other designers will try to tear your design apart; leave them nothing easy.`, {
     phase: 'Propose', label: `propose:${s.key}`, schema: DESIGN_SCHEMA, model: 'opus', effort: 'high',
   })
   if (got.error) agentFailed(`proposal ${s.key}: ${got.error}`)
   return got.error ? null : { stance: s.key, design: boundDesign(`proposal ${s.key}`, got.value) }
-}))).filter(Boolean)
+})))).filter(Boolean)
 if (proposals.length < 2) return { error: `fewer than two proposals returned (${gaps.join('; ')})`, gaps, research: found, proposals }
 const proposed = proposals.map((p) => p.stance)
 const show = (p) => `### ${p.stance}: ${p.design.title}\nThesis: ${p.design.thesis}\nShapes:\n${p.design.shapes}\nFlow:\n${p.design.flow}\nPrediction: ${p.design.prediction}\nMigration:\n${p.design.migration}\nRisks: ${p.design.risks}\nDebt removed: ${p.design.debt_removed.join('; ')}`
@@ -238,7 +257,7 @@ const attackers = [
   ...proposals.map((p) => ({ key: p.stance, own: p })),
   { key: 'red-team', own: null },
 ]
-const attackRuns = (await parallel(attackers.map((a) => async () => {
+const attackRuns = (await parallel(attackers.map((a) => contained(`attacks by ${a.key}`, async () => {
   const targets = proposals.filter((p) => p !== a.own)
   const role = a.own
     ? `You are the author of the "${a.key}" design below. Tear apart every rival design: find where its predicted numbers do not follow from the facts, where its state has two owners or none, where an order of events or a failure breaks it, where it repeats a failure prior art records, what debt it adds, and where your own design is simply better. Be harsh and exact; a vague attack counts for nothing.\n\nYour design:\n${show(a.own)}`
@@ -251,7 +270,7 @@ const attackRuns = (await parallel(attackers.map((a) => async () => {
     return null
   }
   return { by: a.key, attacks: takeAttacks(`attacks by ${a.key}`, got.value.attacks, targets.map((p) => p.stance)) }
-}))).filter(Boolean)
+})))).filter(Boolean)
 // Each attack gets a number its author answers by, so an answer cannot miss its attack by a wording.
 const numbered = attackRuns.flatMap((r) => r.attacks.map((x) => ({ ...x, by: r.by }))).map((x, i) => ({ ...x, id: i + 1 }))
 const attacksOn = (stance) => numbered.filter((x) => x.target === stance)
@@ -278,7 +297,7 @@ const REVISION_SCHEMA = {
 
 phase('Revise')
 const rivalsOf = (p) => proposals.filter((q) => q !== p).map((q) => `- ${q.stance}: ${q.design.title}. ${q.design.thesis}`).join('\n')
-const revised = await parallel(proposals.map((p) => async () => {
+const revised = await parallel(proposals.map((p) => contained(`revision of ${p.stance}`, async () => {
   const against = attacksOn(p.stance)
   const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYour design:\n${show(p)}\n\nThe rival designs, in brief:\n${rivalsOf(p)}\n\nEvery attack on your design, each with its number (JSON):\n${JSON.stringify(against, null, 1)}\n\nAnswer each attack by its number: fixed (say how the design changes), refuted (cite the fact or line), or conceded (say what it costs). An unanswered attack counts as conceded. Then return the revised design; take any rival's idea that is better, and say so.`, {
     phase: 'Revise', label: `revise:${p.stance}`, schema: REVISION_SCHEMA, model: 'opus', effort: 'high',
@@ -300,7 +319,7 @@ const revised = await parallel(proposals.map((p) => async () => {
   if (unmatched) gaps.push(`revision of ${p.stance}: ${unmatched} answers named no attack on this design`)
   if (dropped) gaps.push(`revision of ${p.stance}: ${dropped} answers not kept (each attack keeps its first concession, else its first answer that says how)`)
   return { stance: p.stance, design: boundDesign(`revision of ${p.stance}`, got.value.design), answers, unanswered: against.filter((x) => !answers.some((y) => y.id === x.id)) }
-}))
+}, () => ({ stance: p.stance, design: p.design, answers: [], unanswered: attacksOn(p.stance), failed: true }))))
 // An attack its author leaves unanswered or concedes is open, and so is every attack on a design whose
 // revision failed to run, named as such so the failure is not held against the design: the script
 // carries all three to the judge and to the result, whatever the judge lists.
