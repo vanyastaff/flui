@@ -70,7 +70,7 @@ pub trait TextStore {
     /// What a press at `point` (window-root logical pixels) would land on, by
     /// the window's own hit test and what each target there would do with a
     /// touch going down: the field, another target that would contend for
-    /// the press, or nothing that does ([`PressTarget`]). A platform that
+    /// the press, or nothing that does ([`PressTarget`](super::PressTarget)). A platform that
     /// recognizes gestures over the field itself (iOS's `UITextInteraction`)
     /// begins one only on the field, or where nothing else contends for the
     /// press, so every control keeps its tap.
