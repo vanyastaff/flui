@@ -498,21 +498,21 @@ as the captures are dropped today (`paint.rs:116-120`), and changes the root pla
 
 §9. **The raster side retains recordings and redraws a region rect by rect.** The engine walks the
 held version and culls nodes by their subtree footprint and chunks by their bounds, each through
-the chain above it. For a `Region` it plans:
-
-```rust
-enum RegionPlan { Bounds(DamageRect), Rects(Region) }
-```
-
-`Bounds` clears and redraws what meets the region's bounding box under one scissor. `Rects` records
-the frame once, culled against the union of the rects, and replays it once per rect under that
-rect's scissor and clear: at most `Region::MAX` passes, counted as `region_passes`. Damage is closed
-over the backdrop readers of what the plan redraws, so a `Bounds` plan closes over its box. The
-planner takes `Rects` only where a measurement on hardware of the record-once frame shows it
-cheaper, and `Bounds` otherwise ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet) has
-what is built). Both keep one invariant: no pixel outside the plan's rects is written, and every chunk that meets a written pixel is drawn there
-in paint order. One scissor around the region with culling per rect breaks it: the pixels between
-the rects are cleared and not redrawn, or drawn and blended twice.
+the chain above it. A partial frame redraws its `Region` in one pass per rect, at most
+`Region::MAX`, counted as `region_passes`: each pass clears its rect under that rect's scissor
+and redraws what a walk culled by that rect reaches, and a chunk that meets two rects is drawn in
+each, from its kept recording when it has one. Damage is closed over the backdrop readers of the
+rects, so a reader in the gap between them, which no rect meets, is left as the last frame drew
+it. The invariant: no pixel outside the rects is written, and every chunk that meets a written
+pixel is drawn there in paint order. One scissor around the region with culling per rect breaks
+it: the pixels between the rects are cleared and not redrawn, or drawn and blended twice. The
+region's bounding box in one pass is not taken: on the `raster_share` bench, under lavapipe at
+1200², two cells in opposite corners of a 60 × 60 grid redraw 0.12 % of the surface in 4.2 ms of
+raster against 95 % in 90 ms under the box, and eight cells 0.50 % in 5.9 ms against 96 % in
+89 ms, the box's frame replaying the 7 000 chunks inside it. A chunk that meets several rects and
+has no kept recording is recorded once per pass; recording it once and splicing it into the later
+passes is not built, since on that bench no chunk was recorded in more than one pass
+([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)).
 
 A chunk's IR outlives the frame in a recording cache:
 

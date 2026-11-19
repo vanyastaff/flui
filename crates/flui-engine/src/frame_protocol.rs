@@ -12,7 +12,7 @@ use crate::device_domain::DeviceDomain;
 use flui_foundation::geometry::Rect;
 use std::sync::Arc;
 
-use crate::damage::{DamageTracker, FramePlan, RegionPlan, RegionPlanner, plan_frame};
+use crate::damage::{DamageTracker, FramePlan, plan_frame};
 use crate::error::EngineResult;
 use crate::retained_target::RetainedTarget;
 
@@ -47,8 +47,8 @@ pub(crate) struct RasterCounters {
     /// The chunks of a version whose commands the frame recorded into the
     /// painter's IR; `0` for a tree, whose pictures are layers, not chunks.
     pub(crate) chunks_recorded: u64,
-    /// The passes a partial frame redrew its region in, one per rect of its
-    /// [`RegionPlan`]; `0` for a full frame.
+    /// The passes a partial frame redrew its region in, one per rect of the
+    /// region; `0` for a full frame.
     pub(crate) region_passes: u64,
     /// The chunks whose kept recording the frame replayed instead of
     /// recording them (ADR-0304 §9); a chunk counts here or in
@@ -114,7 +114,7 @@ pub(crate) trait FrameSteps {
         view: &wgpu::TextureView,
         texture: &wgpu::Texture,
         retained: bool,
-        partial: Option<&RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<RecordedContent>;
@@ -197,9 +197,6 @@ pub(crate) struct FrameProtocol {
     /// What the last frame [`Self::run`] was handed did: zero after a skipped
     /// frame or one that failed.
     counters: RasterCounters,
-    /// How a partial frame's region is planned: [`RegionPlan::of`], or rect
-    /// by rect where a test asked for it (`plan_rect_by_rect`, test builds only).
-    plan_region: RegionPlanner,
 }
 
 impl Default for FrameProtocol {
@@ -218,7 +215,6 @@ impl FrameProtocol {
             font_source: FontSource::Ordinary,
             damage_off: false,
             counters: RasterCounters::default(),
-            plan_region: RegionPlan::of,
         }
     }
 
@@ -335,7 +331,6 @@ impl FrameProtocol {
             &self.damage,
             self.retained.is_valid(),
             intermediate_required,
-            self.plan_region,
         )
     }
 
@@ -343,13 +338,10 @@ impl FrameProtocol {
     /// Retained pixels outside damage contain the previous frame's *final*
     /// composition, including later siblings, not the current ordered backdrop.
     ///
-    /// The damage is closed as the frame will redraw it: the closure of a
-    /// region holds each read footprint it joined inside one rect, which a
-    /// pass per rect redraws whole, but a plan that redraws the bounding box
-    /// also redraws the gap between the rects, where a reader the rects did
-    /// not meet is cut by the box's scissor. So a region planned as its box
-    /// is closed as the box itself, and the frame redraws exactly what was
-    /// closed.
+    /// The damage is closed as the frame redraws it, rect by rect: the
+    /// closure of a region holds each read footprint it joined inside one
+    /// rect, which that rect's pass redraws whole, and a reader no rect meets
+    /// is left as the last frame drew it.
     pub(crate) fn include_backdrop_dependencies(
         &mut self,
         scene: &flui_layer::Scene,
@@ -360,57 +352,22 @@ impl FrameProtocol {
         let Some(region) = self.damage.region() else {
             return;
         };
+        let owed = DamageRegion::Region(region);
         let closed = match scene.content() {
             // A retained version closes the damage over its own filters and
             // destination-reading chunks, reading only those (ADR-0304 §6):
             // each publication's damage was closed under its version, and the
             // damage owed here may join several.
-            SceneContent::Version(version) => {
-                self.close_as_planned(region, |damage| version.close_damage(damage, size))
-            }
+            SceneContent::Version(version) => version.close_damage(owed, size),
             SceneContent::Tree(tree) => {
                 let closures = tree_backdrop_closures(tree);
                 // Growing one read region can expose a second filter: the
                 // fixed point is reached before the partial clear and any
                 // recording, not next frame (ADR-0304 §6).
-                self.close_as_planned(region, |damage| {
-                    flui_layer::close_over(damage, &closures, size)
-                })
+                flui_layer::close_over(owed, &closures, size)
             }
         };
-        self.apply_closed(DamageRegion::Region(region), closed);
-    }
-
-    /// `region` closed by `close` over what its plan redraws: a plan that
-    /// redraws the bounding box closes the box itself, which holds every
-    /// pixel the rects would add (closing only grows damage), and a closure
-    /// that adds a rect outside the box is planned and closed again. One rect
-    /// closes to one rect (a footprint that meets it merges into it), so a
-    /// box is a fixed point after one round; the bound only keeps the loop
-    /// finite.
-    fn close_as_planned(
-        &self,
-        region: flui_layer::Region,
-        close: impl Fn(flui_layer::DamageRegion) -> flui_layer::DamageRegion,
-    ) -> flui_layer::DamageRegion {
-        use flui_layer::{DamageRegion, Region};
-
-        let plan_region = self.plan_region;
-        let mut planned = region;
-        for _ in 0..Region::MAX {
-            if let RegionPlan::Bounds(bounds) = plan_region(planned) {
-                planned = Region::new(bounds);
-            }
-            let closed = close(DamageRegion::Region(planned));
-            let DamageRegion::Region(current) = closed else {
-                return closed;
-            };
-            match plan_region(current) {
-                RegionPlan::Bounds(bounds) if current.rects() != [bounds] => planned = current,
-                RegionPlan::Bounds(_) | RegionPlan::Rects(_) => return closed,
-            }
-        }
-        DamageRegion::Full(flui_layer::FullReason::Unbounded)
+        self.apply_closed(owed, closed);
     }
 
     /// Marks what closing `region` added, rect by rect.
@@ -425,13 +382,6 @@ impl FrameProtocol {
         }
     }
 
-    /// Plans every later partial frame rect by rect, the plan production
-    /// does not switch on yet ([`RegionPlan::of`]).
-    #[cfg(test)]
-    pub(crate) fn plan_rect_by_rect(&mut self) {
-        self.plan_region = RegionPlan::rect_by_rect;
-    }
-
     /// Runs `plan` (not [`FramePlan::Skip`]) against `surface`, whose texture
     /// is `size` in `format`.
     ///
@@ -440,7 +390,7 @@ impl FrameProtocol {
     /// - A retained plan renders into a separate candidate. Failure or unwind
     ///   preserves the committed pixels and forces a full retry.
     /// - Only a partial frame skips the full clear: each pass of its
-    ///   [`RegionPlan`] clears inside its own rect instead
+    ///   region clears inside its own rect instead
     ///   (`damage::begin_partial`), keeping the retained pixels outside them.
     ///
     /// # Errors

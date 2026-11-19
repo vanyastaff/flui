@@ -2066,8 +2066,8 @@ impl Renderer {
     }
 
     /// Records one frame's content into `painter`: resets the per-frame
-    /// state and walks the scene, once for a full frame and once per pass of
-    /// `partial`'s [`RegionPlan`](crate::damage::RegionPlan). Each pass opens
+    /// state and walks the scene, once for a full frame and once per rect of
+    /// the region `partial` redraws. Each pass opens
     /// with `damage::begin_partial` (its rect's scissor and the clear inside
     /// it) and walks the scene culled by its own rect. Answers whether an
     /// advanced shape straddles the rect of the pass that drew it, in which
@@ -2083,7 +2083,7 @@ impl Renderer {
     pub(crate) fn record_frame_content(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         let recorded = Self::record_passes(painter, scene, partial, reads)?;
@@ -2095,12 +2095,12 @@ impl Renderer {
     fn record_passes(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         use crate::layer_dispatcher::LayerDispatcher;
 
-        let Some(plan) = partial else {
+        let Some(region) = partial else {
             let mut backend = LayerDispatcher::new(painter);
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
@@ -2113,7 +2113,7 @@ impl Renderer {
             });
         };
         let mut recorded = crate::frame_protocol::RecordedContent::default();
-        for (pass, &rect) in (0_u32..).zip(plan.rects()) {
+        for (pass, &rect) in (0_u32..).zip(region.rects()) {
             // A dispatcher per pass: its Drop calls flush_active_transform(),
             // which balances any deferred lazy-coalescing save left by
             // `with_transform`, so the reset below finds the stacks balanced

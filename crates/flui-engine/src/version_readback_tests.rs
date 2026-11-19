@@ -18,7 +18,7 @@ use flui_layer::{
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 
-use crate::damage::{FramePlan, RegionPlan};
+use crate::damage::FramePlan;
 use crate::headless::RetainedCapture;
 use crate::recording_cache::admission::DRAWS_TO_ADMIT;
 
@@ -490,9 +490,6 @@ fn region_frames_match_a_full_frame() {
         return;
     };
     let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
-    // Production plans the bounding box (`RegionPlan::of`); this pins the
-    // rect-by-rect plan it switches to once a frame records once.
-    partial.plan_rect_by_rect();
     let mut corners = Corners::new();
     apply(
         &mut partial,
@@ -520,7 +517,7 @@ fn region_frames_match_a_full_frame() {
         .expect("the region frame renders");
     assert_eq!(
         partial.last_plan(),
-        Some(FramePlan::RetainedPartial(RegionPlan::Rects(region))),
+        Some(FramePlan::RetainedPartial(region)),
         "two distant rects redraw rect by rect"
     );
     assert_eq!(partial.counters().region_passes, 2, "one pass per rect");
@@ -639,13 +636,13 @@ fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Colo
     });
 }
 
-/// A version's region planned as its bounding box has the box closed over
-/// the version's backdrop readers: a filter in the gap between the damaged
-/// boxes, which neither box's damage meets, is redrawn whole, and the frame
-/// draws as a full one. A version has no straddle self-heal, so a filter
-/// left cut by the box's scissor would stay wrong in the frames after it.
+/// A version's region of two distant boxes is redrawn box by box, and a
+/// filter in the gap between them, which neither box's damage meets and
+/// whose backdrop did not change, is left as the last frame drew it: the
+/// frame draws as a full one, and its two passes redraw only the boxes. The
+/// region's bounding box would redraw the gap, cutting the filter there.
 #[test]
-fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
+fn a_backdrop_effect_in_the_gap_between_a_regions_rects_is_left_alone() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -681,14 +678,12 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     partial
         .render_scene(&Scene::of_version(owner.current().clone()))
         .expect("the region frame renders");
-    assert!(
-        matches!(
-            partial.last_plan(),
-            Some(FramePlan::RetainedPartial(RegionPlan::Bounds(_)))
-        ),
-        "{:?}",
-        partial.last_plan()
+    assert_eq!(
+        partial.last_plan(),
+        Some(FramePlan::RetainedPartial(region)),
+        "the closure adds nothing, and the region is redrawn rect by rect"
     );
+    assert_eq!(partial.counters().region_passes, 2, "one pass per box");
     let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     apply(
         &mut full,
@@ -867,8 +862,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    // (case, where the first member is, one pass per rect)
-    for (case, placed, by_rect) in [
+    // (case, where the first member is, a second rect far from the group)
+    for (case, placed, far_rect) in [
         ("first member in the root", FirstMember::InRoot, false),
         ("first member in its own node", FirstMember::Alone, false),
         ("one pass per rect", FirstMember::Alone, true),
@@ -912,9 +907,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         );
         owner.apply(SURFACE).expect("a recolour applies");
         apply(&mut partial, owner.patch_damage());
-        if by_rect {
+        if far_rect {
             // A second rect far from the group.
-            partial.plan_rect_by_rect();
             partial.mark_dirty(Rect::from_xywh(50.0, 100.0, 10.0, 10.0));
         }
         partial
@@ -925,7 +919,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             "{case}: the frame is partial: {:?}",
             partial.last_plan()
         );
-        if by_rect {
+        if far_rect {
             // The group's members share one rect, the far one has its own.
             assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
         }

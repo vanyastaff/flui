@@ -11,12 +11,9 @@
 //!
 //! The accumulator keeps a [`Region`](flui_layer::Region): the rects of every publication owed,
 //! up to [`Region::MAX`](flui_layer::Region::MAX) of them, a further one merging the cheapest pair as
-//! the region itself does. [`crate::damage::plan_frame`] turns it into where a frame renders,
-//! and a partial frame into a [`RegionPlan`](crate::damage::RegionPlan) (ADR-0304 §9). Production plans
-//! every region as its bounding box ([`RegionPlan::of`](crate::damage::RegionPlan::of)); the rect-by-rect
-//! plan is built and pinned by tests, and is switched on once a frame records
-//! its content once and replays it per rect, because recording it again for
-//! every rect costs more than the pixels it saves.
+//! the region itself does. [`crate::damage::plan_frame`] turns it into where a frame renders;
+//! a partial frame redraws its region rect by rect (ADR-0304 §9), one pass per rect, each
+//! under its own scissor and culled by its own rect.
 //!
 //! wgpu does not expose a swapchain image's age, so the pixels outside a
 //! scissor on a freshly acquired swapchain image are whatever an older frame
@@ -26,66 +23,6 @@
 
 use flui_foundation::geometry::Rect;
 use flui_layer::{DamageRect, Region};
-
-/// Chooses how a partial frame redraws a region: [`RegionPlan::of`] in
-/// production, `RegionPlan::rect_by_rect` where a test asks for it.
-pub(crate) type RegionPlanner = fn(Region) -> RegionPlan;
-
-/// How a partial frame redraws its region (ADR-0304 §9).
-///
-/// Both keep one invariant: no pixel outside the plan's rects is written,
-/// and every chunk that meets a written pixel is drawn there in paint
-/// order. Each pass clears its rect to the background and redraws, under
-/// that rect's scissor, everything a walk culled by that rect reaches. The
-/// damage a plan redraws is the damage the frame closed over its backdrop
-/// readers (`FrameProtocol::include_backdrop_dependencies`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RegionPlan {
-    /// One pass under the region's bounding box.
-    Bounds(DamageRect),
-    /// One pass per rect, each under its own scissor and culled by its own
-    /// rect; at most [`Region::MAX`] passes.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production plans the bounding box until a frame records once and replays per rect (docs/gaps.md, ADR-0304)"
-        )
-    )]
-    Rects(Region),
-}
-
-impl RegionPlan {
-    /// The plan production gives `region`: its bounding box, in one pass.
-    ///
-    /// [`Self::Rects`] waits for a frame that records once and replays per
-    /// rect: a pass per rect records everything its rect reaches again, which
-    /// costs more than one pass over the box (`docs/gaps.md`, ADR-0304).
-    #[must_use]
-    pub(crate) fn of(region: Region) -> Self {
-        Self::Bounds(region.bounds())
-    }
-
-    /// The rect-by-rect plan for `region`: one pass per rect, or the one rect
-    /// of a region that holds one.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn rect_by_rect(region: Region) -> Self {
-        match region.rects() {
-            [one] => Self::Bounds(*one),
-            _ => Self::Rects(region),
-        }
-    }
-
-    /// The rects the plan redraws, one pass each, in order.
-    #[must_use]
-    pub(crate) fn rects(&self) -> &[DamageRect] {
-        match self {
-            Self::Bounds(bounds) => std::slice::from_ref(bounds),
-            Self::Rects(region) => region.rects(),
-        }
-    }
-}
 
 /// Accumulates the area that changed since the last frame.
 ///
@@ -182,14 +119,22 @@ pub(crate) enum FramePlan {
     /// `COPY_SRC`), where it costs nothing extra, and to warm the target up
     /// for a partial frame that found it invalid.
     RetainedFull,
-    /// Only the region, as the plan redraws it, into a valid retained
-    /// target, then a blit of the whole target to the swapchain.
-    RetainedPartial(RegionPlan),
+    /// Only the region, into a valid retained target, then a blit of the
+    /// whole target to the swapchain (ADR-0304 §9).
+    ///
+    /// The region is redrawn rect by rect, at most [`Region::MAX`] passes:
+    /// each pass clears its rect to the background and redraws, under that
+    /// rect's scissor, everything a walk culled by that rect reaches. No
+    /// pixel outside the rects is written, and every chunk that meets a
+    /// written pixel is drawn there once, in paint order. The region is the
+    /// damage the frame closed over its backdrop readers
+    /// (`FrameProtocol::include_backdrop_dependencies`).
+    RetainedPartial(Region),
 }
 
 /// The plan for the next frame, from the damage owed, whether the retained
 /// target holds the last presented frame, and whether the surface needs an
-/// intermediate target at all; `plan_region` plans a partial frame's region.
+/// intermediate target at all.
 ///
 /// A partial frame is never rendered straight into the swapchain: without a
 /// buffer age, the pixels outside its scissor would come from an arbitrary
@@ -198,13 +143,12 @@ pub(crate) fn plan_frame(
     tracker: &DamageTracker,
     retained_valid: bool,
     intermediate_required: bool,
-    plan_region: RegionPlanner,
 ) -> FramePlan {
     if !tracker.has_damage() {
         return FramePlan::Skip;
     }
     match tracker.region() {
-        Some(region) if retained_valid => FramePlan::RetainedPartial(plan_region(region)),
+        Some(region) if retained_valid => FramePlan::RetainedPartial(region),
         Some(_) => FramePlan::RetainedFull,
         None if intermediate_required => FramePlan::RetainedFull,
         None => FramePlan::Direct,
@@ -272,9 +216,9 @@ mod tests {
         tracker
     }
 
-    /// The plan from the damage owed and the retained target. Production
-    /// plans every region as its bounding box; the rect-by-rect plan redraws
-    /// a region of one rect as that rect and any other rect by rect.
+    /// The plan from the damage owed and the retained target: a partial
+    /// frame redraws its region rect by rect, a region of distant rects as
+    /// those rects and not as their bounding box.
     #[test]
     fn plan_frame_table() {
         let clean = {
@@ -288,57 +232,32 @@ mod tests {
             tracker.mark_dirty(Rect::from_ltrb(10.0, 10.0, 20.0, 20.0), SURFACE);
             tracker
         };
-        let partial = |plan| FramePlan::RetainedPartial(plan);
-        let bounds = partial(RegionPlan::Bounds(rect(10.0, 10.0, 20.0, 20.0)));
+        let partial = |rects: &[DamageRect]| FramePlan::RetainedPartial(region(rects));
+        let dirty_rect = partial(&[rect(10.0, 10.0, 20.0, 20.0)]);
         let one = rect(10.0, 10.0, 30.0, 30.0);
         let far = rect(170.0, 170.0, 190.0, 190.0);
         // Beside `one` with a 2-pixel gap.
         let adjacent = rect(32.0, 10.0, 52.0, 30.0);
-        let (production, by_rect): (RegionPlanner, RegionPlanner) =
-            (RegionPlan::of, RegionPlan::rect_by_rect);
 
-        // (case, tracker, retained valid, intermediate required, planner) -> plan
+        // (case, tracker, retained valid, intermediate required) -> plan
         let cases = [
-            ("clean", &clean, false, false, production, FramePlan::Skip),
-            (
-                "clean, valid",
-                &clean,
-                true,
-                true,
-                production,
-                FramePlan::Skip,
-            ),
-            ("full", &full, false, false, production, FramePlan::Direct),
-            (
-                "full, valid",
-                &full,
-                true,
-                false,
-                production,
-                FramePlan::Direct,
-            ),
+            ("clean", &clean, false, false, FramePlan::Skip),
+            ("clean, valid", &clean, true, true, FramePlan::Skip),
+            ("full", &full, false, false, FramePlan::Direct),
+            ("full, valid", &full, true, false, FramePlan::Direct),
             (
                 "full, intermediate",
                 &full,
                 false,
                 true,
-                production,
                 FramePlan::RetainedFull,
             ),
-            (
-                "full, both",
-                &full,
-                true,
-                true,
-                production,
-                FramePlan::RetainedFull,
-            ),
+            ("full, both", &full, true, true, FramePlan::RetainedFull),
             (
                 "dirty, invalid",
                 &dirty,
                 false,
                 false,
-                production,
                 FramePlan::RetainedFull,
             ),
             (
@@ -346,89 +265,48 @@ mod tests {
                 &dirty,
                 false,
                 true,
-                production,
                 FramePlan::RetainedFull,
             ),
-            ("dirty", &dirty, true, false, production, bounds),
-            (
-                "dirty, intermediate",
-                &dirty,
-                true,
-                true,
-                production,
-                bounds,
-            ),
+            ("dirty", &dirty, true, false, dirty_rect),
+            ("dirty, intermediate", &dirty, true, true, dirty_rect),
             (
                 "one rect",
                 &tracker_of(&[one]),
                 true,
                 false,
-                production,
-                partial(RegionPlan::Bounds(one)),
+                partial(&[one]),
             ),
             (
                 "two distant rects",
                 &tracker_of(&[one, far]),
                 true,
                 false,
-                production,
-                partial(RegionPlan::Bounds(one.union(far))),
+                partial(&[one, far]),
             ),
             (
                 "two adjacent rects",
                 &tracker_of(&[one, adjacent]),
                 true,
                 false,
-                production,
-                partial(RegionPlan::Bounds(one.union(adjacent))),
+                partial(&[one, adjacent]),
             ),
             (
-                "one rect, by rect",
-                &tracker_of(&[one]),
-                true,
-                false,
-                by_rect,
-                partial(RegionPlan::Bounds(one)),
-            ),
-            (
-                "two distant rects, by rect",
-                &tracker_of(&[one, far]),
-                true,
-                false,
-                by_rect,
-                partial(RegionPlan::Rects(region(&[one, far]))),
-            ),
-            (
-                "two adjacent rects, by rect",
-                &tracker_of(&[one, adjacent]),
-                true,
-                false,
-                by_rect,
-                partial(RegionPlan::Rects(region(&[one, adjacent]))),
-            ),
-            (
-                "two distant rects, by rect, invalid",
+                "two distant rects, invalid",
                 &tracker_of(&[one, far]),
                 false,
                 false,
-                by_rect,
                 FramePlan::RetainedFull,
             ),
         ];
-        for (case, tracker, valid, intermediate, planner, expected) in cases {
+        for (case, tracker, valid, intermediate, expected) in cases {
             assert_eq!(
-                plan_frame(tracker, valid, intermediate, planner),
+                plan_frame(tracker, valid, intermediate),
                 expected,
                 "{case}: full={} region={:?} valid={valid} intermediate={intermediate}",
                 tracker.needs_full_repaint(),
                 tracker.region(),
             );
         }
-        assert_eq!(
-            RegionPlan::Rects(region(&[one, far])).rects(),
-            &[one, far],
-            "one pass per rect, in the region's order"
-        );
     }
 
     /// The tracker keeps each rect apart, merging overlapping ones as the
