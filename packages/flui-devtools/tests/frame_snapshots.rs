@@ -1,4 +1,5 @@
 //! A presentation's frame snapshots in the exported timeline.
+#![cfg(feature = "timeline")]
 
 use flui_devtools::timeline::Timeline;
 use flui_foundation::{FrameEpoch, PresentationAddress, PresentationId, UiRuntimeId};

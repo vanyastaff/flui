@@ -145,14 +145,20 @@ impl Grant {
     /// Whether a system of `kind` made it: what that system's backend takes,
     /// and never a grant the scripted double minted.
     #[cfg_attr(
-        not(any(
-            windows,
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android"
-        )),
-        expect(dead_code, reason = "a target with no grant backend takes none")
+        all(
+            not(test),
+            not(any(
+                windows,
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "android"
+            ))
+        ),
+        expect(
+            dead_code,
+            reason = "a target with no grant backend takes none; its tests still call it"
+        )
     )]
     pub(crate) fn made_by(&self, kind: GrantKind) -> bool {
         #[cfg(any(test, feature = "testing"))]

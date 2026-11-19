@@ -285,7 +285,7 @@ impl PointerLocks {
             });
         let mut installed = HandlerSwaps::default();
         for mouse in mice() {
-            if let Some(previous) = swap_moved_handler(&mouse, &moved)
+            if let HandlerSwap::Replaced(previous) = swap_moved_handler(&mouse, &moved)
                 && let Err(Some(refused)) = installed.installed(Mouse(mouse), previous)
             {
                 remains.push(refused);
@@ -322,10 +322,10 @@ impl PointerLocks {
                     },
                 );
             });
+            let queue = NSOperationQueue::mainQueue();
             // SAFETY: a `nil` object hears every mouse; the main queue runs
             // the block on the main thread, where the owner lives; the
             // observer is removed in `unwatch`.
-            let queue = NSOperationQueue::mainQueue();
             let observer = unsafe {
                 NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
                     Some(&*name),
@@ -365,7 +365,7 @@ impl PointerLocks {
         let Some(moved) = moved else {
             return;
         };
-        let Some(previous) = swap_moved_handler(&mouse.0, &moved) else {
+        let HandlerSwap::Replaced(previous) = swap_moved_handler(&mouse.0, &moved) else {
             return;
         };
         flui_foundation::panic::commit(&self.mice, |mice, outbox| {
@@ -395,7 +395,7 @@ fn unwatch(watch: MouseWatch, remains: &mut Remains) {
         observers,
     } = watch;
     let ours = |mouse: &Mouse| {
-        moved_handler(&mouse.0).is_some_and(|current| std::ptr::eq(current, &*moved))
+        moved_handler(&mouse.0).is_some_and(|current| std::ptr::eq(current, &raw const *moved))
     };
     let restoration = installed.restore(ours);
     for (mouse, previous) in restoration.put_back {
@@ -406,8 +406,8 @@ fn unwatch(watch: MouseWatch, remains: &mut Remains) {
     remains.push(moved);
     let center = NSNotificationCenter::defaultCenter();
     for observer in &observers {
-        // SAFETY: `observer` is a token `addObserverForName:` returned.
         let observer: &AnyObject = (**observer).as_ref();
+        // SAFETY: `observer` is a token `addObserverForName:` returned.
         unsafe { center.removeObserver(observer) };
     }
 }
@@ -428,14 +428,20 @@ fn mouse_input(mouse: &AnyObject) -> Option<Retained<AnyObject>> {
     unsafe { msg_send![mouse, mouseInput] }
 }
 
-/// Put `moved` on `mouse`, answering the handler it had (`Some(None)` for
-/// none), copied so it can be put back; `None` where the mouse has no input
-/// to set a handler on.
-fn swap_moved_handler(
-    mouse: &AnyObject,
-    moved: &block2::Block<Moved>,
-) -> Option<Option<RcBlock<Moved>>> {
-    let input = mouse_input(mouse)?;
+/// What putting FLUI's motion handler on a mouse found.
+enum HandlerSwap {
+    /// The handler the mouse had, copied so it can be put back; `None` for
+    /// none.
+    Replaced(Option<RcBlock<Moved>>),
+    /// The mouse has no input to set a handler on; nothing was put on it.
+    NoInput,
+}
+
+/// Put `moved` on `mouse`, answering the handler it had.
+fn swap_moved_handler(mouse: &AnyObject, moved: &block2::Block<Moved>) -> HandlerSwap {
+    let Some(input) = mouse_input(mouse) else {
+        return HandlerSwap::NoInput;
+    };
     // SAFETY: the getter of the copied block property `mouseMovedHandler`;
     // the block it answers is live for the call, and copying it keeps it.
     let previous = unsafe {
@@ -443,7 +449,7 @@ fn swap_moved_handler(
         RcBlock::copy(current)
     };
     set_moved_handler(mouse, Some(moved));
-    Some(previous)
+    HandlerSwap::Replaced(previous)
 }
 
 /// Set `mouse`'s motion handler, `None` to remove it; whether the mouse has
