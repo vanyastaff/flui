@@ -144,6 +144,7 @@ mod platform_window;
 pub mod pointer;
 mod preferences;
 mod regional;
+pub mod sandbox;
 mod storage;
 mod surface_target;
 mod system_chrome;

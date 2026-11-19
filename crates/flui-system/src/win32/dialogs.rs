@@ -343,12 +343,20 @@ impl FileDialogBackend for WindowsDialogs {
             }
         };
         let system = Arc::clone(&self.system);
+        let keep_access = request.keep_access;
         show_answering::<FileDialogCapability, _, _>(
             &self.windows,
             window.id(),
             answer,
             move |dismisser| system.open(owner, &spec, dismisser),
-            open_answer,
+            move |answer| {
+                let answered = open_answer(answer);
+                if keep_access {
+                    answered.map(|picks| picks.map(crate::grant::path::granted))
+                } else {
+                    answered
+                }
+            },
         )
     }
 

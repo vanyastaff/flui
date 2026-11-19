@@ -392,8 +392,11 @@ impl OwnerPlatform {
         self.platform.page_origin()
     }
 
-    /// Where the application `app` keeps its data, or `None` when this
-    /// platform has nowhere to keep it.
+    /// Where the application `app` keeps its data, as
+    /// [`Platform::data_store`](crate::Platform::data_store) says: `None` only
+    /// on an Android Activity that reports no internal data path; a desktop
+    /// host whose platform names no data folder answers a store that refuses
+    /// each call.
     #[must_use]
     pub fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore> {
         self.platform.data_store(app)

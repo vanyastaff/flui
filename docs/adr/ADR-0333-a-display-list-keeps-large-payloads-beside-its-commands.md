@@ -163,5 +163,8 @@ const _: () = assert!(size_of::<RecordedOp>() <= 120);
 
 ## More information
 
-- Option 4 stays open as its own task in the render-scaling work: it is the form to take if a
-  cold mount's allocation count is to fall further.
+- Option 4 is declined, not deferred: it would save the one cold block of a list that stores a
+  payload (one allocation for the checkbox, switch and elevated button rows, two for the chip
+  rows) at the price of an `unsafe` byte container of several hundred lines in `flui-painting`,
+  which the decision drivers rule out. It is reconsidered only if a control's cold mount comes to
+  pay more than two allocations for its payloads.

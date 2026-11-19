@@ -30,11 +30,15 @@ use std::path::PathBuf;
 use flui_platform::AppDataDir;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod container;
+#[cfg(not(target_arch = "wasm32"))]
 mod file_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod os_error;
 #[cfg(target_arch = "wasm32")]
 mod page_store;
+#[cfg(not(target_arch = "wasm32"))]
+mod process_store;
 
 mod headless;
 mod memory_store;
@@ -55,6 +59,8 @@ pub(crate) use headless::HeadlessData;
 pub(crate) use memory_store::MemoryStore;
 #[cfg(target_arch = "wasm32")]
 pub use page_store::FileStore;
+#[cfg(not(target_arch = "wasm32"))]
+use process_store::ProcessStore;
 #[cfg(any(
     windows,
     target_os = "macos",
@@ -75,22 +81,34 @@ pub struct DataDirs {
 }
 
 /// The current user's data directories for the application `app`:
-/// `<data dir>/<app>` and `<local data dir>/<app>`.
+/// `<data dir>/<app>` and `<local data dir>/<app>`, in the process's
+/// container when it runs in one.
 ///
 /// The base directories are the platform's own (`%APPDATA%` and
 /// `%LOCALAPPDATA%` on Windows, including a redirected or synced folder;
 /// `~/Library/Application Support` on macOS and inside the iOS app container;
-/// `$XDG_DATA_HOME` on Linux, where both are the same directory). `None` when
-/// the platform reports none. On wasm32 both roots are `app`, the prefix of
-/// the page store's keys.
+/// `$XDG_DATA_HOME` on Linux, where both are the same directory). A
+/// sandboxed process is answered its container's, never a folder its
+/// sandbox keeps it from opening: a Flatpak's `~/.var/app/<id>/data`, the
+/// macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application
+/// Support`, and a packaged Windows application's
+/// `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`.
+/// `None` when the platform reports none, or when a Flatpak's description
+/// could not be read. On wasm32 both roots are `app`, the prefix of the page
+/// store's keys.
+///
+/// Reads the file system (a Flatpak's `/.flatpak-info`): off the owner
+/// thread only. A host's store resolves it at its first call, which the
+/// host runs on a thread of its own ([`DataStore::of_process`]).
 #[must_use]
 pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Some(DataDirs {
-            roaming: dirs::data_dir()?.join(app.as_str()),
-            local: dirs::data_local_dir()?.join(app.as_str()),
-        })
+        container::data_dirs_in(
+            &container::Container::of_process().ok()?,
+            app.as_str(),
+            &base_dirs(),
+        )
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -106,7 +124,9 @@ pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
 /// write to (headless, unless a test gives it a root).
 ///
 /// Its calls are the [`FileStore`]'s: blocking on native targets, so the
-/// host runs them on an IO thread, and futures on wasm32.
+/// host runs them off the owner thread (`flui-app`'s storage host: on the IO
+/// runtime's blocking threads on FLUI's default pools, in the IO task on a
+/// host's own IO pool), and futures on wasm32.
 #[derive(Debug)]
 pub struct DataStore {
     backing: Backing,
@@ -116,6 +136,42 @@ pub struct DataStore {
 enum Backing {
     Files(FileStore),
     Memory(MemoryStore),
+    #[cfg(not(target_arch = "wasm32"))]
+    OfProcess(ProcessStore),
+}
+
+/// The platform's data folders for the user, the container's for a
+/// sandboxed or packaged process.
+#[cfg(not(target_arch = "wasm32"))]
+fn base_dirs() -> container::BaseDirs {
+    container::BaseDirs {
+        data: dirs::data_dir(),
+        local: dirs::data_local_dir(),
+    }
+}
+
+/// The store of `app` in the process's container; `None` when the platform
+/// names no data folder. Blocks on the file system.
+///
+/// # Errors
+///
+/// The container could not be read (a Flatpak's description out of reach).
+#[cfg(not(target_arch = "wasm32"))]
+fn process_store(app: &AppDataDir) -> std::io::Result<Option<FileStore>> {
+    let found = container::Container::of_process()?;
+    let base = base_dirs();
+    let Some(dirs) = container::data_dirs_in(&found, app.as_str(), &base) else {
+        return Ok(None);
+    };
+    #[cfg(windows)]
+    if matches!(found, container::Container::Package { .. }) {
+        let before = container::Container::Sandbox(flui_platform::sandbox::Confinement::Unconfined);
+        if let Some(earlier) = container::data_dirs_in(&before, app.as_str(), &base) {
+            let dirs = container::roots_after_migration(earlier, dirs, &mut container::migrate);
+            return Ok(Some(FileStore::new(dirs)));
+        }
+    }
+    Ok(Some(FileStore::new(dirs)))
 }
 
 impl DataStore {
@@ -124,6 +180,44 @@ impl DataStore {
     pub fn on_disk(dirs: DataDirs) -> Self {
         Self {
             backing: Backing::Files(FileStore::new(dirs)),
+        }
+    }
+
+    /// The values of `app` under the process's own data folders
+    /// ([`data_dirs`]), found at the store's first call, on the thread that
+    /// makes it: the owner thread never reads the file system for them, and
+    /// calls that arrive while one finds wait for it and take its outcome. A
+    /// packaged Windows application's store kept under `%APPDATA%` before it
+    /// was packaged is copied into the package's folders then, once: only
+    /// into a root that holds no store, within a bound, nothing overwritten,
+    /// one instance at a time (another waits for it, as long as it takes:
+    /// the calls block the thread the host runs them on). A store
+    /// that was not copied stays where it is and stays the store, the calls
+    /// reading and writing it there: one whose copy failed is copied again
+    /// at a later start, one past the bound never. A package folder that
+    /// could not be read stays the store. A platform that names no data
+    /// folder refuses every call, and a container that could not be read
+    /// refuses the call and is read again at the next
+    /// (`StorageError::Inaccessible`).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn of_process(app: AppDataDir) -> Self {
+        Self {
+            backing: Backing::OfProcess(ProcessStore::new(app, Box::new(process_store))),
+        }
+    }
+
+    /// [`of_process`](Self::of_process) whose store `find` finds, one find
+    /// at a time, in place of the process's container: a test's stand-in
+    /// for a first call that waits (another instance migrating) or fails.
+    #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "testing")))]
+    #[must_use]
+    pub fn found_by(
+        app: AppDataDir,
+        find: impl Fn(&AppDataDir) -> std::io::Result<Option<FileStore>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            backing: Backing::OfProcess(ProcessStore::new(app, Box::new(find))),
         }
     }
 
@@ -151,6 +245,7 @@ impl DataStore {
         match &self.backing {
             Backing::Files(store) => store.read(name, limit),
             Backing::Memory(store) => store.read(name, limit),
+            Backing::OfProcess(store) => store.store()?.read(name, limit),
         }
     }
 
@@ -168,6 +263,7 @@ impl DataStore {
         match &self.backing {
             Backing::Files(store) => store.write(name, bytes, mode),
             Backing::Memory(store) => store.write(name, bytes, mode),
+            Backing::OfProcess(store) => store.store()?.write(name, bytes, mode),
         }
     }
 
@@ -183,6 +279,7 @@ impl DataStore {
         match &self.backing {
             Backing::Files(store) => store.copy_aside(name),
             Backing::Memory(store) => store.copy_aside(name),
+            Backing::OfProcess(store) => store.store()?.copy_aside(name),
         }
     }
 }
@@ -235,5 +332,78 @@ impl DataStore {
             Backing::Files(store) => store.copy_aside(name).await,
             Backing::Memory(store) => store.copy_aside(name),
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_platform::{AppDataDir, StorageName};
+
+    use super::{DataDirs, DataStore, FileStore, container};
+
+    /// Two calls arrive while another instance holds the migration's lock:
+    /// the second waits for the first's find instead of migrating too, and
+    /// both answer from the new root once the lock is let go of.
+    #[test]
+    fn calls_that_arrive_while_the_store_is_found_wait_for_one_find_and_one_migration() {
+        let scratch = tempfile::tempdir().expect("a scratch folder");
+        let earlier = DataDirs {
+            roaming: scratch.path().join("old"),
+            local: scratch.path().join("old-local"),
+        };
+        std::fs::create_dir_all(&earlier.roaming).expect("the old store");
+        std::fs::write(earlier.roaming.join("notes"), b"kept").expect("a kept value");
+        let dirs = DataDirs {
+            roaming: scratch.path().join("new"),
+            local: scratch.path().join("new-local"),
+        };
+        let held = container::lock_migration(&container::migration_lock(&dirs.local))
+            .expect("another instance holds the lock");
+        let finds = Arc::new(AtomicUsize::new(0));
+        let (finding, found_started) = std::sync::mpsc::channel();
+        let counting = Arc::clone(&finds);
+        let new_roaming = dirs.roaming.clone();
+        let store = Arc::new(DataStore::found_by(
+            AppDataDir::try_new("app").expect("a name"),
+            move |_| {
+                counting.fetch_add(1, Ordering::Relaxed);
+                let _ = finding.send(());
+                let used = container::roots_after_migration(
+                    earlier.clone(),
+                    dirs.clone(),
+                    &mut container::migrate,
+                );
+                Ok(Some(FileStore::new(used)))
+            },
+        ));
+        let name = StorageName::from_static("notes");
+        let read = |store: Arc<DataStore>| {
+            std::thread::spawn(move || store.read(&name, 64).map(|stored| stored.bytes))
+        };
+        let first = read(Arc::clone(&store));
+        found_started.recv().expect("the first call finds");
+        let second = read(Arc::clone(&store));
+        assert!(
+            found_started
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "the second call does not find on its own"
+        );
+        drop(held);
+        for call in [first, second] {
+            assert_eq!(
+                call.join().expect("the call returned"),
+                Ok(Some(b"kept".to_vec())),
+                "answered from the new root"
+            );
+        }
+        assert_eq!(finds.load(Ordering::Relaxed), 1, "one find, one migration");
+        assert!(
+            new_roaming.join("notes").exists(),
+            "the store was copied over"
+        );
     }
 }
