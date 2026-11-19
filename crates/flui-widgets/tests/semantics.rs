@@ -922,6 +922,85 @@ pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
     }
 }
 
+/// A fully transparent `Opacity` or `SliverOpacity` hides its child's
+/// semantics unless `always_include_semantics` keeps them; any positive
+/// opacity publishes them. The first row mounts with the flag set at `0.0`,
+/// and every later row is a rebuild of the same widget.
+pub(crate) fn transparent_opacity_hides_semantics_unless_always_included() {
+    use flui_widgets::{Opacity, SliverOpacity, SliverToBoxAdapter, Viewport};
+
+    const SEQUENCE: [(f64, bool, bool); 8] = [
+        (0.0, true, true),
+        (0.0, false, false),
+        (0.1, false, true),
+        (1.0, false, true),
+        (0.0, false, false),
+        (0.0, true, true),
+        (1.0, true, true),
+        (0.0, false, false),
+    ];
+    let labelled = |label: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(label)
+            .child(SizedBox::new(40.0, 20.0))
+    };
+
+    let boxed = |alpha, always| {
+        Opacity::new(alpha)
+            .always_include_semantics(always)
+            .child(labelled("faded box"))
+    };
+    let (first_alpha, first_always, _) = SEQUENCE[0];
+    let mut laid = lay_out(boxed(first_alpha, first_always), loose(200.0));
+    laid.enable_semantics();
+    laid.tick();
+    for (index, (alpha, always, announced)) in SEQUENCE.into_iter().enumerate() {
+        if index > 0 {
+            laid.pump_widget(boxed(alpha, always));
+        }
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("faded box").is_ok(),
+            announced,
+            "Opacity({alpha}), always_include_semantics={always}: {}",
+            tree.describe()
+        );
+        assert_eq!(
+            laid.size(laid.root()),
+            crate::common::size(40.0, 20.0),
+            "a transparent child is still laid out"
+        );
+    }
+
+    let sliver = |alpha, always| {
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverOpacity::new(alpha)
+                .always_include_semantics(always)
+                .child(SliverToBoxAdapter::new().child(labelled("faded sliver"))),),
+        )
+    };
+    let mut laid = lay_out(
+        sliver(first_alpha, first_always),
+        crate::common::tight(100.0, 100.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    for (index, (alpha, always, announced)) in SEQUENCE.into_iter().enumerate() {
+        if index > 0 {
+            laid.pump_widget(sliver(alpha, always));
+        }
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("faded sliver").is_ok(),
+            announced,
+            "SliverOpacity({alpha}), always_include_semantics={always}: {}",
+            tree.describe()
+        );
+    }
+}
+
 pub(crate) fn retained_visibility_updates_semantics_without_changing_layout() {
     use flui_widgets::Visibility;
 
