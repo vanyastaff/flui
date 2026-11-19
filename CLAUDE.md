@@ -6,10 +6,11 @@ The project guide is shared by every agent runtime and lives in one place:
 
 @AGENTS.md
 
-A plugin, skill or hook that brings another process for this repository (roles, review steps,
-where a spec lives, which checks run) yields to AGENTS.md and this file. `.claude/settings.json`
-turns off the rust-studio prompts that repeat the session's memory and steer toward its own
-skills.
+`.claude/settings.json` turns off four rust-studio prompts: the recall of memory notes at
+session start and on each prompt, the nudge toward its own skills, and its handoff and
+memory-capture reminders. Its session-start briefing (its team of roles, "skills first") has no
+switch and still appears; like any other plugin's process it yields to AGENTS.md ("Working
+here"). A value a contributor saved for those options through `/plugin` wins over this file.
 
 ## Delegating
 
