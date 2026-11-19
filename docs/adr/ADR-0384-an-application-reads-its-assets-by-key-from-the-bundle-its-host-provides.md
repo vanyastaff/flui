@@ -107,12 +107,11 @@ without checking it again. The same key names the same asset on every platform.
 pub trait AssetSource: Send + Sync + 'static {
     /// The bytes of `key`, at most `limit` of them.
     fn load(&self, key: &AssetKey, limit: u64) -> AssetFuture<Vec<u8>>;
-    /// Who answers this source's reads: two handles with one authority share cached results.
-    fn authority(&self) -> AssetAuthority;
 }
 
 pub enum AssetBundleCapability {}          // Capability<Handle = AssetBundle>
 pub struct AssetBundle { /* Arc<dyn AssetSource> */ }   // Clone + Send + Sync
+pub struct AssetAuthority { /* Weak<dyn AssetSource> */ }  // AssetBundle::authority
 #[non_exhaustive]
 pub enum AssetLoadError { NotFound, TooLarge { limit: u64 }, Io(std::io::Error), … }
 ```
@@ -124,7 +123,10 @@ needs no async runtime of the caller's: a reader over a file or `AAssetManager` 
 per poll on whatever lane polls it, and the Web reader awaits the browser's fetch. A reader
 checks the length against `limit` before it allocates, and again on every chunk, and opens only a
 regular file. A missing asset is `NotFound`, never an I/O error with a message. The handle is
-FLUI's `rootBundle`: one per UI runtime, from the composition root, never a `static`.
+FLUI's `rootBundle`: the composition root makes one source per UI runtime and every handle it
+provides clones it, never a `static`. `AssetBundle::authority` names that source by its
+allocation, which it keeps reserved but not alive, so a cache keys a result by the bundle it came
+from without holding the bundle.
 
 ### §3 Every package keeps asset `k` at `flui_assets/k`
 
@@ -155,8 +157,9 @@ directory is never a root: an application started with plain `cargo run` and wit
 
 ### §5 Tests hand the host their own bundle
 
-`flui_platform::testing` provides a bundle over a map of keys to bytes and one over a directory,
-both `AssetSource`s. The headless host provides an empty bundle unless the test names one
+`flui_platform::assets::DirectoryAssets`, the reader the desktop and Apple hosts build over their
+root, reads a test's own directory too, and `flui_platform::testing::MemoryAssets` serves a map
+of keys to bytes. The headless host provides an empty bundle unless the test names one
 (`HeadlessWindow` takes it as it takes a platform convention), so a test that forgets its assets
 gets `NotFound`, not a file from the checkout.
 
@@ -188,8 +191,8 @@ record's.
 
 - `asset_key_refuses_every_key_outside_its_bundle` (`flui-platform`) runs the allow-list of §1
   over absolute paths, `..`, backslashes, drive letters, empty segments and control characters.
-- `every_asset_source_keeps_the_bundle_contract` (`flui-native`) runs §2 against the directory
-  reader and the kit's bundles: a missing key is `NotFound`, a file over the limit is
+- `every_asset_source_keeps_the_bundle_contract` (`flui-platform`) runs §2 against
+  `DirectoryAssets` and `MemoryAssets`: a missing key is `NotFound`, a file over the limit is
   `TooLarge` before its bytes are read, a FIFO is not opened.
 - `flui-cli`'s build tests state §3 for each package: the declared files land at
   `flui_assets/<key>`, and a refused key, a collision and a symbolic link fail the build.
