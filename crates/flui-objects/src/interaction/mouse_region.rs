@@ -7,7 +7,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutContext, BoxHitTestContext, BoxLayoutContext},
     hit_testing::{
-        CursorRequest, DeviceId, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation,
+        Cursor, CursorRequest, DeviceId, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation,
     },
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -67,8 +67,8 @@ impl RenderMouseRegion {
 
     /// Returns the active cursor.
     #[must_use]
-    pub const fn cursor(&self) -> CursorRequest {
-        self.cursor
+    pub const fn cursor(&self) -> &CursorRequest {
+        &self.cursor
     }
 
     /// Updates the active cursor; returns true when hit-test state changed.
@@ -147,14 +147,22 @@ impl flui_foundation::inspect::Inspect for RenderMouseRegion {
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         out.value(
             "cursor",
-            match self.cursor {
+            match &self.cursor {
                 CursorRequest::Defer => Value::Variant {
                     ty: "CursorRequest",
                     name: "Defer",
                 },
-                CursorRequest::Icon(icon) => Value::Variant {
+                CursorRequest::Show(Cursor::Icon(icon)) => Value::Variant {
                     ty: "CursorIcon",
                     name: icon.name(),
+                },
+                CursorRequest::Show(Cursor::Image(_)) => Value::Variant {
+                    ty: "Cursor",
+                    name: "Image",
+                },
+                CursorRequest::Show(Cursor::Hidden) => Value::Variant {
+                    ty: "Cursor",
+                    name: "Hidden",
                 },
             },
         )
@@ -224,7 +232,7 @@ impl RenderBox for RenderMouseRegion {
     }
 
     fn mouse_cursor(&self) -> CursorRequest {
-        self.cursor
+        self.cursor.clone()
     }
 
     fn mouse_tracker_annotation(

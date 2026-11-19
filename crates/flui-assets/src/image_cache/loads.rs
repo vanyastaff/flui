@@ -1,7 +1,7 @@
 //! The decoded images a cache keeps, and the loads that fill them.
 //!
-//! [`ImageCache::load_image`](super::ImageCache::load_image) and its
-//! network sibling go through [`DecodedImages`]: a completed image is served
+//! [`ImageCache::load`](super::ImageCache::load), for a file and a network
+//! source alike, goes through [`DecodedImages`]: a completed image is served
 //! from a byte-budgeted LRU, a request for an image already loading joins
 //! that load, and a cold request starts one on the caller's background lanes.
 //!

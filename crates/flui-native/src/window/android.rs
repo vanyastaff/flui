@@ -26,6 +26,7 @@ use parking_lot::Mutex;
 use crate::display::scale::{RefusedScale, ScaleStreak};
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::input::regions::ProjectedInputRegions;
+use crate::owner::android::java_view::CaptureCommand;
 use crate::owner::android::java_view::{ActivityDragSource, JavaView, KeyboardReport};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
@@ -33,6 +34,7 @@ use crate::owner::android::{
 use crate::window::activity::{activity_color_mode, unbuffered_input_sources};
 use crate::window::capabilities::{ActivityFacts, activity_capabilities, pointer_icon_absence};
 use crate::window::keyboard_motion::KeyboardMotion;
+use crate::window::pointer_capture::{CaptureMirror, CaptureRequest, capture_request};
 
 use crate::text::WindowTextInput;
 use crate::{
@@ -42,6 +44,7 @@ use crate::{
     version::gate::android::AndroidApi,
     version::gate::android::DragSource,
     version::gate::android::GestureExclusion,
+    version::gate::android::PointerCapture,
     version::gate::android::TouchpadGestures,
     version::gate::android::WindowColorMode,
     window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell},
@@ -97,6 +100,9 @@ pub struct AndroidWindow {
     scale_streak: Arc<Mutex<ScaleStreak>>,
     /// The published window state (ADR-0237).
     snapshot: Arc<WindowStateCell>,
+    /// Whether the system last said the window has the mouse
+    /// (`onPointerCaptureChange`), which the snapshot publishes as the lock.
+    pointer_capture: Arc<CaptureMirror>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -109,7 +115,9 @@ impl std::fmt::Debug for AndroidWindow {
 
 impl AndroidWindow {
     /// The Activity's window `window` names, with what `positions` make of the
-    /// table's window-level positions for it.
+    /// table's window-level positions for it, delivering to `delivery`, whose
+    /// frames count into the loop's count: a delivery that does not cannot be
+    /// passed.
     fn new(
         window: &ActivityRef,
         positions: &WindowPositions<ActivityRef>,
@@ -117,8 +125,9 @@ impl AndroidWindow {
         displays: Arc<dyn crate::owner::android::HostDisplays>,
         preferences: Arc<dyn ActivityPreferences>,
         drag_source: Arc<dyn ActivityDragSource>,
-        handler: Rc<dyn flui_platform::WindowHandler>,
+        delivery: crate::owner::android::CountedDelivery,
     ) -> Self {
+        let delivery = Arc::new(delivery.into_inner());
         let ActivityRef {
             id,
             app,
@@ -127,10 +136,6 @@ impl AndroidWindow {
             owner,
             signal: owner_signal,
         } = window.clone();
-        let delivery = Arc::new(WindowDelivery::new(
-            handler,
-            input_capabilities(api, java_view.is_ready()),
-        ));
         // What another thread raises for the window waits for a looper turn.
         if let Some(signal) = owner_signal.upgrade() {
             delivery.resume_through_signal(&signal);
@@ -146,6 +151,7 @@ impl AndroidWindow {
                 appearance,
                 insets: WindowInsets::ZERO,
                 hovered: false,
+                pointer_grab: flui_platform::CursorGrab::None,
             },
         )));
         Self {
@@ -169,6 +175,7 @@ impl AndroidWindow {
             scale_streak: Arc::default(),
             snapshot,
             api,
+            pointer_capture: Arc::default(),
         }
     }
 
@@ -291,6 +298,7 @@ impl AndroidWindow {
                 appearance: *self.appearance.lock(),
                 insets: self.insets.lock().accepted,
                 hovered: self.delivery.hovered(),
+                pointer_grab: self.pointer_capture.grab(),
             },
         )
     }
@@ -400,6 +408,14 @@ impl ActivityWindow for AndroidWindow {
         self.request_insets();
     }
 
+    /// The system's answer is the snapshot's: the lock is published when the
+    /// window has the mouse and gone when it lost it, whatever was asked.
+    fn pointer_capture_changed(&self, held: bool) {
+        if self.pointer_capture.report(held) {
+            ActivityWindow::publish_state(self);
+        }
+    }
+
     /// Report a night-mode change from the configuration that just changed,
     /// as the preference source reads it. A failed read keeps the night mode
     /// last reported.
@@ -431,11 +447,21 @@ impl ActivityWindow for AndroidWindow {
         self.facets.text.invalidate_sizing();
     }
 
-    /// The window is going away: its field and its drag are detached.
+    /// The window is going away: its field and its drag are detached, and it
+    /// lets go of the mouse through the capture owner. The owner's answers
+    /// reach the loop's window only, which this one is no longer, so the
+    /// window's own copy is let go and published here.
     fn retire_java_view(&self) {
         self.facets.text.detach();
         self.facets.accessibility.detach();
         self.drag_source.retire();
+        if self.api.since::<PointerCapture>().is_some() {
+            self.java_view
+                .capture_command(CaptureCommand::Release(self.id));
+            if self.pointer_capture.report(false) {
+                ActivityWindow::publish_state(self);
+            }
+        }
     }
 
     /// Send the system the refresh-rate request this window last made, to the
@@ -504,12 +530,14 @@ fn native_scale(
 }
 
 /// What the window kept of facts the Activity reported earlier: the night
-/// mode its configuration last said, the insets last accepted and the
-/// hover last reported.
+/// mode its configuration last said, the insets last accepted, the hover
+/// last reported and the grab the system's last word on its pointer capture
+/// is ([`CaptureMirror::grab`]).
 struct Kept {
     appearance: Brightness,
     insets: WindowInsets,
     hovered: bool,
+    pointer_grab: flui_platform::CursorGrab,
 }
 
 /// The activity surface as the system reports it now, with what the window
@@ -567,8 +595,10 @@ fn sample_state(
             // The user can resize a freeform or split-screen window, which
             // this host does not read: it cannot tell.
             interaction: flui_platform::WindowInteraction::Unknown,
-            // The window takes no grab and the system stacks it.
-            cursor_grab: flui_platform::CursorGrab::None,
+            // Pointer capture is the lock, as the system last answered it;
+            // the snapshot keeps it only for a focused window.
+            cursor_grab: kept.pointer_grab,
+            // The system stacks the window.
             level: flui_platform::WindowLevel::Normal,
         }
         .onto(state)
@@ -736,7 +766,13 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             Arc::clone(&owner.displays),
             Arc::clone(&owner.preferences),
             drag_source,
-            handler,
+            // Each frame the handler runs counts into the loop's count, which
+            // arms a delivered wake deadline again only after a frame ran.
+            crate::owner::android::window_delivery(
+                handler,
+                input_capabilities(owner.api, owner.java_view.is_ready()),
+                owner.frames.counter(),
+            ),
         ));
         window
             .delivery
@@ -881,16 +917,46 @@ impl PlatformWindow for AndroidWindow {
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         // The system owns the surface and the Activity's lifetime: admission
-        // refuses every command but what the window always is: the normal
-        // mode and level, and no grab, which it never takes. An Activity
-        // cannot bring its task to the front itself: the user and the system
-        // decide which task is shown.
+        // refuses every command but a pointer lock from API 26 and what the
+        // window always is: the normal mode and level. An Activity cannot
+        // bring its task to the front itself: the user and the system decide
+        // which task is shown.
         match command.against(&self.snapshot.published_capabilities())? {
-            flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal)
-            | flui_platform::WindowCommand::SetLevel(flui_platform::WindowLevel::Normal)
-            | flui_platform::WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => {
+            // Only a focused window asks: the system gives the mouse to such
+            // a window alone, and the window holds a grab only while it has
+            // the focus. The system answers later (`onPointerCaptureChange`),
+            // which publishes; until then the snapshot says what is held.
+            flui_platform::WindowCommand::SetCursorGrab(flui_platform::CursorGrab::Locked) => {
+                let asked = match capture_request(
+                    self.activity.standing().focus().is_focused(),
+                    self.java_view.is_ready(),
+                ) {
+                    CaptureRequest::Ask => {
+                        self.java_view
+                            .capture_command(CaptureCommand::Request(self.id));
+                        Ok(())
+                    }
+                    CaptureRequest::Nothing => Ok(()),
+                    CaptureRequest::Refuse => Err(ApplyError::failed(
+                        "FluiView is not in the window: nothing can take the mouse".to_owned(),
+                    )),
+                };
+                ActivityWindow::publish_state(self);
+                asked
+            }
+            // The release is the capture owner's to carry out and the
+            // system's to answer; the snapshot is published on this exit
+            // too, and again when the owner reports the change.
+            flui_platform::WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => {
+                if self.api.since::<PointerCapture>().is_some() {
+                    self.java_view
+                        .capture_command(CaptureCommand::Release(self.id));
+                }
+                ActivityWindow::publish_state(self);
                 Ok(())
             }
+            flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal)
+            | flui_platform::WindowCommand::SetLevel(flui_platform::WindowLevel::Normal) => Ok(()),
             other => Err(crate::window::state::not_carried_out(&other)),
         }
     }

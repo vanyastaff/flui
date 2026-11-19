@@ -97,8 +97,7 @@ fn router_for(
     handler: Option<crate::app::CloseRequestHandler>,
 ) -> CloseRequestRouter {
     let router = CloseRequestRouter::new();
-    let prepared =
-        crate::app::close_request::PreparedCloseRequest::new(address(n), window, handler);
+    let prepared = flui_runtime::owner_turn::PreparedCloseRequest::new(address(n), window, handler);
     router
         .publication(&prepared)
         .expect("a fresh router")

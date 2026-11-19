@@ -45,7 +45,7 @@ Teardown **владеет** общим контрактом закрытия и 
   `platform.run` → `shutdown_main_window` → `teardown_platform_realm` (`realm_dispatch.rs:1980-2104`):
   `drop(realms)` (`:2034`) без catch, сервисы (`SERVICE_SHUTDOWN_DEADLINE` 5 с, `:1970`), пулы
   (`EXECUTION_SHUTDOWN_GRACE` 5 с на каждый из двух, последовательно; `crates/flui-runtime/src/execution.rs:599-622`).
-- **Вето.** `CloseRequest` несёт только адрес (`crates/flui-app/src/app/close_request.rs:105-123`);
+- **Вето.** `CloseRequest` несёт только адрес (`crates/flui-runtime/src/owner_turn/close.rs`);
   `KeepOpen` не оставляет обязательств. `AppHandle::request_quit` вето не спрашивает
   (`crates/flui-app/src/app/application_control.rs:136-144`).
 - **Пробуждение.** `UiRealm::next_wake` — минимум дедлайнов presentation

@@ -17,7 +17,8 @@ each push" item 10 and "Before a merge"), each finding the judge
 confirmed or left unaccounted for (every reader's finding when no judge started) and what became
 of it: fixed, with its class, or refuted by a line or a test; the same for each later read of a
 fix. A lens that could not be started, with its reason and what the author's own read through
-it showed. "Documentation only" when the `docs` lane takes the pull request;
+it showed. The design read too, when AGENTS.md "Before a merge" asks for it; "Documentation only"
+when the `docs` lane takes a pull request that rule leaves out;
 `Independent read unavailable: <reason>` and the scenarios the author tried, when no reader
 could be started.
 

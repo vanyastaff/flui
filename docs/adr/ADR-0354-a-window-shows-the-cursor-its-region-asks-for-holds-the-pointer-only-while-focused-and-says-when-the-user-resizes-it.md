@@ -139,8 +139,10 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   on every host that can, through `WindowHandle` and the snapshot; every other host says why not.
 - Good: a grab cannot outlive the focus in the snapshot, and the conformance check
   `a_grab_ends_with_the_focus` holds each host's window system to it.
-- Bad: a widget cannot yet ask for an image or a hidden cursor (the framework's cursor request
-  carries an icon); `docs/gaps.md` records it with the consumer that brings it.
+- Good: a region asks for any cursor the way it asks for an icon (`CursorRequest::Show(Cursor)`,
+  `MouseRegion::cursor`); a window that refuses an image (`Unsupported` where it shows none, a
+  `Platform` failure where its window system made no cursor of it) gets the arrow from the
+  presentation instead, so the region does not keep the cursor of the one the pointer left.
 
 ## Compliance
 
@@ -155,4 +157,36 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   `a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`
   (`crates/flui-native/tests/windows_window_commands.rs`).
 - Each host's capability table names every new field (`a_wayland_window_has_the_capabilities_it_names`,
-  `an_x11_window_has_the_capabilities_it_names`, `crates/flui-native/src/window/capabilities.rs`).
+  `an_x11_window_has_the_capabilities_it_names`, `crates/flui-native/src/window/capabilities.rs`
+  and its `native_capability_absences`, where UIKit locks from iPadOS 14 on an iPad and an
+  Activity from API 26).
+- Android: `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests`
+  (`crates/flui-native/src/input/android/motion/tests.rs`), and the capture owner's table
+  `android_pointer_capture` (`crates/flui-native/src/window/pointer_capture.rs`): a grant is
+  published for the window asked for (`a_grant_holds_the_capture_for_the_window_asked_for`); the
+  grab ends with the focus (`the_focus_leaving_ends_what_was_wanted`; the system's `false` ends a
+  held capture whether it comes after the focus report,
+  `a_focus_loss_leaves_the_hold_to_the_systems_answer`, or before it,
+  `the_systems_false_before_the_focus_report_ends_the_hold`); a request made while the window is
+  unfocused changes nothing and the focus return takes nothing
+  (`a_request_while_unfocused_is_dropped_and_the_focus_return_takes_nothing`), and nothing from
+  before blocks the calls after it (`a_release_and_an_ask_after_the_focus_returns_are_made`,
+  `a_wait_for_the_systems_release_does_not_outlast_the_focus_return`); the grab ends with the
+  system
+  (`a_capture_the_system_ends_is_not_asked_for_again`); a replaced window's release or late grant
+  never reaches its successor (`a_replaced_windows_release_does_not_cancel_its_successors_request`,
+  `a_late_grant_for_a_replaced_window_goes_to_no_window`); no call is dropped while another is
+  unanswered (`a_release_before_the_grant_ends_free`,
+  `an_ask_during_a_release_gets_the_mouse_after_it`); a failed call changes nothing
+  (`a_failed_call_changes_nothing`).
+- UIKit, the table `ios_pointer_lock_ledger` (`crates/flui-native/src/window/apple/pointer_lock.rs`):
+  `a_lock_is_held_from_the_systems_grant`; letting go (the window's release, its focus or its
+  scene leaving, each a call of the owner's `withdraw`) ends the hold at once
+  (`a_window_that_lets_go_holds_nothing`); the system's unlock changes the hold and not the ask
+  (`a_lock_the_system_lets_go_is_asked_for_again`, `an_ask_over_an_unlock_in_flight_is_kept`);
+  `asking_again_finds_a_lock_the_system_never_let_go`;
+  `one_scenes_unlock_leaves_the_other_scenes_lock`. Which lifecycle steps let go is read at
+  `IOSWindow::apply_lifecycle`, with no test of its own.
+- A region's cursor reaches the window: `mouse_region_cursor_reaches_the_window_through_the_ui_runtime`
+  and `a_refused_image_cursor_shows_the_arrow`
+  (`crates/flui-testing/tests/runtime_driver.rs`).

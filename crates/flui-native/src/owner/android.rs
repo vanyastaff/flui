@@ -339,9 +339,93 @@ impl ActivityWindowIds {
     }
 }
 
+#[cfg(target_os = "android")]
+pub(crate) use counted::CountedDelivery;
+pub(crate) use counted::window_delivery;
+
+/// The Activity window's counted delivery and its one constructor, in a
+/// module of their own: the type's field is private to it, so nothing else
+/// in the crate makes one.
+mod counted {
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use flui_platform::WindowHandler;
+    use flui_platform::input_capabilities::InputCapabilities;
+
+    use crate::owner::window_delivery::WindowDelivery;
+
+    /// The Activity window's delivery whose frames count into the loop's
+    /// count: the only form the window is built from (`AndroidWindow::new`
+    /// takes it), so no frame of it goes uncounted. Made by
+    /// [`window_delivery`].
+    pub(crate) struct CountedDelivery(WindowDelivery);
+
+    impl CountedDelivery {
+        /// The delivery, for the window that holds it.
+        pub(crate) fn into_inner(self) -> WindowDelivery {
+            self.0
+        }
+    }
+
+    /// The delivery of the Activity's window opened with `handler`, whose
+    /// input gives it `capabilities`: each frame the handler runs raises
+    /// `frames`, the loop's count, which arms a delivered wake deadline again
+    /// only after a frame ran (`WakeDeadline`).
+    pub(crate) fn window_delivery(
+        handler: Rc<dyn WindowHandler>,
+        capabilities: InputCapabilities,
+        frames: Arc<AtomicU64>,
+    ) -> CountedDelivery {
+        CountedDelivery(WindowDelivery::counting_frames(
+            handler,
+            capabilities,
+            frames,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ActivityWindowIds;
+
+    /// A frame the window's handler runs raises the loop's count, and a
+    /// declined one does not, so the loop's wake deadline tells a frame that
+    /// served it from a request that reached nothing. The window takes only a
+    /// `CountedDelivery`, so this is the delivery it holds. Red-check: build
+    /// the delivery with `WindowDelivery::new`.
+    #[test]
+    fn a_window_frame_raises_the_loop_count() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        use flui_platform::input_capabilities::InputCapabilities;
+        use flui_platform::{EventTime, FrameRequest};
+        use flui_testing::window_handler::RecordingWindowHandler;
+
+        let handler = RecordingWindowHandler::new();
+        let frames = Arc::new(AtomicU64::new(0));
+        let delivery = super::window_delivery(
+            handler.clone(),
+            InputCapabilities::UNAVAILABLE,
+            Arc::clone(&frames),
+        )
+        .into_inner();
+        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
+        assert_eq!(
+            frames.load(Ordering::Relaxed),
+            0,
+            "a declined frame ran nothing"
+        );
+        handler.react_to_frame(|_| {});
+        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(2)));
+        assert_eq!(
+            frames.load(Ordering::Relaxed),
+            1,
+            "a frame that ran is counted"
+        );
+    }
 
     /// Each window of the Activity gets an identity no other had; that the
     /// space is refused at its end, never wrapped, is the mint's

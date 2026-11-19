@@ -5,7 +5,7 @@ use flui_foundation::{
     geometry::{Offset, Point},
 };
 use flui_interaction::{
-    events::{CursorIcon, PointerEvent},
+    events::{Cursor, CursorIcon, PointerEvent},
     pointer::{HitTestEntry, HitTestResult, MouseTracker, PointerMotionKind},
 };
 use flui_platform::{
@@ -40,7 +40,7 @@ fn known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter() {
     let reentrant = tracker.clone();
     tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
         assert!(reentrant.source_position(&pointer).is_some());
-        sink.borrow_mut().push((pointer, cursor));
+        sink.borrow_mut().push((pointer, cursor.clone()));
     }));
     let mut path = HitTestResult::new();
     path.add(HitTestEntry::new(RenderId::new(1)).cursor(CursorIcon::Text));
@@ -74,9 +74,9 @@ fn known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter() {
     assert_eq!(
         *seen.borrow(),
         [
-            (known, CursorIcon::Text),
-            (fallback, CursorIcon::Crosshair),
-            (fallback, CursorIcon::Default)
+            (known, Cursor::Icon(CursorIcon::Text)),
+            (fallback, Cursor::Icon(CursorIcon::Crosshair)),
+            (fallback, Cursor::Icon(CursorIcon::Default))
         ],
         "device positions stay independent; window leave resets only the latest cursor owner"
     );
