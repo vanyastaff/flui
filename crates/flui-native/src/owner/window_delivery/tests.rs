@@ -603,13 +603,12 @@ fn the_run_hook_follows_every_run_an_unwinding_one_too() {
     assert_eq!(runs(), 3, "a run that unwinds");
 }
 
-/// The hook a loop asks for after each run beyond input follows every run
-/// that delivered more than input, whatever became of it: a state change, a
-/// surface change, a declined frame, a failed frame and a frame that
-/// unwinds; a run of input alone ends in none. AppKit's pump looks at its
-/// wake deadline there. Red-check: gate the hook on the frame count, or call
-/// it after every run.
-fn the_run_hook_beyond_input_follows_every_run_but_input_alone() {
+/// The run hook follows each run whatever it delivered: input alone, a state
+/// change, a surface change, a declined, a failed and an unwound frame, once
+/// each; a run that delivers input and the state change raised inside it ends
+/// in one call. AppKit's pump and UIKit's loop look at the wake deadline
+/// there. Red-check: skip runs of input alone, or call the hook per delivery.
+fn the_run_hook_follows_each_run_whatever_it_delivered() {
     struct FailedFrames;
     impl flui_platform::WindowHandler for FailedFrames {
         fn input(&self, _: PlatformInput) -> DispatchEventResult {
@@ -632,25 +631,41 @@ fn the_run_hook_beyond_input_follows_every_run_but_input_alone() {
     };
 
     let handler = RecordingWindowHandler::new();
-    let delivery = WindowDelivery::new(handler.clone(), InputCapabilities::UNAVAILABLE)
-        .after_each_run_beyond_input(counting(&runs));
+    let delivery = Rc::new(
+        WindowDelivery::new(handler.clone(), InputCapabilities::UNAVAILABLE)
+            .after_each_run(counting(&runs)),
+    );
     let _ = delivery.dispatch_input(ime());
-    assert_eq!(runs.get(), 0, "a run of input alone");
+    assert_eq!(runs.get(), 1, "a run of input alone");
     delivery.dispatch_state_changed();
-    assert_eq!(runs.get(), 1, "a state change's run");
+    assert_eq!(runs.get(), 2, "a state change's run");
     delivery.dispatch_surface_change(SurfaceChange::Rebuild);
-    assert_eq!(runs.get(), 2, "a surface change's run");
+    assert_eq!(runs.get(), 3, "a surface change's run");
     delivery.dispatch_request_frame();
-    assert_eq!(runs.get(), 3, "a declined frame's run");
+    assert_eq!(runs.get(), 4, "a declined frame's run");
+    let raising = Rc::downgrade(&delivery);
+    handler.react_to_input(move |_| {
+        if let Some(delivery) = raising.upgrade() {
+            delivery.dispatch_state_changed();
+        }
+        DispatchEventResult::default()
+    });
+    let _ = delivery.dispatch_input(ime());
+    assert_eq!(
+        handler.count(&HandlerCall::StateChanged),
+        2,
+        "the state change raised inside the input was delivered"
+    );
+    assert_eq!(runs.get(), 5, "an input and its state change: one run");
     handler.react_to_frame(|_| panic!("a frame that unwinds"));
     let unwound = catch_unwind(AssertUnwindSafe(|| delivery.dispatch_request_frame()));
     assert!(unwound.is_err(), "the frame's panic resumes");
-    assert_eq!(runs.get(), 4, "a run that unwinds");
+    assert_eq!(runs.get(), 6, "a run that unwinds");
 
     let failed = WindowDelivery::new(Rc::new(FailedFrames), InputCapabilities::UNAVAILABLE)
-        .after_each_run_beyond_input(counting(&runs));
+        .after_each_run(counting(&runs));
     failed.dispatch_request_frame();
-    assert_eq!(runs.get(), 5, "a failed frame's run");
+    assert_eq!(runs.get(), 7, "a failed frame's run");
 }
 
 /// A keep that reaches the window before its host settles the native
@@ -720,8 +735,8 @@ fn window_handler_obligation_table() {
             the_run_hook_follows_every_run_an_unwinding_one_too,
         ),
         (
-            "the run hook beyond input follows every run but input alone",
-            the_run_hook_beyond_input_follows_every_run_but_input_alone,
+            "the run hook follows each run whatever it delivered",
+            the_run_hook_follows_each_run_whatever_it_delivered,
         ),
         (
             "a delivery raised off the owner thread waits for an owner turn",

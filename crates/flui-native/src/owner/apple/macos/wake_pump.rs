@@ -26,17 +26,16 @@
 //!    owner-queue turn.
 //!
 //! A look is scheduled at a redraw request, after each run of a window's
-//! delivery that delivered more than input ([`WakePump::window_delivery`]: a
-//! frame, a state or surface change; a run of input alone asks for none), and
-//! after an owner turn of the loop that leaves a deadline (`LoopControl`,
-//! [`WakePump::after_owner_turn`]). The run of a frame is what follows a
-//! delivery up: the frame AppKit runs for a request, whenever its display
-//! pass comes, may leave the deadline due again or arm a new one, and no owner
-//! turn of the loop need follow it. A state change (a window covered) reaches
-//! the application in the window's callback, whose owner turn is not the
-//! loop's either, and can leave a deadline no redraw request starts the pump
-//! for: the frame a covered window owes its surface (ADR-0357), whose window
-//! asks for no frame while it cannot be seen.
+//! delivery ([`WakePump::window_delivery`], as UIKit's loop looks after each
+//! of its windows' runs), and after an owner turn of the loop that leaves a
+//! deadline (`LoopControl`, [`WakePump::after_owner_turn`]). A window's run is
+//! what follows a delivery up: the frame AppKit runs for a request, whenever
+//! its display pass comes, may leave the deadline due again or arm a new one;
+//! a state change (a window covered) reaches the application in the window's
+//! callback and can leave a deadline no redraw request starts the pump for,
+//! the frame a covered window owes its surface (ADR-0357); input can arm a
+//! gesture deadline with no frame asked. No owner turn of the loop need
+//! follow any of them.
 //!
 //! Each look arms and takes the deadline by the rule every native host shares
 //! (`WakeDeadline::turn`): a due instant is delivered once, as a frame request
@@ -145,8 +144,7 @@ impl WakePump {
 
     /// The delivery of a window opened with `handler`, whose input devices
     /// give it `capabilities`: each frame its handler runs raises the pump's
-    /// count, and each run of its FIFO that delivered more than input ends
-    /// in a look
+    /// count, and each run of its FIFO ends in a look
     /// ([`pump_delivery::window_delivery`]).
     pub(crate) fn window_delivery(
         self: &Arc<Self>,
