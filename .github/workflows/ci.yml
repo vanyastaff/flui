@@ -1514,10 +1514,12 @@ jobs:
               const modules = modulesOf(require("fs").readFileSync(file));
               const unexpected = modules.filter((m) => !allowed.has(m));
               if (unexpected.length > 0) {
-                console.log(`::error::${name} imports from ${unexpected.map((m) => JSON.stringify(m)).join(", ")}, which no web build provides`);
+                console.log("::error::" + name + " imports from "
+                  + unexpected.map((m) => JSON.stringify(m)).join(", ")
+                  + ", which no web build provides");
                 process.exit(1);
               }
-              console.log(`${name} imports only from ${modules.join(", ")}`);
+              console.log(name + " imports only from " + modules.join(", "));
             ' "$module" "$artifact" || status=1
           done
           exit "$status"
