@@ -16,28 +16,6 @@ use anyhow::{Context, bail};
 
 use crate::util::repo_root;
 
-/// The OS a task runs on: some steps exist on one host only (`xvfb-run` is
-/// Linux's, the iOS SDK behind `xcrun` is macOS').
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Host {
-    Linux,
-    Windows,
-    MacOs,
-    Other,
-}
-
-impl Host {
-    /// The host this process runs on.
-    pub(super) fn current() -> Self {
-        match std::env::consts::OS {
-            "linux" => Self::Linux,
-            "windows" => Self::Windows,
-            "macos" => Self::MacOs,
-            _ => Self::Other,
-        }
-    }
-}
-
 /// One command line: a program, its arguments and the variables it adds to
 /// the inherited environment.
 #[derive(Debug, Clone, PartialEq, Eq)]

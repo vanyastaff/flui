@@ -1438,9 +1438,10 @@ features on and others off is the `feature-matrix` job's, on Linux only.
 
 On a Windows host, Windows checks use the installed MSVC tools. Other hosts
 use `cargo xwin clippy` (CI pins cargo-xwin 0.23.1) with clang/LLVM and its
-MSVC SDK/CRT provisioning. On a macOS host, Apple checks use Xcode; macOS
-checks elsewhere can use `cargo zigbuild clippy` (validated locally with
-cargo-zigbuild 0.23.4) and Zig (0.17.0) for the default-feature run. iOS needs a
+MSVC SDK/CRT provisioning. On a macOS host, Apple checks use Xcode. Off macOS,
+`cargo-zigbuild clippy` (the binary's own subcommand; `doctor full` names the
+cargo-zigbuild and Zig versions) supplies Darwin libc headers for a
+default-feature macOS run, which CI does not run that way. iOS needs a
 genuine Apple SDK: generic Darwin libc headers are insufficient for native
 logging dependencies. Android needs the NDK's target compiler and archiver,
 for example `CC_aarch64_linux_android` set to its clang wrapper for the Android floor in `platform-support.toml` and

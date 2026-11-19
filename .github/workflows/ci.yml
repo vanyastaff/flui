@@ -1724,8 +1724,20 @@ jobs:
           NATIVE_TARGET: ${{ matrix.target }}
           XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
+      # cargo-xwin writes DONE into its cache once the download is complete; the
+      # save waits for that, not for the lint after it.
+      - name: Check the MSVC CRT and Windows SDK download finished
+        id: xwin-done
+        if: ${{ !cancelled() && matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true' }}
+        run: |
+          if [ -n "$(find "$XWIN_CACHE_DIR" -name DONE -print -quit 2>/dev/null)" ]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
+
       - name: Save MSVC CRT and Windows SDK
-        if: matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.xwin-done.outputs.done == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-xwin

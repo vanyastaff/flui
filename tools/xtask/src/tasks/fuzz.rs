@@ -25,7 +25,7 @@ use std::process::ExitCode;
 use anyhow::{Context, bail};
 
 use super::RunOpts;
-use super::exec::{Cmd, Host, target_dir};
+use super::exec::{Cmd, target_dir};
 
 /// A fuzz target and what its run starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +114,7 @@ pub(crate) struct FuzzArgs {
 /// Needs the nightly toolchain, on x86_64 Linux.
 pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
     let targets = selected(&args.targets)?;
-    if Host::current() != Host::Linux || std::env::consts::ARCH != "x86_64" {
+    if std::env::consts::OS != "linux" || std::env::consts::ARCH != "x86_64" {
         bail!("`cargo xtask fuzz` runs on x86_64 Linux: its sanitizer flags name {FUZZ_TARGET}");
     }
     let runner = args.run.runner();
