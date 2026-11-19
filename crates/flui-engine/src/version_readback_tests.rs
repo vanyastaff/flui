@@ -1559,6 +1559,178 @@ fn a_frame_counts_the_chunks_it_records() {
     );
 }
 
+/// A caret boundary over a list boundary of `rows` row boundaries, as
+/// `flui-widgets`' perf scenario `caret_blink_in_10k_list` paints it: the
+/// caret, a 2×16 bar at (4, 4), and below it the list at `y = 24`, whose
+/// rows are 2 px strips that run far past the surface.
+struct CaretOverList {
+    owner: SceneOwner,
+    caret: SceneNodeId,
+    shown: bool,
+}
+
+impl CaretOverList {
+    fn new(rows: usize) -> Self {
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let caret = writer.mint_node();
+        let list = writer.mint_node();
+        let mut list_content = BoundaryContent::builder();
+        for row in 0..rows {
+            let node = writer.mint_node();
+            list_content.slot(node);
+            let version = writer.next_content_version().expect("a content version");
+            let mut canvas = Canvas::new();
+            let shade = u8::try_from(row % 200).expect("a shade below 200");
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, f64::from(SIDE), 2.0),
+                &Paint::fill(Color::rgb(shade, 80, 120)),
+            );
+            let mut content = BoundaryContent::builder();
+            content.chunk(Arc::new(Chunk::new(
+                RenderId::new(row + 3),
+                0,
+                version,
+                canvas.finish(),
+            )));
+            writer.push(SceneOp::Publish {
+                node,
+                content: Arc::new(content.finish()),
+            });
+            writer.push(SceneOp::Place {
+                node,
+                placement: Placement::try_new(Offset::new(0.0, 2.0 * row as f64))
+                    .expect("a finite offset"),
+            });
+        }
+        writer.push(SceneOp::Publish {
+            node: list,
+            content: Arc::new(list_content.finish()),
+        });
+        writer.push(SceneOp::Place {
+            node: list,
+            placement: Placement::try_new(Offset::new(0.0, 24.0)).expect("a finite offset"),
+        });
+        Self::publish_caret(&mut writer, caret, true);
+        writer.push(SceneOp::Place {
+            node: caret,
+            placement: Placement::try_new(Offset::new(4.0, 4.0)).expect("a finite offset"),
+        });
+        let mut content = BoundaryContent::builder();
+        content.slot(caret);
+        content.slot(list);
+        writer.push(SceneOp::Publish {
+            node: root,
+            content: Arc::new(content.finish()),
+        });
+        owner.apply(SURFACE).expect("the list applies");
+        Self {
+            owner,
+            caret,
+            shown: true,
+        }
+    }
+
+    fn publish_caret(writer: &mut SceneWriter<'_>, caret: SceneNodeId, shown: bool) {
+        let version = writer.next_content_version().expect("a content version");
+        let mut canvas = Canvas::new();
+        let color = if shown { Color::BLACK } else { Color::WHITE };
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 2.0, 16.0), &Paint::fill(color));
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::new(Chunk::new(
+            RenderId::new(1),
+            0,
+            version,
+            canvas.finish(),
+        )));
+        writer.push(SceneOp::Publish {
+            node: caret,
+            content: Arc::new(content.finish()),
+        });
+    }
+
+    /// Toggles the caret and answers the damage of the patch.
+    fn blink(&mut self) -> DamageRegion {
+        self.shown = !self.shown;
+        let mut writer = self.owner.writer();
+        Self::publish_caret(&mut writer, self.caret, self.shown);
+        self.owner.apply(SURFACE).expect("a blink applies");
+        self.owner.patch_damage()
+    }
+
+    fn version(&self) -> SceneVersion {
+        self.owner.current().clone()
+    }
+}
+
+/// The counters of `blinks` caret blinks over a list of `rows` row
+/// boundaries, summed, after the first frame and a warm-up frame.
+fn caret_blink_counters(
+    renderer: &crate::headless::HeadlessRenderer,
+    rows: usize,
+    blinks: usize,
+) -> crate::frame_protocol::RasterCounters {
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut list = CaretOverList::new(rows);
+    apply(
+        &mut capture,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    capture
+        .render_scene(&Scene::of_version(list.version()))
+        .expect("the first frame renders");
+    capture.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    capture
+        .render_scene(&Scene::of_version(list.version()))
+        .expect("the warm-up renders");
+    let mut total = crate::frame_protocol::RasterCounters::default();
+    for _ in 0..blinks {
+        let damage = list.blink();
+        apply(&mut capture, damage);
+        capture
+            .render_scene(&Scene::of_version(list.version()))
+            .expect("a blink renders");
+        assert!(
+            matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "{rows} rows: a blink redraws the caret's region, {:?}",
+            capture.last_plan()
+        );
+        let frame = capture.counters();
+        total.nodes_entered += frame.nodes_entered;
+        total.cull_tests += frame.cull_tests;
+        total.chunks_recorded += frame.chunks_recorded;
+        total.region_passes += frame.region_passes;
+        total.recording_cache_hits += frame.recording_cache_hits;
+    }
+    total
+}
+
+/// The engine's half of the gate `caret_blink_in_10k_list` (ADR-0304,
+/// Confirmation): a caret blink over a list of 1 000 row boundaries and over
+/// one of 10 000 enters, asks and records as much, since the walk culls the
+/// list's boundary by its footprint and never reaches a row. Each blink
+/// records the caret's one chunk, in one pass.
+#[test]
+fn a_caret_blink_records_as_many_chunks_at_any_list_size() {
+    const BLINKS: usize = 4;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let small = caret_blink_counters(&renderer, 1_000, BLINKS);
+    let large = caret_blink_counters(&renderer, 10_000, BLINKS);
+    assert_eq!(
+        small, large,
+        "a blink costs the same over 1 000 rows as over 10 000"
+    );
+    let blinks = BLINKS as u64;
+    assert_eq!(
+        (large.chunks_recorded, large.region_passes),
+        (blinks, blinks),
+        "one chunk, the caret's, in one pass per blink: {large:?}"
+    );
+}
+
 /// One chunk owned by `owner`, at `writer`'s next content version, painted by
 /// `paint`.
 fn chunk_of(writer: &mut SceneWriter<'_>, owner: usize, paint: fn(&mut Canvas)) -> Arc<Chunk> {
