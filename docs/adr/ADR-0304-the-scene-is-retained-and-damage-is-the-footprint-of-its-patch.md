@@ -528,12 +528,12 @@ struct RecordingKey {
 `RasterKey` is the canonical bits (ADR-0098 §4) of the linear part of the chunk's device transform
 and of the fractional part of its translation; the integer part is applied at replay, so a chunk
 moved by whole pixels replays without recording. `AmbientKey` is whatever the IR bakes from outside
-the chunk, in the chunk's own pixel frame, which today is each batch's scissor and SDF clip
-(`crates/flui-engine/src/command_ir.rs:479-498`, `:560-572`) and the size of the target a fill of
-the whole target covers: a chunk scrolled under a fixed clip misses until the representation
-applies that state at replay, which ADR-0306 decides. A chunk under a projective transform is not
-cached. `ResourceEpoch` advances when texels a recording names move: a glyph-atlas or image-atlas
-reset or eviction, device recovery and a font-source switch. No kept recording reads the surface
+the chunk beyond its transform: the opacity it is entered at and the size of the target a fill of
+the whole target covers. The scissor, the SDF clip and the clip chain it is entered under are not
+in it: ADR-0306 §2 records a chunk with none of them and applies the entry's where the recording
+is spliced, so a chunk scrolled by whole pixels under a fixed clip replays. A chunk under a
+projective transform is not cached. `ResourceEpoch` advances when texels a recording names move: a
+glyph-atlas or image-atlas reset or eviction, device recovery and a font-source switch. No kept recording reads the surface
 format (a backdrop, which does, is a draw item and is never kept), so a format change keeps them.
 A chunk's recording is captured only when the chunk is drawn under one key on a second frame:
 capture copies every arena the chunk appended, and a chunk drawn once (every chunk of a first
