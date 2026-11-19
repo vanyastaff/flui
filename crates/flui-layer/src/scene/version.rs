@@ -560,45 +560,53 @@ impl<'v> SubtreeCull<'v> {
     /// lineage, an unattached node, an entry past the content's end, an
     /// effect or a slot) meets nothing.
     pub fn meets_chunk(&mut self, at: EntryAddress) -> bool {
+        let reach = self.chunk_reach(at);
+        meets(reach, self.rect)
+    }
+
+    /// How many of `rects` the chunk at `at` can land in, through the chain
+    /// [`Self::meets_chunk`] reads, edges included: a reach that is unbounded
+    /// or not finite meets every rect, and an address that names no chunk of
+    /// this version meets none. What a raster planner asks to count the
+    /// passes a chunk would be drawn in under one pass per rect (ADR-0304 §9).
+    pub fn rects_met_by_chunk(&mut self, at: EntryAddress, rects: &[Rect<f64>]) -> usize {
+        let reach = self.chunk_reach(at);
+        rects.iter().filter(|&&rect| meets(reach, rect)).count()
+    }
+
+    /// Where the chunk at `at` can land, through the effects above it in its
+    /// node and the node's chain; [`Reach::Nothing`] for an address that
+    /// names no chunk of this version.
+    fn chunk_reach(&mut self, at: EntryAddress) -> Reach {
         if at.node.lineage() != self.version.lineage() {
-            return false;
+            return Reach::Nothing;
         }
         let inner = self.version.inner();
         let Some(record) = inner.record(at.node.key()) else {
-            return false;
+            return Reach::Nothing;
         };
         let Some(Entry::Chunk { chunk, parent }) = record.content().entries().get(at.entry.get())
         else {
-            return false;
+            return Reach::Nothing;
         };
         let bounds = chunk.bounds();
         let geometry = Geometry::shown(inner);
         if !self.stand_in(geometry, at.node.key()) {
-            return false;
+            return Reach::Nothing;
         }
         let top = self
             .path
             .last()
             .expect("BUG: standing in a node leaves it on the path");
-        let reach = match parent {
+        match parent {
             None => top.content_reach(bounds),
             Some(_) => top.entry_reach(geometry, at.entry, bounds, &mut self.scratch),
-        };
-        self.meets_reach(reach)
+        }
     }
 
     /// Whether `reach` meets the rect, edges included.
     fn meets_reach(&self, reach: Reach) -> bool {
-        match reach {
-            Reach::Nothing => false,
-            Reach::Rect(reach) => {
-                reach.left() <= self.rect.right()
-                    && self.rect.left() <= reach.right()
-                    && reach.top() <= self.rect.bottom()
-                    && self.rect.top() <= reach.bottom()
-            }
-            Reach::Unbounded | Reach::NonFinite => true,
-        }
+        meets(reach, self.rect)
     }
 
     /// Leaves `key` the last node on the path, rebuilding the path from the
@@ -965,5 +973,20 @@ mod annotations {
             let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
             Some(Point::new(x, y))
         }
+    }
+}
+
+/// Whether `reach` meets `rect`, edges included; an unbounded or non-finite
+/// reach meets every rect.
+fn meets(reach: Reach, rect: Rect<f64>) -> bool {
+    match reach {
+        Reach::Nothing => false,
+        Reach::Rect(reach) => {
+            reach.left() <= rect.right()
+                && rect.left() <= reach.right()
+                && reach.top() <= rect.bottom()
+                && rect.top() <= reach.bottom()
+        }
+        Reach::Unbounded | Reach::NonFinite => true,
     }
 }
