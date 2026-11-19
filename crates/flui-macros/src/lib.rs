@@ -9,7 +9,8 @@
 //! | [`macro@StatelessView`], [`macro@StatefulView`] | `impl View` for a type that implements the authoring trait | `flui_view::StatelessView`, `flui_view::StatefulView` |
 //! | [`macro@InheritedData`] | one field mask per field and `impl InheritedData` | `flui_view::InheritedData` |
 //! | [`macro@Inspect`] | `impl Inspect` for a struct or an enum | `flui_foundation::inspect::Inspect` |
-//! | [`macro@TwoWayConverter`] | `impl TwoWayConverter` and a fieldwise `impl Lerp` | `flui_animation::TwoWayConverter` |
+//! | [`macro@MotionValue`] | `impl MotionValue` from each field's vector | `flui_animation::MotionValue` |
+//! | [`macro@Lerp`] | a fieldwise `impl Lerp` | `flui_foundation::geometry::Lerp` |
 //! | [`macro@Routable`] | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router::Routable` |
 //! | [`macro@main`] | the entry every platform starts an application from | `flui::main` |
 //!
@@ -222,33 +223,58 @@ pub fn derive_inspect(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Emit `impl TwoWayConverter` and a fieldwise `impl Lerp` for a nonempty struct,
-/// so the type can be spring-animated by
-/// `flui_animation::AnimatedValue`, tweened, and used as a
-/// `flui_animation::Keyframes` value.
+/// Emit `impl MotionValue` for a nonempty struct, so the type can be
+/// spring-animated by `flui_animation::AnimatedValue`.
 ///
-/// Each field must implement `TwoWayConverter` and `Lerp`, with a concrete
-/// vector width. Nested values are flattened in declaration order, and each
-/// field retains its interpolation contract. A width that depends on a type,
-/// const or lifetime parameter cannot be summed in an array length on stable
-/// Rust, so such a type is refused. The struct must be `Clone`.
+/// Each field must implement `MotionValue`, with a concrete vector width.
+/// Nested values are flattened in declaration order, with their rest
+/// thresholds. A width that depends on a type, const or lifetime parameter
+/// cannot be summed in an array length on stable Rust, so such a type is
+/// refused. The struct must be `Clone`. Interpolation, for a tween or a
+/// keyframe track, is [`macro@Lerp`]'s.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_animation::TwoWayConverter;
+/// use flui_animation::MotionValue;
+/// use flui_foundation::geometry::Lerp;
 ///
-/// #[derive(Clone, TwoWayConverter)]
+/// #[derive(Clone, Lerp, MotionValue)]
 /// struct Translation {
 ///     x: f64,
 ///     y: f64,
 ///     z: f64,
 /// }
 /// ```
-#[proc_macro_derive(TwoWayConverter)]
-pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(MotionValue)]
+pub fn derive_motion_value(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive::two_way_converter::expand(&input)
+    derive::motion_value::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Emit a fieldwise `impl Lerp` for a struct: each field interpolates by its
+/// own `Lerp`, and `t` of exactly 0 or 1 returns a clone of that endpoint.
+///
+/// A field whose type names a type parameter bounds the impl by
+/// `FieldType: Lerp`. The struct must be `Clone`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_foundation::geometry::Lerp;
+///
+/// #[derive(Clone, Lerp)]
+/// struct Shadow {
+///     offset: flui_foundation::geometry::Offset<f64>,
+///     blur: f64,
+/// }
+/// ```
+#[proc_macro_derive(Lerp)]
+pub fn derive_lerp(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive::lerp::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

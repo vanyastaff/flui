@@ -11,8 +11,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Curve, JumpAt, Keyframes, KeyframesError, Linear, Stagger, StaggerOrigin, Steps,
-    TwoWayConverter, curves,
+    Animatable, Curve, JumpAt, Keyframes, KeyframesError, Linear, MotionValue, Stagger,
+    StaggerOrigin, Steps, curves,
 };
 use flui_foundation::geometry::{Lerp, Rect};
 use proptest::prelude::*;
@@ -383,7 +383,7 @@ impl Lerp for Volatile {
     }
 }
 
-impl TwoWayConverter for Volatile {
+impl MotionValue for Volatile {
     type Vector = [f64; 1];
     fn rest_thresholds() -> Self::Vector {
         [0.001]

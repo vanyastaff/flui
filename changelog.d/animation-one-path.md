@@ -5,7 +5,7 @@
   `flui_animation::SpringSimulation` and the rest from the root (`flui::animation::…`,
   `flui_sdk::animation::…`). `curves` stays public as the namespace of the easing presets. `Lerp`
   is named from `flui_foundation::geometry` (`flui::geometry::Lerp`), which owns it;
-  `#[derive(TwoWayConverter)]` resolves it there.
+  `#[derive(MotionValue)]` resolves it there.
 - **`flui-animation`**: `AnimationController::forward_from` and `reverse_from` take the starting
   value as `f64`, and `fling_with` takes a `SpringDescription`; the `None` each accepted meant
   `forward`, `reverse` and `fling`.

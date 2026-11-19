@@ -284,9 +284,6 @@ impl Runner {
     }
 }
 
-/// No arguments, for [`parsed`].
-pub(super) const NO_ARGS: [&str; 0] = [];
-
 /// Parses `argv` as the arguments of one of this crate's commands, so an
 /// in-process call passes exactly what its command line would.
 pub(super) fn parsed<T: clap::Args + clap::FromArgMatches>(

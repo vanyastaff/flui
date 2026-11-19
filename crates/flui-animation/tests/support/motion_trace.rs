@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{
-    AnimatedValue as DrivenValue, AnimationError, MotionClock, MotionSpec, SpringDescription,
-    TwoWayConverter,
+    AnimatedValue as DrivenValue, AnimationError, MotionClock, MotionSpec, MotionValue,
+    SpringDescription,
 };
 
 #[derive(Clone)]
@@ -17,7 +17,7 @@ enum Command<T> {
     Advance(Duration),
 }
 
-pub(crate) struct AnimatedValue<T: TwoWayConverter + 'static> {
+pub(crate) struct AnimatedValue<T: MotionValue + 'static> {
     value: DrivenValue<T>,
     driver: VsyncDriver,
     clock: MotionClock,
@@ -27,7 +27,7 @@ pub(crate) struct AnimatedValue<T: TwoWayConverter + 'static> {
     commands: Vec<Command<T>>,
 }
 
-impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
+impl<T: MotionValue + 'static> AnimatedValue<T> {
     pub(crate) fn try_new(initial: T, spring: SpringDescription) -> Result<Self, AnimationError> {
         Self::with_motion(initial, MotionSpec::Spring(spring))
     }
@@ -94,7 +94,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> Clone for AnimatedValue<T> {
+impl<T: MotionValue + 'static> Clone for AnimatedValue<T> {
     fn clone(&self) -> Self {
         let mut fork = Self::with_motion(self.initial.clone(), self.motion.clone())
             .expect("BUG: an admitted initial trace is replayable");

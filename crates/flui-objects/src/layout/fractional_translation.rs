@@ -81,7 +81,7 @@ impl Lerp for TranslationFraction {
 
 /// Normalized fractions rest within 0.001 of their target, like every other
 /// normalized animated scalar.
-impl flui_animation::TwoWayConverter for TranslationFraction {
+impl flui_animation::MotionValue for TranslationFraction {
     type Vector = [f64; 2];
     fn rest_thresholds() -> Self::Vector {
         [0.001; 2]

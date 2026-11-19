@@ -40,7 +40,7 @@ gles = ["wgpu/gles", "wgpu/wgsl"]
 gpu-profiler = ["dep:wgpu-profiler"]
 
 # testing: the GPU readback/oracle suites (`cargo nextest run -p flui-engine
-# --features testing`, CI's gpu-test job) and the bench scaffolding they share
+# --features testing`, the GPU readback steps of CI's `test` job) and the bench scaffolding they share
 # (`OffscreenRenderer`, `TexturePool`, `PathCache`). Off by default and not
 # part of the public API; the same name and meaning as in flui-layer and
 # flui-rendering. It turns on wgpu's no-op backend, which only

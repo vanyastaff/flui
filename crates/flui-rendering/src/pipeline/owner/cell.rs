@@ -421,7 +421,7 @@ mod tests {
 
     // ========================================================================
     // Owner-local traversal — full `run_frame` through a `PipelineCell`
-    // checkout (miri coverage: `cargo xtask miri`, whose `pipeline::owner`
+    // checkout (miri coverage: CI's `miri` job, whose `pipeline::owner`
     // filter includes this module).
     // ========================================================================
     //

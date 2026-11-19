@@ -54,7 +54,7 @@ src/
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
-├── value_conversion.rs # TwoWayConverter, fixed component arrays
+├── motion_value.rs   # MotionValue, fixed component arrays
 ├── animated_value.rs # AnimatedValue owner, AnimatedValueView, vector sample commits
 ├── animated_value/motion_update.rs # Coordinated changes to value motion
 ├── vsync_update.rs   # Coordinated registry migration of values and controllers
@@ -86,7 +86,7 @@ last-subscriber retirement in an isolated process.
 
 ### Nested value conversion
 
-`TwoWayConverter` is the fixed-width extension contract for custom animation
+`MotionValue` is the fixed-width extension contract for custom animation
 values. Its derive concatenates concrete field vectors in declaration order;
 `AnimationVector::COMPONENTS` exposes the sealed array width. One `AnimatedValue`
 owns the entire vector, so nested geometry and color share admission, time,
@@ -94,7 +94,7 @@ retargeting and cancellation. Derived `Lerp` delegates to each field, preserving
 its interpolation contract instead of interpreting scalar color components.
 Generic-dependent widths require a manual representation because stable Rust
 cannot express their sum as an array length. Empty derives are refused.
-`two_way_converter_derive_contract` pins nested conversion, perceptual fading
+`motion_value_derive_contract` pins nested conversion, perceptual fading
 and velocity-preserving interruption through an actual Vsync registration.
 
 ### Controller delivery
@@ -180,7 +180,7 @@ segment at every identical target fails that row.
 
 ### Owning vector motion
 
-`TwoWayConverter::rest_thresholds` specifies one positive finite distance per
+`MotionValue::rest_thresholds` specifies one positive finite distance per
 component in its vector's own units ([ADR-0186](../../../docs/adr/ADR-0186-typed-animation-rest-thresholds.md)).
 Geometry uses 0.01 logical pixels; scalar, alignment and premultiplied Oklab
 components use 0.001. Speed limits derive from each spring's natural rate.
@@ -189,7 +189,7 @@ through nonlinear value conversion. Curve motion ignores spring thresholds.
 Preparation validates thresholds before admission, so invalid distances retain
 the previous run and refuse a coordinated update without admitting a prefix.
 `owning_animated_value_contract` covers distinct geometry/scalar completion and
-single/grouped refusal; `two_way_converter_derive_contract` proves that nested
+single/grouped refusal; `motion_value_derive_contract` proves that nested
 geometry retains its own completion timing inside a nested vector. A vector's
 spring components share the latest native rest start and the shortest permitted
 rest interval. This keeps premultiplied color relationships intact while
@@ -537,7 +537,7 @@ The retained surface has these responsibilities:
 |---|---|
 | `Animation`, `Animatable`, `Tween`, integer mappings, curve trait/catalog and live wrappers | Transitions, Hero flights, Cupertino route/button, Material drawer and render-object size/header motion; custom mappings use the same observation trait |
 | `AnimationController`, builder/range, driven owner, status/run/error types | Widget and package lifecycle owners; builder configuration is separate from the registered owner's disposal authority |
-| `AnimatedValue`, its view, `TwoWayConverter`/derive and `AnimationVector` | Implicit properties and nested application values; fixed vectors keep component admission and sampling atomic |
+| `AnimatedValue`, its view, `MotionValue`/derive and `AnimationVector` | Implicit properties and nested application values; fixed vectors keep component admission and sampling atomic |
 | `MotionUpdate`, `VsyncUpdate`, `VsyncPublication` | Multi-property retargeting, ambient migration and Dismissible publication after restoring widget state |
 | Clock, preference, playback, frame and registry types | Runtime frame selection, TickerMode, DevTools playback and actual timer/scroll consumers |
 | Simulation, checked descriptions, bounds, tolerances and errors | Scroll/page physics and controller fling; physical parameterizations form the documented custom-motion constructor contract |
