@@ -2730,6 +2730,23 @@ impl<S: flui_platform::text_store::TextStoreRead + ?Sized> flui_platform::text_s
     {
         self.session.index_at_point(point, mode)
     }
+
+    fn visible_bounds(
+        &self,
+    ) -> Result<
+        Option<flui_foundation::geometry::Bounds<f64>>,
+        flui_platform::text_store::TextStoreError,
+    > {
+        self.session.visible_bounds()
+    }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
+    {
+        self.session.press_target_at(point)
+    }
 }
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
