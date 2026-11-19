@@ -12,8 +12,9 @@ runtime or thread of its own.
 use flui_assets::{ImageCache, ImageCacheConfig, ImageSource, LoadServices};
 
 let cache = ImageCache::new(ImageCacheConfig::default().budget(64 * 1024 * 1024));
-assert!(cache.cached_image(&ImageSource::Asset("logo.png".into())).is_none());
-let load = cache.load_image("logo.png", LoadServices::new());
+let logo = ImageSource::asset("logo.png");
+assert!(cache.get(&logo).is_none());
+let load = cache.load(&logo, &LoadServices::new());
 drop(load); // the last waiter left: the load is cancelled
 ```
 
