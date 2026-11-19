@@ -832,9 +832,15 @@ impl Tester {
                     }
                 }
             };
-            return Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
-                scene_commands(tree, |painter| painters.contains(&painter))
-            }));
+            // The frame is the first slot of the version's root, as the sink
+            // reads it ([`HeadlessSink::layer_tree`](crate::HeadlessSink::layer_tree)).
+            let commands = self.host.sink().version().and_then(|version| {
+                let frame = version.node(version.root())?.content().slots().next()?;
+                Some(scene_commands(version, frame, |painter| {
+                    painters.contains(&painter)
+                }))
+            });
+            return Ok(commands.unwrap_or_default());
         }
         Err(TestError::KeptChanging {
             reads: VISIBLE_READS,
@@ -2020,52 +2026,109 @@ fn chord_keys(chord: &str) -> Vec<&str> {
     }
 }
 
-/// The draw commands of `tree`'s picture layers whose painter `selects`, in
-/// paint order, each placed in the tree's root coordinates; what
+/// The draw commands of the chunks under `node` in `version` whose painter
+/// `selects`, in paint order, each placed in the space `node` sits in; what
 /// [`Tester::draw_commands`] reads.
 ///
-/// Pre-order is paint order: a parent keeps its children in the order they
-/// paint, a repaint boundary's content under its slot. An explicit stack,
-/// children pushed last first, so a deep chain of effects cannot overflow
-/// the test thread's stack. A follower its leader does not place is skipped
-/// with its subtree, as the engine skips it.
+/// A content's entries are in paint order and a slot paints where it
+/// stands, so the walk opens the child's content there and resumes the
+/// parent's after it. An explicit stack of open contents, so a deep chain of
+/// boundaries cannot overflow the test thread's stack. A follower is placed
+/// as the engine places it ([`SceneVersion::follower_transform`]), and one
+/// its leader does not place is skipped with everything under it.
+///
+/// [`SceneVersion::follower_transform`]: flui_rendering::layer::SceneVersion::follower_transform
 fn scene_commands(
-    tree: &flui_rendering::layer::LayerTree,
+    version: &flui_rendering::layer::SceneVersion,
+    node: flui_rendering::layer::SceneNodeId,
     selects: impl Fn(flui_foundation::RenderId) -> bool,
 ) -> Vec<flui_painting::DrawCommandBuf> {
     use flui_foundation::geometry::Matrix4;
-    use flui_rendering::layer::{Layer, resolve_follower_transform};
+    use flui_rendering::layer::{
+        BoundaryContent, Entry, EntryAddress, EntryIndex, Layer, SceneNodeId,
+    };
+
+    /// A content the walk is inside, and the space each of its entries so
+    /// far paints its children in: `None` under a follower nothing places.
+    struct Open<'a> {
+        node: SceneNodeId,
+        content: &'a BoundaryContent,
+        effects: Vec<(EntryIndex, &'a Layer)>,
+        next_effect: usize,
+        origin: Matrix4,
+        spaces: Vec<Option<Matrix4>>,
+    }
+    let open = |node: SceneNodeId, above: Matrix4| {
+        let held = version.node(node)?;
+        let offset = held.placement().offset();
+        let content: &BoundaryContent = held.content();
+        Some(Open {
+            node,
+            content,
+            effects: content.effect_layers().collect(),
+            next_effect: 0,
+            origin: above * Matrix4::translation(offset.dx, offset.dy, 0.0),
+            spaces: Vec::with_capacity(content.entries().len()),
+        })
+    };
 
     let mut commands = Vec::new();
-    let mut pending = vec![(tree.root(), Matrix4::IDENTITY)];
-    while let Some((id, above)) = pending.pop() {
-        let Some(node) = tree.get(id) else { continue };
-        let local = match node.layer() {
-            Layer::Picture(picture) => {
-                // A picture is one render object's run (ADR-0304 §2); one no
-                // render object painted is no element's drawing.
-                if !node.render_id().is_some_and(&selects) {
-                    continue;
-                }
-                commands.extend(picture.picture().iter().map(|command| {
-                    let mut command = command.to_buf();
-                    command.transform = above * command.transform;
-                    command
-                }));
-                Matrix4::IDENTITY
+    let mut stack: Vec<Open<'_>> = open(node, Matrix4::IDENTITY).into_iter().collect();
+    while let Some(top) = stack.last_mut() {
+        let Some(entry) = top.content.entries().get(top.spaces.len()) else {
+            stack.pop();
+            continue;
+        };
+        let under = match entry.parent() {
+            None => Some(top.origin),
+            Some(effect) => top.spaces[effect.get()],
+        };
+        let child = match entry {
+            Entry::Effect { .. } => {
+                let (index, layer) = *top
+                    .effects
+                    .get(top.next_effect)
+                    .expect("BUG: each effect entry has a layer, in paint order");
+                top.next_effect += 1;
+                let local = match layer {
+                    Layer::Transform(layer) => Some(*layer.transform()),
+                    Layer::Follower(_) => version.follower_transform(EntryAddress {
+                        node: top.node,
+                        entry: index,
+                    }),
+                    layer => {
+                        let offset = layer.local_translation();
+                        Some(Matrix4::translation(offset.dx, offset.dy, 0.0))
+                    }
+                };
+                top.spaces
+                    .push(under.zip(local).map(|(under, local)| under * local));
+                None
             }
-            Layer::Transform(layer) => *layer.transform(),
-            Layer::Follower(_) => match resolve_follower_transform(tree, id) {
-                Some(transform) => transform,
-                None => continue,
-            },
-            layer => {
-                let offset = layer.local_translation();
-                Matrix4::translation(offset.dx, offset.dy, 0.0)
+            Entry::Chunk { chunk, .. } => {
+                top.spaces.push(under);
+                // A chunk is one render object's run (ADR-0304 §2).
+                if let Some(under) = under
+                    && selects(chunk.owner())
+                {
+                    commands.extend(chunk.commands().iter().map(|command| {
+                        let mut command = command.to_buf();
+                        command.transform = under * command.transform;
+                        command
+                    }));
+                }
+                None
+            }
+            Entry::Slot { node: child, .. } => {
+                top.spaces.push(under);
+                under.map(|under| (*child, under))
             }
         };
-        let placed = above * local;
-        pending.extend(node.children().iter().rev().map(|&child| (child, placed)));
+        if let Some((child, under)) = child
+            && let Some(child) = open(child, under)
+        {
+            stack.push(child);
+        }
     }
     commands
 }
@@ -2076,7 +2139,7 @@ mod tests {
     use flui_painting::{Canvas, DrawOp, paint::Paint, styling::Color};
     use flui_rendering::layer::{
         FollowerLayer, Layer, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
-        PictureLayer,
+        PictureLayer, SceneVersion,
     };
 
     /// A one-pixel swatch of `shade`, painted by a render object of that slot.
@@ -2095,7 +2158,8 @@ mod tests {
     }
 
     fn placed(tree: &LayerTree) -> Vec<(u8, Matrix4)> {
-        super::scene_commands(tree, |_| true)
+        let version = SceneVersion::from_tree(tree);
+        super::scene_commands(&version, version.root(), |_| true)
             .into_iter()
             .filter_map(|command| match command.op {
                 DrawOp::Rect { paint, .. } => {

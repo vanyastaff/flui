@@ -18,7 +18,7 @@
 //!   (`a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`).
 
 use flui_foundation::geometry::Rect;
-use flui_layer::{LayerTree, SceneBuilder};
+use flui_layer::{Scene, SceneBuilder};
 use flui_painting::{Canvas, paint::Paint};
 use flui_painting::{paint::Clip, styling::Color};
 
@@ -52,10 +52,10 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     ]
 }
 
-/// Renders `tree` and returns the pixel at the sample point.
-fn render_and_sample(renderer: &HeadlessRenderer, tree: &LayerTree) -> [u8; 4] {
+/// Renders `scene` and returns the pixel at the sample point.
+fn render_and_sample(renderer: &HeadlessRenderer, scene: &Scene) -> [u8; 4] {
     let pixels = renderer
-        .render_layer_tree(tree, (SIDE, SIDE))
+        .render_scene(scene, (SIDE, SIDE))
         .expect("the headless capture path must rasterize a two-layer tree");
     sample(&pixels, SAMPLE_X, SAMPLE_Y)
 }
@@ -131,7 +131,7 @@ fn inside_a_clip(
     behavior: Clip,
     push_clip: impl FnOnce(&mut SceneBuilder, Clip),
     paint_inside: impl FnOnce(&mut Canvas),
-) -> LayerTree {
+) -> Scene {
     let mut builder = SceneBuilder::new();
     builder.push_offset(flui_foundation::geometry::Offset::ZERO);
 
@@ -143,7 +143,7 @@ fn inside_a_clip(
     let mut canvas = Canvas::new();
     paint_inside(&mut canvas);
     builder.add_picture(canvas.finish());
-    builder.pop().expect("the clip is open");
+    builder.pop();
     builder.build()
 }
 
@@ -179,7 +179,7 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
         fill_everything,
     );
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("the headless capture path must rasterize the scene");
 
     let path = crate::superellipse::generate_superellipse_path(&squircle);
@@ -335,7 +335,7 @@ fn a_drawn_rrect_matches_hit_testing_with_oversized_radii() {
         builder.build()
     };
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("the headless capture path must rasterize the scene");
     let inside_at = |x: i64, y: i64| pill.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5));
     let (mut kept, mut cut) = (0_usize, 0_usize);
@@ -401,7 +401,7 @@ fn assert_clip_reads_back_as(
                 },
             );
             let frame = renderer
-                .render_layer_tree(&tree, (SIDE, SIDE))
+                .render_scene(&tree, (SIDE, SIDE))
                 .expect("the headless capture path must rasterize the scene");
             let inside_at = |x: i64, y: i64| inside(Point::new(x as f64 + 0.5, y as f64 + 0.5));
             let (mut kept, mut cut) = (0_usize, 0_usize);
@@ -470,7 +470,7 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
         fill_everything,
     );
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("the headless capture path must rasterize the scene");
 
     let in_box_outside_shape = sample(&frame, 40, 20);
@@ -507,7 +507,7 @@ fn an_empty_clip_path_clips_everything() {
             fill_everything,
         );
         let frame = renderer
-            .render_layer_tree(&tree, (SIDE, SIDE))
+            .render_scene(&tree, (SIDE, SIDE))
             .expect("the headless capture path must rasterize the scene");
 
         for (x, y) in [(2, 2), (32, 32), (61, 61)] {
@@ -526,7 +526,7 @@ fn an_empty_clip_path_clips_everything() {
 /// `with_filter` decides whether the pair is wrapped; everything else is
 /// identical, so the wrapped and unwrapped renders differ only by the filter
 /// layer.
-fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
+fn a_clip_beside_a_sibling(with_filter: bool) -> Scene {
     let mut builder = SceneBuilder::new();
     builder.push_offset(flui_foundation::geometry::Offset::ZERO);
     if with_filter {
@@ -551,10 +551,10 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
     let mut canvas = Canvas::new();
     full_surface(&mut canvas, Color::rgb(0, 0, 255));
     builder.add_picture(canvas.finish());
-    builder.pop().expect("the clip is open");
+    builder.pop();
 
     if with_filter {
-        builder.pop().expect("the blur is open");
+        builder.pop();
     }
     builder.build()
 }
@@ -569,7 +569,7 @@ fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
 
     let render = |with_filter: bool| {
         renderer
-            .render_layer_tree(&a_clip_beside_a_sibling(with_filter), (SIDE, SIDE))
+            .render_scene(&a_clip_beside_a_sibling(with_filter), (SIDE, SIDE))
             .expect("the headless capture path must rasterize the scene")
     };
 
@@ -670,7 +670,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
                 builder.build()
             };
             renderer
-                .render_layer_tree(&tree, (SIDE, SIDE))
+                .render_scene(&tree, (SIDE, SIDE))
                 .expect("the headless capture path must rasterize a canvas-clipped tree")
         };
 
@@ -771,7 +771,7 @@ fn inline_picture_replay_owns_its_root_clips() {
         let mut builder = SceneBuilder::new();
         builder.add_picture(frame);
         let pixels = renderer
-            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .render_scene(&builder.build(), (SIDE, SIDE))
             .expect("inline picture clip capture");
         assert_eq!(
             sample(&pixels, 44, 44),
@@ -833,7 +833,7 @@ fn display_list_and_save_layer_scopes_own_their_clips() {
         );
         builder.add_picture(sibling.finish());
         let pixels = renderer
-            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .render_scene(&builder.build(), (SIDE, SIDE))
             .expect("isolated display lists");
         assert_eq!(
             sample(&pixels, 46, 47),
@@ -923,7 +923,7 @@ fn command_transform_changes_preserve_captured_clips() {
             builder.push_offset(Offset::new(2.0, 3.0));
             builder.add_picture(canvas.finish());
             let pixels = renderer
-                .render_layer_tree(&builder.build(), (SIDE, SIDE))
+                .render_scene(&builder.build(), (SIDE, SIDE))
                 .expect("transformed clip capture");
             assert_eq!(
                 sample(&pixels, 18, 19),
@@ -959,7 +959,7 @@ fn nested_exact_clip_geometry_and_coverage() {
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
         renderer
-            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .render_scene(&builder.build(), (SIDE, SIDE))
             .expect("exact canvas clip capture")
     };
     let nested = capture(&|canvas| {
@@ -1041,7 +1041,7 @@ fn nested_exact_clip_geometry_and_coverage() {
     }
 }
 
-fn canvas_clip_tree(record: impl FnOnce(&mut Canvas)) -> LayerTree {
+fn canvas_clip_tree(record: impl FnOnce(&mut Canvas)) -> Scene {
     let mut canvas = Canvas::new();
     record(&mut canvas);
     let mut builder = SceneBuilder::new();
@@ -1075,7 +1075,7 @@ fn clip_failures_and_singular_membership_recover() {
             full_surface(c, Color::BLUE);
         });
         let frame = renderer
-            .render_layer_tree(&tree, (SIDE, SIDE))
+            .render_scene(&tree, (SIDE, SIDE))
             .expect("a non-finite clip is refused at record, not by the frame");
         assert_eq!(sample(&frame, 32, 32), [255, 255, 255, 255]);
     }
@@ -1097,13 +1097,13 @@ fn clip_failures_and_singular_membership_recover() {
         });
         assert!(
             matches!(
-                renderer.render_layer_tree(&tree, (SIDE, SIDE)),
+                renderer.render_scene(&tree, (SIDE, SIDE)),
                 Err(crate::EngineError::InvalidGeometry(_))
             ),
             "invalid clip returns typed geometry refusal"
         );
         let frame = renderer
-            .render_layer_tree(
+            .render_scene(
                 &canvas_clip_tree(|c| full_surface(c, Color::GREEN)),
                 (SIDE, SIDE),
             )
@@ -1121,13 +1121,13 @@ fn clip_failures_and_singular_membership_recover() {
     });
     assert!(
         matches!(
-            renderer.render_layer_tree(&depth, (SIDE, SIDE)),
+            renderer.render_scene(&depth, (SIDE, SIDE)),
             Err(crate::EngineError::PreparedResourceLimit { .. })
         ),
         "depth admission is a typed refusal"
     );
     let next = renderer
-        .render_layer_tree(
+        .render_scene(
             &canvas_clip_tree(|c| full_surface(c, Color::GREEN)),
             (SIDE, SIDE),
         )
@@ -1144,7 +1144,7 @@ fn clip_failures_and_singular_membership_recover() {
             full_surface(c, Color::BLUE);
         });
         let frame = renderer
-            .render_layer_tree(&tree, (SIDE, SIDE))
+            .render_scene(&tree, (SIDE, SIDE))
             .expect("singular clip has defined membership");
         assert_eq!(sample(&frame, 32, 32), expected);
     }
@@ -1186,7 +1186,7 @@ fn grouped_clip_prefix_and_destructive_coverage() {
                 }
             });
             let frame = renderer
-                .render_layer_tree(&tree, (SIDE, SIDE))
+                .render_scene(&tree, (SIDE, SIDE))
                 .expect("destructive clip coverage");
             let pixel = sample(&frame, 8, 32);
             for (actual, expected) in pixel.into_iter().zip(expected) {
@@ -1215,7 +1215,7 @@ fn grouped_clip_prefix_and_destructive_coverage() {
         c.restore();
     });
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("nested group prefix coverage");
     for (actual, expected) in sample(&frame, 8, 32)
         .into_iter()
@@ -1255,7 +1255,7 @@ fn transformed_nested_clip_on_antialiased_path() {
         c.draw_path(&path, &Paint::fill(Color::BLUE).with_anti_alias(true));
     });
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("transformed path clip capture");
     assert_eq!(
         sample(&frame, 12, 12),
@@ -1292,7 +1292,7 @@ fn path_clip_fill_rules_and_implicit_close() {
             full_surface(c, Color::BLUE);
         });
         let frame = renderer
-            .render_layer_tree(&tree, (SIDE, SIDE))
+            .render_scene(&tree, (SIDE, SIDE))
             .expect("path clip fill rule capture");
         assert_eq!(
             sample(&frame, 16, 32),
@@ -1319,7 +1319,7 @@ fn path_clip_fill_rules_and_implicit_close() {
         full_surface(c, Color::BLUE);
     });
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("open contour fills with implicit close");
     assert_eq!(sample(&frame, 16, 16), [0, 0, 255, 255]);
     assert_eq!(
@@ -1371,7 +1371,7 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
             }
         });
         let frame = renderer
-            .render_layer_tree(&tree, (side, side))
+            .render_scene(&tree, (side, side))
             .unwrap_or_else(|error| {
                 panic!("a window-sized antialiased clip (group {group}) is admitted: {error}")
             });
@@ -1476,7 +1476,7 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
                 canvas.draw_rect(frame_rect, &blue);
             });
             renderer
-                .render_layer_tree(&tree, (side, side))
+                .render_scene(&tree, (side, side))
                 .unwrap_or_else(|error| panic!("{row} renders: {error}"))
         };
         let (fast, sampled) = (render(false), render(true));
@@ -1524,7 +1524,7 @@ fn hard_clip_membership_scales_to_a_full_hd_frame() {
         canvas.draw_rect(full, &Paint::fill(Color::BLUE).with_anti_alias(false));
     });
     let frame = renderer
-        .render_layer_tree(&tree, size)
+        .render_scene(&tree, size)
         .expect("full-HD hard membership is admitted without supersample work");
     for (x, y) in [(0, 0), (960, 540), (1919, 1079)] {
         let offset = ((y * size.0 + x) * 4) as usize;
@@ -1661,7 +1661,7 @@ fn a_non_finite_op_is_omitted_and_the_frame_draws() {
         );
     });
     let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
+        .render_scene(&tree, (SIDE, SIDE))
         .expect("a non-finite op does not fail the frame");
     assert_eq!(
         sample(&frame, 48, 48),

@@ -320,7 +320,7 @@ mod frame_tests {
         );
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
-        Scene::new(builder.build())
+        builder.build()
     }
 
     /// The window path's frame protocol times its frames: each frame is read

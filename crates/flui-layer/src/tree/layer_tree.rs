@@ -296,6 +296,7 @@ impl LayerTree {
 
     /// `start`, then each parent up to the root; empty for an id this tree
     /// did not mint.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn ancestors(&self, start: LayerId) -> impl Iterator<Item = LayerId> + '_ {
         std::iter::successors(self.contains(start).then_some(start), |&id| self.parent(id))
     }
@@ -308,6 +309,7 @@ impl LayerTree {
     /// ancestor of the smaller, and stepping it up to its parent keeps the
     /// common ancestor unchanged until the two meet. The root has the
     /// smallest id, so it is never the one stepped.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn lowest_common_ancestor(&self, a: LayerId, b: LayerId) -> Option<LayerId> {
         if !self.contains(a) || !self.contains(b) {
             return None;

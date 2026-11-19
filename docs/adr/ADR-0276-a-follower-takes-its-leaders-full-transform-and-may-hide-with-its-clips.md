@@ -59,8 +59,10 @@ follower placed, and when does a clipped leader hide it?
 Chosen option: 1, because it is the one rule that places a follower correctly under every chain,
 and the anchor point is what a follower is attached to.
 
-§1 `flui_layer::resolve_follower_transform(&LayerTree, LayerId) -> Option<Matrix4>` is the one
-resolution. With `L` the product of the leader's chain from the common ancestor (exclusive) down to
+§1 `SceneVersion::follower_transform(EntryAddress) -> Option<Matrix4>` is the one resolution (ADR-0304
+§3), and `resolve_follower_transform(&LayerTree, LayerId)`, behind `flui-layer`'s `testing` feature,
+keeps the same rule over a hand-built tree as its oracle.
+With `L` the product of the leader's chain from the common ancestor (exclusive) down to
 the leader, and `F` the same for the follower's parent, the result is
 `F⁻¹ · L · translate(FollowerLayer::linked_offset(leader_size))`. A chain layer contributes its
 matrix (`Transform`), its own resolved transform (a nested `Follower`), or its

@@ -16,7 +16,8 @@ frame by annotated regions rather than by direct calls.
 ## Decision
 
 **Lookup.** `SceneVersion::find_annotation::<T>(point)` returns the topmost `T` at a point of
-the retained scene (ADR-0304), read off the version in place, and a hand-built tree answers
+the retained scene (ADR-0304), read off the version in place; behind `flui-layer`'s `testing`
+feature, the oracle it is compared against, a hand-built tree answers
 `LayerTree::find_annotations::<T>(point)` with every `T` at a scene
 point, topmost first: later siblings and a region's own children before the region.
 The point maps through offset-carrying layers, transforms and resolved follower
