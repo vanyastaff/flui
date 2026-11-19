@@ -28,6 +28,7 @@ model, and the session's effort does not carry over to another model.
 | Research across sources, tests for a settled contract, a contained change with a clear end state | `sonnet` | `medium` |
 | A reader of the review before a merge (AGENTS.md, "Before a merge"); the workflow names the lenses that read on `opus` | `sonnet` | `high` |
 | Implementation that changes behaviour inside an accepted design | `opus` | `high` |
+| A school's design, attack or revision in the architecture tournament, which its judge (the row below) verifies; the tournament's research runs on `sonnet` at `high` | `opus` | `high` |
 | Design and ADR options, the judge of the review before a merge and any other review against "Recurring defects", diagnosis of re-entrancy, unwinding, lifetimes or races | `fable` | `high` |
 
 Work that fails at its row is rerun one row up with what the failed run found, and the top row
