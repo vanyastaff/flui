@@ -6258,7 +6258,21 @@ GPU-память простаивающего или невидимого окн
   виджета, сценарная система отвечает на headless, виджет показывает ответ; compile-fail
   `tests/ui/native/headless_doubles_need_scripted.rs` (`thread_boundary_ui`): без `scripted` ни
   одно из имён двойников ядра не разрешается. **Проверки.** `rg --multiline
-  "^\s*impl[^{;/]*PlatformWindow\s+for"` вне `crates/flui-native` и kit — ноль.
+  "^\s*impl[^{;/]*PlatformWindow\s+for"` вне `crates/flui-native` и kit — ноль. На Windows
+  `cargo heli clippy --workspace --all-targets -- -D warnings` с `--all-features` и без —
+  чисто; `clippy -p flui-native --lib` и rustdoc без `scripted` — чисто (кроме ссылки
+  `package_assets` на приватное имя, которая есть на `main`). В WSL (Ubuntu, cargo без heli)
+  `clippy --workspace --all-targets --features flui-native/native-capture` и `clippy -p
+  flui-native --lib` с фичами по умолчанию, без них, с `x11` и с `wayland` — чисто. nextest:
+  `flui-platform` 79/79, `flui-runtime` 222/222, `flui-testing` 187/187, `flui-system
+  --features testing` 208/208, `flui-native` 903/903, `flui-interaction` 152/152 (без
+  trybuild `compile_fail`, чей вывод на этой машине без строк исходников std), `flui-app`
+  145/146 — `the_driver_agent_contains_every_failure` (агент на `HeadlessHost`, файлов этой
+  задачи не касается) падает на Windows и под этой веткой, и отдельно, а в WSL проходит. Фикстуры
+  фасада `thread_boundary_ui` проходят; `.stderr` новой — вывод trybuild. **Остаток:**
+  `flui-system/src/web/tests.rs` не собран под wasm32 (на машине нет std wasm32); сборки ядра
+  без `scripted` под macOS, iOS, Android и wasm32 не запускались; допущения мёртвого кода,
+  зависящие от цели, — `allow`, не `expect`.
 
 - [ ] **LY102** (открыта, не начата) — `crates/flui-platform/src/lib.rs:113–161`
   объявляет плоские модули; каталоги есть у `capability/`, `haptics/`, `input_capabilities/`,
