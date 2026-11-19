@@ -372,7 +372,7 @@ The implementer does not review and the reviewer does not implement.
 
 **A design is read before its code.** A pull request that adds or changes a decision (an ADR's
 decision or options, a spec's `design.md`) gets the same step with the design lenses (the
-workflow's `mode: "design"`): *alternatives* (options against the drivers, and the defects other
+workflow's `mode: "design"`), and one that also changes code gets the change read beside it: *alternatives* (options against the drivers, and the defects other
 frameworks record for the same behaviour), *ownership* (one owner for each piece of state),
 *orders* (how each answer finds what asked for it, and every failure and late arrival), *seams*
 (where each policy lives, every host), *records* (the accepted ADRs it contradicts or supersedes)

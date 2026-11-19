@@ -1,6 +1,6 @@
 export const meta = {
   name: 'review-before-merge',
-  description: 'Readers, one lens each, read a change (seven lenses) or a design (six) to break it; a judge merges, verifies and ranks what they find',
+  description: 'Readers, one lens each, read a change or a design to break it; a judge merges, verifies and ranks what they find',
   whenToUse: 'The independent read AGENTS.md "Before a merge" asks for, on a branch or a checkout, and again on each fix pushed after it; with mode "design", the read of an ADR or a spec design before its code',
   phases: [
     { title: 'Scope', detail: 'merge base, reviewed head and changed files' },
@@ -374,7 +374,12 @@ const DESIGN_LENSES = [
 ]
 
 // `mode: 'design'` reads a design; any other value reads a change.
-const mode = opts.mode === 'design' ? 'design' : 'change'
+// A value that names neither read is refused rather than read as a change, which would record a
+// design read that never happened.
+const mode = opts.mode === undefined || opts.mode === null || opts.mode === '' ? 'change' : opts.mode
+if (mode !== 'change' && mode !== 'design') {
+  return unavailable(`mode ${JSON.stringify(opts.mode)} is neither "change" nor "design"`)
+}
 const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
 
 // An agent that a usage limit or a skip refuses resolves to null, and one started past the turn's
@@ -462,7 +467,17 @@ if (!SHA.test(scope.head) || !SHA.test(scope.base)) {
 // the whole change, and the scope warnings above say why.
 const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
 if (sinceArg && !since) notes.push(`The earlier head ${sinceArg} could not be placed against ${baseRef}; the readers read the whole change.`)
-const header = `Read at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
+const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
+// A decision and code in one diff owe both reads: each read names the other when the diff asks
+// for it, so neither is taken for the whole.
+const decisionFiles = scope.files.filter((f) => /^docs\/adr\/ADR-\d+[^/]*\.md$|^docs\/plans\/specs\/[^/]+\/design\.md$/.test(f))
+const codeFiles = scope.files.filter((f) => !/\.md$/.test(f))
+if (mode === 'design' && codeFiles.length) {
+  notes.push(`The diff also changes ${codeFiles.length} files that are not documents; the change read (no mode) is owed beside this one (AGENTS.md "Before a merge").`)
+}
+if (mode === 'change' && decisionFiles.length) {
+  notes.push(`The diff changes a decision (${decisionFiles.join(', ')}); the design read (mode "design") is owed beside this one (AGENTS.md "Before a merge").`)
+}
 if (!scope.files.length) {
   log('The merge base and the head have the same tree.')
   return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }
@@ -647,7 +662,7 @@ const judgePrompt =
 For each finding:
 1. Merge it with the others that share its root cause; keep the clearest scenario and list every lens that reported it.
 2. Verify it at the reviewed head: open the cited lines and follow the scenario. It is rejected only when ${mode === 'design' ? 'a section of the design, an accepted ADR, or a line of the code it governs' : 'a line or a test'} shows the scenario cannot happen; name it. That it seems unlikely is not a rejection.
-3. Rank it by REVIEW.md "What Important means here": important, or nit. Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
+3. Rank it: important, or nit. ${mode === 'design' ? 'For a design, important is a scenario the design permits that a user or the code built from it would hit (any AGENTS.md "Recurring defects" class), a decision no test or rung can hold, or a contradiction of an accepted ADR; REVIEW.md\'s narrower scope for docs/plans/specs/ does not apply to this read.' : 'By REVIEW.md "What Important means here".'} Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
 
 A finding from the "mutants" lens is a change cargo-gamma made to one line of the diff that either every test reaching it passed with (survived) or that no test reached (no coverage); its "wrong_result" says which. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant) or, for one no test reached, when the line is built only for another target than the run's; say why from the code.
 
