@@ -23,9 +23,9 @@
   `LocalState` and `RoamingState`. A host's store finds them on its IO thread at its first call.
   A packaged application that kept a store under `%APPDATA%` before has it copied into the
   package's folders once, at that first call, when the package's folder holds no store yet: files
-  are copied, never moved or overwritten, and the copy is put in place whole. A store that was not
-  copied (the copy failed, or the store is past the copy's bound on files and bytes) stays where
-  it is and stays the store: the application reads and writes it there, and the next start copies
-  again.
+  are copied, never moved or overwritten, and the copy is put in place whole, by one instance at a
+  time (another waits for it). A store that was not copied stays where it is and stays the store:
+  the application reads and writes it there. One whose copy failed is copied again at the next
+  start; one past the copy's bound on files and bytes is never copied.
 - The Linux user folders answer none for a folder that is not there for the process, as a
   Flatpak shows a folder its manifest does not expose.

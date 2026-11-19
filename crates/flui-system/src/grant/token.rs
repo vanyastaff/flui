@@ -172,7 +172,10 @@ impl Grant {
         self.kind == other.kind
     }
 
-    /// The kind of system that made it, the only kind that resolves it.
+    /// The kind of system that made it, the only kind that resolves it. In
+    /// a build with the scripted double (`test`, the `testing` feature), a
+    /// grant the double minted names the kind it stands in for, which no
+    /// system's backend resolves.
     #[must_use]
     pub fn kind(&self) -> GrantKind {
         self.kind

@@ -68,14 +68,13 @@ impl SandboxSlot {
     /// The most resolves of one handle that wait for its sandbox at once.
     pub(super) const MAX_WAITING: usize = 64;
 
-    /// A slot whose sandbox is read by `read` now.
-    pub(super) fn reading(read: Completion<Sandbox>) -> Rc<Self> {
-        let slot = Rc::new(Self {
-            state: Cell::new(SlotState::Reading(Vec::new())),
+    /// A slot whose sandbox the first resolve asks for: every read starts in
+    /// a resolve, so a backend's panic always reaches the one that asked.
+    pub(super) fn unread() -> Rc<Self> {
+        Rc::new(Self {
+            state: Cell::new(SlotState::Unread),
             next_ticket: Cell::new(0),
-        });
-        Self::fill_on(&slot, read);
-        slot
+        })
     }
 
     /// Fill `slot` with `read`'s answer, and start the resolves that wait:

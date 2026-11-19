@@ -150,14 +150,38 @@ fn base_dirs() -> container::BaseDirs {
 /// store from before it was packaged is copied into the package's folders
 /// once.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug)]
 struct ProcessStore {
     app: AppDataDir,
+    /// How the store is found: [`process_store`], or a test's stand-in.
+    find: FindStore,
     store: std::sync::OnceLock<Option<FileStore>>,
+}
+
+/// What finds a [`ProcessStore`]'s store, on the IO thread.
+#[cfg(not(target_arch = "wasm32"))]
+type FindStore = Box<dyn Fn(&AppDataDir) -> std::io::Result<Option<FileStore>> + Send + Sync>;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Debug for ProcessStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcessStore")
+            .field("app", &self.app)
+            .field("store", &self.store)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ProcessStore {
+    /// A store of `app` that `find` finds at its first call.
+    fn new(app: AppDataDir, find: FindStore) -> Self {
+        Self {
+            app,
+            find,
+            store: std::sync::OnceLock::new(),
+        }
+    }
+
     /// The store, found at the first call that could read the container;
     /// a platform that names no data folder leaves every call refused, and
     /// a container that could not be read refuses this call and is read
@@ -166,7 +190,7 @@ impl ProcessStore {
         let found = if let Some(found) = self.store.get() {
             found
         } else {
-            let found = process_store(&self.app).map_err(|error| {
+            let found = (self.find)(&self.app).map_err(|error| {
                 flui_platform::StorageError::Inaccessible { kind: error.kind() }
             })?;
             self.store.get_or_init(|| found)
@@ -218,20 +242,19 @@ impl DataStore {
     /// packaged Windows application's store kept under `%APPDATA%` before
     /// it was packaged is copied into the package's folders then, once:
     /// only into a root that holds no store, within a bound, nothing
-    /// overwritten. A store that was not copied (the copy failed, or the
-    /// store is past the bound) stays where it is and stays the store: the
-    /// calls read and write it there, and a later start copies again. A
-    /// platform that names no data folder refuses every call, and a
-    /// container that could not be read refuses the call and is read again
-    /// at the next (`StorageError::Inaccessible`).
+    /// overwritten, one instance at a time (another waits for it). A store
+    /// that was not copied stays where it is and stays the store, the calls
+    /// reading and writing it there: one whose copy failed is copied again
+    /// at a later start, one past the bound never. A package folder that
+    /// could not be read stays the store. A platform that names no data
+    /// folder refuses every call, and a container that could not be read
+    /// refuses the call and is read again at the next
+    /// (`StorageError::Inaccessible`).
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn of_process(app: AppDataDir) -> Self {
         Self {
-            backing: Backing::OfProcess(ProcessStore {
-                app,
-                store: std::sync::OnceLock::new(),
-            }),
+            backing: Backing::OfProcess(ProcessStore::new(app, Box::new(process_store))),
         }
     }
 
@@ -346,5 +369,56 @@ impl DataStore {
             Backing::Files(store) => store.copy_aside(name).await,
             Backing::Memory(store) => store.copy_aside(name),
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_platform::{AppDataDir, StorageError};
+
+    use super::{DataDirs, FileStore, ProcessStore};
+
+    #[test]
+    fn a_container_that_could_not_be_read_is_read_again_at_the_next_call() {
+        let scratch = tempfile::tempdir().expect("a scratch folder");
+        let dirs = DataDirs {
+            roaming: scratch.path().join("roaming"),
+            local: scratch.path().join("local"),
+        };
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&asked);
+        let store = ProcessStore::new(
+            AppDataDir::try_new("app").expect("a name"),
+            Box::new(move |_| {
+                if counting.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                } else {
+                    Ok(Some(FileStore::new(dirs.clone())))
+                }
+            }),
+        );
+        assert!(
+            matches!(
+                store.store(),
+                Err(StorageError::Inaccessible {
+                    kind: std::io::ErrorKind::PermissionDenied,
+                    ..
+                })
+            ),
+            "the first call is refused with the read's error"
+        );
+        assert!(
+            store.store().is_ok(),
+            "the next call reads the container again"
+        );
+        assert!(store.store().is_ok());
+        assert_eq!(
+            asked.load(Ordering::Relaxed),
+            2,
+            "a container read is kept once it answered"
+        );
     }
 }

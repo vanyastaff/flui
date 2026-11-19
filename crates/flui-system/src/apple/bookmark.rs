@@ -213,8 +213,9 @@ mod foundation {
             grant.made_by(GrantKind::AppleBookmark)
         }
 
-        /// Read from the environment when the provider was made: no file
-        /// system call.
+        /// Detected when the provider was made, from the environment (and
+        /// the user database only for an App Sandbox whose `HOME` is not its
+        /// container): answered here without another call.
         fn sandbox(&self, answer: Resolver<Sandbox>) {
             // The owner retiring first leaves nothing waiting.
             let _ = answer.resolve(self.sandbox.clone());

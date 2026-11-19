@@ -275,10 +275,8 @@ fn a_sandbox_read_that_answered_nothing_is_asked_again() {
 fn a_sandbox_read_that_panicked_is_asked_again() {
     let store = GrantStore::new();
     let grant = store.grant(outside("notes.txt"));
-    let (mut host, system, grants) =
-        run_with(&store, |system| system.grants().drop_sandbox_questions());
-    // The dropped read settles at a turn, which leaves the sandbox unread.
-    turn(&mut host);
+    let (mut host, system, grants) = run(&store);
+    // The handle's first read is the first resolve's.
     system.grants().panic_at_next_sandbox_question();
     let mut caught = FirstPanic::new();
     let panicked = caught.contain(|| grants.resolve(&grant, 1024));
@@ -290,6 +288,39 @@ fn a_sandbox_read_that_panicked_is_asked_again() {
     let access = settled(&mut host, grants.resolve(&grant, 1024))
         .expect("no read is left in flight: the next resolve asks again, and is answered");
     assert_eq!(access.file().path(), Some(outside("notes.txt").as_path()));
+}
+
+#[test]
+fn a_resolve_waiting_for_a_read_that_panicked_is_refused_unavailable() {
+    let store = GrantStore::new();
+    let grant = store.grant(outside("notes.txt"));
+    let (mut host, system, grants) = run(&store);
+    let waiting = Rc::new(RefCell::new(None::<Resolving>));
+    let (calling, into, called) = (grants.clone(), Rc::clone(&waiting), grant.clone());
+    system
+        .grants()
+        .panic_at_next_sandbox_question_after(move || {
+            // The backend calls the handle back before it panics: this resolve
+            // waits for the read under way.
+            *into.borrow_mut() = Some(calling.resolve(&called, 1024));
+        });
+    let mut caught = FirstPanic::new();
+    assert!(caught.contain(|| grants.resolve(&grant, 1024)).is_none());
+    drop(caught);
+    let waited = waiting
+        .borrow_mut()
+        .take()
+        .expect("the backend called back");
+    let slot = outcome_slot::<Result<GrantResult, Abandoned>>();
+    let into = Rc::clone(&slot);
+    waited.on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    turn(&mut host);
+    let outcome = slot.borrow_mut().take().expect("settled at the turn");
+    assert_eq!(
+        outcome.map(Result::err),
+        Ok(Some(unavailable())),
+        "refused with a typed error, not abandoned"
+    );
 }
 
 #[test]

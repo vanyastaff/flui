@@ -77,20 +77,46 @@ fn has_description(path: &Path, linux: bool) -> bool {
         )
 }
 
+/// Whether `metadata` is a description's: a file within the bound.
+fn is_description(metadata: &std::fs::Metadata) -> bool {
+    metadata.is_file() && metadata.len() <= MAX_FLATPAK_INFO_LEN
+}
+
 /// The description at `path`, on a system that has Flatpak (`linux`).
+///
+/// It is judged a file within the bound before it is opened, so a FIFO or a
+/// device at the name is never opened; on Unix it is opened without
+/// blocking and judged again from the open file, so one swapped in between
+/// the two cannot block the reader either.
 fn read_description(path: &Path, linux: bool) -> std::io::Result<FlatpakInfo> {
     if !linux {
         return Ok(FlatpakInfo::Absent);
     }
-    let file = match std::fs::File::open(path) {
+    match std::fs::metadata(path) {
+        Ok(metadata) if !is_description(&metadata) => {
+            return Ok(FlatpakInfo::Present(String::new()));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(FlatpakInfo::Absent);
+        }
+        Err(error) => return Err(error),
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(FlatpakInfo::Absent);
         }
         Err(error) => return Err(error),
     };
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_FLATPAK_INFO_LEN {
+    if !is_description(&file.metadata()?) {
         return Ok(FlatpakInfo::Present(String::new()));
     }
     let mut bytes = Vec::new();
@@ -265,7 +291,7 @@ impl Confinement {
         user_home: &dyn Fn() -> Option<PathBuf>,
         user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
     ) -> Self {
-        Self::of_environment(
+        Self::detect(
             &|name| std::env::var_os(name),
             flatpak_info,
             user_home,
@@ -273,26 +299,17 @@ impl Confinement {
         )
     }
 
-    /// [`of_process`](Self::of_process) over the environment `env`.
-    fn of_environment(
-        env: Environment<'_>,
-        flatpak_info: &FlatpakInfo,
-        user_home: &dyn Fn() -> Option<PathBuf>,
-        user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
-    ) -> Self {
-        let home = user_home();
-        Self::detect(env, flatpak_info, home.as_deref(), user_dir)
-    }
-
-    /// The sandbox `env` and `flatpak_info` describe; `user_home` is the
-    /// user's home from the system's user database, for a container whose
-    /// `HOME` is not its container; `user_dir` places a user folder as the
-    /// user's `user-dirs.dirs` does, for a manifest's `xdg-*` entries, and
-    /// answers none for a folder it does not configure.
+    /// The sandbox `env` and `flatpak_info` describe. `user_home` reads the
+    /// user's home from the system's user database; it is called only when
+    /// a sandbox needs it and the environment does not name it (a Flatpak
+    /// with no `HOME`, an App Sandbox whose `HOME` is not its container), so
+    /// an unconfined process never asks the database. `user_dir` places a
+    /// user folder as the user's `user-dirs.dirs` does, for a manifest's
+    /// `xdg-*` entries, and answers none for a folder it does not configure.
     pub fn detect(
         env: &dyn Fn(&str) -> Option<OsString>,
         flatpak_info: &FlatpakInfo,
-        user_home: Option<&Path>,
+        user_home: &dyn Fn() -> Option<PathBuf>,
         user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
     ) -> Self {
         if let FlatpakInfo::Present(text) = flatpak_info {
@@ -305,7 +322,7 @@ impl Confinement {
                 .join("Data");
             let home = folder(env, "HOME")
                 .filter(|home| home.ends_with(&container))
-                .or_else(|| user_home.map(|home| home.join(&container)));
+                .or_else(|| user_home().map(|home| home.join(&container)));
             if let Some(home) = home {
                 let temporary = usable_temporary(env, &home);
                 return Self::AppSandbox(AppSandbox { home, temporary });
@@ -370,14 +387,14 @@ fn key_file_list(value: &str) -> Vec<String> {
 fn flatpak(
     env: Environment<'_>,
     text: &str,
-    user_home: Option<&Path>,
+    user_home: &dyn Fn() -> Option<PathBuf>,
     user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
 ) -> FlatpakSandbox {
     let id = key_file_value(text, "Application", "name")
         .map(OsString::from)
         .or_else(|| env("FLATPAK_ID"))
         .filter(is_one_name);
-    let home = folder(env, "HOME").or_else(|| user_home.map(Path::to_path_buf));
+    let home = folder(env, "HOME").or_else(user_home);
     let own = home
         .as_ref()
         .zip(id.as_ref())
@@ -496,12 +513,20 @@ mod tests {
         None
     }
 
+    fn no_home() -> Option<PathBuf> {
+        None
+    }
+
     fn app_sandbox(confinement: Confinement) -> super::AppSandbox {
         let Confinement::AppSandbox(sandbox) = confinement else {
             panic!("the App Sandbox, not {confinement:?}");
         };
         sandbox
     }
+
+    /// A case: its name, the environment, and how many times the user
+    /// database is asked.
+    type Case = (&'static str, Vec<(&'static str, OsString)>, usize);
 
     /// A row: its name, `HOME`, `TMPDIR`, and the temporary folder reached.
     type Row = (
@@ -515,7 +540,7 @@ mod tests {
     fn a_flatpak_is_a_process_with_its_description_whatever_its_environment_says() {
         let inherited = environment(vec![("FLATPAK_ID", "org.example.Ide".into())]);
         assert_eq!(
-            Confinement::detect(&inherited, &FlatpakInfo::Absent, None, &no_user_dirs),
+            Confinement::detect(&inherited, &FlatpakInfo::Absent, &no_home, &no_user_dirs),
             Confinement::Unconfined,
             "a host process started from a Flatpak's terminal inherits FLATPAK_ID"
         );
@@ -525,7 +550,8 @@ mod tests {
             ("HOME", home.clone().into()),
         ]);
         let info = FlatpakInfo::Present("[Application]\nname=org.example.App\n".to_owned());
-        let Confinement::Flatpak(sandbox) = Confinement::detect(&env, &info, None, &no_user_dirs)
+        let Confinement::Flatpak(sandbox) =
+            Confinement::detect(&env, &info, &no_home, &no_user_dirs)
         else {
             panic!("a process with the description is a Flatpak");
         };
@@ -580,26 +606,91 @@ mod tests {
         );
     }
 
+    /// A FIFO at the description's name would block an open until a writer
+    /// came: it is judged by its metadata and never opened.
+    #[cfg(unix)]
     #[test]
-    fn the_process_sandbox_takes_the_users_home_from_the_user_database_not_home() {
-        let user = absolute("user");
-        let env = environment(vec![
-            ("APP_SANDBOX_CONTAINER_ID", "com.example.app".into()),
-            ("HOME", absolute("elsewhere").into_os_string()),
-        ]);
-        let lookup = || Some(user.clone());
-        let sandbox = app_sandbox(Confinement::of_environment(
-            &env,
-            &FlatpakInfo::Absent,
-            &lookup,
-            &no_user_dirs,
-        ));
+    fn a_description_that_is_no_file_is_never_opened() {
+        let fifo = std::env::temp_dir().join(format!("flui-flatpak-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_file(&fifo);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "a FIFO is made");
+        let (sent, read) = std::sync::mpsc::channel();
+        let reading = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(read_description(&reading, true).ok());
+        });
+        let answer = read.recv_timeout(std::time::Duration::from_secs(5));
+        if answer.is_err() {
+            // Unblock the reader so the test process can end.
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        let _ = std::fs::remove_file(&fifo);
         assert_eq!(
-            sandbox.home(),
-            user.join("Library/Containers/com.example.app/Data")
-                .as_path(),
-            "a HOME that is not the container leaves the container under the user's home"
+            answer.expect("the read does not block"),
+            Some(FlatpakInfo::Present(String::new())),
+            "no file: a Flatpak with its own folders alone"
         );
+    }
+
+    #[test]
+    fn the_user_database_is_asked_only_when_a_sandbox_needs_it_and_never_home() {
+        let user = absolute("user");
+        let container = user.join("Library/Containers/com.example.app/Data");
+        let asked = std::cell::Cell::new(0);
+        let lookup = || {
+            asked.set(asked.get() + 1);
+            Some(user.clone())
+        };
+        let cases: [Case; 3] = [
+            (
+                "unconfined",
+                vec![("HOME", absolute("me").into_os_string())],
+                0,
+            ),
+            (
+                "HOME the container",
+                vec![
+                    ("APP_SANDBOX_CONTAINER_ID", "com.example.app".into()),
+                    ("HOME", container.clone().into_os_string()),
+                ],
+                0,
+            ),
+            (
+                "HOME elsewhere",
+                vec![
+                    ("APP_SANDBOX_CONTAINER_ID", "com.example.app".into()),
+                    ("HOME", absolute("elsewhere").into_os_string()),
+                ],
+                1,
+            ),
+        ];
+        for (name, vars, asks) in cases {
+            asked.set(0);
+            let found = Confinement::detect(
+                &environment(vars),
+                &FlatpakInfo::Absent,
+                &lookup,
+                &no_user_dirs,
+            );
+            assert_eq!(
+                asked.get(),
+                asks,
+                "{name}: times the user database is asked"
+            );
+            match found {
+                Confinement::AppSandbox(sandbox) => assert_eq!(
+                    sandbox.home(),
+                    container.as_path(),
+                    "{name}: the container under the database's home, never under HOME"
+                ),
+                Confinement::Unconfined => assert_eq!(name, "unconfined"),
+                Confinement::Flatpak(_) => panic!("{name}: no description, no Flatpak"),
+            }
+        }
     }
 
     #[test]
@@ -630,7 +721,7 @@ mod tests {
         let Confinement::Flatpak(sandbox) = Confinement::detect(
             &env,
             &FlatpakInfo::Present(text.to_owned()),
-            None,
+            &no_home,
             &user_dir,
         ) else {
             panic!("a Flatpak");
@@ -658,7 +749,8 @@ mod tests {
             "Flatpak unsets TMPDIR: the variable is never read there"
         );
         let host = FlatpakInfo::Present("[Context]\nfilesystems=host;\n".to_owned());
-        let Confinement::Flatpak(sandbox) = Confinement::detect(&env, &host, None, &no_user_dirs)
+        let Confinement::Flatpak(sandbox) =
+            Confinement::detect(&env, &host, &no_home, &no_user_dirs)
         else {
             panic!("a Flatpak");
         };
@@ -713,7 +805,7 @@ mod tests {
             let sandbox = app_sandbox(Confinement::detect(
                 &environment(vars),
                 &FlatpakInfo::Absent,
-                Some(&user),
+                &|| Some(user.clone()),
                 &no_user_dirs,
             ));
             assert_eq!(sandbox.home(), container.as_path(), "{name}");
@@ -721,7 +813,12 @@ mod tests {
         }
         let climbing = environment(vec![("APP_SANDBOX_CONTAINER_ID", "../x".into())]);
         assert_eq!(
-            Confinement::detect(&climbing, &FlatpakInfo::Absent, Some(&user), &no_user_dirs),
+            Confinement::detect(
+                &climbing,
+                &FlatpakInfo::Absent,
+                &|| Some(user.clone()),
+                &no_user_dirs
+            ),
             Confinement::Unconfined
         );
     }

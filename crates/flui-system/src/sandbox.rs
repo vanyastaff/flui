@@ -133,16 +133,45 @@ pub(crate) fn of_confinement(confinement: &Confinement) -> Sandbox {
     }
 }
 
+/// The sandbox a description read off the owner thread describes: `None`
+/// when it could not be read, which no handle keeps, so the next resolve
+/// asks again. The user's home is read through `user_home` only when the
+/// sandbox needs it.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn of_description(
+    read: std::io::Result<flui_platform::sandbox::FlatpakInfo>,
+    user_home: &dyn Fn() -> Option<PathBuf>,
+    user_dir: &dyn Fn(flui_platform::sandbox::UserFolder) -> Option<PathBuf>,
+) -> Option<Sandbox> {
+    let info = read.ok()?;
+    Some(of_confinement(&Confinement::of_process(
+        &info, user_home, user_dir,
+    )))
+}
+
 /// The user's home as the system's user database records it
 /// (`getpwuid_r`), whatever `HOME` says: what a container rebuilt under the
 /// user's home is rebuilt under. `None` when the database has no record of
 /// the user, or one that is not an absolute path.
+///
+/// `flui-native`'s data folders keep the same lookup
+/// (`storage::container::user_database_home`): a capability crate does not
+/// depend on the host, and `flui-platform`, which both reach, has no
+/// `unsafe`. Each copy's test reads the record from a buffer too small for
+/// it, so the two keep the same retry.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn user_database_home() -> Option<PathBuf> {
+    user_database_home_from(1024)
+}
+
+/// [`user_database_home`], starting from a buffer of `initial` bytes and
+/// doubling it while the record does not fit, up to 64 KiB.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[expect(
     unsafe_code,
     reason = "getpwuid_r writes the user's record into buffers it was given"
 )]
-pub(crate) fn user_database_home() -> Option<PathBuf> {
+fn user_database_home_from(initial: usize) -> Option<PathBuf> {
     use std::ffi::{CStr, OsStr};
     use std::os::unix::ffi::OsStrExt as _;
 
@@ -150,7 +179,7 @@ pub(crate) fn user_database_home() -> Option<PathBuf> {
     const MAX_RECORD: usize = 64 * 1024;
     // SAFETY: `getuid` takes nothing and always succeeds.
     let uid = unsafe { libc::getuid() };
-    let mut buffer = vec![0_u8; 1024];
+    let mut buffer = vec![0_u8; initial.max(1)];
     loop {
         let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
         let mut found: *mut libc::passwd = std::ptr::null_mut();
@@ -215,7 +244,7 @@ mod tests {
 
     use flui_platform::sandbox::{Confinement, FlatpakInfo, UserFolder};
 
-    use super::{Sandbox, SandboxKind, android_app, ios_app, of_confinement};
+    use super::{Sandbox, SandboxKind, android_app, ios_app, of_confinement, of_description};
 
     /// An absolute path on the host the test runs on, under no folder a
     /// sandbox reaches of itself (a Flatpak reaches `/tmp`).
@@ -238,6 +267,35 @@ mod tests {
 
     fn no_user_dirs(_: UserFolder) -> Option<PathBuf> {
         None
+    }
+
+    fn no_home() -> Option<PathBuf> {
+        None
+    }
+
+    #[test]
+    fn a_description_that_could_not_be_read_answers_no_sandbox() {
+        let unread = of_description(
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            &no_home,
+            &no_user_dirs,
+        );
+        assert_eq!(unread, None, "no answer, which the next resolve asks again");
+        assert_eq!(
+            of_description(Ok(FlatpakInfo::Absent), &no_home, &no_user_dirs),
+            Some(Sandbox::unconfined()),
+            "an absent description is an answer"
+        );
+    }
+
+    /// The lookup starts from a buffer of one byte, which no record fits:
+    /// the answer is the one the default buffer gives.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_user_database_record_is_read_whole_from_a_buffer_too_small() {
+        let whole = super::user_database_home_from(1024);
+        assert!(whole.is_some(), "the test's user has a record with a home");
+        assert_eq!(super::user_database_home_from(1), whole);
     }
 
     #[test]
@@ -289,7 +347,7 @@ mod tests {
             ))
         };
         let reaches = |env: &dyn Fn(&str) -> Option<OsString>, info: &FlatpakInfo, path: &Path| {
-            of_confinement(&Confinement::detect(env, info, None, &no_user_dirs)).reaches(path)
+            of_confinement(&Confinement::detect(env, info, &no_home, &no_user_dirs)).reaches(path)
         };
         let documents = home.join("Documents").join("notes.txt");
         assert!(reaches(
@@ -320,7 +378,7 @@ mod tests {
             of_confinement(&Confinement::detect(
                 &flatpak_env(),
                 &info("xdg-documents:ro;"),
-                None,
+                &no_home,
                 &configured
             ))
             .reaches(&documents),
@@ -335,7 +393,12 @@ mod tests {
             "Flatpak unsets TMPDIR: an inherited one is not the sandbox's"
         );
         assert_eq!(
-            Confinement::detect(&flatpak_env(), &FlatpakInfo::Absent, None, &no_user_dirs),
+            Confinement::detect(
+                &flatpak_env(),
+                &FlatpakInfo::Absent,
+                &no_home,
+                &no_user_dirs
+            ),
             Confinement::Unconfined,
             "FLATPAK_ID without the description is no Flatpak"
         );

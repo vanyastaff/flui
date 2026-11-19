@@ -16,7 +16,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use flui_platform::capability::Resolver;
-use flui_platform::sandbox::{Confinement, read_flatpak_info};
+use flui_platform::sandbox::read_flatpak_info;
 use flui_platform::{Unsupported, UnsupportedReason};
 
 use super::Portal;
@@ -26,7 +26,7 @@ use crate::grant::path::{Granter, file_of, reacquired};
 use crate::grant::{
     Grant, GrantBackend, GrantCapability, GrantError, GrantKind, GrantResult, ResolveHold,
 };
-use crate::sandbox::{Sandbox, of_confinement, user_database_home};
+use crate::sandbox::{Sandbox, of_description, user_database_home};
 
 /// [`GrantBackend`] over the file system, on the portal's runtime.
 pub(crate) struct PortalGrants {
@@ -53,12 +53,7 @@ impl GrantBackend for PortalGrants {
         }
         self.portal.spawn(move |_| async move {
             let sandbox = zruntime::unblock(|| {
-                let info = read_flatpak_info().ok()?;
-                Some(of_confinement(&Confinement::of_process(
-                    &info,
-                    &user_database_home,
-                    &named_folder,
-                )))
+                of_description(read_flatpak_info(), &user_database_home, &named_folder)
             })
             .await;
             if let Some(sandbox) = sandbox {

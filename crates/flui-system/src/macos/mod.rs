@@ -154,7 +154,8 @@ mod appkit {
         });
         registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
             // No Flatpak description on macOS: the App Sandbox is read from
-            // the environment its system sets, with no file system call.
+            // the environment its system sets. The user database is asked
+            // only for an App Sandbox whose `HOME` is not its container.
             let confinement = flui_platform::sandbox::Confinement::of_process(
                 &flui_platform::sandbox::FlatpakInfo::Absent,
                 &crate::sandbox::user_database_home,

@@ -24,8 +24,6 @@
 //! runs on the store's IO thread, at its first call.
 
 use std::path::{Path, PathBuf};
-#[cfg(any(windows, test))]
-use std::time::{Duration, Instant};
 
 use flui_platform::sandbox::Confinement;
 
@@ -59,8 +57,16 @@ impl Container {
     /// A Flatpak's description that could not be read: the container is
     /// unknown this time, and the caller asks again later.
     pub(crate) fn of_process() -> std::io::Result<Self> {
+        Self::of_description(flui_platform::sandbox::read_flatpak_info())
+    }
+
+    /// The process's container, with its Flatpak description as `read`
+    /// read it: an error is no container, which the caller asks again for.
+    fn of_description(
+        read: std::io::Result<flui_platform::sandbox::FlatpakInfo>,
+    ) -> std::io::Result<Self> {
         let confinement = Confinement::of_process(
-            &flui_platform::sandbox::read_flatpak_info()?,
+            &read?,
             &user_database_home,
             // A data folder reads no manifest entry.
             &|_| None,
@@ -79,12 +85,24 @@ impl Container {
 /// (`getpwuid_r`), whatever `HOME` says: what a container rebuilt under the
 /// user's home is rebuilt under. `None` when the database has no record of
 /// the user, or one that is not an absolute path.
+///
+/// `flui-system`'s grants keep the same lookup
+/// (`sandbox::user_database_home`): the host and a capability crate share
+/// only `flui-platform`, which has no `unsafe`. Each copy's test reads the
+/// record from a buffer too small for it, so the two keep the same retry.
+#[cfg(unix)]
+fn user_database_home() -> Option<PathBuf> {
+    user_database_home_from(1024)
+}
+
+/// [`user_database_home`], starting from a buffer of `initial` bytes and
+/// doubling it while the record does not fit, up to 64 KiB.
 #[cfg(unix)]
 #[expect(
     unsafe_code,
     reason = "getpwuid_r writes the user's record into buffers it was given"
 )]
-fn user_database_home() -> Option<PathBuf> {
+fn user_database_home_from(initial: usize) -> Option<PathBuf> {
     use std::ffi::{CStr, OsStr};
     use std::os::unix::ffi::OsStrExt as _;
 
@@ -92,7 +110,7 @@ fn user_database_home() -> Option<PathBuf> {
     const MAX_RECORD: usize = 64 * 1024;
     // SAFETY: `getuid` takes nothing and always succeeds.
     let uid = unsafe { libc::getuid() };
-    let mut buffer = vec![0_u8; 1024];
+    let mut buffer = vec![0_u8; initial.max(1)];
     loop {
         let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
         let mut found: *mut libc::passwd = std::ptr::null_mut();
@@ -186,10 +204,10 @@ pub(crate) enum Migrated {
     /// left where it was, and it stays the store
     /// ([`roots_after_migration`]).
     TooLarge,
-    /// Another instance held the migration's lock past
-    /// [`MIGRATION_LOCK_WAIT`]: this one neither swept nor copied, and the
-    /// old store stays the store this session.
-    Busy,
+    /// The new root could not be read (this error's kind): whether it holds
+    /// a store is unknown, so it stays the store, and a session never goes
+    /// back to an old store an earlier copy replaced.
+    RootUnreadable(std::io::ErrorKind),
 }
 
 /// Copy the store under `from` to `to` once: only when `to` holds no store
@@ -199,15 +217,22 @@ pub(crate) enum Migrated {
 /// killed during it, leaves no root behind and the next first call copies
 /// again; a root another instance renamed into place first is kept, and the
 /// staging copy discarded. One instance migrates at a time: the sweep, the
-/// copy and the rename run under an exclusive lock on a file beside the
-/// root. An instance that finds it held waits up to [`MIGRATION_LOCK_WAIT`]
-/// and then takes the root the holder put in place; one still locked out
-/// after that copies nothing ([`Migrated::Busy`]). Staging folders an earlier copy left (a process
-/// killed during one) are removed first, under that lock, so no folder a
-/// copy still writes into is swept. A link, or anything but a file or a
-/// folder, leaves the store where it was. Blocks on the file system.
+/// copy and the rename run under an exclusive lock on the file `lock`,
+/// which an instance that finds it held waits for, however long the
+/// holder's copy takes (the store's first call, on its IO thread; the
+/// system releases the lock of a holder that crashed). Staging folders an
+/// earlier copy left (a process killed during one) are removed first, under
+/// that lock, so no folder a copy still writes into is swept. A link, or
+/// anything but a file or a folder, leaves the store where it was. Blocks on
+/// the file system.
+///
+/// # Errors
+///
+/// A failure after `to` was shown to hold no store: the old store stays the
+/// store ([`roots_after_migration`]). A failure to read `to` is
+/// [`Migrated::RootUnreadable`] instead.
 #[cfg(any(windows, test))]
-pub(crate) fn migrate(from: &Path, to: &Path) -> std::io::Result<Migrated> {
+pub(crate) fn migrate(from: &Path, to: &Path, lock: &Path) -> std::io::Result<Migrated> {
     let moment = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
@@ -215,7 +240,7 @@ pub(crate) fn migrate(from: &Path, to: &Path) -> std::io::Result<Migrated> {
         from,
         to,
         moment,
-        MIGRATION_LOCK_WAIT,
+        lock,
         &mut |source, target| {
             let mut source = std::fs::File::open(source)?;
             let mut copy = std::fs::OpenOptions::new()
@@ -234,30 +259,35 @@ pub(crate) fn migrate(from: &Path, to: &Path) -> std::io::Result<Migrated> {
 #[cfg(any(windows, test))]
 type FileStep<'a> = &'a mut dyn FnMut(&Path, &Path) -> std::io::Result<()>;
 
-/// [`migrate`] at `moment` (nanoseconds since the epoch, which names its
-/// staging folder), waiting up to `wait` for the lock, each file copied by
-/// `copy` and the copy put in place by `place`.
+/// [`migrate`] under the lock file `lock` at `moment` (nanoseconds since the
+/// epoch, which names its staging folder), each file copied by `copy` and
+/// the copy put in place by `place`.
 #[cfg(any(windows, test))]
 fn migrate_with(
     from: &Path,
     to: &Path,
     moment: u128,
-    wait: Duration,
+    lock: &Path,
     copy: FileStep<'_>,
     place: FileStep<'_>,
 ) -> std::io::Result<Migrated> {
-    if holds_store(to)? || !holds_store(from)? {
+    match holds_store(to) {
+        Ok(true) => return Ok(Migrated::Nothing),
+        Ok(false) => {}
+        Err(error) => return Ok(Migrated::RootUnreadable(error.kind())),
+    }
+    if !holds_store(from)? {
         return Ok(Migrated::Nothing);
     }
     let staging = Staging::beside(to)?;
     // Held to the end of the migration, every return included.
-    let Some(_lock) = staging.lock(wait)? else {
-        return Ok(Migrated::Busy);
-    };
+    let _lock = lock_migration(lock)?;
     // Judged again under the lock: the instance that held it, which this
     // one may have waited for, may have put the root in place.
-    if holds_store(to)? {
-        return Ok(Migrated::Nothing);
+    match holds_store(to) {
+        Ok(true) => return Ok(Migrated::Nothing),
+        Ok(false) => {}
+        Err(error) => return Ok(Migrated::RootUnreadable(error.kind())),
     }
     let Some(entries) = listed(from)? else {
         return Ok(Migrated::TooLarge);
@@ -293,27 +323,41 @@ fn migrate_with(
     Err(failed)
 }
 
+/// Take the migration's exclusive lock on the file at `path`, waiting while
+/// another instance holds it: the locked file, whose drop releases it. The
+/// file stays after the lock is released, so no instance locks a file
+/// another has just removed.
+#[cfg(any(windows, test))]
+fn lock_migration(path: &Path) -> std::io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    file.lock()?;
+    Ok(file)
+}
+
+/// The lock file of a packaged application's migration: in the package's
+/// `LocalState`, beside the local root `local`, which the system never
+/// roams to another machine.
+#[cfg(any(windows, test))]
+pub(crate) fn migration_lock(local: &Path) -> PathBuf {
+    let name = local
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    local.with_file_name(format!(".{name}.migrating.lock"))
+}
+
 /// Where a copy into `to` stages: folders beside it named
-/// `.<name>.migrating-<process id>-<moment>`, and the lock file
-/// `.<name>.migrating.lock` that one migration at a time holds.
+/// `.<name>.migrating-<process id>-<moment>`.
 #[cfg(any(windows, test))]
 struct Staging<'a> {
     parent: &'a Path,
-    /// `.<name>.migrating`: what the lock file and every staging folder of
-    /// `to` begin with.
+    /// `.<name>.migrating`: what every staging folder of `to` begins with.
     stem: String,
 }
-
-/// How long an instance that finds the migration's lock held waits for it:
-/// a migration copies at most [`MAX_MIGRATED_BYTES`] and takes milliseconds
-/// for a usual store, so the holder is normally done well within it. It
-/// blocks the store's first call on its IO thread, never the owner thread.
-#[cfg(any(windows, test))]
-pub(crate) const MIGRATION_LOCK_WAIT: Duration = Duration::from_secs(2);
-
-/// How often a waiting instance tries the lock again.
-#[cfg(any(windows, test))]
-const MIGRATION_LOCK_POLL: Duration = Duration::from_millis(10);
 
 /// The most staging folders one sweep removes.
 #[cfg(any(windows, test))]
@@ -334,40 +378,6 @@ impl<'a> Staging<'a> {
             parent,
             stem: format!(".{}.migrating", name.to_string_lossy()),
         })
-    }
-
-    /// The lock file one migration of this root holds.
-    fn lock_path(&self) -> PathBuf {
-        self.parent.join(format!("{}.lock", self.stem))
-    }
-
-    /// Take the migration's exclusive lock, trying again every
-    /// [`MIGRATION_LOCK_POLL`] for up to `wait`: the locked file, whose drop
-    /// releases it, or `None` when another instance still holds it after
-    /// `wait`. The file stays after the lock is released, so no instance
-    /// locks a file another has just removed.
-    fn lock(&self, wait: Duration) -> std::io::Result<Option<std::fs::File>> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.lock_path())?;
-        let started = Instant::now();
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Some(file)),
-                Err(std::fs::TryLockError::WouldBlock) => {}
-                Err(std::fs::TryLockError::Error(error)) => return Err(error),
-            }
-            let Some(left) = wait.checked_sub(started.elapsed()) else {
-                return Ok(None);
-            };
-            if left.is_zero() {
-                return Ok(None);
-            }
-            std::thread::sleep(left.min(MIGRATION_LOCK_POLL));
-        }
     }
 
     /// Make this process's staging folder at `moment`: made here, never
@@ -431,27 +441,33 @@ fn holds_store(root: &Path) -> std::io::Result<bool> {
 }
 
 /// The roots a packaged application's store uses this session: each of
-/// `dirs` once `migrate` brought the store kept at `earlier`'s matching root
-/// over, or found nothing to bring; else that earlier root, where the store
-/// still is. A copy that failed, or a store past the bounds, leaves the
-/// session reading and writing where the values are: nothing written now
-/// lands in a root the next start would take for the store while the old
-/// values stay behind, and the next start copies again.
+/// `dirs` once `migrate` (from, to, lock file) brought the store kept at
+/// `earlier`'s matching root over, found nothing to bring, or could not read
+/// the new root; else that earlier root, where the store still is. The old
+/// root is taken only where the new one was shown to hold no store: a copy
+/// that failed after that, or a store past the bounds, leaves the session
+/// reading and writing where the values are, so nothing written now lands
+/// in a root the next start would take for the store while the old values
+/// stay behind. A failed copy is tried again at the next start; a store past
+/// the bounds stays where it is for good. Both roots migrate under one lock
+/// file, in the package's `LocalState` ([`migration_lock`]).
 #[cfg(any(windows, test))]
 pub(crate) fn roots_after_migration(
     earlier: DataDirs,
     dirs: DataDirs,
-    migrate: &mut dyn FnMut(&Path, &Path) -> std::io::Result<Migrated>,
+    migrate: &mut dyn FnMut(&Path, &Path, &Path) -> std::io::Result<Migrated>,
 ) -> DataDirs {
-    let mut root = |from: PathBuf, to: PathBuf| match migrate(&from, &to) {
+    let lock = migration_lock(&dirs.local);
+    let mut root = |from: PathBuf, to: PathBuf| match migrate(&from, &to, &lock) {
         Ok(Migrated::Nothing | Migrated::Copied(_)) => to,
-        Ok(Migrated::Busy) => {
-            tracing::info!(
-                from = %from.display(),
-                "another instance is copying the store kept before the application was \
-                 packaged: it stays the store this session"
+        Ok(Migrated::RootUnreadable(kind)) => {
+            tracing::warn!(
+                to = %to.display(),
+                ?kind,
+                "the package's data folder could not be read: it stays the store, and nothing \
+                 is copied into it this time"
             );
-            from
+            to
         }
         Ok(Migrated::TooLarge) => {
             tracing::warn!(
@@ -556,19 +572,47 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use flui_platform::sandbox::{Confinement, FlatpakInfo};
-
+    use std::path::Path;
     use std::time::Duration;
 
+    use flui_platform::sandbox::{Confinement, FlatpakInfo};
+
     use super::{
-        BaseDirs, Container, MAX_MIGRATED_FILES, MAX_SWEPT, MIGRATION_LOCK_WAIT, Migrated, Staging,
-        data_dirs_in, migrate, migrate_with, roots_after_migration,
+        BaseDirs, Container, MAX_MIGRATED_FILES, MAX_SWEPT, Migrated, Staging, data_dirs_in,
+        lock_migration, migrate, migrate_with, migration_lock, roots_after_migration,
     };
     use crate::storage::DataDirs;
     use crate::storage::FileStore;
 
     fn absolute(path: &str) -> PathBuf {
         std::env::temp_dir().join(path)
+    }
+
+    /// The lock file the tests that migrate `new` alone use, beside it.
+    fn lock_of(new: &Path) -> PathBuf {
+        migration_lock(new)
+    }
+
+    #[test]
+    fn a_description_that_could_not_be_read_is_no_container() {
+        assert!(
+            Container::of_description(Err(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied
+            )))
+            .is_err(),
+            "no container this time, rather than a Flatpak with its own folders alone"
+        );
+        assert!(Container::of_description(Ok(FlatpakInfo::Absent)).is_ok());
+    }
+
+    /// The lookup starts from a buffer of one byte, which no record fits:
+    /// the answer is the one the default buffer gives.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_database_record_is_read_whole_from_a_buffer_too_small() {
+        let whole = super::user_database_home_from(1024);
+        assert!(whole.is_some(), "the test's user has a record with a home");
+        assert_eq!(super::user_database_home_from(1), whole);
     }
 
     fn environment(vars: Vec<(&'static str, OsString)>) -> impl Fn(&str) -> Option<OsString> {
@@ -584,7 +628,7 @@ mod tests {
         Container::Sandbox(Confinement::detect(
             &environment(vars),
             info,
-            Some(&user),
+            &|| Some(user.clone()),
             &|_| None,
         ))
     }
@@ -676,7 +720,10 @@ mod tests {
         std::fs::write(old.join("notes"), b"notes").expect("written");
         std::fs::write(old.join(".machine-local").join("window"), b"window").expect("written");
 
-        assert_eq!(migrate(&old, &new).expect("copied"), Migrated::Copied(2));
+        assert_eq!(
+            migrate(&old, &new, &lock_of(&new)).expect("copied"),
+            Migrated::Copied(2)
+        );
         assert_eq!(std::fs::read(new.join("notes")).expect("copied"), b"notes");
         assert_eq!(
             std::fs::read(new.join(".machine-local").join("window")).expect("copied"),
@@ -686,7 +733,7 @@ mod tests {
 
         std::fs::write(old.join("notes"), b"changed").expect("written");
         assert_eq!(
-            migrate(&old, &new).expect("judged"),
+            migrate(&old, &new, &lock_of(&new)).expect("judged"),
             Migrated::Nothing,
             "a root that holds a store is never copied into"
         );
@@ -694,7 +741,7 @@ mod tests {
 
         let empty = scratch.path().join("empty");
         assert_eq!(
-            migrate(&empty, &scratch.path().join("fresh")).expect("judged"),
+            migrate(&empty, &scratch.path().join("fresh"), &lock_of(&new)).expect("judged"),
             Migrated::Nothing,
             "no old store, nothing to copy"
         );
@@ -706,7 +753,7 @@ mod tests {
         }
         let untouched = scratch.path().join("untouched");
         assert_eq!(
-            migrate(&large, &untouched).expect("judged"),
+            migrate(&large, &untouched, &lock_of(&untouched)).expect("judged"),
             Migrated::TooLarge
         );
         assert!(
@@ -738,7 +785,15 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
             })
-            .filter(|name| !["old", "new", ".new.migrating.lock"].contains(&name.as_str()))
+            .filter(|name| {
+                ![
+                    "old",
+                    "new",
+                    ".new.migrating.lock",
+                    ".new-local.migrating.lock",
+                ]
+                .contains(&name.as_str())
+            })
             .collect()
     }
 
@@ -760,7 +815,7 @@ mod tests {
             &old,
             &new,
             1,
-            MIGRATION_LOCK_WAIT,
+            &lock_of(&new),
             &mut |source, target| {
                 copied += 1;
                 if copied == 2 {
@@ -780,7 +835,10 @@ mod tests {
             Vec::<String>::new(),
             "the staging copy is removed"
         );
-        assert_eq!(migrate(&old, &new).expect("copied"), Migrated::Copied(2));
+        assert_eq!(
+            migrate(&old, &new, &lock_of(&new)).expect("copied"),
+            Migrated::Copied(2)
+        );
         assert_eq!(std::fs::read(new.join("b")).expect("copied"), b"b");
     }
 
@@ -792,7 +850,7 @@ mod tests {
             &old,
             &new,
             1,
-            MIGRATION_LOCK_WAIT,
+            &lock_of(&new),
             &mut |source, target| {
                 // The other instance finishes its copy while this one copies.
                 if !theirs.exists() {
@@ -824,7 +882,7 @@ mod tests {
             &old,
             &new,
             1,
-            MIGRATION_LOCK_WAIT,
+            &lock_of(&new),
             &mut copy_file,
             &mut |_, root| {
                 // A file takes the root's place as the rename fails, so reading
@@ -870,15 +928,8 @@ mod tests {
         }
         std::fs::write(scratch.path().join(".new.migrating-9-9-file"), b"").expect("written");
         assert_eq!(
-            migrate_with(
-                &old,
-                &new,
-                1,
-                MIGRATION_LOCK_WAIT,
-                &mut copy_file,
-                &mut rename
-            )
-            .expect("copied"),
+            migrate_with(&old, &new, 1, &lock_of(&new), &mut copy_file, &mut rename)
+                .expect("copied"),
             Migrated::Copied(2)
         );
         let mut left = leftovers(&scratch);
@@ -904,38 +955,50 @@ mod tests {
         assert!(left.iter().any(|left| left == ".new.migrating-9-9-file"));
     }
 
-    /// The first instance's lock on the migration of `new`.
-    fn first_instance_lock(new: &std::path::Path) -> std::fs::File {
-        Staging::beside(new)
-            .expect("its parent")
-            .lock(Duration::ZERO)
-            .expect("opened")
-            .expect("the first instance takes the lock")
+    /// A packaged application's two roots under `scratch`: the old store at
+    /// `old` and the package's at `new`, their local roots beside them.
+    fn package_roots(scratch: &tempfile::TempDir, old: &Path, new: &Path) -> (DataDirs, DataDirs) {
+        (
+            DataDirs {
+                roaming: old.to_path_buf(),
+                local: scratch.path().join("old-local"),
+            },
+            DataDirs {
+                roaming: new.to_path_buf(),
+                local: scratch.path().join("new-local"),
+            },
+        )
     }
 
-    /// The roots a second instance uses when it migrates with `wait`, and
-    /// whether it copied a file.
-    fn second_instance(
-        scratch: &tempfile::TempDir,
-        old: &std::path::Path,
-        new: &std::path::Path,
-        wait: Duration,
-    ) -> (DataDirs, bool) {
+    /// A first instance's copy takes longer than any fixed wait would allow
+    /// (a store near the bound, `sync_all` for each file): the second waits
+    /// for the lock however long, then takes the root the first put in place.
+    #[test]
+    fn a_second_instance_waits_for_the_lock_and_takes_the_root_put_in_place() {
+        let (scratch, old, new) = two_file_store();
+        let (earlier, dirs) = package_roots(&scratch, &old, &new);
+        let lock = migration_lock(&dirs.local);
+        assert_eq!(
+            lock.parent(),
+            dirs.local.parent(),
+            "the lock is in LocalState, never the roaming folder"
+        );
+        let first = lock_migration(&lock).expect("the first instance takes the lock");
+        let theirs = new.clone();
+        let holder = std::thread::spawn(move || {
+            // The first instance finishes its copy, then lets go.
+            std::thread::sleep(Duration::from_millis(2500));
+            std::fs::create_dir(&theirs).expect("their root");
+            std::fs::write(theirs.join("theirs"), b"theirs").expect("written");
+            drop(first);
+        });
         let mut copied = false;
-        let earlier = DataDirs {
-            roaming: old.to_path_buf(),
-            local: scratch.path().join("old-local"),
-        };
-        let dirs = DataDirs {
-            roaming: new.to_path_buf(),
-            local: scratch.path().join("new-local"),
-        };
-        let used = roots_after_migration(earlier, dirs, &mut |from, to| {
+        let used = roots_after_migration(earlier, dirs, &mut |from, to, lock| {
             migrate_with(
                 from,
                 to,
                 1,
-                wait,
+                lock,
                 &mut |source, target| {
                     copied = true;
                     copy_file(source, target)
@@ -943,56 +1006,6 @@ mod tests {
                 &mut rename,
             )
         });
-        (used, copied)
-    }
-
-    #[test]
-    fn a_second_instance_locked_out_past_the_wait_neither_sweeps_nor_copies() {
-        let (scratch, old, new) = two_file_store();
-        // The first instance's copy, under way in its staging folder.
-        leftover_staging(scratch.path(), "new", 1);
-        let first = first_instance_lock(&new);
-        let (used, copied) = second_instance(&scratch, &old, &new, Duration::from_millis(50));
-        assert!(!copied, "the second instance copies nothing");
-        assert!(!new.exists(), "and puts no root in place");
-        assert_eq!(
-            leftovers(&scratch),
-            [".new.migrating-0-0"],
-            "the first instance's staging folder is not swept"
-        );
-        assert_eq!(
-            used.roaming, old,
-            "the old store stays the store this session"
-        );
-        drop(first);
-        assert_eq!(
-            migrate_with(
-                &old,
-                &new,
-                2,
-                MIGRATION_LOCK_WAIT,
-                &mut copy_file,
-                &mut rename
-            )
-            .expect("copied"),
-            Migrated::Copied(2),
-            "once the lock is free, the next start copies"
-        );
-    }
-
-    #[test]
-    fn a_second_instance_waits_for_the_lock_and_takes_the_root_put_in_place() {
-        let (scratch, old, new) = two_file_store();
-        let first = first_instance_lock(&new);
-        let theirs = new.clone();
-        let holder = std::thread::spawn(move || {
-            // The first instance finishes its copy, then lets go.
-            std::thread::sleep(Duration::from_millis(50));
-            std::fs::create_dir(&theirs).expect("their root");
-            std::fs::write(theirs.join("theirs"), b"theirs").expect("written");
-            drop(first);
-        });
-        let (used, copied) = second_instance(&scratch, &old, &new, MIGRATION_LOCK_WAIT);
         holder.join().expect("the first instance finished");
         assert!(
             !copied,
@@ -1003,6 +1016,34 @@ mod tests {
             "the second instance ends on the new root"
         );
         assert!(new.join("theirs").exists());
+    }
+
+    /// The new root cannot be read (a file stands where its folder would):
+    /// whether an earlier copy filled it is unknown, so it stays the store.
+    #[test]
+    fn a_new_root_that_cannot_be_read_stays_the_store() {
+        let (scratch, old, new) = two_file_store();
+        std::fs::write(&new, b"").expect("a file in the root's place");
+        let (earlier, dirs) = package_roots(&scratch, &old, &new);
+        let mut copied = false;
+        let used = roots_after_migration(earlier, dirs, &mut |from, to, lock| {
+            migrate_with(
+                from,
+                to,
+                1,
+                lock,
+                &mut |source, target| {
+                    copied = true;
+                    copy_file(source, target)
+                },
+                &mut rename,
+            )
+        });
+        assert!(!copied, "nothing is copied into a root it could not read");
+        assert_eq!(
+            used.roaming, new,
+            "never back to the old store, which an earlier copy replaced"
+        );
     }
 
     /// A link named as a staging folder is not followed: the sweep removes
@@ -1016,15 +1057,7 @@ mod tests {
         std::fs::write(elsewhere.join("precious"), b"p").expect("written");
         std::os::unix::fs::symlink(&elsewhere, scratch.path().join(".new.migrating-1-1"))
             .expect("a link");
-        migrate_with(
-            &old,
-            &new,
-            2,
-            MIGRATION_LOCK_WAIT,
-            &mut copy_file,
-            &mut rename,
-        )
-        .expect("copied");
+        migrate_with(&old, &new, 2, &lock_of(&new), &mut copy_file, &mut rename).expect("copied");
         assert!(elsewhere.join("precious").exists());
     }
 
@@ -1058,12 +1091,12 @@ mod tests {
             roaming: new.clone(),
             local: new_local.clone(),
         };
-        let used = roots_after_migration(earlier, dirs, &mut |from, to| {
+        let used = roots_after_migration(earlier, dirs, &mut |from, to, lock| {
             migrate_with(
                 from,
                 to,
                 1,
-                MIGRATION_LOCK_WAIT,
+                lock,
                 &mut |_, _| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
                 &mut rename,
             )

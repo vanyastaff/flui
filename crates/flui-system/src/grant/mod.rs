@@ -197,10 +197,11 @@ pub trait GrantBackend: 'static {
     fn takes(&self, grant: &Grant) -> bool;
 
     /// Read the sandbox the process runs in: off the owner thread where the
-    /// file system describes it (a Flatpak's `/.flatpak-info`). Asked again
-    /// at a later resolve when it answered nothing (the resolver dropped) or
-    /// panicked; a panic here reaches the resolve that asked, once every
-    /// resolve waiting for the read was refused `Unavailable`.
+    /// file system describes it (a Flatpak's `/.flatpak-info`). Asked first
+    /// by a handle's first resolve, and again at a later resolve when it
+    /// answered nothing (the resolver dropped) or panicked; a panic here
+    /// reaches the resolve that asked, once every resolve waiting for the
+    /// read was refused `Unavailable`.
     fn sandbox(&self, answer: Resolver<Sandbox>);
 
     /// Reacquire what `grant` reaches; a system that hands the file over as
@@ -224,15 +225,13 @@ pub struct Grants {
 
 impl Grants {
     /// A handle over `backend` for the acquisition `ctx`; the backend is
-    /// asked for the process's sandbox here, and each resolve waits for it.
+    /// asked for the process's sandbox at the first resolve, and each
+    /// resolve waits for it.
     pub fn new(backend: impl GrantBackend, ctx: &ProviderContext<'_>) -> Self {
-        let backend: Rc<dyn GrantBackend> = Rc::new(backend);
-        let completions = ctx.completions().clone();
-        let sandbox = SandboxSlot::reading(read_sandbox(&*backend, &completions));
         Self {
-            backend,
-            sandbox,
-            completions,
+            backend: Rc::new(backend),
+            sandbox: SandboxSlot::unread(),
+            completions: ctx.completions().clone(),
         }
     }
 

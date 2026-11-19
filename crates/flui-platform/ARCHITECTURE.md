@@ -721,15 +721,19 @@ a tmpfs the file does not show, and is reached here. The macOS App Sandbox is
 `APP_SANDBOX_CONTAINER_ID`; its container is `HOME` only when `HOME` is that container's path,
 else the container under the user's home; a `TMPDIR` counts only inside the container
 (`usable_temporary`). `Confinement::detect` is a pure function of what it is given;
-`Confinement::of_process` adds the process's environment, and takes the user's home from a
-lookup its caller passes, which reads the system's user database: never `HOME`, since this crate
-has no `unsafe` and the standard library's `home_dir` prefers `HOME`. What both callers need is
-public (the variants, their accessors, `is_flatpak`, `is_plain`, `usable_temporary`); the
-description's path, fields and bound are not.
+`Confinement::of_process` adds the process's environment. The user's home comes from a lookup its
+caller passes, which reads the system's user database (never `HOME`, since this crate has no
+`unsafe` and the standard library's `home_dir` prefers `HOME`), and `detect` calls it only on
+the branch that needs it, so an unconfined process, or an App Sandbox whose `HOME` is its
+container, never asks the database. The description is judged a file within the bound before
+it is opened, and opened without blocking on Unix, so a FIFO at its name never blocks the
+reader. What both callers need is public (the variants, their accessors, `is_flatpak`,
+`is_plain`, `usable_temporary`); the description's path, fields and bound are not.
 **Tests:** `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
 `the_description_is_read_on_linux_alone_and_within_its_bound`,
 `a_description_out_of_reach_is_no_answer_and_still_a_sign_of_flatpak`,
-`the_process_sandbox_takes_the_users_home_from_the_user_database_not_home`,
+`a_description_that_is_no_file_is_never_opened` (Unix),
+`the_user_database_is_asked_only_when_a_sandbox_needs_it_and_never_home`,
 `a_key_file_list_is_split_where_its_writer_did_not_escape`,
 `a_manifests_filesystems_name_what_the_flatpak_reaches`,
 `an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`.

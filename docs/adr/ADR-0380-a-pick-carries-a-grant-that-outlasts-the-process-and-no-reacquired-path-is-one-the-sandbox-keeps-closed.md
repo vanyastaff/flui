@@ -158,20 +158,20 @@ holds no store and whose redirected `%APPDATA%` location holds one has it copied
 within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the
 root, made with `create_dir` (one already at the name is an error, never a shared folder) and
 renamed into place whole. One instance migrates at a time: the sweep, the copy and the rename run
-under an exclusive lock on `.<name>.migrating.lock` beside the root (`File::try_lock`). An
-instance that finds it held tries again for up to `MIGRATION_LOCK_WAIT` (two seconds, on the
-store's IO thread; a migration takes milliseconds), then judges the root again and takes the one
-the holder put in place. Only an instance still locked out after that neither sweeps nor copies
-and stays on the old store this session; what it writes then stays there, and the next start,
-which finds the holder's root in place, no longer reads it. That is the known limit
-([gaps](../gaps.md#sandbox-aware-file-access-is-partial)).
-Staging folders an earlier copy left are removed first, under that lock, by their exact name,
-folders only and no link followed, at most `MAX_SWEPT` at a time. A copy or rename that
-fails removes its staging folder and reports its own error, and a root another instance put in
-place first is kept. A store that was not copied (the copy failed, or the store is past the
-bound or holds a link) stays where it is and stays the store: the session reads and writes it
-there, so nothing is written to a new root the next start would take for the store, and the
-next start copies again. The Linux user folders answer none
+under an exclusive lock (`File::lock`) on one lock file in the package's `LocalState`, which the
+system never roams. An instance that finds it held waits for it with no deadline: only the
+store's first call waits, on its IO thread, never the owner thread, and the system releases the
+lock of a holder that crashed. It then judges the root again and takes the one the holder put in
+place, so no session is left writing to an old store a copy has replaced. Staging folders an
+earlier copy left are removed first, under that lock, by their exact name, folders only and no
+link followed, at most `MAX_SWEPT` at a time. A copy or rename that fails removes its staging
+folder and reports its own error, and a root another instance put in place first is kept. The
+old store stays the store only where the new root was shown to hold none: after a copy that
+failed, which the next start tries again, and for a store past the bound or holding a link,
+which is never copied. The session reads and writes it there, so nothing is written to a new
+root the next start would take for the store. A new root that could not be read stays the
+store, so a session never goes back to an old store an earlier copy replaced. The Linux user
+folders answer none
 for a folder that is not there for the process, which is how a Flatpak shows a folder its
 manifest does not expose.
 
@@ -210,9 +210,13 @@ manifest does not expose.
   `a_key_file_list_is_split_where_its_writer_did_not_escape`,
   `a_manifests_filesystems_name_what_the_flatpak_reaches`,
   `an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`,
-  `the_process_sandbox_takes_the_users_home_from_the_user_database_not_home` (`flui-platform`);
+  `a_description_that_is_no_file_is_never_opened` (Unix),
+  `the_user_database_is_asked_only_when_a_sandbox_needs_it_and_never_home` (`flui-platform`);
   `a_sandbox_read_that_answered_nothing_is_asked_again`,
   `a_sandbox_read_that_panicked_is_asked_again`,
+  `a_resolve_waiting_for_a_read_that_panicked_is_refused_unavailable`,
+  `a_description_that_could_not_be_read_answers_no_sandbox`,
+  `the_user_database_record_is_read_whole_from_a_buffer_too_small` (macOS and Linux),
   `a_dropped_resolve_leaves_the_queue_and_the_queue_is_bounded`,
   `a_scripted_grant_reads_back_as_the_doubles_and_no_system_takes_it` and the row
   `a_scripted_grant_is_foreign_to_every_system` (`flui-system`);
@@ -226,9 +230,12 @@ manifest does not expose.
   `staging_folders_an_earlier_copy_left_are_swept_by_exact_name_within_a_bound`,
   `a_sweep_follows_no_link` (Unix),
   `a_second_instance_waits_for_the_lock_and_takes_the_root_put_in_place`,
-  `a_second_instance_locked_out_past_the_wait_neither_sweeps_nor_copies`,
-  `a_staging_folder_already_there_is_an_error_not_a_shared_folder` and
-  `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made` (`flui-native`);
+  `a_new_root_that_cannot_be_read_stays_the_store`,
+  `a_staging_folder_already_there_is_an_error_not_a_shared_folder`,
+  `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made`,
+  `a_description_that_could_not_be_read_is_no_container`,
+  `a_container_that_could_not_be_read_is_read_again_at_the_next_call` and
+  `the_user_database_record_is_read_whole_from_a_buffer_too_small` (Unix) (`flui-native`);
   `a_picks_path_is_its_grant_and_resolves_while_the_file_is_there` against the stand-in portal on
   Linux; `a_kept_pick_carries_its_uri_once_every_pick_was_read` and
   `a_document_is_reacquired_only_while_its_permission_is_held_and_within_the_bound` (Android, on

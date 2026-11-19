@@ -6280,16 +6280,20 @@ store from before it was packaged is copied over then, once, within
 `MAX_MIGRATED_FILES` and `MAX_MIGRATED_BYTES`, into a staging folder made with
 `create_dir` and renamed into place whole, after the staging folders an earlier
 copy left are swept by their exact name (folders only, no link followed, at most
-`MAX_SWEPT`). One instance migrates at a time, under an exclusive `try_lock` on a
-lock file beside the root held for the sweep, the copy and the rename; an
-instance that finds it held tries again for up to `MIGRATION_LOCK_WAIT` (two
-seconds) and takes the root the holder put in place, and only one still locked
-out after that stays on the old store this session (the limit `docs/gaps.md`
-names). A failed copy or rename removes its staging folder and reports its
-own error, and a root another instance placed first is kept. A store that was not
-copied (a failure, or past the bound) stays the store: the session reads and
-writes it where it is (`roots_after_migration`), so no new root orphans it, and
-the next start copies again. The container under the user's home is under the
+`MAX_SWEPT`). One instance migrates at a time, under an exclusive lock on one
+lock file in the package's `LocalState` (`migration_lock`) held for the sweep,
+the copy and the rename; an instance that finds it held waits for it, however
+long the holder's copy takes (only the store's first call waits, on its IO
+thread; the system releases a crashed holder's lock), then judges the root
+again and takes the one the holder put in place. A failed copy or rename
+removes its staging folder and reports its own error, and a root another
+instance placed first is kept. The old store stays the store only where the new
+root was shown to hold none (`roots_after_migration`): after a failed copy,
+which the next start tries again, and for a store past the bound, which is
+never copied; the session reads and writes it where it is, so no new root
+orphans it. A new root that could not be read stays the store, so a session
+never goes back to an old store an earlier copy replaced. The container under
+the user's home is under the
 home the user database records (`getpwuid_r`), never `HOME`. The Flatpak
 description is read on Linux alone. Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,

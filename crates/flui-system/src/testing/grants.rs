@@ -178,8 +178,19 @@ enum SandboxAnswers {
     Dropped,
     /// When the test releases them, in order.
     Held(Vec<Resolver<Sandbox>>),
-    /// The next question panics, and the ones after it are answered at once.
-    PanicOnce,
+    /// The next question runs the test's code, if any, then panics; the ones
+    /// after it are answered at once.
+    PanicOnce(Option<BeforePanic>),
+}
+
+/// What the test runs inside the question that panics: code that calls the
+/// handle back, as a backend with a bug may.
+struct BeforePanic(Box<dyn FnOnce()>);
+
+impl std::fmt::Debug for BeforePanic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BeforePanic")
+    }
 }
 
 /// Grants whose system is simulated: each resolve answers what the
@@ -247,7 +258,14 @@ impl ScriptedGrants {
     /// Panic at the next question for the sandbox, as a backend with a bug
     /// does, and answer every one after it at once.
     pub fn panic_at_next_sandbox_question(&self) {
-        *self.answers.borrow_mut() = SandboxAnswers::PanicOnce;
+        *self.answers.borrow_mut() = SandboxAnswers::PanicOnce(None);
+    }
+
+    /// [`panic_at_next_sandbox_question`](Self::panic_at_next_sandbox_question),
+    /// running `before` inside the question first: a test's way to call the
+    /// handle back from a backend that then panics.
+    pub fn panic_at_next_sandbox_question_after(&self, before: impl FnOnce() + 'static) {
+        *self.answers.borrow_mut() = SandboxAnswers::PanicOnce(Some(BeforePanic(Box::new(before))));
     }
 
     /// How many times a handle asked for the sandbox while held.
@@ -255,7 +273,7 @@ impl ScriptedGrants {
     pub fn sandbox_questions_held(&self) -> usize {
         match &*self.answers.borrow() {
             SandboxAnswers::Held(waiting) => waiting.len(),
-            SandboxAnswers::Answered | SandboxAnswers::Dropped | SandboxAnswers::PanicOnce => 0,
+            SandboxAnswers::Answered | SandboxAnswers::Dropped | SandboxAnswers::PanicOnce(_) => 0,
         }
     }
 }
@@ -280,9 +298,14 @@ impl GrantBackend for ScriptedGrants {
                 drop(answer);
             }
             SandboxAnswers::Held(waiting) => waiting.push(answer),
-            SandboxAnswers::PanicOnce => {
+            SandboxAnswers::PanicOnce(before) => {
+                let before = before.take();
                 *answers = SandboxAnswers::Answered;
                 drop(answers);
+                if let Some(BeforePanic(before)) = before {
+                    before();
+                }
+                drop(answer);
                 panic!("the scripted backend panics asking for the sandbox");
             }
         }
