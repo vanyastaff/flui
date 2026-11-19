@@ -175,6 +175,16 @@ impl FontSource {
     }
 }
 
+/// The texture a frame ends in: the surface's view and texture, and the
+/// working format and size its content renders in, which a retained frame's
+/// candidate takes.
+pub(crate) struct FrameTarget<'a> {
+    pub(crate) view: &'a wgpu::TextureView,
+    pub(crate) texture: &'a wgpu::Texture,
+    pub(crate) size: (u32, u32),
+    pub(crate) format: wgpu::TextureFormat,
+}
+
 /// A renderer's damage, its retained target and the one-frame promotion to a
 /// full repaint.
 #[derive(Debug)]
@@ -432,8 +442,8 @@ impl FrameProtocol {
         self.plan_region = RegionPlan::rect_by_rect;
     }
 
-    /// Runs `plan` (not [`FramePlan::Skip`]) against `surface`, whose texture
-    /// is `size` in `format`.
+    /// Runs `plan` (not [`FramePlan::Skip`]) against `target`, timing the
+    /// frame on the GPU under its epoch when `timer` is given (ADR-0388).
     ///
     /// - [`FramePlan::Direct`] renders into the surface; the retained target
     ///   does not see the frame and stops being valid.
@@ -449,10 +459,12 @@ impl FrameProtocol {
         &mut self,
         plan: FramePlan,
         domain: &Arc<DeviceDomain>,
-        size: (u32, u32),
-        format: wgpu::TextureFormat,
-        (surface_view, surface_texture): (&wgpu::TextureView, &wgpu::Texture),
+        target: FrameTarget<'_>,
         steps: &mut impl FrameSteps,
+        mut timer: Option<(
+            &mut crate::gpu_timer::FrameGpuTimer,
+            flui_foundation::FrameEpoch,
+        )>,
     ) -> EngineResult<()> {
         // A failure or unwind leaves damage owed and forces a deliberate full
         // retry; the previous committed allocation itself remains untouched.
@@ -467,6 +479,11 @@ impl FrameProtocol {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("FLUI Complete Frame Encoder"),
             });
+        // The frame's first timestamp precedes its clear, so the time covers
+        // every pass of the frame (ADR-0388).
+        let timed = timer
+            .as_mut()
+            .and_then(|(timer, epoch)| timer.begin(&mut encoder, *epoch));
         let (retained, partial) = match plan {
             FramePlan::Skip => return Ok(()),
             FramePlan::Direct => {
@@ -474,23 +491,29 @@ impl FrameProtocol {
                 (None, None)
             }
             FramePlan::RetainedFull => (
-                Some(
-                    self.retained
-                        .begin_encoded(domain, size, format, false, &mut encoder)?,
-                ),
+                Some(self.retained.begin_encoded(
+                    domain,
+                    target.size,
+                    target.format,
+                    false,
+                    &mut encoder,
+                )?),
                 None,
             ),
             FramePlan::RetainedPartial(region) => (
-                Some(
-                    self.retained
-                        .begin_encoded(domain, size, format, true, &mut encoder)?,
-                ),
+                Some(self.retained.begin_encoded(
+                    domain,
+                    target.size,
+                    target.format,
+                    true,
+                    &mut encoder,
+                )?),
                 Some(region),
             ),
         };
         let (view, texture) = match retained.as_ref() {
             Some(candidate) => (candidate.view(), candidate.texture()),
-            None => (surface_view, surface_texture),
+            None => (target.view, target.texture),
         };
         if partial.is_none() {
             steps.0.clear(view, &mut encoder)?;
@@ -512,12 +535,18 @@ impl FrameProtocol {
             permits = candidate.submission_permits();
             permits.push(steps.0.blit(
                 candidate.texture(),
-                surface_texture,
-                surface_view,
+                target.texture,
+                target.view,
                 &mut encoder,
             )?);
         }
+        if let (Some((timer, _)), Some(timed)) = (timer.as_mut(), timed) {
+            timer.end(&mut encoder, timed);
+        }
         steps.0.submit(encoder, permits)?;
+        if let (Some((timer, _)), Some(timed)) = (timer, timed) {
+            timer.submitted(timed);
+        }
         if let Some(candidate) = retained {
             self.retained.commit(candidate);
         }

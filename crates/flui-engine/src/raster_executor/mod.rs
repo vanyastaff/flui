@@ -49,9 +49,9 @@ use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
 
 pub use backend::RasterBackend;
 pub use command::{
-    DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand,
-    RasterSendError, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotSettlement,
-    SlotTarget, SlotVisibility,
+    DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, GpuFrameTime, LIFECYCLE_CAPACITY,
+    RasterCommand, RasterSendError, RasterVerdict, SendReceipt, SlotChange, SlotConfig,
+    SlotSettlement, SlotTarget, SlotVisibility,
 };
 pub use device_health::DeviceHealth;
 pub use device_request::{DeviceAnswered, DeviceTicket};
@@ -1060,6 +1060,14 @@ impl<B: RasterBackend> RasterExecutor<B> {
             render(backend, slot, &frame)
         };
         let discarded_render = join(&mut failure, render_failure);
+        // The GPU times this frame's render read back for earlier frames,
+        // taken before the lock, since a backend is not called under it. The
+        // newest the record can hold are kept, the oldest first.
+        let mut gpu_times = [None; inbox::UNDRAINED_GPU_TIMES];
+        while let Some(time) = backend.take_gpu_time(slot.id) {
+            gpu_times.rotate_left(1);
+            gpu_times[inbox::UNDRAINED_GPU_TIMES - 1] = Some(time);
+        }
         let extra = {
             let mut state = slot.inbox.lock();
             // The answer counts only while no newer size was sent since the
@@ -1070,6 +1078,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 state.surface = state.surface.on(answer);
             }
             surface_lost(&mut state, &mut slot.applied, surface_loss);
+            for time in gpu_times.into_iter().flatten() {
+                state.hold_gpu_time(time);
+            }
             // Held before the settlement, which carries the mark of every
             // panic held since the slot's last one.
             let extra = failure.and_then(|failure| state.hold_failure(failure));

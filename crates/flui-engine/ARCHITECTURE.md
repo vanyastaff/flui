@@ -64,7 +64,8 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
+| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers; `GpuFrameTime`, a frame's GPU time, which `RasterSender::drain_gpu_times` hands the owner |
+| GPU frame time | `gpu_timer.rs` | `FrameGpuTimer` (ADR-0388): per slot, a ring of three timestamp query sets around a frame's encoder, read back after the GPU finished; absent without `TIMESTAMP_QUERY` |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders) and its `RegionPlan` (one pass under the bounding box or one per rect, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
@@ -380,11 +381,11 @@ and reported as `GpuCapabilities::backend`; when none answers,
 `WGPU_BACKEND` narrows the order, which is how the suites run on the
 fallback. Gradient stops live in a texture, not a storage buffer, because
 GLES 3.0 and WebGL2 have no storage buffers in a fragment stage. Enabling two
-compiles both; no source in this crate cfg-gates on them. The two
-`compile_error!` guards in `lib.rs` cover the invalid pairs: wasm32 with
-atomics while `fragile-send-sync-non-atomic-wasm` is on, and wasm32 with
-`gpu-profiler`. The per-target entries must stay non-optional — an
-`optional = true` there leaves wgpu with no backend at all, and every
+compiles both; no source in this crate cfg-gates on them. The
+`compile_error!` guard in `lib.rs` covers the invalid pair: wasm32 with
+atomics while `fragile-send-sync-non-atomic-wasm` is on. The per-target
+entries must stay non-optional — an `optional = true` there leaves wgpu with
+no backend at all, and every
 `Instance::new` panics; the ordinary test suite catches that, `cargo hack
 check` does not.
 
@@ -632,10 +633,15 @@ index batches charge once. The first failed admission remains authoritative.
 
 `renderer_surface_selection_and_layer_compositing_read_back_as_specified` checks
 that domain quarantine reaches the actual backend recovery predicate even without
-the driver's callback. With `gpu-profiler`, its failure matrix discards incomplete
-query frames on error or unwind, then checks that repeated successful frames
-contain only their own scopes. An abort only marks profiler state; the next frame
-replaces it before recording, without making GPU calls during unwind cleanup.
+the driver's callback.
+
+A slot's frame is timed on the GPU where the device has `TIMESTAMP_QUERY`
+(ADR-0388): `gpu_timer.rs` brackets the frame's encoder with two empty
+timestamp passes and reads the pair back once the GPU finished, at the slot's
+next frame. `a_slot_frame_is_timed_on_the_gpu_under_its_epoch` checks the time
+reaches the backend under the frame's epoch;
+`frames_that_never_submit_give_their_entries_back` checks that frames which fail
+after recording, or unwind, return their query entries.
 
 Headless capture serializes each renderer's complete render/readback operation
 under a host-level mutex, so concurrent `&self` callers wait rather than collide

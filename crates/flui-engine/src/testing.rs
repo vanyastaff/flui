@@ -111,6 +111,8 @@ struct Script {
     device_lost: bool,
     lose_in_next_render: bool,
     no_device_requests: bool,
+    /// GPU times each slot hands out, oldest first.
+    gpu_times: VecDeque<(SlotId, crate::raster_executor::GpuFrameTime)>,
     /// Whether device requests wait for [`ScriptedSlots::answer_device_request`].
     hold_device_requests: bool,
     /// The device requests still asking, oldest first, with their wakes.
@@ -289,6 +291,20 @@ impl ScriptedSlots {
     #[must_use]
     pub fn probes(&self) -> usize {
         self.script.lock().probes
+    }
+
+    /// Hand out `gpu` as the GPU time of `slot`'s frame `epoch`, as a GPU
+    /// context does once it read the frame's timestamps back (ADR-0388).
+    pub fn time_frame(
+        &self,
+        slot: SlotId,
+        epoch: flui_foundation::FrameEpoch,
+        gpu: std::time::Duration,
+    ) {
+        self.script
+            .lock()
+            .gpu_times
+            .push_back((slot, crate::raster_executor::GpuFrameTime::new(epoch, gpu)));
     }
 
     /// Answer that no device request can be answered where the executor
@@ -645,6 +661,15 @@ impl RasterBackend for ScriptedSlots {
 
     fn requests_devices(&self) -> bool {
         !self.script.lock().no_device_requests
+    }
+
+    fn take_gpu_time(&mut self, slot: SlotId) -> Option<crate::raster_executor::GpuFrameTime> {
+        let mut script = self.script.lock();
+        let at = script
+            .gpu_times
+            .iter()
+            .position(|(timed, _)| *timed == slot)?;
+        script.gpu_times.remove(at).map(|(_, time)| time)
     }
 }
 

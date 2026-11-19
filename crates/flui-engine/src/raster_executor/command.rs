@@ -376,6 +376,29 @@ pub struct SlotSettlement {
     pub panicked: bool,
 }
 
+/// How long one frame of a slot ran on the GPU, read back after the frame
+/// finished (ADR-0388).
+///
+/// It arrives after the frame's settlement, at a later frame of the slot, so
+/// it names the frame by its epoch. A device without timestamp queries (the
+/// web, some mobile GPUs) times no frame, and a frame the GPU had not
+/// answered by then is not timed either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GpuFrameTime {
+    /// The epoch of the frame that was timed.
+    pub epoch: FrameEpoch,
+    /// The time from the start of the frame's first GPU pass to the end of
+    /// its last one.
+    pub gpu: std::time::Duration,
+}
+
+impl GpuFrameTime {
+    pub(crate) const fn new(epoch: FrameEpoch, gpu: std::time::Duration) -> Self {
+        Self { epoch, gpu }
+    }
+}
+
 /// Whether the executor still takes commands (ADR-0305 §9).
 ///
 /// An inline executor stops only by shutting down; a raster thread also
