@@ -54,6 +54,9 @@ parking_lot.workspace = true
 # `RoutePath` percent-encodes each segment it joins and decodes each segment it
 # yields, with the URL path-segment set.
 percent-encoding = { workspace = true }
+# A provider's index of its dependents keeps positions only; the ids it
+# hashes stay in the dependents' list (`element::provided`).
+hashbrown.workspace = true
 # Deterministic hashing of per-frame owner tables.
 rustc-hash.workspace = true
 slab.workspace = true

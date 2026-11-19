@@ -238,6 +238,8 @@ windows-collections = "0.3"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
+# `HashTable`: a hash index whose keys live in the caller's own storage.
+hashbrown = { version = "0.17", default-features = false }
 slab = "0.4.12"
 
 # SERIALIZATION - Core functionality
