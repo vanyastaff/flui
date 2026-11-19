@@ -292,8 +292,8 @@ the supplied secondary config does not override either for existing siblings.
   requests the full repaint and waits out the dropped-frame backoff (ADR-0267). `Failed` drains
   telemetry and paints the tree again after that backoff, unless a pending frame shows the tree
   or the device was given up; `Refused` drains telemetry and waits for the window's next change
-  (ADR-0334). `NotShown` repaints at the display rate for its budget and after that backoff past it
-  (ADR-0335). `Presented` drains telemetry and commits; `NoPresent` commits without draining
+  (ADR-0334). `NotShown` publishes the withheld version again (ADR-0304 §7) at the display rate
+  for its budget and after that backoff past it (ADR-0335). `Presented` drains telemetry and commits; `NoPresent` commits without draining
   pending input epochs because no backend present occurred. A segment failure waits out the
   dropped-frame backoff (a text failure that waits for input arms nothing) and repaints only by
   the exact Tail/Scene rule above.

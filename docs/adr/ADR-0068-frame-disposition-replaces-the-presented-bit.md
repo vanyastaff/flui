@@ -71,15 +71,20 @@ match site that had to classify it (`raster_lane.rs`).
 The frame tail commits nothing (ADR-0335 §1) and does not finish the frame:
 
 ```rust
-retry_needed = true;          // wake_frame()
-retry_needs_repaint = true;   // mark_needs_full_repaint_for(producer)
+retry_needed = true;                          // wake_frame()
+retry_draw = RetryDraw::Republish(withheld);  // the scene owes the withheld version
 ```
 
 Both halves are required, for the reason issue #637 records for the
 submit-failure arms. `wake_frame()` alone reopens the segment gate but leaves
 `PipelineOwner` with nothing dirty; the retry pump produces `Idle`, never
-reaches `render_scene`, and parks — the frame is lost exactly as before.
-`mark_needs_full_repaint_for` is what gives the retry real work.
+reaches the sink, and parks — the frame is lost exactly as before. The debt
+the scene holds is what gives the retry its work: a retry whose paint finds
+nothing to change publishes the withheld version again, with nothing painted
+(ADR-0304 §7). A retry that finds another surface size or device pixel ratio
+than the version was applied for, or a newer version applied since, repaints
+the tree in full instead, and one the host asked to repaint (a device rebuilt,
+a surface restored, a display changed) paints as any dirty frame does.
 
 `NoDamage` clears: nothing was owed, so nothing is retained. That is the other
 half of the contract, and without it "retain everything" would satisfy the
@@ -87,8 +92,8 @@ retention test while repainting an idle app at the fallback pace forever.
 
 ### 4. The retention is bounded by count, and the platform does not bound it
 
-The retry re-dirties the presentation on every attempt, so an unbounded
-retention is a self-sustaining repaint loop paced by the runner's fallback
+The retry asks for a frame on every attempt, so an unbounded
+retention is a self-sustaining frame loop paced by the runner's fallback
 deadline (~9.5 ms, ~105 Hz).
 
 It would be convenient if the platform's own occlusion gate bounded it. It
@@ -136,7 +141,7 @@ that returns therefore shows the tree within a second, with no unrelated event n
 ## Consequences
 
 **Accepted cost.** A surface that stays unavailable while frames are enabled
-repaints at the fallback deadline's pace for up to `MAX_NOT_SHOWN_RETRIES`
+publishes its held version again at the fallback deadline's pace for up to `MAX_NOT_SHOWN_RETRIES`
 attempts, then once per backoff interval (ADR-0335 §2) — the same steady-state trade the
 `SubmitVerdict::SurfaceStale` arm already documents and accepts. In the
 measured runs the loop is never observed in steady state: the withheld streak
