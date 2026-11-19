@@ -237,6 +237,20 @@ impl WindowRoutes {
     /// route kept the window open and is asked now, once; granted, `close`
     /// closes the window (the window system's own request was answered
     /// already, so the close is the application's command).
+    #[cfg_attr(
+        not(any(
+            test,
+            all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )
+        )),
+        expect(
+            dead_code,
+            reason = "only the desktop window installation routes a close request"
+        )
+    )]
     pub(crate) fn route_close_requested(
         &self,
         mut route: impl FnMut() -> CloseDecision + 'static,
