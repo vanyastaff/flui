@@ -90,6 +90,7 @@ use crate::owner::apple::macos::{
     on_owner_thread,
 };
 use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
+use crate::owner::apple::pump_delivery::FollowedDelivery;
 
 use crate::{
     owner::OpenWindowError,
@@ -413,8 +414,9 @@ impl MacOSWindow {
     /// read from `opening` as points of AppKit's flipped desktop, which the
     /// window position's `open` turned them into through their screens
     /// before the window is built. `delivery` holds the handler the window
-    /// opens with and reports its frames and runs to the wake pump
-    /// (`WakePump::window_delivery`).
+    /// opens with and reports its frames to the wake pump
+    /// (`WakePump::window_delivery`): a delivery that does not cannot be
+    /// passed.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
@@ -423,7 +425,7 @@ impl MacOSWindow {
         mtm: MainThreadMarker,
         id: WindowId,
         opening: Opening,
-        delivery: Arc<WindowDelivery>,
+        delivery: FollowedDelivery,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
@@ -515,11 +517,12 @@ impl MacOSWindow {
         main: MainThreadMarker,
         id: WindowId,
         opening: Opening,
-        delivery: Arc<WindowDelivery>,
+        delivery: FollowedDelivery,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<UnshownWindow, OpenWindowError> {
+        let delivery = Arc::new(delivery.into_inner());
         let flui_platform::OpeningGeometry {
             content,
             constraints,
@@ -1395,12 +1398,11 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             },
             // Each frame the handler runs counts into the pump's count, which
             // arms a delivered wake deadline again only after a frame ran,
-            // and each run ends in a look at the deadline.
-            Arc::new(
-                owner
-                    .wake_pump
-                    .window_delivery(handler, crate::input::availability::macos()),
-            ),
+            // and each run in which a frame ran ends in a look at the
+            // deadline.
+            owner
+                .wake_pump
+                .window_delivery(handler, crate::input::availability::macos()),
             Arc::clone(&owner.windows),
             windows,
             owner.view_hooks,

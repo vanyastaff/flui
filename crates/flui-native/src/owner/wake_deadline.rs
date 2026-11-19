@@ -149,14 +149,26 @@ pub(crate) enum WakeTurn {
 #[cfg(any(windows, target_os = "macos", target_os = "android", test))]
 impl WakeTurn {
     /// Whether the look delivered the deadline.
-    #[cfg(any(windows, target_os = "android", test))]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn is_due(self) -> bool {
         matches!(self, Self::Due(_))
     }
 
-    /// The instant to wait until for the deadline, if any: a delivered one
-    /// bounds no wait.
-    #[cfg(any(target_os = "android", test))]
+    /// The instant of the deadline the look delivered, if it delivered one.
+    /// A loop whose delivery left frame requests behind waits for those, not
+    /// for this instant; the Win32 modal pace, which no frame's run follows
+    /// up, looks again at it, and finds it armed only once a frame ran.
+    #[cfg(any(windows, test))]
+    pub(crate) fn due_at(self) -> Option<web_time::Instant> {
+        match self {
+            Self::Due(at) => Some(at),
+            Self::Wait(_) | Self::Idle => None,
+        }
+    }
+
+    /// The instant still ahead to wait until for the deadline, if any. A
+    /// delivered deadline is not one (`due_at` names it).
+    #[cfg(any(windows, target_os = "android", test))]
     pub(crate) fn wait(self) -> Option<web_time::Instant> {
         match self {
             Self::Wait(at) => Some(at),
@@ -244,13 +256,11 @@ impl WakeDeadline {
         self.armed.as_ref().map(|arm| arm.deadline)
     }
 
-    /// A look at `now` by a loop that asks for frames the moment a deadline
-    /// is due: [`arm`](Self::arm) the handler's `answer` at the frame count
-    /// `frames`, then [`take_due`](Self::take_due) it. The AppKit pump, the
-    /// Android loop and the Win32 modal loops look this way; a loop that
-    /// waits between the two (Win32's main loop, X11, Wayland, UIKit) calls
-    /// them apart, taking at the start of a turn what it armed before its
-    /// wait.
+    /// A look at `now`: [`arm`](Self::arm) the handler's `answer` at the
+    /// frame count `frames`, then [`take_due`](Self::take_due) it. A loop
+    /// that asks for the answer and takes a due deadline in one instant looks
+    /// with this; a loop that arms right before it waits calls the two apart,
+    /// taking at the start of its next turn what it armed before the wait.
     #[cfg(any(windows, target_os = "macos", target_os = "android", test))]
     pub(crate) fn turn(
         &mut self,
@@ -406,6 +416,24 @@ mod tests {
             ),
         ] {
             assert_eq!(deadline.turn(answer, now, frames), found, "{case}");
+        }
+    }
+
+    /// A delivered deadline is named apart from one to wait for: it bounds
+    /// no wait of a loop whose delivery left frame requests, and the Win32
+    /// modal pace reads it by name to look again.
+    #[test]
+    fn a_delivered_deadline_is_named_apart_from_a_wait() {
+        let at = Instant::now();
+        // (look, delivered, to wait for)
+        for (turn, due_at, wait) in [
+            (WakeTurn::Due(at), Some(at), None),
+            (WakeTurn::Wait(at), None, Some(at)),
+            (WakeTurn::Idle, None, None),
+        ] {
+            assert_eq!(turn.due_at(), due_at, "{turn:?}");
+            assert_eq!(turn.is_due(), due_at.is_some(), "{turn:?}");
+            assert_eq!(turn.wait(), wait, "{turn:?}");
         }
     }
 }

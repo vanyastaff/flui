@@ -339,6 +339,18 @@ impl ActivityWindowIds {
     }
 }
 
+/// The Activity window's delivery whose frames count into the loop's count:
+/// the only form the window is built from (`AndroidWindow::new` takes it),
+/// so no frame of it goes uncounted. Made by [`window_delivery`].
+pub(crate) struct CountedDelivery(crate::owner::window_delivery::WindowDelivery);
+
+impl CountedDelivery {
+    /// The delivery, for the window that holds it.
+    pub(crate) fn into_inner(self) -> crate::owner::window_delivery::WindowDelivery {
+        self.0
+    }
+}
+
 /// The delivery of the Activity's window opened with `handler`, whose input
 /// gives it `capabilities`: each frame the handler runs raises `frames`, the
 /// loop's count, which arms a delivered wake deadline again only after a
@@ -347,8 +359,14 @@ pub(crate) fn window_delivery(
     handler: std::rc::Rc<dyn flui_platform::WindowHandler>,
     capabilities: flui_platform::input_capabilities::InputCapabilities,
     frames: std::sync::Arc<std::sync::atomic::AtomicU64>,
-) -> crate::owner::window_delivery::WindowDelivery {
-    crate::owner::window_delivery::WindowDelivery::counting_frames(handler, capabilities, frames)
+) -> CountedDelivery {
+    CountedDelivery(
+        crate::owner::window_delivery::WindowDelivery::counting_frames(
+            handler,
+            capabilities,
+            frames,
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -357,8 +375,9 @@ mod tests {
 
     /// A frame the window's handler runs raises the loop's count, and a
     /// declined one does not, so the loop's wake deadline tells a frame that
-    /// served it from a request that reached nothing. Red-check: build the
-    /// delivery with `WindowDelivery::new`.
+    /// served it from a request that reached nothing. The window takes only a
+    /// `CountedDelivery`, so this is the delivery it holds. Red-check: build
+    /// the delivery with `WindowDelivery::new`.
     #[test]
     fn a_window_frame_raises_the_loop_count() {
         use std::sync::Arc;
@@ -374,7 +393,8 @@ mod tests {
             handler.clone(),
             InputCapabilities::UNAVAILABLE,
             Arc::clone(&frames),
-        );
+        )
+        .into_inner();
         delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
         assert_eq!(
             frames.load(Ordering::Relaxed),

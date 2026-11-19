@@ -373,9 +373,13 @@ pub struct WindowDelivery {
     /// with no handler to run, leaves it unchanged. Shareable so a backend can count frames across every window
     /// it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
-    /// Called on the owner thread after each run of the FIFO, one that
-    /// unwinds included (`after_each_run`); runs no user code.
-    after_run: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Called on the owner thread, the only one it is reached from, at the
+    /// end of a run of the FIFO, one that unwinds included: after each run
+    /// (`after_each_run`) or after a run in which a frame ran
+    /// (`after_each_frame`), as `run_hook_at` says. Runs no user code.
+    run_hook: OwnerSlot<Rc<dyn Fn()>>,
+    /// Which runs end in `run_hook`.
+    run_hook_at: RunHookAt,
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
     close_answer: Mutex<Option<CloseDecision>>,
@@ -447,7 +451,8 @@ impl WindowDelivery {
                 dispatching: false,
             }),
             frames_run,
-            after_run: None,
+            run_hook: OwnerSlot::new(),
+            run_hook_at: RunHookAt::EachRun,
             close_answer: Mutex::new(None),
             close_granted: AtomicBool::new(false),
             state_publisher: Mutex::new(None),
@@ -501,18 +506,44 @@ impl WindowDelivery {
 
     /// Call `hook` on the owner thread after each run of the window's FIFO,
     /// a run that unwinds included. A loop that no owner turn follows a
-    /// native delivery on (UIKit's: a display-link frame, a touch batch;
-    /// AppKit's: a display pass) asks for its wake deadline again there,
-    /// since the run may have left a new one. `hook` runs no user code: it
-    /// may run while a panic unwinds.
+    /// native delivery on (UIKit's: a display-link frame, a touch batch)
+    /// asks for its wake deadline again there, since the run may have left
+    /// a new one. `hook` runs no user code: it may run while a panic unwinds.
+    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
+    #[must_use]
+    pub(crate) fn after_each_run(self, hook: impl Fn() + 'static) -> Self {
+        self.with_run_hook(hook, RunHookAt::EachRun)
+    }
+
+    /// Call `hook` on the owner thread after a run of the window's FIFO in
+    /// which a frame ran (produced, failed or unwound), a run that unwinds
+    /// included. AppKit's pump looks at the wake deadline there: the frame
+    /// a due deadline asks for runs in a display pass no owner turn follows,
+    /// and may leave the deadline due again. A run of input alone serves no
+    /// deadline and costs no look. `hook` runs no user code: it may run while
+    /// a panic unwinds.
+    #[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
+    #[must_use]
+    pub(crate) fn after_each_frame(self, hook: impl Fn() + 'static) -> Self {
+        self.with_run_hook(hook, RunHookAt::FrameRan)
+    }
+
+    /// Install `hook` for the runs `at` names, on the owner thread the
+    /// delivery is made on.
     #[cfg(any(
         target_os = "ios",
         target_os = "macos",
         all(test, not(target_arch = "wasm32"))
     ))]
-    #[must_use]
-    pub(crate) fn after_each_run(mut self, hook: impl Fn() + Send + Sync + 'static) -> Self {
-        self.after_run = Some(Box::new(hook));
+    fn with_run_hook(mut self, hook: impl Fn() + 'static, at: RunHookAt) -> Self {
+        let hook: Rc<dyn Fn()> = Rc::new(hook);
+        if self.run_hook.replace(hook).is_err() {
+            tracing::error!(
+                "a window's run hook was installed off its owner thread or with owner slots \
+                 exhausted; the runs end in no hook"
+            );
+        }
+        self.run_hook_at = at;
         self
     }
 
@@ -772,7 +803,12 @@ impl WindowDelivery {
     /// is delivered first, and an input among it was answered where it was
     /// raised, so its answer is not this caller's.
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
-        let _after = AfterRun(self.after_run.as_deref());
+        let _after = AfterRun {
+            hook: self.run_hook.cloned(),
+            at: self.run_hook_at,
+            frames_run: &self.frames_run,
+            frames_before: self.frames_run.load(Ordering::Relaxed),
+        };
         let mut own_answer = None;
         let failure = loop {
             let Some(taken) = drain.next() else {
@@ -1138,13 +1174,41 @@ impl std::fmt::Debug for WindowDelivery {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
-/// Calls a window's `WindowDelivery::after_each_run` hook when a run of
-/// its FIFO ends, by return or by unwinding.
-struct AfterRun<'a>(Option<&'a (dyn Fn() + Send + Sync)>);
+/// Which runs of a window's FIFO end in its run hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunHookAt {
+    /// Every run (`WindowDelivery::after_each_run`).
+    EachRun,
+    /// A run in which a frame ran (`WindowDelivery::after_each_frame`).
+    #[cfg_attr(
+        not(any(target_os = "macos", all(test, not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "only AppKit's windows end a frame's run in a hook"
+        )
+    )]
+    FrameRan,
+}
+
+/// Calls a window's run hook when a run of its FIFO ends, by return or by
+/// unwinding, if the run is one the hook is for. A frame ran when the frame
+/// count moved during the run; a count a backend shares across its windows
+/// may also move for another window's frame nested in this run, which costs
+/// one hook more, never one less.
+struct AfterRun<'a> {
+    hook: Option<Rc<dyn Fn()>>,
+    at: RunHookAt,
+    frames_run: &'a AtomicU64,
+    frames_before: u64,
+}
 
 impl Drop for AfterRun<'_> {
     fn drop(&mut self) {
-        if let Some(hook) = self.0 {
+        let Some(hook) = self.hook.as_ref() else {
+            return;
+        };
+        let frame_ran = self.frames_run.load(Ordering::Relaxed) != self.frames_before;
+        if self.at == RunHookAt::EachRun || frame_ran {
             hook();
         }
     }

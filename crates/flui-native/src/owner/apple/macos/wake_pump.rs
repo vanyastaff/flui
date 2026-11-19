@@ -26,7 +26,8 @@
 //!    owner-queue turn.
 //!
 //! A look is scheduled at a redraw request, after each run of a window's
-//! delivery (a frame, input; [`WakePump::window_delivery`]), and after an
+//! delivery in which a frame ran ([`WakePump::window_delivery`]; a run of
+//! input alone asks for none), and after an
 //! owner turn that leaves a deadline (`LoopControl`,
 //! [`WakePump::after_owner_turn`]). The run of a frame is what follows a
 //! delivery up: the frame AppKit runs for a request, whenever its display
@@ -59,10 +60,9 @@ use flui_platform::input_capabilities::InputCapabilities;
 use super::owner_lane::{exec_after_on_owner, owner_queue};
 
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::apple::pump_delivery;
+use crate::owner::apple::pump_delivery::{self, FollowedDelivery};
 use crate::owner::slot::OwnerCell;
 use crate::owner::wake_deadline::{FrameCount, WakeDeadline, WakeTurn};
-use crate::owner::window_delivery::WindowDelivery;
 
 /// The AppKit landing place for the platform's wake deadline.
 ///
@@ -143,13 +143,13 @@ impl WakePump {
 
     /// The delivery of a window opened with `handler`, whose input devices
     /// give it `capabilities`: each frame its handler runs raises the pump's
-    /// count, and each run of its FIFO ends in a look
+    /// count, and each run of its FIFO in which a frame ran ends in a look
     /// ([`pump_delivery::window_delivery`]).
     pub(crate) fn window_delivery(
         self: &Arc<Self>,
         handler: Rc<dyn WindowHandler>,
         capabilities: InputCapabilities,
-    ) -> WindowDelivery {
+    ) -> FollowedDelivery {
         let pump = Arc::downgrade(self);
         pump_delivery::window_delivery(handler, capabilities, self.frames.counter(), move || {
             if let Some(pump) = pump.upgrade() {
@@ -461,7 +461,9 @@ mod tests {
         log.answer_deadline_with(move || -> Option<web_time::Instant> { Some(due) });
         let window = RecordingWindowHandler::new();
         window.react_to_frame(|_| {});
-        let delivery = pump.window_delivery(window.clone(), InputCapabilities::UNAVAILABLE);
+        let delivery = pump
+            .window_delivery(window.clone(), InputCapabilities::UNAVAILABLE)
+            .into_inner();
         let fire = || pump.fire(pump.generation.load(Ordering::Acquire));
 
         fire();
