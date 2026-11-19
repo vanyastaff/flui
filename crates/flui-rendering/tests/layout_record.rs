@@ -13,7 +13,7 @@ use flui_rendering::storage::{BoxRenderState, RenderNode, SliverRenderState};
 fn render_node_slot_stays_within_its_budget() {
     let site = if CreationSite::KEPT { 8 } else { 0 };
     assert!(
-        size_of::<RenderNode>() <= 224 + site,
+        size_of::<RenderNode>() <= 216 + site,
         "RenderNode grew to {} bytes",
         size_of::<RenderNode>()
     );

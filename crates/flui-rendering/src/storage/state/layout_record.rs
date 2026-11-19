@@ -33,41 +33,62 @@ pub trait LayoutRecord<G, C>: Default + Clone + Debug {
 }
 
 /// The box protocol's record, kept inline.
-#[derive(Debug, Clone, Default)]
+///
+/// Two `Option`s would spend a tag word each; the two presence bits share
+/// the padding after the values instead. An absent half holds a zero value
+/// that no accessor returns.
+#[derive(Debug, Clone)]
 pub struct BoxLayoutRecord {
-    size: Option<Size>,
-    constraints: Option<BoxConstraints>,
+    size: Size,
+    constraints: BoxConstraints,
+    has_size: bool,
+    has_constraints: bool,
+}
+
+impl Default for BoxLayoutRecord {
+    fn default() -> Self {
+        Self {
+            size: Size::ZERO,
+            constraints: BoxConstraints::ZERO,
+            has_size: false,
+            has_constraints: false,
+        }
+    }
 }
 
 impl LayoutRecord<Size, BoxConstraints> for BoxLayoutRecord {
     #[inline]
     fn geometry(&self) -> Option<&Size> {
-        self.size.as_ref()
+        self.has_size.then_some(&self.size)
     }
 
     #[inline]
     fn constraints(&self) -> Option<&BoxConstraints> {
-        self.constraints.as_ref()
+        self.has_constraints.then_some(&self.constraints)
     }
 
     #[inline]
     fn set_geometry(&mut self, geometry: Size) {
-        self.size = Some(geometry);
+        self.size = geometry;
+        self.has_size = true;
     }
 
     #[inline]
     fn set_constraints(&mut self, constraints: BoxConstraints) {
-        self.constraints = Some(constraints);
+        self.constraints = constraints;
+        self.has_constraints = true;
     }
 
     #[inline]
     fn clear_geometry(&mut self) {
-        self.size = None;
+        self.size = Size::ZERO;
+        self.has_size = false;
     }
 
     #[inline]
     fn clear_constraints(&mut self) {
-        self.constraints = None;
+        self.constraints = BoxConstraints::ZERO;
+        self.has_constraints = false;
     }
 }
 
