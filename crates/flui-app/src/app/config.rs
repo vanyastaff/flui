@@ -775,7 +775,7 @@ impl AppConfig {
     ///
     /// The framework reclaims its own caches (text, GPU buffers, the glyph
     /// atlas and image textures) itself; register what the application owns
-    /// beside them, above all the `flui_assets::AssetRegistry` its images load
+    /// beside them, above all the `flui_assets::ImageCache` its images load
     /// through, which keeps their decoded pixels (an `Arc` of a receiver is a
     /// receiver). Receivers are reclaimed once per notice, in the
     /// order registered, before any subscriber of

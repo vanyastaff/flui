@@ -579,6 +579,40 @@ the change. `const fn` bodies are not mutated.
 
 These runs are not a CI gate.
 
+### A change's own lines
+
+Before the review of a change (AGENTS.md, "Before each push" item 10), the lines it adds or
+changes are mutated and judged by the tests that exercise them. The run gets a worktree of its own,
+checked out detached at the commit under review, so nothing edits its sources while it runs and
+the worktree itself says which commit its report belongs to:
+
+```bash
+git fetch origin main
+head=$(git rev-parse HEAD)
+git worktree add --detach "../mutants-${head:0:12}" "$head"
+cd "../mutants-${head:0:12}"
+git diff "$(git merge-base HEAD origin/main)" HEAD -- ':(glob)**/src/**/*.rs' > change.diff
+cargo heli exec -- cargo gamma run --workspace --in-diff change.diff \
+  --test-package flui-testing --test-package flui-widgets
+```
+
+`--test-package` names each crate whose tests exercise the change. The diff names only files
+under a `src/`: cargo-gamma mutates the sources of library and binary targets and refuses a diff
+that names any other Rust file (a test, a bench, an example, a build script) rather than report a
+score for part of the change. It mutates the lines it has a mutator for, so a `const fn` body or a
+type definition produces no mutant, and an empty report is not a proof that every line is pinned.
+`gamma.toml` skips the tests that run rustc or cargo themselves (the trybuild suites and the
+generated projects), which would otherwise cost a full compile for every mutant.
+
+The worktree goes to the review workflow as `mutants`. It uses the run only when the worktree is
+checked out at the reviewed head with nothing in it but `change.diff`, the report in its
+`target/cargo-gamma/` was written after that diff, the diff is the reviewed head's over the same
+paths, and the run judged at least one mutant. Each mutant that survived, and each that no test
+reached, goes to the review's judge, who confirms it as a missing test or rejects it as an
+equivalent mutant or a line built only for another target; one the tests timed out or ran out of
+memory on is listed for the author. The worktree is removed after the merge like any other. The
+workflow's own branches are checked by `node .claude/workflows/review-before-merge.test.mjs`.
+
 ## Fuzzing
 
 Code that parses bytes nobody vouches for has two tests of the same
