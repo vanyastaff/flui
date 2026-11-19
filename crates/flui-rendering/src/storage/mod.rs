@@ -77,6 +77,7 @@ pub use links::NodeLinks;
 pub use node::RenderNode;
 pub use state::RenderState;
 pub use state::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
+pub(crate) use state::{BoxLayoutRecord, LayoutRecord, SliverLayoutRecord};
 // Type aliases for convenience
 pub(crate) use node_slab::TreeLease;
 pub use state::{BoxRenderState, SliverRenderState};

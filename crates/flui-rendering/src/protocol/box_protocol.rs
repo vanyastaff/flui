@@ -106,6 +106,7 @@ impl Protocol for BoxProtocol {
     type ErasedLayoutContext<'ctx> = dyn ErasedBoxLayoutContext + 'ctx;
 
     type LayoutCache = crate::storage::BoxLayoutCache;
+    type LayoutRecord = crate::storage::BoxLayoutRecord;
 
     fn name() -> &'static str {
         "box"
