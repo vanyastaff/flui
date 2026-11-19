@@ -227,9 +227,9 @@ and the readers of "Before a merge" look for a change that breaks one:
   host), and a Rust source file has at most 3000 production lines.
 - A relative link in markdown stays inside the repository: lychee follows `../` above the root,
   where the runner's checkout makes it resolve (ADR-0383 §4).
-- An extern that names a wasm import module (`#[link(wasm_import_module = …)]`) is loaded in a
-  browser before the merge: CI links the web demos but loads none, and no list of import modules
-  refuses it (ADR-0383 §5).
+- `wasm-check` runs the wasm32 tests of each package whose dev-dependencies on wasm32 include
+  `wasm-bindgen-test`, and fails a target that passes no assertion; its discovery and its count
+  are shell no pull request runs, so a change to them keeps both rules (ADR-0383 §5).
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.

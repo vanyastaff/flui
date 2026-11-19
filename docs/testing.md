@@ -61,10 +61,11 @@ Two structural rules hold across the stack:
 
 ### wasm32: compiled everywhere, executed in one place
 
-Three of the commands above target wasm32 and only the last one runs anything. That distinction is
+Of the wasm32 commands in the CI list below, only `cargo test` runs anything. That distinction is
 the whole content of the tier: `cargo check` and `cargo clippy` prove the code type-checks, and
 `wasm-check`'s `cargo build` of the two web demos proves rust-lld resolves the cdylibs (since Rust
-1.96 an undefined symbol fails that link instead of becoming an import, ADR-0383 §5). None of them
+1.96 an undefined symbol fails that link instead of becoming an import), and its node step reads
+the demos' import modules after `wasm-bindgen` processes them (ADR-0383 §5). None of them
 execute a single instruction.
 
 It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
@@ -119,9 +120,9 @@ the `testing` feature, and the one execution API an embedder reaches through `fl
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
 `flui-native`'s web backend needs a DOM, which node does not have: the test step runs its lib and
-`wasm32` targets on node, and its `web_browser` target, which no discovery selects, runs in a step
-of its own in headless Chrome, through `wasm-bindgen-test-runner` with a ChromeDriver matching the
-installed Chrome. Locally:
+`wasm32` targets on node, and its `web_browser` target, which no discovery selects, is a row the
+same step names, run in headless Chrome through `wasm-bindgen-test-runner` with a ChromeDriver
+matching the installed Chrome. Locally:
 `CHROMEDRIVER=<path> cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked`.
 
 ## Quality Gates
@@ -1265,8 +1266,8 @@ cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown -
 cargo clippy -p flui-native --all-targets --locked --target wasm32-unknown-unknown -- -D warnings  # same job: flui-native's wasm32-only test targets
 cargo check -p flui-hot-reload --locked --target wasm32-unknown-unknown --all-features             # same job
 cargo clippy -p flui --test wasm_consumer --locked --target wasm32-unknown-unknown -- -D warnings   # same job: an application on wasm32 (ADR-0086)
-cargo build -p flui-web-demo -p flui-painting-demo --locked --target wasm32-unknown-unknown       # same job: links the demos; an undefined symbol fails it
-cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32         # same job: one crate's line of the step that EXECUTES wasm (flui-native's `web_browser` runs in its own step after it)
+cargo build -p flui-web-demo -p flui-painting-demo --locked --target wasm32-unknown-unknown       # same job: links the demos; the job then runs wasm-bindgen over each and lists its import modules with node
+cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32         # same job: one crate's line of the step that EXECUTES wasm (each target on its own, flui-native's `web_browser` among them)
 cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
 cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo deny --workspace --locked check bans licenses sources   # deps job: cargo-deny bans / licenses / sources
@@ -1365,7 +1366,7 @@ heavier ones need installed. One row per job:
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
 | `feature-matrix` | `cargo hack clippy --workspace --partition k/5 --locked --each-feature --keep-going -- -D warnings`, then with `--tests --benches --examples`; the `combinations` leg runs `cargo clippy -p flui --locked --all-targets <combination> -- -D warnings` for each combination ci.yml lists | locally, `-p <crate>` in place of `--workspace --partition k/5` lints the crates a change touched |
-| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, its `cargo build` of the two web demos, then `cargo test --target wasm32-unknown-unknown` for each crate with a wasm32 `wasm-bindgen-test` dev-dependency | the tests need the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it), and a crate whose tests are `run_in_browser` a ChromeDriver (`CHROMEDRIVER=<path>`) |
+| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, its `cargo build` of the two web demos, `wasm-bindgen` over each and node's list of their import modules, then `cargo test --target wasm32-unknown-unknown` for each crate with a wasm32 `wasm-bindgen-test` dev-dependency | the tests need the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it), and a crate whose tests are `run_in_browser` a ChromeDriver (`CHROMEDRIVER=<path>`) |
 | `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require; a shell step over the needed jobs' results |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |

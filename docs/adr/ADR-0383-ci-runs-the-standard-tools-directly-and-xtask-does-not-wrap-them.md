@@ -12,9 +12,9 @@
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
   `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
-- **Revised:** 2026-11-19 — §5 and the wasm names in Supersedes: `wasm-check` links the web demos
-  and runs the wasm32 tests itself, and the import allowlist goes, since the linker now refuses an
-  undefined symbol.
+- **Revised:** 2026-11-19 — §5 and the wasm names in Supersedes: `wasm-check` links the web demos,
+  runs wasm-bindgen over them and reads their import modules with node, and runs the wasm32 tests
+  itself.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -90,36 +90,36 @@ with `docs-links`, so such a link is the reader's to catch.
 
 ### §5. `wasm-check` links the web demos and runs the wasm32 tests itself
 
-The job builds `flui-web-demo` and `flui-painting-demo` for wasm32, so the demos link. Their
-imports are not checked against a list. `wasm-imports` compared them with a committed allowlist
-because an undefined symbol used to link as an import (`env` the catch-all for an accidental
-native extern); rustc stopped passing `--allow-undefined` to the wasm linker in 1.96
-(rust-lang/rust#149868), so on the pinned toolchain that symbol fails the link. What still becomes
-an import is an extern that names its module (`#[link(wasm_import_module = …)]`), in the
-workspace or in a dependency. Three options were weighed for that class:
+The job builds `flui-web-demo` and `flui-painting-demo` for wasm32, so the demos link; rustc
+stopped passing `--allow-undefined` to the wasm linker in 1.96 (rust-lang/rust#149868), so an
+undefined symbol fails that link where it used to become an `env` import. What still becomes an
+import is an extern that names its module (`#[link(wasm_import_module = …)]`), in the workspace or
+in a dependency, and no page provides one wasm-bindgen does not generate. Four options were weighed
+for that class:
 
-1. Keep the list: install `wasm-tools` at a version the pinned `install-action` serves with a
-   checksum, read each demo's imports from the text `wasm-tools print` writes, and fail on a module
-   the allowlist lacks. Good, because a dependency bump that adds an import module is refused.
-   Bad, because the job keeps a tool version, an allowlist and a scrape of a printer's output,
-   checked only on main, for a class whose only members today are wasm-bindgen's own two modules
-   (`__wbindgen_placeholder__`, `__wbindgen_externref_xform__`), which `wasm-bindgen-cli` resolves.
-2. Load the demos: run `wasm-bindgen` over each and instantiate it in the job's headless Chrome.
-   Good, because it finds every load-time failure, an unknown import module among them. Bad,
-   because the demos start a renderer when instantiated, so it needs a page, a canvas and a
-   browser GPU path the job does not have, which is a harness of its own.
-3. Rely on the linker (chosen). Good, because the accidental class fails the link with nothing the
-   job keeps for it. Bad, because an import module a dependency adds passes until the demo is
-   loaded in a browser (Consequences).
+- *An allowlist read by `wasm-tools`* (what `wasm-imports` did with `wasmparser`): a tool version
+  beside the toolchain, an allowlist file and a scrape of a printer's output.
+- *Load the demos* in the job's headless Chrome: finds every load-time failure, but the demos start
+  a renderer when instantiated, which needs a page, a canvas and a browser GPU path.
+- *Rely on the linker*: nothing to keep, but an import module a dependency adds passes until a
+  demo is loaded.
+- *Read the imports with node, after wasm-bindgen* (chosen): the job runs `wasm-bindgen --target
+  web` over each demo, which fails on a binding it cannot generate as a web build would, and node
+  compiles the linked module and lists its import modules with `WebAssembly.Module.imports`,
+  failing on any but wasm-bindgen's own two (`__wbindgen_placeholder__`,
+  `__wbindgen_externref_xform__`), named in the step. It needs only the CLI the tests install and
+  the node they run on, compares names rather than text, and instantiates nothing.
 
 The job then runs `cargo test --target wasm32-unknown-unknown`, through the runner
 `.cargo/config.toml` names, for each workspace package whose dev-dependencies on wasm32 include
 `wasm-bindgen-test`, as cargo's resolver reports them (`cargo metadata --filter-platform
 wasm32-unknown-unknown`, which evaluates each target table's `cfg`): its lib test, and its
-`wasm32` test target when it has one. A test runs on node, or in the job's headless Chrome for
-Testing, at the exact release the step names, with its matching ChromeDriver, when its crate
-configures `run_in_browser`. A package whose run passes no assertion fails the step,
-and so does an empty list. The `wasm-bindgen-cli` the job installs is the one version of
+`wasm32` test target when it has one, each run and counted on its own, and flui-native's
+`web_browser` target, which the loop names. A test runs on node, or in the job's headless Chrome
+for Testing, at the exact release the step names, with its matching ChromeDriver, when its crate
+configures `run_in_browser`. A target whose run passes no assertion fails the step, except a lib
+target beside a `wasm32` target, which may hold none; an empty list fails it too. The
+`wasm-bindgen-cli` the job installs is the one version of
 `wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
 more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
 
@@ -135,14 +135,15 @@ more than one fails the step, and `cargo xtask doctor full` fails its row on the
 - Bad, because the test that pinned the `nested-cargo` group's packages to the job's `-p` list is
   gone with the code it read.
 - Bad, because §5's rules lose their tests with the code they read, and the reader of a change to
-  the `wasm-check` job holds them: the discovery (a normal dependency, or a dev-dependency only a
-  non-wasm32 target table declares, does not opt a package in) and the count of passed assertions
-  (which lines of the runner's output count). The job runs only on main, so such a change is run
-  on its branch at the head that merges (Confirmation).
-- Bad, because an import from a module the extern names is no longer refused by a list: in the
-  workspace it is a rule a reader holds (AGENTS.md), and one a dependency bump brings in is found
-  when the demo is loaded, since nothing in CI instantiates the demos.
-- Bad, because the Chrome release is one more version to bump by hand.
+  the `wasm-check` job holds them (AGENTS.md "Rules a reader holds"): the discovery (a normal
+  dependency, or a dev-dependency only a non-wasm32 target table declares, does not opt a package
+  in) and the count of passed assertions (which lines of the runner's output count). The job runs
+  only on main, so such a change is run on its branch at the head that merges (Confirmation).
+- Bad, because the import check's own tests go with `wasm-imports` (a malformed module, compact
+  import groups, the committed allowlist refusing `env`): node's WebAssembly compiler parses the
+  module, and the two allowed names live in the step, which a wasm-bindgen that renames them fails.
+- Bad, because the Chrome release is one more version to bump by hand, and the browser tests run
+  against it, not against the release users have, until someone does.
 
 ### Confirmation
 
@@ -153,7 +154,8 @@ more than one fails the step, and `cargo xtask doctor full` fails its row on the
 - A pull request that changes the steps of a job only main runs (`wasm-check` among them) runs
   that job on its branch at the head that merges: `gh workflow run CI --ref <branch>` takes the
   full lane, and the pull request's body links the run. AGENTS.md "Before each push" item 14 asks
-  for it, so the readers of "Before a merge" check it.
+  the author for it; the readers of "Before a merge" read git, not the body, so the author holds
+  it.
 - `cargo test -p xtask` holds doctor's wasm-bindgen row to one locked version
   (`the_wasm_bindgen_row_needs_one_locked_version_installed`, `this_lock_pins_one_wasm_bindgen`).
 
