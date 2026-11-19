@@ -21,7 +21,9 @@ const verdict = (p, o) => ({ scores: o.schema.properties.scores.items.properties
 const stances = [{ key: 'a', focus: 'A' }, { key: 'b', focus: 'B' }, { key: 'c', focus: 'C' }]
 // The designs an attacker may name are the ones its schema lists.
 const targetsOf = (o) => o.schema.properties.attacks.items.properties.target.enum
+// A rerun on sonnet answers as its opus run did unless a test names it, so a refusal stays a refusal.
 const happy = (overrides = {}) => (p, o) => {
+  if (o.label.endsWith(':sonnet') && overrides[o.label] === undefined) return happy(overrides)(p, { ...o, label: o.label.slice(0, -7) })
   if (overrides[o.label] !== undefined) return typeof overrides[o.label] === 'function' ? overrides[o.label](p, o) : overrides[o.label]
   if (o.label.startsWith('research:')) return { facts: [{ claim: 'c', evidence: 'x.rs:1' }], summary: 'sum' }
   if (o.label.startsWith('propose:')) return design(o.label.slice(8))
@@ -193,14 +195,18 @@ const noAgent = () => assert.fail('no agent may run')
     },
   }))
   assert.deepEqual(reversed.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', 'c']])
-  // A reason written as quotes in either style, padded or not, is blank, so that answer is not kept.
-  const { result: quoted } = await run({ topic: 'T', stances }, happy({
-    'revise:a': (p) => {
-      const [first, second] = [...p.matchAll(/"id": (\d+)/g)].map((m) => Number(m[1]))
-      return { answers: [{ id: first, verdict: 'fixed', how: " '' " }, { id: second, verdict: 'refuted', how: "''" }], design: design('a revised') }
-    },
+  // A reason with no letter or digit says nothing, whatever its quotes or punctuation, so that answer
+  // is not kept; a reason in any script that says something is.
+  for (const how of [" '' ", "''", '“”', '" "', ' - ', '``']) {
+    const { result: quoted } = await run({ topic: 'T', stances }, happy({
+      'revise:a': (p) => ({ answers: [{ id: Number(p.match(/"id": (\d+)/)[1]), verdict: 'refuted', how }], design: design('a revised') }),
+    }))
+    assert.deepEqual(quoted.proposals.find((p) => p.stance === 'a').answers, [], how)
+  }
+  const { result: worded } = await run({ topic: 'T', stances }, happy({
+    'revise:a': (p) => ({ answers: [{ id: Number(p.match(/"id": (\d+)/)[1]), verdict: 'refuted', how: 'см. второй шаг' }], design: design('a revised') }),
   }))
-  assert.deepEqual(quoted.proposals.find((p) => p.stance === 'a').answers, [])
+  assert.equal(worded.proposals.find((p) => p.stance === 'a').answers.length, 1)
   // A concession that gives no reason still holds against a fixed answer.
   const { result: bare } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -208,7 +214,7 @@ const noAgent = () => assert.fail('no agent may run')
       return { answers: [{ id: first, verdict: 'fixed', how: 'h' }, { id: first, verdict: 'conceded', how: '""' }], design: design('a revised') }
     },
   }))
-  assert.deepEqual(bare.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', '']])
+  assert.deepEqual(bare.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', '""']])
   assert.ok(bare.open.some((x) => x.stance === 'a' && x.why === 'conceded'))
   // Without a concession the first answer that says how is kept, not a later one.
   const { result: firstReason } = await run({ topic: 'T', stances }, happy({
@@ -239,7 +245,7 @@ const noAgent = () => assert.fail('no agent may run')
 //    proposals stop the run.
 {
   const { result, calls } = await run({ topic: 'T', stances }, happy({ 'propose:c': null }))
-  assert.ok(result.gaps.includes('proposal c: no result (refused by a usage limit, skipped, or failed after retries)'))
+  assert.ok(result.gaps.includes('proposal c: no result (refused by a usage limit, skipped, or failed after retries); on sonnet: no result (refused by a usage limit, skipped, or failed after retries)'))
   for (const label of ['attack:a', 'attack:red-team', 'second-round']) assert.ok(!targetsOf(calls.find((o) => o.label === label)).includes('c'), label)
   assert.equal(result.proposals.length, 2)
   const { result: two } = await run({ topic: 'T', stances }, happy({ 'propose:b': null, 'propose:c': null }))
@@ -268,8 +274,8 @@ const noAgent = () => assert.fail('no agent may run')
   // A failed proposal and a failed second round reach the judge as failures too.
   const { prompts: lost } = await run({ topic: 'T', stances }, happy({ 'propose:c': null, 'second-round': null }))
   for (const line of ['proposal c: no result', 'second round: no result']) assert.match(lost.judge.split('Agents that returned nothing')[1], new RegExp(`- ${line}`), line)
-  assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
-  assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries)'))
+  assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); on sonnet: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
+  assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries); on sonnet: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('research failures: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('judged on opus after the fable judge returned no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.equal(calls.find((o) => o.label === 'judge:opus').model, 'opus')
@@ -323,7 +329,7 @@ const noAgent = () => assert.fail('no agent may run')
   assert.equal(bounded.second.length, 12)
   assert.ok(bounded.gaps.includes('second round: 3 past the bound of 12 were left out'))
   const { result: refused } = await run({ topic: 'T', stances }, happy({ 'second-round': null }))
-  assert.ok(refused.gaps.includes('second round: no result (refused by a usage limit, skipped, or failed after retries)'))
+  assert.ok(refused.gaps.includes('second round: no result (refused by a usage limit, skipped, or failed after retries); on sonnet: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.deepEqual(refused.second, [])
 }
 
@@ -407,8 +413,42 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(labels.filter((c) => c.startsWith('propose:')).sort(), ['propose:data-oriented', 'propose:incremental', 'propose:lineage', 'propose:minimal'])
   assert.equal(result.proposals.length, 4)
   assert.deepEqual(result.gaps, [])
-  // Every attack answered and no second round: nothing is open.
+  // Every attack answered and no second round: nothing is open, and the judge left nothing unresolved.
   assert.match(result.markdown, /second round's attacks\nNone\.\n/)
+  assert.match(result.markdown, /leaves unresolved, by the judge\nNone\.\n/)
+}
+
+// 8b. An opus design, attack or revision its model refuses reruns on sonnet, and the result says so;
+//     it is no agent failure, so the judge is not told to excuse it.
+{
+  const plain = happy()
+  const onSonnet = (label) => (p, o) => plain(p, { ...o, label })
+  const { result, calls, prompts } = await run({ topic: 'T', stances }, happy({
+    'propose:a': null, 'propose:a:sonnet': onSonnet('propose:a'),
+    'attack:b': null, 'attack:b:sonnet': onSonnet('attack:b'),
+    'revise:c': null, 'revise:c:sonnet': onSonnet('revise:c'),
+    'second-round': null, 'second-round:sonnet': onSonnet('second-round'),
+  }))
+  for (const label of ['propose:a', 'attack:b', 'revise:c', 'second-round']) {
+    assert.equal(calls.find((o) => o.label === `${label}:sonnet`).model, 'sonnet', label)
+    assert.ok(result.gaps.includes(`${label} ran on sonnet after opus returned no result (refused by a usage limit, skipped, or failed after retries)`), label)
+  }
+  assert.equal(result.proposals.length, 3)
+  assert.ok(!result.proposals.some((p) => p.failed))
+  assert.doesNotMatch(prompts.judge, /Agents that returned nothing/)
+}
+
+// 8c. A list exactly at its bound loses nothing and adds no gap.
+{
+  const many = (n, make) => Array.from({ length: n }, (_, i) => make(i))
+  const { result } = await run({ topic: 'T', stances }, happy({
+    'research:code': { facts: many(30, (i) => ({ claim: `fact ${i}`, evidence: 'x.rs:1' })), summary: 'sum' },
+    'attack:red-team': { attacks: many(12, (i) => ({ target: 'a', claim: `red ${i}`, scenario: 'sc', evidence: 'ev', severity: 'minor' })) },
+    'propose:a': { ...design('a'), debt_removed: many(12, (i) => `debt ${i}`) },
+  }))
+  assert.equal(result.research.find((r) => r.key === 'code').facts.length, 30)
+  assert.equal(result.attacks.filter((x) => x.by === 'red-team').length, 12)
+  assert.deepEqual(result.gaps.filter((g) => /bound/.test(g)), [])
 }
 
 // 9. No research at all stops the run with the reasons.

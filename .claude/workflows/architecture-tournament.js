@@ -99,15 +99,10 @@ ${drivers.length ? drivers.map((d) => `- ${d}`).join('\n') : '- AGENTS.md "Desig
 
 The repository is FLUI, a declarative UI framework in Rust; read it in the checkout ${dir}. AGENTS.md is the process and its rules bind every design. Do not edit tracked files and do not build: other agents share this host. Another project's source may be read with \`gh\` or cloned shallowly into the gitignored \`.flutter/\` or \`.gpui/\`.`
 
-// An agent asked for an empty string sometimes writes the quotes themselves (`""`); every string an
-// agent returns is read through `blankQuotes`, so a `how` written as `""` is empty: a fixed or
-// refuted answer that says nothing is not kept (a concession needs no reason).
-function blankQuotes(value) {
-  if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
-  if (Array.isArray(value)) return value.map(blankQuotes)
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
-  return value
-}
+// A reason says something when it holds a letter or a digit: whitespace, quotes of any kind and
+// punctuation alone (`""`, `“”`, `" "`, `-`) say nothing, so a fixed or refuted answer with such a
+// `how` is not kept. A concession needs no reason.
+const saysSomething = (text) => /[\p{L}\p{N}]/u.test(text)
 
 // The runtime validates an agent's value against its `schema` at the tool-call layer, and the model
 // retries on a mismatch, so `agent()` returns a value of its schema's shape or null (the Workflow
@@ -116,10 +111,22 @@ function blankQuotes(value) {
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
-    return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
+    return value ? { value } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
     return { error: errorText(e) }
   }
+}
+
+// Work its model refuses runs on the next model down that does the work (CLAUDE.md "Delegating"):
+// an opus design, attack or revision reruns on sonnet, and the result says so. Only when both
+// return nothing usable is it an agent failure.
+async function attemptDown(prompt, options, down) {
+  const first = await attempt(prompt, options)
+  if (!first.error) return first
+  const second = await attempt(prompt, { ...options, label: `${options.label}:${down}`, model: down })
+  if (second.error) return { error: `${first.error}; on ${down}: ${second.error}` }
+  gaps.push(`${options.label} ran on ${down} after ${options.model} returned ${first.error}`)
+  return second
 }
 
 // An error's text reaches later prompts as one entry of a list, so it is cut to a line: a cheap cut
@@ -208,9 +215,9 @@ function boundDesign(who, design) {
 
 phase('Propose')
 const proposals = (await parallel(stances.map((s) => async () => {
-  const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou design from one school: ${s.focus}\n\nPropose the best architecture you can for this problem from that school, aiming higher than the stated target where the numbers allow. Be concrete: Rust shapes, the hot path, the owner of each piece of state, the predicted numbers with their arithmetic, the migration and what it deletes. Other designers will try to tear your design apart; leave them nothing easy.`, {
+  const got = await attemptDown(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou design from one school: ${s.focus}\n\nPropose the best architecture you can for this problem from that school, aiming higher than the stated target where the numbers allow. Be concrete: Rust shapes, the hot path, the owner of each piece of state, the predicted numbers with their arithmetic, the migration and what it deletes. Other designers will try to tear your design apart; leave them nothing easy.`, {
     phase: 'Propose', label: `propose:${s.key}`, schema: DESIGN_SCHEMA, model: 'opus', effort: 'high',
-  })
+  }, 'sonnet')
   if (got.error) agentFailed(`proposal ${s.key}: ${got.error}`)
   return got.error ? null : { stance: s.key, design: boundDesign(`proposal ${s.key}`, got.value) }
 }))).filter(Boolean)
@@ -259,9 +266,9 @@ const attackRuns = (await parallel(attackers.map((a) => async () => {
   const role = a.own
     ? `You are the author of the "${a.key}" design below. Tear apart every rival design: find where its predicted numbers do not follow from the facts, where its state has two owners or none, where an order of events or a failure breaks it, where it repeats a failure prior art records, what debt it adds, and where your own design is simply better. Be harsh and exact; a vague attack counts for nothing.\n\nYour design:\n${show(a.own)}`
     : 'You are the red team. Attack every design below on what designers miss: the order of events and failures (a panic in code it does not own, a late or duplicated answer, a resource lost mid-frame, an unwind), scaling (10 000 nodes, a deep tree, a long text, many windows), memory held while idle, the migration that leaves two forms alive, and a prediction that does not follow from the facts.'
-  const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\n${role}\n\nDesigns to attack:\n${targets.map(show).join('\n\n')}\n\nReturn at most ${MAX_ATTACKS} attacks, the strongest first.`, {
+  const got = await attemptDown(`${brief}\n\nResearch everyone shares:\n${dossier}\n\n${role}\n\nDesigns to attack:\n${targets.map(show).join('\n\n')}\n\nReturn at most ${MAX_ATTACKS} attacks, the strongest first.`, {
     phase: 'Tear apart', label: `attack:${a.key}`, schema: attackSchema(targets.map((p) => p.stance)), model: 'opus', effort: 'high',
-  })
+  }, 'sonnet')
   if (got.error) {
     agentFailed(`attacks by ${a.key}: ${got.error}`)
     return null
@@ -296,9 +303,9 @@ phase('Revise')
 const rivalsOf = (p) => proposals.filter((q) => q !== p).map((q) => `- ${q.stance}: ${q.design.title}. ${q.design.thesis}`).join('\n')
 const revised = await parallel(proposals.map((p) => async () => {
   const against = attacksOn(p.stance)
-  const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYour design:\n${show(p)}\n\nThe rival designs, in brief:\n${rivalsOf(p)}\n\nEvery attack on your design, each with its number (JSON):\n${JSON.stringify(against, null, 1)}\n\nAnswer each attack by its number: fixed (say how the design changes), refuted (cite the fact or line), or conceded (say what it costs). An unanswered attack counts as conceded. Then return the revised design; take any rival's idea that is better, and say so.`, {
+  const got = await attemptDown(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYour design:\n${show(p)}\n\nThe rival designs, in brief:\n${rivalsOf(p)}\n\nEvery attack on your design, each with its number (JSON):\n${JSON.stringify(against, null, 1)}\n\nAnswer each attack by its number: fixed (say how the design changes), refuted (cite the fact or line), or conceded (say what it costs). An unanswered attack counts as conceded. Then return the revised design; take any rival's idea that is better, and say so.`, {
     phase: 'Revise', label: `revise:${p.stance}`, schema: REVISION_SCHEMA, model: 'opus', effort: 'high',
-  })
+  }, 'sonnet')
   if (got.error) {
     agentFailed(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
     return { stance: p.stance, design: p.design, answers: [], unanswered: against, failed: true }
@@ -308,7 +315,7 @@ const revised = await parallel(proposals.map((p) => async () => {
   const answers = []
   for (const attack of against) {
     const named = got.value.answers.filter((x) => x.id === attack.id)
-    const kept = named.find((x) => x.verdict === 'conceded') || named.find((x) => x.how.trim())
+    const kept = named.find((x) => x.verdict === 'conceded') || named.find((x) => saysSomething(x.how))
     if (kept) answers.push({ ...kept, attack })
   }
   const unmatched = got.value.answers.filter((x) => !against.some((y) => y.id === x.id)).length
@@ -332,9 +339,9 @@ const showRevised = (r) => r.failed
 const failures = () => (failed.length ? `\n\nAgents that returned nothing usable in this run, failures rather than faults of any design:\n${failed.map((x) => `- ${x}`).join('\n')}` : '')
 
 // A second round on the revisions: a fix is where the next defect usually is.
-const second = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" or "refuted" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.${failures()}\n\n${revised.map(showRevised).join('\n\n')}`, {
+const second = await attemptDown(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" or "refuted" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.${failures()}\n\n${revised.map(showRevised).join('\n\n')}`, {
   phase: 'Revise', label: 'second-round', schema: attackSchema(proposed), model: 'opus', effort: 'high',
-})
+}, 'sonnet')
 if (second.error) agentFailed(`second round: ${second.error}`)
 const secondAttacks = second.error ? [] : takeAttacks('second round', second.value.attacks)
 
