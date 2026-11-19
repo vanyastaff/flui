@@ -20,7 +20,7 @@ Citations below name symbols, not line numbers.
 | `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
 | `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
-| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `SceneVersion` or `LayerTree` (decision 6). |
+| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | One `SceneVersion`; `Scene::new` converts a hand-built `LayerTree` (decision 6). |
 | Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
 | Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary and each chunk a partial frame's damage cannot reach (`SceneVersion::subtree_cull`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
@@ -105,17 +105,27 @@ Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 
 `flui-rendering`'s `FragmentComposer` writes each repainted boundary's content through
 `ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine walks the applied version in place
-(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for hand-authored scenes (`flui_app::run_direct`, examples,
+(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for hand-authored trees (hot-reload plugins, examples,
 the GPU readback tests). `pop` returns `Option<LayerId>` — an empty stack is absence, the
 `Vec::pop` contract — so the crate has no error type. The builder's typed `push_*`/`add_*` are
 one-line conveniences over `push(impl Into<Layer>)` / `add(..)`; a variant without one is reached
 through `push(SomeLayer::new(..))`.
 
-### 6. `Scene` is what the raster side draws, frozen
+### 6. `Scene` holds one version; a hand-built tree becomes one
 
-A `Scene` holds a retained `SceneVersion` (`Scene::of_version`), which the engine walks in place,
-or a `LayerTree` (`Scene::new`), which a plugin image, a hand-built scene and a headless capture
-still hand it; `Scene::content` names which. It adds one fact over either: no `&mut` path back.
+A `Scene` holds a retained `SceneVersion`, which the engine walks in place; it adds one fact over
+the version: no `&mut` path back. A frame's paint publishes its version (`Scene::of_version`). A
+scene authored by hand (a hot-reload plugin's image, an example, a GPU readback test) is built as a
+`LayerTree` and converted when the scene is made: `Scene::new` runs `SceneVersion::from_tree`,
+one node holding the tree, each picture without children a chunk of its recording and every other
+layer an effect over its children. The engine therefore walks one form, closes damage over one
+form (`SceneVersion::close_damage`) and keeps no tree walk, no tree-side backdrop closure and no
+straddle self-heal for trees whose damage carries no such closure (ADR-0304 §9). A version from
+`from_tree` comes from an owner of its own, so its lineage pairs with no other scene's and its
+first frame on any target is full. The conversion's equivalence is pinned by
+`flui-engine`'s `layer_walk::tests::a_version_walks_as_its_flattened_tree` (a version's walk
+equals the walk of its flattened tree's version) and by `SceneVersion::from_tree`'s doctest.
+
 Its former `size`, `root` and `frame_number` fields had no reader that did not already hold the
 value (`root` was a copy of `LayerTree::root` that eleven of thirteen callers left disagreeing;
 `frame_number` is the presentation's counter, read back by its writer; `size` had no reader).
@@ -167,7 +177,8 @@ grown the same way, since the engine composites its whole output; a colour or im
 paints transparent black has no bound and makes the frame `Full(Unbounded)`. Damage that meets a
 closure takes all of it, and damage that meets one member of a backdrop group takes the rect over every
 member's (a `Closures` set keys them by `BackdropGroupKey`), to a fixed point of at most 64 rounds. The engine's backdrop planning
-calls the same two functions. The result is `Full` for an unpairable frame (first frame,
+reaches the same two functions through `SceneVersion::close_damage`, and the crate exports them
+only under `testing`, for the oracle's tests. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
 twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one
 `DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`

@@ -79,6 +79,11 @@ impl PictureLayer {
         &self.picture
     }
 
+    /// The shared commands, for a chunk that holds the same recording.
+    pub(crate) fn shared(&self) -> &Arc<DisplayList> {
+        &self.picture
+    }
+
     /// The union of the commands that contribute bounds, or `None` when
     /// none does (a list of only clips or `DrawPaint`s has no extent).
     pub fn bounds(&self) -> Option<Rect<f64>> {

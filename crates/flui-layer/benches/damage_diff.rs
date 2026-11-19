@@ -15,14 +15,14 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
     ContentToken, DamageMode, Layer, LayerDiffer, LayerNode, LayerTree, OffsetLayer, PictureLayer,
-    Scene, TransformLayer,
+    TransformLayer,
 };
 use flui_painting::{Canvas, paint::Paint, styling::Color};
 
 const BOUNDARIES: usize = 1_000;
 const SURFACE: (u32, u32) = (1920, 1080);
 
-fn scene(root: &ContentToken, tokens: &[ContentToken]) -> Scene {
+fn scene(root: &ContentToken, tokens: &[ContentToken]) -> LayerTree {
     let mut tree = LayerTree::new(
         LayerNode::new(Layer::from(TransformLayer::new(Matrix4::scaling(
             2.0, 2.0, 1.0,
@@ -44,7 +44,7 @@ fn scene(root: &ContentToken, tokens: &[ContentToken]) -> Scene {
         );
         tree.push_child(boundary, Layer::from(PictureLayer::new(canvas.finish())));
     }
-    Scene::new(tree)
+    tree
 }
 
 fn damage_diff(c: &mut Criterion) {

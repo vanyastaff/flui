@@ -606,7 +606,7 @@ run with nothing borrowed.
   display it chose; a configured `AppConfig::position` is whole logical
   pixels of the primary display (the first where none is marked), which
   `AppConfig::window_options` turns into a position against the owner's
-  display snapshot at every open site (the main window, `run_direct`, a
+  display snapshot at every open site (the main window, a
   secondary window, Android and the web); it is the one way to build a
   window's options from the configuration. A window state with no position
   stores nothing, and one whose position names a display the snapshot lacks

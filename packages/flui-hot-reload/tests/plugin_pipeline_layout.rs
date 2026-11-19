@@ -28,7 +28,6 @@ impl View for Fill {
 fn painted_size(scene: &Scene) -> Size {
     let area = scene
         .version()
-        .expect("a plugin hands over its retained version")
         .flatten()
         .iter()
         .filter_map(|(_, node)| node.layer().bounds())

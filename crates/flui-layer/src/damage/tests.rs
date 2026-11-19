@@ -8,7 +8,7 @@ use super::{DamageMode, LayerDiffer};
 use crate::{
     BackdropFilterLayer, ClipRectLayer, ContentToken, DamageRect, DamageRegion, FollowerLayer,
     FullReason, Layer, LayerId, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
-    OpacityLayer, PerformanceOverlayLayer, PictureLayer, ResyncReason, Scene, TextureLayer,
+    OpacityLayer, PerformanceOverlayLayer, PictureLayer, ResyncReason, TextureLayer,
     TransformLayer,
 };
 
@@ -77,8 +77,8 @@ impl Frame {
         self.tree.push_child(parent, layer.into())
     }
 
-    fn scene(self) -> Scene {
-        Scene::new(self.tree)
+    fn scene(self) -> LayerTree {
+        self.tree
     }
 }
 
@@ -100,7 +100,7 @@ fn covering(l: f64, t: f64, r: f64, b: f64) -> (u32, u32, u32, u32) {
     (rect.left(), rect.top(), rect.right(), rect.bottom())
 }
 
-fn one_boundary(root: &ContentToken, token: &ContentToken, at: Offset<f64>) -> Scene {
+fn one_boundary(root: &ContentToken, token: &ContentToken, at: Offset<f64>) -> LayerTree {
     let mut frame = Frame::new(1.0, root);
     let parent = frame.root();
     frame.boundary(parent, 2, token, at, Size::new(20.0, 20.0));
@@ -303,7 +303,7 @@ fn unstamped_root_is_full() {
         let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
         let root = tree.root();
         tree.push_child(root, picture(Rect::from_xywh(0.0, 0.0, 10.0, 10.0)));
-        Scene::new(tree)
+        tree
     };
     let mut differ = LayerDiffer::default();
     assert_eq!(
@@ -321,11 +321,10 @@ fn unstamped_root_is_full() {
 fn root_id_change_is_full() {
     let token = ContentToken::mint();
     let scene = |root_id: u64| {
-        let tree = LayerTree::new(
+        LayerTree::new(
             LayerNode::new(Layer::from(OffsetLayer::zero()))
                 .with_boundary(id(root_id), token.clone()),
-        );
-        Scene::new(tree)
+        )
     };
     let mut differ = LayerDiffer::default();
     differ.diff(&scene(1), SURFACE);
@@ -775,7 +774,7 @@ fn a_leader_move_damages_its_follower() {
     assert_eq!(partial(region), covering(100.0, 100.0, 230.0, 130.0));
 }
 
-fn backdrop_scene(tokens: &[ContentToken; 2], changed_at: Offset<f64>) -> Scene {
+fn backdrop_scene(tokens: &[ContentToken; 2], changed_at: Offset<f64>) -> LayerTree {
     filtered_backdrop_scene(tokens, changed_at, ImageFilter::blur(2.0))
 }
 
@@ -783,7 +782,7 @@ fn filtered_backdrop_scene(
     tokens: &[ContentToken; 2],
     changed_at: Offset<f64>,
     filter: ImageFilter,
-) -> Scene {
+) -> LayerTree {
     let mut frame = Frame::new(1.0, &tokens[0]);
     let parent = frame.root();
     frame.boundary(parent, 2, &tokens[1], changed_at, Size::new(20.0, 20.0));

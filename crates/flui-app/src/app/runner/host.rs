@@ -843,13 +843,13 @@ thread_local! {
 /// in this module does so immediately after minting/receiving its
 /// `OwnerPlatform`.
 ///
-/// Deliberately does NOT resolve `SharedEngineServices`: `run_direct`
-/// installs an owner platform and opens a window but never installs a
-/// `UiRuntime` (no widget tree, no painting/semantics/scheduler singleton
-/// reach at all), so resolving here would pay for singleton construction
-/// and full system-font enumeration on a path that can never consume
-/// either. UI runtime construction and prepared installation resolve these
-/// services; merely installing the platform owner does not.
+/// Deliberately does NOT resolve `SharedEngineServices`: the owner platform
+/// is installed before any `UiRuntime` exists (no widget tree, no
+/// painting/semantics/scheduler singleton reach), so resolving here would
+/// pay for singleton construction and full system-font enumeration before
+/// anything consumes either. UI runtime construction and prepared
+/// installation resolve these services; merely installing the platform
+/// owner does not.
 #[cfg_attr(
     any(target_os = "android", target_os = "ios"),
     expect(
@@ -1199,9 +1199,10 @@ struct RunnerHandler {
     routes: Rc<std::cell::RefCell<AppRoutes>>,
 }
 
-/// The application handler a runner passes to `Platform::run`, with
+/// The application handler a test passes to `Platform::run`, with
 /// `bootstrap` as its `ready`, for a run that declares nothing it opens
 /// ([`opening_app_handler`] with the default settings).
+#[cfg(test)]
 pub(crate) fn app_handler(
     bootstrap: impl FnOnce(flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError>
     + 'static,

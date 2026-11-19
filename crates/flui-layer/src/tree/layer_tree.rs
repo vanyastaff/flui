@@ -22,7 +22,7 @@ use super::stamp::ContentToken;
 use crate::{LayerLink, layer::Layer};
 
 /// A [`Layer`] plus its position in the tree.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerNode {
     parent: Option<LayerId>,
     children: Vec<LayerId>,
@@ -136,7 +136,7 @@ impl From<Layer> for LayerNode {
 /// assert_eq!(tree.parent(leaf), Some(root));
 /// assert_eq!(tree.children(root), Some(&[leaf][..]));
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerTree {
     /// Never empty: slot 0 is the root, placed by [`LayerTree::new`].
     nodes: Vec<LayerNode>,

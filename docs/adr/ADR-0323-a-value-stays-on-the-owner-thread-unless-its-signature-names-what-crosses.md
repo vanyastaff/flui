@@ -178,7 +178,7 @@ positions keeps all of them unless a marker is named.
 | `flui_foundation::wasm::WasmNotSendSync` and its blanket impl | deleted: no production caller |
 | `flui_platform::{data_transfer::DragTransport, drag::PlatformDragSource, haptics::PlatformHaptics, system_chrome::PlatformSystemChrome, text_input::PlatformTextInput}` | no thread supertrait: each is reached through a `PlatformWindow` on the owner thread |
 | `flui_runtime::owner_turn::CloseRequestHandler::new` (re-exported as `flui_app::CloseRequestHandler`) | `impl Fn(&CloseRequest) -> CloseResponse + 'static`, held as `Rc`; the wrong-thread branch of its call goes with the bound |
-| `flui_app::app::direct::run_direct` | `impl FnMut(&mut SceneBuilder, f64, f64) + 'static` |
+| `flui_app::app::direct::run_direct` | deleted: a hand-built scene is a version made by `Scene::new` (ADR-0304 §9), and the entry had no caller |
 | `flui_app::app::config::AppConfig::memory_reclaim` | `impl ReclaimMemory + 'static`, held as `Rc`: a receiver is reclaimed on the owner thread |
 | `flui_hot_reload::pipeline::PluginPipeline::mount` | `V: View + StatelessView + Clone + 'static` |
 | `flui_painting::typography::InlineSpan::as_trait` and `InlineSpanTrait` | deleted: `InlineSpan` is a closed enum, and its methods match its variants |

@@ -78,11 +78,22 @@ impl Chunk {
         version: ContentVersion,
         commands: DisplayList,
     ) -> Self {
+        Self::of_shared(owner, ordinal, version, Arc::new(commands))
+    }
+
+    /// [`Self::new`] over commands another holder shares: a hand-built
+    /// tree's picture keeps its one recording.
+    pub(crate) fn of_shared(
+        owner: RenderId,
+        ordinal: u32,
+        version: ContentVersion,
+        commands: Arc<DisplayList>,
+    ) -> Self {
         let mut chunk = Self {
             owner,
             ordinal,
             version,
-            commands: Arc::new(commands),
+            commands,
             bounds: Bounds::Finite(Rect::ZERO),
             textures: SmallVec::new(),
             reads_destination: false,
