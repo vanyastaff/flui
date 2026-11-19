@@ -242,6 +242,15 @@ impl UiRuntime {
     /// Reached on every target: [`Self::render_frame`]'s `retry_needed` arm
     /// calls it.
     pub(super) fn mark_needs_full_repaint_for(&self, presentation: &PresentationState) {
+        Self::mark_root_needs_paint(presentation);
+        // The paint demand is in the tree before the platform wake, which is user code and can
+        // unwind: a frame the wake still reaches finds the tree to repaint.
+        self.request_redraw_for(presentation);
+    }
+
+    /// The paint half of [`Self::mark_needs_full_repaint_for`], for a frame
+    /// that is already running and asks for no wake.
+    pub(super) fn mark_root_needs_paint(presentation: &PresentationState) {
         presentation
             .renderer()
             .root_pipeline_owner()
@@ -250,9 +259,30 @@ impl UiRuntime {
                     owner.mark_needs_paint(root_id);
                 }
             });
-        // The paint demand is in the tree before the platform wake, which is user code and can
-        // unwind: a frame the wake still reaches finds the tree to repaint.
-        self.request_redraw_for(presentation);
+    }
+
+    /// Gives `presentation`'s next frame what the retry a verdict armed needs
+    /// it to draw (see [`RetryDraw`](super::settlement::RetryDraw)). A
+    /// withheld version is owed to the scene before the platform wake, which
+    /// is user code and can unwind; a scene a frame still holds cannot take
+    /// the debt, and the retry repaints in full instead.
+    pub(super) fn owe_retry_draw(
+        &self,
+        presentation: &PresentationState,
+        draw: super::settlement::RetryDraw,
+    ) {
+        use super::settlement::RetryDraw;
+        match draw {
+            RetryDraw::Wake => {}
+            RetryDraw::Repaint => self.mark_needs_full_repaint_for(presentation),
+            RetryDraw::Republish(version) => {
+                if presentation.scene.owe(version).is_ok() {
+                    self.request_redraw_for(presentation);
+                } else {
+                    self.mark_needs_full_repaint_for(presentation);
+                }
+            }
+        }
     }
 
     /// `Self::mark_needs_full_repaint_for`, addressed to

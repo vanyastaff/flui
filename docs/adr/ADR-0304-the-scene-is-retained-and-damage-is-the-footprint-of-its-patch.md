@@ -473,11 +473,29 @@ submit changes nothing: the next publication's damage still starts at `acked`.
 
 A frame that was not shown (`PresentDisposition::NotShown`, ADR-0068) is retried by publishing the
 version the owner already holds: `acked` did not move, so the publication's damage is still every
-change since the last shown frame, and the raster side finds every chunk in its recording cache.
-The retry re-records nothing and needs no repaint, so `mark_needs_full_repaint_for` leaves
-ADR-0068 §3's retry; the wake half (`wake_frame()`) stays, because the retry pump still needs a
-frame to run. A surface reconfigured in between makes that publication `Full(SurfaceChanged)`, as
-any change of `SurfaceKey` does.
+change since the last shown frame. The engine draws every retry after `NotShown` in full: the
+executor owes its slot a full redraw (`RasterReset`) on that verdict, and the full frame replays
+from the recording cache every chunk it kept under the same key, so it records nothing it already
+holds.
+The presentation's scene holds the withheld version as a debt beside the target (surface size in
+device pixels and device pixel ratio) the current version was applied for; the retry's wake
+(`wake_frame()`) runs a frame, and a frame whose paint finds nothing to change publishes that
+version again with nothing painted (`crates/flui-runtime/src/presentation_scene.rs`,
+`held_retry`). Only a verdict or a new version pays the debt: the raster side showing that version
+or a later one of its lineage (an acknowledgement that arrives while a frame holds the scene is
+applied when the scene returns), or a frame that applies a version. A republish pays nothing, so a
+republished frame discarded before its submit leaves the debt to the next frame. Only the
+settlement of a frame of the current tree owes its version, and a debt for a later version of the
+lineage is never replaced by an older one. The retry repaints the tree in full instead when the
+target changed since the version was applied or a newer version was applied since the withheld
+one: the newest tree is drawn. A repaint the host asks for in between (a device rebuilt, a surface
+restored, a display changed, or a painter the executor let go, which the executor counts in
+`RasterSender::painter_resets` and the host reads before each frame, ADR-0305 §7, §8) dirties the
+tree, and that frame applies a new version as any frame that paints does; a retry that reaches a
+raster side whose recordings went (a resource epoch advanced) records again what it draws, since a
+recording is keyed by the resources it names. A surface reconfigured in between makes that
+publication `Full(SurfaceChanged)`, as any change of `SurfaceKey` does. Flutter's counterpart is
+`Rasterizer::DrawLastLayerTree`.
 
 §8. **Paint starts at each owed boundary.** `PipelineOwner::run_frame` takes a `SceneWriter`. It
 paints the boundaries in the paint queue, deepest first (the order `paint.rs:127` already sorts),
@@ -691,11 +709,26 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_moved_box_repaints_its_old_and_new_positions_only`
   (`crates/flui-engine/src/damage_readback_tests.rs:209`) stay.
 - `flui-runtime` (to be added): `a_refused_submit_keeps_its_damage_owed`,
-  `a_refused_patch_rebuilds_under_a_new_lineage`,
-  `a_frame_not_shown_is_retried_from_the_held_version` (the retry paints no boundary and
-  publishes no new version) and `a_hot_reload_renews_every_scene_lineage`; `flui-engine` (to be
-  added): `a_frame_not_shown_is_retried_without_recording` (the engine's retry of the held version
-  records no chunk).
+  `a_refused_patch_rebuilds_under_a_new_lineage` and `a_hot_reload_renews_every_scene_lineage`.
+- The retry of a withheld frame (§7): `flui-runtime`'s
+  `a_frame_not_shown_is_retried_from_the_held_version` (the retry paints no node, applies no patch
+  and shows the withheld tree), `a_not_shown_retry_repaints_when_the_held_version_is_stale` (a row
+  per guard: another surface size, and the late withheld settlement of a frame older than one
+  painted since), `a_withheld_version_is_republished_only_for_its_own_target` (size, scale, a debt
+  that a republish or an older debt does not pay and a version shown at or after it, or one
+  applied, does) and `a_version_shown_while_the_scene_is_lent_pays_its_debt_on_return`;
+  `flui-app`'s `a_withheld_frame_retried_over_a_reset_painter_paints_a_new_version` (a device
+  rebuilt within one turn, or a sibling window's render that panicked, repaints the window and
+  publishes a new version, drawn in full); `flui-engine`'s
+  `a_withheld_slot_is_retried_in_full_after_its_siblings_panic` (lavapipe: the sibling's panic is
+  counted in `painter_resets`, and the full retry draws what a fresh renderer draws) and
+  `a_frame_not_shown_is_retried_without_recording` (lavapipe; the engine has no path that redraws
+  a held version of its own, so it drives the forced full frame of the same version a retry is:
+  after a frame that failed once begun, that frame records no chunk and replays every one from
+  the cache, and after a frame that panicked once it recorded, it records every chunk again and
+  reports the recordings the panic and a reclaim before it dropped; the pixels are a fresh
+  renderer's each time); and the `cargo xtask perf` scenario `not_shown_retry`
+  (`nodes_painted = 0`, `scene_ops = 0`).
 - `cargo xtask perf` gains the scenario `caret_blink_in_10k_list` (to be added to
   `crates/flui-widgets/tests/perf.rs`, counts in `crates/flui-widgets/perf/baseline/`), whose
   `nodes_painted` and `scene_ops` per blink are equal at 1,000 and 10,000 items; the engine's

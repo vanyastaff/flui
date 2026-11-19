@@ -65,7 +65,7 @@ transient at the display rate.
 - **§2.** The first `MAX_NOT_SHOWN_RETRIES` consecutive withheld attempts are retried on the next
   display period. Each attempt past them counts into the dropped-frame streak
   (`note_frame_failure`) and waits out the dropped-frame backoff (`failure_retry_delay`, doubling
-  from one display period up to `FAILURE_RETRY_CAP`) before it repaints. The withheld streak stays
+  from one display period up to `FAILURE_RETRY_CAP`) before it is tried again. The withheld streak stays
   above the budget until a frame presents or finds no damage, so each attempt after the budget
   waits too, rather than opening a new burst. A key or button press ends the wait early, as for
   any dropped frame. A window shown again after it was hidden starts a new withdrawal: its withheld
@@ -77,8 +77,9 @@ transient at the display rate.
   that shows the current tree has no pending frame painted from it or a later one, since each
   painted segment advances the tree revision (ADR-0048), so ADR-0334 §1's guard for one does not
   arise here.
-- **§4.** The retry repaints in full until ADR-0304 §7's retry from the held version is built; the
-  wake and the repaint are armed before the trace, whose subscriber is user code.
+- **§4.** The retry publishes the withheld version again (ADR-0304 §7), or repaints in full when
+  that version is stale; the wake and the debt are armed before the trace, whose subscriber is user
+  code.
 
 ### Consequences
 
@@ -148,4 +149,5 @@ dispatches it.
 ## More information
 
 ADR-0068 §1 and §2 (the three-state disposition, exhaustive) and its measurements stand; §3's
-repaint half is ADR-0304 §7's, and §3's two-part retention (the wake and the repaint) stands.
+repaint half is ADR-0304 §7's, and §3's two-part retention (the wake and the debt the scene holds)
+stands.

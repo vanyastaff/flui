@@ -743,7 +743,11 @@ input (ADR-0101). A frame that
 rendered but could not be shown commits nothing, so its pointer input waits for the frame that
 shows the tree, and it is retried: at the display rate for `MAX_NOT_SHOWN_RETRIES` attempts, then
 after the dropped-frame backoff (ADR-0335); a window shown again after it was hidden starts a new
-budget. A frame with nothing to present falls back to
+budget. The retry publishes the withheld version again, with nothing painted, while the
+presentation's scene still holds it as current and the target it was applied for is unchanged;
+otherwise it repaints in full (ADR-0304 §7, `PresentationScene::held_retry`, pinned by
+`a_frame_not_shown_is_retried_from_the_held_version` and
+`a_not_shown_retry_repaints_when_the_held_version_is_stale`). A frame with nothing to present falls back to
 no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned on the host side by `flui-engine`'s `window_slots`
 and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_submit_verdict`,

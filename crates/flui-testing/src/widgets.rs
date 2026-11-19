@@ -1711,6 +1711,12 @@ impl LaidOut {
         self.host.ui_runtime().sink().submits()
     }
 
+    /// Leave the next `frames` frames unshown for the reason `how` names; see
+    /// [`HeadlessHost::leave_unshown`](crate::HeadlessHost::leave_unshown).
+    pub fn leave_unshown(&mut self, frames: u32, how: crate::UnshownFrame) {
+        self.host.ui_runtime_mut().leave_unshown(frames, how);
+    }
+
     /// The kinds of every layer the most recent pumped frame composited, in
     /// depth-first pre-order from the root.
     ///
