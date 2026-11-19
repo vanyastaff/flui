@@ -1648,6 +1648,10 @@ jobs:
     if: needs.plan.outputs.lane == 'full'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # The cargo-xwin release, which fixes the default MSVC version and so
+      # names the SDK cache.
+      XWIN_VERSION: 0.23.1
     strategy:
       fail-fast: false
       matrix:
@@ -1685,35 +1689,44 @@ jobs:
           packages: clang llvm
           commands: clang clang-cl llvm-ar llvm-lib
 
+      # The C compiler is the NDK's wrapper for the API floor
+      # platform-support.toml states, the level an APK declares as minSdk.
       - name: Configure bundled Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
+          api=$(sed -n '/^\[android\]/,/^\[/s/^api = \([0-9][0-9]*\)$/\1/p' platform-support.toml)
+          [ -n "$api" ] || { echo "::error::no [android] api in platform-support.toml"; exit 1; }
           tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          test -x "$tools/aarch64-linux-android21-clang"
+          test -x "$tools/aarch64-linux-android$api-clang"
           test -x "$tools/llvm-ar"
-          echo "CC_aarch64_linux_android=$tools/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$tools/aarch64-linux-android$api-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$tools/llvm-ar" >> "$GITHUB_ENV"
 
       # stacker's Windows C shim includes windows.h. cargo-xwin provisions
       # the MSVC SDK/CRT for clang-cl while retaining the shipped MSVC triple.
+      # XWIN_CACHE_DIR is where it keeps them, for every later step.
       - name: Install cargo-xwin
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-xwin@0.23.1
+          tool: cargo-xwin@${{ env.XWIN_VERSION }}
+
+      - name: Name the MSVC CRT and Windows SDK directory
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: echo "XWIN_CACHE_DIR=$RUNNER_TEMP/cargo-xwin" >> "$GITHUB_ENV"
 
       # cargo-xwin downloads the MSVC CRT and Windows SDK on first use, 7-13
       # minutes from Microsoft's servers, then marks the directory DONE. The
       # splatted result is 1.1 GB on disk, about 260 MB compressed. The key
-      # names the cargo-xwin release, which fixes the default MSVC version;
-      # the cache is saved from main only, after a complete download.
+      # names the cargo-xwin release; the cache is saved from main only, after
+      # a complete download.
       - name: Restore MSVC CRT and Windows SDK
         id: xwin-cache
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/cargo-xwin
-          key: cargo-xwin-0.23.1-${{ runner.os }}
+          path: ${{ env.XWIN_CACHE_DIR }}
+          key: cargo-xwin-${{ env.XWIN_VERSION }}-${{ runner.os }}
 
       - name: cargo clippy for the target
         run: |
@@ -1722,7 +1735,6 @@ jobs:
         env:
           CLIPPY: ${{ matrix.clippy }}
           NATIVE_TARGET: ${{ matrix.target }}
-          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
       # cargo-xwin writes DONE into its cache once the download is complete; the
       # save waits for that, not for the lint after it.
@@ -1733,24 +1745,23 @@ jobs:
           if [ -n "$(find "$XWIN_CACHE_DIR" -name DONE -print -quit 2>/dev/null)" ]; then
             echo "done=true" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
       - name: Save MSVC CRT and Windows SDK
         if: ${{ !cancelled() && steps.xwin-done.outputs.done == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/cargo-xwin
+          path: ${{ env.XWIN_CACHE_DIR }}
           key: ${{ steps.xwin-cache.outputs.cache-primary-key }}
 
+      # Runs after a failed default-features run too, so one run shows both.
       - name: cargo clippy for the target, every feature
+        if: ${{ !cancelled() }}
         run: |
           read -ra clippy <<< "$CLIPPY"
           cargo "${clippy[@]}" --workspace --all-targets --all-features --locked --target "$NATIVE_TARGET" -- -D warnings
         env:
           CLIPPY: ${{ matrix.clippy }}
           NATIVE_TARGET: ${{ matrix.target }}
-          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — the one required check: red when a job it needs failed or was

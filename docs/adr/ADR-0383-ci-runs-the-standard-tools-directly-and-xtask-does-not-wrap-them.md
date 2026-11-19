@@ -126,28 +126,39 @@ target beside a `wasm32` target, which may hold none; an empty list fails it too
 `wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
 more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
 
-### §6. `cross-typecheck` lints the whole workspace for each native triple
+### §6. `cross-typecheck` lints the whole workspace for four native triples
 
 Each leg of the job (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-linux-android`,
-`aarch64-apple-ios`) runs `cargo clippy --workspace --all-targets --locked --target <triple> --
--D warnings`, the `clippy` job's command, and then the same with `--all-features`, which reaches
-the `testing` code and the targets behind `required-features` that plain `--all-targets` skips.
-The Windows leg runs on Linux through `cargo xwin clippy`, which the matrix names as the leg's
-subcommand. Three options were weighed for which packages a leg lints:
+`aarch64-apple-ios`, the triples `cross-typecheck` checked) runs `cargo clippy --workspace
+--all-targets --locked --target <triple> -- -D warnings`, the `clippy` job's command, and then the
+same with `--all-features`, which reaches the targets behind `required-features` that plain
+`--all-targets` skips. The Windows leg runs on Linux through `cargo xwin clippy`, which the matrix
+names as the leg's subcommand. The options for which packages a leg lints, judged by the drivers
+(the command in the job, one source per fact) and by the runner time an owner's quota pays:
 
 - *Discover them from the sources* (what `cross-typecheck` did): xtask parsed every crate's module
-  tree with `syn` and kept a package whose code or manifest names a native `cfg`. About 900 lines
-  and their tests for a list cargo can make itself, and a `cfg` it did not parse (a macro's
-  output, an `include!`) dropped its package silently.
-- *Name the packages in the matrix*: a crate that gains a native `cfg` is unchecked until someone
-  adds it, and nothing says it is missing.
-- *Lint the whole workspace* (chosen): nothing to keep, and a crate whose code has no native `cfg`
-  is still checked against its dependencies' native APIs. Each leg compiles the dozen packages
-  the discovery left out (the design-system packages, the demos, the protocol and layer crates).
+  tree with `syn` and kept a package whose code or manifest names a native `cfg`. The selection is
+  in Rust, not in the job; about 900 lines and their tests for it; and a `cfg` it did not parse (a
+  macro's output, an `include!`) dropped its package silently.
+- *Name the packages in the matrix*: the cheapest run, and the command is in the job, but the list
+  is a second source beside the crates' `cfg`s, and a crate that gains a native `cfg` is
+  unchecked until someone adds it, with nothing to say it is missing.
+- *The whole workspace minus a list read from metadata*, as `wasm-check` reads `wasm = false`: a
+  package marked as never built for a triple is left out, and nothing else needs keeping. No
+  package is so marked for a native triple today, so the list would be empty.
+- *Lint the whole workspace* (chosen): the command is the job's, there is no list to keep, and a
+  crate whose code has no native `cfg` is still built against its dependencies' native forms. Each
+  leg compiles the dozen packages the discovery left out (the design-system packages, the demos,
+  the protocol and layer crates). When a package that never ships on a triple cannot build for
+  it, the metadata list above is the next step, not a list in the job.
 
-The required-features run the discovery built, with each package's `testing` feature and its
-targets' required features on and every other optional feature off, is not run: the default run
-and the all-features run bracket it.
+`cargo check` in place of clippy would save the lint pass, but a lint behind a native `cfg` is seen
+only on that native target, which no other job builds. Neither run is an application's build:
+`--all-targets` compiles the tests in the same invocation, so the features a crate's own
+dev-dependency on itself names (flui-native's `testing`, `http` and `single-instance`) are on in
+its library in both. The required-features run the discovery built had the same property, so
+dropping it loses only the configuration with `testing` and required features on and the other
+optional features off.
 
 ### Consequences
 
@@ -174,6 +185,12 @@ and the all-features run bracket it.
   quota pays for, the two macOS-hosted legs among them.
 - Bad, because a native branch behind `testing` that only builds with some other optional
   feature off fails no leg, where the required-features run caught it (§6).
+- Bad, because the tests of the discovery go with it (`native_typecheck_selects_target_gated_workspace_targets`
+  and the module-tree tests), and the job's matrix and its two lines are the whole statement of
+  the scope: the reader of a change to them holds it (Confirmation).
+- Bad, as before this record, because no job compiles a native arm that exists only off these four
+  triples (x86_64 macOS, 32-bit Android) or only with a self-dev-dependency feature off; `docs/gaps.md`
+  lists them.
 
 ### Confirmation
 
@@ -181,6 +198,8 @@ and the all-features run bracket it.
 - Each job runs its commands on every run of its lane;
   `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck)\b'`
   finds none in `.github/`.
+- `cross-typecheck` runs its four legs on every main run. Its scope (`--workspace`, `--all-targets`,
+  the two feature sets, the four triples) is read in the diff of a change to the job, against §6.
 - A pull request that changes the steps of a job only main runs (`wasm-check` and
   `cross-typecheck` among them) runs
   that job on its branch at the head that merges: `gh workflow run CI --ref <branch>` takes the
