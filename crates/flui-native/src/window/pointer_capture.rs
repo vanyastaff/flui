@@ -21,8 +21,10 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(target_os = "android")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(target_os = "android")]
 use flui_platform::CursorGrab;
 
 /// What a lock command does on an Activity window.
@@ -192,7 +194,9 @@ impl<W: Copy + Eq> CaptureOwner<W> {
                 _ => Some(CaptureCall::Release),
             }
         };
-        self.unanswered = call;
+        if call.is_some() {
+            self.unanswered = call;
+        }
         let (was, now) = (before.holder(), self.held.holder());
         let changed = if was == now {
             [None, None]
@@ -214,11 +218,13 @@ impl<W: Copy + Eq> CaptureOwner<W> {
 /// bound is the debt `docs/gaps.md` names under ADR-0327 §1 ("Accepted ADR
 /// sections not built yet"), and owner-thread state is a `Cell` by ADR-0323
 /// §1 once it goes.
+#[cfg(target_os = "android")]
 #[derive(Debug, Default)]
 pub(crate) struct CaptureMirror {
     held: AtomicBool,
 }
 
+#[cfg(target_os = "android")]
 impl CaptureMirror {
     /// Record whether the window holds the capture; whether its published
     /// grab changes, so the window publishes.

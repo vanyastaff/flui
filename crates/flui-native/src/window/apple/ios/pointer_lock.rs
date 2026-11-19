@@ -283,7 +283,7 @@ impl PointerLocks {
         let mut installed = HandlerSwaps::default();
         for mouse in mice() {
             if let Some(previous) = swap_moved_handler(&mouse, &moved)
-                && let Some(Some(refused)) = installed.installed(Mouse(mouse), previous)
+                && let Err(Some(refused)) = installed.installed(Mouse(mouse), previous)
             {
                 remains.push(refused);
             }
@@ -368,9 +368,9 @@ impl PointerLocks {
         flui_foundation::panic::commit(&self.mice, |mice, outbox| {
             let refused = match mice.as_mut() {
                 Some(watch) => watch.installed.installed(mouse, previous),
-                None => Some(previous),
+                None => Err(previous),
             };
-            if let Some(Some(copy)) = refused {
+            if let Err(Some(copy)) = refused {
                 outbox.release(copy);
             }
         });

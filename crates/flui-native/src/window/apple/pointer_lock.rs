@@ -192,14 +192,14 @@ pub(crate) struct Restoration<M, H> {
 impl<M: PartialEq, H> HandlerSwaps<M, H> {
     /// FLUI put its handler on `mouse`, which had `previous`. A mouse FLUI
     /// already holds keeps the handler it found first, and `previous` is
-    /// handed back.
+    /// handed back as the error.
     #[must_use = "a refused copy is destroyed by the owner, after it is done"]
-    pub(crate) fn installed(&mut self, mouse: M, previous: Option<H>) -> Option<Option<H>> {
+    pub(crate) fn installed(&mut self, mouse: M, previous: Option<H>) -> Result<(), Option<H>> {
         if self.swaps.iter().any(|(known, _)| *known == mouse) {
-            return Some(previous);
+            return Err(previous);
         }
         self.swaps.push((mouse, previous));
-        None
+        Ok(())
     }
 
     /// `mouse` went: nothing is put back on it, and its copy is handed back.
@@ -342,11 +342,12 @@ mod tests {
     fn the_handler_flui_replaced_is_put_back_and_no_copy_is_destroyed() {
         let app = Rc::new(());
         let mut swaps = HandlerSwaps::default();
-        assert!(swaps.installed("trackpad", Some(Rc::clone(&app))).is_none());
-        assert!(swaps.installed("mouse", Some(Rc::clone(&app))).is_none());
+        assert!(swaps.installed("trackpad", Some(Rc::clone(&app))).is_ok());
+        assert!(swaps.installed("mouse", Some(Rc::clone(&app))).is_ok());
         let refused = swaps.installed("trackpad", Some(Rc::clone(&app)));
+        assert!(refused.is_err(), "a mouse already held refuses the copy");
         let gone = swaps.forget(&"mouse");
-        assert!(swaps.installed("pen", Some(Rc::clone(&app))).is_none());
+        assert!(swaps.installed("pen", Some(Rc::clone(&app))).is_ok());
         let restoration = swaps.restore(|mouse| *mouse == "trackpad");
         assert_eq!(Rc::strong_count(&app), 5, "every copy is handed back");
         let put_back: Vec<_> = restoration
