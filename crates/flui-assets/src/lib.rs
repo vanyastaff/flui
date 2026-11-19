@@ -1,7 +1,8 @@
 //! The decoded images a FLUI application shows, and the loads that fill them.
 //!
 //! An [`ImageCache`] keeps completed images within a byte budget, shares one
-//! load among every request for the same [`ImageSource`], reads each source on
+//! load among every request for the same [`ImageSource`], reads an
+//! application's asset through the host's asset bundle (ADR-0384) on
 //! the IO lane of the caller's lanes and decodes it on their compute lane
 //! (ADR-0279), and fetches network images with the host's HTTP client
 //! (ADR-0280). It starts no runtime or thread of its own: [`LoadServices`]
@@ -13,11 +14,16 @@
 //! and the runtime trims under memory pressure (ADR-0387).
 //!
 //! ```
+//! use std::sync::Arc;
+//!
 //! use flui_assets::{ImageCache, ImageCacheConfig, ImageSource, LoadServices};
+//! use flui_platform::assets::{AssetBundle, AssetKey, DirectoryAssets};
 //!
 //! let cache = ImageCache::new(ImageCacheConfig::default().budget(64 * 1024 * 1024));
+//! let bundle = AssetBundle::new(Arc::new(DirectoryAssets::new("flui_assets")));
+//! let key = AssetKey::try_new("assets/logo.png").expect("a key inside the bundle");
 //! // Nothing is kept before a load completes.
-//! let logo = ImageSource::asset("logo.png");
+//! let logo = ImageSource::asset(key, &bundle);
 //! assert!(cache.get(&logo).is_none());
 //! // With no lanes, the load runs where the returned future is polled.
 //! let load = cache.load(&logo, &LoadServices::new());

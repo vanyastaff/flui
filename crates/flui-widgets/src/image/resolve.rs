@@ -182,6 +182,14 @@ impl ImageResolver {
                 "Image: no image cache; an asset or network image fails to load"
             ),
         }
+        #[cfg(feature = "asset-images")]
+        match ctx.capability::<flui_platform::assets::AssetBundleCapability>() {
+            Ok(bundle) => services = services.with_asset_bundle(bundle),
+            Err(unsupported) => tracing::debug!(
+                %unsupported,
+                "Image: no asset bundle; an asset image fails to load"
+            ),
+        }
         self.services = services;
         let key = self.provider.cache_key();
         self.start(key);

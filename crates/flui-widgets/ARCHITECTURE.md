@@ -1418,9 +1418,10 @@ images and the loads in flight (ADR-0250), so every `AssetImage` and
 `NetworkImage` of one source in one runtime shares a decode, another runtime
 keeps its own, and the runtime trims its cache under memory pressure. On a host
 without the capability a load answers `ImageProviderError::ImageCacheUnavailable` and
-reads nothing. Their `ImageCacheKey` holds the path or the URL alone: the cache
-and the client an `Image` acquired do not change while it is mounted, so the key
-need not name them. Two HTTP clients can be answered different images at one
+reads nothing. An `AssetImage` reads through the asset bundle `Image` acquires as
+`AssetBundleCapability` (ADR-0384 §6). Their `ImageCacheKey` holds the asset key or the URL
+alone: the cache, the bundle and the client an `Image` acquired do not change while it is
+mounted, so the key need not name them. Two HTTP clients can be answered different images at one
 URL, so the cache keeps a network image under its client's `HttpAuthority` as
 well (ADR-0280 §6), and `NetworkImage::cached` probes with the client its
 `Image` acquired. A custom provider keys by a typed value

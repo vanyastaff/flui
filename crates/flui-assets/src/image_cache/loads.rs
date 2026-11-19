@@ -1,6 +1,6 @@
 //! The decoded images a cache keeps, and the loads that fill them.
 //!
-//! [`ImageCache::load`](super::ImageCache::load), for a file and a network
+//! [`ImageCache::load`](super::ImageCache::load), for an asset and a network
 //! source alike, goes through [`DecodedImages`]: a completed image is served
 //! from a byte-budgeted LRU, a request for an image already loading joins
 //! that load, and a cold request starts one on the caller's background lanes.
@@ -13,7 +13,7 @@
 //! [`ImageLoad`] waiting on it is a subscriber, and only when the last one is
 //! dropped is the pending entry removed, its [`LoadTicket`] cancelled and its
 //! cancel signal sent. The IO future sees the signal at its next poll: an
-//! HTTP request is dropped at once, a file read stops at its next chunk, and a
+//! HTTP request is dropped at once, a bundle's read stops at its next chunk, and a
 //! decode that has not started never runs. A request for the same source
 //! after that starts a fresh load with a fresh ticket. The ticket's
 //! allocation is the load's identity: a load completing after its entry was
@@ -65,6 +65,7 @@ use std::task::{Context, Poll};
 use flui_foundation::memory::MemoryPressureLevel;
 use flui_foundation::panic::{FirstPanic, drop_contained};
 use flui_painting::paint::MAX_ENCODED_IMAGE_BYTES;
+use flui_platform::assets::{AssetAuthority, AssetBundle, AssetKey};
 use flui_platform::executor::{Executor, Lane, SpawnError};
 use flui_platform::http::{Http, HttpAuthority, HttpRequest};
 use parking_lot::Mutex;
@@ -94,10 +95,6 @@ pub(crate) fn default_decode_threads() -> NonZeroUsize {
         .expect("BUG: a value clamped to at least one is nonzero")
 }
 
-/// Bytes one read takes of an image file: a cancelled load stops reading at
-/// the next chunk instead of holding its lane for the whole file.
-const FILE_READ_CHUNK: usize = 256 * 1024;
-
 /// How many times one [`ImageLoad`] takes over a load closed under it before
 /// it answers with an error: lanes that keep dropping what they accept must
 /// not keep a subscriber re-admitting forever.
@@ -115,16 +112,21 @@ type Result<T> = std::result::Result<T, ImageLoadErrorKind>;
 #[derive(Clone)]
 pub struct ImageSource {
     key: SourceKey,
-    /// The client a network source is fetched with; `None` for a file.
-    http: Option<Http>,
+    /// What the bytes are read with.
+    reader: Reader,
 }
 
 /// What a source's image is kept and its load shared under. It holds no
-/// client, so a kept image keeps none alive (ADR-0118).
+/// bundle and no client, so a kept image keeps neither alive (ADR-0118).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum SourceKey {
-    /// An asset path.
-    Asset(Arc<str>),
+    /// An asset key, as one bundle answers it: two bundles may hold
+    /// different images under one key, so they never share a decoded image
+    /// or a load (ADR-0384 §6).
+    Asset {
+        key: AssetKey,
+        authority: AssetAuthority,
+    },
     /// A URL, as one client's authority answers it: two clients with
     /// different authorities may answer one URL with different images, so
     /// they never share a decoded image or a load (ADR-0280 §6).
@@ -134,13 +136,23 @@ enum SourceKey {
     },
 }
 
+/// The handle a source's bytes are read through.
+#[derive(Clone)]
+enum Reader {
+    Bundle(AssetBundle),
+    Http(Http),
+}
+
 impl ImageSource {
-    /// The image file at `path`, read from the file system.
+    /// The application's asset `key`, read through `bundle` (ADR-0384).
     #[must_use]
-    pub fn asset(path: impl Into<Arc<str>>) -> Self {
+    pub fn asset(key: AssetKey, bundle: &AssetBundle) -> Self {
         Self {
-            key: SourceKey::Asset(path.into()),
-            http: None,
+            key: SourceKey::Asset {
+                key,
+                authority: bundle.authority(),
+            },
+            reader: Reader::Bundle(bundle.clone()),
         }
     }
 
@@ -152,15 +164,15 @@ impl ImageSource {
                 url: url.into(),
                 authority: http.authority(),
             },
-            http: Some(http.clone()),
+            reader: Reader::Http(http.clone()),
         }
     }
 
-    /// The path, for an asset source.
+    /// The key, for an asset source.
     #[must_use]
-    pub fn path(&self) -> Option<&str> {
+    pub fn asset_key(&self) -> Option<&AssetKey> {
         match &self.key {
-            SourceKey::Asset(path) => Some(path),
+            SourceKey::Asset { key, .. } => Some(key),
             SourceKey::Network { .. } => None,
         }
     }
@@ -169,7 +181,7 @@ impl ImageSource {
     #[must_use]
     pub fn url(&self) -> Option<&str> {
         match &self.key {
-            SourceKey::Asset(_) => None,
+            SourceKey::Asset { .. } => None,
             SourceKey::Network { url, .. } => Some(url),
         }
     }
@@ -195,11 +207,11 @@ impl std::fmt::Debug for ImageSource {
     }
 }
 
-/// The path or the URL.
+/// The asset key or the URL.
 impl std::fmt::Display for ImageSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.key {
-            SourceKey::Asset(path) => f.write_str(path),
+            SourceKey::Asset { key, .. } => std::fmt::Display::fmt(key, f),
             SourceKey::Network { url, .. } => f.write_str(url),
         }
     }
@@ -217,10 +229,12 @@ type Lanes = Option<Arc<dyn Executor>>;
 /// ```
 /// use std::sync::Arc;
 /// use flui_assets::{ImageCache, ImageSource, LoadServices};
+/// use flui_platform::assets::{AssetBundle, AssetKey};
 /// use flui_platform::executor::Executor;
 ///
-/// fn show(cache: &ImageCache, lanes: Arc<dyn Executor>) {
-///     let load = cache.load(&ImageSource::asset("logo.png"), &LoadServices::new().lanes(lanes));
+/// fn show(cache: &ImageCache, bundle: &AssetBundle, lanes: Arc<dyn Executor>) {
+///     let logo = AssetKey::try_new("assets/logo.png").expect("a key inside the bundle");
+///     let load = cache.load(&ImageSource::asset(logo, bundle), &LoadServices::new().lanes(lanes));
 ///     # drop(load);
 /// }
 /// ```
@@ -868,16 +882,27 @@ impl DecodedImages {
     }
 }
 
-/// The bytes of `source`, read where the run is polled; a network image is
-/// fetched with the client it was built with.
+/// The bytes of `source`, read where the run is polled: an asset through
+/// the bundle it was built with, a network image with its client.
 fn fetch(source: &ImageSource) -> Fetch {
-    match (&source.key, &source.http) {
-        (SourceKey::Asset(path), _) => Box::pin(read_in_chunks(Arc::clone(path))),
-        (SourceKey::Network { url, .. }, Some(http)) => {
+    match (&source.key, &source.reader) {
+        (SourceKey::Asset { key, .. }, Reader::Bundle(bundle)) => {
+            // The read is made inside the future: a source's `load` is host
+            // code, and only the run's polls are contained.
+            let (key, bundle) = (key.clone(), bundle.clone());
+            Box::pin(async move {
+                bundle
+                    .load(&key, MAX_ENCODED_IMAGE_BYTES)
+                    .await
+                    .map_err(ImageLoadErrorKind::from_asset)
+            })
+        }
+        (SourceKey::Network { url, .. }, Reader::Http(http)) => {
             Box::pin(fetch_over_http(Arc::clone(url), http.clone()))
         }
-        (SourceKey::Network { .. }, None) => {
-            unreachable!("BUG: a network source is built with its client")
+        (SourceKey::Asset { .. }, Reader::Http(_))
+        | (SourceKey::Network { .. }, Reader::Bundle(_)) => {
+            unreachable!("BUG: a source is built with the reader of its kind")
         }
     }
 }
@@ -899,53 +924,7 @@ async fn fetch_over_http(url: Arc<str>, http: Http) -> Result<Vec<u8>> {
         .map_err(ImageLoadErrorKind::Http)
 }
 
-/// Reads the file at `path` one [`FILE_READ_CHUNK`] at a time, yielding
-/// between chunks so a cancelled load stops at the next one, and never more
-/// than [`MAX_ENCODED_IMAGE_BYTES`].
-async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
-    use std::io::Read;
-
-    let failed = ImageLoadErrorKind::from_io;
-    let too_large = || ImageLoadErrorKind::TooLarge {
-        limit: MAX_ENCODED_IMAGE_BYTES,
-    };
-    let not_a_file = || ImageLoadErrorKind::NotAFile;
-    // Opening a FIFO or a device can block until another party acts, and
-    // this runs on a shared IO lane: only a regular file is opened, checked
-    // again once open in case the path was swapped in between.
-    if !std::fs::metadata(path.as_ref()).map_err(failed)?.is_file() {
-        return Err(not_a_file());
-    }
-    let mut file = std::fs::File::open(path.as_ref()).map_err(failed)?;
-    let metadata = file.metadata().map_err(failed)?;
-    if !metadata.is_file() {
-        return Err(not_a_file());
-    }
-    let length = metadata.len();
-    if length > MAX_ENCODED_IMAGE_BYTES {
-        return Err(too_large());
-    }
-    // The metadata length is a hint, not a bound: the file can grow while it
-    // is read, so every chunk is checked against the cap.
-    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
-    let mut chunk = vec![0_u8; FILE_READ_CHUNK];
-    loop {
-        let read = match file.read(&mut chunk) {
-            Ok(0) => return Ok(bytes),
-            Ok(read) => read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(failed(error)),
-        };
-        let total = u64::try_from(bytes.len().saturating_add(read)).unwrap_or(u64::MAX);
-        if total > MAX_ENCODED_IMAGE_BYTES {
-            return Err(too_large());
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        yield_now().await;
-    }
-}
-
-/// `fetch` with each poll contained: a client or a file read that panics
+/// `fetch` with each poll contained: a bundle or a client that panics
 /// fails this load with [`ImageLoadErrorKind::Panicked`] instead of
 /// unwinding through the lane or the request that polls it. The fetch is
 /// dropped, under containment too, as soon as it ends.
@@ -974,20 +953,6 @@ fn panicked(caught: FirstPanic) -> ImageLoadErrorKind {
         ImageLoadErrorKind::Panicked { message: None },
         ImageLoadErrorKind::panicked,
     )
-}
-
-/// Pending once, waking itself: the run's poller gets a turn to drop it.
-fn yield_now() -> impl Future<Output = ()> {
-    let mut yielded = false;
-    std::future::poll_fn(move |ctx| {
-        if yielded {
-            Poll::Ready(())
-        } else {
-            yielded = true;
-            ctx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    })
 }
 
 /// Runs `run` until it finishes or `cancel` resolves, whichever is first;

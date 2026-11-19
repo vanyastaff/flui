@@ -12,13 +12,13 @@
 
 ## Context and problem statement
 
-An application ships files with itself: images, fonts, data. `flui create` writes
-`[assets] directories = ["assets"]` into every new project's `flui.toml`, but nothing reads that
-section: `flui build` puts no file into any package, and `ImageSource::Asset` in `flui-assets`
-opens its path with `std::fs` relative to the process's current directory
-(`crates/flui-assets/src/registry/images.rs`, `read_in_chunks`). So on Android (an APK), iOS (an
-application bundle) and the Web (a page) `Image::asset` cannot read an application's own image,
-and on the desktop it reads one only when the process happens to start in the project directory.
+An application ships files with itself: images, fonts, data. `flui create` wrote
+`[assets] directories = ["assets"]` into every new project's `flui.toml`, but nothing read that
+section: `flui build` put no file into any package, and `flui-assets` opened an asset image's
+path with `std::fs` relative to the process's current directory. So on Android (an APK), iOS (an
+application bundle) and the Web (a page) `Image::asset` could not read an application's own
+image, and on the desktop it read one only when the process happened to start in the project
+directory.
 Flutter's answer is `AssetBundle`: the tool copies the declared files into the platform's
 package, and `rootBundle.load(key)` reads them back by the key they were declared under, through
 the platform's own reader (`AAssetManager`, the main bundle, a URL relative to the page, a
@@ -173,11 +173,14 @@ gets `NotFound`, not a file from the checkout.
 
 ### §6 An asset image reads through the bundle
 
-`ImageSource::Asset` holds an `AssetKey`, and its load reads through the `AssetBundle` the
-widget acquired, under `MAX_ENCODED_IMAGE_BYTES`; a decoded image's cache key holds the bundle's
-`AssetAuthority` beside the key. `Image::file` stays the way to read a path on the file system.
-The shape of the cache and the widget constructors around it is the image cache's, not this
-record's.
+`ImageSource::asset(key, &bundle)` holds an `AssetKey`, and its load reads through that
+`AssetBundle`, the one the `Image` widget acquired with `AssetBundleCapability`, under
+`MAX_ENCODED_IMAGE_BYTES`; a decoded image's cache key holds the bundle's `AssetAuthority` beside
+the key, so two bundles never share an image under one key. `Image::asset(key)` takes the key as
+written: one `AssetKey::try_new` refuses reads nothing and fails as
+`ImageProviderError::InvalidAssetKey`, as a missing asset fails as `SourceNotFound`. `Image::file`
+stays the way to read a path on the file system. The shape of the cache and the widget
+constructors around it is the image cache's (ADR-0386, ADR-0387), not this record's.
 
 ### Consequences
 
@@ -211,5 +214,9 @@ record's.
   holds the CLI's keys to `AssetKey::try_new`; `gradle_packages_the_assets_the_project_declares`
   hands Gradle the staged directory; `every_template_makes_the_asset_directories_it_declares`
   keeps a new project buildable; `a_desktop_run_reads_assets_from_the_project` states §4.
+- `two_bundles_never_share_an_image_under_one_key` (`flui-assets`) states §6's cache identity;
+  `asset_images_share_their_runtimes_cache_until_memory_pressure` (`flui-widgets`) shows an
+  `Image::asset` reading through the bundle its window provides, and
+  `an_asset_image_without_a_bundle_or_with_a_bad_key_answers_which` its two refusals.
 - The platform readers of §3 other than Linux's are confirmed by a run on each platform, rows of
   `crates/flui-native/platform-parity.toml`.
