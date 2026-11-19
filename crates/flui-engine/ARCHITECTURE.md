@@ -123,8 +123,8 @@ Recoverable failure publishes reliable retry debt to the application and UI runt
 ## One frame
 
 ```text
-Scene (flui-layer)                the retained version (or a hand-built tree),
-    │                             frozen for the raster side
+Scene (flui-layer)                the retained version (a hand-built tree is
+    │                             made one by Scene::new)
     │
     ▼
 Renderer::render_frame            plans the frame from its damage (skip, direct,
@@ -310,7 +310,7 @@ per layer would take the render path down on a deep-but-valid chain;
 `a_deep_chain_survives_a_small_stack` in `layer_walk.rs` pins a 10 000-deep
 walk on a small stack.
 
-A scene holding a retained `SceneVersion` is walked without building a tree
+A scene's retained `SceneVersion` is walked without building a tree
 (ADR-0304 §9): each node is an offset at its placement, each effect entry its
 layer over the entries under it, each chunk its recording, and each slot the
 child node where it stands, in the order `SceneVersion::flatten` would build
@@ -326,7 +326,9 @@ the depth of the tree), and the walk enters what the damage reaches
 many render objects (a grid painted into one boundary) thus replays only the
 chunks under the damage, not its whole recording. Backdrop inputs
 of a version are closed by `SceneVersion::close_damage`, which reads only the
-version's filtered nodes; a hand-built tree is still walked whole for them.
+version's filtered nodes. A hand-built tree reaches the walk as the version
+`Scene::new` makes of it (`SceneVersion::from_tree`), so the engine has one walk
+and one damage closure.
 
 ---
 
@@ -1227,11 +1229,11 @@ two-slot reuse and resize recovery.
 
 Each pass of a partial frame clears its rect with an opaque fill inside its scissor
 (`damage::begin_partial`) before the content, not with the full clear pass,
-which would wipe the retained pixels. The advanced-shape straddle self-heal
-stays, asked of each pass about the items it recorded under its own rect
-(`a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full`):
-with the correct previous frame outside the damage, it bounds a
-straddling shape's out-of-damage slice to one frame. The full clear and the
+which would wipe the retained pixels. A shape that reads the destination across
+a pass's rect is redrawn whole, because the damage is closed over its chunk
+(ADR-0304 §6, `a_destination_reading_shape_across_a_region_pass_is_redrawn_whole`),
+so no pass draws it cut by a scissor and no next frame owes a repaint for
+it. The full clear and the
 partial clear paint one constant, `frame_protocol::BACKGROUND`.
 
 `Renderer::render_frame` renders the damage the tracker holds; its production

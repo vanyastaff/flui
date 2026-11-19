@@ -21,9 +21,9 @@ A boundary's content is a run of entries: drawing chunks (sealed `DisplayList`s)
 layers that group them (clip, transform, opacity, filters, shader masks, backdrops, leaders and
 followers, annotated regions) and slots that place child boundaries.
 
-`LayerTree` and `SceneBuilder` build a whole layer tree by hand. That form serves
-`flui_app::run_direct`, a hot-reload plugin's image and the engine's GPU readback tests; no frame
-of an application builds one.
+`LayerTree` and `SceneBuilder` build a whole layer tree by hand, for a hot-reload plugin's image,
+an example or the engine's GPU readback tests. `Scene::new` converts the tree into a version
+(`SceneVersion::from_tree`), so the raster side walks one form.
 
 ## Layer types
 
@@ -53,7 +53,7 @@ builder.pop();
 let tree = builder.build();
 assert_eq!(tree.parent(offset), Some(tree.root()));
 
-let scene = Scene::new(tree); // frozen: no `&mut` path back to the tree
+let scene = Scene::new(tree); // a version now: no `&mut` path back
 ```
 
 A tree has one root for its whole life and is append-only: `push_child` mints the child's id in

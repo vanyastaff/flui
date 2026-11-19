@@ -1,9 +1,9 @@
-//! The scene: the frozen per-frame [`Scene`], and the retained scene that
-//! replaces it (ADR-0304): a persistent [`SceneVersion`] its [`SceneOwner`]
-//! changes by typed patches.
+//! The scene: the [`Scene`] the raster side draws, a persistent
+//! [`SceneVersion`] its [`SceneOwner`] changes by typed patches (ADR-0304).
 
 mod content;
 mod footprint;
+mod from_tree;
 mod geometry;
 mod id;
 mod inspect;
@@ -23,100 +23,54 @@ pub use version::{EntryAddress, SceneNode, SceneVersion, SubtreeCull};
 
 use crate::tree::LayerTree;
 
-/// What the raster side draws: a retained [`SceneVersion`] it walks in
-/// place, or a composited layer tree, which a plugin image, a hand-built
-/// test scene and a headless capture still hand it.
+/// What the raster side draws: a retained [`SceneVersion`], walked in place.
 ///
-/// Neither is mutable from here: there is no `&mut` path back to the tree
-/// or the version. It is moved by value across the raster boundary (inside a
+/// A frame's paint publishes its version; a scene authored by hand is built
+/// as a [`LayerTree`] and converted when the scene is made
+/// ([`Scene::new`]), so the raster side walks one form. Nothing is mutable
+/// from here: there is no `&mut` path back to the version. It is moved by
+/// value across the raster boundary (inside a
 /// [`SceneSnapshot`](crate::SceneSnapshot)) and through `flui-hot-reload`'s
 /// plugin ABI, whose compatibility token folds in this type's size and
 /// alignment.
 ///
 /// ```rust
-/// use flui_layer::{Layer, LayerTree, OffsetLayer, Scene, SceneContent};
+/// use flui_layer::{Layer, LayerTree, OffsetLayer, Scene};
 ///
-/// let tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
-/// let scene = Scene::new(tree);
-///
-/// let SceneContent::Tree(tree) = scene.content() else {
-///     unreachable!("a scene built from a tree holds it");
-/// };
-/// assert_eq!(tree.len(), 1);
+/// let scene = Scene::new(LayerTree::new(Layer::from(OffsetLayer::zero())));
+/// let root = scene.version().root();
+/// assert!(scene.version().node(root).is_some());
 /// ```
 #[derive(Debug)]
 pub struct Scene {
-    content: Held,
-}
-
-#[derive(Debug)]
-enum Held {
-    Tree(LayerTree),
-    Version(SceneVersion),
-}
-
-/// What a [`Scene`] holds, borrowed.
-#[derive(Debug, Clone, Copy)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a scene is a layer tree or a retained version, and its walk handles both"
-)]
-pub enum SceneContent<'a> {
-    /// A composited layer tree, walked from its root.
-    Tree(&'a LayerTree),
-    /// A retained version, walked from its root node (ADR-0304 §9).
-    Version(&'a SceneVersion),
+    version: SceneVersion,
 }
 
 impl Default for Scene {
+    /// A scene that draws nothing: a fresh owner's empty version.
     fn default() -> Self {
-        Self::new(LayerTree::default())
+        Self::of_version(SceneOwner::new().current().clone())
     }
 }
 
 impl Scene {
-    /// Freezes `tree`.
+    /// The scene `tree` paints, converted into a version
+    /// ([`SceneVersion::from_tree`]).
+    #[must_use]
     pub fn new(tree: LayerTree) -> Self {
-        Self {
-            content: Held::Tree(tree),
-        }
+        Self::of_version(SceneVersion::from_tree(&tree))
     }
 
-    /// Holds `version`, which the raster side walks without building a tree.
+    /// Holds `version`.
     #[must_use]
     pub fn of_version(version: SceneVersion) -> Self {
-        Self {
-            content: Held::Version(version),
-        }
+        Self { version }
     }
 
-    /// What it holds.
+    /// The version it holds.
     #[inline]
     #[must_use]
-    pub fn content(&self) -> SceneContent<'_> {
-        match &self.content {
-            Held::Tree(tree) => SceneContent::Tree(tree),
-            Held::Version(version) => SceneContent::Version(version),
-        }
-    }
-
-    /// The tree it holds, `None` for a version.
-    #[inline]
-    #[must_use]
-    pub fn tree(&self) -> Option<&LayerTree> {
-        match &self.content {
-            Held::Tree(tree) => Some(tree),
-            Held::Version(_) => None,
-        }
-    }
-
-    /// The version it holds, `None` for a tree.
-    #[inline]
-    #[must_use]
-    pub fn version(&self) -> Option<&SceneVersion> {
-        match &self.content {
-            Held::Tree(_) => None,
-            Held::Version(version) => Some(version),
-        }
+    pub fn version(&self) -> &SceneVersion {
+        &self.version
     }
 }

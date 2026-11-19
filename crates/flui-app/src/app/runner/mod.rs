@@ -82,12 +82,10 @@ mod web;
 use android::run_android;
 #[cfg(windows)]
 pub(in crate::app) use associations::PendingRegistration;
-pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
-pub(crate) use host::{
-    AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, opening_app_handler,
-    route_exit_policy, route_quit, with_owner_platform,
-};
+#[cfg(test)]
+pub(crate) use host::app_handler;
+pub(crate) use host::{AppRoutes, opening_app_handler};
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 use ios::run_ios;
@@ -640,7 +638,9 @@ fn keep_native_journal(served: bool) {
 #[cfg(test)]
 mod tests {
 
-    use super::host::APP_RUNTIME;
+    use super::host::{
+        APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform,
+    };
     use super::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
 
     // `teardown_platform_ui_runtime` is `cfg(all(not(ios), not(wasm32)))` -- neither

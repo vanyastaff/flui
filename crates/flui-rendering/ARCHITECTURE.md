@@ -618,9 +618,13 @@ reverted. The one place the protocols genuinely diverge is the
 never sets `transform`, so the transform arm of `own_effect_layers` stays
 unexercised for slivers.
 
-The static opacity objects retain child semantics; neither exposes an
-`always_include_semantics` flag. The animated box and sliver variants visit
-child semantics when their accepted opacity is positive or that flag is set.
+Every opacity object, static or animated, box or sliver, visits its child's
+semantics when its opacity is positive or its `always_include_semantics` flag
+is set, so a fully transparent child is hidden from assistive technology as it
+is from sight unless the widget keeps it (`Opacity`, `SliverOpacity` and
+`FadeTransition` expose the flag; `AnimatedOpacity` leaves it off). The static rows are
+`harness_static_opacity_visibility_controls_semantics_and_actions` and the
+widget table `transparent_opacity_hides_semantics_unless_always_included`.
 A zero crossing publishes the sample and admits all required paint, compositing and
 semantics work together before waking the owner. The public harness row
 `harness_animated_opacity_semantics_follow_accepted_visibility` covers both

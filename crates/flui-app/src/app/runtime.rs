@@ -544,8 +544,8 @@ impl AppRuntime {
     /// `install_platform_ui_runtime` -- never from an incidental
     /// first touch such as `OwnerHostClearGuard::drop` unwinding through a
     /// virgin thread, and never from `install_owner_platform` either (every
-    /// backend calls that, including `run_direct`, which never installs a
-    /// UI runtime and never needs these services).
+    /// backend calls that before a UI runtime exists, and it needs none of
+    /// these services).
     ///
     /// Not `const fn`: the wake/clipboard fields below need their own
     /// independent `Arc` allocations (three small ones), which the allocator
@@ -665,9 +665,9 @@ impl AppRuntime {
     /// installed on this thread; [`Self::font_collection`] resolves the same
     /// cell a step earlier, when the runner builds that UI runtime --
     /// `install_owner_platform` deliberately
-    /// does NOT call this (see its own doc): every backend calls that,
-    /// including `run_direct`, which opens a window but never installs a
-    /// UI runtime and never consumes painting/semantics/scheduler services, so
+    /// does NOT call this (see its own doc): every backend calls that before
+    /// a UI runtime exists, and it consumes no
+    /// painting/semantics/scheduler services, so
     /// resolving there would pay for singleton construction and full
     /// system-font enumeration for nothing.
     ///
@@ -987,8 +987,7 @@ impl AppRuntime {
     }
 
     /// The resolved execution services, if any. `None` before the first
-    /// UI runtime install and on a loop (like `run_direct`'s) that never installs
-    /// a UI runtime.
+    /// UI runtime install.
     #[cfg_attr(
         not(test),
         expect(

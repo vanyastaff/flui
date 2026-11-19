@@ -30,8 +30,8 @@
   before) fills. `WindowPlacement` holds its size as a `WindowExtent` and its scale as a
   `DevicePixelRatio`; its stored format is unchanged.
 - `AppConfig::position(x, y)` takes whole logical pixels of the primary display (the field is a
-  `Point<i32>`), and every window the configuration opens is placed there: the main window,
-  `run_direct`'s and a secondary window. No configured position refuses a start.
+  `Point<i32>`), and every window the configuration opens is placed there: the main window
+  and a secondary window. No configured position refuses a start.
 - A window placement is not written from a window whose host reports positions and published
   none for it (a Win32 sample that missed a monitor plugged in since the last read): the placement
   stored before stays. A Win32 window on such a monitor has the monitors read again before its

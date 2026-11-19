@@ -14,8 +14,9 @@
 //!   `repr(Rust)` layout may legally change between compiler versions;
 //! - this crate's version — the plugin ABI itself (symbol set, calling
 //!   conventions) is versioned with the crate;
-//! - `size_of`/`align_of` of [`Scene`] and [`LayerTree`] — a direct tripwire
-//!   for layout drift of the payload types actually transferred.
+//! - `size_of`/`align_of` of [`Scene`] — a direct tripwire for layout drift
+//!   of the payload type actually transferred (a plugin's hand-built tree is
+//!   made a version inside the plugin and never crosses).
 //!
 //! Equal tokens do not *prove* layout equality (same size/align can hide a
 //! field reorder within one compiler version if the sources diverged), but
@@ -25,7 +26,7 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use flui_sdk::hooks::{LayerTree, Scene};
+use flui_sdk::hooks::Scene;
 
 /// The ABI-compatibility token for THIS compilation of the plugin boundary.
 ///
@@ -39,7 +40,5 @@ pub fn abi_token() -> u64 {
     env!("CARGO_PKG_VERSION").hash(&mut hasher);
     core::mem::size_of::<Scene>().hash(&mut hasher);
     core::mem::align_of::<Scene>().hash(&mut hasher);
-    core::mem::size_of::<LayerTree>().hash(&mut hasher);
-    core::mem::align_of::<LayerTree>().hash(&mut hasher);
     hasher.finish()
 }
