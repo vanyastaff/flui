@@ -1213,6 +1213,9 @@ cargo hack clippy -p <crate> --locked --each-feature --keep-going -- -D warnings
 cargo clippy -p flui --locked --all-targets --no-default-features --features material -- -D warnings  # same job: one facade combination; ci.yml lists them all
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude <each wasm = false package>   # wasm-check job; the job reads the excludes from cargo metadata
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # same job: the only lint pass over the wasm32-only web backend
+cargo clippy -p flui-native --all-targets --locked --target wasm32-unknown-unknown -- -D warnings  # same job: flui-native's wasm32-only test targets
+cargo check -p flui-hot-reload --locked --target wasm32-unknown-unknown --all-features             # same job
+cargo clippy -p flui --test wasm_consumer --locked --target wasm32-unknown-unknown -- -D warnings   # same job: an application on wasm32 (ADR-0086)
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
 cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
 cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)

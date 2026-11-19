@@ -341,8 +341,12 @@ jobs:
           status=0
           for features in "" x11 wayland testing; do
             for targets in "" --all-targets; do
+              label="flui-native features=[$features] $targets"
+              echo "::group::cargo clippy $label"
               cargo clippy -p flui-native --locked --no-default-features \
-                ${features:+--features "$features"} ${targets:+"$targets"} -- -D warnings || status=1
+                ${features:+--features "$features"} ${targets:+"$targets"} -- -D warnings \
+                || { status=1; echo "::error::cargo clippy $label failed"; }
+              echo "::endgroup::"
             done
           done
           exit "$status"
@@ -1331,17 +1335,21 @@ jobs:
             "--no-default-features --features http" \
             "--all-features" \
             ""; do
+            echo "::group::cargo clippy -p flui $combo"
             # shellcheck disable=SC2086 # `combo` is a list of flags
-            cargo clippy -p flui --locked --all-targets $combo -- -D warnings || status=1
+            cargo clippy -p flui --locked --all-targets $combo -- -D warnings \
+              || { status=1; echo "::error::cargo clippy -p flui $combo failed"; }
+            echo "::endgroup::"
           done
           exit "$status"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # wasm-check — the web platform claim, machine-checked, in three steps:
+  # wasm-check — the web platform claim, machine-checked. Its steps:
   #   check      — check + lib/bin clippy of every package that builds for
   #                wasm32 (a package opts out with `[package.metadata.flui]
-  #                wasm = false`, a reason beside it), plus `flui-hot-reload`
-  #                with every feature. The clippy pass is the only lint over
+  #                wasm = false`, a reason beside it), flui-native's wasm32
+  #                test targets, `flui-hot-reload` with every feature and the
+  #                facade's `wasm_consumer`. It is the only lint over
   #                flui-native's wasm32-only web backend.
   #   wasm-link  — really links the two web demos and checks their import
   #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
@@ -1350,6 +1358,7 @@ jobs:
   #   wasm-test  — EXECUTES the wasm32 tests on node. Everything before it only
   #                compiles; swapping `web_time::Instant` for std's stays green
   #                there and panics at run time (issue #985).
+  #   then the DOM tests in headless Chrome, which node is not (below).
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check

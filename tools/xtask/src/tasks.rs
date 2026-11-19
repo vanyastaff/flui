@@ -1,10 +1,10 @@
 //! The tasks that choose packages, targets or tools from the workspace and
-//! the host: `checks`, `cross-typecheck`, `wasm-link` and `wasm-test`, and
-//! `clean-nested`.
+//! the host: `checks`, `cross-typecheck`, `wasm-link`, `wasm-test`, `fuzz`
+//! and `clean-nested`.
 //!
 //! Each task prints every command before it runs it and stops at the first
-//! failure, except `checks`, which runs every step and then reports all that
-//! failed. `--dry-run` prints the commands without running them.
+//! failure, except `checks` and `fuzz`, which run every step and then report
+//! all that failed. `--dry-run` prints the commands without running them.
 
 mod checks;
 mod exec;

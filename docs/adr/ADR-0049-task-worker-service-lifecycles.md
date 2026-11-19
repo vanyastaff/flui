@@ -159,7 +159,7 @@ execution slot's reset.
   ratchet is gone on every target. The two native-pool sizing items (`IO_WORKER_THREADS`,
   `default_compute_worker_count`) are compiled out of wasm32 non-test builds, which have no
   default pools; CI's `wasm-check` job (its workspace clippy pass over wasm32 lib targets,
-  with `-D warnings`; CI's `wasm-check` job) is the check that nothing else is dead there.
+  with `-D warnings`) is the check that nothing else is dead there.
 - `ExecutionServices` is now held in an `Arc` by `AppRuntime` so lifecycle handles can hold
   it weakly; shutdown semantics are unchanged.
 - **Deliberately deferred, tracked under #558:** ProcessWorker (FLUI has no process
