@@ -2,6 +2,7 @@
 //! as for the program's close, a refusal with a record defers the quit until
 //! that record is carried out, and one without cancels it (ADR-0350 §1).
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{PresentationAddress, UiRuntimeId};
 use flui_view::CloseReason;
 
@@ -33,10 +34,12 @@ enum QuitState {
 
 /// What the presentations answered a quit ([`QuitConsultation::ask`]).
 #[derive(Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum QuitAnswer {
+enum QuitAnswer {
     /// A refusal recorded nothing to wait on: the quit is cancelled.
     Cancelled,
+    /// Code the consultation ran panicked: no answer, and the quit is
+    /// cancelled.
+    Panicked,
     /// The presentations whose recorded close the quit waits on; none, and
     /// the quit goes ahead.
     Waiting(Vec<PresentationAddress>),
@@ -84,38 +87,43 @@ impl QuitRequest {
         self.0 == QuitState::Asked
     }
 
-    /// Start asking the presentations: `true` when a quit is asked and not
-    /// being asked already. The host then asks them through a
-    /// [`QuitConsultation`], which ends the consultation on every exit.
-    pub fn begin_consult(&mut self) -> bool {
+    /// Start asking the presentations: the consultation when a quit is asked
+    /// and not being asked already. The host asks it with no borrow of its
+    /// own state held ([`QuitConsultation::ask`]) and hands the answer back
+    /// to [`finish_consult`](Self::finish_consult).
+    pub fn begin_consult(&mut self) -> Option<QuitConsultation> {
         if self.0 != QuitState::Asked {
-            return false;
+            return None;
         }
         self.0 = QuitState::Consulting;
-        true
+        Some(QuitConsultation(()))
     }
 
     /// End the consultation [`begin_consult`](Self::begin_consult) started
     /// with what the presentations answered. A quit asked again while they
-    /// were asked stays asked for the next turn, and this answer is dropped.
-    pub fn finish_consult(&mut self, answer: QuitAnswer) -> QuitVerdict {
-        if self.0 != QuitState::Consulting {
-            return QuitVerdict::Unchanged;
-        }
-        match answer {
-            QuitAnswer::Cancelled => {
-                self.0 = QuitState::None;
-                QuitVerdict::Abandoned
+    /// were asked stays asked for the next turn, and this answer is dropped;
+    /// its panic is still handed on to resume.
+    pub fn finish_consult(&mut self, answered: QuitAnswered) -> QuitFinished {
+        let QuitAnswered { answer, panic } = answered;
+        let verdict = if self.0 == QuitState::Consulting {
+            match answer {
+                QuitAnswer::Cancelled | QuitAnswer::Panicked => {
+                    self.0 = QuitState::None;
+                    QuitVerdict::Abandoned
+                }
+                QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
+                    self.0 = QuitState::Deferred(waiting);
+                    QuitVerdict::Deferred
+                }
+                QuitAnswer::Waiting(_) => {
+                    self.0 = QuitState::None;
+                    QuitVerdict::Commit
+                }
             }
-            QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
-                self.0 = QuitState::Deferred(waiting);
-                QuitVerdict::Deferred
-            }
-            QuitAnswer::Waiting(_) => {
-                self.0 = QuitState::None;
-                QuitVerdict::Commit
-            }
-        }
+        } else {
+            QuitVerdict::Unchanged
+        };
+        QuitFinished { verdict, panic }
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its
@@ -178,89 +186,125 @@ impl QuitRequest {
     }
 }
 
-/// The consultation of a quit's presentations that a host began with
-/// [`QuitRequest::begin_consult`], which ends it exactly once through
-/// `finish`, the host's way to [`QuitRequest::finish_consult`]: with what the
-/// presentations answered ([`ask`](Self::ask)), or with
-/// [`QuitAnswer::Cancelled`] when it is dropped unasked, as it is when a
-/// panic unwinds out of the code it ran. A quit therefore never stays in its
-/// consultation: the next one the application asks for is asked again.
-///
-/// `finish` runs while a panic unwinds when the consultation is cancelled;
-/// one that panics then aborts, as any destructor does (ADR-0281).
-#[must_use = "a consultation dropped unasked cancels the quit"]
-pub struct QuitConsultation<F: FnOnce(QuitAnswer) -> QuitVerdict> {
-    finish: Option<F>,
-}
+/// A quit's consultation of its presentations, which only
+/// [`QuitRequest::begin_consult`] hands out: [`ask`](Self::ask) consumes it
+/// into the [`QuitAnswered`] that [`QuitRequest::finish_consult`] alone
+/// takes, so a host cannot ask without finishing or finish without asking.
+/// Nothing runs when one is dropped.
+#[derive(Debug)]
+#[must_use = "a begun consultation is asked, and its answer finished with QuitRequest::finish_consult"]
+pub struct QuitConsultation(());
 
-impl<F: FnOnce(QuitAnswer) -> QuitVerdict> QuitConsultation<F> {
-    /// The consultation a host just began, ended by `finish`.
-    pub fn new(finish: F) -> Self {
-        Self {
-            finish: Some(finish),
-        }
-    }
-
+impl QuitConsultation {
     /// Ask each of `presentations`, in order, whether the quit may go ahead,
     /// as a close for [`CloseReason::Program`]: its guard first, then its
     /// handler ([`CloseRequestRouter::consult`]). Every one is asked, not
     /// only up to the first refusal, so each that refuses records its close.
     /// A refusal that recorded nothing (a handler that panicked, a
-    /// presentation without a guard) cancels the quit. The consultation ends
-    /// with the answer, and its verdict is returned.
+    /// presentation without a guard) cancels the quit.
+    ///
+    /// A panic that escapes a presentation's question (the report of its
+    /// handler's panic reaching a log subscriber that fails, the drop of a
+    /// handler that closed its own window) is kept, not unwound: that
+    /// presentation gave no answer, the quit is cancelled as
+    /// [`QuitFinished::panicked`], every later presentation is still asked,
+    /// and the host resumes the first such panic once it has finished the
+    /// consultation ([`QuitFinished::resume`]).
     ///
     /// Runs application code: call it with no borrow of the host's state
     /// held.
     pub fn ask(
-        mut self,
+        self,
         router: &CloseRequestRouter,
         presentations: impl IntoIterator<Item = PresentationAddress>,
-    ) -> QuitVerdict {
-        let answer = answer_quit(router, presentations);
-        let finish = self
-            .finish
-            .take()
-            .expect("BUG: a consultation ends once, by `ask` or by its drop");
-        finish(answer)
-    }
-}
-
-impl<F: FnOnce(QuitAnswer) -> QuitVerdict> Drop for QuitConsultation<F> {
-    fn drop(&mut self) {
-        if let Some(finish) = self.finish.take() {
-            let _verdict = finish(QuitAnswer::Cancelled);
+    ) -> QuitAnswered {
+        let mut panic = FirstPanic::new();
+        let mut waiting = Vec::new();
+        let mut refused_unrecorded = false;
+        for address in presentations {
+            let recorded = panic.contain(|| {
+                let response = router.consult(address, CloseReason::Program);
+                (response == CloseResponse::KeepOpen)
+                    .then(|| router.is_recorded(address, CloseReason::Program))
+            });
+            // Not asked to stay open, or a panic, which is no answer to wait
+            // on (`panic` holds the first), adds nothing to wait for.
+            match recorded {
+                Some(Some(true)) => waiting.push(address),
+                Some(Some(false)) => refused_unrecorded = true,
+                Some(None) | None => {}
+            }
         }
+        let answer = if panic.is_held() {
+            QuitAnswer::Panicked
+        } else if refused_unrecorded {
+            QuitAnswer::Cancelled
+        } else {
+            QuitAnswer::Waiting(waiting)
+        };
+        QuitAnswered { answer, panic }
     }
 }
 
-impl<F: FnOnce(QuitAnswer) -> QuitVerdict> std::fmt::Debug for QuitConsultation<F> {
+/// What a quit's presentations answered ([`QuitConsultation::ask`]), for
+/// [`QuitRequest::finish_consult`].
+#[must_use = "a quit's answer is finished with QuitRequest::finish_consult"]
+pub struct QuitAnswered {
+    answer: QuitAnswer,
+    panic: FirstPanic,
+}
+
+impl std::fmt::Debug for QuitAnswered {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QuitConsultation")
-            .field("ended", &self.finish.is_none())
+        f.debug_struct("QuitAnswered")
+            .field("answer", &self.answer)
+            .field("panicked", &self.panic.is_held())
             .finish()
     }
 }
 
-/// What `presentations` answer a quit ([`QuitConsultation::ask`]).
-fn answer_quit(
-    router: &CloseRequestRouter,
-    presentations: impl IntoIterator<Item = PresentationAddress>,
-) -> QuitAnswer {
-    let mut waiting = Vec::new();
-    let mut cancelled = false;
-    for address in presentations {
-        if router.consult(address, CloseReason::Program) == CloseResponse::KeepOpen {
-            if router.is_recorded(address, CloseReason::Program) {
-                waiting.push(address);
-            } else {
-                cancelled = true;
-            }
-        }
+/// A finished consultation ([`QuitRequest::finish_consult`]): the verdict the
+/// host follows, and the first panic the consultation kept, which the host
+/// resumes once it has followed the verdict and released its own state.
+#[must_use = "a finished consultation's verdict is followed and its panic resumed"]
+pub struct QuitFinished {
+    verdict: QuitVerdict,
+    panic: FirstPanic,
+}
+
+impl QuitFinished {
+    /// What the host carries out.
+    pub fn verdict(&self) -> QuitVerdict {
+        self.verdict
     }
-    if cancelled {
-        QuitAnswer::Cancelled
-    } else {
-        QuitAnswer::Waiting(waiting)
+
+    /// Whether a panic is kept: read before any [`contain`](Self::contain),
+    /// whether the quit was cancelled because code the consultation ran
+    /// panicked, not because a presentation refused it.
+    #[must_use]
+    pub fn panicked(&self) -> bool {
+        self.panic.is_held()
+    }
+
+    /// Run `follow_up`, the host's code after the consultation (following the
+    /// verdict, reporting it), keeping a panic it raises behind the first one
+    /// the consultation kept.
+    pub fn contain(&mut self, follow_up: impl FnOnce()) {
+        let _done = self.panic.contain(follow_up);
+    }
+
+    /// Resume the first panic the consultation kept, if any.
+    pub fn resume(self) {
+        self.panic.resume();
+    }
+}
+
+impl std::fmt::Debug for QuitFinished {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuitFinished")
+            .field("verdict", &self.verdict)
+            .field("panicked", &self.panic.is_held())
+            .finish()
     }
 }
 
@@ -328,17 +372,28 @@ mod tests {
         }
     }
 
+    /// Finish the consultation `quit` just began with `answer`.
+    fn finish(quit: &mut QuitRequest, answer: QuitAnswer) -> QuitVerdict {
+        let _consultation = quit.begin_consult().expect("a quit is asked");
+        let finished = quit.finish_consult(QuitAnswered {
+            answer,
+            panic: FirstPanic::new(),
+        });
+        let verdict = finished.verdict();
+        finished.resume();
+        verdict
+    }
+
     /// A deferred quit commits when its last waiter consents, a gone waiter
     /// consents, and one that stays open abandons it; an answer that arrives
     /// after the quit was asked again is dropped.
     #[test]
     fn a_quit_moves_on_its_presentations_answers() {
         let mut quit = QuitRequest::new();
-        assert!(!quit.begin_consult(), "nothing asked");
+        assert!(quit.begin_consult().is_none(), "nothing asked");
         quit.ask();
-        assert!(quit.begin_consult());
         assert_eq!(
-            quit.finish_consult(QuitAnswer::Waiting(vec![at(1), at(2)])),
+            finish(&mut quit, QuitAnswer::Waiting(vec![at(1), at(2)])),
             QuitVerdict::Deferred
         );
         assert_eq!(quit.consented(at(1)), QuitVerdict::Unchanged);
@@ -346,26 +401,35 @@ mod tests {
         assert!(!quit.is_pending());
 
         quit.ask();
-        assert!(quit.begin_consult());
         assert_eq!(
-            quit.finish_consult(QuitAnswer::Waiting(vec![at(3)])),
+            finish(&mut quit, QuitAnswer::Waiting(vec![at(3)])),
             QuitVerdict::Deferred
         );
         assert_eq!(quit.declined(at(4)), QuitVerdict::Unchanged);
         assert_eq!(quit.declined(at(3)), QuitVerdict::Abandoned);
 
         quit.ask();
-        assert!(quit.begin_consult());
+        let _consultation = quit.begin_consult().expect("a quit is asked");
         quit.ask();
+        let finished = quit.finish_consult(QuitAnswered {
+            answer: QuitAnswer::Waiting(Vec::new()),
+            panic: FirstPanic::new(),
+        });
         assert_eq!(
-            quit.finish_consult(QuitAnswer::Waiting(Vec::new())),
+            finished.verdict(),
             QuitVerdict::Unchanged,
             "a quit asked again during the consultation is asked again"
         );
-        assert!(quit.begin_consult());
+        finished.resume();
         assert_eq!(
-            quit.finish_consult(QuitAnswer::Cancelled),
+            finish(&mut quit, QuitAnswer::Cancelled),
             QuitVerdict::Abandoned
         );
+        quit.ask();
+        assert_eq!(
+            finish(&mut quit, QuitAnswer::Panicked),
+            QuitVerdict::Abandoned
+        );
+        assert!(!quit.is_pending());
     }
 }

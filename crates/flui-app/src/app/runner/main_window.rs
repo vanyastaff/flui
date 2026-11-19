@@ -628,16 +628,14 @@ pub(super) fn drive_program_quit() {
     }
     let registered = router.addresses();
     ingress.quit_forget_gone(&registered);
-    if !ingress.begin_quit_consult() {
+    let Some(consultation) = ingress.begin_quit_consult() else {
         return;
-    }
-    // Ended on every exit: a panic that unwinds out of the code it runs (a
-    // handler's drop, a subscriber of the router's report) cancels the quit
-    // instead of leaving it asked forever.
-    let _verdict = flui_runtime::owner_turn::QuitConsultation::new(|answer| {
-        ingress.finish_quit_consult(answer)
-    })
-    .ask(&router, registered);
+    };
+    // The consultation keeps a panic of the code it runs (a handler's drop,
+    // a subscriber of the router's report) and cancels the quit; the panic
+    // resumes once the quit is finished and nothing of the host is held.
+    let answered = consultation.ask(&router, registered);
+    ingress.finish_quit_consult(answered).resume();
 }
 
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {

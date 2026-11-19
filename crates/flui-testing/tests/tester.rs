@@ -862,14 +862,17 @@ impl tracing::Subscriber for FailsOnOwnerTurnEvents {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-/// A quit whose consultation a panic unwinds out of (the report of the
-/// close handler's panic reaching a log subscriber that fails) costs the
-/// turn none of its later steps: the note the handler saved before it
-/// panicked is written in that turn, the window stays open, and the next
-/// quit is asked again and goes ahead.
+/// A quit whose consultation panics (the report of the close handler's
+/// panic reaching a log subscriber that fails) costs the turn none of its
+/// later steps: the note the handler saved before it panicked is written in
+/// that turn, and the panic reaches the test once the turn is done. The
+/// next quit waits for the note's save, which holds the window's close, and
+/// the turns its release owes carry the quit out without a hand pump.
 ///
-/// Fails against a turn that runs the consultation uncontained: the panic
-/// skips the turn's writes and the note stays unwritten.
+/// Fails against a turn that runs the consultation uncontained (the note
+/// stays unwritten) and against a host that owes no turn for a hold
+/// released inside a turn (the window stays open). That the panicked quit
+/// is cancelled is `quit_consultation`'s.
 #[test]
 fn a_quit_whose_consultation_panics_still_lets_the_turn_write() {
     use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
@@ -907,12 +910,8 @@ fn a_quit_whose_consultation_panics_still_lets_the_turn_write() {
     );
     assert!(!t.is_closed(), "the quit was cancelled");
 
-    // The note's save still holds the window's close as the quit is asked:
-    // the quit waits for it, and the frame after the hold's release carries
-    // the quit out.
     panics.set(false);
     t.request_quit();
-    t.pump();
     assert!(
         t.is_closed(),
         "the next quit was asked again and went ahead"

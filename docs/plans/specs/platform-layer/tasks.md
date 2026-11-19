@@ -8009,13 +8009,15 @@ GPU-память простаивающего или невидимого окн
   (`owner_turn`): `CloseRequestRouter` с `CloseRequest`/`CloseResponse`/`CloseRequestHandler`/
   `CloseRequestError` переехал из `flui-app` (`flui_app::CloseRequestHandler` и соседи —
   реэкспорт; отказ потока без цикла — `flui_app::PresentationCloseError::NoHostedRuntime`),
-  `QuitRequest` с `QuitConsultation` (опрос завершается на любом выходе, паника его отменяет)
-  заменил состояние выхода `Ingress` и копию выхода в headless, `settled_steps` разводит то, что
+  `QuitRequest` с `QuitConsultation` (её выдаёт только `begin_consult`, ответ принимает только
+  `finish_consult`; паника кода опроса не разматывается, а отменяет выход, и хост поднимает её
+  после завершения, ничего своего не выполняя при размотке) заменил состояние выхода `Ingress` и копию выхода в headless, `settled_steps` разводит то, что
   отпустили guard'ы, `SessionEnd::answer` с `SessionEndHost` — запрос, отмену и конец сеанса
   (уведомление, `Detached`, сброс, состояние хоста, разбор, фоновое удержание; бюджет и порог 1 с
   — на часах `SessionEndHost::clock`, у headless ручных), `CloseRequestRouter::consult` держит
-  порядок для всех (guard первым, обработчик первым в конце сеанса), `close_vetoes(TargetPlatform,
-  поддержка)` — какие закрытия платформа даёт отклонить, одна функция для runner и headless;
+  порядок для всех (guard первым, обработчик первым в конце сеанса), `close_vetoes(WindowSystem,
+  поддержка)` — какие закрытия даёт отклонить названная хостом оконная система (браузер runner
+  называет сам), одна функция для runner и headless, без чтения цели сборки;
   встроенные возможности — `capability::BuiltIns::compose` (primary selection только на Linux;
   нативное окно `flui-app` передаёт как `host_specific`). Runner и `HeadlessHost` зовут один код;
   копии в `flui-testing` (выход, опрос одних guard'ов, собственный конец сеанса, сборка реестра) и
@@ -8033,14 +8035,19 @@ GPU-память простаивающего или невидимого окн
   guard'ов в `request_close`, `end_session(Query)` и выходе, конец сеанса через закрытие окон до
   записи), восстановленных в рабочем дереве, все пять падают, остальные строки таблицы зелёные;
   `quit::tests::a_quit_moves_on_its_presentations_answers` — модель выхода; `close_request_matrix`
-  переехал в `flui-runtime`. Паника, вышедшая из опроса выхода, отменяет выход
-  (`quit_consultation`/`a_quit_whose_consultation_unwinds_is_cancelled_and_asked_again`, без `Drop`
-  у `QuitConsultation` падает), ход headless после неё пишет документы
-  (`a_quit_whose_consultation_panics_still_lets_the_turn_write`, без `contain` падает), бюджет
-  конца сеанса идёт по часам хоста (`a_session_end_spends_the_budget_on_the_hosts_clock`, на
-  `Instant::now` падает), закрытие сеанса из headless спрашивает обработчик первым
-  (`a_session_end_close_asks_the_handler_before_the_guard`, с guard первым падает). Нативное окно (`flui::native`) по-прежнему проверяется на
-  `flui_app::testing`: его тип принадлежит `flui-app`.
+  переехал в `flui-runtime`. Паника опроса выхода отменяет выход и поднимается один раз
+  (`quit_consultation`/`a_quit_whose_consultation_panics_is_cancelled_and_resumed_once`, с
+  подписчиком, падающим на любом событии; без сдерживания в `ask` падает); ход headless после неё
+  пишет документы, а удержание, отпущенное внутри хода, задолжало ход
+  (`a_quit_whose_consultation_panics_still_lets_the_turn_write`: без `contain` и без
+  `owes_close_settle` в `turn_owed` падает); бюджет конца сеанса идёт по часам хоста
+  (`a_session_end_spends_the_budget_on_the_hosts_clock`, на `Instant::now` падает); закрытие
+  сеанса из headless спрашивает обработчик первым
+  (`a_session_end_close_asks_the_handler_before_the_guard`, с guard первым падает); вопрос окна в
+  запросе конца сеанса сдержан по окну, а отчёт хоста о панике — после её сохранения
+  (`a_session_end_query_contains_each_windows_question`); ответ `close_vetoes` не зависит от цели
+  сборки (`close_vetoes_follow_the_window_system_named`). Нативное окно (`flui::native`)
+  по-прежнему проверяется на `flui_app::testing`: его тип принадлежит `flui-app`.
 - [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
   `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
   рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.

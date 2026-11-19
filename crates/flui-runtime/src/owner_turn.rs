@@ -14,7 +14,8 @@
 //! budget is decided here, once.
 //!
 //! The closes a platform lets an application refuse are
-//! [`close_vetoes`]'s, the same on every host.
+//! [`close_vetoes`]'s, the same on every host for the [`WindowSystem`] it
+//! names.
 
 mod close;
 mod quit;
@@ -25,35 +26,48 @@ pub use close::{
     CloseResponse, PreparedCloseRequest,
 };
 pub use quit::{
-    QuitAnswer, QuitConsultation, QuitRequest, QuitVerdict, SettledStep, settled_steps,
+    QuitAnswered, QuitConsultation, QuitFinished, QuitRequest, QuitVerdict, SettledStep,
+    settled_steps,
 };
 pub use session_end::{NoticeDelivery, SessionEnd, SessionEndHost, SessionEndStep};
 
 use flui_platform::{SessionEndSupport, TargetPlatform};
 use flui_view::CloseReason;
 
-/// The closes `platform` lets the application refuse, where it lets the
-/// session end with `support` (`None` for a host with no platform
-/// installed). Every host builds its UI runtimes and registers its close
-/// handlers from this one answer: a runner with the platform it was built for
+/// What a host's windows are drawn in, as far as closing them goes: a
+/// platform's window system, or a browser's page, which no [`TargetPlatform`]
+/// names. A host states it; nothing here reads the build target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowSystem {
+    /// The window system of the platform named: a runner's own, or the one a
+    /// headless window plays.
+    Platform(TargetPlatform),
+    /// A browser's page.
+    Browser,
+}
+
+/// The closes a host's `windows` let the application refuse, where its
+/// platform lets the session end with `support` (`None` for a host with no
+/// platform installed). Every host builds its UI runtimes and registers its
+/// close handlers from this one answer: a runner with its own window system
 /// and the support its platform reports, a headless host with the platform
 /// its window names.
 ///
 /// A desktop's window system asks before a window closes, for the user and
 /// for the program; Android's, iOS's and the browser's never do, so nothing
-/// there is refusable but the session's end. The browser is the platform
-/// [`TargetPlatform::current`] names `Unknown` on `wasm32`. The session's end
-/// is refusable only where the platform holds the session for a block
-/// (Windows, macOS); one that only delays it (logind) or only tells cannot be
-/// refused, so a guard's holds never refuse it there.
+/// there is refusable but the session's end. The session's end is refusable
+/// only where the platform holds the session for a block (Windows, macOS);
+/// one that only delays it (logind) or only tells cannot be refused, so a
+/// guard's holds never refuse it there.
 #[must_use]
-pub fn close_vetoes(
-    platform: TargetPlatform,
-    support: Option<SessionEndSupport>,
-) -> Vec<CloseReason> {
-    let in_browser = cfg!(target_arch = "wasm32") && platform == TargetPlatform::Unknown;
-    let windows_ask =
-        !in_browser && !matches!(platform, TargetPlatform::Android | TargetPlatform::iOS);
+pub fn close_vetoes(windows: WindowSystem, support: Option<SessionEndSupport>) -> Vec<CloseReason> {
+    let windows_ask = match windows {
+        WindowSystem::Platform(platform) => {
+            !matches!(platform, TargetPlatform::Android | TargetPlatform::iOS)
+        }
+        WindowSystem::Browser => false,
+    };
     let mut vetoes = Vec::with_capacity(3);
     if windows_ask {
         vetoes.extend([CloseReason::User, CloseReason::Program]);

@@ -10,8 +10,8 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{PresentationAddress, PresentationId};
 use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndSupport};
 use flui_runtime::owner_turn::{
-    CloseRequestRouter, CloseResponse, NoticeDelivery, QuitConsultation, QuitVerdict,
-    SessionEndHost, SessionEndStep, SettledStep, settled_steps,
+    CloseRequestRouter, CloseResponse, NoticeDelivery, QuitVerdict, SessionEndHost, SessionEndStep,
+    SettledStep, settled_steps,
 };
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_view::__runtime::{FlushWrite, WritesInFlight};
@@ -217,8 +217,9 @@ impl HeadlessHost {
     /// Ask for the application to quit, as `AppHandle::request_quit` does and
     /// as AppKit's Dock Quit reaches a runner (ADR-0350 §1): the next turn
     /// asks every open window, in the order they opened, as for the program's
-    /// close ([`QuitConsultation`]). A window that refuses with a record defers the
-    /// quit until its close comes due; one that refuses without one, or keeps
+    /// close ([`QuitConsultation`](flui_runtime::owner_turn::QuitConsultation)).
+    /// A window that refuses with a record defers the quit until its close
+    /// comes due; one that refuses without one, or keeps
     /// itself open, cancels it; when no window holds it, every window closes
     /// past every hold, what the documents published is written and the host
     /// retires. A quit asked while one is deferred asks every window again.
@@ -230,8 +231,9 @@ impl HeadlessHost {
 
     /// The quit a turn finds asked or deferred: a window it waits on that is
     /// gone consents, and an asked quit asks every open window. A quit no
-    /// window holds is owed to the turn; one whose consultation a panic
-    /// unwinds out of is cancelled ([`QuitConsultation`]).
+    /// window holds is owed to the turn; one whose consultation kept a panic
+    /// is cancelled, and the panic resumes once the quit is finished
+    /// ([`QuitConsultation::ask`](flui_runtime::owner_turn::QuitConsultation::ask)).
     fn consult_quit(&mut self) {
         // Most turns have no quit: they collect no windows, so a steady
         // frame allocates nothing.
@@ -245,17 +247,27 @@ impl HeadlessHost {
             .collect();
         let verdict = self.quit.forget_gone(&open);
         self.follow_quit(verdict);
-        if !self.quit.begin_consult() {
+        let Some(consultation) = self.quit.begin_consult() else {
             return;
-        }
+        };
         let router: Rc<CloseRequestRouter> = Rc::clone(&self.close_requests);
-        let quit = &mut self.quit;
-        let verdict =
-            QuitConsultation::new(|answer| quit.finish_consult(answer)).ask(&router, open);
+        let answered = consultation.ask(&router, open);
+        let mut finished = self.quit.finish_consult(answered);
+        let (verdict, panicked) = (finished.verdict(), finished.panicked());
         self.follow_quit(verdict);
         if verdict == QuitVerdict::Abandoned {
-            tracing::info!("a window refused the quit without recording it; quit cancelled");
+            // A subscriber is user code: its panic stays behind the first.
+            finished.contain(|| {
+                if panicked {
+                    tracing::info!("asking the windows about the quit panicked; quit cancelled");
+                } else {
+                    tracing::info!(
+                        "a window refused the quit without recording it; quit cancelled"
+                    );
+                }
+            });
         }
+        finished.resume();
     }
 
     /// A quit no window holds is owed to the turn, which carries it out.
@@ -388,12 +400,15 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
     }
 
     /// Kept to raise once the session end returns: a runner contains and
-    /// logs it, a test sees it.
+    /// logs it, a test sees it. The payload is kept before the event, whose
+    /// subscriber is user code, so a panic of the event stays behind it.
     fn contained(&mut self, step: SessionEndStep, payload: Box<dyn Any + Send>) {
-        tracing::debug!(
-            ?step,
-            "a session-end step panicked; raised once the session end returns"
-        );
         self.first.record(payload);
+        self.first.contain(|| {
+            tracing::debug!(
+                ?step,
+                "a session-end step panicked; raised once the session end returns"
+            );
+        });
     }
 }

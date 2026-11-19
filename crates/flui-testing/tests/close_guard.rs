@@ -771,6 +771,104 @@ pub(crate) fn a_session_end_query_reaches_the_subscribers_and_their_block_holds_
     assert_eq!(*view.heard.borrow(), ["ending", "cancelled"]);
 }
 
+/// A log subscriber that fails on every event of the owner turn's steps and
+/// of the headless host, as a faulty one does; the panic names the event's
+/// target.
+struct FailsOnTurnEvents;
+
+impl tracing::Subscriber for FailsOnTurnEvents {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let target = event.metadata().target();
+        if target.starts_with("flui_runtime::owner_turn")
+            || target.starts_with("flui_testing::host")
+        {
+            panic!("log subscriber failed on {target}");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// At a session-end query, a window whose question panics past its handler
+/// (the report of the handler's panic reaching a subscriber that fails)
+/// refuses, and the windows after it are still asked; the host's own report
+/// of that panic fails too, and the notice still reaches the subscribers.
+/// The panic raised afterwards is the window's, not the report's; the
+/// refusal holds the session until its window closes.
+///
+/// Fails against a query that asks the windows uncontained (the second
+/// handler is never asked and nobody hears the notice) and against a host
+/// that logs before it keeps the step's panic (the step's panic is lost).
+pub(crate) fn a_session_end_query_contains_each_windows_question() {
+    use flui_platform::{SessionEndPhase, TargetPlatform};
+
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let mut host = HeadlessHost::new(
+        HeadlessWindow::new(10, 10)
+            .with_platform(TargetPlatform::Windows)
+            .with_close_request_handler(CloseRequestHandler::new(|request| {
+                assert_ne!(
+                    request.reason(),
+                    CloseReason::SessionEnd,
+                    "deliberate handler panic under test"
+                );
+                CloseResponse::Close
+            })),
+    );
+    let second = host
+        .open_window(HeadlessWindow::new(10, 10).with_close_request_handler(letting_close(&asked)));
+    let view = HoldsSessionEnds::default();
+    host.attach_to(second, &view).expect("second root");
+    let _ = host.pump(Duration::ZERO);
+
+    let query = tracing::subscriber::with_default(FailsOnTurnEvents, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            host.end_session(SessionEndPhase::Query)
+        }))
+    });
+    let raised = query.expect_err("the window's panic is raised after the query");
+    let message = raised
+        .downcast_ref::<String>()
+        .expect("the subscriber panics with a message");
+    assert!(
+        message.contains("flui_runtime::owner_turn"),
+        "the window's panic is the one raised, not the report's: {message}"
+    );
+    assert_eq!(
+        *asked.borrow(),
+        [CloseReason::SessionEnd],
+        "the window after the one that panicked was asked"
+    );
+    assert_eq!(*view.heard.borrow(), ["ending"], "the notice was delivered");
+
+    view.blocks.borrow_mut().clear();
+    assert_eq!(
+        host.session_end_releases(),
+        0,
+        "the window whose question panicked refuses"
+    );
+    assert!(host.request_close(host.primary_window(), CloseReason::User));
+    assert_eq!(
+        host.session_end_releases(),
+        1,
+        "its close released the platform"
+    );
+}
+
 /// A quit asks every window's handler, not only up to the first refusal; it
 /// waits for each window whose refusal recorded its close, and goes ahead
 /// once both records are carried out.
@@ -833,6 +931,10 @@ fn close_guard_hosting() {
     crate::run_table(
         "close_guard_hosting",
         &[
+            (
+                "a_session_end_query_contains_each_windows_question",
+                a_session_end_query_contains_each_windows_question,
+            ),
             (
                 "a_session_end_close_asks_the_handler_before_the_guard",
                 a_session_end_close_asks_the_handler_before_the_guard,

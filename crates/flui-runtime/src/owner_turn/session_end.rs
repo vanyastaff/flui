@@ -330,7 +330,7 @@ impl SessionEnd {
                 );
             });
             if let Some(payload) = caught.into_payload() {
-                host.contained(SessionEndStep::Notice, payload);
+                report_contained(host, SessionEndStep::Notice, payload);
             }
         }
         if delivery.is_some() || self.has_refusals() {
@@ -376,7 +376,7 @@ impl SessionEnd {
             }
         }
         if let Some(payload) = caught.into_payload() {
-            host.contained(SessionEndStep::Query, payload);
+            report_contained(host, SessionEndStep::Query, payload);
         }
     }
 
@@ -405,7 +405,7 @@ fn deliver_contained(
     let mut caught = FirstPanic::new();
     let delivery = caught.contain(|| host.deliver_notice(notice, may_start));
     if let Some(payload) = caught.into_payload() {
-        host.contained(SessionEndStep::Notice, payload);
+        report_contained(host, SessionEndStep::Notice, payload);
     }
     delivery
 }
@@ -436,13 +436,13 @@ fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
         let mut caught = FirstPanic::new();
         caught.contain(|| host.close_for_session_end(&margin_left));
         if let Some(payload) = caught.into_payload() {
-            host.contained(SessionEndStep::Close, payload);
+            report_contained(host, SessionEndStep::Close, payload);
         }
     }
     let mut caught = FirstPanic::new();
     let unfinished = caught.contain(|| host.flush(deadline)).flatten();
     if let Some(payload) = caught.into_payload() {
-        host.contained(SessionEndStep::Flush, payload);
+        report_contained(host, SessionEndStep::Flush, payload);
     }
     host.flush_host_state(deadline);
     if ends_application {
@@ -469,11 +469,34 @@ fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
     SessionEndAnswer::Proceed
 }
 
+/// Hand the panic `step` raised to `host`, containing whatever the host's
+/// report runs (a `tracing` subscriber is user code): the session end goes on
+/// to its next step, and the platform still gets its answer.
+fn report_contained(
+    host: &mut dyn SessionEndHost,
+    step: SessionEndStep,
+    payload: Box<dyn Any + Send>,
+) {
+    let mut caught = FirstPanic::new();
+    caught.contain(|| host.contained(step, payload));
+    // The step's own panic is the host's now; a panic of its report has
+    // nowhere left to go.
+    drop(caught);
+}
+
 impl SessionEndStep {
     /// Log the panic this step raised and drop its payload: how a host that
-    /// answers a native callback reports it.
+    /// answers a native callback reports it. A subscriber that panics on the
+    /// event is contained, and both payloads are dropped.
     pub fn log(self, payload: Box<dyn Any + Send>) {
-        let text = payload_text(&*payload).unwrap_or("<non-string panic payload>");
+        let mut caught = FirstPanic::new();
+        caught.contain(|| self.log_event(&*payload));
+        discard_payload(payload);
+        drop(caught);
+    }
+
+    fn log_event(self, payload: &(dyn Any + Send)) {
+        let text = payload_text(payload).unwrap_or("<non-string panic payload>");
         match self {
             Self::Query => tracing::error!(
                 panic = text,
@@ -491,6 +514,5 @@ impl SessionEndStep {
             }
             Self::Flush => tracing::error!(panic = text, "the session-end flush panicked"),
         }
-        discard_payload(payload);
     }
 }

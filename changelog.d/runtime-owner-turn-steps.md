@@ -15,12 +15,18 @@
 - A headless session end spends its budget on the host's manual clock, so a slow test run no
   longer leaves the windows open and the host unretired.
 - `request_presentation_close` returns `PresentationCloseError`: `NoHostedRuntime` for a thread
-  that runs no loop, and `Close` carrying the window's `CloseRequestError`, which no longer has a
-  `NoHostedRuntime` variant.
+  that runs no loop, and `Close` carrying the window's `CloseRequestError`.
+
+### Removed
+
+- `CloseRequestError::NoHostedRuntime`: a thread that runs no loop is refused with
+  `PresentationCloseError::NoHostedRuntime`.
 
 ### Fixed
 
-- A quit whose consultation a panic unwinds out of (a close handler's drop, a log subscriber that
-  fails) is cancelled instead of staying asked, so the next quit is asked again and a Dock reopen
-  is no longer held; the headless turn runs its later steps, the documents' write included, past
-  that panic.
+- A quit whose consultation panics (a close handler's drop, a log subscriber that fails) is
+  cancelled, with nothing of the host run while the panic unwinds, and the panic resumes once the
+  quit is finished; the next quit is asked again and a Dock reopen is no longer held. The headless
+  turn runs its later steps, the documents' write included, past that panic.
+- A close-guard hold released inside a headless turn owes the host a turn, so
+  `pump_until_settled` and the tester carry out a quit that waited for it.

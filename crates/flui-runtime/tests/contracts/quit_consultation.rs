@@ -1,5 +1,6 @@
-//! A quit's consultation ends on every exit: a panic that unwinds out of the
-//! code it runs cancels the quit instead of leaving it asked forever.
+//! A quit's consultation keeps a panic of the code it runs instead of
+//! unwinding: the quit is cancelled as a panicked consultation, the host
+//! finishes it with nothing unwinding, and the panic resumes once.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -7,16 +8,16 @@ use std::rc::Rc;
 use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 use flui_platform::PlatformWindow;
 use flui_runtime::owner_turn::{
-    CloseRequestHandler, CloseRequestRouter, CloseResponse, PreparedCloseRequest, QuitConsultation,
-    QuitRequest, QuitVerdict,
+    CloseRequestHandler, CloseRequestRouter, CloseResponse, PreparedCloseRequest, QuitRequest,
+    QuitVerdict,
 };
 use flui_view::CloseReason;
 
-/// A log subscriber that fails on every event of the owner turn's steps, as
-/// a faulty one does.
-struct FailsOnOwnerTurnEvents;
+/// A log subscriber that fails on every event, whatever its target, as a
+/// faulty one does; the panic names the event's target.
+struct FailsOnEveryEvent;
 
-impl tracing::Subscriber for FailsOnOwnerTurnEvents {
+impl tracing::Subscriber for FailsOnEveryEvent {
     fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
         true
     }
@@ -30,13 +31,7 @@ impl tracing::Subscriber for FailsOnOwnerTurnEvents {
     fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
-        if event
-            .metadata()
-            .target()
-            .starts_with("flui_runtime::owner_turn")
-        {
-            panic!("log subscriber failed");
-        }
+        panic!("log subscriber failed on {}", event.metadata().target());
     }
 
     fn enter(&self, _: &tracing::span::Id) {}
@@ -46,13 +41,16 @@ impl tracing::Subscriber for FailsOnOwnerTurnEvents {
 
 /// A router with one presentation, whose close handler panics at the
 /// program's close: the router contains that panic and reports it, and the
-/// report reaches a subscriber that fails, so the panic unwinds out of the
-/// consultation. The quit is cancelled, not left in its consultation, and the
-/// next quit the application asks for is asked again.
+/// report reaches a subscriber that fails on every event. `ask` keeps that
+/// panic and returns; the host finishes the quit, which is cancelled as a
+/// panicked consultation, then reports it to the same failing subscriber,
+/// which the finished consultation keeps behind the first; resuming raises
+/// the router's report, once. The next quit is asked again, and a handler's
+/// own contained panic then cancels it as a refusal, not a panic.
 ///
-/// Fails against a consultation that ends only when `ask` returns: the quit
-/// stays in its consultation, pending, and is never asked again.
-fn a_quit_whose_consultation_unwinds_is_cancelled_and_asked_again() {
+/// Fails against a consultation that lets a presentation's panic unwind out
+/// of `ask`.
+fn a_quit_whose_consultation_panics_is_cancelled_and_resumed_once() {
     let router = CloseRequestRouter::new();
     let window: Rc<dyn PlatformWindow> = Rc::new(flui_runtime::testing::TestWindow::new());
     let at = PresentationAddress {
@@ -78,29 +76,38 @@ fn a_quit_whose_consultation_unwinds_is_cancelled_and_asked_again() {
 
     let mut quit = QuitRequest::new();
     quit.ask();
-    assert!(quit.begin_consult());
-    let unwound = {
-        let _diagnostics = crate::scoped_diagnostics(FailsOnOwnerTurnEvents);
-        catch_unwind(AssertUnwindSafe(|| {
-            QuitConsultation::new(|answer| quit.finish_consult(answer)).ask(&router, [at])
-        }))
+    let consultation = quit.begin_consult().expect("a quit is asked");
+    let finished = {
+        let _diagnostics = crate::scoped_diagnostics(FailsOnEveryEvent);
+        let answered = catch_unwind(AssertUnwindSafe(|| consultation.ask(&router, [at])))
+            .expect("the consultation keeps the subscriber's panic instead of unwinding");
+        let mut finished = quit.finish_consult(answered);
+        assert_eq!(finished.verdict(), QuitVerdict::Abandoned);
+        assert!(finished.panicked(), "cancelled as a panic, not a refusal");
+        // A host reports the cancelled quit to the same subscriber.
+        finished.contain(|| tracing::info!("quit cancelled"));
+        finished
     };
+    assert!(!quit.is_pending(), "the quit is cancelled");
+    let resumed =
+        catch_unwind(AssertUnwindSafe(|| finished.resume())).expect_err("the kept panic resumes");
+    let message = resumed
+        .downcast_ref::<String>()
+        .expect("the subscriber panics with a message");
     assert!(
-        unwound.is_err(),
-        "the subscriber's panic unwinds out of the consultation"
-    );
-    assert!(
-        !quit.is_pending(),
-        "the unwound consultation cancelled the quit"
+        message.contains("flui_runtime::owner_turn"),
+        "the first panic, the router's report, is the one resumed: {message}"
     );
 
     quit.ask();
-    assert!(quit.begin_consult(), "the next quit is asked again");
-    assert_eq!(
-        QuitConsultation::new(|answer| quit.finish_consult(answer)).ask(&router, [at]),
-        QuitVerdict::Abandoned,
-        "the handler's contained panic refuses the quit without a record"
+    let consultation = quit.begin_consult().expect("the next quit is asked again");
+    let finished = quit.finish_consult(consultation.ask(&router, [at]));
+    assert_eq!(finished.verdict(), QuitVerdict::Abandoned);
+    assert!(
+        !finished.panicked(),
+        "a handler's contained panic is a refusal without a record"
     );
+    finished.resume();
 }
 
 #[test]
@@ -108,8 +115,8 @@ fn quit_consultation() {
     crate::table_test::run_table(
         "quit_consultation",
         &[(
-            "a_quit_whose_consultation_unwinds_is_cancelled_and_asked_again",
-            a_quit_whose_consultation_unwinds_is_cancelled_and_asked_again as fn(),
+            "a_quit_whose_consultation_panics_is_cancelled_and_resumed_once",
+            a_quit_whose_consultation_panics_is_cancelled_and_resumed_once as fn(),
         )],
     );
 }

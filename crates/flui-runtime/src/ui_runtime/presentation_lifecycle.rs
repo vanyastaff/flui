@@ -311,6 +311,17 @@ impl UiRuntime {
             .map(|presentation| presentation.close_guard().clone())
     }
 
+    /// Whether a close guard signalled since the last
+    /// [`settle_close_guards`](Self::settle_close_guards): the owner owes a
+    /// turn that settles it, even when no frame is asked for (a hold released
+    /// inside a turn, after its settle, leaves only this).
+    #[must_use]
+    pub fn owes_close_settle(&self) -> bool {
+        self.close
+            .settle_owed
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Settle every presentation's close guard on the owner's turn: wake the
     /// waiters each change resolved, one by one, and return the closes now
     /// due, for the host to carry out without asking the application again,

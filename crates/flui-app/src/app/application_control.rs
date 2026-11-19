@@ -1,7 +1,9 @@
 //! Closed cross-thread application commands. UI factories never enter this state.
 use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, PresentationAddress, claim_slot};
 use flui_native::PlatformProxy;
-use flui_runtime::owner_turn::{QuitAnswer, QuitRequest, QuitVerdict};
+use flui_runtime::owner_turn::{
+    QuitAnswered, QuitConsultation, QuitFinished, QuitRequest, QuitVerdict,
+};
 use parking_lot::Mutex;
 use std::{
     future::Future,
@@ -597,24 +599,42 @@ impl Ingress {
     }
 
     /// Start the owner's consultation of a quit the application asked for:
-    /// `true` when one is asked and nothing has fenced the application yet.
-    pub(crate) fn begin_quit_consult(&self) -> bool {
+    /// the consultation when one is asked and nothing has fenced the
+    /// application yet.
+    pub(crate) fn begin_quit_consult(&self) -> Option<QuitConsultation> {
         let mut state = self.state.lock();
-        state.phase == Phase::Accepting && state.quit.begin_consult()
+        if state.phase != Phase::Accepting {
+            return None;
+        }
+        state.quit.begin_consult()
     }
 
     /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
     /// started with what the presentations answered
-    /// ([`QuitRequest::finish_consult`]).
-    pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) -> QuitVerdict {
+    /// ([`QuitRequest::finish_consult`]) and follow its verdict; the caller
+    /// resumes the consultation's panic, with nothing of this state held.
+    pub(crate) fn finish_quit_consult(&self, answered: QuitAnswered) -> QuitFinished {
         let mut state = self.state.lock();
-        let verdict = state.quit.finish_consult(answer);
-        self.follow_quit(state, verdict);
+        let mut finished = state.quit.finish_consult(answered);
+        let (verdict, panicked) = (finished.verdict(), finished.panicked());
+        // A panic of the follow-up or of a subscriber stays behind the
+        // consultation's own, so the first failure is the one resumed.
+        finished.contain(|| self.follow_quit(state, verdict));
         // With the state unlocked: a subscriber is user code.
         if verdict == QuitVerdict::Abandoned {
-            tracing::info!("a presentation refused the quit without recording it; quit cancelled");
+            finished.contain(|| {
+                if panicked {
+                    tracing::info!(
+                        "asking the presentations about the quit panicked; quit cancelled"
+                    );
+                } else {
+                    tracing::info!(
+                        "a presentation refused the quit without recording it; quit cancelled"
+                    );
+                }
+            });
         }
-        verdict
+        finished
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its

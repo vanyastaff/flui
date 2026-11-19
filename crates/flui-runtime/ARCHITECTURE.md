@@ -192,20 +192,25 @@ host.
   `flui-testing`'s headless host call the same code: one
   `CloseRequestRouter::consult` asks a window's guard before its handler for
   a close and after it for the session's end, whoever asks; `QuitRequest`
-  holds a quit and a `QuitConsultation` asks its presentations, ending the
-  consultation on every exit, a panic that unwinds out of it included, so a
-  quit never stays asked; `settled_steps` routes what the guards let through;
-  and `SessionEnd::answer` orders the session end (notice, `Detached`, flush,
-  host state, teardown, background hold) within its budget, on the clock the
-  host names (`SessionEndHost::clock`: the operating system's on a runner, the
-  manual clock on a headless host), containing a panic at each step that runs
-  application code, a window's question at the query included. A host
-  supplies only what a step does to its own state, through `SessionEndHost`,
-  whose methods take no borrow of the book, so application code they run may
-  re-enter it. `close_vetoes` says which closes a platform lets the
-  application refuse, from the platform and its session-end support, for
-  every host, and `BuiltIns::primary_selection` registers the primary
-  selection only on Linux.
+  holds a quit, and the `QuitConsultation` its `begin_consult` hands out asks
+  the presentations, keeping a panic of the code it runs instead of
+  unwinding, into the answer `finish_consult` alone takes: a panicked
+  consultation cancels the quit, and the host resumes the panic only after it
+  has finished the quit and released its own state, so nothing of a host runs
+  while a panic unwinds (`quit_consultation`); `settled_steps` routes what
+  the guards let through; and `SessionEnd::answer` orders the session end
+  (notice, `Detached`, flush, host state, teardown, background hold) within
+  its budget, on the clock the host names (`SessionEndHost::clock`: the
+  operating system's on a runner, the manual clock on a headless host),
+  containing a panic at each step that runs application code, a window's
+  question at the query and the host's report of a contained panic included.
+  A host supplies only what a step does to its own state, through
+  `SessionEndHost`, whose methods take no borrow of the book, so application
+  code they run may re-enter it. `close_vetoes` says which closes a host's
+  `WindowSystem` lets the application refuse, from the window system and the
+  session-end support the host names and never from the build target, and
+  `BuiltIns::primary_selection` registers the primary selection only on
+  Linux.
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a

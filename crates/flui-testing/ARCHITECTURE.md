@@ -53,10 +53,14 @@ Its frame driver is `HeadlessHost`, which pumps a
   next turn after the router is asked as for the program's close (a runner's
   window queue); what the guards let through is routed by `settled_steps` and
   carried out contained, the first panic resumed after the rest; a quit asks
-  every window through a `QuitConsultation`, contained like the other steps,
-  which cancels the quit if a panic unwinds out of it. The session end's
+  every window through a `QuitConsultation`, which cancels a quit whose
+  consultation panicked, and the turn resumes that panic contained like its
+  other steps. A close guard that signalled since the last settle (a hold
+  released inside a turn) owes the host a turn, so `time_to_next_frame` and
+  `pump_until_settled` carry out what it lets through. The session end's
   budget runs on the host's manual clock (`SessionEndHost::clock`), so a slow
-  test spends none of it. What the host supplies is what a step does to
+  test spends none of it, and the vetoes follow the platform the window
+  names, whatever the build target. What the host supplies is what a step does to
   its own state (`HeadlessSessionEnd` in `src/host/turn.rs`): the notice
   reaches its one runtime, `Detached` goes through
   `UiRuntime::update_host_lifecycle`, the flush runs the queued writes without

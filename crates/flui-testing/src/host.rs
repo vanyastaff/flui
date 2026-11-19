@@ -1306,7 +1306,7 @@ impl HeadlessHost {
             host = host.with_flush_registry(flush.registry());
         }
         let close_vetoes = flui_runtime::owner_turn::close_vetoes(
-            platform,
+            flui_runtime::owner_turn::WindowSystem::Platform(platform),
             Some(session_end_support_of(platform)),
         );
         host = host.with_close_vetoes(&close_vetoes);
@@ -2772,10 +2772,15 @@ impl HeadlessHost {
     }
 
     /// Whether the host owes a turn, as a runner's owner is woken for one: a
-    /// close a widget asked for, or a quit to ask the windows, to commit, or
-    /// that waits on a window that is gone.
+    /// close a widget asked for, a close guard that signalled since the last
+    /// settle (a hold released, a decision made), or a quit to ask the
+    /// windows, to commit, or that waits on a window that is gone.
     fn turn_owed(&self) -> bool {
         !self.close_asks.borrow().is_empty()
+            || self
+                .ui_runtime
+                .as_ref()
+                .is_some_and(UiRuntime::owes_close_settle)
             || self.quit_owed
             || self.quit.is_asked()
             || self

@@ -337,15 +337,20 @@ pub(super) fn drive_native_text_sizing() {
 
 /// Every close the installed platform lets the application refuse
 /// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)), on the
-/// platform this runner was built for.
+/// window system this runner was built for: the browser's page on `wasm32`,
+/// the platform's window system elsewhere.
 fn close_vetoes() -> Vec<flui_view::CloseReason> {
+    #[cfg(target_arch = "wasm32")]
+    let windows = flui_runtime::owner_turn::WindowSystem::Browser;
+    #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         clippy::disallowed_methods,
         reason = "the runner refuses the closes of the platform it was built for"
     )]
-    let platform = flui_platform::TargetPlatform::current();
+    let windows =
+        flui_runtime::owner_turn::WindowSystem::Platform(flui_platform::TargetPlatform::current());
     flui_runtime::owner_turn::close_vetoes(
-        platform,
+        windows,
         with_owner_platform(flui_native::OwnerPlatform::session_end_support),
     )
 }
@@ -617,7 +622,10 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
         drop(take_background_writes());
     }
 
-    /// Contained and logged: the caller answers a native callback.
+    /// Logged, its subscriber contained ([`SessionEndStep::log`]), and
+    /// dropped: the caller answers a native callback.
+    ///
+    /// [`SessionEndStep::log`]: flui_runtime::owner_turn::SessionEndStep::log
     fn contained(
         &mut self,
         step: flui_runtime::owner_turn::SessionEndStep,
