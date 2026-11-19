@@ -25,7 +25,7 @@ use std::process::ExitCode;
 use anyhow::{Context, bail};
 
 use super::RunOpts;
-use super::exec::{Cmd, Host, Step, target_dir};
+use super::exec::{Cmd, Host, target_dir};
 
 /// A fuzz target and what its run starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,11 +129,11 @@ pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
         // Every command runs from the repository root, wherever this one was typed.
         let input =
             std::path::absolute(input).with_context(|| format!("resolving {}", input.display()))?;
-        runner.steps(&[replay_step(target, &input)])?;
+        runner.run(&replay_cmd(target, &input))?;
         return Ok(ExitCode::SUCCESS);
     }
     let work = target_dir()?.join("fuzz");
-    let mut steps = Vec::with_capacity(targets.len());
+    let mut cmds = Vec::with_capacity(targets.len());
     for target in targets {
         let dir = work.join(target.name);
         if !runner.dry_run {
@@ -142,9 +142,9 @@ pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
                     .with_context(|| format!("creating {}", made.display()))?;
             }
         }
-        steps.push(run_step(target, &dir, args.seconds));
+        cmds.push(run_cmd(target, &dir, args.seconds));
     }
-    runner.every(&steps)?;
+    runner.every(&cmds)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -192,7 +192,7 @@ fn limits(target: Target) -> Vec<String> {
 
 /// One target's run: libFuzzer over the corpus in `dir` and the target's
 /// seeds for `seconds`.
-fn run_step(target: Target, dir: &Path, seconds: u32) -> Step {
+fn run_cmd(target: Target, dir: &Path, seconds: u32) -> Cmd {
     let dir = dir.display();
     started(target)
         .args([format!("{dir}/corpus")])
@@ -204,15 +204,13 @@ fn run_step(target: Target, dir: &Path, seconds: u32) -> Step {
         ])
         .args(limits(target))
         .args(["-print_final_stats=1"])
-        .into()
 }
 
 /// One target on `input` alone: libFuzzer runs a file it is given once.
-fn replay_step(target: Target, input: &Path) -> Step {
+fn replay_cmd(target: Target, input: &Path) -> Cmd {
     started(target)
         .args([input.display().to_string()])
         .args(limits(target))
-        .into()
 }
 
 #[cfg(test)]
@@ -220,10 +218,10 @@ mod tests {
     use super::*;
 
     fn a_run_builds_the_example_under_the_fuzzing_flags() {
-        let step = run_step(TARGETS[0], Path::new("target/fuzz/image_decode"), 600);
-        let line = step.to_string();
+        let cmd = run_cmd(TARGETS[0], Path::new("target/fuzz/image_decode"), 600);
+        let line = cmd.to_string();
         assert!(
-            line.starts_with("$ RUSTFLAGS='--cfg fuzzing -Cpasses=sancov-module "),
+            line.starts_with("RUSTFLAGS='--cfg fuzzing -Cpasses=sancov-module "),
             "{line}"
         );
         assert!(
@@ -239,8 +237,8 @@ mod tests {
     }
 
     fn a_replay_runs_the_target_on_the_one_input() {
-        let step = replay_step(TARGETS[1], Path::new("/tmp/crash-0a1b"));
-        let line = step.to_string();
+        let cmd = replay_cmd(TARGETS[1], Path::new("/tmp/crash-0a1b"));
+        let line = cmd.to_string();
         assert!(
             line.ends_with(
                 "-p flui-runtime --example fuzz_agent_wire -- /tmp/crash-0a1b -timeout=20 \

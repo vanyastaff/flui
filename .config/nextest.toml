@@ -174,9 +174,6 @@ system-clipboard = { max-threads = 1 }
 # flui-native's Win32 and AppKit window tests share one desktop's activation
 # (and AppKit's Spaces; see `desktop-foreground` below).
 desktop-foreground = { max-threads = 1 }
-# xtask's binary test spawns the built `cargo xtask` binary, which runs
-# `cargo metadata`; one at a time keeps it off the other tests' timing.
-xtask-binary = { max-threads = 1 }
 # flui-native's X11 window tests share the one X server `xvfb-run` starts for
 # the run (see `x11-server` below).
 x11-server = { max-threads = 1 }
@@ -254,9 +251,3 @@ test-group = 'x11-server'
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/^drag::linux::x11::tests::/)'
 test-group = 'xdnd-selection'
-
-# `cargo xtask` itself, spawned as a binary (see `xtask-binary`).
-[[profile.default.overrides]]
-filter = 'binary_id(xtask::binary)'
-slow-timeout = { period = "60s", terminate-after = 3 }
-test-group = 'xtask-binary'

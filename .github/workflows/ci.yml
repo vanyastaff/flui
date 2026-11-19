@@ -1632,13 +1632,15 @@ jobs:
           exit "$status"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # cross-typecheck — source-derived native package selection, including
-  # each selected package's tests, examples and benches. Clippy does not
-  # execute native targets, but C build scripts still need target headers.
-  # Linux uses MSVC cross tools and the bundled NDK. Both Apple targets use
-  # genuine Xcode SDKs, including os/log.h for optional macOS logging.
-  # Runtime and GPU validation remain local; a green leg proves compilation
-  # under the enabled features, not native runtime behavior.
+  # cross-typecheck — clippy over the whole workspace for each shipped native
+  # triple, with its tests, examples and benches: once with default features,
+  # as the `clippy` job runs on Linux, then with every feature, which reaches
+  # the `testing` code and the targets behind `required-features`. Clippy does
+  # not execute native targets, but C build scripts still need target headers.
+  # Linux uses MSVC cross tools (cargo-xwin) and the bundled NDK. Both Apple
+  # targets use genuine Xcode SDKs, including os/log.h for optional macOS
+  # logging. Runtime and GPU validation remain local; a green leg proves
+  # compilation under the enabled features, not native runtime behavior.
   # ─────────────────────────────────────────────────────────────────────────
   cross-typecheck:
     name: cross-typecheck (${{ matrix.target }})
@@ -1649,15 +1651,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `clippy` is the cargo subcommand: cargo-xwin supplies the MSVC SDK
+        # headers stacker's C shim includes, even without linking.
         include:
           - target: x86_64-pc-windows-msvc
             os: ubuntu-26.04
+            clippy: xwin clippy
           - target: aarch64-apple-darwin
             os: macos-26
+            clippy: clippy
           - target: aarch64-linux-android
             os: ubuntu-26.04
+            clippy: clippy
+          # The device triple, not `-sim`: the two differ in the slice, not
+          # in the API surface a lint sees.
           - target: aarch64-apple-ios
             os: macos-26
+            clippy: clippy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1674,17 +1684,6 @@ jobs:
         with:
           packages: clang llvm
           commands: clang clang-cl llvm-ar llvm-lib
-
-      # The driver build the checks job saves; restored before the NDK step,
-      # whose CC_/AR_ variables would change the key. Without it each Linux
-      # leg built the driver from scratch (1.5-3 min).
-      - name: Rust cache (xtask)
-        if: runner.os == 'Linux'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
 
       - name: Configure bundled Android NDK
         if: matrix.target == 'aarch64-linux-android'
@@ -1716,9 +1715,12 @@ jobs:
           path: ${{ runner.temp }}/cargo-xwin
           key: cargo-xwin-0.23.1-${{ runner.os }}
 
-      - name: Lint source-derived native targets
-        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
+      - name: cargo clippy for the target
+        run: |
+          read -ra clippy <<< "$CLIPPY"
+          cargo "${clippy[@]}" --workspace --all-targets --locked --target "$NATIVE_TARGET" -- -D warnings
         env:
+          CLIPPY: ${{ matrix.clippy }}
           NATIVE_TARGET: ${{ matrix.target }}
           XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
@@ -1729,9 +1731,12 @@ jobs:
           path: ${{ runner.temp }}/cargo-xwin
           key: ${{ steps.xwin-cache.outputs.cache-primary-key }}
 
-      - name: Lint optional native features
-        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
+      - name: cargo clippy for the target, every feature
+        run: |
+          read -ra clippy <<< "$CLIPPY"
+          cargo "${clippy[@]}" --workspace --all-targets --all-features --locked --target "$NATIVE_TARGET" -- -D warnings
         env:
+          CLIPPY: ${{ matrix.clippy }}
           NATIVE_TARGET: ${{ matrix.target }}
           XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
