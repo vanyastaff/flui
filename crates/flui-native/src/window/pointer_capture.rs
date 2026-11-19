@@ -343,12 +343,21 @@ mod tests {
     }
 
     /// The focus leaving ends the capture and what was wanted: an unanswered
-    /// request is forgotten, and a late grant is released.
+    /// request is forgotten (the system may drop it without an answer, and
+    /// the next ask is made all the same), and a late grant is released.
     fn the_focus_leaving_ends_the_capture() {
         let mut owner = CaptureOwner::default();
         owner.request(W1);
         owner.answered(true);
         assert_eq!(owner.focus_lost().changed, [Some((W1, false)), None]);
+        owner.request(W1);
+        owner.focus_lost();
+        assert_eq!(
+            owner.request(W1).call,
+            Some(CaptureCall::Request(W1)),
+            "a request the focus loss dropped does not block the next"
+        );
+        owner.focus_lost();
         owner.request(W2);
         owner.focus_lost();
         let late = owner.answered(true);
