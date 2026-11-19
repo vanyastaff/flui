@@ -35,7 +35,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run `case` on a worker thread: its panic is resumed here, and a case that
 /// does not finish within [`TIMEOUT`] fails as deadlocked.
-fn within(case: &'static str, body: impl FnOnce() + Send + 'static) {
+fn within(case: impl std::fmt::Display, body: impl FnOnce() + Send + 'static) {
     let (done, finished) = channel();
     let worker = std::thread::spawn(move || {
         body();
@@ -877,78 +877,82 @@ mod win32 {
     /// quits from inside its call, inside the window procedure that called
     /// it. A Win32 window never releases its surface, and the quit is a
     /// posted `WM_QUIT` the pump consumes.
+    ///
+    /// Each row has a deadlock budget of its own and names its method. A
+    /// platform's first window activates TSF, which on a desktop no input
+    /// reaches (the one nextest starts each test on) takes about two seconds
+    /// to answer: the rows' opens together outlast one budget with nothing
+    /// deadlocked.
     fn handler_methods_reenter() {
-        within("Win32 window handler", || {
-            let rows: [(Method, Box<Trigger>); 5] = [
-                (
-                    Method::Input,
-                    Box::new(|window, reentered| {
-                        let hwnd = crate::win32_handle(window.as_ref());
-                        // SAFETY: the window is alive (the trigger runs before
-                        // anything closes it) and owned by this thread, which
-                        // opened it, so the send runs its window procedure
-                        // here; the message carries plain integers, a primary
-                        // press at client (10, 10).
-                        unsafe {
-                            SendMessageW(
-                                hwnd,
-                                WM_LBUTTONDOWN,
-                                Some(WPARAM(0x0001)),
-                                Some(LPARAM((0x000a << 16) | 0x000a)),
-                            );
-                        }
-                        pump_until(reentered)
-                    }),
-                ),
-                (
-                    Method::StateChanged,
-                    Box::new(|window, reentered| {
-                        window
-                            .admit_and_apply(WindowCommand::SetSize(
-                                flui_platform::WindowExtent::try_new(
-                                    flui_foundation::geometry::Size::new(320.0, 200.0),
-                                )
-                                .expect("a finite extent"),
-                            ))
-                            .expect("a resize");
-                        pump_until(reentered)
-                    }),
-                ),
-                (
-                    Method::FrameRequested,
-                    Box::new(|window, reentered| {
-                        window.request_redraw();
-                        pump_until(reentered)
-                    }),
-                ),
-                (
-                    Method::CloseRequested,
-                    Box::new(|window, reentered| {
-                        let hwnd = crate::win32_handle(window.as_ref());
-                        // SAFETY: the window is alive and owned by this thread,
-                        // whose pump delivers the posted message; `WM_CLOSE`
-                        // carries no pointers.
-                        unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
-                            .expect("a posted close");
-                        pump_until(reentered)
-                    }),
-                ),
-                (
-                    Method::Closed,
-                    Box::new(|window, reentered| {
-                        window.close_now();
-                        pump_until(reentered)
-                    }),
-                ),
-            ];
-            // A quit stops the platform taking windows: each method gets its own.
-            for (method, trigger) in &rows {
-                a_handler_method_reenters(&platform(), None, hidden, *method, trigger);
-            }
+        let methods = [
+            Method::Input,
+            Method::StateChanged,
+            Method::FrameRequested,
+            Method::CloseRequested,
+            Method::Closed,
+        ];
+        // A quit stops the platform taking windows: each method gets its own.
+        for method in methods {
+            within(format!("Win32 window handler, {method:?}"), move || {
+                a_handler_method_reenters(&platform(), None, hidden, method, &*trigger(method));
+            });
+        }
+        within("Win32 window handler, dropped at close", || {
             a_handler_dropped_at_close_reaches_the_platform(&platform(), hidden, &|done| {
                 pump_until(done)
             });
         });
+    }
+
+    /// Makes a Win32 window call `method`, then pumps until it ran.
+    fn trigger(method: Method) -> Box<Trigger> {
+        match method {
+            Method::Input => Box::new(|window, reentered| {
+                let hwnd = crate::win32_handle(window.as_ref());
+                // SAFETY: the window is alive (the trigger runs before
+                // anything closes it) and owned by this thread, which opened
+                // it, so the send runs its window procedure here; the message
+                // carries plain integers, a primary press at client (10, 10).
+                unsafe {
+                    SendMessageW(
+                        hwnd,
+                        WM_LBUTTONDOWN,
+                        Some(WPARAM(0x0001)),
+                        Some(LPARAM((0x000a << 16) | 0x000a)),
+                    );
+                }
+                pump_until(reentered)
+            }),
+            Method::StateChanged => Box::new(|window, reentered| {
+                window
+                    .admit_and_apply(WindowCommand::SetSize(
+                        flui_platform::WindowExtent::try_new(flui_foundation::geometry::Size::new(
+                            320.0, 200.0,
+                        ))
+                        .expect("a finite extent"),
+                    ))
+                    .expect("a resize");
+                pump_until(reentered)
+            }),
+            Method::FrameRequested => Box::new(|window, reentered| {
+                window.request_redraw();
+                pump_until(reentered)
+            }),
+            Method::CloseRequested => Box::new(|window, reentered| {
+                let hwnd = crate::win32_handle(window.as_ref());
+                // SAFETY: the window is alive and owned by this thread, whose
+                // pump delivers the posted message; `WM_CLOSE` carries no
+                // pointers.
+                unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+                    .expect("a posted close");
+                pump_until(reentered)
+            }),
+            Method::Closed => Box::new(|window, reentered| {
+                window.close_now();
+                pump_until(reentered)
+            }),
+            Method::SurfaceChanged => panic!("a Win32 window never releases its surface"),
+        }
     }
 
     /// A `WM_CLOSE` sent from inside the handler's `input`, inside the window
