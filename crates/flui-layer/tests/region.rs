@@ -58,6 +58,33 @@ pub(crate) fn a_ninth_rect_merges_the_cheapest_pair() {
     }
 }
 
+/// Two rects that share a whole side tile their box, which holds no pixel
+/// more, so they merge; rects that only touch along part of a side or at a
+/// corner stay apart.
+pub(crate) fn rects_that_share_a_side_merge() {
+    let mut region = Region::new(rect(0, 0, 10, 10));
+    region.insert(rect(10, 0, 20, 10));
+    assert_eq!(
+        region.rects().iter().map(|r| ltrb(*r)).collect::<Vec<_>>(),
+        [(0, 0, 20, 10)],
+        "side by side, one rect"
+    );
+    region.insert(rect(0, 10, 20, 15));
+    assert_eq!(
+        region.rects().iter().map(|r| ltrb(*r)).collect::<Vec<_>>(),
+        [(0, 0, 20, 15)],
+        "stacked on the merged rect, one rect again"
+    );
+    region.insert(rect(0, 15, 10, 25));
+    region.insert(rect(20, 25, 30, 35));
+    assert_eq!(
+        region.rects().len(),
+        3,
+        "part of a side and a corner keep their rects: {:?}",
+        region.rects()
+    );
+}
+
 pub(crate) fn merged_rects_stay_pairwise_disjoint() {
     // A rect overlapping two of the squares merges with both, and the box it
     // grows into reaches a third, which merges too.

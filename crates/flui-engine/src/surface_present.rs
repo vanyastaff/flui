@@ -439,7 +439,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         render_view: &wgpu::TextureView,
         render_texture: &wgpu::Texture,
         _intermediate_active: bool,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {

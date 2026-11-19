@@ -343,6 +343,9 @@ mod recording_budget;
 /// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
 /// under the same transform and ambient state (ADR-0304 §9).
 mod recording_cache;
+/// Whether a partial frame redraws a region rect by rect or under its
+/// bounding box, by what each is predicted to cost (ADR-0304 §9).
+mod region_cost;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`
 /// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
 pub(crate) mod render_target;
