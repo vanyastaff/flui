@@ -402,20 +402,22 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
 }
 
 // ============================================================================
-// DefaultTextStyle (text.dart:55-136, consumed by Text.build :716-765)
+// Directionality
 // ============================================================================
 
 /// A run with no direction of its own reads the ambient `Directionality`: in RTL
 /// its paragraph is right-to-left and start-aligned glyphs sit at the right
-/// edge, and flipping the ambient direction re-lays the same paragraph. An
-/// explicit direction wins over the ambient one.
+/// edge, flipping the ambient direction re-lays the same paragraph, and with no
+/// `Directionality` above it the run is left-to-right. A linked run and a run
+/// in a selection area follow it too. An explicit direction wins over the
+/// ambient one and takes no dependency on it.
 pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
     use crate::common::tight;
     use flui_foundation::TextDirection;
     use flui_objects::RenderParagraph;
     use flui_painting::typography::TextSpan;
     use flui_view::{BoxedView, ViewExt};
-    use flui_widgets::{Directionality, RichText};
+    use flui_widgets::{Directionality, RichText, SelectionArea};
 
     // The paragraph's direction and the left edge of its glyphs.
     let read = |laid: &crate::common::LaidOut| {
@@ -428,6 +430,7 @@ pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
                 .and_then(|node| node.render_object().downcast_ref::<RenderParagraph>())
                 .expect("a mounted paragraph");
             let glyphs = render.painter().get_boxes_for_selection(0, 3);
+            assert!(!glyphs.is_empty(), "the run has glyphs");
             let left = glyphs
                 .iter()
                 .map(|text_box| text_box.rect.left())
@@ -440,7 +443,29 @@ pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
     for (name, view) in [
         ("Text", Text::new("abc").boxed()),
         ("RichText", RichText::new(TextSpan::new("abc")).boxed()),
+        (
+            "a linked RichText",
+            RichText::new(TextSpan::new("abc").with_link("app://abc"))
+                .on_link(|_ctx, _link| {})
+                .boxed(),
+        ),
+        (
+            "Text in a SelectionArea",
+            SelectionArea::new(Text::new("abc")).boxed(),
+        ),
     ] {
+        let alone = lay_out(view.clone(), tight(400.0, 50.0));
+        let (direction, left) = read(&alone);
+        assert_eq!(
+            direction,
+            Some(TextDirection::Ltr),
+            "{name}: left-to-right with no Directionality above it"
+        );
+        assert!(
+            left < 200.0,
+            "{name}: start-aligned glyphs at the left edge, got {left}"
+        );
+
         let mut laid = lay_out(under(TextDirection::Rtl, view.clone()), tight(400.0, 50.0));
         let paragraph = laid.find_by_render_type("RenderParagraph");
         let (direction, left) = read(&laid);
@@ -472,26 +497,41 @@ pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
         );
     }
 
-    for (name, view) in [
+    // A plain run's paragraph is the only reader of the ambient direction, so
+    // the count of its dependents tells whether the run took the dependency.
+    for (name, view, dependents) in [
+        ("Text", Text::new("abc").boxed(), 1),
         (
-            "Text",
+            "Text with a direction",
             Text::new("abc").direction(TextDirection::Ltr).boxed(),
+            0,
         ),
         (
-            "RichText",
+            "RichText with a direction",
             RichText::new(TextSpan::new("abc"))
                 .direction(TextDirection::Ltr)
                 .boxed(),
+            0,
         ),
     ] {
-        let laid = lay_out(under(TextDirection::Rtl, view), tight(400.0, 50.0));
+        let mut laid = lay_out(under(TextDirection::Rtl, view), tight(400.0, 50.0));
+        let expected = if dependents == 0 {
+            TextDirection::Ltr
+        } else {
+            TextDirection::Rtl
+        };
+        assert_eq!(read(&laid).0, Some(expected), "{name}");
         assert_eq!(
-            read(&laid).0,
-            Some(TextDirection::Ltr),
-            "{name}: an explicit direction wins over the ambient one"
+            laid.inherited_dependent_count::<Directionality>(),
+            dependents,
+            "{name}: a named direction takes no dependency on the ambient one"
         );
     }
 }
+
+// ============================================================================
+// DefaultTextStyle (text.dart:55-136, consumed by Text.build :716-765)
+// ============================================================================
 
 /// An enclosing `DefaultTextStyle` styles a bare `Text` run: the ambient
 /// `font_size` shapes the glyphs, so the box grows with it (`text.dart:720`).
