@@ -147,6 +147,8 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(result.markdown, /^# S/)
   assert.match(result.markdown, /x\.rs:1 debt/)
   assert.deepEqual(result.gaps, [])
+  // A clean run tells neither the second round nor the judge of failures.
+  for (const label of ['second-round', 'judge']) assert.doesNotMatch(prompts[label], /Agents that returned nothing/, label)
 }
 
 // 3. Each attack keeps one answer: its first concession, which needs no reason, else its first
@@ -154,7 +156,7 @@ const noAgent = () => assert.fail('no agent may run')
 //    a quoted empty string) is not kept. A conceded attack stays open and reaches the judge.
 {
   let own = []
-  const { result } = await run({ topic: 'T', stances }, happy({
+  const { result, prompts: misnumbered } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
       own = [...p.matchAll(/"id": (\d+)/g)].map((m) => Number(m[1]))
       const foreign = [1, 2, 3, 4, 5, 6, 7, 8, 9].find((id) => !own.includes(id))
@@ -179,6 +181,8 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(result.open.filter((x) => x.stance === 'a').map((x) => [x.id, x.why]), [[own[1], 'unanswered'], [own[2], 'unanswered'], [own[0], 'conceded']])
   assert.ok(result.gaps.includes('revision of a: 2 answers named no attack on this design'))
   assert.ok(result.gaps.includes('revision of a: 3 answers not kept (each attack keeps its first concession, else its first answer that says how)'))
+  // An author's own misnumbered or empty answers are its fault, not an agent failure the judge excuses.
+  for (const label of ['second-round', 'judge']) assert.doesNotMatch(misnumbered[label], /Agents that returned nothing/, label)
   // In the other order the concession holds too, and the first of two concessions is kept.
   const { result: reversed } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -238,7 +242,7 @@ const noAgent = () => assert.fail('no agent may run')
 //    researcher is a named gap; a refused fable judge falls to opus and says so once opus has
 //    judged; no judge at all returns the material, not an empty verdict.
 {
-  const { result, calls, prompts } = await run({ topic: 'T', stances }, happy({ 'revise:a': null, 'attack:c': null, 'research:failures': null, judge: null, 'judge:opus': verdict }))
+  const { result, calls, prompts } = await run({ topic: 'T', stances }, happy({ 'revise:a': null, 'attack:c': null, 'research:failures': null, judge: null, 'judge:opus': verdict, 'propose:b': { ...design('b'), debt_removed: Array.from({ length: 13 }, (_, i) => `d${i}`) } }))
   const a = result.proposals.find((p) => p.stance === 'a')
   assert.equal(a.design.title, 'a')
   assert.equal(a.unanswered.length, 2)
@@ -247,7 +251,9 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(result.markdown, /- #\d+ on a by [a-z-]+, revision failed: /)
   for (const label of ['second-round', 'judge:opus']) {
     assert.match(prompts[label].split('### a: a')[1].split('### b:')[0], /Its revision failed to run/, label)
-    assert.match(prompts[label], /Gaps in this run, agent failures rather than faults of any design:\n[\s\S]*- revision of a: no result/, label)
+    assert.match(prompts[label], /Agents that returned nothing in this run, failures rather than faults of any design:\n[\s\S]*- revision of a: no result/, label)
+    // A design's own list past its bound is a gap, not an agent failure.
+    assert.doesNotMatch(prompts[label].split('Agents that returned nothing')[1], /debt items past the bound/, label)
   }
   assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
   assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries)'))
@@ -259,6 +265,9 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(result.markdown, /Judged on opus/)
   const { result: none } = await run({ topic: 'T', stances }, happy({ judge: null, 'judge:opus': () => { throw new Error('budget spent') } }))
   assert.match(none.error, /no judge \(budget spent\)/)
+  // A failed agent's error text is cut before it reaches a gap and the later prompts.
+  const { result: long } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw new Error('x'.repeat(5000)) } }))
+  assert.equal(long.gaps.find((g) => g.startsWith('research prior-art: ')).length, 'research prior-art: '.length + 300)
   assert.ok(none.gaps.some((g) => g.startsWith('no judge: fable returned no result')))
   assert.ok(!none.gaps.some((g) => g.startsWith('judged on opus')))
   assert.equal(none.proposals.length, 3)

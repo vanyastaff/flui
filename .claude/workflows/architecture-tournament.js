@@ -24,6 +24,10 @@ export const meta = {
 //             directory)
 const opts = args || {}
 const gaps = []
+// The gaps that are agents which returned nothing, kept apart from the gaps a design's own output
+// causes (a misnumbered answer, a list past its bound), so a later prompt can excuse only these.
+const failed = []
+const agentFailed = (line) => { gaps.push(line); failed.push(line) }
 if (typeof opts.topic !== 'string' || !opts.topic.trim()) {
   return { error: 'a topic is required: the problem, its measured facts and the target' }
 }
@@ -111,7 +115,8 @@ async function attempt(prompt, options) {
     const value = await agent(prompt, options)
     return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
-    return { error: String(e && e.message ? e.message : e) }
+    // An error's text reaches later prompts, so it is cut to a line's worth.
+    return { error: String(e && e.message ? e.message : e).slice(0, 300) }
   }
 }
 
@@ -154,7 +159,7 @@ const research = await parallel(RESEARCH.map((r) => async () => {
   const got = await attempt(`${brief}\n\nYour research task: ${r.task}\n\nReturn at most ${MAX_FACTS} facts with their evidence, and a summary a designer can act on.`, {
     phase: 'Research', label: `research:${r.key}`, schema: RESEARCH_SCHEMA, model: 'sonnet', effort: 'high',
   })
-  if (got.error) gaps.push(`research ${r.key}: ${got.error}`)
+  if (got.error) agentFailed(`research ${r.key}: ${got.error}`)
   return got.error ? null : { key: r.key, summary: got.value.summary, facts: got.value.facts.slice(0, MAX_FACTS), dropped: Math.max(0, got.value.facts.length - MAX_FACTS) }
 }))
 const found = research.filter(Boolean)
@@ -189,7 +194,7 @@ const proposals = (await parallel(stances.map((s) => async () => {
   const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou design from one school: ${s.focus}\n\nPropose the best architecture you can for this problem from that school, aiming higher than the stated target where the numbers allow. Be concrete: Rust shapes, the hot path, the owner of each piece of state, the predicted numbers with their arithmetic, the migration and what it deletes. Other designers will try to tear your design apart; leave them nothing easy.`, {
     phase: 'Propose', label: `propose:${s.key}`, schema: DESIGN_SCHEMA, model: 'opus', effort: 'high',
   })
-  if (got.error) gaps.push(`proposal ${s.key}: ${got.error}`)
+  if (got.error) agentFailed(`proposal ${s.key}: ${got.error}`)
   return got.error ? null : { stance: s.key, design: boundDesign(`proposal ${s.key}`, got.value) }
 }))).filter(Boolean)
 if (proposals.length < 2) return { error: `fewer than two proposals returned (${gaps.join('; ')})`, gaps, research: found, proposals }
@@ -242,7 +247,7 @@ const attackRuns = (await parallel(attackers.map((a) => async () => {
     phase: 'Tear apart', label: `attack:${a.key}`, schema: attackSchema(targets.map((p) => p.stance)), model: 'opus', effort: 'high',
   })
   if (got.error) {
-    gaps.push(`attacks by ${a.key}: ${got.error}`)
+    agentFailed(`attacks by ${a.key}: ${got.error}`)
     return null
   }
   return { by: a.key, attacks: takeAttacks(`attacks by ${a.key}`, got.value.attacks, targets.map((p) => p.stance)) }
@@ -279,7 +284,7 @@ const revised = await parallel(proposals.map((p) => async () => {
     phase: 'Revise', label: `revise:${p.stance}`, schema: REVISION_SCHEMA, model: 'opus', effort: 'high',
   })
   if (got.error) {
-    gaps.push(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
+    agentFailed(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
     return { stance: p.stance, design: p.design, answers: [], unanswered: against, failed: true }
   }
   // Each attack keeps one answer: its first concession, which needs no reason and stays open whatever
@@ -306,15 +311,15 @@ const open = [...unanswered, ...conceded.map((x) => ({ ...x, why: 'conceded' }))
 const showRevised = (r) => r.failed
   ? `${show(r)}\n(Its revision failed to run: this is its first design, and its attacks went unanswered because of that failure, not by its author.)`
   : `${show(r)}\nAnswers, each with the attack it answers (JSON):\n${JSON.stringify(r.answers, null, 1)}`
-// Agent failures so far, so a reader does not take a missing answer or a missing round of attacks for
-// a fault of a design.
-const failures = () => (gaps.length ? `\n\nGaps in this run, agent failures rather than faults of any design:\n${gaps.map((x) => `- ${x}`).join('\n')}` : '')
+// The agents that returned nothing so far, so a reader does not take a missing revision or a missing
+// round of attacks for a fault of a design; an author's own misnumbered or empty answers are not here.
+const failures = () => (failed.length ? `\n\nAgents that returned nothing in this run, failures rather than faults of any design:\n${failed.map((x) => `- ${x}`).join('\n')}` : '')
 
 // A second round on the revisions: a fix is where the next defect usually is.
 const second = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" or "refuted" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.${failures()}\n\n${revised.map(showRevised).join('\n\n')}`, {
   phase: 'Revise', label: 'second-round', schema: attackSchema(proposed), model: 'opus', effort: 'high',
 })
-if (second.error) gaps.push(`second round: ${second.error}`)
+if (second.error) agentFailed(`second round: ${second.error}`)
 const secondAttacks = second.error ? [] : takeAttacks('second round', second.value.attacks, proposed)
 
 const verdictSchema = {
