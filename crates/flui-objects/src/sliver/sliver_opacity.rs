@@ -190,6 +190,10 @@ impl RenderSliverOpacity {
 
     /// Sets whether the child's semantics are published at opacity `0.0`;
     /// a change that alters what is published republishes semantics.
+    ///
+    /// The same visit gates the window's input regions, which reach the window
+    /// with a painted frame. A sliver that still paints at `0.0` (its layer is
+    /// forced) therefore also repaints, so the regions under it are restaged.
     pub fn set_always_include_semantics(
         &mut self,
         value: bool,
@@ -202,7 +206,12 @@ impl RenderSliverOpacity {
         if old_includes_semantics == self.includes_child_semantics() {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        flui_rendering::RenderUpdateImpact::SEMANTICS
+        if <Self as RenderSliver>::skip_paint(self) {
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else {
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+                | flui_rendering::RenderUpdateImpact::PAINT
+        }
     }
 
     /// Whether the child's semantics are visited: at a positive opacity, or

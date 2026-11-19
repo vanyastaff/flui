@@ -4246,16 +4246,67 @@ fn harness_animated_opacity_semantics_follow_accepted_visibility() {
     }
 }
 
+/// Each static opacity setter reports what its change needs: the flag
+/// republishes semantics only when it changes what is visited, and repaints
+/// too when the node still paints at alpha 0 (a forced layer), because the
+/// same visit gates the input regions a painted frame restages.
+fn harness_static_opacity_setters_report_their_exact_impact() {
+    use flui_rendering::RenderUpdateImpact as Impact;
+    // (forced layer, alpha, flag before, flag after, impact of the flag change)
+    let flag_cases = [
+        (false, 0.0, false, true, Impact::SEMANTICS),
+        (false, 0.0, true, false, Impact::SEMANTICS),
+        (true, 0.0, false, true, Impact::SEMANTICS | Impact::PAINT),
+        (true, 0.0, true, false, Impact::SEMANTICS | Impact::PAINT),
+        (false, 0.5, false, true, Impact::NONE),
+        (true, 1.0, true, false, Impact::NONE),
+        (false, 0.0, true, true, Impact::NONE),
+    ];
+    for (force_layer, alpha, before, after, expected) in flag_cases {
+        let mut boxed = RenderOpacity::new(alpha);
+        let _ = boxed.set_always_needs_compositing(force_layer);
+        let _ = boxed.set_always_include_semantics(before);
+        let mut sliver = RenderSliverOpacity::new(alpha);
+        let _ = sliver.set_always_needs_compositing(force_layer);
+        let _ = sliver.set_always_include_semantics(before);
+        let case = format!("layer={force_layer}, alpha={alpha}, flag {before}->{after}");
+        assert_eq!(
+            boxed.set_always_include_semantics(after),
+            expected,
+            "box {case}"
+        );
+        assert_eq!(
+            sliver.set_always_include_semantics(after),
+            expected,
+            "sliver {case}"
+        );
+    }
+    // An opacity crossing zero republishes semantics only without the flag.
+    for always in [false, true] {
+        let mut boxed = RenderOpacity::new(0.0);
+        let _ = boxed.set_always_include_semantics(always);
+        let mut sliver = RenderSliverOpacity::new(0.0);
+        let _ = sliver.set_always_include_semantics(always);
+        assert_eq!(
+            boxed.set_opacity(1.0).needs_semantics_update(),
+            !always,
+            "box 0->1, flag={always}"
+        );
+        assert_eq!(
+            sliver.set_opacity(1.0).needs_semantics_update(),
+            !always,
+            "sliver 0->1, flag={always}"
+        );
+    }
+}
+
 fn harness_static_opacity_visibility_controls_semantics_and_actions() {
     use flui_rendering::semantics::{
         AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
     };
     let mut failures = Vec::new();
-    for (sliver, force_layer, always) in [false, true].into_iter().flat_map(|sliver| {
-        [(false, false), (true, false), (false, true), (true, true)]
-            .map(|(force_layer, always)| (sliver, force_layer, always))
-    }) {
-        {
+    for sliver in [false, true] {
+        for (force_layer, always) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut config = labelled("Static fade content");
             config.set_role(SemanticsRole::Button);
             config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
@@ -15097,6 +15148,10 @@ fn family_semantics() {
             (
                 "static_opacity_visibility_controls_semantics_and_actions",
                 harness_static_opacity_visibility_controls_semantics_and_actions,
+            ),
+            (
+                "static_opacity_setters_report_their_exact_impact",
+                harness_static_opacity_setters_report_their_exact_impact,
             ),
             (
                 "sliver_offstage_removes_hidden_semantics_and_stale_actions",

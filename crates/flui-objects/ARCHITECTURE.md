@@ -274,7 +274,12 @@ distinguishes callbacks from an outgoing controller from the new controller.
 ### Hidden layout retention does not imply accessibility retention
 
 Static box and sliver opacity omit child semantics at exactly zero opacity,
-including when a layer is forced. Nonzero opacity retains accessibility even
+including when a layer is forced, unless `always_include_semantics` is set,
+which keeps them at any opacity. The flag's setter republishes semantics only
+when the visit changes, and repaints too when the node still paints at zero
+(a forced layer), since the same visit gates the input regions a painted frame
+restages (`harness_static_opacity_setters_report_their_exact_impact`).
+Nonzero opacity retains accessibility even
 when raster alpha rounds toward zero. Box opacity retains its independent
 pointer hit-testing contract. `RenderSliverOffstage` excludes the whole
 hidden subtree while retaining child layout. The assembled-tree and stale
