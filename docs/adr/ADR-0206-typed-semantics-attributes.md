@@ -51,7 +51,9 @@ while Slint keeps its own model and confines AccessKit to a backend.
    (its documented precedence under a forced merge; `Mixed > On > Off` for `Toggled`).
 4. **One merge table.** Per group: union (relations, tags, and custom actions, which the
    contributor's follow and each keep their own handler), direction-aware concatenation (label,
-   description), first wins (other naming, traversal), conflict when both
+   description), first wins (other naming, traversal, and each standard action's handler: the
+   receiver's, else the first contributor's in tree order, after a contributor that blocks user
+   actions has dropped the blocked ones), conflict when both
    are present (role, except a control over content as [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md)
    decides; each state through `StateMerge`, non-empty value, range, collection, text,
    scroll, live, platform view). A conflict forms separate nodes; a forced merge

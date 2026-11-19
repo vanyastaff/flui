@@ -189,6 +189,10 @@ A scrollable's metrics (position, axis, extents) are one group: either side decl
 conflicts with the other declaring any, and a forced merge keeps the receiver's group whole or
 takes the contributor's whole. A node's place in a set merges per field ([Where a node sits in a
 set, a tree and a table](#where-a-node-sits-in-a-set-a-tree-and-a-table)).
+A standard action (tap, long press, increase, …) has one handler on a node, and a merge keeps
+the first: the receiver's own, else the first contributor's in tree order, so a merged node's
+tap runs the first descendant that handles it, never a later sibling. A contributor that blocks
+user actions drops the blocked ones before they can claim the action.
 A node offers any number of custom actions, each added with its label and
 its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
 in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
@@ -225,7 +229,8 @@ reader stop on the tile inside it.
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
 `custom_actions_run_their_own_handler_until_stale` in `owner.rs`;
-`merged_custom_actions_each_reach_their_own_handler` in `crates/flui-widgets/tests/semantics.rs`;
+`merged_custom_actions_each_reach_their_own_handler` and
+`a_merged_action_runs_the_first_handler_in_tree_order` in `crates/flui-widgets/tests/semantics.rs`;
 `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
 `packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
 `packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the

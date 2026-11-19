@@ -2343,6 +2343,57 @@ pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
     );
 }
 
+/// A `MergeSemantics` node's action runs the first handler in tree order: the
+/// merging node's own, else the first descendant's, never a later sibling's.
+pub(crate) fn a_merged_action_runs_the_first_handler_in_tree_order() {
+    use flui_widgets::Column;
+
+    let merged = |host: Semantics| MergeSemantics::new().child(host);
+
+    let tapper = |ran: &Rc<RefCell<Vec<&'static str>>>, name: &'static str| {
+        let ran = Rc::clone(ran);
+        Semantics::new()
+            .on_click(move |_ctx| ran.borrow_mut().push(name))
+            .child(SizedBox::new(40.0, 20.0))
+    };
+
+    // No handler of its own: the first descendant's wins.
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let (laid, tree, node_id) = pump_labelled(merged(
+        host().child(Column::new((tapper(&ran, "first"), tapper(&ran, "second")))),
+    ));
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("node was located a moment ago")
+            .supports_action(Action::Click),
+        "both taps merge into the one node. Tree was:\n{}",
+        tree.describe()
+    );
+    laid.invoke_semantics_action(request(Action::Click, node_id, None))
+        .expect("the merged click resolves");
+    assert_eq!(
+        *ran.borrow(),
+        ["first"],
+        "the first descendant owns the tap"
+    );
+
+    // A handler of its own: it keeps the tap over its descendant's.
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let own = Rc::clone(&ran);
+    let (laid, _tree, node_id) = pump_labelled(merged(
+        host()
+            .on_click(move |_ctx| own.borrow_mut().push("host"))
+            .child(tapper(&ran, "descendant")),
+    ));
+    laid.invoke_semantics_action(request(Action::Click, node_id, None))
+        .expect("the merged click resolves");
+    assert_eq!(
+        *ran.borrow(),
+        ["host"],
+        "the merging widget keeps its own tap"
+    );
+}
+
 /// A label names one action of a widget: a second `custom_action` with the
 /// same label replaces the first, so the platform is offered one "Delete"
 /// and a request for it runs the latest handler.
