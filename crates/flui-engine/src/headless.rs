@@ -780,7 +780,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         _view: &wgpu::TextureView,
         texture: &wgpu::Texture,
         _retained: bool,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
@@ -924,12 +924,6 @@ impl RetainedCapture {
     /// a region rect by rect.
     pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
         self.frame.apply_damage(damage);
-    }
-
-    /// Plans every later partial frame rect by rect, as production does not
-    /// yet.
-    pub(crate) fn plan_rect_by_rect(&mut self) {
-        self.frame.plan_rect_by_rect();
     }
 
     /// What the last frame's walk and recording did.

@@ -2453,3 +2453,46 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
     assert_eq!(host.device_health(), DeviceHealth::Healthy);
     assert_eq!(host.window_deadline(address()), None);
 }
+
+/// The GPU times the executor read back for a window's frames reach the
+/// runtime through the window's sink, under the epochs of the frames they
+/// timed, once a later frame of the window was rendered (ADR-0388).
+///
+/// Red-check: keep `FrameSink::take_gpu_times`'s default on `SlotFrame` and
+/// the sink hands back nothing.
+#[test]
+fn a_windows_sink_hands_back_the_gpu_times_of_its_frames() {
+    let (shared, slots, _wakes) = threaded_host();
+    let mut scene = TestScene::new(AT);
+    let (first, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert_eq!(settle_threaded(&shared, 1).len(), 1);
+    let slot = shared
+        .try_read(|host| {
+            host.placed
+                .as_ref()
+                .and_then(|placed| placed.slots.get(&address()))
+                .map(|slot| slot.slot)
+        })
+        .flatten()
+        .expect("the window holds a slot");
+    slots.time_frame(slot, first, std::time::Duration::from_micros(300));
+
+    scene.republish_child(AT, 3);
+    let (_, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert_eq!(settle_threaded(&shared, 1).len(), 1);
+
+    let mut frame = super::SlotFrame::new(shared.clone(), address(), SIZE);
+    let mut times = Vec::new();
+    flui_runtime::sink::FrameSink::take_gpu_times(&mut frame, &mut times);
+    assert_eq!(
+        times,
+        [flui_foundation::GpuFrameTime::new(
+            first,
+            std::time::Duration::from_micros(300)
+        )]
+    );
+    flui_runtime::sink::FrameSink::take_gpu_times(&mut frame, &mut times);
+    assert_eq!(times.len(), 1, "each time is handed back once");
+}
