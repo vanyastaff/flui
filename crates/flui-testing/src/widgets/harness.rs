@@ -106,6 +106,22 @@ pub fn mount_with_ime_on(root: impl View, platform: flui_platform::TargetPlatfor
     )
 }
 
+/// [`mount_with_ime_on`], with a host that answers `ui` for who draws the
+/// focused field's selection UI, as iOS's host answers
+/// [`SelectionUi::Platform`](flui_platform::text_store::SelectionUi::Platform).
+pub fn mount_with_selection_ui_on(
+    root: impl View,
+    platform: flui_platform::TargetPlatform,
+    ui: flui_platform::text_store::SelectionUi,
+) -> Harness {
+    mount_in(
+        root,
+        HeadlessWindow::new(SURFACE.0, SURFACE.1)
+            .with_text_store_host_drawing(ui)
+            .with_platform(platform),
+    )
+}
+
 /// [`mount`], with a window that offers a recording push-model text input:
 /// the UI runtime's presentation enables the IME and reports the
 /// candidate area ([`Harness::cursor_area_calls`],
@@ -367,13 +383,7 @@ impl Harness {
         self.store_host().calls()
     }
 
-    /// The window's input-method host, to answer as a platform host would
-    /// ([`crate::RecordingTextStoreHost::set_selection_ui`]).
-    ///
-    /// # Panics
-    ///
-    /// As [`Self::store_host_calls`].
-    pub fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
+    fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
         self.host
             .ui_runtime()
             .text_store_host()

@@ -236,6 +236,24 @@ pub trait TextStoreRead {
         point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError>;
+
+    /// Whether a press at `point` (window-root logical pixels) would land on
+    /// the field: the window's own hit test finds the field under the point,
+    /// not a control drawn over it. A platform that recognizes gestures over
+    /// the field itself (iOS's `UITextInteraction`) begins one only where
+    /// this holds, so a control over the field keeps its tap.
+    ///
+    /// The default is the field's bounds ([`Self::document_bounds`]): a
+    /// store with no tree of its own has nothing drawn over it. A store
+    /// that wraps another forwards it.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::NoLayout`] when the field is not laid out, or the
+    /// window's tree cannot be hit-tested now.
+    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
+        Ok(self.document_bounds()?.contains(&point))
+    }
 }
 
 /// The edits a platform makes under a read-write lock.

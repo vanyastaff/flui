@@ -1876,8 +1876,10 @@ impl ViewState<EditableText> for EditableTextState {
                 // resumed once the cursor-area loop below has started.
                 let mut failure = FirstPanic::new();
                 platform_selection.follow(Some(handle.selection_ui(token)));
-                if let Some(handles) = handles_for_platform.upgrade() {
-                    handles.set_platform_selection(platform_selection.is_active(), &mut failure);
+                if platform_selection.is_active()
+                    && let Some(handles) = handles_for_platform.upgrade()
+                {
+                    handles.platform_took_over(&mut failure);
                 }
 
                 if let Some(post_frame) = post_frame_handle_for_focus.clone() {
@@ -1903,9 +1905,6 @@ impl ViewState<EditableText> for EditableTextState {
                 // The field draws its own selection UI again once it no
                 // longer holds the input.
                 platform_selection.follow(None);
-                if let Some(handles) = handles_for_platform.upgrade() {
-                    handles.release_platform_selection();
-                }
                 // The composition is committed while the token still names
                 // this field's client, then the client detaches; the detach
                 // runs though the commit's owner code failed (ADR-0142
@@ -1972,6 +1971,7 @@ impl ViewState<EditableText> for EditableTextState {
             repaint: self.rebuild_notifier.clone(),
             commit: self.composition_commit(),
             post_frame: self.post_frame_handle.clone(),
+            platform_selection: Rc::clone(&self.platform_selection),
         });
         self.follow_handle_scope(ctx);
 

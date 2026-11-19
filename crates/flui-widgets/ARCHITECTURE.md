@@ -1304,12 +1304,19 @@ field's own selection UI. While the platform owns it, `EditableText` paints no c
 highlight, hides its menu, takes down the handles, magnifier and toolbar a touch of its own
 showed and shows none at the end of one under way, and builds no pointer handlers, long
 press, double tap or secondary tap; its listener stays opaque, so a touch on the field still
-reaches nothing behind it. It keeps painting its text and its composition's underline. The
-platform's edit menu reaches the field as `EditCommand`s through its store
+reaches nothing behind it. It keeps painting its text and its composition's underline. One
+value owns the state, the field's `PlatformSelection`: the build, the handles and the
+magnifier all read it, and losing the input gives the field its own gestures back. The
+platform begins its gestures only where the field's store says a press lands on the field
+(`TextStoreRead::is_hit_at`), which the store answers with the window's own hit test, the one
+a touch is dispatched by, so a control drawn over the field keeps its tap. The platform's
+edit menu reaches the field as `EditCommand`s through its store
 (`TextStore::perform_edit_command`), performed by the actions its chords invoke, under the
-same rules. The `text_editing` family pins this with
+same rules; Select picks the word at a collapsed caret and is not offered in an obscured
+field. The `text_editing` family pins this with
 `a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
 `the_fields_own_handles_go_when_the_platform_takes_the_selection_ui`,
+`a_control_over_the_field_keeps_its_press`,
 `the_platforms_edit_menu_reaches_the_field_through_its_store` and
 `an_obscured_field_offers_the_platform_no_copy_or_cut`.
 

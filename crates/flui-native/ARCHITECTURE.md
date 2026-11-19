@@ -490,9 +490,14 @@ trait depends on `flui-platform` instead.
   (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
   (`detach`). UIKit's store host is the one that answers
   `SelectionUi::Platform`: while it serves a field its responder puts a
-  `UITextInteraction` on the window's view, whose gestures begin only over
-  the field and on its selection's handles, and the edit menu's actions reach
-  the field as `EditCommand`s through its store. Where the text feature keeps a
+  `UITextInteraction` on the window's view, whose gestures begin only where a
+  press lands on the field by the window's hit test and on its selection's
+  handles; its rectangles and caret are cut to the field's box, a move of the
+  field makes it ask for them again (the input delegate's selection
+  will/did-change pair), and the edit menu's actions reach the field as
+  `EditCommand`s through its store, only the field the menu was offered over;
+  focus leaving the field reinstalls the interaction, which takes the menu
+  down. Where the text feature keeps a
   window's state itself the handle is a key to it: Android's input method
   keeps each window's field by `owner::android::ActivityWindowId`, and the
   Web's text input lives in the canvas window's owner-thread slot. On

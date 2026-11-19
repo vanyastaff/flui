@@ -29,7 +29,8 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
 use super::{
-    CompositionCommit, EditableText, source_offset_at_global, source_word_range_at_global,
+    CompositionCommit, EditableText, PlatformSelection, source_offset_at_global,
+    source_word_range_at_global,
 };
 #[cfg(doc)]
 use crate::DefaultSelectionControls;
@@ -228,6 +229,10 @@ pub(super) struct HandleParts {
     pub(super) repaint: ChangeNotifier,
     pub(super) commit: CompositionCommit,
     pub(super) post_frame: Option<flui_scheduler::PostFrameHandle>,
+    /// While the platform draws the field's selection UI, the handles, the
+    /// magnifier and the toolbar show nothing, a touch under way when the
+    /// platform took over included.
+    pub(super) platform_selection: Rc<PlatformSelection>,
 }
 
 /// A field's handles: which are shown, the links the field publishes its
@@ -281,10 +286,6 @@ pub(super) struct FieldHandles {
     menu: Rc<MenuHost>,
     /// Whether the finger on a handle has dragged it since it touched.
     touch_dragged: Cell<bool>,
-    /// The platform draws the field's selection UI: the handles, the
-    /// magnifier and the toolbar show nothing, a touch under way when the
-    /// platform took over included.
-    platform_selection: Cell<bool>,
 }
 
 impl FieldHandles {
@@ -316,7 +317,6 @@ impl FieldHandles {
             warned: Cell::new(false),
             menu: Rc::new(MenuHost::default()),
             touch_dragged: Cell::new(false),
-            platform_selection: Cell::new(false),
             magnifier: RefCell::new(None),
             magnifier_along: Cell::new(0.0),
             haptics: RefCell::new(None),
@@ -598,7 +598,7 @@ impl FieldHandles {
     /// `bare_caret`, for a toolbar the caller shows. Without an overlay
     /// there are none, which a debug build reports once.
     pub(super) fn show_for_touch(self: &Rc<Self>, bare_caret: bool, failure: &mut FirstPanic) {
-        if self.platform_selection.get() {
+        if self.platform_draws() {
             return;
         }
         let Some((selection, caret, revision)) = self.controller_state() else {
@@ -657,22 +657,21 @@ impl FieldHandles {
         Some(entry)
     }
 
-    /// The platform took the field's selection UI over (`active`), or gave
-    /// it back: what the field shows of its own goes, and none of it shows
-    /// while the platform holds it, at the end of a touch already under way
-    /// included.
-    pub(super) fn set_platform_selection(&self, active: bool, failure: &mut FirstPanic) {
-        self.platform_selection.set(active);
-        if active {
-            self.abandon(failure);
-            failure.contain(|| self.menu.close());
-        }
+    /// Whether the platform draws the field's selection UI now, as the
+    /// field's [`PlatformSelection`] says.
+    fn platform_draws(&self) -> bool {
+        self.parts
+            .borrow()
+            .as_ref()
+            .is_some_and(|parts| parts.platform_selection.is_active())
     }
 
-    /// The platform gave the selection UI back: the field shows its own
-    /// again from the next touch. Nothing is taken down.
-    pub(super) fn release_platform_selection(&self) {
-        self.platform_selection.set(false);
+    /// The platform took the field's selection UI over: what the field
+    /// shows of its own goes, and [`Self::platform_draws`] keeps any more
+    /// from showing while the platform holds it.
+    pub(super) fn platform_took_over(&self, failure: &mut FirstPanic) {
+        self.abandon(failure);
+        failure.contain(|| self.menu.close());
     }
 
     /// The field stopped taking touches here (it was disabled, given another
@@ -837,7 +836,7 @@ impl FieldHandles {
     /// moves, while the touch stays down; the field publishes its ends for
     /// it. Without a magnifier or an overlay it shows nothing.
     fn magnify_press(self: &Rc<Self>, side: HandleSide, global: Offset<f64>) {
-        if self.magnifier.borrow().is_none() || self.platform_selection.get() {
+        if self.magnifier.borrow().is_none() || self.platform_draws() {
             return;
         }
         let Some(overlay) = self.overlay.borrow().clone() else {

@@ -25,6 +25,8 @@ use super::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 struct Context {
     discards: Cell<usize>,
     invalidations: Cell<usize>,
+    /// How many times focus moved off the field the context served.
+    fields_left: Cell<usize>,
     on_discard: RefCell<Option<Box<dyn Fn()>>>,
     /// Each status the client told, in order.
     statuses: RefCell<Vec<Option<TextStoreStatus>>>,
@@ -66,6 +68,7 @@ impl Default for Context {
         Self {
             discards: Cell::new(0),
             invalidations: Cell::new(0),
+            fields_left: Cell::new(0),
             on_discard: RefCell::new(None),
             statuses: RefCell::new(Vec::new()),
             changes: RefCell::new(Vec::new()),
@@ -130,6 +133,10 @@ impl InputContext for Context {
         if let Some(answer) = answer {
             answer();
         }
+    }
+
+    fn field_left(&self) {
+        self.fields_left.set(self.fields_left.get() + 1);
     }
 }
 
@@ -784,16 +791,23 @@ fn uikit_replaces_selects_and_measures_the_field() {
         "the selection's one line, clamped to the document"
     );
     assert_eq!(
-        client.document_bounds(),
+        client.caret_rect(Utf16Offset::new(99)),
         Some(Bounds::new(
-            Point::new(0.0, 0.0),
-            Size::new(7.0 * advance, line)
-        ))
+            Point::new(7.0 * advance, 0.0),
+            Size::new(0.0, line)
+        )),
+        "the caret at the end, clamped to the document"
+    );
+    assert!(client.is_hit_at(Point::new(advance, line / 2.0)));
+    assert!(
+        !client.is_hit_at(Point::new(8.0 * advance, line / 2.0)),
+        "past the field's box"
     );
     client.focus_store(None);
     assert_eq!(client.document_len(), None, "no field has focus");
     assert_eq!(client.selection_rects(span(0, 3)), Vec::new());
-    assert_eq!(client.document_bounds(), None);
+    assert_eq!(client.caret_rect(Utf16Offset::ZERO), None);
+    assert!(!client.is_hit_at(Point::new(advance, line / 2.0)));
 }
 
 #[test]
@@ -1591,5 +1605,135 @@ fn uikit_edit_commands_reach_the_focused_field() {
         client.document_len(),
         None,
         "the queued focus move ran after it"
+    );
+}
+
+fn field_with_commands(text: &str) -> Rc<FieldWithCommands> {
+    Rc::new(FieldWithCommands {
+        inner: InMemoryTextStore::new(text),
+        enabled: vec![EditCommand::Paste, EditCommand::SelectAll],
+        performed: RefCell::new(Vec::new()),
+        on_perform: RefCell::new(None),
+    })
+}
+
+/// An edit menu UIKit offered over one field never edits the field focus
+/// moved to since: the command is refused there, and the context hears once
+/// that focus left the field the menu was shown over. A command UIKit never
+/// asked about is refused too.
+#[test]
+fn an_edit_command_reaches_only_the_field_it_was_offered_for() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let first = field_with_commands("one");
+    let second = field_with_commands("two");
+    client.focus_store(Some(Rc::clone(&first) as Rc<dyn TextStore>));
+    assert!(
+        !client.perform_edit_command(EditCommand::SelectAll),
+        "never offered"
+    );
+
+    assert!(client.edit_command_enabled(EditCommand::Paste));
+    client.focus_store(Some(Rc::clone(&second) as Rc<dyn TextStore>));
+    assert_eq!(context.fields_left.get(), 1, "focus left the first field");
+    assert!(
+        !client.perform_edit_command(EditCommand::Paste),
+        "offered over the first field"
+    );
+    assert!(first.performed.borrow().is_empty());
+    assert!(second.performed.borrow().is_empty());
+
+    assert!(client.edit_command_enabled(EditCommand::Paste));
+    assert!(client.perform_edit_command(EditCommand::Paste));
+    assert_eq!(*second.performed.borrow(), [EditCommand::Paste]);
+    client.focus_store(Some(Rc::clone(&second) as Rc<dyn TextStore>));
+    assert_eq!(
+        context.fields_left.get(),
+        1,
+        "the same field again is no move"
+    );
+}
+
+/// The reference store as a field that keeps the observer it was given when
+/// told to drop it, as a store with a publication under way when focus moved
+/// still reports through it.
+struct FieldKeepingItsObserver {
+    inner: Rc<InMemoryTextStore>,
+    kept: RefCell<Option<Rc<dyn TextStoreObserver>>>,
+}
+
+impl TextStore for FieldKeepingItsObserver {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        if let Some(observer) = &observer {
+            *self.kept.borrow_mut() = Some(Rc::clone(observer));
+        }
+        self.inner.set_observer(observer);
+    }
+}
+
+/// A layout change of the focused field asks the input method for its
+/// geometry once (on iOS, UIKit's text interaction asks for the caret and
+/// selection rectangles again); one a field focus moved off still reports
+/// asks nothing.
+#[test]
+fn a_layout_change_asks_for_the_geometry_of_the_focused_field_only() {
+    let kept = Rc::new(FieldKeepingItsObserver {
+        inner: InMemoryTextStore::new("one"),
+        kept: RefCell::new(None),
+    });
+    let (client, context) = serving(&kept);
+    let other = InMemoryTextStore::new("two");
+
+    let before = context.invalidations.get();
+    kept.inner.screen_moved();
+    assert_eq!(context.invalidations.get(), before + 1, "the focused field");
+
+    client.focus_store(Some(as_store(&other)));
+    let before = context.invalidations.get();
+    let changes = context.changes.borrow().len();
+    let observer = kept.kept.borrow().clone().expect("the field was observed");
+    observer.layout_changed();
+    observer.text_changed(flui_platform::text_store::TextChange {
+        start: Utf16Offset::ZERO,
+        old_end: Utf16Offset::ZERO,
+        new_end: Utf16Offset::ZERO,
+    });
+    assert_eq!(
+        context.invalidations.get(),
+        before,
+        "a field focus moved off"
+    );
+    assert_eq!(
+        context.changes.borrow().len(),
+        changes,
+        "nor is its edit the input method's"
+    );
+    other.screen_moved();
+    assert_eq!(
+        context.invalidations.get(),
+        before + 1,
+        "the field focus moved to"
     );
 }

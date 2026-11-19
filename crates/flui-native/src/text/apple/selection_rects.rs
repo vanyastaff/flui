@@ -69,16 +69,24 @@ impl SelectionRect {
 }
 
 /// The rectangles of `range`, an offset range inside `session`'s document,
-/// one per line in document order: one zero-wide rectangle, the caret, for
-/// an empty range, and none when the field has no layout for it or the store
-/// answers a rectangle that is not finite. An end that splits a surrogate
+/// one per line in document order, cut to the field's box
+/// ([`TextStoreRead::document_bounds`]): one zero-wide rectangle, the caret,
+/// for an empty range, and none when the field has no layout for it or the
+/// store answers a rectangle that is not finite. A line scrolled wholly out
+/// of the box has none, and a line the box cuts at the range's start or end
+/// no longer holds that end ([`clip_to`]). An end that splits a surrogate
 /// pair moves out to cover the whole scalar.
 pub(crate) fn selection_rects(
     session: &dyn TextStoreRead,
     range: Utf16Range,
 ) -> Vec<SelectionRect> {
-    match lines(session, range) {
-        Ok(rects) if rects.iter().all(|rect| is_finite(rect.bounds)) => rects,
+    let answer = lines(session, range).and_then(|rects| Ok((rects, session.document_bounds()?)));
+    match answer {
+        Ok((rects, visible))
+            if is_finite(visible) && rects.iter().all(|rect| is_finite(rect.bounds)) =>
+        {
+            clip_to(rects, visible)
+        }
         Ok(_) => {
             tracing::debug!("the field answered a selection rectangle that is not finite");
             Vec::new()
@@ -91,6 +99,49 @@ pub(crate) fn selection_rects(
             Vec::new()
         }
     }
+}
+
+/// `rects` cut to `visible`, the field's box. A rectangle the cut leaves
+/// nothing of goes (a caret, zero-wide, stays while it stands inside). A
+/// line whose edge at the range's start (its leading edge) or end (its
+/// trailing edge) the cut moved no longer holds that end: the end is
+/// scrolled out, and a handle there would stand at the box's edge instead
+/// of at the text.
+pub(crate) fn clip_to(rects: Vec<SelectionRect>, visible: Bounds<f64>) -> Vec<SelectionRect> {
+    rects
+        .into_iter()
+        .filter_map(|rect| {
+            let bounds = clip_bounds(rect.bounds, visible)?;
+            let (leading_cut, trailing_cut) = {
+                let left_cut = bounds.left() > rect.bounds.left();
+                let right_cut = bounds.right() < rect.bounds.right();
+                match rect.direction {
+                    TextDirection::Ltr => (left_cut, right_cut),
+                    TextDirection::Rtl => (right_cut, left_cut),
+                }
+            };
+            Some(SelectionRect {
+                bounds,
+                contains_start: rect.contains_start && !leading_cut,
+                contains_end: rect.contains_end && !trailing_cut,
+                ..rect
+            })
+        })
+        .collect()
+}
+
+/// What of `bounds` lies inside `visible`; `None` when nothing does. A
+/// zero-wide rectangle (a caret) is kept while it stands inside or on the
+/// box's edge.
+pub(crate) fn clip_bounds(bounds: Bounds<f64>, visible: Bounds<f64>) -> Option<Bounds<f64>> {
+    let left = bounds.left().max(visible.left());
+    let right = bounds.right().min(visible.right());
+    let top = bounds.top().max(visible.top());
+    let bottom = bounds.bottom().min(visible.bottom());
+    let caret = bounds.size.width <= 0.0;
+    let wide_enough = if caret { right >= left } else { right > left };
+    (wide_enough && bottom > top)
+        .then(|| Bounds::new(Point::new(left, top), Size::new(right - left, bottom - top)))
 }
 
 fn lines(
@@ -267,6 +318,8 @@ mod tests {
     struct LaidOutLines {
         text: String,
         lines: Vec<(usize, TextDirection)>,
+        /// The field's box: the part of the text it shows.
+        visible: Bounds<f64>,
     }
 
     impl LaidOutLines {
@@ -274,6 +327,16 @@ mod tests {
             Self {
                 text: text.to_owned(),
                 lines: lines.to_vec(),
+                visible: Bounds::new(Point::new(0.0, 0.0), Size::new(1000.0, 1000.0)),
+            }
+        }
+
+        /// This layout in a field whose box shows only `(x, y, width,
+        /// height)` of it: the text scrolled under the box.
+        fn shown_in(self, (x, y, width, height): (f64, f64, f64, f64)) -> Self {
+            Self {
+                visible: Bounds::new(Point::new(x, y), Size::new(width, height)),
+                ..self
             }
         }
 
@@ -364,7 +427,7 @@ mod tests {
         }
 
         fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
-            Err(TextStoreError::NoLayout)
+            Ok(self.visible)
         }
 
         fn index_at_point(
@@ -398,7 +461,7 @@ mod tests {
     #[test]
     fn a_range_gets_a_rectangle_for_each_line_it_crosses() {
         use TextDirection::{Ltr, Rtl};
-        let rows: [(&str, LaidOutLines, Utf16Range, Vec<SelectionRect>); 6] = [
+        let rows: [(&str, LaidOutLines, Utf16Range, Vec<SelectionRect>); 10] = [
             (
                 "one line",
                 LaidOutLines::new("hello world", &[(0, Ltr)]),
@@ -442,6 +505,38 @@ mod tests {
                 span(2, 5),
                 vec![rect((10.0, 0.0, 30.0), Ltr, true, true)],
             ),
+            (
+                "a whole line scrolled past both edges of the box holds neither end",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((30.0, 0.0, 50.0, LINE)),
+                span(0, 11),
+                vec![rect((30.0, 0.0, 50.0), Ltr, false, false)],
+            ),
+            (
+                "a right-to-left line cut at its start's right edge",
+                LaidOutLines::new("abc def", &[(0, Rtl)]).shown_in((0.0, 0.0, 85.0, LINE)),
+                span(1, 3),
+                vec![rect((WIDTH - 30.0, 0.0, 15.0), Rtl, false, true)],
+            ),
+            (
+                "the last line scrolled out below the box is dropped",
+                LaidOutLines::new("one two three", &[(0, Ltr), (4, Ltr), (8, Ltr)]).shown_in((
+                    0.0,
+                    0.0,
+                    400.0,
+                    2.0 * LINE,
+                )),
+                span(2, 10),
+                vec![
+                    rect((20.0, 0.0, 20.0), Ltr, true, false),
+                    rect((0.0, LINE, 40.0), Ltr, false, false),
+                ],
+            ),
+            (
+                "a caret scrolled out of the box is no rectangle",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((30.0, 0.0, 50.0, LINE)),
+                span(11, 11),
+                vec![],
+            ),
         ];
         for (case, layout, range, expected) in rows {
             assert_eq!(selection_rects(&layout, range), expected, "{case}");
@@ -452,7 +547,13 @@ mod tests {
     fn the_handles_stand_on_the_starts_leading_and_the_ends_trailing_edge() {
         use TextDirection::{Ltr, Rtl};
         let edge = |x: f64, y: f64| Bounds::new(Point::new(x, y), Size::new(0.0, LINE));
-        let rows: [(&str, LaidOutLines, Utf16Range, Vec<Bounds<f64>>); 3] = [
+        let rows: [(&str, LaidOutLines, Utf16Range, Vec<Bounds<f64>>); 4] = [
+            (
+                "a start scrolled out of the box has no handle",
+                LaidOutLines::new("hello world", &[(0, Ltr)]).shown_in((30.0, 0.0, 900.0, LINE)),
+                span(0, 11),
+                vec![edge(110.0, 0.0)],
+            ),
             (
                 "one left-to-right line",
                 LaidOutLines::new("hello world", &[(0, Ltr)]),

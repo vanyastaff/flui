@@ -5935,7 +5935,13 @@ GPU-память простаивающего или невидимого окн
   `TextStore::perform_edit_command`, исполняют действия поля:
   `uikit_edit_commands_reach_the_focused_field`,
   `the_platforms_edit_menu_reaches_the_field_through_its_store`,
-  `an_obscured_field_offers_the_platform_no_copy_or_cut` (красные без команды). Клаузы
+  `an_obscured_field_offers_the_platform_no_copy_or_cut` (красные без команды); `select:` —
+  `EditCommand::SelectWord`, Paste предлагается по `hasStrings`; команда доходит только до поля,
+  над которым меню предложено (`an_edit_command_reaches_only_the_field_it_was_offered_for`).
+  Прямоугольники и каретка обрезаны рамкой поля, сдвиг поля заставляет UIKit спросить их снова
+  (`a_layout_change_asks_for_the_geometry_of_the_focused_field_only`), жесты начинаются там,
+  где hit test окна находит поле (`TextStoreRead::is_hit_at`,
+  `a_control_over_the_field_keeps_its_press`). Клаузы
   составления CJK не различаются: хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
   CoreText по языку (`crates/flui-native/src/fonts/apple.rs`); квадраты вместо кана и кандзи
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,

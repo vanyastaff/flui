@@ -37,12 +37,12 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSSize as CGSize, NSString,
 };
 use objc2_ui_kit::{
-    NSWritingDirection, UIInteraction, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
-    UITextAutocapitalizationType, UITextAutocorrectionType, UITextContentTypeNewPassword,
-    UITextContentTypeOneTimeCode, UITextContentTypePassword, UITextContentTypeUsername,
-    UITextInput, UITextInputDelegate, UITextInputStringTokenizer, UITextInputTokenizer,
-    UITextInputTraits, UITextInteraction, UITextInteractionDelegate, UITextInteractionMode,
-    UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
+    NSWritingDirection, UIInteraction, UIKeyInput, UIKeyboardType, UIPasteboard, UIResponder,
+    UIReturnKeyType, UITextAutocapitalizationType, UITextAutocorrectionType,
+    UITextContentTypeNewPassword, UITextContentTypeOneTimeCode, UITextContentTypePassword,
+    UITextContentTypeUsername, UITextInput, UITextInputDelegate, UITextInputStringTokenizer,
+    UITextInputTokenizer, UITextInputTraits, UITextInteraction, UITextInteractionDelegate,
+    UITextInteractionMode, UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
     UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
@@ -233,19 +233,30 @@ define_class!(
             true
         }
 
-        /// The edit menu's Cut, Copy, Paste and Select All, offered when the
-        /// focused field would perform them; any other action is UIKit's to
-        /// answer.
+        /// The edit menu's Cut, Copy, Paste, Select and Select All, offered
+        /// when the focused field would perform them, Paste only while the
+        /// pasteboard holds text (`hasStrings`, which reads no content and so
+        /// shows no paste prompt); any other action is UIKit's to answer.
         #[unsafe(method(canPerformAction:withSender:))]
         fn can_perform_action(&self, action: Sel, sender: Option<&AnyObject>) -> bool {
             os_entry("FluiTextInputView canPerformAction:withSender:", (), AfterPanic::Answer(|()| false), || {
                 match edit_command(action) {
+                    Some(EditCommand::Paste) => {
+                        self.client().edit_command_enabled(EditCommand::Paste) && pasteboard_has_text()
+                    }
                     Some(command) => self.client().edit_command_enabled(command),
                     // SAFETY: UIResponder's `canPerformAction:withSender:`,
                     // with the selector and sender UIKit passed.
                     None => unsafe { msg_send![super(self), canPerformAction: action, withSender: sender] },
                 }
             })
+        }
+
+        #[unsafe(method(select:))]
+        fn select(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView select:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::SelectWord);
+            });
         }
 
         #[unsafe(method(cut:))]
@@ -613,11 +624,14 @@ define_class!(
             })
         }
 
+        /// The caret, cut to the field's box; an empty rectangle, which
+        /// UIKit draws nothing for, while it is scrolled out of the box.
         #[unsafe(method(caretRectForPosition:))]
         fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
             os_entry("FluiTextInputView caretRectForPosition:", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
-                let at = offset(position).map(|at| self.range(at, at));
-                self.rect(at)
+                offset(position)
+                    .and_then(|at| self.client().caret_rect(at))
+                    .map_or(CGRect::ZERO, cg_rect)
             })
         }
 
@@ -817,15 +831,15 @@ impl TextInputView {
         }
     }
 
-    /// Whether UIKit's selection gestures begin at `point`: inside the
-    /// focused field's box, or within a handle's reach of the edge a
-    /// selection handle stands on, whose knob UIKit draws past the line.
+    /// Whether UIKit's selection gestures begin at `point`: where a press
+    /// lands on the focused field by the window's own hit test, so a control
+    /// drawn over the field keeps its tap, or within a handle's reach of the
+    /// edge a shown selection handle stands on, whose knob UIKit draws past
+    /// the line. The edges come from the rectangles cut to the field's box,
+    /// so a handle scrolled out of it reaches nothing.
     fn begins_at(&self, point: Point<f64>) -> bool {
         let client = self.client();
-        if client
-            .document_bounds()
-            .is_some_and(|field| field.contains(&point))
-        {
+        if client.is_hit_at(point) {
             return true;
         }
         let Some(selection) = client.selected_range().filter(|range| !range.is_empty()) else {
@@ -878,6 +892,38 @@ impl TextInputView {
         }
     }
 
+    /// Tell UIKit the field's geometry changed under it (the field moved:
+    /// a scroll, the keyboard lifting the view). UIKit keeps no rectangle the
+    /// candidate bar asks for, but `UITextInteraction` keeps the caret,
+    /// highlight and handles it drew: told the selection changed, the
+    /// interaction asks `caretRectForPosition:` and `selectionRectsForRange:`
+    /// again (`UITextInputDelegate`'s `selectionWillChange:` and
+    /// `selectionDidChange:`, the pair a text input sends when what UIKit
+    /// shows of its selection is out of date).
+    fn geometry_changed_under_keyboard(&self) {
+        let delegate = self.delegate();
+        let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
+        if let Some(delegate) = &delegate {
+            delegate.selectionWillChange(Some(input));
+            delegate.selectionDidChange(Some(input));
+        }
+    }
+
+    /// Focus moved off the field the interaction served: taken off and put
+    /// back, it drops what it showed over the old field (an edit menu, a
+    /// loupe) and serves the next one fresh.
+    fn reinstall_interaction(&self) {
+        let installed = self
+            .ivars()
+            .interaction
+            .get()
+            .is_some_and(|interaction| interaction.view().is_some());
+        if installed {
+            self.remove_interaction();
+            self.install_interaction();
+        }
+    }
+
     /// Tell the keyboard the selection moved under it.
     fn selection_changed_under_keyboard(&self) {
         let delegate = self.delegate();
@@ -918,13 +964,25 @@ impl InputContext for ResponderContext {
         }
     }
 
-    /// UIKit asks `firstRectForRange:` each time it places the candidate
-    /// bar, and keeps no rectangle to invalidate.
-    fn invalidate_character_coordinates(&self) {}
+    /// The focused field moved on the screen: UIKit's text interaction asks
+    /// for the caret and selection rectangles again
+    /// ([`TextInputView::geometry_changed_under_keyboard`]).
+    fn invalidate_character_coordinates(&self) {
+        if let Some(view) = self.view.load() {
+            view.geometry_changed_under_keyboard();
+        }
+    }
 
     fn field_changed(&self, status: Option<TextStoreStatus>) {
         if let Some(view) = self.view.load() {
             view.serve(status);
+        }
+    }
+
+    /// An edit menu open over the field focus left goes with it.
+    fn field_left(&self) {
+        if let Some(view) = self.view.load() {
+            view.reinstall_interaction();
         }
     }
 
@@ -963,10 +1021,21 @@ fn edit_command(action: Sel) -> Option<EditCommand> {
         (sel!(cut:), EditCommand::Cut),
         (sel!(copy:), EditCommand::Copy),
         (sel!(paste:), EditCommand::Paste),
+        (sel!(select:), EditCommand::SelectWord),
         (sel!(selectAll:), EditCommand::SelectAll),
     ]
     .into_iter()
     .find_map(|(selector, command)| (selector == action).then_some(command))
+}
+
+/// Whether the general pasteboard holds text. `hasStrings` answers from the
+/// pasteboard's types without reading an item, which UIKit does not count as
+/// a paste: it shows no paste prompt or banner, as reading `string` would.
+fn pasteboard_has_text() -> bool {
+    let pasteboard = UIPasteboard::generalPasteboard();
+    // SAFETY: a getter of the general pasteboard on the main thread, which
+    // `canPerformAction:withSender:` runs on; it takes no argument.
+    unsafe { pasteboard.hasStrings() }
 }
 
 /// The range of one of this view's ranges; `None` for one UIKit made.

@@ -54,6 +54,8 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
+use flui_interaction::events::PointerKind;
+use flui_interaction::pointer::HitTestResult;
 use flui_interaction::text_input::TextInputHandle;
 use flui_interaction::text_input::{
     CompositionLedger, EditGeneration, LockArbiter, committed_text,
@@ -901,10 +903,11 @@ impl TextStore for EditableTextStore {
                 .is_some_and(|commands| commands.is_enabled(command))
     }
 
-    /// The edit reaches the observer at once, as a key edit does: a select
-    /// all, a cut the clipboard answered at once. A paste or a cut answered
-    /// later reaches it at the next lock request or frame, as any other
-    /// application edit.
+    /// A selection the command makes (select all, select word) reaches the
+    /// observer at once, as a key edit does. A cut and a paste edit the text
+    /// only when the clipboard's answer is delivered, at a later owner turn,
+    /// never inside this call, and that edit reaches the observer at the next
+    /// lock request or frame, as any other application edit.
     fn perform_edit_command(&self, command: EditCommand) -> bool {
         if !self.edit_command_enabled(command) {
             return false;
@@ -1030,6 +1033,41 @@ impl TextStoreRead for Session<'_> {
         })?;
         let source = self.store.source_offset(&self.doc.text, rendered);
         Ok(self.doc.units(source))
+    }
+
+    /// The window's own hit test, the one a touch is dispatched by, run at
+    /// `point`: the field is hit when its editable is on the path, which a
+    /// control drawn over it keeps off. A render object's hit test is user
+    /// code; one that panics counts as a miss and its failure is resumed
+    /// here, after the walk.
+    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
+        let pipeline = self
+            .store
+            .pipeline
+            .as_ref()
+            .ok_or(TextStoreError::NoLayout)?;
+        let anchor = self
+            .store
+            .inner_anchor
+            .get()
+            .ok_or(TextStoreError::NoLayout)?;
+        // The path outlives the pipeline's borrow: its entries' payloads are
+        // destroyed after it is released.
+        let mut path = HitTestResult::new();
+        let hit = pipeline
+            .try_with_layout(|owner| {
+                let editable = *owner.render_tree().children(anchor).first()?;
+                owner.hit_test(Offset::new(point.x, point.y), PointerKind::Touch, &mut path);
+                Some(
+                    path.path()
+                        .iter()
+                        .any(|entry| entry.target == editable || entry.target == anchor),
+                )
+            })
+            .flatten()
+            .ok_or(TextStoreError::NoLayout);
+        drop(path);
+        hit
     }
 }
 

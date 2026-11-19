@@ -76,6 +76,13 @@ pub(crate) trait InputContext {
     /// The application is about to publish this change. Synchronous reads
     /// still see the previous published document during this notice.
     fn document_will_change(&self, change: DocumentChange);
+
+    /// The focus moved off the field the input method served, to another
+    /// field or to none: what the platform showed over the old field (UIKit's
+    /// edit menu) goes with it. Called once per move, after
+    /// [`Self::field_changed`] told the new field. AppKit shows nothing over
+    /// the field, so the default does nothing.
+    fn field_left(&self) {}
 }
 
 /// What the application changed of the focused field's document.
@@ -132,6 +139,13 @@ pub(crate) struct TextClient {
     /// Who draws the selection UI of the fields this client serves: UIKit's
     /// text interaction on iOS, the field on macOS.
     selection_ui: SelectionUi,
+    /// The field UIKit last asked about an edit command for
+    /// (`canPerformAction:withSender:`): a command reaches it only while it
+    /// still has focus, so an edit menu shown over one field never edits the
+    /// field focus moved to. Held strongly, so the identity it is compared by
+    /// cannot be a later store at a freed address; let go on every focus move.
+    #[cfg(any(target_os = "ios", test))]
+    offered: RefCell<Option<Rc<dyn TextStore>>>,
     this: Weak<Self>,
 }
 
@@ -271,6 +285,8 @@ impl TextClient {
             queue: HostQueue::new(),
             retired: Cell::new(false),
             selection_ui,
+            #[cfg(any(target_os = "ios", test))]
+            offered: RefCell::new(None),
             this: this.clone(),
         })
     }
@@ -532,25 +548,39 @@ impl TextClient {
         if same || self.retired.get() {
             return;
         }
-        if let Some(previous) = self.focused() {
+        // An edit command offered for the field losing focus is not the
+        // next field's.
+        #[cfg(any(target_os = "ios", test))]
+        let offered = self.offered.borrow_mut().take();
+        #[cfg(any(target_os = "ios", test))]
+        contain_owner_callback(|| drop(offered));
+        let left = self.focused();
+        if let Some(previous) = &left {
             // AppKit's composition belongs to the field losing focus: what
             // the input method makes of the discard reaches that field, and
             // what it leaves composing there is committed in place, so no
             // field keeps a composing range no input method owns.
             self.discard_marked_text();
-            crate::text::refusal::commit_in_place(&*previous);
+            crate::text::refusal::commit_in_place(&**previous);
             *self.focused.borrow_mut() = None;
             contain_owner_callback(|| previous.set_observer(None));
         }
         if let Some(store) = store {
             let observer: Rc<dyn TextStoreObserver> = Rc::new(ClientObserver {
                 client: self.this.clone(),
+                store: Rc::downgrade(&store),
             });
             *self.focused.borrow_mut() = Some(Rc::clone(&store));
             contain_owner_callback(|| store.set_observer(Some(observer)));
         }
         self.sync_field();
         self.invalidate_character_coordinates();
+        if left.is_some()
+            && let Some(context) = self.context()
+        {
+            self.notify_context(context, |context| context.field_left());
+        }
+        contain_owner_callback(|| drop(left));
     }
 
     /// End AppKit's composition in `store`, the focused one: its context
@@ -805,29 +835,38 @@ impl TextClient {
         .unwrap_or_default()
     }
 
-    /// The focused field's box in the window's logical coordinates, the
-    /// area UIKit's selection gestures begin in; `None` when no field has
-    /// focus or it is not laid out.
-    #[cfg(any(target_os = "ios", test))]
-    pub(crate) fn document_bounds(&self) -> Option<Bounds<f64>> {
-        self.read(|session| session.document_bounds().ok())
-            .flatten()
-    }
-
     /// `canPerformAction:withSender:` for an edit-menu item: whether the
-    /// focused field would perform `command` now; `false` without one.
+    /// focused field would perform `command` now; `false` without one. The
+    /// field asked about is the one a command may reach afterwards
+    /// ([`Self::perform_edit_command`]).
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        let offered = self.focused();
+        let replaced = self.offered.replace(offered);
+        contain_owner_callback(|| drop(replaced));
         self.call_focused(|store| store.edit_command_enabled(command))
     }
 
-    /// `cut:`, `copy:`, `paste:` and `selectAll:` from the edit menu: the
-    /// focused field performs `command` as its own menu would, as a call
-    /// into its store, so a host operation its code asks for (a paste ending
-    /// the composition, a focus move) waits for it to return. Whether the
-    /// field took it; `false` without one.
+    /// `cut:`, `copy:`, `paste:`, `select:` and `selectAll:` from the edit
+    /// menu: the focused field performs `command` as its own menu would, as
+    /// a call into its store, so a host operation its code asks for (a paste
+    /// ending the composition, a focus move) waits for it to return. Refused
+    /// unless the focused field is the one UIKit last asked about
+    /// ([`Self::edit_command_enabled`]): a menu offered over one field never
+    /// edits the field focus moved to since. Whether the field took it.
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn perform_edit_command(&self, command: EditCommand) -> bool {
+        let offered_here = match (&*self.offered.borrow(), &*self.focused.borrow()) {
+            (Some(offered), Some(focused)) => Rc::ptr_eq(offered, focused),
+            _ => false,
+        };
+        if !offered_here {
+            tracing::debug!(
+                ?command,
+                "an edit command for a field that lost focus; refused"
+            );
+            return false;
+        }
         self.call_focused(|store| store.perform_edit_command(command))
     }
 
@@ -850,6 +889,29 @@ impl TextClient {
         failure.contain(|| drop(store));
         failure.resume();
         answer
+    }
+
+    /// `caretRectForPosition:` — the caret at `at`, clamped to the document,
+    /// cut to the field's box; `None` when the caret is scrolled out of it,
+    /// no field has focus or its layout has none.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn caret_rect(&self, at: Utf16Offset) -> Option<Bounds<f64>> {
+        self.read(move |session| {
+            let at = Utf16Range::collapsed(at.min(session.document_len()));
+            let caret = session.rect_for_range(at).ok()?.bounds;
+            super::selection_rects::clip_bounds(caret, session.document_bounds().ok()?)
+        })
+        .flatten()
+    }
+
+    /// Whether a press at `point`, in the window's logical coordinates,
+    /// lands on the focused field, which the window's own hit test answers
+    /// ([`TextStoreRead::is_hit_at`]); `false` without a field or a layout.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn is_hit_at(&self, point: Point<f64>) -> bool {
+        self.read(move |session| session.is_hit_at(point).ok())
+            .flatten()
+            .unwrap_or(false)
     }
 
     /// The scalar under a point in the focused field.
@@ -977,6 +1039,9 @@ impl TextStoreHost for TextClient {
 /// field.
 struct ClientObserver {
     client: Weak<TextClient>,
+    /// The store it was installed on, which owns it: compared by address
+    /// with the store the client serves, and never upgraded.
+    store: Weak<dyn TextStore>,
 }
 
 impl TextStoreObserver for ClientObserver {
@@ -986,7 +1051,7 @@ impl TextStoreObserver for ClientObserver {
         publish: &mut dyn FnMut(&mut OwnerCalls),
         calls: &mut OwnerCalls,
     ) {
-        if let Some(client) = self.client.upgrade() {
+        if let Some(client) = self.serving() {
             client.publish_change(change, publish, calls);
             calls.run(|| drop(client));
         } else {
@@ -995,32 +1060,49 @@ impl TextStoreObserver for ClientObserver {
     }
 
     fn text_changed(&self, _change: TextChange) {
-        if let Some(client) = self.client.upgrade() {
+        if let Some(client) = self.serving() {
             client.application_edited(DocumentChange::Text);
         }
     }
 
     fn selection_changed(&self) {
-        if let Some(client) = self.client.upgrade() {
+        if let Some(client) = self.serving() {
             client.application_edited(DocumentChange::Selection);
         }
     }
 
     fn composition_changed(&self) {
-        if let Some(client) = self.client.upgrade() {
+        if let Some(client) = self.serving() {
             client.application_edited(DocumentChange::Composition);
         }
     }
 
+    /// The focused field moved on the screen (a scroll, the keyboard lifting
+    /// the view): the input method asks for its geometry again, once.
     fn layout_changed(&self) {
-        if let Some(client) = self.client.upgrade() {
+        if let Some(client) = self.serving() {
             client.invalidate_character_coordinates();
         }
     }
 
     fn status_changed(&self) {
-        if let Some(client) = self.client.upgrade() {
+        if let Some(client) = self.serving() {
             client.sync_field();
         }
+    }
+}
+
+impl ClientObserver {
+    /// The client, while the store this observer was installed on is the
+    /// one it serves: a store focus moved off that still reports (a
+    /// publication under way when it lost focus) reaches no input method.
+    fn serving(&self) -> Option<Rc<TextClient>> {
+        let client = self.client.upgrade()?;
+        let serves = client
+            .focused
+            .borrow()
+            .as_ref()
+            .is_some_and(|focused| std::ptr::addr_eq(Rc::as_ptr(focused), self.store.as_ptr()));
+        serves.then_some(client)
     }
 }

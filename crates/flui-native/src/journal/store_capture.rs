@@ -703,6 +703,10 @@ impl TextStoreRead for ReadTap<'_> {
     ) -> Result<Utf16Offset, TextStoreError> {
         self.log.index_at_point(self.session, point, mode)
     }
+
+    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
+        self.session.is_hit_at(point)
+    }
 }
 
 /// A read-write lock's session as the input method sees it, journaling each
@@ -743,6 +747,10 @@ impl TextStoreRead for EditTap<'_> {
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         self.log.index_at_point(&*self.session, point, mode)
+    }
+
+    fn is_hit_at(&self, point: Point<f64>) -> Result<bool, TextStoreError> {
+        self.session.is_hit_at(point)
     }
 }
 

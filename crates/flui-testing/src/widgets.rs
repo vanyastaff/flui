@@ -365,15 +365,16 @@ pub fn lay_out_on(
 }
 
 /// Like [`lay_out_on`], in a window whose input method pulls from the focused
-/// field through a recording host ([`LaidOut::store_host`]), as a harness
-/// from [`harness::mount_with_ime_on`] has: a test answers for the platform
-/// through it, its selection UI among the answers.
-pub fn lay_out_with_ime_on(
+/// field through a recording host that answers `ui` for who draws the
+/// field's selection UI, as a harness from
+/// [`harness::mount_with_selection_ui_on`] has.
+pub fn lay_out_with_selection_ui_on(
     root: impl View,
     constraints: BoxConstraints,
     platform: flui_platform::TargetPlatform,
+    ui: flui_platform::text_store::SelectionUi,
 ) -> LaidOut {
-    mount_laid_out(root, constraints, None, platform, KitInput::Pull)
+    mount_laid_out(root, constraints, None, platform, KitInput::Pull(ui))
 }
 
 /// Like [`lay_out`], with `storage` as the UI runtime's byte storage: the tree's
@@ -424,8 +425,9 @@ pub fn lay_out_with_provided_storage(
 enum KitInput {
     /// Pushed events ([`LaidOut::dispatch_ime`]).
     Push,
-    /// Pulled through a recording store host ([`LaidOut::store_host`]).
-    Pull,
+    /// Pulled through a recording store host that answers this for who
+    /// draws the selection UI.
+    Pull(flui_platform::text_store::SelectionUi),
 }
 
 fn mount_laid_out(
@@ -463,7 +465,7 @@ fn mount_laid_out(
     let window = HeadlessWindow::new(surface.0, surface.1).with_platform(platform);
     let window = match input {
         KitInput::Push => window.with_text_input(),
-        KitInput::Pull => window.with_text_store_host(),
+        KitInput::Pull(ui) => window.with_text_store_host_drawing(ui),
     };
     let host = WidgetHost::mount(wrapped, window, storage);
     let pipeline_owner = host.pipeline().clone();
@@ -1933,20 +1935,6 @@ impl LaidOut {
     /// field composes, commits or cancels with it.
     pub fn dispatch_ime(&self, event: flui_platform::ImeEvent) {
         self.host.dispatch_ime(event);
-    }
-
-    /// The window's input-method host, to answer as a platform host would
-    /// ([`crate::RecordingTextStoreHost::set_selection_ui`]).
-    ///
-    /// # Panics
-    ///
-    /// Panics unless the tree was laid out with [`lay_out_with_ime_on`]: no
-    /// other window offers a host.
-    pub fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
-        self.host
-            .ui_runtime()
-            .text_store_host()
-            .expect("the input-method host requires lay_out_with_ime_on")
     }
 
     /// Advance the UI runtime's virtual clock by `dt` before a synthetic Move

@@ -42,7 +42,8 @@ pub struct RecordingTextStoreHost {
     depth: Cell<u32>,
     nested: Cell<bool>,
     unavailable: Cell<bool>,
-    selection_ui: Cell<SelectionUi>,
+    /// The host's one answer for its life.
+    selection_ui: SelectionUi,
 }
 
 impl std::fmt::Debug for RecordingTextStoreHost {
@@ -59,6 +60,16 @@ impl RecordingTextStoreHost {
     #[must_use]
     pub fn new() -> Rc<Self> {
         Rc::new(Self::default())
+    }
+
+    /// A host that answers [`TextStoreHost::selection_ui`] with `ui` for its
+    /// life, as iOS's host answers [`SelectionUi::Platform`].
+    #[must_use]
+    pub fn with_selection_ui(ui: SelectionUi) -> Rc<Self> {
+        Rc::new(Self {
+            selection_ui: ui,
+            ..Self::default()
+        })
     }
 
     /// Every call, in the order it arrived.
@@ -84,13 +95,6 @@ impl RecordingTextStoreHost {
     /// shut down does.
     pub fn shut_down(&self) {
         self.unavailable.set(true);
-    }
-
-    /// From now on, answer [`TextStoreHost::selection_ui`] with `ui`, as
-    /// iOS's host answers [`SelectionUi::Platform`]: a field that attaches
-    /// afterwards leaves its selection UI to the platform.
-    pub fn set_selection_ui(&self, ui: SelectionUi) {
-        self.selection_ui.set(ui);
     }
 
     fn enter(&self, call: StoreHostCall) -> Depth<'_> {
@@ -161,8 +165,9 @@ impl TextStoreHost for RecordingTextStoreHost {
         }
     }
 
-    /// What [`Self::set_selection_ui`] last set; the field's by default.
+    /// What the host was made with ([`RecordingTextStoreHost::with_selection_ui`]);
+    /// the field's by default.
     fn selection_ui(&self) -> SelectionUi {
-        self.selection_ui.get()
+        self.selection_ui
     }
 }

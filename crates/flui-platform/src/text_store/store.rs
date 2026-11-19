@@ -95,7 +95,7 @@ pub trait TextStore {
 
 /// An edit the platform's own text UI asks the focused field for: an item of
 /// iOS's edit menu, which `UITextInteraction` shows over the field
-/// (`cut:`, `copy:`, `paste:`, `selectAll:`). The field performs it with its
+/// (`cut:`, `copy:`, `paste:`, `select:`, `selectAll:`). The field performs it with its
 /// own clipboard and selection rules ([`TextStore::perform_edit_command`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -106,6 +106,9 @@ pub enum EditCommand {
     Copy,
     /// Replace the selection with the clipboard's text.
     Paste,
+    /// Select the word at the caret (`select:`, the item a collapsed caret's
+    /// menu offers).
+    SelectWord,
     /// Select the whole text.
     SelectAll,
 }
