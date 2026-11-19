@@ -1900,6 +1900,13 @@ pub(crate) fn with_owner_platform<R>(
 /// the original failure.
 #[must_use = "the guard must stay alive across the Platform::run(...) call it \
               guards, or the TLS host clears immediately instead of at loop exit"]
+#[cfg_attr(
+    all(target_arch = "wasm32", not(test)),
+    expect(
+        dead_code,
+        reason = "the web host clears its owner when its own loop exits (see `web.rs`)"
+    )
+)]
 pub(crate) struct OwnerHostClearGuard {
     expected_generation: u64,
 }
@@ -1909,6 +1916,13 @@ impl OwnerHostClearGuard {
     /// replacement has another generation and cannot be erased by this guard.
     /// Call immediately before `Platform::run(...)`; no-install failure leaves
     /// a previously installed owner untouched.
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "the web host clears its owner when its own loop exits (see `web.rs`)"
+        )
+    )]
     pub(crate) fn arm() -> Self {
         let expected_generation = APP_RUNTIME.with(|slot| {
             slot.borrow()
