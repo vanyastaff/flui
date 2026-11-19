@@ -55,6 +55,18 @@ fn primary_retry_wait(ui_runtime: &UiRuntime) -> Option<Duration> {
         .map(|at| at.saturating_duration_since(presentation.clock().now()))
 }
 
+/// Move `clock` on by `wait`, as a host woken at the deadline `ui_runtime` reports to it, after
+/// checking that the reported deadline is the one `wait` from now.
+fn wake_at_retry_deadline(ui_runtime: &UiRuntime, clock: &ManualClock, wait: Duration) {
+    let now = ui_runtime.presentations.primary().clock().now();
+    assert_eq!(
+        ui_runtime.failure_retry_deadline(),
+        Some(now + wait),
+        "the host wakes at the deadline the last attempt armed"
+    );
+    clock.advance(wait);
+}
+
 fn primary_state(ui_runtime: &UiRuntime) -> FrameCommitState {
     ui_runtime.presentations.primary().frame_commit_state()
 }
@@ -399,13 +411,13 @@ pub(crate) fn a_withheld_frame_commits_nothing_and_holds_input_for_the_frame_tha
 }
 
 /// The withheld retry is bounded (ADR-0335 §2): `MAX_NOT_SHOWN_RETRIES` attempts follow each
-/// other, and past them every attempt waits out the dropped-frame backoff, which grows, so a
+/// other, and past them every attempt waits out the dropped-frame backoff, which doubles, so a
 /// drawable that stays withdrawn costs at most one paint per backoff interval while the tree it
 /// owes, and the input held for it, still reach the screen once the surface returns.
 ///
 /// Fails when the budget parks the frame (no wait is armed, and the held press waits for an
 /// unrelated frame), when an attempt past the budget runs before its wait ends, or when the wait
-/// does not grow.
+/// does not double.
 pub(crate) fn the_withheld_retry_is_bounded_and_then_waits_out_the_backoff() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
     let clock = ManualClock::new();
@@ -425,9 +437,8 @@ pub(crate) fn the_withheld_retry_is_bounded_and_then_waits_out_the_backoff() {
     let presentation = || ui_runtime.presentations.primary();
     let mut delays: Vec<Duration> = Vec::new();
     for _ in 0..2 {
-        // The host wakes at the deadline the last attempt armed.
         if let Some(&delay) = delays.last() {
-            clock.advance(delay);
+            wake_at_retry_deadline(&ui_runtime, &clock, delay);
             assert!(!ui_runtime.render_frame(&mut withheld));
         }
         delays.push(
@@ -444,9 +455,11 @@ pub(crate) fn the_withheld_retry_is_bounded_and_then_waits_out_the_backoff() {
         );
     }
     assert_eq!(withheld.submit_calls, budget + 2);
-    assert!(
-        delays[0] < delays[1],
-        "the wait grows while the surface keeps withholding: {delays:?}"
+    // Both waits lie far below the ceiling on the test window's 60 Hz period.
+    assert_eq!(
+        delays[1],
+        delays[0] * 2,
+        "the wait doubles while the surface keeps withholding: {delays:?}"
     );
 
     press_primary(&ui_runtime);
@@ -658,9 +671,13 @@ pub(crate) fn a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_onc
     }
     let mut waits =
         vec![primary_retry_wait(&ui_runtime).expect("past the budget an attempt waits")];
+    // The test window names no display, so the schedule starts at the 60 Hz default period and
+    // meets the ceiling after six doublings. Every wait below it is exactly double the one before
+    // because the doubling exponent's own limit (ten, a wait of `T · 1024`) lies past the
+    // ceiling on any display slower than 1024 Hz.
+    assert_eq!(waits[0], super::display::DEFAULT_REFRESH_PERIOD);
     while waits.len() < 16 {
-        // The host wakes at the deadline the last attempt armed.
-        clock.advance(waits[waits.len() - 1]);
+        wake_at_retry_deadline(&ui_runtime, &clock, waits[waits.len() - 1]);
         assert!(!ui_runtime.render_frame(&mut withheld));
         waits.push(primary_retry_wait(&ui_runtime).expect("every attempt past the budget waits"));
     }
@@ -1231,8 +1248,8 @@ fn held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree() {
 /// backoff, which doubles while the frames keep failing, and a frame that presents resets it.
 /// Without the retry the app would keep its last frame until an unrelated one.
 ///
-/// Fails when a failed frame arms no retry, or when its clean segment resets the streak the
-/// backoff grows by.
+/// Fails when a failed frame arms no retry, when the backoff does not double, or when its clean
+/// segment resets the streak the backoff grows by.
 #[test]
 fn a_failed_frame_is_painted_again_after_a_growing_backoff() {
     let clock = ManualClock::new();
@@ -1241,9 +1258,8 @@ fn a_failed_frame_is_painted_again_after_a_growing_backoff() {
     let presentation = || ui_runtime.presentations.primary();
     let mut delays: Vec<Duration> = Vec::new();
     for attempt in 0..3 {
-        // The host wakes at the deadline the last attempt armed.
         if let Some(&delay) = delays.last() {
-            clock.advance(delay);
+            wake_at_retry_deadline(&ui_runtime, &clock, delay);
         }
         assert!(!ui_runtime.render_frame(&mut failing));
         assert_eq!(
@@ -1253,12 +1269,14 @@ fn a_failed_frame_is_painted_again_after_a_growing_backoff() {
         );
         delays.push(primary_retry_wait(&ui_runtime).expect("a failed frame arms its retry"));
     }
-    assert!(
-        delays[0] < delays[1] && delays[1] < delays[2],
+    // All three waits lie far below the ceiling on the test window's 60 Hz period.
+    assert_eq!(
+        [delays[1], delays[2]],
+        [delays[0] * 2, delays[1] * 2],
         "the backoff doubles while frames keep failing: {delays:?}"
     );
 
-    clock.advance(delays[2]);
+    wake_at_retry_deadline(&ui_runtime, &clock, delays[2]);
     assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
     assert_eq!(presentation().failure_retry_at(), None);
     assert_eq!(presentation().frame_failure_streak(), 0);
