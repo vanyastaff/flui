@@ -514,6 +514,9 @@ struct Placed {
     /// The executor's count of unadopted retries when the owner last read
     /// it: one more since is a retry whose adoption panicked, answered once.
     retries_unadopted: u64,
+    /// The working vectors of a texture frame's damage, kept between
+    /// frames.
+    texture_damage: flui_layer::TextureDamageScratch,
 }
 
 /// The executor as the owner holds it in each placement (ADR-0305 §10).
@@ -2094,13 +2097,16 @@ impl RasterHost {
         let mut damage = slot.base.damage_for(&publication, key);
         // A new image or a retirement changes the pixels of the texture's
         // users and of nothing else, whatever the patch damaged (ADR-0304 §9).
+        // Damage already full has nothing to add; the union is held to the
+        // threshold the patch's damage was.
         if !matches!(damage, DamageRegion::Full(_)) && !updates.is_empty() {
             let textures = updates.frames.iter().map(|(id, _)| *id);
-            damage = damage.union(
-                publication
-                    .scene
-                    .texture_damage(textures.chain(updates.retired.iter().copied()), key.size),
+            let users = publication.scene.texture_damage(
+                textures.chain(updates.retired.iter().copied()),
+                key.size,
+                &mut placed.texture_damage,
             );
+            damage = slot.base.thresholded(damage.union(users), key.size);
         }
         let shown = publication.scene.id();
         let mut snapshot =
@@ -2542,6 +2548,7 @@ impl Placed {
             redraws,
             retries_sent: 0,
             retries_unadopted: 0,
+            texture_damage: flui_layer::TextureDamageScratch::default(),
         }
     }
 }

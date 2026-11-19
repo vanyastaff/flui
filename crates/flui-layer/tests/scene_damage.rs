@@ -1296,7 +1296,9 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         .expect("two users, a plain sibling and a loose user");
 
     let version = owner.current();
-    let damage = rects(version.texture_damage([texture], SURFACE.size));
+    // One scratch serves every call: each clears what it reads.
+    let mut scratch = flui_layer::TextureDamageScratch::default();
+    let damage = rects(version.texture_damage([texture], SURFACE.size, &mut scratch));
     assert!(
         covered(&damage, covering(110.0, 110.0, 130.0, 130.0)),
         "the chunk's texture draw: {damage:?}"
@@ -1310,19 +1312,20 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         damage.iter().all(|rect| !rect.overlaps(sibling)),
         "the plain sibling: {damage:?}"
     );
+    // Unplaced and unslotted, the loose user would land on its own draw's
+    // rect, which nothing attached meets.
+    let loose = covering(10.0, 10.0, 30.0, 30.0);
     assert!(
-        damage
-            .iter()
-            .all(|rect| rect.right() <= 360 && rect.bottom() <= 360),
+        damage.iter().all(|rect| !rect.overlaps(loose)),
         "the loose user draws nowhere: {damage:?}"
     );
     assert_eq!(
-        version.texture_damage([other], SURFACE.size),
+        version.texture_damage([other], SURFACE.size, &mut scratch),
         DamageRegion::Unchanged,
         "a texture no entry draws"
     );
     assert_eq!(
-        version.texture_damage([], SURFACE.size),
+        version.texture_damage([], SURFACE.size, &mut scratch),
         DamageRegion::Unchanged
     );
 }

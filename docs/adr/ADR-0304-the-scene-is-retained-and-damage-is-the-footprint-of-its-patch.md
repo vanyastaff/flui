@@ -614,8 +614,15 @@ so a version's frame skips the renderer's straddle self-heal (`record_passes` in
 `crates/flui-engine/src/renderer.rs`), which only a hand-built tree keeps.
 
 A texture frame or retirement drained with a publication (`RasterHost::submit`) damages the device
-footprints of that texture's users in the version it draws, closed under §6 (`SceneVersion::texture_damage`,
-which reads the texture-user index); a texture no entry draws damages nothing. A platform view is damaged on every frame it is drawn, because the platform gives
+footprints of that texture's users in the version it draws, closed under §6
+(`SceneVersion::texture_damage`, which reads the texture-user index and works in a
+`TextureDamageScratch` the host keeps between frames); a texture no entry draws damages nothing.
+Damage already `Full` takes no union, and the union is held to the threshold the publication's
+damage was (`RasterBase::thresholded`, which `damage_for` answers through). A frame that carries a
+texture frame and is not shown loses neither: a frame superseded in the slot's inbox folds its
+damage and its texture updates into the survivor (`raster_executor/sender.rs`), and one the
+executor does not show (`NotShown`, a render error or panic) leaves the slot owing a full redraw
+(`owe_full(RESET)`), which its next frame draws with the updates it applied. A platform view is damaged on every frame it is drawn, because the platform gives
 no signal when its content changes; a per-view frame signal that damages it the way a texture
 frame does is a follow-up, not part of this decision. A canvas layer's display
 list and the performance overlay are versioned content, and no longer damaged every frame.
@@ -700,7 +707,11 @@ consecutive versions. The patch damage must cover the diff damage.
   `scene_patch_damage` table: a texture draw and a texture layer under a backdrop, closed over
   what the backdrop reads, a sibling and an unattached user left out), and `flui-app`'s
   `a_texture_frame_damages_only_its_users` (the `raster_host_damage_matrix` table: a texture
-  frame drained with an empty patch reaches the backend as its user's rect alone).
+  frame drained with an empty patch reaches the backend as its user's rect alone), with
+  `a_texture_frame_over_most_of_the_surface_draws_in_full` (the union is held to the threshold),
+  `a_full_frame_reads_no_texture_users` (full damage reads no user) and
+  `a_replaced_texture_frame_still_damages_its_users` (a texture frame superseded in a raster
+  thread's inbox damages its users through the survivor).
 - `flui-engine` (to be added): `a_chunk_drawn_once_is_not_captured`,
   `the_candidate_table_stays_bounded`, `stable_keys_are_admitted_under_churn`,
   `a_cached_chunk_replays_the_command_stream_it_recorded`
