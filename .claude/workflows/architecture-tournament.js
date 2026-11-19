@@ -82,7 +82,6 @@ if (opts.stances !== undefined) {
   }
   stances = given
 }
-const stanceKeys = stances.map((s) => s.key)
 
 // A list an agent returns that a later prompt re-embeds is bounded, and what is left out is a gap:
 // facts, a design's debt, each round's attacks, and answers (one per attack).
@@ -110,54 +109,72 @@ function blankQuotes(value) {
   return value
 }
 
-// Where a value breaks its schema, as a path ('' when it conforms). The script reads every agent's
-// value by its schema's shape, so `attempt` holds the shape at the seam instead of trusting the
-// runtime to; a number's minimum and maximum are left to its reader, which clamps.
-function offSchema(value, schema, path = '$') {
-  if (schema.enum && !schema.enum.includes(value)) return path
+// An agent's value held to its schema, since the script reads every value by its schema's shape and
+// does not trust the runtime to hold it. A list item that breaks the schema is the agent's own
+// output, so it is left out and its path recorded in `dropped`, and the rest of the value is kept; a
+// break anywhere else leaves nothing usable, and its path comes back as `off`. A number's minimum and
+// maximum are left to its reader, which clamps.
+function conform(value, schema, path, dropped) {
+  if (schema.enum && !schema.enum.includes(value)) return { off: path }
   switch (schema.type) {
-    case 'string': return typeof value === 'string' ? '' : path
-    case 'integer': return Number.isInteger(value) ? '' : path
+    case 'string': return typeof value === 'string' ? { ok: value } : { off: path }
+    case 'integer': return Number.isInteger(value) ? { ok: value } : { off: path }
     case 'array': {
-      if (!Array.isArray(value)) return path
-      for (let i = 0; i < value.length; i += 1) {
-        const at = offSchema(value[i], schema.items, `${path}[${i}]`)
-        if (at) return at
-      }
-      return ''
+      if (!Array.isArray(value)) return { off: path }
+      const kept = []
+      value.forEach((item, i) => {
+        const got = conform(item, schema.items, `${path}[${i}]`, dropped)
+        if (got.off) dropped.push(got.off)
+        else kept.push(got.ok)
+      })
+      return { ok: kept }
     }
     case 'object': {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return path
-      for (const key of schema.required || []) if (!(key in value)) return `${path}.${key}`
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return { off: path }
+      for (const key of schema.required || []) if (!(key in value)) return { off: `${path}.${key}` }
+      const kept = { ...value }
       for (const [key, sub] of Object.entries(schema.properties || {})) {
-        const at = key in value ? offSchema(value[key], sub, `${path}.${key}`) : ''
-        if (at) return at
+        if (!(key in value)) continue
+        const got = conform(value[key], sub, `${path}.${key}`, dropped)
+        if (got.off) return got
+        kept[key] = got.ok
       }
-      return ''
+      return { ok: kept }
     }
-    default: return ''
+    default: return { ok: value }
   }
 }
 
-// An agent refused, skipped, past the token target or off its schema is a gap the result names,
-// never an empty or malformed answer: past `attempt`, a value has its schema's shape.
+// An agent refused, skipped, past the token target or off its schema outside its lists is a gap the
+// result names as an agent that returned nothing usable; list items it returned off its schema are a
+// gap of its own output. Past `attempt`, a value has its schema's shape.
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
     if (!value) return { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
-    const at = offSchema(value, options.schema)
-    return at ? { error: `a result off its schema at ${at}` } : { value: blankQuotes(value) }
+    const dropped = []
+    const got = conform(value, options.schema, '$', dropped)
+    if (got.off) return { error: `a result off its schema at ${got.off}` }
+    if (dropped.length) gaps.push(`${options.label}: ${dropped.length} list items off their schema were left out (at ${dropped.slice(0, 3).join(', ')}${dropped.length > 3 ? ', …' : ''})`)
+    return { value: blankQuotes(got.ok) }
   } catch (e) {
     return { error: errorText(e) }
   }
 }
 
-// An error's text reaches later prompts as one entry of a list, so it is cut to a line: its line
-// breaks become spaces, and it is cut to 300 code points (so a cut never splits a surrogate pair),
-// after a cheap cut that bounds the copy.
+// An error's text reaches later prompts as one entry of a list, so it is cut to a line: a cheap cut
+// bounds the copy (and drops a high surrogate it leaves alone at its end), line breaks become
+// spaces, and the text is cut to 300 code points, so no cut splits a surrogate pair. A value that
+// cannot be shown as text, or shows as nothing, still names a failure.
 function errorText(e) {
-  const text = String(e && e.message ? e.message : e).slice(0, 1200).replace(/\s+/g, ' ')
-  return Array.from(text).slice(0, 300).join('')
+  let text
+  try {
+    text = String(e && e.message ? e.message : e)
+  } catch {
+    text = ''
+  }
+  text = text.slice(0, 1200).replace(/[\uD800-\uDBFF]$/, '').replace(/\s+/g, ' ').trim()
+  return text ? Array.from(text).slice(0, 300).join('') : 'an error with no text'
 }
 
 const RESEARCH_SCHEMA = {
