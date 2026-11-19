@@ -339,9 +339,56 @@ impl ActivityWindowIds {
     }
 }
 
+/// The delivery of the Activity's window opened with `handler`, whose input
+/// gives it `capabilities`: each frame the handler runs raises `frames`, the
+/// loop's count, which arms a delivered wake deadline again only after a
+/// frame ran (`WakeDeadline`).
+pub(crate) fn window_delivery(
+    handler: std::rc::Rc<dyn flui_platform::WindowHandler>,
+    capabilities: flui_platform::input_capabilities::InputCapabilities,
+    frames: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> crate::owner::window_delivery::WindowDelivery {
+    crate::owner::window_delivery::WindowDelivery::counting_frames(handler, capabilities, frames)
+}
+
 #[cfg(test)]
 mod tests {
     use super::ActivityWindowIds;
+
+    /// A frame the window's handler runs raises the loop's count, and a
+    /// declined one does not, so the loop's wake deadline tells a frame that
+    /// served it from a request that reached nothing. Red-check: build the
+    /// delivery with `WindowDelivery::new`.
+    #[test]
+    fn a_window_frame_raises_the_loop_count() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        use flui_platform::input_capabilities::InputCapabilities;
+        use flui_platform::{EventTime, FrameRequest};
+        use flui_testing::window_handler::RecordingWindowHandler;
+
+        let handler = RecordingWindowHandler::new();
+        let frames = Arc::new(AtomicU64::new(0));
+        let delivery = super::window_delivery(
+            handler.clone(),
+            InputCapabilities::UNAVAILABLE,
+            Arc::clone(&frames),
+        );
+        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
+        assert_eq!(
+            frames.load(Ordering::Relaxed),
+            0,
+            "a declined frame ran nothing"
+        );
+        handler.react_to_frame(|_| {});
+        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(2)));
+        assert_eq!(
+            frames.load(Ordering::Relaxed),
+            1,
+            "a frame that ran is counted"
+        );
+    }
 
     /// Each window of the Activity gets an identity no other had; that the
     /// space is refused at its end, never wrapped, is the mint's

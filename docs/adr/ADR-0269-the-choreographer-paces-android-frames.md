@@ -77,8 +77,8 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
    unless one is still posted, and blocks: it has no frame to deliver now, so `poll_timeout` waits
    until woken, or until a deadline or preference sample still ahead. A due wake deadline is
    delivered once as a frame request, which waits for the callback like any other, and is armed
-   again only after a frame ran (`owner::android::poll::LoopDeadline`, over the hosts' shared
-   `WakeDeadline`): delivered on every turn it would spin until the callback came.
+   again only after a frame ran (the hosts' shared `WakeDeadline::turn`): delivered on every
+   turn it would spin until the callback came.
 3. **The callback records and wakes.** It runs as one `os_entry`, records a `VsyncTick` (the frame
    time, and on API 33 the preferred timeline's expected presentation) and wakes the looper. It
    calls no user code. Each post hands the callback a counted reference to the state it records
@@ -112,8 +112,9 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
 - `ndk_gate_table` rows for each marker, and `the_frame_callback_is_the_newest_the_system_has` in
   `os_capability_table` (`flui-native`, run on the Linux CI host).
 - `a_tick_places_its_vsync_and_presentation_around_the_reading` (`owner::android::frame_clock`).
-- `a_due_deadline_is_delivered_once_per_frame_generation`,
-  `a_declined_frame_does_not_keep_the_loop_awake` and `a_stopped_loop_blocks_until_it_is_woken`
+- `a_look_delivers_a_due_deadline_once_per_frame_generation` (`owner::wake_deadline`),
+  `a_declined_frame_does_not_keep_the_loop_awake`,
+  `a_deadline_delivered_while_stopped_blocks_the_loop` and `a_stopped_loop_blocks_until_it_is_woken`
   (`owner::android::poll`), the last with rows for a turn waiting for the next frame.
 - `os_entry` around both callbacks: `xtask panic-boundary`.
 - CI's `cross-typecheck (aarch64-linux-android)` builds the loop. A run on a device: frames follow

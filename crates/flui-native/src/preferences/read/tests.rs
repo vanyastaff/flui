@@ -298,7 +298,8 @@ impl Rig {
             LoopTurn {
                 should_render: false,
                 running: true,
-                wake_deadline: None,
+                wake: crate::owner::wake_deadline::WakeTurn::Idle,
+                turn_deadline: None,
                 next_preference_sample: next,
                 hand_off_deadline: None,
                 open_deadline: None,

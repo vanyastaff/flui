@@ -83,8 +83,6 @@ use crate::{
     owner::android::activity_callbacks::Reaction,
     owner::android::frame_clock::{FrameClock, FrameStamp},
     owner::android::ndk::{FrameCallbacks, SymbolSource},
-    owner::android::poll::DeadlineTurn,
-    owner::android::poll::LoopDeadline,
     owner::android::poll::LoopReads,
     owner::android::poll::LoopTurn,
     owner::android::poll::PreferenceNotice,
@@ -93,7 +91,7 @@ use crate::{
     owner::notices::{LifecycleHooks, NoticeChannel},
     owner::redraw_poll::RedrawPoll,
     owner::signal::OwnerSignal,
-    owner::wake_deadline::FrameCount,
+    owner::wake_deadline::{FrameCount, WakeDeadline},
     platform::AppHandler,
     platform::Platform,
     version::gate::android::AndroidApi,
@@ -772,7 +770,7 @@ impl host::Loop for AndroidLoop {
                 message: error.to_string(),
             })?;
         self.loop_reads.set(LoopReads::first());
-        let mut wake_deadline = LoopDeadline::default();
+        let mut wake_deadline = WakeDeadline::default();
         let mut turn_deadline = crate::owner::wake_deadline::TurnDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
@@ -878,7 +876,7 @@ impl host::Loop for AndroidLoop {
             // gated. The window is cloned out of its cell: a redraw request
             // runs no user code, but the cell is the loop's.
             let wake_turn = wake_deadline.turn(wake_answer, now, self.frames.get());
-            if wake_turn == DeadlineTurn::Deliver {
+            if wake_turn.is_due() {
                 let window = self.window.borrow().clone();
                 if let Some(window) = window {
                     window.request_redraw();
@@ -917,10 +915,8 @@ impl host::Loop for AndroidLoop {
                         LoopTurn {
                             should_render: should_render && !awaiting_vsync,
                             running,
-                            wake_deadline: [wake_turn.wait(), turn_wait]
-                                .into_iter()
-                                .flatten()
-                                .min(),
+                            wake: wake_turn,
+                            turn_deadline: turn_wait,
                             next_preference_sample: self.loop_reads.get().next(
                                 self.preferences.retry_deadline(),
                                 web_time::Instant::now(),

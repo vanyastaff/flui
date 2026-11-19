@@ -734,7 +734,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             drag_source,
             // Each frame the handler runs counts into the loop's count, which
             // arms a delivered wake deadline again only after a frame ran.
-            Arc::new(WindowDelivery::counting_frames(
+            Arc::new(crate::owner::android::window_delivery(
                 handler,
                 input_capabilities(owner.api, owner.java_view.is_ready()),
                 owner.frames.counter(),

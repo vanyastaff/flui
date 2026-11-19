@@ -6746,28 +6746,36 @@ GPU-память простаивающего или невидимого окн
   `bind` ставит `delivering`; `owner/frame_timing.rs`, тесты `OwnerSignal` —
   `owner/signal/tests.rs`; лестница хостов в `lib.rs` — `target_os` и псевдонимы `build.rs`; ход
   после паники обработчика — `crates/flui-native/ARCHITECTURE.md` («A turn after a handler's
-  panic»). Все родные циклы берут срок пробуждения через `WakeDeadline::{arm, take_due}`: Win32 с
-  модальным циклом, X11, Wayland и UIKit, насос AppKit (`owner/apple/pump_deadline.rs`,
-  `PumpDeadline`: взгляд тика и конец хода владельца) и цикл Android (`owner/android/poll.rs`,
-  `LoopDeadline`: наступивший срок — запрос кадра окну и пробуждение владельца, раз на поколение
-  кадров). Окна AppKit и Android считают кадры в `FrameCount` цикла (`WindowDelivery::counting_frames`);
-  `RedrawPoll` больше не несёт срок, у `LoopTurn` нет `awaiting_vsync`. Кадр, который должно
-  закрытое окно (ADR-0357), по-прежнему ставит конец хода владельца и доставляется при позднем
-  взгляде. Тесты: `a_second_layout_callback_replaces_the_first` (X11,
+  panic»). Все родные циклы берут срок пробуждения по одному правилу `WakeDeadline`: Win32, X11,
+  Wayland и UIKit — `arm` до ожидания и `take_due` в начале хода, насос AppKit, цикл Android и
+  модальные циклы Win32 — `WakeDeadline::turn` (`Due | Wait | Idle`). Насос AppKit смотрит на срок
+  после запроса перерисовки, после каждого прогона доставки окна (`WakePump::window_delivery`,
+  `after_each_run`; кадр, пришедший поздно, всё равно смотрит) и после хода владельца, оставившего
+  срок; эвристики `FOLLOW_UP` нет. Цикл Android доставляет наступивший срок запросом кадра окну и
+  пробуждением владельца, `LoopTurn::wake` — `WakeTurn`, и доставленный срок не ограничивает
+  ожидание. Окна AppKit и Android считают кадры в счётчик цикла (`pump_delivery::window_delivery`,
+  `owner::android::window_delivery`); `RedrawPoll` не несёт срок, `PostPollRedraw` не подделать.
+  Открыто ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit)):
+  должный кадр закрытого окна рядом с показанным окном AppKit доставляется снова после каждого
+  кадра показанного окна — ответ приложения не называет окно. Тесты:
+  `a_second_layout_callback_replaces_the_first` (X11,
   Wayland), `a_panicking_exit_policy_is_terminal`,
   `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one`,
   `a_question_keeps_its_answer_when_a_report_after_it_panics`,
   `a_report_between_bind_and_ready_waits_for_ready`,
   `a_due_deadline_gets_one_modal_frame_per_generation`,
   `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`;
-  `a_due_deadline_is_delivered_once_per_frame_generation` и
-  `an_owed_frame_is_delivered_when_its_look_is_late` (`owner::apple::pump_deadline`),
-  `a_due_deadline_is_delivered_once_per_frame_generation` и
-  `a_declined_frame_does_not_keep_the_loop_awake` (`owner::android::poll`) — все четыре падают,
-  когда решение возвращено к прежнему правилу «срок не позже `now` — доставить» (у
-  `after_owner_turn` — ответ без записи доставки). Проверки на Windows: clippy и nextest
+  `a_look_delivers_a_due_deadline_once_per_frame_generation` (`owner::wake_deadline`),
+  `a_window_frame_raises_the_pump_count_and_asks_for_a_look` (`owner::apple::pump_delivery`),
+  `a_window_frame_raises_the_loop_count` (`owner::android`),
+  `a_declined_frame_does_not_keep_the_loop_awake` и
+  `a_deadline_delivered_while_stopped_blocks_the_loop` (`owner::android::poll`), на macOS
+  `a_frame_of_a_pump_window_lets_the_deadline_be_delivered_again`; каждый падает при откате своей
+  правки (прежнее правило «срок не позже `now` — доставить», `WindowDelivery::new` вместо счёта
+  кадров, без `after_each_run`, доставленный срок как граница ожидания). Проверки на Windows: clippy и nextest
   `-p flui-native` (кроме trybuild `owner_platform_is_not_send`, чей вывод на Windows расходится
-  с ожидаемым, без связи с изменением), `xtask doc-strict`, `xtask checks`; в WSL Ubuntu 24.04:
+  с ожидаемым; файл не затронут), `cargo doc -p flui-native --document-private-items` с
+  `RUSTDOCFLAGS=-D warnings`, `xtask checks`; в WSL Ubuntu 24.04:
   clippy `-p flui-native` на Linux и `cargo +nightly check -p flui-native --lib --tests` для
   `aarch64-apple-darwin` и `aarch64-linux-android`. Прогон на Mac и на Android-устройстве (отклонённый кадр не держит
   цикл бодрствующим) — примечание строки «Event loop, startup and wake-ups»

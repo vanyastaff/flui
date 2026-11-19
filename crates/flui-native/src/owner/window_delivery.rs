@@ -375,7 +375,7 @@ pub struct WindowDelivery {
     frames_run: Arc<AtomicU64>,
     /// Called on the owner thread after each run of the FIFO, one that
     /// unwinds included (`after_each_run`); runs no user code.
-    after_run: Option<fn()>,
+    after_run: Option<Box<dyn Fn() + Send + Sync>>,
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
     close_answer: Mutex<Option<CloseDecision>>,
@@ -501,13 +501,18 @@ impl WindowDelivery {
 
     /// Call `hook` on the owner thread after each run of the window's FIFO,
     /// a run that unwinds included. A loop that no owner turn follows a
-    /// native delivery on (UIKit's: a display-link frame, a touch batch)
-    /// asks for its wake deadline again there, since the run may have left
-    /// a new one. `hook` runs no user code: it may run while a panic unwinds.
-    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
+    /// native delivery on (UIKit's: a display-link frame, a touch batch;
+    /// AppKit's: a display pass) asks for its wake deadline again there,
+    /// since the run may have left a new one. `hook` runs no user code: it
+    /// may run while a panic unwinds.
+    #[cfg(any(
+        target_os = "ios",
+        target_os = "macos",
+        all(test, not(target_arch = "wasm32"))
+    ))]
     #[must_use]
-    pub(crate) fn after_each_run(mut self, hook: fn()) -> Self {
-        self.after_run = Some(hook);
+    pub(crate) fn after_each_run(mut self, hook: impl Fn() + Send + Sync + 'static) -> Self {
+        self.after_run = Some(Box::new(hook));
         self
     }
 
@@ -767,7 +772,7 @@ impl WindowDelivery {
     /// is delivered first, and an input among it was answered where it was
     /// raised, so its answer is not this caller's.
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
-        let _after = AfterRun(self.after_run);
+        let _after = AfterRun(self.after_run.as_deref());
         let mut own_answer = None;
         let failure = loop {
             let Some(taken) = drain.next() else {
@@ -1135,9 +1140,9 @@ mod tests;
 
 /// Calls a window's `WindowDelivery::after_each_run` hook when a run of
 /// its FIFO ends, by return or by unwinding.
-struct AfterRun(Option<fn()>);
+struct AfterRun<'a>(Option<&'a (dyn Fn() + Send + Sync)>);
 
-impl Drop for AfterRun {
+impl Drop for AfterRun<'_> {
     fn drop(&mut self) {
         if let Some(hook) = self.0 {
             hook();

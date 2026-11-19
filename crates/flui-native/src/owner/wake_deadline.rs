@@ -132,6 +132,39 @@ impl FrameCount {
     }
 }
 
+/// What a look at the wake deadline found ([`WakeDeadline::turn`]).
+#[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WakeTurn {
+    /// The armed deadline, at the instant it carries, is due and is
+    /// delivered now: the caller asks for frames.
+    Due(web_time::Instant),
+    /// The armed deadline is still ahead: the caller waits no later than it.
+    Wait(web_time::Instant),
+    /// Nothing is armed: no deadline, or the one delivered with no frame run
+    /// since.
+    Idle,
+}
+
+#[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+impl WakeTurn {
+    /// Whether the look delivered the deadline.
+    #[cfg(any(windows, target_os = "android", test))]
+    pub(crate) fn is_due(self) -> bool {
+        matches!(self, Self::Due(_))
+    }
+
+    /// The instant to wait until for the deadline, if any: a delivered one
+    /// bounds no wait.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn wait(self) -> Option<web_time::Instant> {
+        match self {
+            Self::Wait(at) => Some(at),
+            Self::Due(_) | Self::Idle => None,
+        }
+    }
+}
+
 /// A deadline the loop waits for.
 #[cfg(any(
     windows,
@@ -210,6 +243,27 @@ impl WakeDeadline {
         };
         self.armed.as_ref().map(|arm| arm.deadline)
     }
+
+    /// A look at `now` by a loop that asks for frames the moment a deadline
+    /// is due: [`arm`](Self::arm) the handler's `answer` at the frame count
+    /// `frames`, then [`take_due`](Self::take_due) it. The AppKit pump, the
+    /// Android loop and the Win32 modal loops look this way; a loop that
+    /// waits between the two (Win32's main loop, X11, Wayland, UIKit) calls
+    /// them apart, taking at the start of a turn what it armed before its
+    /// wait.
+    #[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+    pub(crate) fn turn(
+        &mut self,
+        answer: Option<web_time::Instant>,
+        now: web_time::Instant,
+        frames: u64,
+    ) -> WakeTurn {
+        match self.arm(answer, frames) {
+            Some(at) if self.take_due(now, frames) => WakeTurn::Due(at),
+            Some(at) => WakeTurn::Wait(at),
+            None => WakeTurn::Idle,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -218,7 +272,7 @@ mod tests {
 
     use web_time::Instant;
 
-    use super::{TurnDeadline, WakeDeadline};
+    use super::{TurnDeadline, WakeDeadline, WakeTurn};
 
     /// A turn delivered for the deadline serves every answer not later than
     /// its time: a past instant answered again is not armed again, a later
@@ -294,5 +348,64 @@ mod tests {
             Some(at),
             "after a quiet answer, the old instant is new again"
         );
+    }
+
+    /// A loop's looks over its deadline: a due instant is delivered once per
+    /// frame generation, a look before the frame it asked for has run (or
+    /// after the handler declined it) finds nothing armed, the frame that
+    /// runs late still lets the same instant be delivered again at the look
+    /// that follows it, and a look that comes long after the instant still
+    /// delivers it. Red-check: deliver whenever the answer is not later than
+    /// `now`, the rule the AppKit pump and the Android loop had before.
+    #[test]
+    fn a_look_delivers_a_due_deadline_once_per_frame_generation() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let at = start + ms(5);
+        let later = start + ms(100);
+        let mut deadline = WakeDeadline::default();
+        // (case, answer, now, frames run, what the look finds)
+        for (case, answer, now, frames, found) in [
+            ("nothing asked for", None, start, 0, WakeTurn::Idle),
+            ("a deadline ahead", Some(at), start, 0, WakeTurn::Wait(at)),
+            ("due at its instant", Some(at), at, 0, WakeTurn::Due(at)),
+            (
+                "a look before its frame ran, or after it was declined",
+                Some(at),
+                at + ms(8),
+                0,
+                WakeTurn::Idle,
+            ),
+            (
+                "the frame ran late and left it due: delivered again",
+                Some(at),
+                at + ms(40),
+                1,
+                WakeTurn::Due(at),
+            ),
+            (
+                "and once for that generation",
+                Some(at),
+                at + ms(48),
+                1,
+                WakeTurn::Idle,
+            ),
+            (
+                "another instant is a new deadline",
+                Some(later),
+                at + ms(48),
+                1,
+                WakeTurn::Wait(later),
+            ),
+            (
+                "a look long after its instant still delivers it",
+                Some(later),
+                later + ms(900),
+                1,
+                WakeTurn::Due(later),
+            ),
+        ] {
+            assert_eq!(deadline.turn(answer, now, frames), found, "{case}");
+        }
     }
 }

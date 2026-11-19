@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
-use crate::owner::wake_deadline::WakeDeadline;
+use crate::owner::wake_deadline::WakeTurn;
 
 /// What one turn of the Android event loop knows when it chooses how long
 /// `poll_events` may block.
@@ -22,10 +22,13 @@ pub(crate) struct LoopTurn {
     /// The Activity is on screen, paused or not (ADR-0366), so a frame can be
     /// delivered at all.
     pub(crate) running: bool,
-    /// The earliest deadline armed and not yet delivered: the wake deadline
-    /// ([`LoopDeadline`]) or the turn deadline, both still ahead when the
-    /// turn took them.
-    pub(crate) wake_deadline: Option<Instant>,
+    /// What the turn's look at the wake deadline found
+    /// (`WakeDeadline::turn`). A due one was delivered as a redraw request,
+    /// which `should_render` carries while a frame can run, and bounds no
+    /// wait: stopped, or waiting for the choreographer, the turn blocks.
+    pub(crate) wake: WakeTurn,
+    /// The turn deadline, still ahead when the turn took it.
+    pub(crate) turn_deadline: Option<Instant>,
     /// When preferences, scroll factors and insets are read next
     /// ([`LoopReads::next`]); `None` while their changes are reported instead.
     pub(crate) next_preference_sample: Option<Instant>,
@@ -55,11 +58,13 @@ const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
 /// - a stopped turn blocks until the next deadline, and with none until it is
 ///   woken; preferences are read again on `Start`.
 ///
-/// A due wake deadline never reaches here: the turn delivered it as a frame
-/// request, which waits for a turn that can deliver it, and it is not armed
-/// again until a frame ran ([`LoopDeadline`]). A deadline that came due
-/// between the turn's look and this wait ends the wait at once, and the next
-/// turn delivers it.
+/// The wake deadline is the loop's look at it (`WakeDeadline::turn`): a due
+/// instant was delivered as a redraw request, which waits for a turn that
+/// can deliver it and bounds no wait, and it is not armed again until a frame
+/// ran, so a deadline whose frames the handler declines, or that a stopped
+/// Activity cannot draw, costs one delivery and no turn after it. A deadline
+/// that came due between the turn's look and this wait ends the wait at
+/// once, and the next turn delivers it.
 pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     if turn.should_render {
         return Some(Duration::ZERO);
@@ -67,7 +72,8 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     let until = |deadline: Instant| deadline.saturating_duration_since(now).min(LOOPER_MAX_WAIT);
     let sample = turn.next_preference_sample.filter(|_| turn.running);
     [
-        turn.wake_deadline,
+        turn.wake.wait(),
+        turn.turn_deadline,
         sample,
         turn.hand_off_deadline,
         turn.open_deadline,
@@ -76,57 +82,6 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     .flatten()
     .min()
     .map(until)
-}
-
-/// What one turn does with the application's wake deadline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeadlineTurn {
-    /// Nothing is armed: no deadline, or the one delivered with no frame run
-    /// since.
-    Idle,
-    /// The armed deadline is still ahead: the poll waits no longer.
-    Wait(Instant),
-    /// The armed deadline is due: the turn asks the window for a frame and
-    /// wakes the owner.
-    Deliver,
-}
-
-impl DeadlineTurn {
-    /// The instant the poll waits until for the deadline, if any.
-    pub(crate) fn wait(self) -> Option<Instant> {
-        match self {
-            Self::Wait(at) => Some(at),
-            Self::Idle | Self::Deliver => None,
-        }
-    }
-}
-
-/// The wake deadline as the Android loop arms and delivers it, by the rule
-/// every native host shares ([`WakeDeadline`]): a due instant is delivered
-/// once, and armed again only after a frame ran, so a deadline whose frames
-/// the handler declines, or that a stopped Activity cannot draw, costs one
-/// delivery and no turn after it.
-#[derive(Default)]
-pub(crate) struct LoopDeadline {
-    deadline: WakeDeadline,
-}
-
-impl LoopDeadline {
-    /// A turn at `now`: the handler answered `answer` with `frames` frames
-    /// run so far. A due deadline is delivered here, recorded at `frames`,
-    /// the count before the frame the delivery asks for.
-    pub(crate) fn turn(
-        &mut self,
-        answer: Option<Instant>,
-        now: Instant,
-        frames: u64,
-    ) -> DeadlineTurn {
-        match self.deadline.arm(answer, frames) {
-            Some(_) if self.deadline.take_due(now, frames) => DeadlineTurn::Deliver,
-            Some(at) => DeadlineTurn::Wait(at),
-            None => DeadlineTurn::Idle,
-        }
-    }
 }
 
 /// When the loop reads the preferences, scroll factors and insets on its own
@@ -207,6 +162,7 @@ impl LoopReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::owner::wake_deadline::WakeDeadline;
 
     /// A stopped Activity cannot deliver a frame, so the loop blocks: no timer
     /// of its own, and only a deadline still ahead (a timer the owner serves
@@ -217,60 +173,77 @@ mod tests {
     fn a_stopped_loop_blocks_until_it_is_woken() {
         let now = Instant::now();
         let ms = Duration::from_millis;
-        let turn = |should_render, running, wake_deadline| LoopTurn {
+        let turn = |should_render, running, wake| LoopTurn {
             should_render,
             running,
-            wake_deadline,
+            wake,
+            turn_deadline: None,
             next_preference_sample: Some(now + ms(500)),
             hand_off_deadline: None,
             open_deadline: None,
         };
-        let reported = |wake_deadline| LoopTurn {
+        let reported = |wake| LoopTurn {
             should_render: false,
             running: true,
-            wake_deadline,
+            wake,
+            turn_deadline: None,
             next_preference_sample: None,
             hand_off_deadline: None,
             open_deadline: None,
         };
+        let idle = WakeTurn::Idle;
+        let wait = |after| WakeTurn::Wait(now + after);
         for (case, turn, expected) in [
             (
                 "a frame to deliver",
-                turn(true, true, None),
+                turn(true, true, idle),
                 Some(Duration::ZERO),
             ),
-            ("running and idle", turn(false, true, None), Some(ms(500))),
+            ("running and idle", turn(false, true, idle), Some(ms(500))),
+            (
+                "waiting for the next frame, its deadline delivered",
+                turn(false, true, WakeTurn::Due(now)),
+                Some(ms(500)),
+            ),
             (
                 "waiting for the next frame, a timer ahead",
-                turn(false, true, Some(now + ms(3))),
+                turn(false, true, wait(ms(3))),
                 Some(ms(3)),
             ),
             (
                 "running and idle, with changes reported",
-                reported(None),
+                reported(idle),
                 None,
             ),
             (
                 "running, with changes reported, a timer ahead",
-                reported(Some(now + ms(250))),
+                reported(wait(ms(250))),
                 Some(ms(250)),
             ),
             (
                 "running, a deadline before the next sample",
-                turn(false, true, Some(now + ms(3))),
+                turn(false, true, wait(ms(3))),
                 Some(ms(3)),
             ),
             (
                 "running, a deadline after the next sample",
-                turn(false, true, Some(now + ms(5_000))),
+                turn(false, true, wait(ms(5_000))),
                 Some(ms(500)),
             ),
-            ("stopped and idle", turn(false, false, None), None),
+            (
+                "running, a turn deadline ahead",
+                LoopTurn {
+                    turn_deadline: Some(now + ms(40)),
+                    ..turn(false, true, idle)
+                },
+                Some(ms(40)),
+            ),
+            ("stopped and idle", turn(false, false, idle), None),
             (
                 "stopped, a request for a result due to end",
                 LoopTurn {
                     hand_off_deadline: Some(now + ms(700)),
-                    ..turn(false, false, None)
+                    ..turn(false, false, idle)
                 },
                 Some(ms(700)),
             ),
@@ -278,23 +251,28 @@ mod tests {
                 "stopped, an intent's documents due to be refused",
                 LoopTurn {
                     open_deadline: Some(now + ms(900)),
-                    ..turn(false, false, None)
+                    ..turn(false, false, idle)
                 },
                 Some(ms(900)),
             ),
             (
+                "stopped, a deadline delivered as a frame nothing can draw",
+                turn(false, false, WakeTurn::Due(now)),
+                None,
+            ),
+            (
                 "stopped, a deadline that came due since the turn took it",
-                turn(false, false, Some(now)),
+                turn(false, false, wait(ms(0))),
                 Some(Duration::ZERO),
             ),
             (
                 "stopped, a timer still ahead",
-                turn(false, false, Some(now + ms(250))),
+                turn(false, false, wait(ms(250))),
                 Some(ms(250)),
             ),
             (
                 "stopped, a timer further ahead than the looper can wait",
-                turn(false, false, Some(now + Duration::from_hours(30 * 24))),
+                turn(false, false, wait(Duration::from_hours(30 * 24))),
                 Some(LOOPER_MAX_WAIT),
             ),
         ] {
@@ -355,76 +333,43 @@ mod tests {
         }
     }
 
-    /// The loop's turns over a wake deadline: a due instant is delivered once
-    /// per frame generation, a frame the handler declines (the count stays)
-    /// leaves the loop blocked instead of turning again, a frame that ran lets
-    /// the same instant be delivered again, and a deadline whose turn comes
-    /// late is still delivered. Red-check: deliver whenever the answer is not
-    /// later than `now`, the rule the loop had before `WakeDeadline`.
-    #[test]
-    fn a_due_deadline_is_delivered_once_per_frame_generation() {
+    /// Turns of the loop over a past wake deadline, as the loop composes
+    /// them: the look, the redraw request a delivery leaves (taken only by a
+    /// turn that can draw), and the poll. Each frame the handler runs is
+    /// declined, so the count stays. The poll timeout of each turn.
+    fn turns_over_a_declined_deadline(running: bool) -> Vec<Option<Duration>> {
         let start = Instant::now();
         let ms = Duration::from_millis;
-        let at = start + ms(5);
-        let later = start + ms(100);
-        let mut deadline = LoopDeadline::default();
-        // (case, answer, now, frames run, what the turn does)
-        let table: &[(&str, Option<Instant>, Instant, u64, DeadlineTurn)] = &[
-            ("nothing asked for", None, start, 0, DeadlineTurn::Idle),
-            (
-                "a deadline ahead",
-                Some(at),
-                start,
-                0,
-                DeadlineTurn::Wait(at),
-            ),
-            ("due at its instant", Some(at), at, 0, DeadlineTurn::Deliver),
-            (
-                "its frame was declined: nothing armed",
-                Some(at),
-                at + ms(16),
-                0,
-                DeadlineTurn::Idle,
-            ),
-            (
-                "a turn woken for something else, still no frame",
-                Some(at),
-                at + ms(500),
-                0,
-                DeadlineTurn::Idle,
-            ),
-            (
-                "a frame ran and left it due: delivered again",
-                Some(at),
-                at + ms(520),
-                1,
-                DeadlineTurn::Deliver,
-            ),
-            (
-                "and once for that generation",
-                Some(at),
-                at + ms(536),
-                1,
-                DeadlineTurn::Idle,
-            ),
-            (
-                "another instant is a new deadline",
-                Some(later),
-                start + ms(60),
-                1,
-                DeadlineTurn::Wait(later),
-            ),
-            (
-                "its turn comes late: still delivered",
-                Some(later),
-                later + ms(900),
-                1,
-                DeadlineTurn::Deliver,
-            ),
-        ];
-        for (case, answer, now, frames, expected) in table {
-            assert_eq!(deadline.turn(*answer, *now, *frames), *expected, "{case}");
-        }
+        let behind = start + ms(5);
+        let mut deadline = WakeDeadline::default();
+        let mut redraw_requested = false;
+        (0..4_u32)
+            .map(|turn| {
+                let now = behind + ms(16) * turn;
+                let wake = deadline.turn(Some(behind), now, 0);
+                if wake.is_due() {
+                    redraw_requested = true;
+                }
+                let timeout = poll_timeout(
+                    LoopTurn {
+                        should_render: running && redraw_requested,
+                        running,
+                        wake,
+                        turn_deadline: None,
+                        next_preference_sample: None,
+                        hand_off_deadline: None,
+                        open_deadline: None,
+                    },
+                    now,
+                );
+                // A running turn takes the request and runs the frame, which
+                // the handler declines; a stopped one keeps it.
+                if running {
+                    redraw_requested = false;
+                }
+                timeout
+            })
+            .collect()
     }
 
     /// A running loop whose handler declines the frame a past deadline asks
@@ -433,36 +378,23 @@ mod tests {
     /// answer is not later than `now`, which kept the loop at a zero timeout.
     #[test]
     fn a_declined_frame_does_not_keep_the_loop_awake() {
-        let start = Instant::now();
-        let ms = Duration::from_millis;
-        let behind = start + ms(5);
-        let mut deadline = LoopDeadline::default();
-        let mut redraw_requested = false;
-        let mut timeouts = Vec::new();
-        for turn in 0..4_u32 {
-            let now = behind + ms(16) * turn;
-            let wake = deadline.turn(Some(behind), now, 0);
-            if wake == DeadlineTurn::Deliver {
-                redraw_requested = true;
-            }
-            timeouts.push(poll_timeout(
-                LoopTurn {
-                    should_render: redraw_requested,
-                    running: true,
-                    wake_deadline: wake.wait(),
-                    next_preference_sample: None,
-                    hand_off_deadline: None,
-                    open_deadline: None,
-                },
-                now,
-            ));
-            // The frame runs and the handler declines it: the count stays.
-            redraw_requested = false;
-        }
         assert_eq!(
-            timeouts,
+            turns_over_a_declined_deadline(true),
             [Some(Duration::ZERO), None, None, None],
             "one turn delivers the deadline, and the loop then blocks"
+        );
+    }
+
+    /// A stopped Activity cannot draw the frame a past deadline asks for:
+    /// the delivery waits as a redraw request for `Start`, and no turn polls
+    /// at a zero timeout for it meanwhile. Red-check: let a delivered
+    /// deadline bound the wait (the instant of `WakeTurn::Due`).
+    #[test]
+    fn a_deadline_delivered_while_stopped_blocks_the_loop() {
+        assert_eq!(
+            turns_over_a_declined_deadline(false),
+            [None, None, None, None],
+            "a stopped loop blocks from the delivery on"
         );
     }
 }

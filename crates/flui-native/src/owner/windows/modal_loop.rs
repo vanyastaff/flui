@@ -31,7 +31,7 @@ use super::{ClassWindows, FrameCount, WindowsLoop};
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::modal_pace::{ASK_AGAIN_MS, LONGEST_WAIT_MS, PaceTimer, TimerChange};
 use crate::owner::signal::OwnerSignal;
-use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
+use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline, WakeTurn};
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
 pub(crate) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
@@ -104,12 +104,10 @@ impl ModalFrames {
         let answer = WindowsLoop::ask_wake_deadline(&self.app);
         let now = web_time::Instant::now();
         let frames = self.frames.get();
-        let (armed, due) = {
-            let mut deadline = self.deadline.borrow_mut();
-            let armed = deadline.arm(answer, frames);
-            (armed, deadline.take_due(now, frames))
-        };
-        if due && let Some(windows) = self.windows.upgrade() {
+        let wake = self.deadline.borrow_mut().turn(answer, now, frames);
+        if wake.is_due()
+            && let Some(windows) = self.windows.upgrade()
+        {
             windows.redraw_for_deadline();
         }
         // The turn deadline, as the main loop asks it: only while the owner
@@ -133,7 +131,13 @@ impl ModalFrames {
         if let Some(windows) = self.windows.upgrade() {
             windows.paint_invalid();
         }
-        [armed, turn_armed].into_iter().flatten().min()
+        // A delivered instant is returned too: the pace looks again at it,
+        // and that look finds it armed only once a frame ran.
+        let wake_armed = match wake {
+            WakeTurn::Due(at) | WakeTurn::Wait(at) => Some(at),
+            WakeTurn::Idle => None,
+        };
+        [wake_armed, turn_armed].into_iter().flatten().min()
     }
 }
 

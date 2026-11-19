@@ -34,7 +34,7 @@ mod native_owner;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod opened_urls;
 #[cfg(any(target_os = "macos", test))]
-pub(crate) mod pump_deadline;
+pub(crate) mod pump_delivery;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod terminate_gate;
 

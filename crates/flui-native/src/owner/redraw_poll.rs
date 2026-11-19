@@ -8,7 +8,7 @@
 /// forcing one while stopped would busy-loop even though no frame can be
 /// delivered. The redraw is preserved rather than consumed until the
 /// post-poll execution snapshot permits delivery. A due wake deadline reaches
-/// here as such a redraw request (`poll::LoopDeadline`).
+/// here as such a redraw request (`WakeDeadline::turn`).
 pub(crate) struct RedrawPoll {
     redraw_observed: bool,
 }
@@ -24,23 +24,22 @@ impl RedrawPoll {
         poll: impl FnOnce(bool) -> T,
     ) -> (T, PostPollRedraw) {
         let force_immediate = running && self.redraw_observed;
-        (poll(force_immediate), PostPollRedraw)
+        (poll(force_immediate), PostPollRedraw(()))
     }
 }
 
-/// The proof that the poll ran, which the redraw is consumed through.
-pub(crate) struct PostPollRedraw;
+/// The proof that the poll ran, which the redraw is consumed through: only
+/// [`RedrawPoll::poll`] makes one, so no consumption comes before a poll.
+pub(crate) struct PostPollRedraw(());
 
 impl PostPollRedraw {
-    #[expect(
-        clippy::unused_self,
-        reason = "consuming the post-poll value is what orders the consumption after the poll"
-    )]
     pub(crate) fn take_if_deliverable(
         self,
         running_after_poll: bool,
         take_redraw: impl FnOnce() -> bool,
     ) -> bool {
+        // The proof is spent here.
+        let Self(()) = self;
         running_after_poll && take_redraw()
     }
 }

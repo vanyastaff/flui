@@ -413,7 +413,8 @@ impl MacOSWindow {
     /// read from `opening` as points of AppKit's flipped desktop, which the
     /// window position's `open` turned them into through their screens
     /// before the window is built. `delivery` holds the handler the window
-    /// opens with and counts its frames into the loop's count.
+    /// opens with and reports its frames and runs to the wake pump
+    /// (`WakePump::window_delivery`).
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
@@ -1393,12 +1394,13 @@ impl host::Window<MacOSLoop> for MacOSWindow {
                 returns_to,
             },
             // Each frame the handler runs counts into the pump's count, which
-            // arms a delivered wake deadline again only after a frame ran.
-            Arc::new(WindowDelivery::counting_frames(
-                handler,
-                crate::input::availability::macos(),
-                owner.wake_pump.frame_counter(),
-            )),
+            // arms a delivered wake deadline again only after a frame ran,
+            // and each run ends in a look at the deadline.
+            Arc::new(
+                owner
+                    .wake_pump
+                    .window_delivery(handler, crate::input::availability::macos()),
+            ),
             Arc::clone(&owner.windows),
             windows,
             owner.view_hooks,
