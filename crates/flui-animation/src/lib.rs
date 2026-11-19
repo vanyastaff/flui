@@ -21,7 +21,7 @@
 //! - [`Simulation`] - Validated physics: [`SpringSimulation`], friction and a bouncing
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - An owned value driven by [`MotionSpec`], with
-//!   velocity-preserving retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//!   velocity-preserving retargeting (`#[derive(MotionValue)]` for custom types)
 //! - [`Vsync`] - The registry handle a tree hands its controllers; a presentation's
 //!   frame driver alone ticks and closes it (ADR-0382)
 //! - [`AnimationError`] - Error type for animation operations
@@ -94,16 +94,18 @@
 #![deny(missing_docs)]
 // Crate-local bars above the workspace lint table (a member using
 // `[lints] workspace = true` cannot add its own `[lints.clippy]` entries).
-// `missing_panics_doc`, `missing_errors_doc`, `allow_attributes_without_reason`,
-// `cast_possible_truncation`, `cast_sign_loss` and `clone_on_ref_ptr` still
-// have hits in the controller, vsync, proxy, switch and compound modules; they
-// turn on here once those modules are reworked.
 #![warn(
     clippy::derive_partial_eq_without_eq,
     clippy::return_self_not_must_use,
     clippy::lossy_float_literal,
     clippy::unwrap_in_result,
-    clippy::fallible_impl_from
+    clippy::fallible_impl_from,
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::allow_attributes_without_reason,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::clone_on_ref_ptr
 )]
 
 // Core animation modules
@@ -128,6 +130,7 @@ mod driven;
 mod error;
 mod keyframes;
 mod motion;
+mod motion_value;
 mod observability;
 mod origin;
 mod proxy;
@@ -140,7 +143,6 @@ mod simulation;
 mod stagger;
 mod switch;
 mod tween;
-mod value_conversion;
 mod vsync;
 mod vsync_update;
 
@@ -169,6 +171,7 @@ pub use motion::{
     AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionOverride, MotionPolicy,
     PlaybackRate,
 };
+pub use motion_value::{AnimationVector, MotionValue};
 pub use proxy::ProxyAnimation;
 pub use refusal::{CONTAINED_PANIC_TARGET, NEVER_SETTLES_TARGET, REFUSAL_TARGET};
 pub use repeat::{Iterations, RepeatMode, RepeatSpec};
@@ -181,13 +184,11 @@ pub use simulation::{
     SpringSimulation, SpringType, Tolerance,
 };
 pub use stagger::{Stagger, StaggerOrigin};
-pub use value_conversion::{AnimationVector, TwoWayConverter};
 pub use vsync_update::{VsyncPublication, VsyncUpdate};
-// `#[derive(TwoWayConverter)]` writes `TwoWayConverter` and the geometry
-// `Lerp`. It shares the trait's name in the macro namespace (the serde
-// `Serialize` trait and derive), so one `use flui_animation::TwoWayConverter`
-// brings in both.
-pub use flui_macros::TwoWayConverter;
+// `#[derive(MotionValue)]` shares the trait's name in the macro namespace (as
+// serde's `Serialize` does), so one `use flui_animation::MotionValue` brings in
+// both; interpolation is the separate `flui_foundation::geometry::Lerp` derive.
+pub use flui_macros::MotionValue;
 pub use switch::AnimationSwitch;
 pub use tween::TweenAnimation;
 pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};

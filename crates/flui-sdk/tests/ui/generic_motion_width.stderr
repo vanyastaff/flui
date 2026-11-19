@@ -1,16 +1,16 @@
-error: #[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths
- --> tests/ui/generic_motion_width.rs:4:43
+error: #[derive(MotionValue)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths
+ --> tests/ui/generic_motion_width.rs:4:39
   |
-4 | struct Generic<T: TwoWayConverter + Lerp>(T);
-  |                                           ^
+4 | struct Generic<T: MotionValue + Lerp>(T);
+  |                                       ^
 
-error: #[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths
+error: #[derive(MotionValue)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths
  --> tests/ui/generic_motion_width.rs:7:37
   |
 7 | struct GenericArray<const N: usize>([f64; N]);
   |                                     ^^^^^^^^
 
-error: #[derive(TwoWayConverter)] requires a type without lifetime parameters: a vector's width cannot depend on one
+error: #[derive(MotionValue)] requires a type without lifetime parameters: a vector's width cannot depend on one
   --> tests/ui/generic_motion_width.rs:10:17
    |
 10 | struct Borrowed<'a>(f64, std::marker::PhantomData<&'a ()>);

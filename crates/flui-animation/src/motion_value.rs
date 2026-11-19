@@ -1,6 +1,6 @@
 //! Conversion between UI values and fixed-width scalar components.
 //!
-//! [`TwoWayConverter`] separates value representation from motion and ownership.
+//! [`MotionValue`] separates value representation from motion and ownership.
 //! [`crate::AnimatedValue`] applies curves or springs to these components.
 
 use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
@@ -40,7 +40,7 @@ impl<const N: usize> AnimationVector for [f64; N] {
 /// requires concrete component widths, since stable Rust cannot sum
 /// generic-dependent widths in an array length.
 /// Conversions run outside state borrows.
-pub trait TwoWayConverter: Clone {
+pub trait MotionValue: Clone {
     /// The scalar-component representation, e.g. `[f64; 4]` for a colour.
     /// `Copy` so it can be used as a scratch buffer; `AsRef`/`AsMut<[f64]>` so
     /// the motion core can iterate components generically.
@@ -64,7 +64,7 @@ pub trait TwoWayConverter: Clone {
     fn rest_thresholds() -> Self::Vector;
 }
 
-impl TwoWayConverter for f64 {
+impl MotionValue for f64 {
     type Vector = [f64; 1];
     fn rest_thresholds() -> Self::Vector {
         [0.001]
@@ -79,7 +79,7 @@ impl TwoWayConverter for f64 {
     }
 }
 
-impl TwoWayConverter for Offset<f64> {
+impl MotionValue for Offset<f64> {
     type Vector = [f64; 2];
     fn rest_thresholds() -> Self::Vector {
         [0.01; 2]
@@ -94,7 +94,7 @@ impl TwoWayConverter for Offset<f64> {
     }
 }
 
-impl TwoWayConverter for Size<f64> {
+impl MotionValue for Size<f64> {
     type Vector = [f64; 2];
     fn rest_thresholds() -> Self::Vector {
         [0.01; 2]
@@ -112,7 +112,7 @@ impl TwoWayConverter for Size<f64> {
 /// Animates the four bounds in `[left, top, right, bottom]` order, matching
 /// `Rect` interpolation. Inverted and degenerate rectangles remain unchanged
 /// by conversion; consumers own any nonnegative-size requirement.
-impl TwoWayConverter for Rect<f64> {
+impl MotionValue for Rect<f64> {
     type Vector = [f64; 4];
 
     fn rest_thresholds() -> Self::Vector {
@@ -130,7 +130,7 @@ impl TwoWayConverter for Rect<f64> {
     }
 }
 
-impl TwoWayConverter for EdgeInsets {
+impl MotionValue for EdgeInsets {
     type Vector = [f64; 4];
     fn rest_thresholds() -> Self::Vector {
         [0.01; 4]
@@ -143,7 +143,7 @@ impl TwoWayConverter for EdgeInsets {
     }
 }
 
-impl TwoWayConverter for Alignment {
+impl MotionValue for Alignment {
     type Vector = [f64; 2];
     fn rest_thresholds() -> Self::Vector {
         [0.001; 2]
@@ -159,7 +159,7 @@ impl TwoWayConverter for Alignment {
 /// Springs a colour in premultiplied Oklab (`L·α`, `a·α`, `b·α`, `α`), the space
 /// `Tween<Color>` mixes in (ADR-0149): each component's spring carries its own
 /// velocity, and a fade to transparent keeps the opaque end's hue.
-impl TwoWayConverter for Color {
+impl MotionValue for Color {
     type Vector = [f64; 4];
     fn rest_thresholds() -> Self::Vector {
         [0.001; 4]

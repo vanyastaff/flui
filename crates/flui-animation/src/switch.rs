@@ -7,7 +7,7 @@ use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId, Notifier};
 use std::cell::RefCell;
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// The mode for determining when to switch animations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +32,7 @@ enum SwitchMode {
 ///
 /// ```
 /// use flui_animation::{AnimationSwitch, AnimationController, Animation};
-/// use std::rc::Rc;
+/// use std::rc::{Rc, Weak};
 /// use std::time::Duration;
 ///
 ///
@@ -183,7 +183,7 @@ impl AnimationSwitch {
             let next_value = next_anim.value();
 
             if current_value == next_value {
-                (Terminal::new(next_anim.get().clone()), None, None)
+                (Terminal::new(Rc::clone(next_anim.get())), None, None)
             } else {
                 let mode = if current_value > next_value {
                     SwitchMode::Maximize
@@ -240,16 +240,16 @@ impl AnimationSwitch {
     /// Returns the currently active animation.
     #[must_use]
     pub fn current(&self) -> Rc<dyn Animation<f64>> {
-        self.owner.inner.borrow().current.get().clone()
+        Rc::clone(self.owner.inner.borrow().current.get())
     }
 
     /// Builds the status forwarder that re-emits the current animation's
     /// status transitions through the switch's own status channel.
     fn make_status_callback(
-        inner_weak: &std::rc::Weak<RefCell<AnimationSwitchInner>>,
+        inner_weak: &Weak<RefCell<AnimationSwitchInner>>,
         statuses: &Rc<Notifier<AnimationStatus>>,
     ) -> crate::StatusObserver {
-        let inner_weak = inner_weak.clone();
+        let inner_weak = Weak::clone(inner_weak);
         let statuses = Rc::downgrade(statuses);
         Rc::new(move |status, recovery| {
             if let Some(state) = inner_weak.upgrade() {
@@ -374,7 +374,7 @@ impl AnimationSwitch {
         let (current, next) = {
             let inner = self.owner.inner.borrow_mut();
             (
-                Terminal::new(inner.current.get().clone()),
+                Terminal::new(Rc::clone(inner.current.get())),
                 inner.next.clone(),
             )
         };
@@ -456,7 +456,7 @@ fn dispose_switch(
         inner.disposed = true;
         inner.mode = None;
         (
-            Terminal::new(inner.current.get().clone()),
+            Terminal::new(Rc::clone(inner.current.get())),
             inner.next.take(),
             inner.current_listener.take(),
             inner.current_status_subscription.take(),
@@ -540,7 +540,7 @@ impl fmt::Debug for AnimationSwitch {
         let (current, has_next) = {
             let inner = self.owner.inner.borrow();
             (
-                Terminal::new(inner.current.get().clone()),
+                Terminal::new(Rc::clone(inner.current.get())),
                 inner.next.is_some(),
             )
         };

@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_animation::{AnimatedValueView, Animation, AnimationVector, MotionSpec, TwoWayConverter};
+use flui_animation::{AnimatedValueView, Animation, AnimationVector, MotionSpec, MotionValue};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
@@ -15,7 +15,7 @@ type ValueBuilder<T> = Rc<dyn Fn(&T) -> BoxedView>;
 /// Animates `target` implicitly and builds its subtree from the value shown.
 ///
 /// This is the implicit widget for a value no named widget covers: any type
-/// that implements [`TwoWayConverter`], including one that derives it. The
+/// that implements [`MotionValue`], including one that derives it. The
 /// first build shows `target`; a later build with a different target moves
 /// from the value currently shown, keeping its velocity. Only the builder's
 /// subtree rebuilds per frame.
@@ -33,13 +33,13 @@ type ValueBuilder<T> = Rc<dyn Fn(&T) -> BoxedView>;
 /// # let _ = bar;
 /// ```
 #[derive(Clone, StatefulView)]
-pub struct Animated<T: TwoWayConverter + 'static> {
+pub struct Animated<T: MotionValue + 'static> {
     target: T,
     motion: MotionSpec,
     builder: ValueBuilder<T>,
 }
 
-impl<T: TwoWayConverter + 'static> Animated<T> {
+impl<T: MotionValue + 'static> Animated<T> {
     /// Animate toward `target` with the default motion, building the subtree
     /// from each value shown.
     pub fn new<V, F>(target: T, builder: F) -> Self
@@ -55,13 +55,13 @@ impl<T: TwoWayConverter + 'static> Animated<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> MotionBuilder for Animated<T> {
+impl<T: MotionValue + 'static> MotionBuilder for Animated<T> {
     fn motion_mut(&mut self) -> &mut MotionSpec {
         &mut self.motion
     }
 }
 
-impl<T: TwoWayConverter + 'static> std::fmt::Debug for Animated<T> {
+impl<T: MotionValue + 'static> std::fmt::Debug for Animated<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Animated")
             .field("motion", &self.motion)
@@ -70,18 +70,18 @@ impl<T: TwoWayConverter + 'static> std::fmt::Debug for Animated<T> {
 }
 
 /// Owns the motion and the stable stream the builder observes.
-pub struct AnimatedState<T: TwoWayConverter + 'static> {
+pub struct AnimatedState<T: MotionValue + 'static> {
     animation: ImplicitMotion<T>,
     stream: Rc<AnimatedValueView<T>>,
 }
 
-impl<T: TwoWayConverter + 'static> std::fmt::Debug for AnimatedState<T> {
+impl<T: MotionValue + 'static> std::fmt::Debug for AnimatedState<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedState").finish_non_exhaustive()
     }
 }
 
-impl<T: TwoWayConverter + 'static> StatefulView for Animated<T> {
+impl<T: MotionValue + 'static> StatefulView for Animated<T> {
     type State = AnimatedState<T>;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
@@ -96,7 +96,7 @@ impl<T: TwoWayConverter + 'static> StatefulView for Animated<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> ViewState<Animated<T>> for AnimatedState<T> {
+impl<T: MotionValue + 'static> ViewState<Animated<T>> for AnimatedState<T> {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.animation.bind(ctx);
     }

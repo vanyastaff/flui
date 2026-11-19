@@ -4,11 +4,8 @@
 use super::{AnimationController, Vsync, VsyncRegistration};
 use crate::{Animation, AnimationStatus};
 use std::{
+    cell::{Cell, RefCell},
     rc::Rc,
-    sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
     time::Duration,
 };
 
@@ -20,16 +17,16 @@ enum VsyncRemoval {
 
 struct VsyncRetirementProbe {
     registry: Vsync,
-    registration: Rc<Mutex<Option<VsyncRegistration>>>,
-    replacement: Rc<Mutex<Option<(AnimationController, VsyncRegistration)>>>,
-    drops: Rc<AtomicUsize>,
+    registration: Rc<RefCell<Option<VsyncRegistration>>>,
+    replacement: Rc<RefCell<Option<(AnimationController, VsyncRegistration)>>>,
+    drops: Rc<Cell<usize>>,
     removal: VsyncRemoval,
     panics: bool,
 }
 
 impl Drop for VsyncRetirementProbe {
     fn drop(&mut self) {
-        self.drops.fetch_add(1, Ordering::SeqCst);
+        self.drops.set(self.drops.get() + 1);
         assert_eq!(
             self.registry.len(),
             1,
@@ -37,8 +34,7 @@ impl Drop for VsyncRetirementProbe {
         );
         let id = self
             .registration
-            .lock()
-            .expect("vsync registration")
+            .borrow()
             .as_ref()
             .expect("admitted owner")
             .clone();
@@ -52,7 +48,7 @@ impl Drop for VsyncRetirementProbe {
             .registry
             .try_register_resuming(&fresh, Duration::ZERO)
             .expect("private token admission");
-        *self.replacement.lock().expect("fresh registration") = Some((fresh, id));
+        *self.replacement.borrow_mut() = Some((fresh, id));
         assert_eq!(
             self.registry.len(),
             2,
@@ -70,15 +66,15 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
             .try_register_resuming(&sibling, Duration::ZERO)
             .expect("private token admission");
         sibling.forward().expect("sibling runs");
-        let registration = Rc::new(Mutex::new(None));
-        let replacement = Rc::new(Mutex::new(None));
-        let drops = Rc::new(AtomicUsize::new(0));
+        let registration = Rc::new(RefCell::new(None));
+        let replacement = Rc::new(RefCell::new(None));
+        let drops = Rc::new(Cell::new(0));
         let owner = AnimationController::builder(Duration::from_secs(1)).build();
         let probe = VsyncRetirementProbe {
             registry: registry.clone(),
-            registration: registration.clone(),
-            replacement: replacement.clone(),
-            drops: drops.clone(),
+            registration: Rc::clone(&registration),
+            replacement: Rc::clone(&replacement),
+            drops: Rc::clone(&drops),
             removal,
             panics,
         };
@@ -88,18 +84,18 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
             }))
             .forget();
 
-        let child_order = Rc::new(Mutex::new(Vec::new()));
+        let child_order = Rc::new(RefCell::new(Vec::new()));
         let mut sibling_children = Vec::new();
         // Put the removed child between surviving siblings, with two trailing
         // children so an order-changing swap removal would be observable.
         let make_child = |label| {
             let child = Vsync::new();
             let animation = AnimationController::builder(Duration::from_secs(1)).build();
-            let order = child_order.clone();
+            let order = Rc::clone(&child_order);
             animation
                 .listen_status(std::rc::Rc::new(move |status| {
                     if status == AnimationStatus::ForwardSettled {
-                        order.lock().expect("child tick order").push(label);
+                        order.borrow_mut().push(label);
                     }
                 }))
                 .forget();
@@ -134,12 +130,8 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
             }
         };
         drop(owner);
-        *registration.lock().expect("registration stored") = Some(id.clone());
-        assert_eq!(
-            drops.load(Ordering::SeqCst),
-            0,
-            "registry owns the last controller"
-        );
+        *registration.borrow_mut() = Some(id.clone());
+        assert_eq!(drops.get(), 0, "registry owns the last controller");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match removal {
             VsyncRemoval::Controller => registry.unregister(&id),
             VsyncRemoval::Child => registry.detach_child(&id),
@@ -154,19 +146,14 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
         } else {
             assert!(result.is_ok());
         }
-        assert_eq!(
-            drops.load(Ordering::SeqCst),
-            1,
-            "actual last owner retired once"
-        );
+        assert_eq!(drops.get(), 1, "actual last owner retired once");
         match removal {
             VsyncRemoval::Controller => registry.unregister(&id),
             VsyncRemoval::Child => registry.detach_child(&id),
         }
-        assert_eq!(drops.load(Ordering::SeqCst), 1, "removal is idempotent");
+        assert_eq!(drops.get(), 1, "removal is idempotent");
         let (fresh, fresh_id) = replacement
-            .lock()
-            .expect("fresh run preserved")
+            .borrow_mut()
             .take()
             .expect("reentrant registration");
         assert_eq!(
@@ -189,7 +176,7 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
         assert!(!registry.has_running(), "completed runs quiesce");
         if let VsyncRemoval::Child = removal {
             assert_eq!(
-                *child_order.lock().expect("surviving children order"),
+                *child_order.borrow(),
                 vec!["before", "after first", "after second"]
             );
         }

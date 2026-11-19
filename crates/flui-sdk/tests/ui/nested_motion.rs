@@ -1,17 +1,17 @@
-use flui_sdk::animation::TwoWayConverter;
+use flui_sdk::animation::MotionValue;
 use flui_sdk::{animation::AnimationVector, geometry::Lerp};
 use flui_sdk::geometry::Offset;
 use flui_sdk::painting::Color;
 
 type Position = Offset<f64>;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct Appearance {
     position: Position,
     color: Color,
 }
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct Motion<const TAG: usize>(Appearance, f64);
 
 fn main() {
@@ -23,7 +23,7 @@ fn main() {
         Appearance { position: Offset::new(4.0, 8.0), color: Color::rgba(0, 0, 255, 0) },
         1.0,
     );
-    assert_eq!(<Motion<7> as TwoWayConverter>::Vector::COMPONENTS, 7);
+    assert_eq!(<Motion<7> as MotionValue>::Vector::COMPONENTS, 7);
     let midpoint = start.lerp_to(&finish, 0.5);
     assert_eq!(midpoint.0.position, Offset::new(2.0, 4.0));
     assert!(midpoint.0.color.red_f32() > 0.999);

@@ -1,8 +1,8 @@
 ### Added
 
 - `AnimatedScale`, `AnimatedSlide`, `AnimatedPositioned`, `AnimatedCrossFade` (with `CrossFadeState`) and `AnimatedDefaultTextStyle` implicit widgets.
-- `Animated<T>` animates any `TwoWayConverter` value, keeping its velocity, and builds its subtree from the value shown; `AnimatedLerp<T>` does the same for any `Lerp` value by re-anchoring from the value shown.
-- `Lerp` for `TextStyle`, and in `flui-material` for `ColorScheme`, `TextTheme` and `ThemeData`; `TwoWayConverter` for `TranslationFraction`.
+- `Animated<T>` animates any `MotionValue` value, keeping its velocity, and builds its subtree from the value shown; `AnimatedLerp<T>` does the same for any `Lerp` value by re-anchoring from the value shown.
+- `Lerp` for `TextStyle`, and in `flui-material` for `ColorScheme`, `TextTheme` and `ThemeData`; `MotionValue` for `TranslationFraction`.
 - `flui-material`: `AnimatedTheme`.
 
 ### Changed
