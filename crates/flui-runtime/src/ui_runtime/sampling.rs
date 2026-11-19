@@ -186,15 +186,21 @@ impl<'runtime> PresentationSampling<'runtime> {
             tracing::trace!(target: "flui.pace", event = "segment_backoff", presentation = ?presentation.id(), "presentation waits out a dropped frame");
             return;
         }
-        // An unseen window whose quiet period is over draws the frame it owes its surface. The
+        // An unseen window whose owed frame a frame of its own window served draws it. The
         // grant waits in its clock for the first poll this or a later pump makes (text
         // preparation may hold this one); the next quiet period starts when the frame runs.
-        presentation.grant_occluded_frame(runtime.session.get(), presentation.clock().now());
+        let owed_granted =
+            presentation.grant_occluded_frame(runtime.session.get(), presentation.clock().now());
         let mut selected = None;
         let mut completion_entered = self.completion_entered;
         self.run(SamplingStage::Preparation, |recovery| {
             let resuming = presentation.text_preparation.borrow().segment.is_some();
             if !text_preparation::can_run(presentation) {
+                // The served owed frame is held: asked for again once the preparation's
+                // outcome moves on (ADR-0389).
+                if owed_granted {
+                    presentation.hold_owed_frame();
+                }
                 return;
             }
             presentation.reconcile_semantics_enablement();

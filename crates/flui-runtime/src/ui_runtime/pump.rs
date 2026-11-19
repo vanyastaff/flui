@@ -480,6 +480,7 @@ impl UiRuntime {
     fn clear_frame_requests(&self) {
         for presentation in self.presentations.iter() {
             presentation.frame_request.set(None);
+            presentation.forget_served_owed_frame();
         }
     }
 

@@ -2191,6 +2191,10 @@ impl PlatformWindow for IOSWindow {
         self.redraw.request_redraw();
     }
 
+    /// Never asked: UIKit tells no covering and keeps no covered window's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
         Arc::clone(&self.redraw) as _
     }

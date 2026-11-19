@@ -37,6 +37,8 @@ pub(crate) mod opened_urls;
 pub(crate) mod pump_delivery;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod terminate_gate;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod timed_frame;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use native_owner::NativeOwner;

@@ -1497,6 +1497,10 @@ impl PlatformWindow for WebWindow {
         }
     }
 
+    /// Never asked: a page tells no covering and keeps no covered canvas's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     /// The same request as [`request_redraw`](PlatformWindow::request_redraw),
     /// from the page's only thread or any other.
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
