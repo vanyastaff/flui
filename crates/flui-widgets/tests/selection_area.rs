@@ -477,7 +477,7 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
 /// linked text in an area changes neither link navigation nor activation.
 ///
 /// Red-check: make a linked selectable paragraph merge its descendants
-/// (the two links fold into one node with the last handler).
+/// (the two links fold into one node with the first link's handler).
 pub(crate) fn links_in_a_selection_area_keep_their_own_nodes() {
     use flui_painting::typography::TextSpan;
     use flui_widgets::RichText;

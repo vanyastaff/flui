@@ -482,8 +482,9 @@ impl<'f> AssemblyRegions<'f> {
     }
 }
 
-/// Pins executable ownership before folding can replace a receiver's handler
-/// or discard a blocked, clipped or fallback contributor. Topology and metadata
+/// Pins executable ownership before folding can skip a contributor's handler
+/// (the first handler of an action wins) or discard a blocked, clipped or
+/// fallback contributor. Topology and metadata
 /// remain ordinary temporary values; only the opaque captures need this custody.
 #[derive(Default)]
 struct AssemblyCallbacks {
