@@ -105,7 +105,7 @@ impl ModalFrames {
         let now = web_time::Instant::now();
         let frames = self.frames.get();
         let wake = self.deadline.borrow_mut().turn(answer, now, frames);
-        if wake.due_at().is_some()
+        if wake.is_due()
             && let Some(windows) = self.windows.upgrade()
         {
             windows.redraw_for_deadline();
@@ -134,10 +134,7 @@ impl ModalFrames {
         // A delivered instant is returned too: no frame's run follows a modal
         // delivery up, so the pace looks again at it, and that look finds it
         // armed only once a frame ran.
-        [wake.due_at().or(wake.wait()), turn_armed]
-            .into_iter()
-            .flatten()
-            .min()
+        [wake.instant(), turn_armed].into_iter().flatten().min()
     }
 }
 

@@ -1398,8 +1398,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             },
             // Each frame the handler runs counts into the pump's count, which
             // arms a delivered wake deadline again only after a frame ran,
-            // and each run in which a frame ran ends in a look at the
-            // deadline.
+            // and each run beyond input ends in a look at the deadline.
             owner
                 .wake_pump
                 .window_delivery(handler, crate::input::availability::macos()),

@@ -26,15 +26,17 @@
 //!    owner-queue turn.
 //!
 //! A look is scheduled at a redraw request, after each run of a window's
-//! delivery in which a frame ran ([`WakePump::window_delivery`]; a run of
-//! input alone asks for none), and after an
-//! owner turn that leaves a deadline (`LoopControl`,
+//! delivery that delivered more than input ([`WakePump::window_delivery`]: a
+//! frame, a state or surface change; a run of input alone asks for none), and
+//! after an owner turn of the loop that leaves a deadline (`LoopControl`,
 //! [`WakePump::after_owner_turn`]). The run of a frame is what follows a
 //! delivery up: the frame AppKit runs for a request, whenever its display
 //! pass comes, may leave the deadline due again or arm a new one, and no owner
-//! turn need follow it. An owner turn can leave a deadline no redraw request
-//! starts the pump for, such as the frame a covered window owes its surface
-//! (ADR-0357), whose window asks for no frame while it cannot be seen.
+//! turn of the loop need follow it. A state change (a window covered) reaches
+//! the application in the window's callback, whose owner turn is not the
+//! loop's either, and can leave a deadline no redraw request starts the pump
+//! for: the frame a covered window owes its surface (ADR-0357), whose window
+//! asks for no frame while it cannot be seen.
 //!
 //! Each look arms and takes the deadline by the rule every native host shares
 //! (`WakeDeadline::turn`): a due instant is delivered once, as a frame request
@@ -143,7 +145,8 @@ impl WakePump {
 
     /// The delivery of a window opened with `handler`, whose input devices
     /// give it `capabilities`: each frame its handler runs raises the pump's
-    /// count, and each run of its FIFO in which a frame ran ends in a look
+    /// count, and each run of its FIFO that delivered more than input ends
+    /// in a look
     /// ([`pump_delivery::window_delivery`]).
     pub(crate) fn window_delivery(
         self: &Arc<Self>,

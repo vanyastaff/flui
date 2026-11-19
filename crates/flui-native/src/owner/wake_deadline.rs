@@ -148,27 +148,30 @@ pub(crate) enum WakeTurn {
 
 #[cfg(any(windows, target_os = "macos", target_os = "android", test))]
 impl WakeTurn {
-    /// Whether the look delivered the deadline.
-    #[cfg(any(target_os = "android", test))]
+    /// Whether the look delivered the deadline. The AppKit pump matches the
+    /// variants instead.
+    #[cfg(any(windows, target_os = "android", test))]
     pub(crate) fn is_due(self) -> bool {
         matches!(self, Self::Due(_))
     }
 
-    /// The instant of the deadline the look delivered, if it delivered one.
-    /// A loop whose delivery left frame requests behind waits for those, not
-    /// for this instant; the Win32 modal pace, which no frame's run follows
-    /// up, looks again at it, and finds it armed only once a frame ran.
+    /// The instant of the deadline the look found armed, delivered or still
+    /// ahead. A loop whose delivery left frame requests behind waits for
+    /// those, not for a delivered instant (`wait`); the Win32
+    /// modal pace, which no frame's run follows up, looks again at it, and
+    /// finds it armed only once a frame ran.
     #[cfg(any(windows, test))]
-    pub(crate) fn due_at(self) -> Option<web_time::Instant> {
+    pub(crate) fn instant(self) -> Option<web_time::Instant> {
         match self {
-            Self::Due(at) => Some(at),
-            Self::Wait(_) | Self::Idle => None,
+            Self::Due(at) | Self::Wait(at) => Some(at),
+            Self::Idle => None,
         }
     }
 
-    /// The instant still ahead to wait until for the deadline, if any. A
-    /// delivered deadline is not one (`due_at` names it).
-    #[cfg(any(windows, target_os = "android", test))]
+    /// The instant still ahead to wait until for the deadline, if any: a
+    /// delivered deadline bounds no wait of a loop whose delivery left frame
+    /// requests behind.
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn wait(self) -> Option<web_time::Instant> {
         match self {
             Self::Wait(at) => Some(at),
@@ -419,20 +422,20 @@ mod tests {
         }
     }
 
-    /// A delivered deadline is named apart from one to wait for: it bounds
-    /// no wait of a loop whose delivery left frame requests, and the Win32
-    /// modal pace reads it by name to look again.
+    /// A delivered deadline is told apart from one to wait for: it bounds no
+    /// wait of a loop whose delivery left frame requests, and the Win32 modal
+    /// pace reads the instant of either to look again.
     #[test]
-    fn a_delivered_deadline_is_named_apart_from_a_wait() {
+    fn a_delivered_deadline_is_told_apart_from_a_wait() {
         let at = Instant::now();
-        // (look, delivered, to wait for)
-        for (turn, due_at, wait) in [
-            (WakeTurn::Due(at), Some(at), None),
-            (WakeTurn::Wait(at), None, Some(at)),
-            (WakeTurn::Idle, None, None),
+        // (look, delivered, the instant found, to wait for)
+        for (turn, due, instant, wait) in [
+            (WakeTurn::Due(at), true, Some(at), None),
+            (WakeTurn::Wait(at), false, Some(at), Some(at)),
+            (WakeTurn::Idle, false, None, None),
         ] {
-            assert_eq!(turn.due_at(), due_at, "{turn:?}");
-            assert_eq!(turn.is_due(), due_at.is_some(), "{turn:?}");
+            assert_eq!(turn.is_due(), due, "{turn:?}");
+            assert_eq!(turn.instant(), instant, "{turn:?}");
             assert_eq!(turn.wait(), wait, "{turn:?}");
         }
     }

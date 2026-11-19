@@ -14,6 +14,7 @@
 //! delivered, each in its own containment, and the first panic resumes
 //! afterwards (ADR-0207 §7).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -375,10 +376,12 @@ pub struct WindowDelivery {
     frames_run: Arc<AtomicU64>,
     /// Called on the owner thread, the only one it is reached from, at the
     /// end of a run of the FIFO, one that unwinds included: after each run
-    /// (`after_each_run`) or after a run in which a frame ran
-    /// (`after_each_frame`), as `run_hook_at` says. Runs no user code.
+    /// (`after_each_run`) or after a run that delivered more than input
+    /// (`after_each_run_beyond_input`), as `run_hook_at` says. Runs no user
+    /// code.
     run_hook: OwnerSlot<Rc<dyn Fn()>>,
-    /// Which runs end in `run_hook`.
+    /// Which runs end in `run_hook`; `Never` while none is installed, so a
+    /// run does not reach the slot for nothing.
     run_hook_at: RunHookAt,
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
@@ -452,7 +455,7 @@ impl WindowDelivery {
             }),
             frames_run,
             run_hook: OwnerSlot::new(),
-            run_hook_at: RunHookAt::EachRun,
+            run_hook_at: RunHookAt::Never,
             close_answer: Mutex::new(None),
             close_granted: AtomicBool::new(false),
             state_publisher: Mutex::new(None),
@@ -515,17 +518,19 @@ impl WindowDelivery {
         self.with_run_hook(hook, RunHookAt::EachRun)
     }
 
-    /// Call `hook` on the owner thread after a run of the window's FIFO in
-    /// which a frame ran (produced, failed or unwound), a run that unwinds
-    /// included. AppKit's pump looks at the wake deadline there: the frame
-    /// a due deadline asks for runs in a display pass no owner turn follows,
-    /// and may leave the deadline due again. A run of input alone serves no
-    /// deadline and costs no look. `hook` runs no user code: it may run while
-    /// a panic unwinds.
+    /// Call `hook` on the owner thread after a run of the window's FIFO that
+    /// delivered more than input: a frame (declined, produced, failed or
+    /// unwound), a state or surface change, a close. A run that unwinds is
+    /// included. AppKit's pump looks at the wake deadline there: such a run
+    /// can serve the deadline or leave a new one (a frame left due again, a
+    /// window covered that now owes a frame), in a display pass or a window
+    /// callback no owner turn of the loop follows. Only a run of input alone
+    /// is skipped: input that changes anything asks for a frame, whose run
+    /// looks. `hook` runs no user code: it may run while a panic unwinds.
     #[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
     #[must_use]
-    pub(crate) fn after_each_frame(self, hook: impl Fn() + 'static) -> Self {
-        self.with_run_hook(hook, RunHookAt::FrameRan)
+    pub(crate) fn after_each_run_beyond_input(self, hook: impl Fn() + 'static) -> Self {
+        self.with_run_hook(hook, RunHookAt::BeyondInput)
     }
 
     /// Install `hook` for the runs `at` names, on the owner thread the
@@ -542,6 +547,7 @@ impl WindowDelivery {
                 "a window's run hook was installed off its owner thread or with owner slots \
                  exhausted; the runs end in no hook"
             );
+            return self;
         }
         self.run_hook_at = at;
         self
@@ -803,17 +809,20 @@ impl WindowDelivery {
     /// is delivered first, and an input among it was answered where it was
     /// raised, so its answer is not this caller's.
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
-        let _after = AfterRun {
-            hook: self.run_hook.cloned(),
+        let after = AfterRun {
+            hook: match self.run_hook_at {
+                RunHookAt::Never => None,
+                RunHookAt::EachRun | RunHookAt::BeyondInput => self.run_hook.cloned(),
+            },
             at: self.run_hook_at,
-            frames_run: &self.frames_run,
-            frames_before: self.frames_run.load(Ordering::Relaxed),
+            beyond_input: Cell::new(false),
         };
         let mut own_answer = None;
         let failure = loop {
             let Some(taken) = drain.next() else {
                 return own_answer;
             };
+            after.saw(&taken.delivery);
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a handler's panic stops the drain but the queued tail is delivered"
@@ -832,6 +841,7 @@ impl WindowDelivery {
         // delivered, each in its own containment, and the first panic resumes
         // afterwards. A later panic does not replace it.
         while let Some(taken) = drain.next() {
+            after.saw(&taken.delivery);
             contain_owner_callback(|| {
                 let _ = self.deliver(taken.delivery);
             });
@@ -1177,38 +1187,64 @@ mod tests;
 /// Which runs of a window's FIFO end in its run hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunHookAt {
+    /// No hook is installed.
+    Never,
     /// Every run (`WindowDelivery::after_each_run`).
+    #[cfg_attr(
+        not(any(target_os = "ios", all(test, not(target_arch = "wasm32")))),
+        expect(dead_code, reason = "only UIKit's windows end every run in a hook")
+    )]
     EachRun,
-    /// A run in which a frame ran (`WindowDelivery::after_each_frame`).
+    /// A run that delivered more than input
+    /// (`WindowDelivery::after_each_run_beyond_input`).
     #[cfg_attr(
         not(any(target_os = "macos", all(test, not(target_arch = "wasm32")))),
         expect(
             dead_code,
-            reason = "only AppKit's windows end a frame's run in a hook"
+            reason = "only AppKit's windows end a run beyond input in a hook"
         )
     )]
-    FrameRan,
+    BeyondInput,
+}
+
+impl Delivery {
+    /// Whether the delivery is input: an event, or the capability snapshot
+    /// that goes ahead of the first.
+    fn is_input(&self) -> bool {
+        matches!(self, Self::Snapshot | Self::Input(_))
+    }
 }
 
 /// Calls a window's run hook when a run of its FIFO ends, by return or by
-/// unwinding, if the run is one the hook is for. A frame ran when the frame
-/// count moved during the run; a count a backend shares across its windows
-/// may also move for another window's frame nested in this run, which costs
-/// one hook more, never one less.
-struct AfterRun<'a> {
+/// unwinding, if the run is one the hook is for.
+struct AfterRun {
+    /// `None` when no hook is installed.
     hook: Option<Rc<dyn Fn()>>,
     at: RunHookAt,
-    frames_run: &'a AtomicU64,
-    frames_before: u64,
+    /// The run delivered something besides input.
+    beyond_input: Cell<bool>,
 }
 
-impl Drop for AfterRun<'_> {
+impl AfterRun {
+    /// The run is about to deliver `delivery`.
+    fn saw(&self, delivery: &Delivery) {
+        if !delivery.is_input() {
+            self.beyond_input.set(true);
+        }
+    }
+}
+
+impl Drop for AfterRun {
     fn drop(&mut self) {
         let Some(hook) = self.hook.as_ref() else {
             return;
         };
-        let frame_ran = self.frames_run.load(Ordering::Relaxed) != self.frames_before;
-        if self.at == RunHookAt::EachRun || frame_ran {
+        let called = match self.at {
+            RunHookAt::Never => false,
+            RunHookAt::EachRun => true,
+            RunHookAt::BeyondInput => self.beyond_input.get(),
+        };
+        if called {
             hook();
         }
     }

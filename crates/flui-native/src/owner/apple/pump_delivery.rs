@@ -1,15 +1,17 @@
 //! What an AppKit window's delivery reports to the wake pump
 //! (`macos::wake_pump`): each frame its handler runs, into the count that
 //! lets a delivered wake deadline be armed again (`WakeDeadline`), and the end
-//! of each run in which a frame ran, after which the pump looks at the
-//! deadline once more. Pure, so every host runs its tests.
+//! of each run that delivered more than input, after which the pump looks at
+//! the deadline once more. Pure, so every host runs its tests.
 //!
-//! The look after a frame's run is what follows a delivery up: the frames a
-//! due deadline asks for run in display passes AppKit schedules, at no time
-//! the pump can predict, and such a frame may leave the deadline due again or
-//! arm a new one. No owner turn need follow a display pass, so without that
-//! look a frame that ran late would leave its deadline unseen. A run of input
-//! alone serves no deadline and asks for no look.
+//! The look after such a run is what follows a delivery up: the frames a due
+//! deadline asks for run in display passes AppKit schedules, at no time the
+//! pump can predict, and such a frame may leave the deadline due again or arm
+//! a new one; a state or surface change (a window covered, which then owes a
+//! frame) reaches the application in a window callback. No owner turn of the
+//! loop need follow either, so without that look the deadline they leave
+//! would be unseen. A run of input alone asks for no look: input that changes
+//! anything asks for a frame, and that frame's run looks.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -35,8 +37,8 @@ impl FollowedDelivery {
 /// The delivery of an AppKit window opened with `handler`, whose input
 /// devices give it `capabilities`: each frame the handler runs raises
 /// `frames`, the pump's count, and `look` asks the pump for a look after each
-/// run in which a frame ran. `look` runs no user code (no `tracing` event
-/// either): it may run while a panic unwinds.
+/// run that delivered more than input. `look` runs no user code (no
+/// `tracing` event either): it may run while a panic unwinds.
 pub(crate) fn window_delivery(
     handler: Rc<dyn WindowHandler>,
     capabilities: InputCapabilities,
@@ -44,7 +46,8 @@ pub(crate) fn window_delivery(
     look: impl Fn() + 'static,
 ) -> FollowedDelivery {
     FollowedDelivery(
-        WindowDelivery::counting_frames(handler, capabilities, frames).after_each_frame(look),
+        WindowDelivery::counting_frames(handler, capabilities, frames)
+            .after_each_run_beyond_input(look),
     )
 }
 
@@ -61,15 +64,15 @@ mod tests {
 
     use super::window_delivery;
 
-    /// A frame the handler runs reaches the pump twice: it raises the pump's
-    /// count, so the deadline it was asked for can be armed again, and its
-    /// run ends in a look, however late after the delivery it ran. A run of
-    /// input alone, or of a frame the handler declined, ran no frame: it
-    /// leaves the count and asks for no look. Red-check: build the delivery
-    /// with `WindowDelivery::new`, without the hook, or with
-    /// `after_each_run`.
+    /// What reaches the pump from a window's runs: a frame that ran raises
+    /// the pump's count, so the deadline it was asked for can be armed again,
+    /// and every run that delivered more than input (a frame, a state change)
+    /// ends in a look, however late after the delivery it ran. A run of input
+    /// alone leaves the count and asks for no look. Red-check: build the
+    /// delivery with `WindowDelivery::new`, without the hook, with
+    /// `after_each_run`, or with a hook gated on the frame count.
     #[test]
-    fn a_window_frame_raises_the_pump_count_and_asks_for_a_look() {
+    fn a_window_run_beyond_input_asks_the_pump_for_a_look() {
         let handler = RecordingWindowHandler::new();
         let frames = Arc::new(AtomicU64::new(0));
         let looks = Rc::new(Cell::new(0_u32));
@@ -84,21 +87,16 @@ mod tests {
 
         let _ = delivery.dispatch_input(PlatformInput::Ime(ImeEvent::Enabled));
         assert_eq!(looks.get(), 0, "a run of input alone asks for no look");
-        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
-        assert_eq!(
-            frames.load(Ordering::Relaxed),
-            0,
-            "a declined frame ran nothing"
-        );
-        assert_eq!(looks.get(), 0, "and asks for no look");
+        delivery.dispatch_state_changed();
+        assert_eq!(looks.get(), 1, "a run of a state change alone asks for one");
 
         handler.react_to_frame(|_| {});
-        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(2)));
+        delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
         assert_eq!(
             frames.load(Ordering::Relaxed),
             1,
             "a frame that ran is counted"
         );
-        assert_eq!(looks.get(), 1, "and followed by a look");
+        assert_eq!(looks.get(), 2, "and followed by a look");
     }
 }

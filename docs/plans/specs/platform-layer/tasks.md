@@ -6749,9 +6749,10 @@ GPU-память простаивающего или невидимого окн
   panic»). Все родные циклы берут срок пробуждения по одному правилу `WakeDeadline`: Win32, X11,
   Wayland и UIKit — `arm` до ожидания и `take_due` в начале хода, насос AppKit, цикл Android и
   модальные циклы Win32 — `WakeDeadline::turn` (`Due | Wait | Idle`). Насос AppKit смотрит на срок
-  после запроса перерисовки, после прогона доставки окна, в котором прошёл кадр
-  (`WakePump::window_delivery`, `WindowDelivery::after_each_frame`; кадр, пришедший поздно, всё
-  равно смотрит, прогон одного ввода — нет) и после хода владельца, оставившего срок; эвристики
+  после запроса перерисовки, после прогона доставки окна, доставившего не только ввод — кадр,
+  изменение состояния или поверхности (`WakePump::window_delivery`,
+  `WindowDelivery::after_each_run_beyond_input`; кадр, пришедший поздно, и окно, ставшее закрытым,
+  всё равно смотрят, прогон одного ввода — нет) и после хода владельца, оставившего срок; эвристики
   `FOLLOW_UP` нет. Цикл Android доставляет наступивший срок запросом кадра окну и пробуждением
   владельца, `LoopTurn::wake` — `WakeTurn`, и доставленный срок не ограничивает ожидание. Окна
   AppKit и Android строятся только из доставки, считающей кадры в счётчик цикла:
@@ -6769,7 +6770,8 @@ GPU-память простаивающего или невидимого окн
   `a_due_deadline_gets_one_modal_frame_per_generation`,
   `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`;
   `a_look_delivers_a_due_deadline_once_per_frame_generation` (`owner::wake_deadline`),
-  `a_window_frame_raises_the_pump_count_and_asks_for_a_look` (`owner::apple::pump_delivery`),
+  `a_window_run_beyond_input_asks_the_pump_for_a_look` (`owner::apple::pump_delivery`),
+  `the_run_hook_beyond_input_follows_every_run_but_input_alone` (`owner::window_delivery`),
   `a_window_frame_raises_the_loop_count` (`owner::android`),
   `a_declined_frame_does_not_keep_the_loop_awake` (`owner::android::poll`), на macOS
   `a_frame_of_a_pump_window_lets_the_deadline_be_delivered_again`; каждый падает при откате своей

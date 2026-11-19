@@ -339,34 +339,51 @@ impl ActivityWindowIds {
     }
 }
 
-/// The Activity window's delivery whose frames count into the loop's count:
-/// the only form the window is built from (`AndroidWindow::new` takes it),
-/// so no frame of it goes uncounted. Made by [`window_delivery`].
-pub(crate) struct CountedDelivery(crate::owner::window_delivery::WindowDelivery);
+#[cfg(target_os = "android")]
+pub(crate) use counted::CountedDelivery;
+pub(crate) use counted::window_delivery;
 
-impl CountedDelivery {
-    /// The delivery, for the window that holds it.
-    pub(crate) fn into_inner(self) -> crate::owner::window_delivery::WindowDelivery {
-        self.0
+/// The Activity window's counted delivery and its one constructor, in a
+/// module of their own: the type's field is private to it, so nothing else
+/// in the crate makes one.
+mod counted {
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use flui_platform::WindowHandler;
+    use flui_platform::input_capabilities::InputCapabilities;
+
+    use crate::owner::window_delivery::WindowDelivery;
+
+    /// The Activity window's delivery whose frames count into the loop's
+    /// count: the only form the window is built from (`AndroidWindow::new`
+    /// takes it), so no frame of it goes uncounted. Made by
+    /// [`window_delivery`].
+    pub(crate) struct CountedDelivery(WindowDelivery);
+
+    impl CountedDelivery {
+        /// The delivery, for the window that holds it.
+        pub(crate) fn into_inner(self) -> WindowDelivery {
+            self.0
+        }
     }
-}
 
-/// The delivery of the Activity's window opened with `handler`, whose input
-/// gives it `capabilities`: each frame the handler runs raises `frames`, the
-/// loop's count, which arms a delivered wake deadline again only after a
-/// frame ran (`WakeDeadline`).
-pub(crate) fn window_delivery(
-    handler: std::rc::Rc<dyn flui_platform::WindowHandler>,
-    capabilities: flui_platform::input_capabilities::InputCapabilities,
-    frames: std::sync::Arc<std::sync::atomic::AtomicU64>,
-) -> CountedDelivery {
-    CountedDelivery(
-        crate::owner::window_delivery::WindowDelivery::counting_frames(
+    /// The delivery of the Activity's window opened with `handler`, whose
+    /// input gives it `capabilities`: each frame the handler runs raises
+    /// `frames`, the loop's count, which arms a delivered wake deadline again
+    /// only after a frame ran (`WakeDeadline`).
+    pub(crate) fn window_delivery(
+        handler: Rc<dyn WindowHandler>,
+        capabilities: InputCapabilities,
+        frames: Arc<AtomicU64>,
+    ) -> CountedDelivery {
+        CountedDelivery(WindowDelivery::counting_frames(
             handler,
             capabilities,
             frames,
-        ),
-    )
+        ))
+    }
 }
 
 #[cfg(test)]
