@@ -1160,6 +1160,68 @@ pub(crate) fn a_fitted_child_moved_by_a_fit_change_moves_its_semantics() {
         "None: the child keeps its size, centred"
     );
 }
+/// A merged node in view stays visible when content merged into it is painted
+/// in the viewport's cache extent: the hidden flag the clips give a node
+/// belongs to the node it forms, and the merged node's own rect is in view. On
+/// its own, the same content forms a node that is hidden.
+pub(crate) fn a_merged_node_inside_its_clip_ignores_its_clipped_content() {
+    use flui_view::{BoxedView, ViewExt as _};
+    use flui_widgets::{Column, ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+
+    let labelled = |text: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(text)
+            .child(SizedBox::new(40.0, 20.0))
+            .boxed()
+    };
+    // "outside" is laid out below "inside" but painted 150 lower, past the
+    // 100-high viewport and inside its cache extent. The spacer overflows the
+    // viewport, so it clips what it paints.
+    let row = || {
+        Column::new((
+            labelled("inside"),
+            Transform::translate(0.0, 150.0).child(labelled("outside")),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    let clipped = |content: BoxedView| {
+        SizedBox::new(100.0, 100.0)
+            .child(Viewport::new(
+                ScrollPosition::fixed(0.0),
+                (SliverToBoxAdapter::new().child(content),),
+            ))
+            .boxed()
+    };
+    // Whether the published node labelled `label` is hidden, read from the
+    // whole update: the reachable tree leaves a hidden node out.
+    let hidden = |view: BoxedView, label: &str| {
+        let mut laid = lay_out(view, loose(200.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        tree.raw()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some(label))
+            .map_or_else(
+                || panic!("no node labelled {label:?}\n{}", tree.describe()),
+                |(_, node)| node.is_hidden(),
+            )
+    };
+
+    assert!(
+        hidden(clipped(row().boxed()), "outside"),
+        "premise: unmerged, the content past the clip forms a hidden node"
+    );
+    assert!(
+        !hidden(
+            clipped(MergeSemantics::new().child(row()).boxed()),
+            "inside outside"
+        ),
+        "the merged node's own rect is inside the clip, so it is not hidden"
+    );
+}
 
 // ===========================================================================
 // Actions: a platform request, routed back to the widget's own callback
@@ -3223,9 +3285,10 @@ fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
     );
 }
 
-/// The reverse: a wrapper in the cache extent gives its hidden flag to the
-/// labelled container it merges into, and moving it into view ends that flag.
-fn a_wrapper_moved_out_of_the_cache_extent_unhides_its_container() {
+/// The reverse, under a labelled container: the wrapper the move takes out of
+/// the cache extent merges into the container, which the wrapper's hidden
+/// flag never reaches, in view or out of it.
+fn a_wrapper_moved_out_of_the_cache_extent_merges_into_its_container() {
     use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
     let position = ScrollPosition::fixed(0.0);
     publishes_as_built_afresh(
@@ -3396,7 +3459,7 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             ),
             (
                 "a wrapper moved out of the cache extent",
-                a_wrapper_moved_out_of_the_cache_extent_unhides_its_container,
+                a_wrapper_moved_out_of_the_cache_extent_merges_into_its_container,
             ),
             (
                 "reading order in a document",

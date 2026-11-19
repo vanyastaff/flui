@@ -912,6 +912,10 @@ struct PendingSemanticsNode<'f> {
     /// The content merged into the node, which has no node of its own, lies
     /// inside its rect.
     absorbed_inside: bool,
+    /// The clips hide this node's own rect. The hidden flag belongs to the
+    /// node it forms, not to its configuration: merged into an ancestor, it
+    /// says nothing about the ancestor, whose own rect decides.
+    hidden_by_clip: bool,
 }
 
 impl<'f> PendingSemanticsNode<'f> {
@@ -941,7 +945,10 @@ impl<'f> PendingSemanticsNode<'f> {
     /// A child with an empty or non-finite rect keeps the flag off: AccessKit
     /// counts a child with no area as outside its clipping parent and drops
     /// it unless a sibling next to it lies inside.
-    fn form(self) -> BuiltSemanticsNode<'f> {
+    fn form(mut self) -> BuiltSemanticsNode<'f> {
+        if self.hidden_by_clip {
+            self.config.set_hidden(true);
+        }
         let contained = self.absorbed_inside
             && self.children.iter().all(|child| {
                 has_area(&child.rect) && inside(&child.rect, &self.rect) && child.contained
@@ -1360,10 +1367,13 @@ struct NodeAssemblyDecisions {
 
 fn assembly_decisions(
     config: &SemanticsConfiguration,
+    hidden_by_clip: bool,
     context: SemanticsAssemblyContext,
 ) -> NodeAssemblyDecisions {
     let boundary = config.is_semantics_boundary() || config.is_merge_boundary();
-    let contributes = context.is_root || boundary || config.has_been_annotated();
+    // A node the clips hide contributes: as its own node it carries the
+    // hidden flag (see `PendingSemanticsNode::hidden_by_clip`).
+    let contributes = context.is_root || boundary || config.has_been_annotated() || hidden_by_clip;
     // A node that merges its own descendants is a unit a screen reader stops
     // on, even inside an outer merge: the outer one takes it as a child rather
     // than absorbing it (ADR-0206, decision 4). A merge boundary stops the
@@ -1443,11 +1453,7 @@ fn build_semantics_fragments_impl<'f>(
         ),
     };
     let rect = clipped.rect;
-    if clipped.hidden {
-        config.set_hidden(true);
-    }
-
-    let decisions = assembly_decisions(&config, context);
+    let decisions = assembly_decisions(&config, clipped.hidden, context);
 
     regions.visited.insert(id);
     let authored = match node {
@@ -1615,6 +1621,7 @@ fn build_semantics_fragments_impl<'f>(
         clip_inside,
         children,
         absorbed_inside,
+        hidden_by_clip: clipped.hidden,
     };
 
     let mut nodes = Vec::with_capacity_in(1, arena);
@@ -1708,10 +1715,7 @@ fn append_region_fragments<'f>(
         config.set_semantics_boundary(true);
         config.set_blocks_user_actions(blocks_user_actions || config.blocks_user_actions());
         config.set_has_reveal_ancestor(context.has_reveal_ancestor);
-        if clipped.hidden {
-            config.set_hidden(true);
-        }
-        let decisions = assembly_decisions(&config, context);
+        let decisions = assembly_decisions(&config, clipped.hidden, context);
         let pending = PendingSemanticsNode {
             source: SemanticsSource::Region(source),
             config,
@@ -1720,6 +1724,7 @@ fn append_region_fragments<'f>(
             clip_inside: clips.paint.is_some_and(|clip| inside(&clip, &clipped.rect)),
             children: Vec::new_in(regions.built),
             absorbed_inside: true,
+            hidden_by_clip: clipped.hidden,
         };
         fragments.push(if decisions.forms_node {
             SemanticsFragment::Formed(pending.form())
@@ -2153,9 +2158,9 @@ fn placement_anchors(
         }
         // Assembly marks a node that lands outside the paint clip hidden,
         // and a hidden node contributes: a move can turn a transparent
-        // wrapper into a node of its own, or end the hidden flag it gave the
-        // node above last pass. Neither pass's state is kept for a wrapper,
-        // so wherever the clips can hide one the walk refuses.
+        // wrapper into a node of its own, or end the node it formed last pass.
+        // Neither pass's state is kept for a wrapper, so wherever the clips
+        // can hide one the walk refuses.
         if clips.can_hide(context.has_reveal_ancestor) {
             return false;
         }
@@ -2184,7 +2189,7 @@ fn placement_anchors(
             continue;
         }
         let parent_generation = node.layout_generation();
-        let child_context = assembly_decisions(&config, context).child_context;
+        let child_context = assembly_decisions(&config, false, context).child_context;
         // Pushed in reverse so the walk visits children in slot order, the
         // order the anchors' grafts are later sorted into anyway.
         for (child_slot, &child_id) in node.children().iter().enumerate().rev() {
@@ -2350,6 +2355,7 @@ fn assembly_inputs_into(
             if context.merge_into_ancestor
                 && !assembly_decisions(
                     &describe_semantics_configuration(id, node, regions),
+                    false,
                     context,
                 )
                 .forms_node
@@ -2375,7 +2381,7 @@ fn assembly_inputs_into(
         let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
         clips = clips.descend(local_paint, local_semantics);
         transform = child_transform(node, tree.get(chain[index + 1])?, child_slot, transform)?;
-        context = assembly_decisions(&config, context).child_context;
+        context = assembly_decisions(&config, false, context).child_context;
     }
 
     // The chain always contains `target`, so the loop returns before
