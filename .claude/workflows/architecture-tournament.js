@@ -36,9 +36,9 @@ if (typeof checkout !== 'string' || !QUOTABLE.test(checkout) || !checkout.trim()
 }
 // Paths and drivers a caller names are used as named or refused, like the stances: a default in
 // their place would judge the designs against forces nobody named.
-const listOfText = (value) => value === undefined || (Array.isArray(value) && value.every((x) => typeof x === 'string' && x.trim()))
+const listOfText = (value) => value === undefined || (Array.isArray(value) && value.length > 0 && value.every((x) => typeof x === 'string' && x.trim()))
 if (!listOfText(opts.paths) || !listOfText(opts.drivers)) {
-  return { error: 'paths and drivers must each be a list of non-empty strings' }
+  return { error: 'paths and drivers must each be left out or a non-empty list of non-empty strings' }
 }
 const paths = opts.paths || []
 const drivers = opts.drivers || []
@@ -281,22 +281,16 @@ const revised = await parallel(proposals.map((p) => async () => {
     gaps.push(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
     return { stance: p.stance, design: p.design, answers: [], unanswered: against }
   }
-  // An attack is answered once: by its first concession if any answer concedes it, else by the first
-  // answer that names it, so a concession stays open whatever order the answers come in. An answer
-  // that names no attack on this design, repeats one, or has a blank `how` answers nothing.
+  // Each attack keeps one answer: its first concession, which needs no reason and stays open whatever
+  // else the author says, else its first answer that says how. Every other answer is not kept.
   const answers = []
-  let refused = 0
-  for (const x of got.value.answers) {
-    const attack = against.find((y) => y.id === x.id)
-    const kept = answers.findIndex((y) => y.id === x.id)
-    if (!attack || !x.how.trim()) refused += 1
-    else if (kept < 0) answers.push({ ...x, attack })
-    else {
-      refused += 1
-      if (x.verdict === 'conceded' && answers[kept].verdict !== 'conceded') answers[kept] = { ...x, attack }
-    }
+  for (const attack of against) {
+    const named = got.value.answers.filter((x) => x.id === attack.id)
+    const kept = named.find((x) => x.verdict === 'conceded') || named.find((x) => x.how.trim())
+    if (kept) answers.push({ ...kept, attack })
   }
-  if (refused) gaps.push(`revision of ${p.stance}: ${refused} answers named no attack on this design, repeated one, or said nothing, and answer nothing`)
+  const dropped = got.value.answers.length - answers.length
+  if (dropped) gaps.push(`revision of ${p.stance}: ${dropped} answers not kept (each attack keeps its first concession, else its first answer that says how)`)
   return { stance: p.stance, design: boundDesign(`revision of ${p.stance}`, got.value.design), answers, unanswered: against.filter((x) => !answers.some((y) => y.id === x.id)) }
 }))
 const unanswered = revised.flatMap((r) => r.unanswered.map((x) => ({ ...x, stance: r.stance })))

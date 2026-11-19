@@ -68,7 +68,7 @@ const noAgent = () => assert.fail('no agent may run')
     assert.match(refused.error, /stances must be/, JSON.stringify(given))
     assert.equal(none.length, 0)
   }
-  for (const extra of [{ paths: 'crates/flui-layer' }, { drivers: 'stay under 2 ms' }, { drivers: ['ok', ' '] }, { paths: [7] }]) {
+  for (const extra of [{ paths: 'crates/flui-layer' }, { drivers: 'stay under 2 ms' }, { drivers: ['ok', ' '] }, { paths: [7] }, { paths: [] }, { drivers: [] }]) {
     const { result: refused, calls: none } = await run({ topic: 'T', ...extra }, noAgent)
     assert.match(refused.error, /paths and drivers must/, JSON.stringify(extra))
     assert.equal(none.length, 0)
@@ -143,9 +143,9 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(result.gaps, [])
 }
 
-// 3. An attack is answered once, by an answer that says how: an answer that names no attack on this
-//    design, a repeat, or a blank `how` (spaces, or a quoted empty string) answers nothing. A
-//    conceded attack stays open in the record and reaches the judge.
+// 3. Each attack keeps one answer: its first concession, which needs no reason, else its first
+//    answer that says how; an answer naming no attack on this design, or a blank `how` (spaces, or
+//    a quoted empty string) is not kept. A conceded attack stays open and reaches the judge.
 {
   let own = []
   const { result } = await run({ topic: 'T', stances }, happy({
@@ -171,7 +171,7 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(a.answers.map((x) => [x.id, x.verdict]), [[own[0], 'conceded']])
   assert.deepEqual(a.unanswered.map((x) => x.id), own.slice(1))
   assert.deepEqual(result.open.filter((x) => x.stance === 'a').map((x) => [x.id, x.why]), [[own[1], 'unanswered'], [own[2], 'unanswered'], [own[0], 'conceded']])
-  assert.ok(result.gaps.includes('revision of a: 5 answers named no attack on this design, repeated one, or said nothing, and answer nothing'))
+  assert.ok(result.gaps.includes('revision of a: 5 answers not kept (each attack keeps its first concession, else its first answer that says how)'))
   // In the other order the concession holds too, and the first of two concessions is kept.
   const { result: reversed } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -180,6 +180,15 @@ const noAgent = () => assert.fail('no agent may run')
     },
   }))
   assert.deepEqual(reversed.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', 'c']])
+  // A concession that gives no reason still holds against a fixed answer.
+  const { result: bare } = await run({ topic: 'T', stances }, happy({
+    'revise:a': (p) => {
+      const first = Number(p.match(/"id": (\d+)/)[1])
+      return { answers: [{ id: first, verdict: 'fixed', how: 'h' }, { id: first, verdict: 'conceded', how: '""' }], design: design('a revised') }
+    },
+  }))
+  assert.deepEqual(bare.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', '']])
+  assert.ok(bare.open.some((x) => x.stance === 'a' && x.why === 'conceded'))
 
   let conceded = 0
   const { result: owned, prompts } = await run({ topic: 'T', stances }, happy({
