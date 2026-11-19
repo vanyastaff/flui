@@ -144,8 +144,6 @@
 //!   explicitly. These are additive pass-throughs to wgpu's own features, not
 //!   selectors: the right one for the target OS is already enabled by this
 //!   crate's per-target dependency entries, and enabling two compiles both.
-//! - `gpu-profiler` — per-pass GPU timings, off by default; no-ops at runtime
-//!   on an adapter without timestamp-query support. Rejected on wasm32.
 //! - `testing` — test support only; not part of the public API.
 
 // Every public item is documented; keep it that way.
@@ -161,24 +159,6 @@
 compile_error!(
     "fragile-send-sync-non-atomic-wasm is unsound with threads/atomics enabled \
      — see flui-engine Cargo.toml [target.wasm32] note"
-);
-
-// The `gpu-profiler` + wasm32 combination is rejected at compile time so a
-// downstream consumer cannot enable both by accident.
-//
-// The original reason was that wgpu-profiler 0.27 did not build for wasm32 at
-// all. That is no longer why: 0.28 type-checks clean for
-// `wasm32-unknown-unknown` (measured — `cargo check -p flui-engine --target
-// wasm32-unknown-unknown --features gpu-profiler` succeeds with the guard
-// lifted). What has NOT changed is that nothing here exercises timestamp
-// queries on a browser WebGPU adapter, so the guard stays: it now marks an
-// unverified configuration rather than an impossible one, and lifting it is a
-// deliberate decision that needs a run on a real wasm target, not a
-// side effect of a version bump.
-#[cfg(all(target_arch = "wasm32", feature = "gpu-profiler"))]
-compile_error!(
-    "the `gpu-profiler` feature is not supported on wasm32 by this workspace; \
-     build without it"
 );
 
 // ============================================================================
@@ -302,6 +282,7 @@ pub(crate) mod gamma;
 mod gpu_backend;
 mod gpu_context;
 mod gpu_probe;
+mod gpu_timer;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
@@ -356,7 +337,6 @@ mod pipeline_warmup;
 /// pixels replay its recording (ADR-0304 §9).
 mod pixel_shift;
 mod portable_coverage;
-mod profiler;
 /// Values in the order of their last use, for least-recently-used eviction.
 mod recency;
 mod recording_budget;
@@ -516,10 +496,10 @@ pub use raster::PresentDisposition;
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
     DETACH_DEADLINE, DeviceAnswered, DeviceHealth, DeviceRetries, DeviceTicket, ExecutorFailure,
-    ExecutorHealth, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement, RasterSendError,
-    RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId,
-    SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility,
-    SurfaceHold, TurnOutcome,
+    ExecutorHealth, GpuFrameTime, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement,
+    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
+    SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget,
+    SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
@@ -533,9 +513,6 @@ pub use frame_latency::FrameLatency;
 pub use gpu_backend::{BackendFailure, GpuBackend};
 pub use renderer::{GpuCapabilities, Renderer};
 pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
-// GPU frame profile — feature-independent type, always available so callers
-// can store/display profiling results without gating on `gpu-profiler`.
-pub use profiler::{GpuFrameProfile, PassTiming};
 
 // Presentation blit helper — re-exported ONLY under the
 // `testing` feature for the retained-presentation blit benchmark.

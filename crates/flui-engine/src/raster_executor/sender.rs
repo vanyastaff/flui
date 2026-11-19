@@ -22,8 +22,8 @@ use super::inbox::THREADED_DEPTH;
 use super::{
     DeviceHealth, SlotId, SurfaceEvent,
     command::{
-        ExecutorFailure, ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange,
-        SlotConfig, SlotSettlement, SlotTarget,
+        ExecutorFailure, ExecutorHealth, GpuFrameTime, RasterCommand, RasterSendError, SendReceipt,
+        SlotChange, SlotConfig, SlotSettlement, SlotTarget,
     },
     inbox::{INLINE_DEPTH, SlotFailure, SlotInbox, SlotPhase, SlotRecord},
     slot::SlotMint,
@@ -709,6 +709,20 @@ impl RasterSender {
     /// answer how many moved.
     pub fn drain_settlements(&self, slot: SlotId, into: &mut Vec<SlotSettlement>) -> usize {
         self.drain(slot, into, false).0
+    }
+
+    /// Move `slot`'s undrained GPU frame times, oldest first, into `into`,
+    /// and answer how many moved (ADR-0388). A time names its frame by
+    /// epoch and arrives after the frame's settlement; a slot holds at most
+    /// eight undrained, dropping the oldest.
+    pub fn drain_gpu_times(&self, slot: SlotId, into: &mut Vec<GpuFrameTime>) -> usize {
+        let Some(inbox) = self.inbox(slot) else {
+            return 0;
+        };
+        let mut state = inbox.lock();
+        let drained = state.gpu_times.len();
+        into.extend(state.gpu_times.drain(..));
+        drained
     }
 
     /// [`drain_settlements`](Self::drain_settlements) and
