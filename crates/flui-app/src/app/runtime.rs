@@ -498,6 +498,10 @@ pub(crate) struct AppRuntime {
     /// them, filled by [`Self::ensure_execution`].
     execution_slot: crate::app::capability::ExecutionSlot,
     pub(super) host_storage: crate::app::capability::StorageSlot,
+    /// The application's assets every UI runtime this host builds hands its
+    /// widgets (ADR-0384): the process's package, or the APK's assets the
+    /// Android run installs.
+    pub(super) assets: crate::app::asset_host::AssetSlot,
     /// The flush registry over [`Self::host_storage`], kept outside every UI
     /// runtime: what their documents publish, written on the loop's IO pool
     /// and flushed when the application or the session ends.
@@ -634,6 +638,7 @@ impl AppRuntime {
             ))]
             placement: super::runner::placement::PlacementHost::default(),
             window_routes: super::runner::window_routes::RouteBook::default(),
+            assets: crate::app::asset_host::AssetSlot::default(),
         }
     }
 
@@ -1525,6 +1530,7 @@ impl AppRuntime {
     pub(super) fn capability_slots(&self) -> crate::app::capability::CapabilitySlots {
         crate::app::capability::CapabilitySlots {
             storage: self.host_storage.clone(),
+            assets: self.assets.clone(),
             execution: Rc::clone(&self.execution_slot),
             clipboard: Rc::clone(&self.platform_clipboard),
             primary_selection: Rc::clone(&self.platform_primary_selection),

@@ -13,6 +13,7 @@
 #[doc(hidden)]
 pub mod __entry;
 pub(crate) mod agent;
+pub(crate) mod asset_host;
 pub(crate) mod capability;
 pub(crate) mod clipboard_expiry;
 mod config;

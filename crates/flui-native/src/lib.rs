@@ -193,6 +193,7 @@
 #![deny(missing_docs)]
 
 pub(crate) mod accessibility;
+pub mod assets;
 pub(crate) mod clipboard;
 mod display;
 mod display_connection;

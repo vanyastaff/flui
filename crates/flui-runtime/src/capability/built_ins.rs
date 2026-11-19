@@ -6,6 +6,7 @@
 
 use flui_interaction::text_input::{ClipboardCapability, PrimarySelectionCapability};
 use flui_platform::TargetPlatform;
+use flui_platform::assets::AssetBundleCapability;
 use flui_platform::capability::{
     Capability, CapabilityProvider, CapabilityRegistrar, HostBridge, Plugin,
 };
@@ -17,8 +18,9 @@ use super::{CapabilityConflict, CapabilityRegistry};
 
 /// The providers a host ships for an application on one platform.
 ///
-/// The clipboard, the background lanes and the storage are on every
-/// platform; the primary selection only where the platform has one (X11's
+/// The clipboard, the background lanes, the storage and the application's
+/// assets (ADR-0384) are on every platform; the primary selection only where
+/// the platform has one (X11's
 /// and Wayland's, so Linux); HTTP where the host was built with it; and
 /// what only one host can ship (a runner's native window) through
 /// [`host_specific`](Self::host_specific).
@@ -29,19 +31,21 @@ pub struct BuiltIns {
 }
 
 impl BuiltIns {
-    /// The providers every platform has: `clipboard`, `background` and
-    /// `storage`, on `platform`.
+    /// The providers every platform has: `clipboard`, `background`,
+    /// `storage` and `assets`, on `platform`.
     #[must_use]
     pub fn new(
         platform: TargetPlatform,
         clipboard: impl CapabilityProvider<ClipboardCapability>,
         background: impl CapabilityProvider<BackgroundCapability>,
         storage: impl CapabilityProvider<StorageCapability>,
+        assets: impl CapabilityProvider<AssetBundleCapability>,
     ) -> Self {
         let mut registrar = CapabilityRegistrar::new();
         registrar.provide::<ClipboardCapability>(clipboard);
         registrar.provide::<BackgroundCapability>(background);
         registrar.provide::<StorageCapability>(storage);
+        registrar.provide::<AssetBundleCapability>(assets);
         Self {
             platform,
             registrar,

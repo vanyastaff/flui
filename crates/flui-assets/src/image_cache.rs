@@ -10,7 +10,7 @@ use flui_painting::paint::Image;
 mod loads;
 mod ordered_slots;
 
-pub use loads::{ImageLoad, ImageSource, LoadServices, NetworkSource};
+pub use loads::{ImageLoad, ImageSource, LoadServices};
 
 /// How an [`ImageCache`] keeps and decodes images.
 ///
@@ -105,70 +105,47 @@ impl ImageCache {
         }
     }
 
-    /// Loads and decodes the image file at `path` on `services`.
+    /// Loads and decodes `source` on `services`.
     ///
-    /// A completed image for `path` is returned at once and made most recently
-    /// used; a request for a path already loading joins that load; otherwise
-    /// the file is read on the IO lane of the services' lanes and decoded on
-    /// their compute lane, at most [`ImageCacheConfig::decode_threads`]
-    /// decodes at a time. The decoded image is kept within
-    /// [`ImageCacheConfig::budget`]; failures are not kept, so a later request
-    /// retries.
+    /// A completed image for `source` is returned at once and made most
+    /// recently used; a request for a source already loading joins that load;
+    /// otherwise the file is read, or the URL fetched with the source's
+    /// client, on the IO lane of the services' lanes and decoded on their
+    /// compute lane, at most [`ImageCacheConfig::decode_threads`] decodes at a
+    /// time. A request is sent from the IO lane and driven by its client, so
+    /// the lane needs no async runtime of its own. The decoded image is kept
+    /// within [`ImageCacheConfig::budget`]; failures are not kept, so a later
+    /// request retries.
     ///
     /// With no lanes, or lanes too full or unable to take the load, it runs
     /// inside the returned [`ImageLoad`], on the thread that polls it.
     ///
-    /// The load is the cache's, shared by every request for `path`: dropping
-    /// one [`ImageLoad`] leaves it running for the rest, and dropping the last
-    /// cancels it (the file is read in chunks and stops at the next one, and a
-    /// decode that has not started never runs). A load dropped unfinished by
-    /// the lanes or the request it ran in is taken over by the next request
-    /// still waiting, on that request's services. Loads start reading in the
-    /// order they were requested, up to four per decode thread; a decode slot
-    /// goes to the earliest-requested load whose bytes are ready, never held
-    /// for one still fetching.
+    /// The load is the cache's, shared by every request for `source`:
+    /// dropping one [`ImageLoad`] leaves it running for the rest, and dropping
+    /// the last cancels it (a file is read in chunks and stops at the next
+    /// one, a request is dropped, and a decode that has not started never
+    /// runs). A load dropped unfinished by the lanes or the request it ran in
+    /// is taken over by the next request still waiting, on that request's
+    /// services. Loads start reading in the order they were requested, up to
+    /// four per decode thread; a decode slot goes to the earliest-requested
+    /// load whose bytes are ready, never held for one still fetching.
     ///
     /// # Errors
     ///
-    /// The load resolves to [`AssetError::LoadFailed`](crate::AssetError::LoadFailed)
-    /// if the file cannot be read, or if the load panicked or kept being
-    /// dropped unfinished; to [`AssetError::DecodeFailed`](crate::AssetError::DecodeFailed)
-    /// if it cannot be decoded; and to
-    /// [`AssetError::LanesRefused`](crate::AssetError::LanesRefused) if the
-    /// lanes are shutting down.
-    pub fn load_image(&self, path: impl Into<Arc<str>>, services: LoadServices) -> ImageLoad {
-        self.images.load(ImageSource::Asset(path.into()), services)
-    }
-
-    /// Fetches and decodes an image over HTTP or HTTPS with the services'
-    /// HTTP client, with the same cache, lanes, sharing and cancellation as
-    /// [`load_image`](Self::load_image).
-    ///
-    /// The request is sent from the IO lane; the client drives it, so the
-    /// lane needs no async runtime of its own. Dropping the last waiter drops
-    /// the request. A body over 256 MiB fails without being read whole.
-    ///
-    /// # Errors
-    ///
-    /// The load resolves to [`AssetError::HttpUnavailable`](crate::AssetError::HttpUnavailable)
-    /// when the services have no HTTP client;
-    /// [`AssetError::Http`](crate::AssetError::Http) when the request fails
-    /// and [`AssetError::HttpStatus`](crate::AssetError::HttpStatus) when it
-    /// answers a status other than 2xx; and otherwise to the errors of
-    /// [`load_image`](Self::load_image).
-    pub fn load_network_image(
-        &self,
-        url: impl Into<Arc<str>>,
-        services: LoadServices,
-    ) -> ImageLoad {
-        self.images
-            .load(services.network_source(url.into()), services)
+    /// The load resolves to an [`ImageLoadError`](crate::ImageLoadError)
+    /// whose [`kind`](crate::ImageLoadError::kind) says why: the file is
+    /// missing, not a regular file, too large or unreadable; the request
+    /// failed or answered a status other than 2xx; the bytes did not decode;
+    /// the lanes are shutting down; the load panicked; or the lanes kept
+    /// dropping it unfinished.
+    pub fn load(&self, source: &ImageSource, services: &LoadServices) -> ImageLoad {
+        self.images.load(source.clone(), services.clone())
     }
 
     /// The completed image this cache keeps for `source`, made most recently
     /// used: the synchronous probe a frame makes before starting a load.
     #[must_use]
-    pub fn cached_image(&self, source: &ImageSource) -> Option<Image> {
+    pub fn get(&self, source: &ImageSource) -> Option<Image> {
         self.images.cached(source)
     }
 }

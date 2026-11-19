@@ -1,24 +1,29 @@
 //! A chunk's IR kept past its frame, so an unchanged chunk drawn again under
-//! the same device transform and ambient state replays it instead of
-//! recording its commands again (ADR-0304 §9).
+//! the same device transform replays it instead of recording its commands
+//! again (ADR-0304 §9).
 //!
 //! A `ChunkRecording` is the slice of the segment one chunk appended: every
 //! arena's new elements, with each range, offset and index made relative to
-//! where the chunk began, and runs that carry no clip chain. Splicing it
-//! (`DrawSegment::splice`) rebases them onto the segment as it stands,
-//! attaches the clip chain, the SDF clip and the scissor the chunk is entered
-//! under, and re-runs each arena's merge rule on the first element only, as
-//! recording the chunk there would have. Only a chunk that leaves the
-//! segment's draw order and layer depth alone, opens no clip of its own and
-//! draws no external texture is kept: every element it appended then sits
-//! under the clip it was entered with, which the key holds or the splice
-//! writes.
+//! where the chunk began, runs that carry no clip chain, and every glyph the
+//! chunk placed, none culled by the scissor it was captured under. Splicing
+//! it (`DrawSegment::splice`) rebases them onto the segment as it stands,
+//! applies the state the chunk is entered under (ADR-0306 §2): each region
+//! takes the entry scissor, the entry SDF clip fills the instances, the runs
+//! take the entry clip chain, and the glyphs wholly outside the entry
+//! scissor are left out, as recording the chunk there would leave them out.
+//! It re-runs each arena's merge rule on its first element, and on the run
+//! and tessellated batch after one the cull emptied. Only a chunk that
+//! leaves the segment's draw order and layer depth alone, opens no clip of
+//! its own and draws no external texture is kept: every element it appended
+//! then sits under the entry's scissor and clip alone.
 //!
 //! What the IR bakes from outside the chunk is in its key: the device
-//! transform (`RasterKey`), the scissor and opacity it was entered under and
-//! the size of the target (`AmbientKey`) and the painter's resources
-//! (`ResourceEpoch`): a glyph texel or an image's atlas rectangle is valid
-//! only while no slot the recording names was freed since.
+//! transform (`RasterKey`), the opacity it was entered under and the size of
+//! the target (`AmbientKey`) and the painter's resources (`ResourceEpoch`): a
+//! glyph texel or an image's atlas rectangle is valid only while no slot the
+//! recording names was freed since. The scissor and clip are not, so one
+//! recording serves a chunk scrolled under a fixed clip and a chunk drawn
+//! under two clips.
 
 pub(crate) mod admission;
 
@@ -28,7 +33,7 @@ use std::num::NonZeroU64;
 
 use flui_foundation::IdMint;
 use flui_foundation::geometry::{Matrix4, canonical_bits, canonical_bits_f64};
-use flui_layer::{Bounds, ContentVersion, Lineage};
+use flui_layer::{ContentVersion, Lineage};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -41,7 +46,7 @@ use crate::instancing::{
     ArcInstance, CircleInstance, ClippableInstance, GlyphInstance, LinearGradientInstance,
     RadialGradientInstance, RectInstance, ShadowInstance, SweepGradientInstance,
 };
-use crate::pixel_shift::{PixelOrigin, PixelShift, Shift, split_translation};
+use crate::pixel_shift::{GridExtent, PixelOrigin, PixelShift, Shift, split_translation};
 use crate::recency::{Place, RecencyList};
 use crate::state_stack::ResolvedClip;
 use crate::tallied_map::TalliedMap;
@@ -131,96 +136,29 @@ impl RasterKey {
     }
 }
 
-/// The scissor a chunk is entered under, as far as its IR depends on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum AmbientScissor {
-    /// None, or one holding every pixel the chunk's bounds touch: no glyph
-    /// was culled, so the splice writes the scissor it finds.
-    Covers,
-    /// One that cuts the chunk, in the chunk's pixel frame (less its
-    /// [`PixelOrigin`]): which glyphs the cut culled is in the IR, so a chunk
-    /// moved under a fixed scissor that cuts it records again.
-    Exact { x: i64, y: i64, w: u32, h: u32 },
-}
-
-/// What a chunk's IR bakes from outside it, beyond its transform: the scissor
-/// and the opacity bits it is entered under, and the size of the target, which
-/// a fill of the whole target (`DrawOp::Color`, `DrawOp::Paint`) records. The
-/// SDF clip and the clip chain are attached at the splice, so they are not in
-/// it.
+/// What a chunk's IR bakes from outside it, beyond its transform: the opacity
+/// bits it is entered under and the size of the target, which a fill of the
+/// whole target (`DrawOp::Color`, `DrawOp::Paint`) records. The scissor, the
+/// SDF clip and the clip chain it is entered under are not in it: a chunk is
+/// recorded in its own pixel frame, culled by none of them, and the splice
+/// applies the entry's (ADR-0306 §2), as Flutter's raster cache keys an entry
+/// on its matrix and picture and the parent clip layer applies when the entry
+/// is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AmbientKey {
-    scissor: AmbientScissor,
     opacity: u32,
     viewport: (u32, u32),
 }
 
 impl AmbientKey {
-    /// The ambient of a chunk with `bounds`, entered under `ctm` (already
-    /// admitted by [`RasterKey::of`]) and `scissor` at `opacity`, on a target
-    /// of `viewport` pixels.
-    pub(crate) fn of(
-        scissor: ScissorRect,
-        ctm: &Matrix4,
-        bounds: Bounds,
-        opacity: f32,
-        viewport: (u32, u32),
-    ) -> Option<Self> {
-        let scissor = match scissor {
-            None => AmbientScissor::Covers,
-            Some(rect) if covers(rect, ctm, bounds) => AmbientScissor::Covers,
-            Some((x, y, w, h)) => {
-                // Below `TRANSLATION_LIMIT`, so the origin is exact.
-                let (origin_x, origin_y) = PixelOrigin::of_bounded(ctm.m[12], ctm.m[13]).pixels();
-                AmbientScissor::Exact {
-                    x: x.checked_sub(origin_x)?,
-                    y: y.checked_sub(origin_y)?,
-                    w,
-                    h,
-                }
-            }
-        };
-        Some(Self {
-            scissor,
+    /// The ambient of a chunk entered at `opacity` on a target of `viewport`
+    /// pixels.
+    pub(crate) fn of(opacity: f32, viewport: (u32, u32)) -> Self {
+        Self {
             opacity: canonical_bits(opacity),
             viewport,
-        })
+        }
     }
-}
-
-/// Whether `scissor` holds every whole pixel `bounds` touches under `ctm`.
-fn covers(scissor: (i64, i64, u32, u32), ctm: &Matrix4, bounds: Bounds) -> bool {
-    let (left_edge, top_edge, width, height) = scissor;
-    let Bounds::Finite(rect) = bounds else {
-        return false;
-    };
-    let m = &ctm.m;
-    let corners = [
-        (rect.left(), rect.top()),
-        (rect.right(), rect.top()),
-        (rect.left(), rect.bottom()),
-        (rect.right(), rect.bottom()),
-    ]
-    .map(|(px, py)| (m[0] * px + m[4] * py + m[12], m[1] * px + m[5] * py + m[13]));
-    let left = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
-    let top = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
-    let right = corners
-        .iter()
-        .map(|c| c.0)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let bottom = corners
-        .iter()
-        .map(|c| c.1)
-        .fold(f64::NEG_INFINITY, f64::max);
-    if ![left, top, right, bottom].iter().all(|v| v.is_finite()) {
-        return false;
-    }
-    // i64 to f64 is exact here: a scissor is clamped to ±2^30.
-    let (scissor_left, scissor_top) = (left_edge as f64, top_edge as f64);
-    scissor_left <= left.floor()
-        && scissor_top <= top.floor()
-        && scissor_left + f64::from(width) >= right.ceil()
-        && scissor_top + f64::from(height) >= bottom.ceil()
 }
 
 /// Which recording of which chunk under which state (ADR-0304 §9).
@@ -309,6 +247,10 @@ pub(crate) struct ChunkRecording {
     origin: PixelOrigin,
     /// The glyphs the recording placed, which a replay keeps placed.
     glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
+    /// What the glyphs it holds on the device grid cover, which a splice
+    /// tests against the entry scissor before it tests each glyph; `None`
+    /// when it holds none.
+    glyph_extent: Option<GridExtent>,
     bytes: usize,
 }
 
@@ -804,8 +746,10 @@ impl DrawSegment {
             clip,
             origin,
             glyph_keys,
+            glyph_extent: None,
             bytes: 0,
         };
+        recording.glyph_extent = grid_extent(&recording.glyphs);
         shrink_to_fit(&mut recording);
         recording.bytes = recording_bytes(&recording);
         Some(recording)
@@ -816,9 +760,16 @@ impl DrawSegment {
     /// position moved by the whole pixels between the origin it was recorded
     /// at and the one it is entered at, the first element of each arena
     /// merged by that arena's own rule, the ambient scissor, SDF clip and clip
-    /// chain attached. Each arena grows through the recording budget, as a
+    /// chain attached, and the glyphs outside the ambient scissor left out as
+    /// recording culls them. Each arena grows through the recording budget, as a
     /// recording's would; a refusal is recorded on it and fails the frame.
-    pub(crate) fn splice(&mut self, recording: &ChunkRecording, ambient: &SpliceAmbient<'_>) {
+    /// `scratch` is room the cull reuses from splice to splice.
+    pub(crate) fn splice(
+        &mut self,
+        recording: &ChunkRecording,
+        ambient: &SpliceAmbient<'_>,
+        scratch: &mut Vec<usize>,
+    ) {
         let Self {
             budget: _,
             rect_batch: _,
@@ -878,6 +829,7 @@ impl DrawSegment {
             clip,
             origin,
             glyph_keys: _,
+            glyph_extent,
             bytes: _,
         } = recording;
         if self.budget.error().is_some() {
@@ -922,7 +874,7 @@ impl DrawSegment {
         ] = offsets;
         let reclip = !same_clip(clip, &ambient.clip);
         let entry = ambient.clip;
-        let mut bases = ArenaBases {
+        let bases = ArenaBases {
             rects: self.rect_batch.instances.len(),
             circles: self.circle_batch.instances.len(),
             arcs: self.arc_batch.instances.len(),
@@ -982,13 +934,42 @@ impl DrawSegment {
                     instance
                 }
             }));
-        extend_clipped(
-            &mut self.glyph_batch.instances,
-            glyphs,
-            shift,
-            reclip,
-            entry,
-        );
+        // A recording holds every glyph its chunk placed; the ones wholly
+        // outside the entry scissor are left out here, as recording the
+        // chunk here would have left them out. A scissor that holds every
+        // glyph on the grid leaves out none, and costs no pass over them.
+        let kept = match (ambient.scissor, glyph_extent) {
+            (Some(scissor), Some(extent))
+                if !holds(scissor, moved(*extent, shift))
+                    && kept_glyphs(glyphs, shift, scissor, scratch) =>
+            {
+                Some(scratch.as_slice())
+            }
+            _ => None,
+        };
+        match &kept {
+            None => extend_clipped(
+                &mut self.glyph_batch.instances,
+                glyphs,
+                shift,
+                reclip,
+                entry,
+            ),
+            Some(kept) => self.glyph_batch.instances.extend(
+                glyphs
+                    .iter()
+                    .zip(kept.windows(2))
+                    .filter(|(_, counts)| counts[1] > counts[0])
+                    .map(|(&glyph, _)| {
+                        let glyph = moved(glyph, shift);
+                        if reclip {
+                            glyph.with_clip(entry)
+                        } else {
+                            glyph
+                        }
+                    }),
+            ),
+        }
         self.current_gradient_stops.extend_from_slice(stops);
         // Unit-square coordinates, which the instance places.
         self.gradient_mesh_vertices.extend_from_slice(mesh_vertices);
@@ -1008,8 +989,21 @@ impl DrawSegment {
                 ..draw.clone()
             }));
 
+        // A chunk kept opens no scissor of its own, so each of its regions
+        // is the entry scissor intersected with none: the entry scissor.
+        for region in glyph_scissors {
+            let count = match &kept {
+                None => region.count,
+                Some(kept) => {
+                    let start = region.start as usize;
+                    kept_count(kept, start..start + region.count as usize)
+                }
+            };
+            if count > 0 {
+                Self::push_scissor_span(&mut self.glyph_scissors, ambient.scissor, count);
+            }
+        }
         for (regions, captured) in [
-            (&mut self.glyph_scissors, glyph_scissors),
             (&mut self.rect_scissors, rect_scissors),
             (&mut self.circle_scissors, circle_scissors),
             (&mut self.arc_scissors, arc_scissors),
@@ -1042,7 +1036,9 @@ impl DrawSegment {
         // Tessellated batches, then the runs. A first batch the chunk began
         // with (one that grew the batch before it, or the first of its first
         // run) may merge into the segment's last batch as it did, or did not,
-        // where it was recorded; the batches after it are the chunk's own.
+        // where it was recorded. The batches after it are appended as the
+        // runs that name them come up, so that the first batch of a run after
+        // one the cull emptied meets the merge rule as it would recorded here.
         let rebase_batch = |batch: &TessellatedBatch| TessellatedBatch {
             scissor: ambient.scissor,
             clip: entry,
@@ -1053,15 +1049,16 @@ impl DrawSegment {
         let mut pending: Option<DrawRun> = None;
         let leads = *first_batch_grew
             || matches!(runs.first(), Some(DrawRun::Tess(range)) if range.start == 0);
-        let mut later_batches = tess_batches.iter();
-        if leads && let Some(first) = later_batches.next() {
-            let before = self.tess_batches.len();
-            self.push_tess_batch(rebase_batch(first), ambient.chain.clone());
-            // A first batch the last one absorbed moves every later batch
-            // down one.
-            if self.tess_batches.len() == before {
-                bases.tess_batches -= 1;
+        // How many of the recording's batches are appended, and how many of
+        // those a batch before them absorbed, each moving every later batch
+        // down one.
+        let mut appended = 0;
+        let mut absorbed = 0;
+        if leads && let Some(first) = tess_batches.first() {
+            if !self.push_tess_batch_apart(rebase_batch(first), ambient.chain.clone()) {
+                absorbed += 1;
             }
+            appended = 1;
             if !*first_batch_grew
                 && let Some(DrawRun::Tess(range)) = captured_runs.next()
                 && range.end > 1
@@ -1069,24 +1066,188 @@ impl DrawSegment {
                 pending = Some(DrawRun::Tess(1..range.end));
             }
         }
-        self.tess_batches.extend(later_batches.map(rebase_batch));
-        let rebase_run = |run: &DrawRun| {
-            let base = bases.of(run);
-            let range = range(run);
-            with_range(run, range.start + base..range.end + base)
+        let first = match pending.as_ref() {
+            Some(pending) => Some(pending),
+            None => captured_runs.next(),
         };
-        let first = pending
-            .as_ref()
-            .map(rebase_run)
-            .or_else(|| captured_runs.next().map(rebase_run));
-        if let Some(first) = first {
-            self.record_run(first, ambient.chain.clone());
+        // The first run, and a run after one the cull emptied, merge by the
+        // recording rule, as recorded here they would; the runs between were
+        // recorded apart and stay apart.
+        let mut merges = true;
+        let mut after_cull = false;
+        for run in first.into_iter().chain(captured_runs) {
+            let mut run = run.clone();
+            if let DrawRun::Tess(range) = &mut run {
+                let end = range.end.min(tess_batches.len());
+                if after_cull && range.start == appended && appended < end {
+                    if !self.push_tess_batch_apart(
+                        rebase_batch(&tess_batches[appended]),
+                        ambient.chain.clone(),
+                    ) {
+                        absorbed += 1;
+                    }
+                    appended += 1;
+                    range.start += 1;
+                    // The run its batch recorded is the one the rest of the
+                    // range merges into.
+                    merges = range.start < range.end;
+                    after_cull = false;
+                }
+                if appended < end {
+                    self.tess_batches
+                        .extend(tess_batches[appended..end].iter().map(rebase_batch));
+                    appended = end;
+                }
+            }
+            match rebased_run(&run, bases, absorbed, kept) {
+                None if matches!(run, DrawRun::Glyph(_)) => {
+                    merges = true;
+                    after_cull = true;
+                }
+                None => {}
+                Some(kind) if merges => {
+                    self.record_run(kind, ambient.chain.clone());
+                    merges = false;
+                    after_cull = false;
+                }
+                Some(kind) => {
+                    after_cull = false;
+                    self.runs.push(RecordedRun {
+                        kind,
+                        clip: ambient.chain.clone(),
+                    });
+                }
+            }
         }
-        self.runs.extend(captured_runs.map(|run| RecordedRun {
-            kind: rebase_run(run),
-            clip: ambient.chain.clone(),
-        }));
+        if appended < tess_batches.len() {
+            self.tess_batches
+                .extend(tess_batches[appended..].iter().map(rebase_batch));
+        }
     }
+}
+
+/// `run` rebased by `bases`, a tessellated range moved down by the
+/// `absorbed` batches before it; a glyph range takes the glyphs `kept` keeps
+/// of it, and one that keeps none leaves no run (`None`), as does an empty
+/// range.
+fn rebased_run(
+    run: &DrawRun,
+    bases: ArenaBases,
+    absorbed: usize,
+    kept: Option<&[usize]>,
+) -> Option<DrawRun> {
+    let range = match (kept, run) {
+        (Some(kept), DrawRun::Glyph(range)) => kept[range.start]..kept[range.end],
+        _ => range(run),
+    };
+    if range.is_empty() {
+        return None;
+    }
+    // An absorbed batch merged into one at a lower index, so the batches
+    // after it sit no lower than the base less the absorbed: no underflow.
+    let base = bases.of(run);
+    let (start, end) = match run {
+        DrawRun::Tess(_) => (range.start + base - absorbed, range.end + base - absorbed),
+        _ => (range.start + base, range.end + base),
+    };
+    Some(with_range(run, start..end))
+}
+
+impl DrawSegment {
+    /// Pushes `batch` by the recording rule (`push_tess_batch`) and answers
+    /// whether it stands apart: `false` when the segment's last batch
+    /// absorbed it.
+    fn push_tess_batch_apart(
+        &mut self,
+        batch: TessellatedBatch,
+        chain: crate::clip_chain::ClipChain,
+    ) -> bool {
+        let before = self.tess_batches.len();
+        self.push_tess_batch(batch, chain);
+        self.tess_batches.len() != before
+    }
+}
+
+/// Which of `glyphs`, each moved by `shift`, a recording here would have
+/// kept under `scissor`, written into `kept`: for each index `i`, how many
+/// glyphs before `i` are kept, so `kept[i + 1] > kept[i]` keeps glyph `i` and
+/// a range `a..b` of the recording's glyphs is `kept[a]..kept[b]` of the ones
+/// spliced. `false`, and `kept` left as it was, when the scissor leaves out
+/// none.
+fn kept_glyphs(
+    glyphs: &[GlyphInstance],
+    shift: Option<PixelShift>,
+    scissor: (i64, i64, u32, u32),
+    kept: &mut Vec<usize>,
+) -> bool {
+    let outside = |glyph: &GlyphInstance| outside_scissor(&moved(*glyph, shift), Some(scissor));
+    let Some(first) = glyphs.iter().position(outside) else {
+        return false;
+    };
+    kept.clear();
+    kept.extend(0..=first);
+    // Glyph `first` is left out.
+    let mut count = first;
+    kept.push(count);
+    for glyph in &glyphs[first + 1..] {
+        if !outside(glyph) {
+            count += 1;
+        }
+        kept.push(count);
+    }
+    true
+}
+
+/// How many of the glyphs in `range` `kept` keeps.
+fn kept_count(kept: &[usize], range: std::ops::Range<usize>) -> u32 {
+    u32::try_from(kept[range.end] - kept[range.start])
+        .expect("BUG: a region keeps at most the glyphs it counts in u32")
+}
+
+/// Whether `glyph` is placed on the device grid (an identity linear part
+/// and no origin), the only placement the scissor culls.
+fn on_grid(glyph: &GlyphInstance) -> bool {
+    glyph.transform == [1.0, 0.0, 0.0, 1.0] && glyph.origin[0] == 0.0 && glyph.origin[1] == 0.0
+}
+
+/// Whether recording `glyph` under `scissor` would have left it out: the
+/// cull of `batches/text.rs`, by the same rule. A glyph under an affine
+/// placement is never culled, as in recording.
+fn outside_scissor(glyph: &GlyphInstance, scissor: ScissorRect) -> bool {
+    if !on_grid(glyph) {
+        return false;
+    }
+    // A grid quad holds whole pixels, which `f32` holds exactly below 2^24,
+    // where every quad a target can show lies, so the conversion gives back
+    // the integers the recording culls with.
+    let [x, y, w, h] = glyph.dst_rect.map(|value| value as i64);
+    crate::batches::outside_scissor(scissor, x, y, w, h)
+}
+
+/// What the grid glyphs of `glyphs` cover; `None` when there are none.
+fn grid_extent(glyphs: &[GlyphInstance]) -> Option<GridExtent> {
+    let (left, top, right, bottom) = glyphs.iter().filter(|glyph| on_grid(glyph)).fold(
+        None,
+        |extent: Option<(f32, f32, f32, f32)>, glyph| {
+            let [x, y, w, h] = glyph.dst_rect;
+            Some(match extent {
+                None => (x, y, x + w, y + h),
+                Some((left, top, right, bottom)) => {
+                    (left.min(x), top.min(y), right.max(x + w), bottom.max(y + h))
+                }
+            })
+        },
+    )?;
+    Some(GridExtent([left, top, right - left, bottom - top]))
+}
+
+/// Whether `scissor` holds every pixel of `extent`, so it culls no glyph
+/// inside it.
+fn holds((left, top, width, height): (i64, i64, u32, u32), extent: GridExtent) -> bool {
+    // Whole pixels, exact in `f64`, as `outside_scissor` reads them.
+    let [x, y, w, h] = extent.0.map(f64::from);
+    let (left, top) = (left as f64, top as f64);
+    x >= left && y >= top && x + w <= left + f64::from(width) && y + h <= top + f64::from(height)
 }
 
 /// `item` moved by `shift`, or as it is when there is none.
@@ -1161,6 +1322,7 @@ fn recording_bytes(recording: &ChunkRecording) -> usize {
         clip: _,
         origin: _,
         glyph_keys,
+        glyph_extent: _,
         bytes: _,
     } = recording;
     std::mem::size_of::<ChunkRecording>()
@@ -1227,6 +1389,7 @@ fn shrink_to_fit(recording: &mut ChunkRecording) {
         clip: _,
         origin: _,
         glyph_keys,
+        glyph_extent: _,
         bytes: _,
     } = recording;
     rects.shrink_to_fit();
@@ -1720,12 +1883,9 @@ impl DrawSegment {
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::{Matrix4, Rect};
-    use flui_layer::{Bounds, ContentVersion, SceneOwner};
+    use flui_layer::{ContentVersion, SceneOwner};
 
-    use super::{
-        AmbientKey, AmbientScissor, ChunkRecording, PixelOrigin, RasterKey, RecordingCache,
-        RecordingKey,
-    };
+    use super::{AmbientKey, ChunkRecording, PixelOrigin, RasterKey, RecordingCache, RecordingKey};
     use crate::state_stack::ResolvedClip;
 
     fn translated(x: f64, y: f64) -> Matrix4 {
@@ -1772,6 +1932,7 @@ mod tests {
             clip: ResolvedClip::NONE,
             origin: PixelOrigin::of_bounded(0.0, 0.0),
             glyph_keys: Vec::new(),
+            glyph_extent: None,
             bytes: bytes
                 .checked_sub(super::ENTRY_OVERHEAD)
                 .expect("BUG: a test recording charges at least an entry's overhead"),
@@ -1784,8 +1945,7 @@ mod tests {
         RecordingKey {
             content,
             raster: RasterKey::of(&ctm).expect("a translation is kept").0,
-            ambient: AmbientKey::of(None, &ctm, Bounds::Unbounded, 1.0, (64, 64))
-                .expect("no scissor is kept"),
+            ambient: AmbientKey::of(1.0, (64, 64)),
             epoch: cache.epoch().expect("a fresh cache has an epoch"),
         }
     }
@@ -1927,57 +2087,19 @@ mod tests {
         }
     }
 
-    /// The scissor is keyed as `Covers` when it holds every pixel the chunk
-    /// touches, and otherwise exactly, relative to the whole pixels of the
-    /// translation; opacity and the target's size are keyed as they are.
+    /// The ambient key holds the opacity bits and the target's size, and no
+    /// scissor or clip: the splice applies the entry's (ADR-0306 §2).
     #[test]
-    fn an_ambient_key_holds_the_scissor_that_cuts_the_chunk() {
-        let bounds = Bounds::Finite(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
-        let at = |x: f64, scissor, viewport| {
-            AmbientKey::of(scissor, &translated(x, 0.0), bounds, 1.0, viewport)
-                .expect("an affine transform in range")
-        };
-        assert_eq!(at(5.0, None, (64, 64)).scissor, AmbientScissor::Covers);
-        assert_eq!(
-            at(5.0, Some((0, 0, 64, 64)), (64, 64)).scissor,
-            AmbientScissor::Covers,
-            "a scissor around the chunk"
-        );
-        assert_eq!(
-            at(5.5, Some((0, 0, 15, 64)), (64, 64)).scissor,
-            AmbientScissor::Exact {
-                x: -5,
-                y: 0,
-                w: 15,
-                h: 64
-            },
-            "the chunk's last pixel column, 15, is outside"
-        );
-        assert_eq!(
-            at(5.5, Some((0, 0, 16, 64)), (64, 64)).scissor,
-            AmbientScissor::Covers,
-            "the scissor holds the pixel the chunk's edge shares"
-        );
-        assert_eq!(
-            at(5.0, Some((2, 0, 4, 64)), (64, 64)),
-            at(7.0, Some((4, 0, 4, 64)), (64, 64)),
-            "a scissor moved with the chunk by whole pixels"
+    fn an_ambient_key_holds_the_opacity_and_the_target_size() {
+        assert_eq!(AmbientKey::of(1.0, (64, 64)), AmbientKey::of(1.0, (64, 64)));
+        assert_ne!(
+            AmbientKey::of(1.0, (64, 64)),
+            AmbientKey::of(1.0, (32, 64)),
+            "size"
         );
         assert_ne!(
-            AmbientKey::of(
-                Some((0, 0, 64, 64)),
-                &Matrix4::IDENTITY,
-                Bounds::Unbounded,
-                1.0,
-                (64, 64)
-            ),
-            AmbientKey::of(None, &Matrix4::IDENTITY, Bounds::Unbounded, 1.0, (64, 64)),
-            "an unbounded chunk under a scissor is cut by it"
-        );
-        assert_ne!(at(5.0, None, (64, 64)), at(5.0, None, (32, 64)), "size");
-        assert_ne!(
-            AmbientKey::of(None, &Matrix4::IDENTITY, bounds, 0.5, (64, 64)),
-            AmbientKey::of(None, &Matrix4::IDENTITY, bounds, 1.0, (64, 64)),
+            AmbientKey::of(0.5, (64, 64)),
+            AmbientKey::of(1.0, (64, 64)),
             "opacity"
         );
     }

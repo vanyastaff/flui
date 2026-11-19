@@ -122,6 +122,9 @@ fn built_ins(slots: &CapabilitySlots) -> BuiltIns {
         HostStorageProvider {
             slot: slots.storage.clone(),
         },
+        super::asset_host::HostAssets {
+            slot: slots.assets.clone(),
+        },
     )
     .primary_selection(PlatformPrimarySelection {
         slot: Rc::clone(&slots.primary_selection),
@@ -209,6 +212,7 @@ impl NativePrimary {
 #[derive(Clone, Default)]
 pub(crate) struct CapabilitySlots {
     pub(crate) storage: StorageSlot,
+    pub(crate) assets: super::asset_host::AssetSlot,
     pub(crate) execution: ExecutionSlot,
     pub(crate) clipboard: ClipboardSlot,
     pub(crate) primary_selection: PrimarySelectionSlot,

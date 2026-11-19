@@ -1,7 +1,7 @@
 //! Assertions that only mean anything when they EXECUTE on wasm32.
 //!
 //! Until this file landed, the workspace only ever compiled for wasm32 —
-//! `cargo xtask wasm-check` is `cargo check` plus `cargo clippy`, and there was no
+//! CI's `wasm-check` job is `cargo check` plus `cargo clippy`, and there was no
 //! `wasm_bindgen_test` anywhere in the tree, so every "works on the web" claim
 //! rested on the linker succeeding (issue #985). The whole point of the file is
 //! that a green here is produced by running code in a wasm VM.
