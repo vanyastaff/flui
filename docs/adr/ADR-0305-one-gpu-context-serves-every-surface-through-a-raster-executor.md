@@ -479,12 +479,11 @@ executor runs each command under its own catch, in both placements.
   the request's own, `DEVICE_REQUEST_DEADLINE` (five seconds) after it started: a request
   unanswered by then is a failed attempt, so a driver that hangs inside it walks the backoff to
   the give-up instead of holding the device lost with no attempt counted, and its worker is left
-  to end on its own. The worker's answer calls the executor's `DeviceAnswered` wake, which notes
-  the answer in the device's record, so `device_retry_at` answers the request's start, a past
-  instant, and then wakes the host from the answering thread: inline, the raster host asks every
-  window it attached for a frame (every window lists its redraw requester), and the frame gate
-  counts the due deadline, so that frame's turn installs the device; threaded, it rings the
-  raster thread. Each request carries a `DeviceTicket` the executor mints; it installs only the
+  to end on its own. The worker's answer calls the executor's `DeviceAnswered` wake from the
+  answering thread: inline, the raster host asks every window it attached for a frame (every
+  window lists its redraw requester), and the frame gate counts the request's deadline, so that
+  frame's turn installs the device; threaded, it rings the raster thread, whose turn installs it
+  and wakes the owner. Each request carries a `DeviceTicket` the executor mints; it installs only the
   answer to the ticket it waits for, and it stops waiting when the attempt fails or the streak
   ends (the device came back, an adoption, a give-up), so a late answer installs nothing, and a
   retiring context drops its worker's answer without waiting for it. A request that answers no

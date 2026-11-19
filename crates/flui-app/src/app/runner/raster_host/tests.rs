@@ -2405,15 +2405,13 @@ pub(in crate::app::runner) fn threaded_host_for_two(
 }
 
 /// An inline host's device request answers on its worker, which asks the
-/// window it attached for a frame and makes the window's deadline due, so the
-/// frame gate runs the frame whose turn installs the device. While the
-/// request is under way the deadline is the request's own, so a driver that
+/// window it attached for a frame, and the frame gate, which counts the
+/// request's deadline, runs the frame whose turn installs the device. The
+/// deadline is the request's own, so a driver that
 /// never answers still wakes the window.
 ///
 /// Red-check: attach an inline window with no redraw requester (as the host
-/// did for the threaded placement only) and the answer asks for no frame;
-/// leave the answer unnoted (`Shared::device_answered`) and the window's
-/// deadline stays at the request's, seconds away.
+/// did for the threaded placement only) and the answer asks for no frame.
 #[test]
 fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
     let slots = ScriptedSlots::new();
@@ -2451,10 +2449,6 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         asked + 1,
         "the answer asks the window for a frame"
     );
-    let due = host
-        .window_deadline(address())
-        .expect("an answered request is due");
-    assert!(due <= web_time::Instant::now(), "the frame gate runs now");
     host.service(address());
     assert_eq!(host.device_health(), DeviceHealth::Healthy);
     assert_eq!(host.window_deadline(address()), None);

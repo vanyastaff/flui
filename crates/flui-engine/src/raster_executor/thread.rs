@@ -105,8 +105,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
                 caught.contain(|| {
                     let clock: Rc<dyn MonotonicClock> = Rc::new(SharedClock(clock));
                     let turned = Rc::clone(&wake);
-                    // A device request answered on its worker is noted and
-                    // rings the thread, which installs the device next turn.
+                    // A device request answered on its worker rings the
+                    // thread, which installs the device on its next turn.
                     let rung = Arc::downgrade(&served);
                     let executor = Self::assemble(
                         backend,
@@ -115,7 +115,7 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
                         Box::new(move || turned()),
                         DeviceAnswered::new(Arc::new(move || {
                             if let Some(shared) = rung.upgrade() {
-                                shared.device_answered();
+                                shared.ring();
                             }
                         })),
                         Arc::clone(&served),

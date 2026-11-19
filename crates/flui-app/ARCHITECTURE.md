@@ -264,8 +264,8 @@ the dispatch layer moves there too.
   no surface of their own; a surface the backend refuses is asked for again
   at the window's `RestorePace` (16 ms doubling to 1 s), only while the
   window is shown. `RasterHost::window_deadline` (that deadline and the
-  device's next turn: its next rebuild, the deadline of its request under
-  way, or now once that request answered) is what a window's frame gate counts, and the
+  device's next turn: its next rebuild or the deadline of its request under
+  way, whose answer asks every window for a frame) is what a window's frame gate counts, and the
   loop's wake (`AppRuntime::next_wake`, on every platform) counts it for each
   window whose frames run (`RasterHost::wake_deadline`), so no window's
   deadline wakes the loop while only another window's frame would run. A native

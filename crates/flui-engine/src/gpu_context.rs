@@ -369,6 +369,9 @@ pub struct GpuContext {
     /// How many of the next device rebuilds fail.
     #[cfg(test)]
     rebuilds_failing: u32,
+    /// What the next device request waits on, on its worker, before it asks.
+    #[cfg(test)]
+    request_hold: Option<std::sync::mpsc::Receiver<()>>,
     _one_mutator: PhantomData<Cell<()>>,
 }
 
@@ -524,6 +527,8 @@ impl GpuContext {
             panic_in_warmup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
+            #[cfg(test)]
+            request_hold: None,
             _one_mutator: PhantomData,
         }
     }
@@ -556,10 +561,16 @@ impl GpuContext {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let recipe = self.recipe;
+            #[cfg(test)]
+            let hold = self.request_hold.take();
             self.requested = Some(crate::device_worker::DeviceWorker::start(
                 ticket,
                 answered,
                 move || {
+                    #[cfg(test)]
+                    if let Some(held) = hold {
+                        let _released = held.recv();
+                    }
                     let (device, queue) = pollster::block_on(recipe.device(&adapter))?;
                     Ok((adapter, device, queue))
                 },
@@ -1359,6 +1370,15 @@ impl GpuContext {
     #[cfg(test)]
     pub(crate) fn fail_next_rebuilds(&mut self, rebuilds: u32) {
         self.rebuilds_failing = rebuilds;
+    }
+
+    /// Hold the next device request on its worker until the answer this
+    /// returns is sent (or dropped), so a test acts while it is under way.
+    #[cfg(test)]
+    pub(crate) fn hold_next_device_request(&mut self) -> std::sync::mpsc::Sender<()> {
+        let (release, held) = std::sync::mpsc::channel();
+        self.request_hold = Some(held);
+        release
     }
 
     /// Wait until the device request under way answered, so the executor's
@@ -3769,12 +3789,18 @@ mod tests {
         let (closed, _, _) = attach_rgba(&sender);
         let (kept, address, _) = attach_rgba(&sender);
         let _ = executor.turn();
+        let release = executor.backend_mut().hold_next_device_request();
         executor.backend().lose_device();
         let _ = executor.turn();
         let _ = sender
             .send(RasterCommand::Detach { slot: closed })
             .expect("the detach is accepted");
         let _ = executor.turn();
+        assert!(
+            sender.device_health().is_lost(),
+            "the window closed while the device was asked for"
+        );
+        release.send(()).expect("the worker waits for its release");
         executor.backend_mut().await_device_request();
         let _ = executor.turn();
         assert_eq!(sender.device_health(), DeviceHealth::Healthy);

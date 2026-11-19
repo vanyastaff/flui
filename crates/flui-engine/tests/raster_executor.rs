@@ -2482,11 +2482,12 @@ fn a_settlement_is_announced_only_by_a_wake_that_returned() {
 
 /// A lost device's replacement is asked for off the turn: the turn that
 /// starts the request settles its frames lost and owes only the request's
-/// deadline, and the answer wakes the owner and makes its deadline due, so
-/// the owner's next turn installs the device.
+/// deadline, and the answer wakes the owner, whose next turn installs the
+/// device.
 ///
-/// Red-check: leave the answer unnoted (`Shared::device_answered`) and the
-/// owner's deadline stays at the request's, seconds after the answer.
+/// Red-check: owe no deadline while a request is under way (`None` from
+/// `DeviceRebuilds::next_attempt_at`) and the owner of a request whose driver
+/// never answers is never woken.
 #[test]
 fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
     let mut rig = rig();
@@ -2521,11 +2522,6 @@ fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
         rig.wakes.load(Ordering::SeqCst),
         woken + 1,
         "the answer wakes the owner"
-    );
-    assert_eq!(
-        rig.sender.device_retry_at(),
-        Some(requested),
-        "an answered request is due at once"
     );
     let _ = rig
         .sender

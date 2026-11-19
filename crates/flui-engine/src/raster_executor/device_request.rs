@@ -46,13 +46,17 @@ impl DeviceAnswered {
         let _woken = caught.contain(|| (self.0)());
         if let Some(payload) = caught.into_payload() {
             // Nobody on this thread can take it: its text is logged, so the
-            // wake that never came is told.
+            // wake that never came is told, once the payload is discarded,
+            // since a subscriber is user code too.
+            let text = flui_foundation::panic::payload_text(&*payload)
+                .unwrap_or("non-text payload")
+                .to_owned();
+            flui_foundation::panic::discard_payload(payload);
             tracing::error!(
                 target: "flui.gpu",
-                panic = flui_foundation::panic::payload_text(&*payload).unwrap_or("non-text payload"),
+                panic = %text,
                 "the wake of an answered device request panicked",
             );
-            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

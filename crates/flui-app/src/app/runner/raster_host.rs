@@ -1116,10 +1116,9 @@ impl RasterHost {
                     Rc::new(flui_foundation::SystemClock);
                 let backend: Box<dyn RasterBackend> = backend;
                 // A lost device's replacement is asked for on a worker, which
-                // notes the answer, so `device_retry_at` is due, and asks every
-                // attached window for a frame: the frame gate counts the due
-                // deadline, and that frame's turn installs the device
-                // (ADR-0305 §8).
+                // asks every attached window for a frame: the frame gate
+                // counts the request's deadline, so that frame's turn installs
+                // the device (ADR-0305 §8).
                 let woken = redraws.clone();
                 let (executor, sender) =
                     RasterExecutor::new(backend, clock, || {}, move || woken.wake());
@@ -1534,7 +1533,7 @@ impl RasterHost {
     }
 
     /// When the executor must next turn for a lost device (its next rebuild,
-    /// its request's deadline, or now once the request answered), for the
+    /// or its request's deadline), for the
     /// loop's wake;
     /// `None` once it died, since a dead executor rebuilds nothing.
     #[cfg_attr(

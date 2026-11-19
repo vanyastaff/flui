@@ -57,7 +57,9 @@ pub(crate) const REBUILD_CAP: Duration = Duration::from_secs(1);
 /// rebuild is given up. The backoff reaches its ceiling after seven failures,
 /// about two seconds after the loss, so ten more give the driver about
 /// twelve seconds in all: longer than a Windows driver reset (TDR, two
-/// seconds by default) or a GPU switch takes.
+/// seconds by default) or a GPU switch takes. A driver that hangs every
+/// request adds `DEVICE_REQUEST_DEADLINE` to each attempt, about ninety
+/// seconds in all.
 pub(crate) const REBUILD_ATTEMPTS_AT_CAP: u32 = 10;
 /// `REBUILD_BASE << 6` is past the cap, so the shift stops there and never
 /// overflows on a long streak.
@@ -164,11 +166,6 @@ impl DeviceRebuilds {
     /// The request the executor waits for, if one is under way.
     pub(crate) fn requested(&self) -> Option<DeviceTicket> {
         self.requested.map(|(ticket, _)| ticket)
-    }
-
-    /// When the request under way started, if one is.
-    pub(crate) fn requested_at(&self) -> Option<Instant> {
-        self.requested.map(|(_, started)| started)
     }
 
     /// Whether the request under way is unanswered past its deadline at
