@@ -62,16 +62,16 @@ pub(crate) fn positioned_start_resolves_against_directionality() {
 // never directly exercised.
 // ============================================================================
 
-/// `Stack` and `IndexedStack` clip a child that overflows them, by default and
-/// with any clipping behavior, and let it paint outside with `Clip::None`, at
-/// creation and on every rebuild. The clip cuts the child off from paint and
-/// from assistive technology alike; the child keeps its layout either way.
+/// `Stack` and `IndexedStack` clip the paint of a positioned child that
+/// overflows them, by default and with any clipping behavior, and let it paint
+/// outside with `Clip::None`, at creation and on every rebuild. The child keeps
+/// its layout either way.
 pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
     use crate::common::LaidOut;
     use flui_painting::paint::Clip;
     use flui_rendering::layer::Layer;
     use flui_view::ViewExt;
-    use flui_widgets::{IndexedStack, Semantics};
+    use flui_widgets::IndexedStack;
 
     fn clips(laid: &LaidOut) -> usize {
         laid.layer_tree().map_or(0, |tree| {
@@ -82,23 +82,11 @@ pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
                 .count()
         })
     }
-    fn heard(laid: &LaidOut) -> bool {
-        let tree = laid.a11y_tree().expect("semantics enabled");
-        tree.find_by_label("beyond")
-            .ok()
-            .and_then(|node| tree.window_bounds(&node))
-            .is_some()
-    }
     // A 200×200 stack whose positioned child lies wholly past its right edge.
     let beyond = || {
-        Positioned::new(
-            Semantics::new()
-                .container(true)
-                .label("beyond")
-                .child(SizedBox::new(40.0, 40.0)),
-        )
-        .left(220.0)
-        .top(0.0)
+        Positioned::new(SizedBox::new(40.0, 40.0))
+            .left(220.0)
+            .top(0.0)
     };
     // `None` builds the widget with its default clip, `Clip::HardEdge`.
     let sequence = [
@@ -117,19 +105,15 @@ pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
         }
     };
     let mut laid = lay_out(stack(sequence[0]), tight(200.0, 200.0));
-    laid.enable_semantics();
-    laid.tick();
     for (index, &clip) in sequence.iter().enumerate() {
         if index > 0 {
             laid.pump_widget(stack(clip));
-            laid.tick();
         }
         assert_eq!(
             clips(&laid),
             usize::from(clipped(clip)),
             "Stack with {clip:?}"
         );
-        assert_eq!(heard(&laid), !clipped(clip), "Stack with {clip:?}");
         let child = laid.only_child(laid.root());
         assert_eq!(
             laid.offset(child),
@@ -146,25 +130,20 @@ pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
         }
     };
     let mut laid = lay_out(indexed(sequence[0]), tight(200.0, 200.0));
-    laid.enable_semantics();
-    laid.tick();
     for (index, &clip) in sequence.iter().enumerate() {
         if index > 0 {
             laid.pump_widget(indexed(clip));
-            laid.tick();
         }
         assert_eq!(
             clips(&laid),
             usize::from(clipped(clip)),
             "IndexedStack with {clip:?}"
         );
-        assert_eq!(heard(&laid), !clipped(clip), "IndexedStack with {clip:?}");
     }
 }
 
 /// An indexed stack is heard only through the child it shows, and switching the index
 /// switches what is heard.
-
 pub(crate) fn an_indexed_stack_is_heard_only_through_its_shown_child() {
     use flui_view::ViewExt;
     use flui_widgets::{IndexedStack, Semantics};

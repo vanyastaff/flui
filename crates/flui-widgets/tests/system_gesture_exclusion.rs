@@ -112,15 +112,13 @@ pub(crate) fn a_region_beyond_the_window_is_clamped_to_it() {
 /// branches between them, which the walk does not enter, change nothing.
 pub(crate) fn regions_in_separate_branches_come_out_in_paint_order() {
     let plain = || SizedBox::new(10.0, 10.0).child(ColoredBox::new(GREY));
-    // The stack is given a box: one of only positioned children sizes to
-    // nothing under loose constraints, and its clip would cut them all off.
-    let laid = mounted(SizedBox::new(180.0, 180.0).child(Stack::new((
+    let laid = mounted(Stack::new((
         Positioned::new(plain()).left(0.0).top(0.0),
         Positioned::new(excluded(20.0, 20.0)).left(0.0).top(0.0),
         Positioned::new(plain()).left(50.0).top(50.0),
         Positioned::new(excluded(10.0, 30.0)).left(100.0).top(40.0),
         Positioned::new(plain()).left(150.0).top(150.0),
-    ))));
+    )));
     assert_eq!(
         laid.window().input_region_updates(),
         vec![vec![device(10, 20, 30, 40), device(110, 60, 120, 90)]]

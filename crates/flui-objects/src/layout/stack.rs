@@ -302,14 +302,6 @@ impl RenderStack {
         self.has_visual_overflow
     }
 
-    /// The box a stack of `size` clips its children to: its own bounds when
-    /// the last layout overflowed and the clip behavior clips, else `None`.
-    /// Paint, semantics and the input regions all read this one answer.
-    fn overflow_clip(&self, size: Size) -> Option<Rect<f64>> {
-        (self.has_visual_overflow && self.clip_behavior != Clip::None)
-            .then(|| Rect::from_origin_size(Point::ZERO, size))
-    }
-
     /// Updates the fit and reports layout when changed.
     pub fn set_fit(&mut self, fit: StackFit) -> flui_rendering::RenderUpdateImpact {
         if self.fit == fit {
@@ -660,7 +652,8 @@ impl RenderBox for RenderStack {
         // The clip must cover the CHILDREN, so it goes through a clip
         // layer scope (canvas clips are run-local and never extend
         // across child markers).
-        if let Some(bounds) = self.overflow_clip(ctx.size()) {
+        if self.has_visual_overflow && self.clip_behavior != Clip::None {
+            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| {
                 // Paint all children in order (bottom-up = first to last).
                 ctx.paint_children();
@@ -668,12 +661,6 @@ impl RenderBox for RenderStack {
         } else {
             ctx.paint_children();
         }
-    }
-
-    /// The clip paint applies, so semantics and the input regions cut off
-    /// what paint cuts off.
-    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
-        self.overflow_clip(size)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, StackParentData>) -> bool {
@@ -1053,17 +1040,12 @@ impl RenderBox for RenderIndexedStack {
                 ctx.paint_child(index);
             };
 
-        if let Some(bounds) = self.stack.overflow_clip(ctx.size()) {
+        if self.stack.has_visual_overflow && self.stack.clip_behavior != Clip::None {
+            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(bounds, self.stack.clip_behavior, paint_displayed_child);
         } else {
             paint_displayed_child(ctx);
         }
-    }
-
-    /// The clip paint applies, so semantics and the input regions cut off
-    /// what paint cuts off.
-    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
-        self.stack.overflow_clip(size)
     }
 
     /// Only the displayed child is in the semantics tree; the others are laid out but
