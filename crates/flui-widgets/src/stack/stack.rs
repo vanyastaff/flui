@@ -46,7 +46,7 @@ impl<C> Stack<C> {
     /// `Clip::HardEdge` (the default) clips its paint to the stack's box;
     /// `Clip::None` lets it paint outside. The clip governs paint only: a
     /// pointer outside the stack never reaches a child whatever the clip, and
-    /// the cut-off part still reaches semantics and the input regions (#2888).
+    /// the cut-off part still reaches semantics and the input regions.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;
@@ -156,9 +156,10 @@ impl<C> IndexedStack<C> {
         }
     }
 
-    /// How the shown child is painted where it reaches outside the stack, as
-    /// [`Stack::clip_behavior`]: `Clip::HardEdge` by default, `Clip::None` to
-    /// let it paint outside.
+    /// How the shown child's paint is clipped, as [`Stack::clip_behavior`]:
+    /// `Clip::HardEdge` by default, `Clip::None` to let it paint outside. The
+    /// clip applies when any positioned child overflowed the last layout, the
+    /// hidden ones included, since every child is laid out.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;
