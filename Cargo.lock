@@ -2246,6 +2246,7 @@ dependencies = [
  "flui-foundation",
  "js-sys",
  "language-tags",
+ "libc",
  "raw-window-handle",
  "serde",
  "serde_json",

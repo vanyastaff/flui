@@ -110,6 +110,7 @@
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
 
+pub mod assets;
 mod backoff;
 mod brightness;
 pub mod capability;
