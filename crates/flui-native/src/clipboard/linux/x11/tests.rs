@@ -64,12 +64,11 @@ fn clipboard_on(display: &str) -> X11Clipboard {
 
 /// An X server of the case's own, for a case that holds its server with a
 /// grab: on the run's shared display that would freeze every other test's
-/// client, which nextest runs in processes of their own beside it. Xvfb on a
-/// display number no other server holds, ended as it drops (as the
-/// integration harness starts one in `tests/x11_window.rs`); `None` without
-/// Xvfb installed. One at a time in a process: two started at once may try
-/// the same number, and the one that loses it can still be starting as the
-/// other answers its probe.
+/// client, which nextest runs in processes of their own beside it. Xvfb
+/// from the crate's kit ([`crate::testing::xvfb`]), ended as it drops;
+/// `None` without Xvfb installed. One at a time in a process: two started
+/// at once may try the same number, and the one that loses it can still be
+/// starting as the other answers its probe.
 struct PrivateServer {
     server: std::process::Child,
     display: String,
@@ -78,65 +77,25 @@ struct PrivateServer {
 
 impl PrivateServer {
     fn start() -> Option<Self> {
-        use std::process::{Command, Stdio};
-
         static STARTED: Mutex<()> = Mutex::new(());
         let one_at_a_time = STARTED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // Each process tries numbers from one its id picks; a server that
-        // finds its number taken exits at once, and the next is tried.
-        let first = 100 + std::process::id() % 800;
-        for number in (first..first + 200).map(|number| 100 + number % 900) {
-            let display = format!(":{number}");
-            // `-noreset`: a server resets as its last client leaves, which
-            // the start's probe and each case's row do, and refuses the
-            // connections that arrive meanwhile.
-            let spawned = Command::new("Xvfb")
-                .args([
-                    &display,
-                    "-screen",
-                    "0",
-                    "640x480x24",
-                    "-nolisten",
-                    "tcp",
-                    "-noreset",
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-            let mut server = match spawned {
-                Ok(server) => server,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!("skipped: no Xvfb to start a server of the case's own");
-                    return None;
-                }
-                Err(error) => panic!("Xvfb starts: {error}"),
-            };
-            let deadline = Instant::now() + STEP;
-            loop {
-                if server.try_wait().ok().flatten().is_some() {
-                    break;
-                }
-                // Still running a moment after it answers, the server that
-                // answered is this one.
-                if RustConnection::connect(Some(&display)).is_ok() {
-                    std::thread::sleep(Duration::from_millis(200));
-                    if server.try_wait().ok().flatten().is_none() {
-                        return Some(Self {
-                            server,
-                            display,
-                            _one_at_a_time: one_at_a_time,
-                        });
-                    }
-                    break;
-                }
-                assert!(Instant::now() < deadline, "timed out waiting for Xvfb");
-                std::thread::sleep(Duration::from_millis(10));
+        let started = crate::testing::xvfb::start(|command| {
+            command.args(["-screen", "0", "640x480x24"]);
+        });
+        match started {
+            Ok((server, display)) => Some(Self {
+                server,
+                display,
+                _one_at_a_time: one_at_a_time,
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skipped: no Xvfb to start a server of the case's own");
+                None
             }
+            Err(error) => panic!("Xvfb starts: {error}"),
         }
-        panic!("no free X display number");
     }
 }
 
@@ -1325,32 +1284,61 @@ fn a_panic_in_the_thread_still_answers_what_it_decided() {
 }
 
 /// The clipboard's thread ends in time though another client holds the
-/// server, which then reads none of its requests: dropping the clipboard,
-/// as an application exits, waits on the server no longer than one reply's
-/// bound and the close's, whether the thread was idle or waiting on a reply
-/// (a request heard before the grab, whose requestor it checks). The server
+/// server, which then reads none of its requests, and sends the clipboard's
+/// window an event every half second meanwhile: dropping the clipboard, as
+/// an application exits, waits on the server no longer than the close's
+/// bound when the thread was idle, and one wait's bound more when it waited
+/// on a reply (a request heard before the grab, whose requestor it checks)
+/// or on room to write (text larger than a socket's buffer, written whole).
+/// The events arriving meanwhile do not move a wait's deadline. The server
 /// is the case's own, so no other test's client waits on the grab.
 #[test]
 fn the_thread_ends_in_time_while_another_client_holds_the_server() {
+    use super::connection::REPLY_TIMEOUT;
+
     #[derive(Debug, Clone, Copy)]
     enum Held {
         /// The thread waits on nothing as the grab starts.
         Idle,
         /// The thread waits on the server's reply as the grab starts.
         MidReply,
+        /// The thread waits to write as the grab starts.
+        MidWrite,
     }
 
     let Some(private) = PrivateServer::start() else {
         return;
     };
     let display = Some(private.display.as_str());
-    for held in [Held::Idle, Held::MidReply] {
+    let margin = Duration::from_secs(1);
+    let rows = [
+        // The close's 300 ms, and the margin.
+        (Held::Idle, Duration::from_millis(300) + margin),
+        (Held::MidReply, REPLY_TIMEOUT + margin),
+        (Held::MidWrite, REPLY_TIMEOUT + margin),
+    ];
+    for (held, bound) in rows {
         let owner = clipboard_on(&private.display);
         let asked = Rc::new(Cell::new(0));
         offer_primary_on(display, &owner, counted("selected", &asked));
-        let requestor = Requestor::on(display, "PRIMARY");
+        // Whole, but past what a socket's buffer holds.
+        let large = "x".repeat(250_000);
+        write_unobserved(&owner, ClipboardWrite::text(large.clone()));
+        assert_eq!(Answers::new().read(&owner).as_deref(), Some(large.as_str()));
+        let selection = if matches!(held, Held::MidWrite) {
+            "CLIPBOARD"
+        } else {
+            "PRIMARY"
+        };
+        let requestor = Requestor::on(display, selection);
         let property = requestor.atom("FLUI_BEFORE_THE_GRAB");
         let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+        let owners_window = holder
+            .get_selection_owner(xproto::Atom::from(xproto::AtomEnum::PRIMARY))
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers")
+            .owner;
         let hold = || {
             holder.grab_server().expect("the request is sent");
             holder
@@ -1361,10 +1349,10 @@ fn the_thread_ends_in_time_while_another_client_holds_the_server() {
         };
         match held {
             Held::Idle => hold(),
-            Held::MidReply => {
+            Held::MidReply | Held::MidWrite => {
                 // The request reaches the thread while it is held in a
-                // command, and the server is held before the thread asks
-                // about the request's window.
+                // command, and the server is held before the thread checks
+                // the request's window or writes its answer.
                 let (release, _read) = hold_in_a_command(&owner);
                 requestor.send_request(property);
                 requestor.round_trip();
@@ -1373,11 +1361,32 @@ fn the_thread_ends_in_time_while_another_client_holds_the_server() {
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
-        // Lets the server go once the case is done, or after `STEP` if the
+        // Holds the server, sending the clipboard's window an event every
+        // half second, until the case is done, or `STEP` has passed if the
         // clipboard never lets the case go on.
         let (done, waiting) = std::sync::mpsc::channel::<()>();
         let holding = std::thread::spawn(move || {
-            let _ = waiting.recv_timeout(STEP);
+            let until = Instant::now() + STEP;
+            while Instant::now() < until {
+                match waiting.recv_timeout(Duration::from_millis(500)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        let event = xproto::ClientMessageEvent::new(
+                            32,
+                            owners_window,
+                            xproto::AtomEnum::STRING,
+                            [0_u32; 5],
+                        );
+                        let _ = holder.send_event(
+                            false,
+                            owners_window,
+                            xproto::EventMask::NO_EVENT,
+                            event,
+                        );
+                        let _ = holder.flush();
+                    }
+                    _ => break,
+                }
+            }
             let _ = holder.ungrab_server();
             let _ = holder.flush();
         });
@@ -1388,10 +1397,133 @@ fn the_thread_ends_in_time_while_another_client_holds_the_server() {
         drop(done);
         holding.join().expect("the holder lets the server go");
         assert!(
-            ended < Duration::from_secs(4),
-            "{held:?}: the clipboard ended after {ended:?}, waiting on a held server"
+            ended < bound,
+            "{held:?}: the clipboard ended after {ended:?}, past {bound:?}, waiting on a held server"
         );
     }
+}
+
+/// Commands queued behind a held server cost it one reply's wait at most: a
+/// reply that comes too late leaves the server counted as held for the rest
+/// of the thread's step, so the reads queued with it answer at once; and
+/// with `Stop` among them none waits at all, the clipboard ending within the
+/// close's bound. The server is the case's own.
+#[test]
+fn commands_queued_behind_a_held_server_wait_once_at_most() {
+    use super::connection::REPLY_TIMEOUT;
+    use super::selection::{Command, Name, Owed};
+
+    let Some(private) = PrivateServer::start() else {
+        return;
+    };
+    let display = Some(private.display.as_str());
+    let margin = Duration::from_secs(1);
+    let rows = [
+        ("three reads", false, REPLY_TIMEOUT + margin),
+        (
+            "three reads and Stop",
+            true,
+            Duration::from_millis(300) + margin,
+        ),
+    ];
+    for (case, stops, bound) in rows {
+        let mut owner = clipboard_on(&private.display);
+        let asked = Rc::new(Cell::new(0));
+        offer_primary_on(display, &owner, counted("selected", &asked));
+        let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+        let settling = crate::testing::clipboard::SettlingOwner::new();
+
+        // Each read asks the server whether the clipboard still owns the
+        // selection; all of them, and `Stop`, reach the thread in one batch.
+        let (release, _read) = hold_in_a_command(&owner);
+        holder.grab_server().expect("the request is sent");
+        holder
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        let mut reads: Vec<Completion<ClipboardRead>> = (0..3)
+            .map(|_| {
+                let (read, answer) = settling.pending::<ClipboardRead>();
+                owner.send(Command::Read(Name::Primary, Owed::new(answer)));
+                read
+            })
+            .collect();
+        if stops {
+            owner.send(Command::Stop);
+        }
+        let started = Instant::now();
+        drop(release);
+        if stops {
+            owner
+                .thread
+                .take()
+                .expect("the thread runs")
+                .join()
+                .expect("the thread ends without a panic");
+        } else {
+            for read in &mut reads {
+                settling
+                    .settle_within(read, 4 * STEP)
+                    .expect("the read is answered in time")
+                    .expect("the read is answered, not abandoned")
+                    .expect("the read answers");
+            }
+        }
+        let ended = started.elapsed();
+        holder.ungrab_server().expect("the request is sent");
+        holder.flush().expect("the request is sent");
+        assert!(
+            ended < bound,
+            "{case}: done after {ended:?}, past {bound:?}"
+        );
+    }
+}
+
+/// A requestor's window the thread selected on while the server was held,
+/// which did not answer in time, ends up selected as what waits on it
+/// needs: nothing, its request refused, whatever the server carries out once
+/// it answers again. The server is the case's own.
+#[test]
+fn a_selection_the_server_answers_late_ends_as_the_window_needs() {
+    use super::connection::REPLY_TIMEOUT;
+
+    let Some(private) = PrivateServer::start() else {
+        return;
+    };
+    let display = Some(private.display.as_str());
+    let owner = clipboard_on(&private.display);
+    let asked = Rc::new(Cell::new(0));
+    offer_primary_on(display, &owner, counted("selected", &asked));
+    let requestor = Requestor::on(display, "PRIMARY");
+    let property = requestor.atom("FLUI_LATE_SELECTION");
+    let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+
+    // The request reaches the thread while it is held in a command, and the
+    // server is held before the thread selects on the request's window.
+    let (release, _read) = hold_in_a_command(&owner);
+    requestor.send_request(property);
+    requestor.round_trip();
+    holder.grab_server().expect("the request is sent");
+    holder
+        .get_input_focus()
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    drop(release);
+    std::thread::sleep(REPLY_TIMEOUT + Duration::from_millis(500));
+    holder.ungrab_server().expect("the request is sent");
+    holder.flush().expect("the request is sent");
+
+    assert_eq!(
+        requestor.answer(&owner),
+        x11rb::NONE,
+        "the request is refused"
+    );
+    requestor.wait_until_heard_as(
+        xproto::EventMask::NO_EVENT,
+        "the window nothing waits on is not heard",
+    );
 }
 
 /// Clients that flood the clipboard's thread with requests do not hold up

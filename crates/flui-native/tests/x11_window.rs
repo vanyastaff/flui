@@ -284,44 +284,14 @@ mod cases {
             Self::finish(server, &display)
         }
 
-        /// Start Xvfb on a display number no other server holds. Processes
-        /// start at once (nextest runs each case in its own), so each tries
-        /// numbers from one its process id picks, and a server that finds
-        /// its number taken exits at once and the next is tried. (`-displayfd`
-        /// would let the server pick, but it needs a writable
-        /// `/tmp/.X11-unix`, which WSLg's is not.)
+        /// Start Xvfb on a display number no other server holds
+        /// (`flui_native::testing::xvfb`), with the screen the cases lay
+        /// their windows out on.
         fn server() -> (Child, String) {
-            let first = 100 + std::process::id() % 800;
-            for number in (first..first + 200).map(|number| 100 + number % 900) {
-                let display = format!(":{number}");
-                let mut server = Command::new("Xvfb")
-                    .args([&display, "-screen", "0", "1280x1024x24", "-nolisten", "tcp"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("Xvfb starts (apt-get install xvfb)");
-                let deadline = Instant::now() + Duration::from_secs(10);
-                loop {
-                    if server.try_wait().ok().flatten().is_some() {
-                        // The number was taken.
-                        break;
-                    }
-                    // The server may listen on an abstract socket only,
-                    // where `/tmp/.X11-unix` is not writable, so it is asked;
-                    // still running a moment later, the server that answered
-                    // is this one.
-                    if RustConnection::connect(Some(&display)).is_ok() {
-                        std::thread::sleep(Duration::from_millis(200));
-                        if server.try_wait().ok().flatten().is_none() {
-                            return (server, display);
-                        }
-                        break;
-                    }
-                    assert!(Instant::now() < deadline, "timed out waiting for Xvfb");
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
-            panic!("no free X display number");
+            flui_native::testing::xvfb::start(|command| {
+                command.args(["-screen", "0", "1280x1024x24"]);
+            })
+            .expect("Xvfb starts (apt-get install xvfb)")
         }
 
         /// A `dbus-daemon` that activates no service, so the session's own
