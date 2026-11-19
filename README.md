@@ -84,7 +84,7 @@ Native accessibility needs no feature: on Windows, macOS and Linux the AccessKit
 adapters hand the semantics tree to Narrator, VoiceOver and Orca in every build.
 
 A module whose feature is off is *absent*, not empty. Every supported
-combination is compiled in isolation by CI (`cargo xtask facade-combos`), so a
+combination is compiled in isolation by CI's `feature-matrix` job, so a
 combination cannot pass only because a sibling crate happened to enable a
 feature. Hot reload is the official package `flui-hot-reload`, which an
 application adds beside the facade (ADR-0311 §6); `flui create --hot-reload`

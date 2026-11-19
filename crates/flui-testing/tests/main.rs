@@ -118,6 +118,10 @@ fn capability_seam() {
                 capability_seam::a_provider_refusal_reaches_the_widget_unchanged as fn(),
             ),
             (
+                "capability_seam::a_headless_window_serves_only_the_assets_its_test_names",
+                capability_seam::a_headless_window_serves_only_the_assets_its_test_names as fn(),
+            ),
+            (
                 "capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard",
                 capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
             ),

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use flui_assets::{AssetRegistryBuilder, ImageSource};
+use flui_assets::{ImageCache, ImageCacheConfig, ImageSource};
 use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 use lanes::{ThreadLanes, block_on};
 
@@ -104,9 +104,9 @@ fn decodes_leave_the_io_lane_free() {
     });
     let files = SignedFiles::new("worker-probe");
     let path = files.write(SIGNATURE, "probe.img");
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
 
-    let image = block_on(registry.load_image(path, lanes.services()))
+    let image = block_on(registry.load(&ImageSource::asset(path), &lanes.services()))
         .expect("the decode reaches a free IO worker");
     assert_eq!((image.width(), image.height()), (4, 2));
 }
@@ -157,18 +157,18 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     register_signed_png(SIGNATURE, "flui-gated", move || hook_gate.pass());
     let files = SignedFiles::new("gated");
     let lanes = ThreadLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
 
-    let blocker = registry.load_image(files.write(SIGNATURE, "blocker.img"), lanes.services());
+    let blocker = registry.load(
+        &ImageSource::asset(files.write(SIGNATURE, "blocker.img")),
+        &lanes.services(),
+    );
     gate.wait_for_decodes(1);
     let stale: Vec<_> = (0..5)
         .map(|index| {
-            registry.load_image(
-                files.write(SIGNATURE, &format!("stale-{index}.img")),
-                lanes.services(),
+            registry.load(
+                &ImageSource::asset(files.write(SIGNATURE, &format!("stale-{index}.img"))),
+                &lanes.services(),
             )
         })
         .collect();
@@ -176,7 +176,7 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     std::thread::sleep(Duration::from_millis(100));
     drop(stale);
     let live_path = files.write(SIGNATURE, "live.img");
-    let live = registry.load_image(live_path.clone(), lanes.services());
+    let live = registry.load(&ImageSource::asset(live_path.clone()), &lanes.services());
     gate.open();
 
     let runtime = current_thread();
@@ -193,9 +193,7 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
         "only the blocker and the live load decode; the abandoned ones never do"
     );
     assert!(
-        registry
-            .cached_image(&ImageSource::Asset(live_path.into()))
-            .is_some(),
+        registry.get(&ImageSource::asset(live_path)).is_some(),
         "the live image is kept"
     );
 }
@@ -220,17 +218,20 @@ fn loads_past_admission_are_bounded_by_count() {
     let requests = || http.requests().len();
     let files = SignedFiles::new("bound");
     let lanes = ThreadLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
 
-    let blocker = registry.load_image(files.write(BLOCKER, "blocker.img"), lanes.services());
+    let blocker = registry.load(
+        &ImageSource::asset(files.write(BLOCKER, "blocker.img")),
+        &lanes.services(),
+    );
     gate.wait_for_decodes(1);
     let held: Vec<_> = urls
         .iter()
         .map(|url| {
-            registry.load_network_image(url.as_str(), lanes.services().with_http(http.handle()))
+            registry.load(
+                &ImageSource::network(url.as_str(), &http.handle()),
+                &lanes.services(),
+            )
         })
         .collect();
     std::thread::sleep(SETTLE);
@@ -286,10 +287,7 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     }
     let files = SignedFiles::new("order");
     let lanes = ThreadLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
     let http = ScriptedHttp::new();
     let mut response = NETWORK.to_vec();
     response.extend_from_slice(PNG);
@@ -306,9 +304,15 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     let slow = "https://example.test/slow.img";
     http.hold(slow);
     http.respond(slow, ScriptedResponse::ok(response.clone()));
-    let fetching = registry.load_network_image(slow, lanes.services().with_http(http.handle()));
+    let fetching = registry.load(
+        &ImageSource::network(slow, &http.handle()),
+        &lanes.services(),
+    );
     arrive(&http, slow);
-    finish(registry.load_image(files.write(FILE, "ready.img"), lanes.services()));
+    finish(registry.load(
+        &ImageSource::asset(files.write(FILE, "ready.img")),
+        &lanes.services(),
+    ));
     assert_eq!(
         *order.lock().expect("order log"),
         ["file"],
@@ -323,11 +327,20 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     http.hold(held);
     http.respond(held, ScriptedResponse::ok(response));
 
-    let blocker = registry.load_image(files.write(BLOCKER, "blocker.img"), lanes.services());
+    let blocker = registry.load(
+        &ImageSource::asset(files.write(BLOCKER, "blocker.img")),
+        &lanes.services(),
+    );
     gate.wait_for_decodes(1);
-    let network = registry.load_network_image(held, lanes.services().with_http(http.handle()));
+    let network = registry.load(
+        &ImageSource::network(held, &http.handle()),
+        &lanes.services(),
+    );
     arrive(&http, held);
-    let file = registry.load_image(files.write(FILE, "file.img"), lanes.services());
+    let file = registry.load(
+        &ImageSource::asset(files.write(FILE, "file.img")),
+        &lanes.services(),
+    );
     // The file's read finishes and it waits for the slot before the response
     // is even sent; then the network load's bytes arrive and it waits too.
     std::thread::sleep(Duration::from_millis(100));

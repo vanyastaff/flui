@@ -72,12 +72,6 @@ impl Cmd {
         self
     }
 
-    /// Appends a whitespace-separated argument list (package names and
-    /// flags, never quoted).
-    pub(super) fn split(self, list: &str) -> Self {
-        self.args(list.split_whitespace())
-    }
-
     /// Sets `key=value` for this command only.
     pub(super) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));

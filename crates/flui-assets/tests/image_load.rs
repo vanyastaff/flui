@@ -1,31 +1,32 @@
-//! `AssetRegistry::load_image`: a decoded-image load on the lanes it is
-//! given, shared by every request for a source and owned by the registry
+//! `ImageCache::load`: a decoded-image load on the lanes it is
+//! given, shared by every request for a source and owned by the cache
 //! rather than by any one request. A load the lanes or its request drop
 //! unfinished is handed over to the next request still waiting.
-#![cfg(feature = "images")]
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use flui_assets::{AssetError, AssetRegistry, AssetRegistryBuilder, Image, LoadServices};
+use flui_assets::{
+    ImageCache, ImageCacheConfig, ImageLoadError, ImageLoadErrorKind, ImageSource, LoadServices,
+};
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
+use flui_painting::paint::Image;
 use flui_platform::executor::{Lane, SpawnError};
 
 use crate::lanes::{QueuedLanes, ThreadLanes, block_on};
 
-/// Absolute path to the committed 4x2 RGBA fixture PNG (shared with
-/// `image_asset_integration.rs`).
+/// Absolute path to the committed 4x2 RGBA fixture PNG.
 fn fixture_path() -> &'static str {
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny.png")
 }
 
-fn registry() -> AssetRegistry {
-    AssetRegistryBuilder::new().default_capacity().build()
+fn registry() -> ImageCache {
+    ImageCache::default()
 }
 
 /// Loads `path` on a native host's default lanes and waits for it.
-fn load(registry: &AssetRegistry, path: impl Into<Arc<str>>) -> Result<Image, AssetError> {
-    block_on(registry.load_image(path, ThreadLanes::new().services()))
+fn load(registry: &ImageCache, path: impl Into<Arc<str>>) -> Result<Image, ImageLoadError> {
+    block_on(registry.load(&ImageSource::asset(path), &ThreadLanes::new().services()))
 }
 
 fn assert_fixture(image: &Image) {
@@ -40,7 +41,7 @@ fn assert_fixture(image: &Image) {
 fn loads_on_the_given_lanes() {
     let lanes = QueuedLanes::new();
     let registry = registry();
-    let pending = registry.load_image(fixture_path(), lanes.services());
+    let pending = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
     assert_eq!(lanes.pending_io(), 1, "the read waits on the IO lane");
     lanes.run_until_idle();
     assert_eq!(lanes.computes(), 1, "the decode ran on the compute lane");
@@ -49,8 +50,9 @@ fn loads_on_the_given_lanes() {
 
 /// With no lanes the load runs inside the request, where it is polled.
 fn without_lanes_the_load_runs_where_it_is_polled() {
-    let image = block_on(registry().load_image(fixture_path(), LoadServices::new()))
-        .expect("the fixture decodes");
+    let image =
+        block_on(registry().load(&ImageSource::asset(fixture_path()), &LoadServices::new()))
+            .expect("the fixture decodes");
     assert_fixture(&image);
 }
 
@@ -62,7 +64,7 @@ fn without_lanes_the_load_runs_where_it_is_polled() {
 fn saturated_lanes_leave_the_load_to_the_request() {
     let lanes = QueuedLanes::new();
     lanes.refuse(SpawnError::Saturated);
-    let mut load = registry().load_image(fixture_path(), lanes.services());
+    let mut load = registry().load(&ImageSource::asset(fixture_path()), &lanes.services());
     poll_until(&mut load, || lanes.waiting_for_room() > 0);
     assert_eq!(
         (lanes.pending_io(), lanes.computes()),
@@ -88,7 +90,7 @@ fn saturated_lanes_leave_the_load_to_the_request() {
 fn a_full_compute_lane_is_waited_for_off_the_io_lane() {
     let lanes = QueuedLanes::new();
     lanes.refuse_lane(Lane::Compute, SpawnError::Saturated);
-    let mut load = registry().load_image(fixture_path(), lanes.services());
+    let mut load = registry().load(&ImageSource::asset(fixture_path()), &lanes.services());
     lanes.run_io_until_idle();
     assert_eq!(lanes.waiting_for_room(), 1, "waits for the compute lane");
     assert_eq!(
@@ -116,7 +118,7 @@ fn a_full_compute_lane_is_waited_for_off_the_io_lane() {
 fn a_lane_shutting_down_ends_the_wait_for_room() {
     let lanes = QueuedLanes::new();
     lanes.refuse_lane(Lane::Compute, SpawnError::Saturated);
-    let load = registry().load_image(fixture_path(), lanes.services());
+    let load = registry().load(&ImageSource::asset(fixture_path()), &lanes.services());
     lanes.run_io_until_idle();
     assert_eq!(lanes.waiting_for_room(), 1);
 
@@ -158,7 +160,7 @@ fn a_missing_file_is_an_error_and_the_next_load_succeeds() {
     );
     let result = load(&registry, missing);
     assert!(
-        matches!(result, Err(AssetError::LoadFailed { .. })),
+        matches!(&result, Err(error) if matches!(error.kind(), ImageLoadErrorKind::NotFound)),
         "a nonexistent path is a typed error, got {result:?}",
     );
     assert_fixture(&load(&registry, fixture_path()).expect("the next load succeeds"));
@@ -172,8 +174,8 @@ fn a_request_that_leaves_does_not_cancel_the_load_for_the_rest() {
     for drop_lead in [false, true] {
         let lanes = QueuedLanes::new();
         let registry = registry();
-        let lead = registry.load_image(fixture_path(), lanes.services());
-        let joined = registry.load_image(fixture_path(), lanes.services());
+        let lead = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
+        let joined = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
         assert_eq!(lanes.pending_io(), 1, "one load for both requests");
         let kept = if drop_lead {
             drop(lead);
@@ -193,8 +195,8 @@ fn a_request_that_leaves_does_not_cancel_the_load_for_the_rest() {
 /// Red-check: answer a closed load as a failure instead of handing it over.
 fn a_load_whose_request_left_is_taken_over() {
     let registry = registry();
-    let lead = registry.load_image(fixture_path(), LoadServices::new());
-    let joined = registry.load_image(fixture_path(), LoadServices::new());
+    let lead = registry.load(&ImageSource::asset(fixture_path()), &LoadServices::new());
+    let joined = registry.load(&ImageSource::asset(fixture_path()), &LoadServices::new());
     drop(lead);
     assert_fixture(&block_on(joined).expect("the waiting request took the load over"));
 }
@@ -208,26 +210,26 @@ fn a_load_on_lanes_that_shut_down_is_taken_over_on_other_lanes() {
     let retiring = QueuedLanes::new();
     let other = ThreadLanes::new();
     let registry = registry();
-    let first = registry.load_image(fixture_path(), retiring.services());
-    let second = registry.load_image(fixture_path(), other.services());
+    let first = registry.load(&ImageSource::asset(fixture_path()), &retiring.services());
+    let second = registry.load(&ImageSource::asset(fixture_path()), &other.services());
     retiring.shut_down();
     assert_fixture(&block_on(second).expect("the other runtime's request took the load over"));
     assert_fixture(&block_on(first).expect("the first request then finds the image kept"));
 
-    let refused = block_on(registry.load_image(
-        concat!(
+    let refused = block_on(registry.load(
+        &ImageSource::asset(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/never-loaded.png"
-        ),
-        retiring.services(),
+        )),
+        &retiring.services(),
     ));
     assert!(
         matches!(
-            refused,
-            Err(AssetError::LanesRefused {
-                reason: SpawnError::ShuttingDown,
-                ..
-            })
+            &refused,
+            Err(error) if matches!(
+                error.kind(),
+                ImageLoadErrorKind::LanesRefused(SpawnError::ShuttingDown)
+            )
         ),
         "retired lanes refuse a new load, got {refused:?}"
     );
@@ -240,16 +242,13 @@ fn a_load_on_lanes_that_shut_down_is_taken_over_on_other_lanes() {
 /// check before the decode slot (the decoder is reached).
 fn a_cancelled_load_never_reaches_the_decoder() {
     let lanes = QueuedLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
-    drop(registry.load_image(fixture_path(), lanes.services()));
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
+    drop(registry.load(&ImageSource::asset(fixture_path()), &lanes.services()));
     lanes.run_until_idle();
     assert_eq!(lanes.computes(), 0, "the cancelled load never decoded");
     assert_eq!(lanes.pending_io(), 0, "and its read is gone");
 
-    let next = registry.load_image(fixture_path(), lanes.services());
+    let next = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
     lanes.run_until_idle();
     assert_fixture(&block_on(next).expect("the decode slot is free"));
 }
@@ -263,8 +262,8 @@ fn a_decode_its_lanes_drop_is_taken_over_on_other_lanes() {
     let retiring = QueuedLanes::new();
     let other = ThreadLanes::new();
     let registry = registry();
-    let first = registry.load_image(fixture_path(), retiring.services());
-    let second = registry.load_image(fixture_path(), other.services());
+    let first = registry.load(&ImageSource::asset(fixture_path()), &retiring.services());
+    let second = registry.load(&ImageSource::asset(fixture_path()), &other.services());
     retiring.run_io_until_idle();
     assert_eq!(
         retiring.computes(),
@@ -287,13 +286,13 @@ fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
     let retiring = QueuedLanes::new();
     let other = ThreadLanes::new();
     let registry = registry();
-    let first = registry.load_image(fixture_path(), retiring.services());
-    let second = registry.load_image(fixture_path(), other.services());
+    let first = registry.load(&ImageSource::asset(fixture_path()), &retiring.services());
+    let second = registry.load(&ImageSource::asset(fixture_path()), &other.services());
     retiring.refuse(SpawnError::ShuttingDown);
     retiring.run_until_idle();
-    let source = flui_assets::ImageSource::Asset(fixture_path().into());
+    let source = flui_assets::ImageSource::asset(fixture_path());
     assert!(
-        registry.cached_image(&source).is_none(),
+        registry.get(&source).is_none(),
         "the retiring IO lane decoded nothing"
     );
     assert_fixture(&block_on(second).expect("the other lanes' request took the load over"));
@@ -308,32 +307,29 @@ fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
 /// Red-check: admit a load without lanes when it is created (the awaited
 /// load never starts).
 fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
     let held: Vec<_> = (0..8)
         .map(|index| {
-            registry.load_image(
-                format!(
+            registry.load(
+                &ImageSource::asset(format!(
                     "{}/tests/fixtures/held-{index}.png",
                     env!("CARGO_MANIFEST_DIR")
-                ),
-                LoadServices::new(),
+                )),
+                &LoadServices::new(),
             )
         })
         .collect();
     assert_fixture(
-        &block_on(registry.load_image(fixture_path(), LoadServices::new()))
+        &block_on(registry.load(&ImageSource::asset(fixture_path()), &LoadServices::new()))
             .expect("the awaited load runs"),
     );
     drop(held);
 
-    let shared = AssetRegistryBuilder::new().default_capacity().build();
-    let held = shared.load_image(fixture_path(), LoadServices::new());
+    let shared = ImageCache::default();
+    let held = shared.load(&ImageSource::asset(fixture_path()), &LoadServices::new());
     let lanes = ThreadLanes::new();
     assert_fixture(
-        &block_on(shared.load_image(fixture_path(), lanes.services()))
+        &block_on(shared.load(&ImageSource::asset(fixture_path()), &lanes.services()))
             .expect("the request for the held source loads it"),
     );
     drop(held);
@@ -345,13 +341,12 @@ fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
 /// Red-check: drop the regular-file check (the directory opens and its read
 /// fails with an OS error instead).
 fn a_path_that_is_not_a_regular_file_is_refused() {
-    let refused = block_on(registry().load_image(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"),
-        LoadServices::new(),
+    let refused = block_on(registry().load(
+        &ImageSource::asset(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")),
+        &LoadServices::new(),
     ));
     assert!(
-        matches!(&refused, Err(AssetError::LoadFailed { reason, .. })
-            if reason.contains("not a regular file")),
+        matches!(&refused, Err(error) if matches!(error.kind(), ImageLoadErrorKind::NotAFile)),
         "a directory is refused, got {refused:?}"
     );
 }
@@ -367,8 +362,8 @@ fn an_oversized_file_is_refused_before_it_is_read() {
     let registry = budgeted(FIXTURE_BYTES);
     let result = load(&registry, path.to_string_lossy().into_owned());
     assert!(
-        matches!(&result, Err(flui_assets::AssetError::LoadFailed { reason, .. })
-            if reason.contains("larger than")),
+        matches!(&result, Err(error)
+            if matches!(error.kind(), ImageLoadErrorKind::TooLarge { limit } if *limit == 256 * 1024 * 1024)),
         "an oversized file is refused by size, got {result:?}"
     );
 }
@@ -407,16 +402,13 @@ impl Drop for FixtureCopies {
     }
 }
 
-fn budgeted(bytes: usize) -> flui_assets::AssetRegistry {
-    AssetRegistryBuilder::new()
-        .default_capacity()
-        .decoded_image_budget(bytes)
-        .build()
+fn budgeted(bytes: usize) -> flui_assets::ImageCache {
+    ImageCache::new(ImageCacheConfig::default().budget(bytes))
 }
 
-fn is_kept(registry: &flui_assets::AssetRegistry, path: &str) -> bool {
+fn is_kept(registry: &flui_assets::ImageCache, path: &str) -> bool {
     registry
-        .cached_image(&flui_assets::ImageSource::Asset(path.into()))
+        .get(&flui_assets::ImageSource::asset(path))
         .is_some()
 }
 

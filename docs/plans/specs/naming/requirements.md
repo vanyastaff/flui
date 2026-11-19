@@ -83,7 +83,6 @@
 | 25 | `LinuxWindowExt` (нет реализаций) | `flui-platform/src/platforms/linux/window_ext.rs:42` | Непривязанная поверхность | Удалить или реализовать (решение платформенной спеки) | да | 2 |
 | 26 | `RootElementImpl` | `flui-view/src/element/root.rs:84`, `lib.rs:195` | `Impl` — шум. Рядом трейт `RootElement` | `ElementTreeRoot` | да | 8 |
 | 27 | `TextFormFieldCore` (в закреплённом списке поверхности SDK через `__private`) | `flui-widgets/src/form/text_form_field_core.rs:134`, `flui-sdk/tests/surface.rs:68` | `Core` | `TextFormFieldModel`. Список SDK обновить в том же PR | да (скрыт) | 15 |
-| 28 | `AssetCacheCore`/`AssetCacheExt`, `AssetHandleCore`/`AssetHandleExt` | `flui-assets/src/cache/mod.rs:345,435`, `types/handle.rs:311,374` | `Core` и `Ext` на собственных трейтах одного крейта: пара «минимальный трейт + общая реализация» | `AssetCache` (объектно-безопасный) с `AssetCacheExt`, или один трейт, если `dyn` не нужен (В2) | да | 9, 15 |
 | 29 | `RenderPhysicalModelBase`, `RenderSliverFloatingHeaderBase`, `PersistentHeaderCoreView` | `flui-objects/src/proxy/physical_model.rs:292`; `sliver/sliver_persistent_header.rs:812,950` | `Base` и `Core` у обобщённых движков за двумя псевдонимами | `RenderPhysicalClip<S>`, `RenderSliverFloatingHeader<M>`, `PersistentHeaderLayoutView` | да | 16, 15, 6 |
 | 30 | `PlatformHandlers` | `flui-platform/src/shared/handlers.rs:35` | `Handlers` — таблица необязательных колбэков | `PlatformCallbacks` | да | 61 |
 | 31 | `RawInputHandler` | `flui-interaction/src/processing/raw_input.rs:245` | `Handler` ничего не говорит. Объект переводит сырой ввод в события | `RawInputTranslator` | да | 21 |
@@ -102,14 +101,12 @@
 | 44 | `SignalWriteExt` на собственном `Signal<T>` | `flui-view/src/reactive/mod.rs:1037` | `Ext` на своём типе. Оправдано только если это граница возможности (запись запрещена в `build`, ADR-0074) | Оставить при В2 «Ext = граница возможности», иначе inherent | да | 30 |
 | 45 | `run_app_impl`, `run_app_with_config_impl` | `flui-app/src/app/runner/mod.rs:230,240` | `_impl` в `pub fn`. При реэкспорте переименовываются в `run_app` | Назвать `run_app`/`run_app_with_config` в месте определения | нет | 4, 3 |
 | 46 | Фичи `test-utils` (flui-view), `test-support` (flui-runtime) при `testing` у 10 крейтов | `crates/flui-view/Cargo.toml:112`, `crates/flui-runtime/Cargo.toml:27` | Три имени одного понятия. `utils` — мешок | `testing` | да (фича) | 9 + 11 (в том числе Cargo.toml в flui-app, flui-testing) |
-| 47 | `FontData` | `flui-assets/src/types/font_data.rs:10` | `Data` — шум. Внутри байты шрифта | `FontBytes` | да | — |
 | 48 | `InheritedData` + derive `derive_inherited_data` | `flui-view/src/view/inherited.rs:247`, `flui-macros/src/lib.rs:140` | `Data` у трейта значений по полям | `InheritedFields` | да | 2 в SDK |
 
 ### Модули и файлы (a, b)
 
 | # | Сейчас | Где | Почему слабо | Предлагается | Публ. | Ссылок |
 |---|---|---|---|---|---|---|
-| 49 | `pub mod core` (`Asset`, `AssetMetadata`), `pub mod types` (`AssetKey`, handle, state, `FontData`) | `flui-assets/src/lib.rs:164,167` | Два мешка | Модули `asset`, `key`, `handle`, `state` (приватные + реэкспорт) | да | — |
 | 50 | `pub mod shared` (events, gestures, keys, scroll, visibility, panic_boundary, …), `pub mod traits` | `flui-platform/src/lib.rs:182,184` | `shared` — «общее для бэкендов», не что это | Разнести по смыслу: `input` (events, gestures, keys, scroll), `panic_boundary`, `accessibility`; трейты в `platform`, `host_window` | да (зависит только flui-app) | 160 `shared::` |
 | 51 | `pub mod traits` | `flui-interaction/src/lib.rs:154`, `flui-rendering/src/lib.rs:104`, `flui-foundation/src/geometry/mod.rs:57` | Модуль по виду элемента (трейты), а не по предмету | interaction: удалить (строки 1, 10), `HitTestTarget` в `hit_test`. rendering: `render_object`, `render_box`, `render_sliver` на уровень выше. geometry: `units` (`Unit`, `NumericUnit`, `FloatUnit`) и `approx` | да | — |
 | 52 | `pub mod ext` (`AnimatableExt`, `AnimationExt`), `pub mod tween_types` | `flui-animation/src/lib.rs:105,118` | `ext` — мешок. `_types` — шум | Расширения рядом со своими трейтами (`animatable`, `animation`), `tween` | да (пути) | 6–7 |

@@ -616,6 +616,7 @@ mod grid {
                 bootstrap.context,
                 Rc::new(flui_foundation::SystemClock),
                 || {},
+                || {},
             );
             let slot = sender.mint_slot().expect("a slot id is left");
             sender

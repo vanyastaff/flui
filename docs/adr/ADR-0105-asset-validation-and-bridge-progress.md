@@ -1,9 +1,8 @@
 # ADR-0105: Asset validation and bridged load progress
 
-- **Status:** Accepted (2026-10-03)
+- **Status:** Superseded (2026-11-19)
 - **Date:** 2026-10-03
-- **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
-  for the second and third paragraphs of "Decision" only (the bridge's runtime)
+- **Superseded-by:** [ADR-0385](ADR-0385-flui-assets-is-the-decoded-image-cache.md) in full: `flui-assets` is the decoded-image cache and has no typed asset framework. The decoded-image rules are ADR-0250, ADR-0279 and ADR-0280.
 - **Related:** [ADR-0018](ADR-0018-async-builder-seam.md),
   [ADR-0047](ADR-0047-unified-execution-services.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)
