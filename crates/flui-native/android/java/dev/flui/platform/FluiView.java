@@ -104,6 +104,13 @@ public final class FluiView extends View {
      */
     static native void nativePointerCaptureChanged(long handle, boolean hasCapture);
 
+    /**
+     * The window lost the focus, heard on this thread in order with the
+     * pointer capture's answers: before the system's own release of a held
+     * capture.
+     */
+    static native void nativeWindowFocusLost(long handle);
+
     /** The node info of a virtual view, {@code HOST_VIEW_ID} for this view itself, or null. */
     static native AccessibilityNodeInfo nativeNodeInfo(long handle, View host, int virtualViewId);
 
@@ -344,6 +351,16 @@ public final class FluiView extends View {
         long handle = this.handle;
         if (handle != 0) {
             nativePointerCaptureChanged(handle, hasCapture);
+        }
+    }
+
+    /** Every view of the window hears the window's focus change. */
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        long handle = this.handle;
+        if (handle != 0 && !hasWindowFocus) {
+            nativeWindowFocusLost(handle);
         }
     }
 

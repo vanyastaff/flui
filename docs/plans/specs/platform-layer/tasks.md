@@ -7660,16 +7660,20 @@ GPU-память простаивающего или невидимого окн
   UIKit и GameController читаются из загруженных фреймворков (`dlsym`), без ссылки на символ
   (пол iOS 13); нет уведомления — способность недоступна. Движение →
   `ViewTouches::locked_motion` → `ContactRegistry::raw_motion`, `MotionAcceleration::None`.
-  Android: `FluiView.onPointerCaptureChange` → `nativePointerCaptureChanged` (протокол 9, dex
+  Android: `FluiView.onPointerCaptureChange` → `nativePointerCaptureChanged` и
+  `FluiView.onWindowFocusChanged` → `nativeWindowFocusLost` (протокол 9, dex
   пересобран `android-dex --write`, JDK 21.0.12 и build-tools 35.0.0 записи), один
   владелец захвата на главном потоке Java (`CaptureOwner`, чистая модель): `wanted` — из команд
   окон, `held` — только из ответов системы, не больше одного вызова JNI
   (`requestPointerCapture`/`releasePointerCapture`) без ответа, и после ответа владелец снова
   сводит `held` к `wanted`; ответ приписывается окну, которое владелец считает держателем или
   просившим, а не текущему окну; неудавшийся вызов ничего не меняет; окно публикует только
-  `held`. AOSP android11-release `ViewRootImpl` (строки 4551–4556) молча выходит из
-  `requestPointerCapture`, когда состояние уже то же, а потеря фокуса окна снимает захват (строки
-  3283–3285); просит только окно в фокусе, без `FluiView` — `ApplyError::Platform`; ворота
+  `held`. Потеря фокуса приходит на главный поток Java в порядке с ответами и снимает `wanted` и
+  вызов без ответа, а `held` снимает `false` системы, который идёт сразу за ней; вызов, на который
+  система не ответила вовсе, держит следующие команды до следующей потери фокуса. AOSP
+  android11-release `ViewRootImpl` (строки 4551–4556) молча выходит из `requestPointerCapture`,
+  когда состояние уже то же, а потеря фокуса окна сначала доходит до видов (строка 3257), затем
+  снимает захват (строки 3283–3285); просит только окно в фокусе, без `FluiView` — `ApplyError::Platform`; ворота
   `PointerCapture` (API 26). События `SOURCE_MOUSE_RELATIVE` очереди — `RawMotion` по каждому
   сэмплу пачки, клики и колесо — там, где указатель покоится. Тесты:
   `mouse_region_cursor_reaches_the_window_through_the_ui_runtime` (таблица иконка/образ/скрыт;

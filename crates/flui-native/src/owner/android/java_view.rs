@@ -187,8 +187,6 @@ pub(crate) enum CaptureCommand {
     Request(ActivityWindowId),
     /// The window lets go: its release command, or its retirement.
     Release(ActivityWindowId),
-    /// The Activity lost the focus: the system ended the capture.
-    FocusLost,
 }
 
 /// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
@@ -357,9 +355,10 @@ pub(crate) struct JavaView {
     /// The Activity's pointer capture, which every window's commands and
     /// every system answer go through on the Java main thread. A lock, though
     /// that one thread alone touches it: the bridge is an `Arc` the owner
-    /// thread shares, so its fields are `Sync`, and this crate has no cell
-    /// bound to the Java main thread. Never contended, and no JNI call runs
-    /// under it.
+    /// thread shares, so its fields are `Sync`, and no dependency binds a
+    /// value to the Java main thread without an `unsafe impl Send`/`Sync`
+    /// (the debt `docs/gaps.md` names under ADR-0327 §1). Never contended,
+    /// and no JNI call runs under it.
     capture: Mutex<CaptureOwner<ActivityWindowId>>,
 }
 
@@ -560,7 +559,6 @@ impl JavaView {
                 match command {
                     CaptureCommand::Request(window) => owner.request(window),
                     CaptureCommand::Release(window) => owner.release(window),
-                    CaptureCommand::FocusLost => owner.focus_lost(),
                 }
             };
             this.carry_out_capture(step);
@@ -570,6 +568,14 @@ impl JavaView {
     /// The system answered (`onPointerCaptureChange`). Java main thread.
     fn capture_answered(self: &Arc<Self>, has_capture: bool) {
         let step = self.capture.lock().answered(has_capture);
+        self.carry_out_capture(step);
+    }
+
+    /// The Activity window lost the focus (`onWindowFocusChanged`), heard in
+    /// order with the capture's answers, before the system's own release of
+    /// a held capture. Java main thread.
+    fn window_focus_lost(self: &Arc<Self>) {
+        let step = self.capture.lock().focus_lost();
         self.carry_out_capture(step);
     }
 
@@ -877,6 +883,11 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 jni_str!("nativePointerCaptureChanged"),
                 jni_str!("(JZ)V"),
                 native_pointer_capture_changed as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeWindowFocusLost"),
+                jni_str!("(J)V"),
+                native_window_focus_lost as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeNodeInfo"),
@@ -1211,6 +1222,24 @@ extern "system" fn native_pointer_capture_changed<'local>(
         |_| {
             if let Some(view) = bridge(handle) {
                 view.capture_answered(has_capture);
+            }
+            Ok(())
+        },
+    );
+}
+
+extern "system" fn native_window_focus_lost<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) {
+    jni_native(
+        "nativeWindowFocusLost",
+        &mut env,
+        |()| (),
+        |_| {
+            if let Some(view) = bridge(handle) {
+                view.window_focus_lost();
             }
             Ok(())
         },

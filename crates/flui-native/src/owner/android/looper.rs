@@ -67,7 +67,6 @@ use crate::owner::android::{
     HostDisplays,
 };
 use crate::owner::android::{java_host, java_view};
-use crate::version::gate::android::PointerCapture;
 
 use crate::{
     error::BootstrapError,
@@ -416,12 +415,6 @@ impl AndroidLoop {
     /// state is published first, so an observer reads the new value.
     fn publish_activity_fact(&self, signal: ActivitySignal) {
         self.activity.record(signal);
-        // The system ends the pointer capture with the focus, and drops a
-        // request it had not answered: the capture owner forgets both.
-        if signal == ActivitySignal::Focus(false) && self.api.since::<PointerCapture>().is_some() {
-            self.java_view
-                .capture_command(java_view::CaptureCommand::FocusLost);
-        }
         let window = self.window.borrow().clone();
         if let Some(window) = window {
             window.publish_state();

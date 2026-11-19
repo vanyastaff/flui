@@ -205,9 +205,15 @@ impl PointerLocks {
         }
         // The copies of the application's handlers go last, once the state
         // is committed, the preference refreshed and every window published:
-        // their last release is the application's code (ADR-0287).
+        // their last release is the application's code (ADR-0287), each its
+        // own item, so one copy's panic leaves the next released and the
+        // first failure kept.
         failure.contain(|| {
-            flui_foundation::panic::commit(&self.mice, |_, outbox| outbox.release(remains));
+            flui_foundation::panic::commit(&self.mice, |_, outbox| {
+                for copy in remains {
+                    outbox.release(copy);
+                }
+            });
         });
         failure.resume();
     }

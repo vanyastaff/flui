@@ -726,9 +726,10 @@ impl FluiView {
     }
 
     /// Read the system's pointer lock of this view's scene again and tell the
-    /// lock owner, which publishes, moves the mouse's motion and stops the
-    /// preference of a lock the system let go of. A view out of its scene
-    /// holds no lock.
+    /// lock owner, which publishes and moves the mouse's motion; a lock the
+    /// system let go of while the window still asks keeps the window's ask,
+    /// and UIKit is asked to read its preference again. A view out of its
+    /// scene holds no lock.
     fn follow_pointer_lock(&self) {
         let Some(lock) = &self.ivars().pointer_lock else {
             return;
@@ -2910,8 +2911,9 @@ pub(crate) mod status_bar {
             controller
         }
 
-        /// The lock owner changed whether the window prefers the lock: the
-        /// attached controller asks UIKit to read it again, on the main
+        /// The lock owner changed whether the window prefers the lock, or the
+        /// system let go of a lock the window still asks for: the attached
+        /// controller asks UIKit to read the preference again, on the main
         /// thread `mtm` proves. A window not in a scene has no controller to
         /// tell; the next one reads the owner when UIKit asks.
         pub(super) fn refresh_pointer_lock(&self, mtm: MainThreadMarker) {
