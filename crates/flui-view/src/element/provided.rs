@@ -95,7 +95,10 @@ impl Provided<'_> {
 #[non_exhaustive]
 pub struct DependentEntry {
     /// The dependent's depth in the element tree, for the dirty heap.
-    pub depth: usize,
+    ///
+    /// Four bytes: no element tree reaches `u32::MAX` levels, which the
+    /// ledger checks when it records the depth.
+    pub depth: u32,
     /// The fields read in the dependent's latest build.
     pub(crate) mask: FieldSet,
     /// The fields read in a lifecycle hook, kept until the dependent unmounts.
@@ -170,6 +173,8 @@ impl Dependents {
     }
 
     fn entry(&mut self, element: ElementId, depth: usize) -> &mut DependentEntry {
+        let depth =
+            u32::try_from(depth).expect("BUG: an element tree is shallower than u32::MAX levels");
         let position = match self.position(element) {
             Some(position) => position,
             None => self.push(element, depth),
@@ -181,7 +186,7 @@ impl Dependents {
         entry
     }
 
-    fn push(&mut self, element: ElementId, depth: usize) -> usize {
+    fn push(&mut self, element: ElementId, depth: u32) -> usize {
         let position = self.entries.len();
         self.entries.push(Some((
             element,
@@ -305,7 +310,9 @@ impl Dependents {
             // `BuildOwner::build_scope`, right before the dependent's build:
             // `did_change_dependencies` runs once per change, before the build.
             owner.note_dependency_change(id);
-            owner.schedule_build_for(id, entry.depth, crate::RebuildReason::DependencyChange);
+            let depth = usize::try_from(entry.depth)
+                .expect("BUG: usize holds a u32 on every target FLUI builds for");
+            owner.schedule_build_for(id, depth, crate::RebuildReason::DependencyChange);
         }
     }
 
