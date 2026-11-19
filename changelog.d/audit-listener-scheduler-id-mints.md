@@ -13,8 +13,8 @@
 - **`TaskToken::id` returns `Option<NonZeroU64>`** (`flui-scheduler`): `None` for a task the driver
   refused, instead of the `0` sentinel. Async task ids come from the task store's own `IdMint`
   instead of a hand-written counter.
-- **`TextureRegistry` listener keys come from an `IdMint`** (`flui-layer`); exhaustion still refuses
-  `listen` for good.
+- **`TextureRegistry` texture ids come from an `IdMint`** (`flui-layer`); exhaustion still refuses
+  `register` for good.
 
 ### Removed
 

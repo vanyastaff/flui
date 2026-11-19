@@ -2,6 +2,10 @@
 
 - **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
+  §8 for the path of a frame to the screen only: a frame wakes the runtime, whose next frame
+  publishes the held version with it, and the `Texture` widget neither listens nor rebuilds;
+  the registry, its ids, its updates and the slot's uploads stand
 - **Related:** ADR-0078 (lifecycle capabilities), ADR-0115 (image source regions)
 
 ## Context
@@ -22,10 +26,10 @@ next frame from any thread, and dropping it retires the id. Frames are CPU image
 (straight-alpha, encoded-sRGB RGBA8); importing a GPU texture without a copy needs a
 shared device and is not part of this contract.
 
-Each frame bumps the id's revision, runs its listeners outside the registry's lock,
-and wakes the runtime. The `Texture` widget listens to its id, rebuilds with the new
-revision, and `RenderTexture` repaints on a revision change, so the frame reaches
-the screen without anything else changing.
+A frame's path to the screen is ADR-0304 §8's: the registry holds it as its id's pending
+frame and wakes the runtime, whose next frame publishes the version it holds when that
+version draws the texture, and the raster host takes the frame with the publication. The
+`Texture` widget neither listens nor rebuilds.
 
 The registry's updates (the newest frame per texture, and the retired ids) travel to
 the raster side. A retired id is unregistered at once.
@@ -46,11 +50,11 @@ surface format change), which drops imported allocations.
 
 ## Verification
 
-`texture_registry` (flui-layer) pins unique ids, newest-frame delivery, retirement and
-reentrant listeners. `registry_frames_upload_replace_resize_and_retire` (flui-engine)
+`texture_registry` (flui-layer) pins unique ids, newest-frame delivery, retirement and a
+wake run outside the registry's lock. `registry_frames_upload_replace_resize_and_retire` (flui-engine)
 reads back each upload path and the retired id's refusal.
 `a_frames_texture_updates_apply_before_it_whether_shown_or_superseded` (flui-engine) pins the
 raster executor's ordering. The `external_textures` rows of `frame_pacing_and_pump_matrix`
-(flui-runtime) pin a cross-thread frame repainting the widget and unmount retiring
-the texture, and `harness_texture_fills_its_box_and_repaints_per_frame` pins the
+(flui-runtime) pin a cross-thread frame reaching the raster side and unmount retiring
+the texture, and `harness_texture_fills_its_box_and_repaints_on_another_texture` pins the
 render object. The re-upload after a device rebuild is not exercised by a test.

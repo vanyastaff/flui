@@ -132,6 +132,9 @@ flui-foundation = { workspace = true, features = ["testing"] }
 # The headless host whose windows the conformance checks run against, named
 # through its doubles (`scripted`).
 flui-native = { workspace = true, features = ["scripted"] }
+# A hot reload renews a scene's lineage within a pump, which the headless
+# sink's texture tracking is tested against.
+flui-runtime = { workspace = true, features = ["testing", "hot-reload"] }
 # The painting values the integration tests' widgets paint with.
 flui-painting = { workspace = true }
 

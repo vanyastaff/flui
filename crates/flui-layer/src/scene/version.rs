@@ -378,6 +378,21 @@ impl SceneVersion {
             .flat_map(|users| users.iter().map(|address| self.address(*address)))
     }
 
+    /// Whether an entry the root reaches draws `texture`: what a new image
+    /// of it would damage ([`Self::texture_damage`]). An unattached node's
+    /// users draw nothing. It costs the texture's users, each by the depth
+    /// of its node.
+    #[must_use]
+    pub fn draws_texture(&self, texture: TextureId) -> bool {
+        let geometry = Geometry::new(&self.0);
+        self.0
+            .textures
+            .get(texture.get())
+            .into_iter()
+            .flatten()
+            .any(|user| geometry.is_attached(user.node))
+    }
+
     /// The transform the renderer applies at the follower entry `at` so its
     /// content lands on its leader: what [`resolve_follower_transform`]
     /// answers over [`Self::flatten`]'s tree, read off the version without

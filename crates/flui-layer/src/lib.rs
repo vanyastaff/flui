@@ -101,7 +101,7 @@ pub use scene::{
 };
 pub use scene_snapshot::SceneSnapshot;
 pub use texture_registry::{
-    TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
+    TextureIdsExhausted, TextureRegistration, TextureRegistry, TextureUpdates,
 };
 #[cfg(feature = "testing")]
 pub use tree::{BoundaryStamp, ContentToken};

@@ -17,6 +17,10 @@ pub(super) struct AdmittedSegment {
     pub(super) segment_start: Instant,
     pub(super) woken: bool,
     pub(super) pending: bool,
+    /// A texture frame or retirement waited for the raster host: the segment
+    /// publishes the held version for it when its tree changed nothing
+    /// (ADR-0304 §8).
+    pub(super) textures: bool,
     pub(super) resuming: bool,
     pub(super) completion: bool,
 }
@@ -206,8 +210,10 @@ impl<'runtime> PresentationSampling<'runtime> {
             presentation.reconcile_semantics_enablement();
             let woken = presentation.take_redraw_pending();
             let pending = presentation.prepare_pending_work(recovery);
+            // A texture frame is drawn whatever layout waits for: it changes no tree.
+            let textures = presentation.owes_texture_frame();
             let blocked = presentation.pipeline().with(PipelineOwner::layout_waits_for_input);
-            if (woken && !blocked) || pending || resuming {
+            if (woken && !blocked) || pending || textures || resuming {
                 presentation.clock().mark_demand(DemandKind::Dirty);
             }
             let completion = presentation.has_eligible_completion();
@@ -221,8 +227,8 @@ impl<'runtime> PresentationSampling<'runtime> {
                 // A hidden presentation's clock produces only the frame it owed.
                 presentation.occluded_frame_drawn(now);
             }
-            if decision.should_run_segment() && !(blocked && !pending && !resuming) {
-                selected = Some(AdmittedSegment { decision, segment_start, woken, pending, resuming, completion });
+            if decision.should_run_segment() && !(blocked && !pending && !textures && !resuming) {
+                selected = Some(AdmittedSegment { decision, segment_start, woken, pending, textures, resuming, completion });
                 if runtime.scheduler.phase() == flui_scheduler::SchedulerPhase::Frame {
                     presentation.begin_completion_segment();
                     completion_entered = true;

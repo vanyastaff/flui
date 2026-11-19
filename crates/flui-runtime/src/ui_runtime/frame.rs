@@ -127,6 +127,7 @@ impl UiRuntime {
                 segment_start,
                 woken,
                 pending,
+                textures,
                 resuming,
                 completion,
             }) = operation.take_segment()
@@ -135,7 +136,7 @@ impl UiRuntime {
             };
 
             let scoped = self.scheduler.phase() == flui_scheduler::SchedulerPhase::Frame;
-            if scoped && completion && !pending && !woken && !resuming {
+            if scoped && completion && !pending && !woken && !textures && !resuming {
                 presentation.complete_segment();
                 continue;
             }
@@ -667,13 +668,7 @@ impl UiRuntime {
         let dpr = presentation
             .pipeline()
             .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio);
-        let target = crate::presentation_scene::SceneTarget {
-            size: (
-                device_extent(constraints.max_width, dpr),
-                device_extent(constraints.max_height, dpr),
-            ),
-            scale: dpr,
-        };
+        let target = crate::presentation_scene::SceneTarget::of(constraints, dpr);
         // A version the surface withheld is published again as it is when this frame paints
         // nothing (ADR-0304 §7). One applied for another target, or superseded by a newer
         // version, is not what the screen should show: the tree repaints in full.
@@ -681,6 +676,11 @@ impl UiRuntime {
         if held_retry == crate::presentation_scene::HeldRetry::Repaint {
             Self::mark_root_needs_paint(presentation);
         }
+        // A texture update the held version owes a publication for rides it again when this
+        // frame paints nothing (ADR-0304 §8); a version applied for another target owes none,
+        // since the repaint the target change asked for carries the update.
+        let textures_republish =
+            scene.owes_texture_frame(presentation.texture_registry(), Some(target));
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
@@ -715,12 +715,17 @@ impl UiRuntime {
 
         if !painted {
             phases.lap(FramePhase::Paint);
-            if held_retry != crate::presentation_scene::HeldRetry::Republish {
+            // A frame that painted nothing publishes nothing, unless the screen is owed the held
+            // version: the surface withheld it, or a texture update it owes a publication for
+            // waits for the raster host, which takes it with the publication and damages the
+            // texture's users alone (ADR-0304 §7, §8).
+            if held_retry != crate::presentation_scene::HeldRetry::Republish && !textures_republish
+            {
                 return Ok(FramePaintOutcome::Idle);
             }
-            // The withheld version again, with the damage since the acknowledged base: the
-            // pipeline, its probes and input regions already read it, and only the system bars'
-            // style, which the withheld frame took with it, is staged once more.
+            // The held version again, with the damage since the acknowledged base, which is none
+            // once the raster side showed it: the pipeline, its probes and input regions already
+            // read it, and only the system bars' style is staged once more.
             presentation.enter_segment_phase(SegmentPhase::Scene);
             let publication = scene.republish();
             presentation
@@ -1662,15 +1667,4 @@ impl<'a> PhaseStopwatch<'a> {
         *slot = slot.saturating_add(spent);
         self.presentation.record_segment_phases(self.phases);
     }
-}
-
-/// A logical extent in whole device pixels, for the surface a patch is
-/// applied against, snapped by the conversion the hosts share
-/// (`flui_foundation::geometry::device_extent`), so the patch's surface rounds
-/// as the window's does: an unbounded or non-finite extent is no surface. The
-/// largest surface is a host's policy, applied where it sizes the window, and
-/// the renderer refuses a surface past its device's limit; the runtime holds
-/// neither, so it does not clamp.
-fn device_extent(logical: f64, ratio: flui_foundation::geometry::DevicePixelRatio) -> u32 {
-    flui_foundation::geometry::device_extent(logical, ratio).unwrap_or(0)
 }

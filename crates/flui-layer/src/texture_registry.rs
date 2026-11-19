@@ -3,9 +3,14 @@
 //!
 //! A [`TextureRegistry`] belongs to one presentation. [`TextureRegistry::register`]
 //! issues a [`TextureRegistration`]: an owned handle whose [`TextureId`] is never
-//! issued again, which accepts frames until it is dropped. Each frame wakes the
-//! presentation and notifies the id's listeners (the `Texture` widget repaints),
-//! and the raster backend takes the newest frame per id before it renders, so a
+//! issued again, which accepts frames until it is dropped. Each frame is held as
+//! its id's pending frame and wakes the presentation, as Flutter's
+//! `markTextureFrameAvailable` schedules a frame: the runtime's next frame,
+//! finding the registry holding updates its held version draws
+//! ([`TextureRegistry::has_updates_for`]),
+//! publishes the version its scene holds even when nothing in the tree changed,
+//! and the raster host takes the newest frame per id
+//! ([`TextureRegistry::take_updates_into`]) with that publication (ADR-0304 §8). A
 //! producer that outruns the display only costs its skipped frames. Dropping a
 //! registration retires its id; the backend releases the allocation on its next
 //! update.
@@ -15,7 +20,6 @@
 use std::{fmt, num::NonZeroU64, sync::Arc};
 
 use flui_foundation::IdMint;
-use flui_foundation::panic::PanicRecovery;
 use flui_painting::paint::{Image, TextureId};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -36,21 +40,12 @@ struct State {
     /// Texture ids, never reissued: a stale layer or draw may still name
     /// a retired one.
     ids: IdMint<NonZeroU64>,
-    live: FxHashMap<TextureId, Entry>,
+    /// Each live texture's frame not yet taken.
+    live: FxHashMap<TextureId, Option<Image>>,
     retired: Vec<TextureId>,
-    /// Listener keys, issued under this lock and never reissued: a
-    /// reissued key could remove another guard's listener.
-    listener_keys: IdMint<NonZeroU64>,
+    /// How many entries of `live` hold a frame.
+    pending: usize,
 }
-
-#[derive(Default)]
-struct Entry {
-    pending: Option<Image>,
-    revision: u64,
-    listeners: Vec<(NonZeroU64, Listener)>,
-}
-
-type Listener = Arc<dyn Fn() + Send + Sync>;
 
 /// Every texture id has been issued; the registry refuses further ids rather
 /// than reuse one a stale layer may still name.
@@ -128,102 +123,120 @@ impl TextureRegistry {
         // The mint's refusal is sticky, so once exhausted every later
         // `register` refuses too.
         let id = TextureId::new(state.ids.next().map_err(|_| TextureIdsExhausted)?.get());
-        state.live.insert(id, Entry::default());
+        state.live.insert(id, None);
         Ok(TextureRegistration {
             registry: self.clone(),
             id,
         })
     }
 
-    /// How many frames `id` has received, or `None` when it is not live.
+    /// Whether the presentation's next frame owes a publication for these
+    /// updates when nothing in its tree changed (ADR-0304 §8): a retirement
+    /// waits, or a texture `drawn` reports as drawn by the held version has a
+    /// pending frame. A frame no drawn texture shows waits, one per id, for
+    /// the next publication. With no pending frame the answer costs no walk.
+    ///
+    /// `drawn` runs under the registry's lock, so it must not reach the
+    /// registry.
     #[must_use]
-    pub fn revision(&self, id: TextureId) -> Option<u64> {
-        self.shared
-            .state
-            .lock()
+    pub fn has_updates_for(&self, mut drawn: impl FnMut(TextureId) -> bool) -> bool {
+        let state = self.shared.state.lock();
+        if !state.retired.is_empty() {
+            return true;
+        }
+        if state.pending == 0 {
+            return false;
+        }
+        state
             .live
-            .get(&id)
-            .map(|entry| entry.revision)
-    }
-
-    /// Calls `listener` after every frame `id` receives, until the returned
-    /// guard drops. `None` when `id` is not live, or for good once every
-    /// listener key has been issued: a reissued key could remove another
-    /// guard's listener.
-    pub fn listen(
-        &self,
-        id: TextureId,
-        listener: impl Fn() + Send + Sync + 'static,
-    ) -> Option<TextureListener> {
-        let mut guard = self.shared.state.lock();
-        let state = &mut *guard;
-        // Liveness first: a listen on a dead id spends no key.
-        let entry = state.live.get_mut(&id)?;
-        // The mint's refusal is sticky, so once exhausted every later
-        // `listen` refuses too.
-        let key = state.listener_keys.next().ok()?;
-        entry.listeners.push((key, Arc::new(listener)));
-        Some(TextureListener {
-            registry: self.clone(),
-            id,
-            key,
-        })
+            .iter()
+            .any(|(id, frame)| frame.is_some() && drawn(*id))
     }
 
     /// Takes the newest pending frame of each live texture and the retired
     /// ids, for the raster backend to apply before it renders.
     #[must_use]
     pub fn take_updates(&self) -> TextureUpdates {
-        let mut state = self.shared.state.lock();
-        let frames = state
-            .live
-            .iter_mut()
-            .filter_map(|(id, entry)| entry.pending.take().map(|frame| (*id, frame)))
-            .collect();
-        TextureUpdates {
-            frames,
-            retired: std::mem::take(&mut state.retired),
+        let mut updates = TextureUpdates::default();
+        self.take_updates_into(&mut updates);
+        updates
+    }
+
+    /// Takes the pending updates into `into`, folded as
+    /// [`TextureUpdates::merge`] folds a newer update: a backend that keeps
+    /// one buffer across frames takes them without allocating once the
+    /// buffer has grown to its working size.
+    pub fn take_updates_into(&self, into: &mut TextureUpdates) {
+        // The frames newer ones replace, and the frames of retired ids, drop
+        // after the lock.
+        let mut replaced = Vec::new();
+        {
+            let mut state = self.shared.state.lock();
+            let State {
+                live,
+                retired,
+                pending,
+                ..
+            } = &mut *state;
+            if *pending > 0 {
+                for (id, frame) in live.iter_mut() {
+                    let Some(frame) = frame.take() else { continue };
+                    if let Some(at) = into.frames.iter().position(|(held, _)| held == id) {
+                        replaced.push(std::mem::replace(&mut into.frames[at].1, frame));
+                    } else {
+                        into.frames.push((*id, frame));
+                    }
+                }
+                *pending = 0;
+            }
+            if !retired.is_empty() {
+                replaced.extend(
+                    into.frames
+                        .extract_if(.., |(id, _)| retired.contains(id))
+                        .map(|(_, frame)| frame),
+                );
+                into.retired.append(retired);
+            }
         }
+        drop(replaced);
     }
 
     fn submit(&self, id: TextureId, frame: Image) {
-        let listeners: Vec<Listener> = {
+        // The frame a newer one replaces drops after the lock.
+        let replaced = {
             let mut state = self.shared.state.lock();
-            let Some(entry) = state.live.get_mut(&id) else {
+            let State { live, pending, .. } = &mut *state;
+            let Some(slot) = live.get_mut(&id) else {
                 return;
             };
-            entry.pending = Some(frame);
-            entry.revision += 1;
-            entry
-                .listeners
-                .iter()
-                .map(|(_, listener)| Arc::clone(listener))
-                .collect()
+            let replaced = slot.replace(frame);
+            if replaced.is_none() {
+                *pending += 1;
+            }
+            replaced
         };
-        // Outside the lock: a listener may reach this registry again. The
-        // frame is already accepted, so a panicking listener skips neither
-        // the others nor the wake; the first panic resumes afterwards.
-        let mut recovery = PanicRecovery::new();
-        for listener in listeners {
-            recovery.run(|| listener());
-        }
-        recovery.run(|| (self.shared.wake)());
-        recovery.finish();
+        // Outside the lock: the wake is the host's, and may reach this
+        // registry again. The frame is already pending, so a wake that panics
+        // leaves it for whatever frame the presentation draws next.
+        (self.shared.wake)();
+        drop(replaced);
     }
 
     fn retire(&self, id: TextureId) {
         let retired = {
             let mut state = self.shared.state.lock();
-            let entry = state.live.remove(&id);
+            let frame = state.live.remove(&id).flatten();
+            if frame.is_some() {
+                state.pending -= 1;
+            }
             state.retired.push(id);
-            entry
+            frame
         };
-        // The entry's frame and listeners drop outside the lock; the id is
-        // already queued, so a panicking capture does not skip the wake.
-        let mut recovery = PanicRecovery::new();
-        recovery.retire(retired);
-        recovery.run(|| (self.shared.wake)());
-        recovery.finish();
+        // The id is already queued, so a wake that panics leaves the
+        // retirement for the presentation's next frame; the frame it never
+        // drew drops after the wake, outside the lock.
+        (self.shared.wake)();
+        drop(retired);
     }
 }
 
@@ -253,7 +266,7 @@ impl TextureRegistration {
     }
 
     /// Hands over the texture's next frame, from any thread. A frame not yet
-    /// drawn is replaced; the presentation wakes and the id's listeners run.
+    /// drawn is replaced, and the presentation wakes to draw it.
     pub fn submit_frame(&self, frame: Image) {
         self.registry.submit(self.id, frame);
     }
@@ -273,61 +286,9 @@ impl fmt::Debug for TextureRegistration {
     }
 }
 
-/// Keeps a frame listener installed; dropping it removes the listener.
-#[must_use = "dropping the guard removes the listener"]
-pub struct TextureListener {
-    registry: TextureRegistry,
-    id: TextureId,
-    key: NonZeroU64,
-}
-
-impl Drop for TextureListener {
-    fn drop(&mut self) {
-        let removed = {
-            let mut state = self.registry.shared.state.lock();
-            state.live.get_mut(&self.id).and_then(|entry| {
-                let index = entry
-                    .listeners
-                    .iter()
-                    .position(|(key, _)| *key == self.key)?;
-                Some(entry.listeners.swap_remove(index))
-            })
-        };
-        drop(removed);
-    }
-}
-
-impl fmt::Debug for TextureListener {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TextureListener")
-            .field("id", &self.id)
-            .finish_non_exhaustive()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The last listener key is issued once; after it every `listen` refuses,
-    /// so no key an older guard holds is reissued.
-    #[test]
-    fn exhausted_listener_keys_refuse_for_good() {
-        let registry = TextureRegistry::new(Arc::new(|| {}));
-        let texture = registry.register().expect("id");
-        let id = texture.id();
-        registry.shared.state.lock().listener_keys = IdMint::starting_after(u64::MAX - 1);
-        let last = registry.listen(id, || {}).expect("the last key");
-        assert_eq!(last.key.get(), u64::MAX);
-        for _ in 0..2 {
-            assert!(registry.listen(id, || {}).is_none());
-        }
-        assert_eq!(
-            registry.shared.state.lock().live[&id].listeners.len(),
-            1,
-            "a refused listener is not installed"
-        );
-    }
 
     /// The last texture id is issued once; after it every `register`
     /// refuses, so no id a stale draw names is issued again.
