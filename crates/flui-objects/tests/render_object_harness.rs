@@ -4251,8 +4251,11 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
         AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
     };
     let mut failures = Vec::new();
-    for sliver in [false, true] {
-        for force_layer in [false, true] {
+    for (sliver, force_layer, always) in [false, true].into_iter().flat_map(|sliver| {
+        [(false, false), (true, false), (false, true), (true, true)]
+            .map(|(force_layer, always)| (sliver, force_layer, always))
+    }) {
+        {
             let mut config = labelled("Static fade content");
             config.set_role(SemanticsRole::Button);
             config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
@@ -4264,6 +4267,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
             let spec = if sliver {
                 let mut opacity = RenderSliverOpacity::new(0.0);
                 let _ = opacity.set_always_needs_compositing(force_layer);
+                let _ = opacity.set_always_include_semantics(always);
                 viewport(
                     sliver_node(opacity)
                         .label("opacity")
@@ -4272,6 +4276,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
             } else {
                 let mut opacity = RenderOpacity::new(0.0);
                 let _ = opacity.set_always_needs_compositing(force_layer);
+                let _ = opacity.set_always_include_semantics(always);
                 box_node(opacity).label("opacity").child(child)
             };
             let mut run = RenderTester::mount(spec)
@@ -4303,8 +4308,9 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
                 let actionable = owner
                     .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
                     .is_ok();
-                if included != (alpha > 0.0) || actionable != (alpha > 0.0) {
-                    failures.push((sliver, force_layer, alpha, included, actionable));
+                let expected = always || alpha > 0.0;
+                if included != expected || actionable != expected {
+                    failures.push((sliver, force_layer, always, alpha, included, actionable));
                 }
                 if !sliver {
                     assert_eq!(
@@ -4318,7 +4324,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
     }
     assert!(
         failures.is_empty(),
-        "static opacity semantics (sliver, force layer, alpha, included, actionable): {failures:?}"
+        "static opacity semantics (sliver, force layer, always include, alpha, included, actionable): {failures:?}"
     );
 }
 

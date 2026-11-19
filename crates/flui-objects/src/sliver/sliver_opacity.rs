@@ -55,6 +55,8 @@ pub struct RenderSliverOpacity {
     /// even when `alpha == 1`. Useful for stable compositing under
     /// animation.
     always_needs_compositing: bool,
+    /// Whether the child's semantics are published at opacity `0.0` too.
+    always_include_semantics: bool,
 }
 
 impl RenderSliverOpacity {
@@ -65,6 +67,7 @@ impl RenderSliverOpacity {
         Self {
             opacity: clamped,
             always_needs_compositing: false,
+            always_include_semantics: false,
         }
     }
 
@@ -120,7 +123,7 @@ impl RenderSliverOpacity {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let old_needs_compositing = self.needs_compositing();
-        let old_is_visible = self.opacity > 0.0;
+        let old_includes_semantics = self.includes_child_semantics();
         // Whether this node suppresses its subtree's paint entirely. Read
         // through the trait method rather than re-deriving `alpha == 0`, so
         // this stays correct if that predicate changes.
@@ -147,7 +150,7 @@ impl RenderSliverOpacity {
             // — which is the only way to serve a structural change.
             impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
         }
-        if old_is_visible != (self.opacity > 0.0) {
+        if old_includes_semantics != self.includes_child_semantics() {
             impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
         }
         // Starting or stopping suppressing the subtree's paint is a change to
@@ -173,6 +176,39 @@ impl RenderSliverOpacity {
             impact |= flui_rendering::RenderUpdateImpact::PAINT;
         }
         impact
+    }
+
+    /// Whether the child's semantics are published at opacity `0.0` too.
+    ///
+    /// Off by default: a fully transparent sliver is hidden from assistive
+    /// technology as it is from sight.
+    #[inline]
+    #[must_use]
+    pub fn always_include_semantics(&self) -> bool {
+        self.always_include_semantics
+    }
+
+    /// Sets whether the child's semantics are published at opacity `0.0`;
+    /// a change that alters what is published republishes semantics.
+    pub fn set_always_include_semantics(
+        &mut self,
+        value: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.always_include_semantics == value {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        let old_includes_semantics = self.includes_child_semantics();
+        self.always_include_semantics = value;
+        if old_includes_semantics == self.includes_child_semantics() {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Whether the child's semantics are visited: at a positive opacity, or
+    /// at any opacity with [`always_include_semantics`](Self::always_include_semantics).
+    fn includes_child_semantics(&self) -> bool {
+        self.always_include_semantics || self.opacity > 0.0
     }
 
     /// Updates the explicit compositing predicate and reports its phase.
@@ -206,6 +242,8 @@ impl Inspect for RenderSliverOpacity {
             .default(&1.0_f64);
         out.field("always_needs_compositing", &self.always_needs_compositing)
             .default(&false);
+        out.field("always_include_semantics", &self.always_include_semantics)
+            .default(&false);
     }
 }
 
@@ -214,7 +252,7 @@ impl RenderSliver for RenderSliverOpacity {
     type ParentData = SliverPhysicalParentData;
 
     fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
-        self.opacity > 0.0
+        self.includes_child_semantics()
     }
 
     fn perform_layout(
