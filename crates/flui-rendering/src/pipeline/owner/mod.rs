@@ -1472,7 +1472,7 @@ mod tests {
             "the message names the ancestors: {named}"
         );
 
-        let anonymous = owner.in_tree(crate::error::RenderError::InvalidParentChild);
+        let anonymous = owner.in_tree(crate::error::RenderError::ViewportOffsetChanged);
         assert!(
             anonymous.context().path().is_empty(),
             "an error that names no node has no path"

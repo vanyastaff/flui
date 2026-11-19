@@ -132,7 +132,7 @@ pub mod prelude {
         SliverHitTestContext, SliverLayoutContext,
     };
     // Error types
-    pub use crate::error::{PoisonPhase, RenderError, RenderResult};
+    pub use crate::error::{PoisonPhase, RenderError, RenderResult, SemanticsError};
     // Hit testing. The parallel `BoxHitTestEntry`/`BoxHitTestResult`/
     // `SliverHitTestEntry`/`SliverHitTestResult` exports that used to live
     // here have been removed; the protocol-canonical versions live in
@@ -187,7 +187,7 @@ pub use context::{
     BoxHitTestContext, BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext,
     PaintContext, PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
-pub use error::{PoisonPhase, RenderError, RenderResult};
+pub use error::{PoisonPhase, RenderError, RenderResult, SemanticsError};
 pub use parent_data::ParentData;
 pub use pipeline::{
     LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextContextMut, TextSource,
