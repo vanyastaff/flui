@@ -42,6 +42,46 @@ pub enum WindowAt {
     Unknown,
 }
 
+/// A failed presentation-specific preference query.
+///
+/// Unsupported observation is `Ok(None)`, rather than an error. On failure the
+/// consumer preserves its last accepted projection and arranges a bounded retry.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PreferenceQueryError {
+    /// Nothing can answer now: the native window or its owner no longer exists
+    /// ([`NoWindow`](crate::UnsupportedReason::NoWindow)), or the observation
+    /// cannot be read yet ([`Unavailable`](crate::UnsupportedReason::Unavailable)).
+    #[error("the preference query has no answer: {0}")]
+    Unsupported(#[from] Unsupported),
+    /// The query was attempted outside the platform owner thread.
+    #[error("the preference query requires the platform owner thread")]
+    WrongThread,
+    /// A numeric observation or projection failed validation.
+    #[error(transparent)]
+    Invalid(#[from] crate::InvalidPreference),
+    /// The operating system refused or failed the query.
+    #[error("native preference query failed: {0}")]
+    Platform(#[from] crate::PlatformFailure),
+}
+
+impl PreferenceQueryError {
+    /// An operating-system failure with this message.
+    #[must_use]
+    pub fn failed(message: String) -> Self {
+        Self::Platform(crate::PlatformFailure::Failed { message })
+    }
+
+    /// What is not here, when that is why the query has no answer.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::WrongThread | Self::Invalid(_) | Self::Platform(_) => None,
+        }
+    }
+}
+
 /// One window of the platform, as the framework programs against it: its
 /// identity, its [`WindowState`] snapshot and the [`WindowCommand`]s it takes,
 /// the per-frame verbs (redraw, input regions, the refresh-rate hint, the

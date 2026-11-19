@@ -5,6 +5,26 @@
 //! [`PlatformWindow`](crate::PlatformWindow), and the host-facing
 //! `flui_native::Platform` that opens windows (which stays in
 //! `flui-native`, ADR-0082 §2) use in their signatures.
+//!
+//! The rest of the window area is in the modules below: the window trait,
+//! its state, commands and capabilities (ADR-0237), placement, geometry,
+//! frame and insets, the handler a window is opened with (ADR-0254 §4), the
+//! surface a renderer draws into, the cursor, the brightness, the frames a
+//! host asks for and the options of one operating system (ADR-0254 §8).
+
+pub(crate) mod brightness;
+pub(crate) mod capabilities;
+pub(crate) mod cursor;
+pub(crate) mod frame;
+pub(crate) mod frame_request;
+pub(crate) mod geometry;
+pub(crate) mod handler;
+pub(crate) mod insets;
+pub mod os_options;
+pub(crate) mod placement;
+pub(crate) mod platform_window;
+pub(crate) mod state;
+pub(crate) mod surface_target;
 
 use std::num::NonZeroU64;
 

@@ -7,7 +7,7 @@ error[E0308]: mismatched types
   |                    arguments to this method are incorrect
   |
 note: method defined here
- --> src/platform_window.rs
+ --> src/window/platform_window.rs
   |
   |     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError>;
   |        ^^^^^

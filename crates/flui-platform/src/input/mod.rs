@@ -20,6 +20,19 @@
 //! flui_interaction (gesture recognition)
 //! ```
 //!
+//! The input area's other modules: the [`pointer`] and [`keyboard`]
+//! vocabularies, the handle-less [`input_capabilities`] (ADR-0213), the
+//! [`input_regions`] the application claims for its own input (ADR-0217 §5),
+//! and the [`EventTime`] every event carries.
+//!
+//! [`EventTime`]: crate::EventTime
+
+pub(crate) mod event_time;
+pub mod input_capabilities;
+pub mod input_regions;
+pub mod keyboard;
+pub mod pointer;
+
 use crate::{keyboard::KeyEvent, pointer::PointerEvent};
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;

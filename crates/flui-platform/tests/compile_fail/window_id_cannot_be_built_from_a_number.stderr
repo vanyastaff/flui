@@ -6,7 +6,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
   |
   = note: a struct named `WindowId` exists in another namespace
 note: constructor is not visible here due to private fields
- --> src/window.rs
+ --> src/window/mod.rs
   |
   | pub struct WindowId(NonZeroU64);
   |                     ^^^^^^^^^^ private field
@@ -34,7 +34,7 @@ error[E0599]: no associated function or constant named `new` found for struct `W
    |                       ^^^ associated function or constant not found in `WindowId`
    |
 note: if you're trying to build a new `WindowId`, consider using `WindowId::try_from_raw` which returns `Option<WindowId>`
-  --> src/window.rs
+  --> src/window/mod.rs
    |
    |     pub const fn try_from_raw(raw: u64) -> Option<Self> {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -36,6 +36,8 @@
 //! capability is reached from a window. A backend with one device-global
 //! engine returns the same `Arc` from every window.
 
+// The tier-1 kind is re-exported at the crate root, its one public path.
+pub(crate) mod feedback;
 mod pattern;
 mod request;
 

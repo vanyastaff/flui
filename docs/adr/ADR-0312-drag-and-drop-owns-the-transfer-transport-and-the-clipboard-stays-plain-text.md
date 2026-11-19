@@ -28,9 +28,9 @@ was not. At `vanyastaff/flui@24a496f4449bef02a26d3b67b13f93d5abc29068`:
 
 | Fact | Evidence |
 |---|---|
-| The transport trait still requires a clipboard offer | `DataTransferSource::clipboard_offer`, `crates/flui-platform/src/data_transfer.rs:492` |
+| The transport trait still requires a clipboard offer | `DataTransferSource::clipboard_offer`, `crates/flui-platform/src/transfer/data_transfer.rs:492` |
 | Every implementation answers `None`: the six hosts' transports, the inert one and three test doubles | `drag/{windows,wayland,x11,android,web,headless}.rs`, `data_transfer.rs:525`, `owner/windows/testing.rs`, `flui-app/tests/data_transfer_transport.rs`, `flui-interaction/tests/drag_sessions.rs` |
-| The clipboard is its own capability and reads plain text | `ClipboardRead = Result<Option<Arc<str>>, ClipboardError>` (`flui-platform/src/clipboard.rs:13`), `ClipboardHandle::read_text` (`flui-interaction/src/text_input/clipboard.rs:114`), `NativeClipboard` (`flui-native/src/host/clipboard.rs:17`), ADR-0152 §5 and §6 |
+| The clipboard is its own capability and reads plain text | `ClipboardRead = Result<Option<Arc<str>>, ClipboardError>` (`flui-platform/src/transfer/clipboard.rs:13`), `ClipboardHandle::read_text` (`flui-interaction/src/text_input/clipboard.rs:114`), `NativeClipboard` (`flui-native/src/host/clipboard.rs:17`), ADR-0152 §5 and §6 |
 | No widget reads anything but text | `EditableText`'s copy, cut and paste go through `ClipboardHandle::read_text` and `write_text` |
 | ADR-0038 describes forms that are gone | §6 and §9: the `arboard` worker, winit and `Arc<dyn Clipboard>`; §8, "the web backend returns `NullDataTransferSource`", against `drag/web.rs` |
 

@@ -45,7 +45,7 @@ const TABLES: [Table; 2] = [
     Table {
         name: "NamedKey",
         upstream: "src/named_key.rs",
-        output: "crates/flui-platform/src/keyboard/named_key.rs",
+        output: "crates/flui-platform/src/input/keyboard/named_key.rs",
         summary: "A key the W3C names: the `key` value of a key that produces no character.\n\n\
                   The variants are the [UI Events `key` values](https://w3c.github.io/uievents-key/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\
@@ -58,7 +58,7 @@ const TABLES: [Table; 2] = [
     Table {
         name: "Code",
         upstream: "src/code.rs",
-        output: "crates/flui-platform/src/keyboard/code.rs",
+        output: "crates/flui-platform/src/input/keyboard/code.rs",
         summary: "The physical key, independent of the keyboard layout: the W3C `code` value.\n\n\
                   The variants are the [UI Events `code` values](https://w3c.github.io/uievents-code/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\

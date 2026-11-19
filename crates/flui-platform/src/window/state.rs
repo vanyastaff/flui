@@ -33,7 +33,7 @@
 
 use flui_foundation::geometry::{Size, WindowMetrics};
 
-use crate::window_capabilities::Publication;
+use crate::window::capabilities::Publication;
 use crate::{
     CapabilityParts, CursorGrab, DisplayId, InvalidGeometry, Unsupported, WindowCapabilities,
     WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,

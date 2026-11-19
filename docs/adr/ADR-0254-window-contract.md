@@ -151,7 +151,7 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
   ([gfx-rs/wgpu@3050396df2 wgpu/src/api/surface.rs:266](https://github.com/gfx-rs/wgpu/blob/3050396df2/wgpu/src/api/surface.rs#L266)), not 51 methods.
   The price is a wrong-thread `request_redraw` that compiles and is unsound on macOS, and about
   50 lines of doc stating the rule instead of a type stating it
-  (`crates/flui-platform/src/platform_window.rs:247-298`).
+  (`crates/flui-platform/src/window/platform_window.rs:247-298`).
 - **Nine spellings of "not here".** Nine enums each define their own `Unsupported` or
   `Unavailable` (ADR-0151 lists them with their lines). The per-frame verbs return `()`: the Win32
   host logs a failed backdrop call, so an app cannot know Mica was ignored
@@ -456,7 +456,7 @@ method stops compiling instead of being documented. The raster thread receives a
   window to the target;
 - it has `pre_present_notify` as a required method, because the raster thread calls it once per
   presented frame, immediately before the present (an inert default of `PlatformWindow` today,
-  `crates/flui-platform/src/platform_window.rs:311`; on Wayland it arms the surface's frame
+  `crates/flui-platform/src/window/platform_window.rs:311`; on Wayland it arms the surface's frame
   callback, which paces `request_redraw` by the compositor). A host without the concept
   returns at once, and its documentation says so; the absence is stated by the host and not
   inherited from a default;

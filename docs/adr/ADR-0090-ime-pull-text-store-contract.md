@@ -34,8 +34,8 @@
 
 [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) made the IME contract winit's push
 model: the platform pushes `ImeEvent::{Enabled, Preedit, Commit, Disabled}`
-(`crates/flui-platform/src/ime.rs`) and the framework pushes back two things,
-`set_ime_allowed` and `set_ime_cursor_area` (`crates/flui-platform/src/text_input.rs`,
+(`crates/flui-platform/src/text/ime.rs`) and the framework pushes back two things,
+`set_ime_allowed` and `set_ime_cursor_area` (`crates/flui-platform/src/text/input.rs`,
 the whole `PlatformTextInput` trait). The platform never asks the framework anything. Its §1
 already noted that Android's `InputConnection` is a pull model and left the bridge to "the backend
 that needs it".

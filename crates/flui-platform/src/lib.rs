@@ -110,66 +110,43 @@
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
 
+// The contract is grouped by area (ADR-0151 §2): `window`, `input`, `text`,
+// `display`, `preferences`, `transfer`, `haptics` and `capability`, beside
+// the single modules that section keeps at the root (`unsupported`, `notice`,
+// `system_chrome`, `storage`, `target_platform`) and the services that are
+// not an area of their own. An area that is not itself a public module is
+// private: each item has one public path, at the root, and a public module
+// inside it (`pointer`, `text_store`, `drag`, …) is re-exported at the root
+// under its own name.
 pub mod assets;
 mod backoff;
-mod brightness;
 pub mod capability;
-mod clipboard;
-mod cursor;
-pub mod data_transfer;
 mod display;
-pub mod drag;
 mod environment;
-mod event_time;
 pub mod executor;
 mod flag_set;
-mod frame_request;
-mod haptic_feedback;
 pub mod haptics;
-mod host_notice;
 pub mod http;
-mod ime;
 mod input;
-pub mod input_capabilities;
-pub mod input_regions;
-pub mod keyboard;
 pub mod launch;
 mod launch_key;
-mod locale;
+mod notice;
 mod opened;
-pub mod os_options;
 mod owner_wait;
-mod placement;
-mod platform_window;
-pub mod pointer;
 mod preferences;
-mod regional;
 pub mod sandbox;
 mod storage;
-mod surface_target;
 mod system_chrome;
 mod system_failure;
 mod target_platform;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-mod text_input;
-pub mod text_store;
+mod text;
+mod transfer;
 mod unsupported;
 mod window;
-mod window_capabilities;
-mod window_frame;
-mod window_geometry;
-mod window_handler;
-mod window_insets;
-mod window_state;
 
 pub use backoff::Backoff;
-pub use brightness::Brightness;
-pub use clipboard::{
-    ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
-    ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
-};
-pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};
 /// The system cursor shapes a [`Cursor::Icon`] names: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
@@ -181,69 +158,78 @@ pub use display::{
     WindowDisplay,
 };
 pub use environment::{Environment, OsRelease};
-pub use event_time::EventTime;
-pub use frame_request::{FramePresented, FrameRequest};
-pub use haptic_feedback::HapticFeedback;
-pub use host_notice::{
-    HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
-    SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
-};
-pub use ime::ImeEvent;
+pub use haptics::feedback::HapticFeedback;
+pub use input::event_time::EventTime;
 pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
+pub use input::{input_capabilities, input_regions, keyboard, pointer};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
-pub use locale::{InvalidLocale, Locale};
+pub use notice::{
+    HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
+    SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
+};
 pub use opened::{
     Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
 };
 pub use owner_wait::OwnerWait;
-pub use placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
-pub use platform_window::{PlatformWindow, WindowAt};
+pub use preferences::locale::{InvalidLocale, Locale};
+pub use preferences::regional::{
+    HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
+    RegionalFormats, RegionalParts, Weekday,
+};
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
-    PreferenceQueryError, ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility,
-    ScrollTrackClick, SrgbColor, SystemPreferences, TextWeightPreference, WheelParts,
-    WheelPreferences, WheelStep,
-};
-pub use regional::{
-    HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
-    RegionalFormats, RegionalParts, Weekday,
+    ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor,
+    SystemPreferences, TextWeightPreference, WheelParts, WheelPreferences, WheelStep,
 };
 pub use storage::{
     AppDataDir, CopiedAside, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName,
     Stored, StoredVersion, WriteMode,
 };
-pub use surface_target::{
-    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
-    RedrawRequester, SurfaceTarget, SwapChainStatistics,
-};
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use system_failure::{BrowserException, SystemFailure};
 pub use target_platform::TargetPlatform;
-pub use text_input::PlatformTextInput;
-pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
-pub use window::{
-    InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,
-    WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
+pub use text::ime::ImeEvent;
+pub use text::input::PlatformTextInput;
+pub use text::text_store;
+pub use transfer::clipboard::{
+    ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
+    ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
 };
-pub use window_capabilities::{
+pub use transfer::{data_transfer, drag};
+pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
+pub use window::brightness::Brightness;
+pub use window::capabilities::{
     CapabilityParts, OccludedSurface, PublicationMint, WindowCapabilities, WindowCapability,
 };
-pub use window_frame::{
+pub use window::cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};
+pub use window::frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };
-pub use window_geometry::{
+pub use window::frame_request::{FramePresented, FrameRequest};
+pub use window::geometry::{
     InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry, WindowPosition,
 };
-pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
-pub use window_insets::{
+pub use window::handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
+pub use window::insets::{
     InsetCurve, InsetMotion, InvalidInsets, KeyboardPlacement, SoftKeyboard, WindowInsets,
 };
-pub use window_state::{
+pub use window::os_options;
+pub use window::placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
+pub use window::platform_window::{PlatformWindow, PreferenceQueryError, WindowAt};
+pub use window::state::{
     AdmissionError, AdmittedCommand, ApplyError, AspectRatio, CommandRefusal, PlatformFailure,
     SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFocus, WindowInteraction,
     WindowLevel, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
     WindowStateParts,
+};
+pub use window::surface_target::{
+    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
+    RedrawRequester, SurfaceTarget, SwapChainStatistics,
+};
+pub use window::{
+    InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,
+    WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };
