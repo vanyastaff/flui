@@ -2680,46 +2680,6 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
-/// A performance overlay narrower than its readouts shows the same pixels
-/// after its numbers change as a full frame does: its ink stays inside the
-/// bounds its damage covers, rather than leaving the previous frame's
-/// numbers standing past them.
-#[test]
-fn a_changed_undersized_performance_overlay_matches_a_full_frame() {
-    use flui_layer::PerformanceOverlayLayer;
-
-    let Some(renderer) = crate::test_support::renderer_or_skip() else {
-        return;
-    };
-    let (root, background) = (ContentToken::mint(), ContentToken::mint());
-    let text = std::cell::RefCell::new(flui_painting::TextContext::new(
-        &flui_painting::FontCollection::new(),
-    ));
-    let build = |fps: f64, frame_time_ms: f64| {
-        backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
-            // The labels start 8 px in, the values 50 px in: a 30 px wide
-            // overlay records the values outside its bounds, which the
-            // engine's clip keeps from inking.
-            let overlay = PerformanceOverlayLayer::record(
-                &mut text.borrow_mut(),
-                Rect::from_xywh(10.0, 10.0, 30.0, 40.0),
-                flui_layer::PerformanceOverlayOption::all(),
-                &flui_layer::PerformanceSample {
-                    fps,
-                    frame_time_ms,
-                    diagnostic_line: None,
-                },
-            )
-            .expect("overlay fixture has valid shaping inputs");
-            tree.push_child(root_id, Layer::from(overlay));
-        })
-    };
-    let (before, after) = (build(10.0, 88.8), build(99.0, 11.1));
-    let (partial, full) = partial_and_full(&renderer, &before, &after);
-    let stale = mismatches(&partial, &full, 0);
-    assert!(stale.is_empty(), "stale pixels at {stale:?}");
-}
-
 /// A partial frame resolves a clip's coverage only over the pixels its draws
 /// can write, which its damage bounds. The clip is a full-window rounded
 /// rectangle repeated as 16 antialiased leaves: over the whole 1024² window

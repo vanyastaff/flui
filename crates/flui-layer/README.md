@@ -30,12 +30,15 @@ append-only tree whose ids a caller keeps. `Scene::new` converts the tree into a
 
 | Kind | Variants |
 |------|----------|
-| Leaf | `PictureLayer` (sealed drawing commands, external textures among them), `PerformanceOverlayLayer` |
+| Leaf | `PictureLayer` (sealed drawing commands, external textures among them) |
 | Clip | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` |
 | Transform | `OffsetLayer`, `TransformLayer` |
 | Effect | `OpacityLayer`, `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` |
 | Link | `LeaderLayer`, `FollowerLayer` |
 | Annotation | `AnnotatedRegionLayer` |
+
+A retained scene's content opens every layer but a picture as an `Effect`
+(`ContentBuilder::push_effect`); what it draws is a chunk of recorded commands.
 
 `Layer::local_translation()` is the one place the set of translating variants is written down;
 the engine's pushes and the follower resolver's chain sums both read it.

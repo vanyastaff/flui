@@ -122,17 +122,17 @@ pub struct AppConfig {
     ///
     /// Scope, deliberately narrow: the overlay's three rows are shaped
     /// through the UI runtime's text context at scene assembly and the renderer
-    /// only rasterizes them; every row is drawn whatever the option mask
-    /// says, so `PerformanceOverlayOption` has no observable effect yet. The sampled
-    /// interval is between *composited* frames — an idle frame produces no layer
-    /// tree, so it is a repaint rate, not a wall-clock frame rate. The telemetry
+    /// only rasterizes them. The sampled
+    /// interval is between *composited* frames — an idle frame publishes no
+    /// scene, so it is a repaint rate, not a wall-clock frame rate. The telemetry
     /// row reports p99 present/input latency, deferred/dropped counts, and
     /// whether input attribution was truncated by the bounded per-frame buffer.
     ///
     /// The bootstrap runner forwards this
     /// to `UiRuntime::set_performance_overlay`, which is what actually starts
-    /// the rolling frame-time window; the frame path then appends a
-    /// `PerformanceOverlayLayer` as the root layer's last child. Off costs a
+    /// the rolling frame-time window; each painted frame then publishes the
+    /// readout as one chunk under a clip, at a scene node slotted after the
+    /// frame's own, so no boundary of the app repaints for it. Off costs a
     /// cheap `None` check per frame; snapshot collection, percentile reduction,
     /// and line formatting run only while the overlay is enabled.
     ///

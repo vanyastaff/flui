@@ -397,10 +397,6 @@ fn scene_patch_damage() {
                 d::nested_filter_kernels_add_along_the_chain,
             ),
             (
-                "a_picture_effect_damages_its_damage_extent",
-                d::a_picture_effect_damages_its_damage_extent,
-            ),
-            (
                 "nested_followers_resolve_below_their_common_ancestor",
                 d::nested_followers_resolve_below_their_common_ancestor,
             ),

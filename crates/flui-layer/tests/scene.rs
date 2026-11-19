@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_foundation::{RenderId, SurfaceGeneration};
+use flui_layer::Effect;
 use flui_layer::{
     BackdropFilterLayer, BoundaryContent, Chunk, DamageRegion, FollowerLayer, FullReason, Layer,
     LayerLink, LeaderLayer, OpacityLayer, Placement, ResyncReason, SceneError, SceneNode,
@@ -441,7 +442,7 @@ pub(crate) fn the_indexes_follow_publish_and_retire() {
     let version = writer.next_content_version().expect("fresh");
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
         owner_id(),
         0,
     );
@@ -453,7 +454,7 @@ pub(crate) fn the_indexes_follow_publish_and_retire() {
     )));
     content.pop_effect();
     content.push_effect(
-        Layer::from(BackdropFilterLayer::new(
+        Effect::from(BackdropFilterLayer::new(
             ImageFilter::blur(4.0),
             BlendMode::SrcOver,
             Rect::from_xywh(0.0, 0.0, 9.0, 9.0),
@@ -463,7 +464,7 @@ pub(crate) fn the_indexes_follow_publish_and_retire() {
     );
     writer.push(publish(a, Arc::new(content.finish())));
     let mut follower = BoundaryContent::builder();
-    follower.push_effect(Layer::from(FollowerLayer::new(link)), owner_id(), 0);
+    follower.push_effect(Effect::from(FollowerLayer::new(link)), owner_id(), 0);
     writer.push(publish(b, Arc::new(follower.finish())));
     owner.apply(SURFACE).expect("applies");
 
@@ -514,7 +515,7 @@ pub(crate) fn a_version_flattens_to_the_tree_it_paints() {
     let mut writer = owner.writer();
     let version = writer.next_content_version().expect("fresh");
     let mut content = BoundaryContent::builder();
-    content.push_effect(Layer::from(OpacityLayer::new(0.5)), owner_id(), 0);
+    content.push_effect(Effect::from(OpacityLayer::new(0.5)), owner_id(), 0);
     content.chunk(Arc::new(Chunk::new(owner_id(), 0, version, picture())));
     content.slot(b);
     content.pop_effect();
@@ -665,7 +666,7 @@ fn linked(owner: &mut SceneOwner, link: LayerLink, texture: TextureId) -> Arc<Bo
     let version = owner.writer().next_content_version().expect("fresh");
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
         owner_id(),
         0,
     );
@@ -707,7 +708,7 @@ fn shared_users(
     let version = owner.writer().next_content_version().expect("fresh");
     let mut content = BoundaryContent::builder();
     for ordinal in 0..n {
-        content.push_effect(Layer::from(FollowerLayer::new(link)), owner_id(), ordinal);
+        content.push_effect(Effect::from(FollowerLayer::new(link)), owner_id(), ordinal);
         let mut canvas = Canvas::new();
         canvas.draw_texture(
             texture,

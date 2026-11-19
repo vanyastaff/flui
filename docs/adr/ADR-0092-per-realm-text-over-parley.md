@@ -716,9 +716,9 @@ that wires what it adds.
      parameter is gone. Recording a paragraph registers each run's face in the rasterizer's
      registry and places the run's glyphs; the engine no longer takes `FONT_SYSTEM`'s lock to
      rasterize. `WgpuPainter::draw_text` is gone. The performance overlay's labels are shaped
-     through the UI runtime's `TextContext` at scene assembly: `PerformanceOverlayLayer::record`
-     composes them into the display list the layer carries, and the engine clips it to the
-     overlay's bounds and replays it, rasterizing the labels like any other paragraph.
+     through the UI runtime's `TextContext` at scene assembly: the runtime records them into
+     the one chunk its overlay node publishes under a clip to the overlay's bounds, and the
+     engine replays it, rasterizing the labels like any other paragraph.
    - (4b) The cosmic-text paint path is removed: `TextLayout::placed_glyphs` and its ink
      bounds, `SharedFontSystem::rasterize` and its `GlyphRasterizer` impl, and the cosmic
      `GlyphKey`, whose name `ParleyGlyphKey` takes.

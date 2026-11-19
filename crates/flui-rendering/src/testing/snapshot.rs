@@ -575,10 +575,6 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             // Emit commands one level deeper.
             write_display_list(out, p.picture(), depth + 1);
         }
-        Layer::PerformanceOverlay(_) => {
-            out.push_str(&indent);
-            out.push_str("PerformanceOverlay\n");
-        }
         Layer::ClipRect(c) => {
             let r = c.clip_rect();
             out.push_str(&indent);

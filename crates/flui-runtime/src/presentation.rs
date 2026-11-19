@@ -21,7 +21,6 @@ use flui_interaction::{
     pointer::InteractionDispatchHandle,
     text_input::{TextInputBackend, TextInputHandle, TextInputOwner},
 };
-use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
 use flui_platform::text::store::TextStoreHost;
@@ -2465,27 +2464,27 @@ impl PresentationState {
         self.performance_overlay.set(enabled);
     }
 
-    /// Record this frame and the overlay layer it composes above the
-    /// presentation's content, `None` while the overlay is off.
+    /// This frame's debug readout, to draw above the presentation's content,
+    /// `None` while the overlay is off.
     ///
-    /// The layer is published at a scene node of its own, slotted after the
+    /// The scene records it at a node of its own, slotted after the
     /// pipeline's frame node, so it composites above the content and no
-    /// boundary of the pipeline repaints for it.
+    /// boundary of the pipeline repaints for it; a readout equal to the one
+    /// shown records nothing (`PresentationScene`).
     ///
     /// # The overlay is inside what it measures
     ///
-    /// When enabled, this pulls `frames_since(None)`, rebuilds both
-    /// histograms and shapes the readout's seven labels through `text`, the
-    /// UI runtime's text context, on every composited frame. The cost is bounded — the
+    /// When enabled, this pulls `frames_since(None)` and rebuilds both
+    /// histograms on every composited frame, and the scene shapes the
+    /// readout's labels whenever they change. The cost is bounded — the
     /// telemetry ring is fixed-capacity, so it is O(ring), not O(session) —
     /// and no frame pays it while the overlay is off. But it is not free, and
     /// it lands *inside* the frames the overlay subsequently reports: read the
     /// displayed percentiles as the cost of running with the overlay on, not
     /// as the app's cost without it.
-    pub(crate) fn performance_overlay_layer(
+    pub(crate) fn performance_overlay_readout(
         &self,
-        text: &flui_rendering::TextContextHandle,
-    ) -> Option<flui_layer::Layer> {
+    ) -> Option<crate::performance_overlay::Readout> {
         if !self.performance_overlay.get() {
             return None;
         }
@@ -2506,37 +2505,13 @@ impl PresentationState {
             self.clock.produces_deferred(),
             self.frames_dropped(),
         );
-        let sample = PerformanceSample {
-            fps: pace.frames_per_second,
-            frame_time_ms: pace.frame_work.as_secs_f64() * 1000.0,
-            diagnostic_line: Some(&diagnostic_line),
-        };
-
-        // The readout's labels are shaped here, through the ui_runtime's text
-        // context, so the backend only rasterizes them (ADR-0092). The
-        // context is free at scene assembly; were it lent, a debug overlay
-        // skips a frame rather than panic it.
-        let Some(overlay) = text.try_with(|text| {
-            PerformanceOverlayLayer::record(
-                text,
-                PerformanceOverlayLayer::default_bounds(),
-                PerformanceOverlayOption::all(),
-                &sample,
-            )
-        }) else {
-            tracing::warn!("performance overlay skipped: the ui_runtime's text context is lent");
-            return None;
-        };
-
-        let overlay = match overlay {
-            Ok(overlay) => overlay,
-            Err(error) => {
-                tracing::warn!(%error, "performance overlay skipped: label layout failed");
-                return None;
-            }
-        };
-
-        Some(flui_layer::Layer::from(overlay))
+        Some(crate::performance_overlay::Readout::of(
+            &crate::performance_overlay::PerformanceSample {
+                fps: pace.frames_per_second,
+                frame_time_ms: pace.frame_work.as_secs_f64() * 1000.0,
+                diagnostic_line: Some(&diagnostic_line),
+            },
+        ))
     }
 
     fn attach_surface(&self) {
@@ -3075,27 +3050,5 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
-    }
-
-    /// While the UI runtime's text context is lent, the overlay skips the frame
-    /// and leaves the tree as it was, rather than panic on the borrow; once
-    /// the loan ends, the next frame attaches it. Fails if the overlay
-    /// borrows the context unconditionally (a panic), or attaches an
-    /// unshaped readout while the context is lent.
-    #[test]
-    fn a_lent_text_context_skips_the_overlay_frame() {
-        let presentation = presentation();
-        presentation.set_performance_overlay(true);
-        let text = flui_rendering::TextContextHandle::standalone();
-
-        let lent = text.with(|_| presentation.performance_overlay_layer(&text));
-        assert!(lent.is_none(), "a lent context attaches no overlay");
-
-        let free = presentation.performance_overlay_layer(&text);
-        assert!(
-            free.as_ref()
-                .is_some_and(|layer| layer.as_performance_overlay().is_some()),
-            "a free context yields the overlay"
-        );
     }
 }

@@ -10,9 +10,9 @@ use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::panic::commit;
 use flui_foundation::{RenderId, SurfaceGeneration};
 use flui_layer::{
-    AnnotatedRegionLayer, BoundaryContent, Chunk, DamageMode, DamageRect, DamageRegion, FullReason,
-    Layer, Placement, RasterBase, ResyncReason, SceneNodeId, SceneOp, SceneOwner, SceneVersionId,
-    SurfaceKey,
+    AnnotatedRegionLayer, BoundaryContent, Chunk, DamageMode, DamageRect, DamageRegion, Effect,
+    FullReason, Placement, RasterBase, ResyncReason, SceneNodeId, SceneOp, SceneOwner,
+    SceneVersionId, SurfaceKey,
 };
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
@@ -295,7 +295,7 @@ fn probed_owner() -> (Rc<RefCell<SceneOwner>>, SceneVersionId) {
     DROPPED.set(None);
     let mut annotated = BoundaryContent::builder();
     annotated.push_effect(
-        Layer::AnnotatedRegion(AnnotatedRegionLayer::new(
+        Effect::from(AnnotatedRegionLayer::new(
             Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             Arc::new(ReentryProbe),
         )),
