@@ -48,6 +48,7 @@ use flui_foundation::{
 use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
 
 pub use backend::RasterBackend;
+pub(crate) use command::GpuFrameTime;
 pub use command::{
     DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand,
     RasterSendError, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotSettlement,
@@ -56,7 +57,7 @@ pub use command::{
 pub use device_health::DeviceHealth;
 pub use device_request::{DeviceAnswered, DeviceTicket};
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
-pub use sender::{DeviceRetries, RasterSender};
+pub use sender::{DeviceRetries, PainterResets, RasterSender};
 pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
 use surface::SurfaceEvent;
@@ -284,7 +285,12 @@ impl<B: RasterBackend> RasterExecutor<B> {
         if self.shared.health() != ExecutorHealth::Running {
             return Ok(PresentDisposition::NotShown);
         }
-        let Self { backend, slots, .. } = self;
+        let Self {
+            backend,
+            slots,
+            shared,
+            ..
+        } = self;
         let Some(held) = slots
             .get_mut(slot.index() as usize)
             .and_then(Option::as_mut)
@@ -299,6 +305,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let mut caught = FirstPanic::new();
         let Some(rendered) = caught.contain(|| backend.render_lent(slot, scene, reset_fonts))
         else {
+            // The draw unwound in the painter, which is dropped (§7).
+            shared.note_painter_reset();
             let mut first = FirstPanic::new();
             hold_panic(&held.inbox, caught, &mut first);
             first.resume();
@@ -741,6 +749,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
     /// device; it is empty when the device came back without that answer (a
     /// rebuild that panicked or failed with its device in place).
     fn after_rebuild(&mut self, refused: Vec<(SlotId, EngineError)>, first: &mut FirstPanic) {
+        // The new device draws with a new painter.
+        self.shared.note_painter_reset();
         for slot in self.slots.iter_mut().flatten() {
             slot.owe_full(RESET);
             let mut state = slot.inbox.lock();
@@ -1059,7 +1069,36 @@ impl<B: RasterBackend> RasterExecutor<B> {
         } else {
             render(backend, slot, &frame)
         };
+        // A render that panicked dropped the painter every slot shares (ADR-0305 §7): counted
+        // before the settlement is written, so an owner that drains it reads the count too.
+        if matches!(render_failure, Some(SlotFailure::Panicked(_))) {
+            shared.note_painter_reset();
+        }
         let discarded_render = join(&mut failure, render_failure);
+        // The GPU times this frame's render read back for earlier frames,
+        // taken before the lock, since a backend is not called under it. The
+        // newest the record can hold are kept, the oldest first. A backend
+        // answers a few per frame; one that keeps answering is cut off at
+        // `GPU_TIMES_PER_FRAME`, and the panic of one that panics is held for
+        // the owner, as a render's is.
+        let mut gpu_times = [None; inbox::UNDRAINED_GPU_TIMES];
+        let mut caught = FirstPanic::new();
+        let taken = caught.contain(|| {
+            for _ in 0..GPU_TIMES_PER_FRAME {
+                let Some(time) = backend.take_gpu_time(slot.id) else {
+                    break;
+                };
+                gpu_times.rotate_left(1);
+                gpu_times[inbox::UNDRAINED_GPU_TIMES - 1] = Some(time);
+            }
+        });
+        let discarded_gpu_times = match taken {
+            Some(()) => None,
+            None => join(
+                &mut failure,
+                caught.into_payload().map(SlotFailure::Panicked),
+            ),
+        };
         let extra = {
             let mut state = slot.inbox.lock();
             // The answer counts only while no newer size was sent since the
@@ -1070,6 +1109,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 state.surface = state.surface.on(answer);
             }
             surface_lost(&mut state, &mut slot.applied, surface_loss);
+            for time in gpu_times.into_iter().flatten() {
+                state.hold_gpu_time(time);
+            }
             // Held before the settlement, which carries the mark of every
             // panic held since the slot's last one.
             let extra = failure.and_then(|failure| state.hold_failure(failure));
@@ -1079,6 +1121,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         retire(Some(frame), extra, first);
         retire(None, discarded, first);
         retire(None, discarded_render, first);
+        retire(None, discarded_gpu_times, first);
         report_each([resize_report, textures_report, render_report], first);
         1
     }
@@ -1119,6 +1162,11 @@ fn over_limit(error: &EngineError) -> Option<DeviceSize> {
         _ => None,
     }
 }
+
+/// How many GPU times the executor takes from a backend after one frame: a
+/// timer publishes at most its ring per frame, so a backend past this bound
+/// is answering without end.
+const GPU_TIMES_PER_FRAME: usize = 4 * inbox::UNDRAINED_GPU_TIMES;
 
 /// The full repaint a slot owes after the raster side lost what it showed.
 const RESET: FullReason = FullReason::Resync(ResyncReason::RasterReset);

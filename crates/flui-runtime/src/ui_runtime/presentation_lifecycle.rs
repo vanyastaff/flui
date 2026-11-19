@@ -298,24 +298,11 @@ impl UiRuntime {
         }
     }
 
-    /// Whether presentation `id`'s close guard refuses a close for `reason`.
-    /// A refused close is recorded on the guard, once per reason, and is
-    /// carried out when the last hold over it is released: the host does not
-    /// close the presentation now, and the next
-    /// [`settle_close_guards`](Self::settle_close_guards) after that release
-    /// hands the close back. `false`, and nothing recorded, for a reason the
-    /// platform does not let the application refuse and for a presentation
-    /// that is gone.
+    /// Presentation `id`'s close guard, for the host to register with its
+    /// [`CloseRequestRouter`](crate::owner_turn::CloseRequestRouter), which
+    /// answers the window's close requests with it.
     #[must_use]
-    pub fn close_refused(&self, id: PresentationId, reason: flui_view::CloseReason) -> bool {
-        self.presentations
-            .get(id)
-            .is_some_and(|presentation| presentation.close_guard().refuses(reason))
-    }
-
-    /// Presentation `id`'s close guard, for the host to answer its window's
-    /// close requests with.
-    pub(crate) fn close_guard_of(
+    pub fn close_guard_of(
         &self,
         id: PresentationId,
     ) -> Option<flui_view::__runtime::CloseGuardSource> {
@@ -324,22 +311,15 @@ impl UiRuntime {
             .map(|presentation| presentation.close_guard().clone())
     }
 
-    /// Whether presentation `id`'s close guard holds a close recorded for
-    /// `reason`: a refusal it recorded, which the guard carries out once
-    /// released. `false` for a presentation the UI runtime does not host.
-    pub fn close_recorded(&self, id: PresentationId, reason: flui_view::CloseReason) -> bool {
-        self.presentations
-            .get(id)
-            .is_some_and(|presentation| presentation.close_guard().is_recorded(reason))
-    }
-
-    /// Withdraw the close presentation `id`'s guard recorded for `reason`:
-    /// the platform cancelled it, as when a log-off is cancelled. Closes
-    /// recorded for other reasons stay recorded.
-    pub fn withdraw_close(&self, id: PresentationId, reason: flui_view::CloseReason) {
-        if let Some(presentation) = self.presentations.get(id) {
-            presentation.close_guard().withdraw(reason);
-        }
+    /// Whether a close guard signalled since the last
+    /// [`settle_close_guards`](Self::settle_close_guards): the owner owes a
+    /// turn that settles it, even when no frame is asked for (a hold released
+    /// inside a turn, after its settle, leaves only this).
+    #[must_use]
+    pub fn owes_close_settle(&self) -> bool {
+        self.close
+            .settle_owed
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Settle every presentation's close guard on the owner's turn: wake the

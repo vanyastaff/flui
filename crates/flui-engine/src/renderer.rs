@@ -193,18 +193,12 @@ impl GpuCapabilities {
         self.features.contains(wgpu::Features::IMMEDIATES)
     }
 
-    /// Whether the adapter can run timestamp queries through an encoder.
-    ///
-    /// Both `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS` are
-    /// required: the encoder-level scopes `GpuFrameProfiler` uses need the
-    /// second, and without it wgpu-profiler records 0.0 ms for every scope —
-    /// it passes tests while measuring nothing.
+    /// Whether the adapter can write pass timestamps, which time a slot's
+    /// frames on the GPU (ADR-0388). Pass timestamps need no
+    /// `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
     #[must_use]
     pub fn supports_timestamp_queries(&self) -> bool {
         self.features.contains(wgpu::Features::TIMESTAMP_QUERY)
-            && self
-                .features
-                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
     }
 
     /// Whether the adapter exposes a second blend source (`@blend_src(1)`).
@@ -274,8 +268,6 @@ struct WindowedGpuStack {
     offscreen: crate::offscreen::OffscreenRenderer,
     supports_copy_src: bool,
     device_lost: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(feature = "gpu-profiler")]
-    gpu_profiler: Option<crate::profiler::GpuFrameProfiler>,
 }
 
 /// Cross-platform GPU renderer
@@ -364,10 +356,6 @@ pub struct Renderer {
     /// `PhantomData` of it carries that without occupying space or affecting
     /// `Send` (`Cell<()>` is `Send`) or drop-check (nothing to drop).
     _single_mutator: PhantomData<Cell<()>>,
-    /// GPU timestamp profiler. `None` when the `gpu-profiler` feature is off
-    /// or the adapter does not expose `wgpu::Features::TIMESTAMP_QUERY`.
-    #[cfg(feature = "gpu-profiler")]
-    gpu_profiler: Option<crate::profiler::GpuFrameProfiler>,
 
     /// Test-only flag that forces the intermediate-texture present path ON,
     /// even when the surface supports COPY_SRC.  Allows C2/C3 tests to
@@ -559,8 +547,6 @@ impl Renderer {
             frame: crate::frame_protocol::FrameProtocol::new(),
             surface_recovery: SurfaceRecovery::default(),
             lease,
-            #[cfg(feature = "gpu-profiler")]
-            gpu_profiler: stack.gpu_profiler,
             #[cfg(test)]
             force_intermediate: false,
             _single_mutator: PhantomData,
@@ -786,31 +772,6 @@ impl Renderer {
             (config.width, config.height),
         );
 
-        // Create the GPU profiler if the feature is enabled AND the adapter
-        // exposes TIMESTAMP_QUERY. A creation failure is non-fatal — profiling
-        // is strictly additive and must never abort initialization.
-        #[cfg(feature = "gpu-profiler")]
-        let gpu_profiler = if capabilities.supports_timestamp_queries() {
-            match crate::profiler::GpuFrameProfiler::try_new(&device) {
-                Ok(profiler) => {
-                    tracing::info!("GPU profiler enabled (TIMESTAMP_QUERY available)");
-                    Some(profiler)
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        error = ?err,
-                        "GPU profiler creation failed; profiling disabled for this session"
-                    );
-                    None
-                }
-            }
-        } else {
-            tracing::debug!(
-                "TIMESTAMP_QUERY not available on this adapter; GPU profiling disabled"
-            );
-            None
-        };
-
         Ok(WindowedGpuStack {
             instance,
             adapter,
@@ -824,8 +785,6 @@ impl Renderer {
             offscreen,
             supports_copy_src,
             device_lost,
-            #[cfg(feature = "gpu-profiler")]
-            gpu_profiler,
         })
     }
 
@@ -973,12 +932,6 @@ impl Renderer {
         self.supports_copy_src = stack.supports_copy_src;
         // Replace with a fresh flag — the new device starts healthy.
         self.device_lost = stack.device_lost;
-        // Reset profiler with the fresh device — timestamp queries from the
-        // lost device are invalid and must not be carried over.
-        #[cfg(feature = "gpu-profiler")]
-        {
-            self.gpu_profiler = stack.gpu_profiler;
-        }
         self.lease.replace_surface(released, stack.surface);
         self.surface_recovery.reset();
         // Force a full repaint so the first recovered frame is complete.
@@ -1171,15 +1124,10 @@ impl Renderer {
             features |= wgpu::Features::IMMEDIATES;
         }
 
-        // Timestamp queries for GPU profiling: only request when the adapter exposes
-        // BOTH features AND the gpu-profiler cargo feature is enabled. Device creation
-        // must never fail because of an optional profiling feature the adapter lacks.
-        // `supports_timestamp_queries` is already true only when both are present
-        // (see `GpuCapabilities::detect`), so requesting both here is safe.
-        #[cfg(feature = "gpu-profiler")]
+        // Pass timestamps time each slot's frame on the GPU (ADR-0388), where
+        // the adapter offers them: a device without them times nothing.
         if capabilities.supports_timestamp_queries() {
-            features |=
-                wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+            features |= wgpu::Features::TIMESTAMP_QUERY;
         }
 
         // A second blend source, so an anti-aliased clip can feather a
@@ -1536,26 +1484,6 @@ impl Renderer {
             painter.apply_texture_updates(flui_layer::TextureUpdates::from_frames(frames))
         {
             tracing::warn!(target: "flui.gpu", %error, "external texture re-upload refused a frame");
-        }
-    }
-
-    /// The latest completed GPU frame profile, or `None` when the `gpu-profiler`
-    /// feature is off, the adapter lacks `TIMESTAMP_QUERY`, or fewer than
-    /// `PENDING_FRAME_BUFFER_DEPTH` frames have been rendered.
-    ///
-    /// Implements [`Inspect`](flui_foundation::inspect::Inspect): its passes and total read as
-    /// typed fields.
-    #[must_use]
-    pub fn latest_gpu_frame_profile(&self) -> Option<&crate::profiler::GpuFrameProfile> {
-        #[cfg(feature = "gpu-profiler")]
-        {
-            self.gpu_profiler
-                .as_ref()
-                .and_then(|p| p.latest_completed_frame())
-        }
-        #[cfg(not(feature = "gpu-profiler"))]
-        {
-            None
         }
     }
 
@@ -1931,27 +1859,24 @@ impl Renderer {
         // render. A failed content pass is the frame's failure: nothing below
         // presents it.
         let domain = Arc::clone(self.painter.domain());
-        #[cfg(feature = "gpu-profiler")]
-        let mut profile_frame =
-            crate::profiler::ProfileFrame::begin(&mut self.gpu_profiler, &self.device);
         let mut steps = SwapchainFrame {
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
             output: self.surface_color.output(),
             scene,
-            #[cfg(feature = "gpu-profiler")]
-            gpu_profiler: profile_frame.profiler(),
         };
         self.frame.run(
             plan,
             &domain,
-            (self.config.width, self.config.height),
-            surface_format,
-            (&view, &output.texture),
+            crate::frame_protocol::FrameTarget {
+                view: &view,
+                texture: &output.texture,
+                size: (self.config.width, self.config.height),
+                format: surface_format,
+            },
             &mut steps,
+            None,
         )?;
-        #[cfg(feature = "gpu-profiler")]
-        profile_frame.complete();
 
         let present_started = crate::frame_timing::now();
         self.queue.present(output);
@@ -1972,16 +1897,6 @@ impl Renderer {
             present_us,
             "surface frame submitted and presented"
         );
-
-        // Harvest the oldest completed result (if the pipeline has warmed up).
-        // Profiling is already closed before the potentially panicking present hook.
-        // This is a no-op when
-        // `gpu_profiler` is `None`.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_mut() {
-            let timestamp_period = self.queue.get_timestamp_period();
-            profiler.process_finished_frame(timestamp_period);
-        }
 
         // The damage this frame covered is paid.
         self.frame.presented();
@@ -2066,8 +1981,8 @@ impl Renderer {
     }
 
     /// Records one frame's content into `painter`: resets the per-frame
-    /// state and walks the scene, once for a full frame and once per pass of
-    /// `partial`'s [`RegionPlan`](crate::damage::RegionPlan). Each pass opens
+    /// state and walks the scene, once for a full frame and once per rect of
+    /// the region `partial` redraws. Each pass opens
     /// with `damage::begin_partial` (its rect's scissor and the clear inside
     /// it) and walks the scene culled by its own rect. Answers whether an
     /// advanced shape straddles the rect of the pass that drew it, in which
@@ -2083,7 +1998,7 @@ impl Renderer {
     pub(crate) fn record_frame_content(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         let recorded = Self::record_passes(painter, scene, partial, reads)?;
@@ -2095,12 +2010,12 @@ impl Renderer {
     fn record_passes(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         use crate::layer_dispatcher::LayerDispatcher;
 
-        let Some(plan) = partial else {
+        let Some(region) = partial else {
             let mut backend = LayerDispatcher::new(painter);
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
@@ -2113,7 +2028,7 @@ impl Renderer {
             });
         };
         let mut recorded = crate::frame_protocol::RecordedContent::default();
-        for (pass, &rect) in (0_u32..).zip(plan.rects()) {
+        for (pass, &rect) in (0_u32..).zip(region.rects()) {
             // A dispatcher per pass: its Drop calls flush_active_transform(),
             // which balances any deferred lazy-coalescing save left by
             // `with_transform`, so the reset below finds the stacks balanced
@@ -2543,8 +2458,6 @@ mod tests {
             surface_recovery: SurfaceRecovery::default(),
             lease: SurfaceLease::released_for_test(Arc::new(window)),
             _single_mutator: PhantomData,
-            #[cfg(feature = "gpu-profiler")]
-            gpu_profiler: None,
             force_intermediate: false,
             external_frames: rustc_hash::FxHashMap::default(),
         };
@@ -3293,8 +3206,6 @@ mod tests {
         sdr_surface_selection_painter_readback_preserves_swatches_and_blending();
         follower_gpu_renders_at_resolved_position_across_repaint_boundaries();
         shader_mask_layer_root_gpu_pixel_readback_reflects_mask();
-        #[cfg(feature = "gpu-profiler")]
-        crate::profiler::tests::failed_frames_do_not_pollute_the_next_profile();
     }
 
     #[cfg(target_os = "windows")]

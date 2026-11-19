@@ -1,19 +1,24 @@
 //! The headless host's lifecycle: the session ends and system notices a test
 //! reports, the way an operating system does.
 
+use std::sync::Weak;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
 
 use flui_platform::{Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::headless::HeadlessLoop;
 use crate::owner::notices::NoticeChannel;
-use crate::platform::HostPlatform;
+#[cfg(feature = "scripted")]
+use {
+    crate::{host::Host, platform::HostPlatform},
+    std::sync::Arc,
+};
 
 /// The headless platform's lifecycle controls, taken before
 /// [`Platform::run`](crate::Platform::run) consumes it.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Obtain the host-event handle before `run` consumes this platform: the
     /// handle reports session ends and system notices the way an operating

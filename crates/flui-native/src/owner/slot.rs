@@ -318,6 +318,13 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// # Errors
     ///
     /// Hands `value` back off the owner thread.
+    #[cfg_attr(
+        not(any(feature = "scripted", target_os = "macos")),
+        expect(
+            dead_code,
+            reason = "only the AppKit window registry and the headless host's deferred opens insert"
+        )
+    )]
     pub(crate) fn insert(&self, key: K, value: V) -> Result<Option<V>, V> {
         let mut value = Some(value);
         self.cell

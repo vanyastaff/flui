@@ -1,11 +1,6 @@
-//! Window test doubles for flui-app's test modules.
-//!
-//! The state-level [`TestWindow`] double is the frame runtime's
-//! (`flui_runtime::testing`), shared with the UI runtime tests there. What stays
-//! here is what names a `flui-native` type: [`HostedTestWindow`], a
-//! `TestWindow` offered as a [`HostWindow`] the way an `open_window` reply
-//! is, and the real headless windows for tests that exercise the platform's
-//! own capabilities.
+//! The real headless windows flui-app's test modules open, for tests that exercise the
+//! platform's own capabilities. A test that needs only a window uses
+//! `flui_testing::MockWindow`.
 
 #[cfg(not(target_os = "android"))]
 use crate::app::runner::window_routes::OpenRouted as _;
@@ -16,7 +11,6 @@ use std::rc::Rc;
 use flui_native::HostWindow;
 #[cfg(not(target_os = "android"))]
 use flui_platform::PlatformWindow;
-pub(crate) use flui_runtime::testing::TestWindow;
 
 /// A REAL window from the headless platform, for tests that exercise the
 /// platform's own capabilities (haptics, deferred opens, exit policy) rather

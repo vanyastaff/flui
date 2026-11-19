@@ -284,6 +284,8 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "block2",
+    # The main bundle whose resources hold the packaged assets (`assets`, ADR-0384).
+    "NSBundle",
     "NSData",
     "NSDictionary",
     "NSArray",
@@ -553,6 +555,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIColor",
     # `UIUserInterfaceIdiom`: whether the device shows a pointer.
     "UIDevice",
+    # Whether the system holds a scene's pointer locked (iPadOS 14).
+    "UIPointerLockState",
     # The feedback generators, the window's haptic actuator (ADR-0210).
     "UIFeedbackGenerator",
     "UIImpactFeedbackGenerator",
@@ -680,6 +684,14 @@ single-instance = []
 # release build with the feature compiles none of the journal (ADR-0151 §16).
 native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 
+# The headless host's doubles and controls at the crate root: `HeadlessPlatform`,
+# `HeadlessHostWindow`, `FakeTextInput`, `FakeAccessibility` and the other
+# `Headless*` handles a test drives the headless host with. Off, the headless
+# host still runs (`FLUI_HEADLESS`, `headless_platform`) and the crate's public
+# paths name no double. `testing` turns it on, as do flui-app's `testing` and
+# the dev-dependencies of the crates whose tests drive the headless host.
+scripted = []
+
 # The `testing` module (ADR-0243): what a test of a native host's windows
 # needs from the host itself, such as turns of the AppKit event loop, and the
 # native recording codec the tests replay recordings through. Off by
@@ -688,6 +700,7 @@ native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 # the Wayland crates and the descriptor primitives the kit's compositor
 # (`testing::wayland_compositor`) runs on, a server that needs no host.
 testing = [
+    "scripted",
     "dep:flui-protocol",
     "dep:serde",
     "dep:serde_json",
@@ -788,6 +801,9 @@ wayland-protocols-misc = { version = "0.3", features = ["client"] }
 # The toplevel list `wayland_window` reads a window's app id from on sway, as a
 # dock or a task bar does: `zwlr_foreign_toplevel_manager_v1`.
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# `net`: the X11 clipboard's stream tests shrink a socket's send buffer, so a
+# peer that drains it slowly makes it writable often.
+rustix = { workspace = true, features = ["net"] }
 
 # The native X11 host on the harness's X server plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.

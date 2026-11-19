@@ -376,6 +376,8 @@ pub struct SlotSettlement {
     pub panicked: bool,
 }
 
+pub(crate) use flui_foundation::GpuFrameTime;
+
 /// Whether the executor still takes commands (ADR-0305 §9).
 ///
 /// An inline executor stops only by shutting down; a raster thread also

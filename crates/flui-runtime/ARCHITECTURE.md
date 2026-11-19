@@ -186,6 +186,34 @@ host.
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
   amended), and the development reload tier is this crate's own
   `reload::ReloadTier`, which the host translates from its hot-reload driver.
+- **Every host runs one set of owner-turn steps.** The close, quit and
+  session-end steps (`owner_turn`) and the built-in tier of an application's
+  registry (`capability::BuiltIns`) live here, so `flui-app`'s runners and
+  `flui-testing`'s headless host call the same code: one
+  `CloseRequestRouter::consult` asks a window's guard before its handler for
+  a close and after it for the session's end, whoever asks; `QuitRequest`
+  holds a quit, and the `QuitConsultation` its `begin_consult` hands out asks
+  the presentations, keeping a panic of the code it runs instead of
+  unwinding, into the answer `finish_consult` alone takes: a panicked
+  consultation cancels the quit, and the host resumes the panic only after it
+  has finished the quit and released its own state, so nothing of a host runs
+  while a panic unwinds (`quit_consultation`); `settled_steps` routes what
+  the guards let through; and `SessionEnd::answer` orders the session end
+  (notice, `Detached`, flush, host state, teardown, background hold) within
+  its budget, on the clock the host names (`SessionEndHost::clock`: the
+  operating system's on a runner, the manual clock on a headless host),
+  containing a panic at each step that runs application code, a window's
+  question at the query and the host's report of a contained panic included.
+  A host supplies only what a step does to its own state, through
+  `SessionEndHost`, whose methods take no borrow of the book, so application
+  code they run may re-enter it. A host states its `WindowSystem`
+  (`window_system`, a platform's or a browser's page) once, and every policy
+  that differs between them reads it, none the build target: the built-ins
+  (`BuiltIns::new`; the primary selection only in Linux's window system,
+  never a page's), `close_vetoes`, and the session end
+  (`SessionEndHost::window_system`; a page's end is `pagehide`, the notice
+  alone, and its support is `NotifyOnly` whatever the host reports,
+  `WindowSystem::session_end_support`).
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a
@@ -715,7 +743,11 @@ input (ADR-0101). A frame that
 rendered but could not be shown commits nothing, so its pointer input waits for the frame that
 shows the tree, and it is retried: at the display rate for `MAX_NOT_SHOWN_RETRIES` attempts, then
 after the dropped-frame backoff (ADR-0335); a window shown again after it was hidden starts a new
-budget. A frame with nothing to present falls back to
+budget. The retry publishes the withheld version again, with nothing painted, while the
+presentation's scene still holds it as current and the target it was applied for is unchanged;
+otherwise it repaints in full (ADR-0304 §7, `PresentationScene::held_retry`, pinned by
+`a_frame_not_shown_is_retried_from_the_held_version` and
+`a_not_shown_retry_repaints_when_the_held_version_is_stale`). A frame with nothing to present falls back to
 no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned on the host side by `flui-engine`'s `window_slots`
 and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_submit_verdict`,

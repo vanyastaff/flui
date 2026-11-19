@@ -9,7 +9,7 @@ pub use flui_runtime::presentation::PointerResampling;
 
 use flui_platform::WindowMode;
 
-use super::close_request::CloseRequestHandler;
+use super::CloseRequestHandler;
 use super::dev_agent::DevAgent;
 use super::hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]
@@ -262,7 +262,7 @@ pub struct AppConfig {
     /// several windows can still answer per window. See
     /// [`CloseRequestHandler`]'s own doc for the thread and panic
     /// contract, and
-    /// [`CloseResponse::KeepOpen`](super::close_request::CloseResponse::KeepOpen)
+    /// [`CloseResponse::KeepOpen`](super::CloseResponse::KeepOpen)
     /// for why a veto needs no deadline.
     ///
     /// Only the Win32, AppKit, X11 and Wayland backends consult the underlying

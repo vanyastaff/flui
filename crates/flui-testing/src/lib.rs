@@ -118,7 +118,9 @@ pub use a11y::{
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
-pub use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
+pub use flui_platform::testing::{
+    MockWindow, ScriptedHttp, ScriptedResponse, WindowCall, mock_window,
+};
 pub use flui_protocol::{
     geometry::LogicalPoint, geometry::LogicalRect, inspect::InspectField, inspect::InspectNode,
     inspect::InspectReading, inspect::InspectValue, locator::Locator, locator::Match,
@@ -131,6 +133,7 @@ pub use gesture_alternatives::{
 pub use host::{
     HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
     HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, StartedOsDrag, UnshownFrame,
+    WindowSystemMismatch,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;

@@ -96,10 +96,12 @@ and it puts the reader where HTTP, the clipboard and storage already are.
 `flui_platform::assets::AssetKey` is the asset's path relative to the project root, with `/`
 between segments, as `[assets] directories` declares it: `assets/logo.png` for the file
 `<project>/assets/logo.png`. It is built by `AssetKey::try_new(&str) -> Result<AssetKey,
-AssetKeyError>`, an allow-list: at most 1024 bytes, at least one segment, no empty segment, no
-`.` or `..` segment, and no `\`, `:`, NUL or other control character anywhere. A key that passes
-is never absolute and never leaves the bundle's root, so every reader joins it to its root
-without checking it again. The same key names the same asset on every platform.
+AssetKeyError>`: at most 1024 bytes, at least one segment, no empty segment, no `.` or `..`
+segment, no character a Windows file name may not hold (`\ : * ? " < > |`) and no control
+character anywhere, and no segment Windows would not keep as written (one ending in `.` or a
+space, or a device name such as `NUL`, `CONIN$` or `COM1.txt`). A key that passes is never absolute, never
+leaves the bundle's root and is kept as written on Windows too, so every reader joins it to its
+root without checking it again. The same key names the same asset on every platform.
 
 ### §2 The bundle is a capability of the host
 
@@ -119,10 +121,12 @@ pub enum AssetLoadError { NotFound, TooLarge { limit: u64 }, Io(std::io::Error),
 `AssetBundle::load(&key, limit)` and `AssetBundle::load_string(&key, limit)` (UTF-8, Flutter's
 `loadString`) are what a widget or a service calls. A widget acquires the handle in a lifecycle
 hook with `ctx.capability::<AssetBundleCapability>()`, as it acquires `HttpCapability`. The future
-needs no async runtime of the caller's: a reader over a file or `AAssetManager` reads one chunk
-per poll on whatever lane polls it, and the Web reader awaits the browser's fetch. A reader
-checks the length against `limit` before it allocates, and again on every chunk, and opens only a
-regular file. A missing asset is `NotFound`, never an I/O error with a message. The handle is
+needs no async runtime of the caller's, and nothing is read before it is polled: a reader over
+files reads one chunk per poll on whatever lane polls it, the Android reader reads its asset in
+its first poll (an `AAsset` is not `Send`), and the Web reader awaits the browser's fetch. A
+reader checks the length against `limit` before it allocates, and again on every chunk, and reads
+only a regular file: on Unix it opens without blocking and checks the open file, so a FIFO swapped
+in for an asset never holds the lane. A missing asset is `NotFound`, never an I/O error with a message. The handle is
 FLUI's `rootBundle`: the composition root makes one source per UI runtime and every handle it
 provides clones it, never a `static`. `AssetBundle::authority` names that source by its
 allocation, which it keeps reserved but not alive, so a cache keys a result by the bundle it came
@@ -131,7 +135,9 @@ from without holding the bundle.
 ### §3 Every package keeps asset `k` at `flui_assets/k`
 
 `flui build` copies every regular file under each directory `[assets] directories` lists, at any
-depth, to `flui_assets/<key>` inside the package's root, and the host's reader reads it there:
+depth, to `flui_assets/<key>` inside the package's root, and the host's reader reads it there. A
+hidden file or directory (a name starting with `.`, such as `.gitkeep`) is not an asset: Android's
+packagers drop it from an APK, so no package carries it.
 
 | Package | Root of `flui_assets/` | Reader |
 |---------|------------------------|--------|
@@ -142,15 +148,17 @@ depth, to `flui_assets/<key>` inside the package's root, and the host's reader r
 | Android APK | the APK's `assets/` | `AAssetManager_open` with `AASSET_MODE_STREAMING` |
 | Web | the directory of the page | the document-relative URL `flui_assets/<key>`, each segment percent-encoded, fetched through the host's `Http` |
 
-A listed directory that does not exist, a file whose key §1 refuses, two files that map to one
-key and a symbolic link are build errors that name the file. A project with no `[assets]`
-section ships no assets, and its bundle answers `NotFound`.
+A listed directory that does not exist or that a symbolic link takes outside the project, a file
+whose key §1 refuses, two files whose keys differ only in case (one file where the file system
+ignores case) and a symbolic link under a listed directory are build errors that name the file.
+A project with no `[assets]` section ships no assets, and its bundle answers `NotFound`.
 
 ### §4 A development run reads the project
 
 `flui run` on a desktop target starts the application with `FLUI_ASSET_ROOT` set to the project
 root, so an edited asset is read on the next load without a copy; the desktop reader reads
-`$FLUI_ASSET_ROOT/<key>` when that variable is set, and its package's `flui_assets/` otherwise.
+`$FLUI_ASSET_ROOT/<key>` when that variable is an absolute path, and its package's `flui_assets/`
+otherwise (a relative one would resolve against the current directory, so it is ignored).
 `flui run` on Android, iOS and the Web packages the assets as `flui build` does. The current
 directory is never a root: an application started with plain `cargo run` and without
 `FLUI_ASSET_ROOT` finds its assets only once `flui build` has copied them.
@@ -190,11 +198,18 @@ record's.
 ### Confirmation
 
 - `asset_key_refuses_every_key_outside_its_bundle` (`flui-platform`) runs the allow-list of §1
-  over absolute paths, `..`, backslashes, drive letters, empty segments and control characters.
+  over absolute paths, `..`, backslashes, drive letters, empty segments, control characters,
+  the other characters Windows refuses, Windows device names and trailing dots and spaces.
 - `every_asset_source_keeps_the_bundle_contract` (`flui-platform`) runs §2 against
   `DirectoryAssets` and `MemoryAssets`: a missing key is `NotFound`, a file over the limit is
-  `TooLarge` before its bytes are read, a directory is `NotAFile`.
-- `flui-cli`'s build tests state §3 for each package: the declared files land at
-  `flui_assets/<key>`, and a refused key, a collision and a symbolic link fail the build.
+  `TooLarge`, a directory is `NotAFile`; `a_directory_read_checks_before_it_reads` refuses an
+  oversized file at its first poll, before a chunk, reads a large one a chunk per poll, and
+  refuses a FIFO without waiting for a writer.
+- `a_build_stages_every_declared_file_under_flui_assets` (`flui-cli`) states §3: the declared
+  files land at `flui_assets/<key>` and a hidden one does not; `a_build_refuses_what_no_package_can_carry`
+  fails the build on a refused key, a case collision and a symbolic link; `asset_keys_agree_with_the_runtime`
+  holds the CLI's keys to `AssetKey::try_new`; `gradle_packages_the_assets_the_project_declares`
+  hands Gradle the staged directory; `every_template_makes_the_asset_directories_it_declares`
+  keeps a new project buildable; `a_desktop_run_reads_assets_from_the_project` states §4.
 - The platform readers of §3 other than Linux's are confirmed by a run on each platform, rows of
   `crates/flui-native/platform-parity.toml`.

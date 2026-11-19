@@ -627,6 +627,131 @@ fn a_retry_asked_again_waits_for_the_device_already_sent() {
 /// whose device the executor gave up on and whose application was told so.
 fn window_over_a_given_up_device() -> (crate::app::ui_runtime::UiRuntime, RasterSlot, ScriptedSlots)
 {
+    let (mut ui_runtime, mut slot, slots) = window_shown();
+    // The executor gives the device up at once where it cannot rebuild; the
+    // backend then answers that it could, so the give-up is the
+    // application's to retry rather than the owner's to replace.
+    slots.cannot_request_devices();
+    slots.lose_device();
+    let _ = window_frame(&mut slot, &mut ui_runtime);
+    slots.can_request_devices();
+    let _ = window_frame(&mut slot, &mut ui_runtime);
+    assert!(matches!(slot.device, DeviceHealth::GivenUp { .. }));
+    assert!(
+        ui_runtime
+            .primary_device_recovery()
+            .is_some_and(flui_runtime::frame_failure::DeviceRecovery::is_abandoned)
+    );
+    (ui_runtime, slot, slots)
+}
+
+/// The scene version `ui_runtime`'s window holds.
+fn held_version(ui_runtime: &crate::app::ui_runtime::UiRuntime) -> flui_layer::SceneVersionId {
+    ui_runtime
+        .presentation_scene_totals_for_test(ui_runtime.active_presentation_for_test())
+        .expect("no frame holds the scene")
+        .version
+}
+
+/// A window whose frame its surface withheld, and the version it holds for the retry, which
+/// the window's next frame draws without any repaint asked for.
+fn window_with_a_withheld_frame() -> (
+    crate::app::ui_runtime::UiRuntime,
+    RasterSlot,
+    ScriptedSlots,
+    flui_layer::SceneVersionId,
+) {
+    let (mut ui_runtime, mut slot, slots) = window_shown();
+    slots.script_render(ScriptedAnswer::Answer(
+        flui_engine::PresentDisposition::NotShown,
+    ));
+    assert!(
+        !window_frame(&mut slot, &mut ui_runtime),
+        "the surface withholds the frame"
+    );
+    let withheld = held_version(&ui_runtime);
+    (ui_runtime, slot, slots, withheld)
+}
+
+/// The retry of a withheld frame republishes the version it holds, unless the executor let the
+/// painter go in between (ADR-0305 §7, §8): a device rebuilt within one turn, which leaves the
+/// device's health as the window last saw it, or the render of a sibling window that panicked.
+/// Either repaints the window and publishes a new version, drawn in full (ADR-0304 §7).
+///
+/// Red-check: drop `follow_painter` from `RasterHost::before_frame`, or either count in the
+/// executor (`after_rebuild`, the panicked render in `service`), and the retry over the reset
+/// painter republishes the withheld version.
+#[test]
+fn a_withheld_frame_retried_over_a_reset_painter_paints_a_new_version() {
+    #[derive(Debug, Clone, Copy)]
+    enum Between {
+        Nothing,
+        DeviceRebuilt,
+        SiblingPanicked,
+    }
+    for between in [
+        Between::Nothing,
+        Between::DeviceRebuilt,
+        Between::SiblingPanicked,
+    ] {
+        let (mut ui_runtime, mut slot, slots, withheld) = window_with_a_withheld_frame();
+        match between {
+            Between::Nothing => {}
+            // Lost and rebuilt by the turn before the retry's frame.
+            Between::DeviceRebuilt => slots.lose_device(),
+            Between::SiblingPanicked => {
+                let sibling = address();
+                slot.host
+                    .try_with(|host| {
+                        host.attach_target(
+                            Arc::new(FakeWindow::new(2)),
+                            None,
+                            sibling,
+                            &crate::app::AppConfig::default(),
+                            None,
+                            None,
+                        )
+                    })
+                    .expect("the host is idle")
+                    .expect("the scripted backend attaches any window");
+                slots.script_render(ScriptedAnswer::Panic);
+                let mut scene = TestScene::new(AT);
+                let verdict = slot
+                    .host
+                    .try_with(|host| scene.submit(host))
+                    .expect("the host is idle");
+                assert_eq!(
+                    verdict,
+                    SubmitVerdict::Refused,
+                    "the sibling's render panics"
+                );
+                let panic = slot
+                    .host
+                    .try_with(|host| host.take_frame_panic(sibling))
+                    .flatten()
+                    .expect("the sibling holds its frame's panic");
+                flui_foundation::panic::discard_payload(panic);
+            }
+        }
+        let retried = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+        assert!(retried, "{between:?}: the retry presents");
+        assert_eq!(slot.device, DeviceHealth::Healthy, "{between:?}");
+        assert_eq!(
+            held_version(&ui_runtime) == withheld,
+            matches!(between, Between::Nothing),
+            "{between:?}: the retry republishes only over the painter it was drawn with"
+        );
+        assert!(
+            matches!(renders(&slots).last(), Some(DamageRegion::Full(_))),
+            "{between:?}: the retry draws in full: {:?}",
+            renders(&slots)
+        );
+    }
+}
+
+/// A window drawn through a slot of an inline host over scripted slots, its
+/// first frame presented.
+fn window_shown() -> (crate::app::ui_runtime::UiRuntime, RasterSlot, ScriptedSlots) {
     let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
     ui_runtime
         .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
@@ -663,20 +788,6 @@ fn window_over_a_given_up_device() -> (crate::app::ui_runtime::UiRuntime, Raster
     assert!(
         window_frame(&mut slot, &mut ui_runtime),
         "the first frame presents"
-    );
-    // The executor gives the device up at once where it cannot rebuild; the
-    // backend then answers that it could, so the give-up is the
-    // application's to retry rather than the owner's to replace.
-    slots.cannot_request_devices();
-    slots.lose_device();
-    let _ = window_frame(&mut slot, &mut ui_runtime);
-    slots.can_request_devices();
-    let _ = window_frame(&mut slot, &mut ui_runtime);
-    assert!(matches!(slot.device, DeviceHealth::GivenUp { .. }));
-    assert!(
-        ui_runtime
-            .primary_device_recovery()
-            .is_some_and(flui_runtime::frame_failure::DeviceRecovery::is_abandoned)
     );
     (ui_runtime, slot, slots)
 }
@@ -2419,8 +2530,7 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         RasterFactory::Scripted(slots.clone()),
         RasterPlacement::Inline,
     );
-    let window = flui_runtime::testing::TestWindow::new();
-    let redraws = window.redraw_calls_handle();
+    let window = flui_testing::MockWindow::new();
     host.attach(
         &window,
         address(),
@@ -2442,14 +2552,57 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         "the request's deadline is seconds away"
     );
 
-    let asked = redraws.load(std::sync::atomic::Ordering::SeqCst);
+    let asked = window.redraw_requests();
     assert!(slots.answer_device_request());
     assert_eq!(
-        redraws.load(std::sync::atomic::Ordering::SeqCst),
+        window.redraw_requests(),
         asked + 1,
         "the answer asks the window for a frame"
     );
     host.service(address());
     assert_eq!(host.device_health(), DeviceHealth::Healthy);
     assert_eq!(host.window_deadline(address()), None);
+}
+
+/// The GPU times the executor read back for a window's frames reach the
+/// runtime through the window's sink, under the epochs of the frames they
+/// timed, once a later frame of the window was rendered (ADR-0388).
+///
+/// Red-check: keep `FrameSink::take_gpu_times`'s default on `SlotFrame` and
+/// the sink hands back nothing.
+#[test]
+fn a_windows_sink_hands_back_the_gpu_times_of_its_frames() {
+    let (shared, slots, _wakes) = threaded_host();
+    let mut scene = TestScene::new(AT);
+    let (first, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert_eq!(settle_threaded(&shared, 1).len(), 1);
+    let slot = shared
+        .try_read(|host| {
+            host.placed
+                .as_ref()
+                .and_then(|placed| placed.slots.get(&address()))
+                .map(|slot| slot.slot)
+        })
+        .flatten()
+        .expect("the window holds a slot");
+    slots.time_frame(slot, first, std::time::Duration::from_micros(300));
+
+    scene.republish_child(AT, 3);
+    let (_, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert_eq!(settle_threaded(&shared, 1).len(), 1);
+
+    let mut frame = super::SlotFrame::new(shared.clone(), address(), SIZE);
+    let mut times = Vec::new();
+    flui_runtime::sink::FrameSink::take_gpu_times(&mut frame, &mut times);
+    assert_eq!(
+        times,
+        [flui_foundation::GpuFrameTime::new(
+            first,
+            std::time::Duration::from_micros(300)
+        )]
+    );
+    flui_runtime::sink::FrameSink::take_gpu_times(&mut frame, &mut times);
+    assert_eq!(times.len(), 1, "each time is handed back once");
 }

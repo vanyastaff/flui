@@ -27,9 +27,10 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use flui_engine::{
-    DeviceHealth, EngineError, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement,
-    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotSettlement, SlotSize, SlotTarget, SlotVisibility, SurfaceFactory, SurfaceHold,
+    DeviceHealth, EngineError, PainterResets, RasterBackend, RasterCommand, RasterExecutor,
+    RasterPlacement, RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange,
+    SlotConfig, SlotFailure, SlotId, SlotSettlement, SlotSize, SlotTarget, SlotVisibility,
+    SurfaceFactory, SurfaceHold,
 };
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
@@ -663,6 +664,10 @@ struct HostSlot {
     /// The frames a raster thread holds for the slot, oldest first: what the
     /// verdict of each needs once it settles (ADR-0305 §4).
     pending: Vec<PendingFrame>,
+    /// The executor's painter resets as the window's last frame found them:
+    /// a frame that finds another count repaints in full
+    /// ([`RasterHost::before_frame`]).
+    painters: PainterResets,
 }
 
 /// What the owner keeps of a frame a raster thread holds, to settle it.
@@ -1043,6 +1048,7 @@ impl RasterHost {
                 redraw,
                 in_flight_limit: limit,
                 pending: Vec::with_capacity(self.placement.depth().get()),
+                painters: placed.sender.painter_resets(),
             },
         );
         placed.redraws.follow(&placed.slots);
@@ -1442,7 +1448,7 @@ impl RasterHost {
         // took a thread's failures with their settlements: it is this
         // window's, while the turn's may be another window's work, and the
         // executor records no order between the two.
-        Self::hold_slot_failure(slot, failure, caught)
+        Self::hold_slot_failure(slot, failure, caught, placed.sender.painter_resets())
     }
 
     /// Settle `failure`, taken from `slot`'s executor slot, with `turned`,
@@ -1451,14 +1457,21 @@ impl RasterHost {
     /// the executor records no order between them), and a refusal
     /// is logged last. The log and the refusal's drop run contained, their
     /// panic held with the slot's (a subscriber is user code), so a caller
-    /// that drained settlements with the failure still hands them on.
+    /// that drained settlements with the failure still hands them on. `painters` is the
+    /// executor's painter-reset count as the slot's failure was taken.
     fn hold_slot_failure(
         slot: &mut HostSlot,
         failure: Option<SlotFailure>,
         turned: FirstPanic,
+        painters: PainterResets,
     ) -> SlotTurn {
         let refusal = match failure {
             Some(SlotFailure::Panicked(payload)) => {
+                // The slot's own panic settles its frame `Retry`, whose retry repaints in full
+                // after the frame-failure backoff (ADR-0258 §6), so the painter resets counted
+                // by now (`painters`) are that retry's to answer: read again before the next
+                // frame, they would repaint at once, into the same panic.
+                slot.painters = painters;
                 slot.panic.record(payload);
                 slot.panic.absorb(turned);
                 return SlotTurn::Panicked;
@@ -1916,10 +1929,28 @@ impl RasterHost {
         let restored = self.restore_due(address, now);
         let changed = self.follow_display(address, display);
         self.service(address);
+        let painter_reset = self.follow_painter(address);
         BeforeFrame {
-            repaint: changed | restored,
+            repaint: changed | restored | painter_reset,
             retry_failed,
         }
+    }
+
+    /// Whether the executor let its painter go since `address`'s window last
+    /// asked (a device rebuilt, or a render of any window that panicked,
+    /// ADR-0305 §7): the recordings the window's last scene was drawn from
+    /// went with it, so its frame repaints in full rather than republish a
+    /// version it holds for a retry (ADR-0304 §7). Read after the turn, which
+    /// may rebuild the device.
+    fn follow_painter(&mut self, address: PresentationAddress) -> bool {
+        let Some(placed) = self.placed.as_mut() else {
+            return false;
+        };
+        let now = placed.sender.painter_resets();
+        placed
+            .slots
+            .get_mut(&address)
+            .is_some_and(|slot| std::mem::replace(&mut slot.painters, now) != now)
     }
 
     /// The loop's next wake for raster work: the earliest
@@ -2277,8 +2308,12 @@ impl RasterHost {
             .slots
             .get_mut(&address)
             .expect("BUG: the window whose slot drained still holds it");
-        let panicked =
-            Self::hold_slot_failure(slot, failure, FirstPanic::new()) == SlotTurn::Panicked;
+        let panicked = Self::hold_slot_failure(
+            slot,
+            failure,
+            FirstPanic::new(),
+            placed.sender.painter_resets(),
+        ) == SlotTurn::Panicked;
         if panicked {
             for held in &mut slot.pending {
                 held.tainted |= !settlements
@@ -2373,6 +2408,21 @@ impl RasterHost {
             slot.base.forget();
         }
         placed.settlements = settlements;
+    }
+
+    /// Move the GPU times the executor holds for `address`'s slot into
+    /// `into` (ADR-0388); a window with no slot has none.
+    fn drain_gpu_times(
+        &self,
+        address: PresentationAddress,
+        into: &mut Vec<flui_foundation::GpuFrameTime>,
+    ) {
+        let Some(placed) = self.placed.as_ref() else {
+            return;
+        };
+        if let Some(slot) = placed.slots.get(&address) {
+            let _drained = placed.sender.drain_gpu_times(slot.slot, into);
+        }
     }
 
     /// How many frames of `address`'s window its sink may hold unsettled
@@ -2488,8 +2538,8 @@ impl Placed {
 /// ([`RasterHost::before_frame`]).
 #[derive(Debug, Clone, Copy)]
 struct BeforeFrame {
-    /// The window's surface came back or its display changed: the frame
-    /// repaints in full.
+    /// The window's surface came back, its display changed or the executor let its
+    /// painter go: the frame repaints in full.
     repaint: bool,
     /// The application's retry of a given-up device found no device: the
     /// device stays given up, which the window tells its runtime again.
@@ -2603,6 +2653,15 @@ impl FrameSink for SlotFrame {
         self.host
             .try_with(|host| host.submit(self.address, self.surface, epoch, publication))
             .unwrap_or(SubmitVerdict::Retry)
+    }
+
+    fn take_gpu_times(&mut self, into: &mut Vec<flui_foundation::GpuFrameTime>) {
+        // A host that is turning keeps them: the executor holds the times
+        // until a later frame of the window takes them.
+        let address = self.address;
+        let _taken = self
+            .host
+            .try_read(|host| host.drain_gpu_times(address, into));
     }
 }
 
@@ -2828,7 +2887,7 @@ impl RasterSlot {
     /// §6), and a turn of the executor, which asks for a lost device that is
     /// due, or installs one whose request answered, even when the frame has
     /// nothing new to draw. A device or a surface
-    /// that came back, or a display that changed, repaints the window in
+    /// that came back, a display that changed, or a painter the executor let go (a device rebuilt, a render that panicked), repaints the window in
     /// full. After it: the frame's GPU
     /// panic goes to the application's frame-failure handler, and a device
     /// the frame lost is reported with the frames it drops; its next turn is

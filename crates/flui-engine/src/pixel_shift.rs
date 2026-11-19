@@ -61,6 +61,7 @@ impl PixelOrigin {
     }
 
     /// The whole device pixels of the origin, `(x, y)`.
+    #[cfg(test)]
     pub(crate) fn pixels(self) -> (i64, i64) {
         (self.x, self.y)
     }
@@ -111,6 +112,18 @@ pub(crate) trait Shift: Copy {
     /// `self` drawn `by` further right and down.
     #[must_use]
     fn shifted(self, by: PixelShift) -> Self;
+}
+
+/// The device rectangle `[x, y, w, h]` that a recording's glyphs on the
+/// device grid cover, in whole pixels, which moves with them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GridExtent(pub(crate) [f32; 4]);
+
+impl Shift for GridExtent {
+    fn shifted(mut self, by: PixelShift) -> Self {
+        by.apply(&mut self.0);
+        self
+    }
 }
 
 const IDENTITY: [f32; 4] = [1.0, 0.0, 0.0, 1.0];

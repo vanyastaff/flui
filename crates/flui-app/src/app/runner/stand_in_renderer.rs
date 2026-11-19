@@ -419,4 +419,8 @@ impl RasterBackend for StandInBackend {
     fn requests_devices(&self) -> bool {
         true
     }
+
+    fn take_gpu_time(&mut self, _slot: SlotId) -> Option<flui_foundation::GpuFrameTime> {
+        None
+    }
 }

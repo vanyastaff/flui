@@ -178,6 +178,7 @@ mod epoch;
 // the raster boundary — see the module doc for why it exists as its own
 // builder-constructed type instead of positional constructor arguments.
 mod frame_stamp;
+mod gpu_frame_time;
 // A slot's typed generation, and the one generation bookkeeping (`GenSlots`)
 // under every packed generational key: fresh and recycled mints, the
 // release's peek (before user code) and commit (after the release's own
@@ -246,6 +247,7 @@ pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
 pub use creation_site::CreationSite;
 pub use epoch::{FrameEpoch, SurfaceGeneration};
 pub use frame_stamp::FrameStamp;
+pub use gpu_frame_time::GpuFrameTime;
 pub use id::{
     DataTransferId, ElementId, GenId, Id, Identifier, LayerId, Marker, PresentationAddress,
     PresentationId, RawId, RenderId, SemanticsId, TreeId, UiRuntimeId, ViewId, markers,

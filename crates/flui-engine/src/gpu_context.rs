@@ -240,12 +240,15 @@ async fn offscreen_device(
     // wants wgpu's default (downlevel-friendly) device rather than the
     // renderer's capability-negotiated one, plus the features asked for,
     // which change what the rendered pixels look like, and the pipeline
-    // cache, which changes none, wherever the adapter offers them.
+    // cache and timestamp queries (ADR-0388), which change none, wherever the
+    // adapter offers them.
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("FLUI GPU Context Device"),
             required_features: adapter.features()
-                & (wanted_features | wgpu::Features::PIPELINE_CACHE),
+                & (wanted_features
+                    | wgpu::Features::PIPELINE_CACHE
+                    | wgpu::Features::TIMESTAMP_QUERY),
             ..Default::default()
         })
         .await
@@ -339,6 +342,10 @@ pub struct GpuContext {
     /// The lineage each slot last drew a version of: the painter's
     /// recordings of one no slot draws any more are dropped.
     lineages: crate::recording_cache::DrawnLineages<SlotId>,
+    /// Each slot's frame timer, built at its first timed frame on a device
+    /// with timestamp queries and dropped with the slot or the device
+    /// (ADR-0388).
+    gpu_timers: FxHashMap<SlotId, crate::gpu_timer::FrameGpuTimer>,
     /// What the driver's report of a lost device wakes, besides marking the
     /// device lost: the owner that replaces the context (the web).
     loss_wake: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -370,7 +377,7 @@ pub struct GpuContext {
     #[cfg(test)]
     rebuilds_failing: u32,
     /// What the next device request waits on, on its worker, before it asks.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     request_hold: Option<std::sync::mpsc::Receiver<()>>,
     _one_mutator: PhantomData<Cell<()>>,
 }
@@ -504,6 +511,7 @@ impl GpuContext {
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
             lineages: crate::recording_cache::DrawnLineages::new(),
+            gpu_timers: FxHashMap::default(),
             loss_wake: None,
             #[cfg(test)]
             texture_flushes: Cell::new(0),
@@ -527,7 +535,7 @@ impl GpuContext {
             panic_in_warmup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
-            #[cfg(test)]
+            #[cfg(all(test, not(target_arch = "wasm32")))]
             request_hold: None,
             _one_mutator: PhantomData,
         }
@@ -597,6 +605,15 @@ impl GpuContext {
     /// # Errors
     /// The device request failed, or no request under `ticket` is held; the
     /// context keeps its lost device and every slot as it was.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "wasm32 has no worker to request a device on, so every request is refused \
+                      through the shape the backend trait shares with native"
+        )
+    )]
     fn install_requested(
         &mut self,
         ticket: DeviceTicket,
@@ -618,7 +635,7 @@ impl GpuContext {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _unheld = ticket;
+            let _ = ticket;
             Some(Err(EngineError::GpuUnavailable))
         }
     }
@@ -678,6 +695,9 @@ impl GpuContext {
             self.warmup = None;
         }
         self.blit = None;
+        // The timers' queries and readbacks are the lost device's, and so are
+        // the times they had not read back.
+        self.gpu_timers.clear();
         for kept in self.textures.values_mut() {
             kept.leave_device();
         }
@@ -918,6 +938,7 @@ impl GpuContext {
     /// Detach `slot`; `false` for a stale id or one already detached.
     pub(crate) fn detach(&mut self, slot: SlotId) -> bool {
         self.textures.remove(&slot);
+        self.gpu_timers.remove(&slot);
         if let Some(dead) = self.lineages.draws(slot, None)
             && let Some(painter) = self.painter.as_mut()
         {
@@ -1073,6 +1094,7 @@ impl GpuContext {
         slot: SlotId,
         scene: flui_layer::SceneContent<'_>,
         reads: crate::recording_cache::CacheReads,
+        epoch: Option<flui_foundation::FrameEpoch>,
     ) -> EngineResult<()> {
         let (texture, format, size) = {
             let entry = self.offscreen_slot(slot)?;
@@ -1086,29 +1108,55 @@ impl GpuContext {
         #[cfg(test)]
         let panics = self.injected_panic();
         let domain = &self.domain;
+        let timers = &mut self.gpu_timers;
         let mut caught = FirstPanic::new();
         let drawn = caught.contain(|| {
+            let mut timer =
+                epoch.and_then(|epoch| Some((frame_timer(timers, slot, domain)?, epoch)));
             painter.begin_frame_in_scope();
             painter.resize(size.0, size.1);
             let drawn = (|| {
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                crate::headless::clear_to_background(domain, &view)?;
+                domain.poll()?;
                 let counters = {
                     let mut backend = LayerDispatcher::new(&mut painter);
                     crate::layer_walk::record_scene(scene, None, reads, &mut backend)?
                 };
                 painter.settle_recording_cache();
-                #[cfg(test)]
-                assert!(!panics, "injected panic in the middle of a slot's frame");
                 let mut encoder =
                     domain
                         .device()
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                             label: Some("FLUI Slot Render Encoder"),
                         });
+                // The frame's first timestamp precedes its clear (ADR-0388).
+                let timed = timer
+                    .as_mut()
+                    .and_then(|(timer, epoch)| timer.begin(&mut encoder, *epoch));
+                // The clear goes in the frame's own encoder, so a frame that
+                // fails or unwinds before its submission leaves the slot's
+                // committed image in place (ADR-0100).
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                crate::headless::record_background_clear(&mut encoder, &view);
                 painter.render_to_texture(&texture, &mut encoder)?;
-                painter.submit_encoder(encoder).map(|_submitted| counters)
+                if let (Some((timer, _)), Some(timed)) = (timer.as_mut(), timed) {
+                    timer.end(&mut encoder, timed);
+                }
+                #[cfg(test)]
+                assert!(
+                    !panics,
+                    "injected panic between a slot's encoding and its submission"
+                );
+                painter.submit_encoder(encoder)?;
+                if let (Some((timer, _)), Some(timed)) = (timer.as_mut(), timed) {
+                    timer.submitted(timed);
+                }
+                Ok::<_, EngineError>(counters)
             })();
+            // Earlier frames the GPU has finished are read back once this
+            // one is submitted, whose poll ran their readbacks' callbacks.
+            if let Some((timer, _)) = timer {
+                timer.collect();
+            }
             // Once a frame began, an error closes it as a completed frame
             // does, with its encoder discarded, as the window path's frame
             // protocol closes its own: the painter is whole for the next one.
@@ -1221,6 +1269,7 @@ impl GpuContext {
             adapter,
             domain,
             slots,
+            gpu_timers,
             ..
         } = self;
         let Some(SurfaceSlot::Window(window)) = slots.get_mut(slot) else {
@@ -1232,7 +1281,21 @@ impl GpuContext {
             let gpu = gpu_of(adapter, domain);
             match draw {
                 WindowDraw::Frame { damage, frame } => {
-                    window.render(&gpu, &mut painter, &mut blit, scene, damage, frame)
+                    let mut timer = frame_timer(gpu_timers, slot, domain);
+                    let rendered = window.render(
+                        &gpu,
+                        (&mut painter, &mut blit),
+                        scene,
+                        damage,
+                        frame,
+                        timer.as_deref_mut(),
+                    );
+                    // Earlier frames the GPU has finished are read back once
+                    // this one is submitted (ADR-0388).
+                    if let Some(timer) = timer {
+                        timer.collect();
+                    }
+                    rendered
                 }
                 WindowDraw::Lent { reset_fonts } => {
                     window.render_lent(&gpu, &mut painter, &mut blit, scene, reset_fonts)
@@ -1374,7 +1437,7 @@ impl GpuContext {
 
     /// Hold the next device request on its worker until the answer this
     /// returns is sent (or dropped), so a test acts while it is under way.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn hold_next_device_request(&mut self) -> std::sync::mpsc::Sender<()> {
         let (release, held) = std::sync::mpsc::channel();
         self.request_hold = Some(held);
@@ -1382,9 +1445,15 @@ impl GpuContext {
     }
 
     /// Wait until the device request under way answered, so the executor's
-    /// next turn installs its device; nothing when none is under way.
+    /// next turn installs its device; nothing when none is under way, which
+    /// on wasm32 is always: a request there is refused, not started.
     #[cfg(test)]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(clippy::unused_self, reason = "wasm32 starts no device request")
+    )]
     pub(crate) fn await_device_request(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(worker) = self.requested.as_mut() {
             worker.wait();
         }
@@ -1584,6 +1653,21 @@ fn gpu_of<'a>(adapter: &'a wgpu::Adapter, domain: &'a DeviceDomain) -> Gpu<'a> {
     }
 }
 
+/// `slot`'s frame timer, built at its first timed frame; `None` on a device
+/// without timestamp queries, where no frame is timed (ADR-0388).
+fn frame_timer<'t>(
+    timers: &'t mut FxHashMap<SlotId, crate::gpu_timer::FrameGpuTimer>,
+    slot: SlotId,
+    domain: &DeviceDomain,
+) -> Option<&'t mut crate::gpu_timer::FrameGpuTimer> {
+    match timers.entry(slot) {
+        std::collections::hash_map::Entry::Occupied(timer) => Some(timer.into_mut()),
+        std::collections::hash_map::Entry::Vacant(vacant) => Some(vacant.insert(
+            crate::gpu_timer::FrameGpuTimer::try_new(domain.device(), domain.queue())?,
+        )),
+    }
+}
+
 fn not_attached() -> EngineError {
     EngineError::InvalidRenderTarget {
         reason: "the slot is not attached to this context",
@@ -1722,6 +1806,7 @@ impl RasterBackend for GpuContext {
                     slot,
                     scene.content(),
                     crate::recording_cache::CacheReads::for_damage(&damage),
+                    Some(frame.epoch),
                 )?;
                 Ok(PresentDisposition::Presented)
             }
@@ -1786,6 +1871,10 @@ impl RasterBackend for GpuContext {
 
     fn requests_devices(&self) -> bool {
         cfg!(not(target_arch = "wasm32"))
+    }
+
+    fn take_gpu_time(&mut self, slot: SlotId) -> Option<crate::raster_executor::GpuFrameTime> {
+        self.gpu_timers.get_mut(&slot)?.take()
     }
 }
 
@@ -2176,19 +2265,116 @@ mod tests {
         ));
     }
 
+    /// A slot's frames are timed on the GPU where the device writes
+    /// timestamps: a later frame of the slot reads an earlier one's two
+    /// timestamps back, and the owner drains a time that names that frame's
+    /// epoch. A device without timestamp queries times no frame, and that is
+    /// no error (ADR-0388).
+    ///
+    /// Red-check: skip `FrameGpuTimer::collect` in `render_slot` and no time
+    /// arrives; publish the time under the frame being drawn instead of the
+    /// entry's epoch and the epochs are off by one.
+    #[test]
+    fn a_slot_frame_is_timed_on_the_gpu_under_its_epoch() {
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let timed = context
+            .domain
+            .device()
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY);
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(32, 16),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let SendReceipt::Configured(generation) = receipt else {
+            panic!("an attach of a positive size configures the slot: {receipt:?}");
+        };
+        let mut times = Vec::new();
+        for epoch in 1..=4 {
+            sender
+                .send(RasterCommand::Frame {
+                    slot,
+                    snapshot: SceneSnapshot::new(
+                        FrameStamp::new(address, FrameEpoch::from_raw(epoch), generation),
+                        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+                        Scene::new(square_and_glyph()),
+                    ),
+                })
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            assert_eq!(
+                settled.iter().map(|s| s.verdict).collect::<Vec<_>>(),
+                [RasterVerdict::Presented]
+            );
+            // The frame finishes on the GPU before the next one reads it.
+            executor
+                .backend()
+                .domain
+                .device()
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("the frame completes");
+            sender.drain_gpu_times(slot, &mut times);
+        }
+        if timed {
+            assert_eq!(
+                times
+                    .iter()
+                    .map(|time| time.epoch.get())
+                    .collect::<Vec<_>>(),
+                [1, 2, 3],
+                "each frame is read back by the next, under its own epoch"
+            );
+            assert!(
+                times
+                    .iter()
+                    .all(|time| time.gpu > std::time::Duration::ZERO),
+                "a frame that drew takes GPU time: {times:?}"
+            );
+        } else {
+            assert!(
+                times.is_empty(),
+                "a device without timestamps times nothing"
+            );
+        }
+    }
+
     /// A frame that panics costs the caches every slot shares, not the
     /// pipelines: two slots whose frames both panic in one turn, after their
     /// recording and before their submission, each settle `Retry` and each
     /// keep their own payload, and the next turn draws every slot over a
     /// fresh glyph atlas with no pipeline built again (ADR-0305 §7).
     ///
-    /// An offscreen slot is cleared before it records, so a frame that panics
-    /// leaves its target cleared, not as it was: the slot's committed image
-    /// does not survive, and its `Retry` is what makes the owner draw it again.
+    /// The clear an offscreen frame starts with is recorded in that frame's
+    /// encoder, so a frame that panics before its submission leaves the
+    /// slot's committed image in place; its `Retry` makes the owner draw it
+    /// again.
     ///
     /// Red-check: drop the pipelines with the painter in
     /// `GpuContext::keep_pipelines` and the next painter builds its pipeline
-    /// set again.
+    /// set again; submit the clear on its own before the frame records and
+    /// the panicking frame leaves its target cleared.
     #[test]
     fn a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines() {
         use crate::raster_executor::SlotFailure;
@@ -2262,13 +2448,13 @@ mod tests {
                 "each slot's record holds its own panic"
             );
         }
-        assert_ne!(
+        assert_eq!(
             executor
                 .backend()
                 .read_slot(second_slot)
                 .expect("the slot reads back"),
             committed,
-            "the panicking frame cleared its target before it recorded"
+            "the panicking frame left the slot's committed image"
         );
 
         assert_eq!(
@@ -2295,6 +2481,136 @@ mod tests {
                 "the rebuilt caches draw the same frame"
             );
         }
+    }
+
+    /// A slot whose frame was withheld, and whose sibling's frame then panicked and dropped the
+    /// painter both slots share, is retried in full over the new painter: the executor counts
+    /// the reset, which the host reads before the retry's frame and answers with a full repaint
+    /// instead of republishing the withheld version (ADR-0304 §7, ADR-0305 §7), and the retry
+    /// draws what a fresh renderer draws.
+    ///
+    /// Red-check: drop the count of the panicked render from the executor's `service` and the
+    /// reset goes unseen.
+    #[test]
+    fn a_withheld_slot_is_retried_in_full_after_its_siblings_panic() {
+        use crate::raster_executor::{SlotChange, SlotVisibility};
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let slots = [(); 2].map(|()| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(32, 16),
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            let SendReceipt::Configured(generation) = receipt else {
+                panic!("an attach of a positive size configures the slot: {receipt:?}");
+            };
+            (slot, address, generation)
+        });
+        let draw = |executor: &mut RasterExecutor<GpuContext>, (slot, address, generation)| {
+            sender
+                .send(frame(slot, address, generation, square_and_glyph()))
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            assert_eq!(settled.len(), 1, "the frame settles once");
+            settled[0].verdict
+        };
+        let show = |executor: &mut RasterExecutor<GpuContext>, slot, visibility| {
+            let _receipt = sender
+                .send(RasterCommand::Configure {
+                    slot,
+                    change: SlotChange::Shown(visibility),
+                })
+                .expect("the change is accepted");
+            let _ = executor.turn();
+        };
+        let [withheld, sibling] = slots;
+        for slot in slots {
+            assert_eq!(draw(&mut executor, slot), RasterVerdict::Presented);
+        }
+
+        show(&mut executor, withheld.0, SlotVisibility::Hidden);
+        assert_eq!(draw(&mut executor, withheld), RasterVerdict::NotShown);
+        let before = sender.painter_resets();
+        executor.backend_mut().panic_in_next_frame();
+        assert_eq!(draw(&mut executor, sibling), RasterVerdict::Retry);
+        drop(sender.take_failure(sibling.0));
+        assert_ne!(
+            sender.painter_resets(),
+            before,
+            "the sibling's panic is counted, so the host repaints the withheld window"
+        );
+
+        show(&mut executor, withheld.0, SlotVisibility::Shown);
+        assert_eq!(draw(&mut executor, withheld), RasterVerdict::Presented);
+        let retried = executor
+            .backend()
+            .read_slot(withheld.0)
+            .expect("the slot reads back");
+
+        // The same frame on an executor over a context of its own.
+        let (mut fresh, fresh_sender) = RasterExecutor::new(
+            context_or_skip().expect("a second context on the same adapter"),
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let slot = fresh_sender.mint_slot().expect("a slot id is left");
+        let receipt = fresh_sender
+            .send(RasterCommand::Attach {
+                slot,
+                address: withheld.1,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(32, 16),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let SendReceipt::Configured(generation) = receipt else {
+            panic!("an attach of a positive size configures the slot: {receipt:?}");
+        };
+        fresh_sender
+            .send(frame(slot, withheld.1, generation, square_and_glyph()))
+            .expect("the frame is accepted");
+        let _ = fresh.turn();
+        let oracle = fresh
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert!(
+            oracle
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| *pixel != [0, 0, 0, 0]),
+            "the frame draws something to compare"
+        );
+        assert_eq!(
+            retried, oracle,
+            "the retry draws what a fresh renderer draws"
+        );
     }
 
     /// A lost device is rebuilt on the context's own instance: no instance is
@@ -2925,7 +3241,7 @@ mod tests {
         };
         assert_eq!(
             payload.downcast_ref::<&str>().copied(),
-            Some("injected panic in the middle of a slot's frame"),
+            Some("injected panic between a slot's encoding and its submission"),
             "the record holds the frame's panic, not the cleanup's"
         );
         flui_foundation::panic::discard_payload(payload);
@@ -3135,6 +3451,7 @@ mod tests {
                         slot,
                         scene.content(),
                         crate::recording_cache::CacheReads::On,
+                        None,
                     )
                 };
                 assert_eq!(
@@ -3779,6 +4096,7 @@ mod tests {
     /// Red-check: skip `GpuContext::detach` in the backend's `detach`, so the
     /// closed slot stays in the context's table, and the install serves it.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_slot_detached_while_its_device_is_requested_is_not_served_by_the_new_device() {
         use crate::raster_executor::DeviceHealth;
 

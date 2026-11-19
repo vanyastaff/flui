@@ -6,13 +6,15 @@ use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::headless::{HeadlessLoop, SimulatedPreferences};
 use crate::owner::signal::OwnerSignal;
-use crate::platform::HostPlatform;
+#[cfg(feature = "scripted")]
+use crate::{host::Host, platform::HostPlatform};
 
 /// The headless platform's preference controls, taken before
 /// [`Platform::run`](crate::Platform::run) consumes it.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// What the system reports as its preferences from the start, before any
     /// window exists. The default reports every field unknown.

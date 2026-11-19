@@ -4,7 +4,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform::Unsupported;
+use flui_platform::{Unsupported, UnsupportedReason};
 use flui_view::persist::{StorageCapability, StorageHandle};
 
 use super::{KitStorage, ScriptedBuiltIns};
@@ -92,9 +92,12 @@ pub(super) enum Registry {
     Composed(AppRegistrations),
 }
 
-/// The registry a runner builds for an application on `platform`: the
+/// The registry a runner builds for an application in `windows`, reading
+/// `assets` (ADR-0384 §5)
+/// ([`BuiltIns::compose`](flui_runtime::capability::BuiltIns::compose)): the
 /// application's overrides first (the provided storage among them), then the
-/// built-ins with the host's storage, then the application's plugins and the
+/// scripted built-ins a runner ships in that window system with the host's
+/// storage, then the application's plugins and the
 /// package plugin a test of that package names. Every registry a headless
 /// host builds for itself is built here.
 ///
@@ -104,42 +107,40 @@ pub(super) enum Registry {
 /// platform starts.
 pub(super) fn compose_registry(
     scripted: &ScriptedBuiltIns,
-    platform: flui_platform::TargetPlatform,
+    windows: flui_runtime::window_system::WindowSystem,
+    assets: &flui_platform::assets::AssetBundle,
     storage: Option<&KitStorage>,
     application: &AppRegistrations,
     package: Option<&dyn flui_platform::capability::Plugin>,
 ) -> flui_runtime::capability::CapabilityRegistry {
-    let mut built_ins = scripted.registrar(platform);
     let mut overrides = flui_platform::capability::CapabilityRegistrar::new();
     for registration in &application.overrides {
         registration.register(&mut overrides);
     }
-    if let Some(KitStorage { host, provided }) = storage {
-        let host = Arc::clone(host);
-        built_ins.provide::<StorageCapability>(
+    if let Some(provided) = storage.and_then(|storage| storage.provided.as_ref()) {
+        let provided = Arc::clone(provided);
+        overrides.provide::<StorageCapability>(
             move |_: &flui_platform::capability::ProviderContext<'_>| {
-                Ok(StorageHandle::new(Arc::clone(&host)))
+                Ok(StorageHandle::new(Arc::clone(&provided)))
             },
         );
-        if let Some(provided) = provided {
-            let provided = Arc::clone(provided);
-            overrides.provide::<StorageCapability>(
-                move |_: &flui_platform::capability::ProviderContext<'_>| {
-                    Ok(StorageHandle::new(Arc::clone(&provided)))
-                },
-            );
-        }
     }
-    let mut builder = flui_runtime::capability::CapabilityRegistry::builder()
-        .overrides(overrides)
-        .built_ins(built_ins);
-    for plugin in &application.plugins {
-        builder = builder.plugin(plugin.as_ref());
-    }
-    if let Some(package) = package {
-        builder = builder.plugin(package);
-    }
-    builder
-        .build()
+    let host = storage.map(|storage| Arc::clone(&storage.host));
+    // Without storage of its own the host answers as a runner with no data
+    // directory does: the storage is not registered for this run.
+    let host_storage = move |_: &flui_platform::capability::ProviderContext<'_>| match &host {
+        Some(host) => Ok(StorageHandle::new(Arc::clone(host))),
+        None => Err(Unsupported::of::<StorageCapability>(
+            UnsupportedReason::NotRegistered,
+        )),
+    };
+    let plugins = application.plugins.iter().map(AsRef::as_ref).chain(package);
+    scripted
+        .built_ins(windows, assets, host_storage)
+        .compose(
+            overrides,
+            flui_platform::capability::HostBridge::new(),
+            plugins,
+        )
         .unwrap_or_else(|conflict| panic!("the application's registrations conflict: {conflict}"))
 }

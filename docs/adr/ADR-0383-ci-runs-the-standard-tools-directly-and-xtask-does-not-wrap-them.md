@@ -3,10 +3,14 @@
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18
 - **Supersedes:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
-  §1 only for the command lines it lists as xtask's orchestration (`test`, `clippy`, `miri`) and
-  for those of the same kind it does not list (`deps`, `doc-strict`, `gpu-test`, `platform-test`,
-  `wayland-optional`, `native-features`, `build-all-targets`, and the local mirrors `lint`,
-  `gate`, `ci`, `ci-full`): a workflow step calls the tool.
+  §1 only for the command lines it lists as xtask's orchestration (`test`, `clippy`, `miri`,
+  `feature-matrix`, the `wasm-check` step) and for those of the same kind it does not list
+  (`deps`, `doc-strict`, `gpu-test`, `platform-test`, `wayland-optional`, `native-features`,
+  `build-all-targets`, `facade-combos`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a
+  workflow step calls the tool.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
+  `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -44,18 +48,20 @@ a task runner would be a second tool to install for what a step already says.
 
 ### §1. A workflow step calls the tool
 
-CI's `clippy`, `test`, `test-nested`, `test-trybuild`, `doc` and `deps` jobs, `advisories.yml` and
-the `desktop` legs of `nightly-platforms.yml` call `cargo nextest`, `cargo clippy`, `cargo doc` and
+CI's `clippy`, `test`, `test-nested`, `test-trybuild`, `doc`, `deps` and `feature-matrix` jobs,
+the check and clippy step of `wasm-check`, `advisories.yml` and the `desktop` legs of
+`nightly-platforms.yml` call `cargo nextest`, `cargo clippy`, `cargo hack`, `cargo doc` and
 `cargo deny` with their arguments in the step. A value two steps share (the test features) is a
-job-level `env`; a list the workspace already states (the packages with a `testing` feature) is
-read from `cargo metadata` in the step. A step that repeats over a short list (flui-native's
-features, its two feature sets on Windows and macOS) is a shell loop that runs every iteration
-before it fails.
+job-level `env`; a list the workspace already states (the packages with a `testing` feature, those
+with `wasm = false`) is read from `cargo metadata` in the step. A step that repeats over a short
+list (the facade's feature combinations, flui-native's features, its two feature sets on Windows
+and macOS) is a shell loop that runs every iteration before it fails.
 
 ### §2. The subcommands are removed
 
 `lint`, `gate`, `test`, `platform-test`, `cli-test`, `wayland-optional`, `build-all-targets`, `ci`,
-`ci-full`, `deps`, `native-features`, `gpu-test`, `miri` and `doc-strict` leave `tools/xtask`.
+`ci-full`, `deps`, `native-features`, `gpu-test`, `miri`, `doc-strict`, `feature-matrix`,
+`facade-combos`, `wasm-check` and `docs-links` leave `tools/xtask`.
 There is no local command that mirrors CI: `docs/testing.md` names, for each job, the commands a
 contributor runs, and the job holds them.
 
@@ -67,6 +73,15 @@ suite added there goes into one shard. The same comment says `test-nested` build
 packages the `nested-cargo` filter names, so a test of another package joins the job's `-p`
 list. cargo-deny's advisories read the RustSec database
 cargo-audit reads, so cargo-audit is not added beside them.
+
+### §4. The `checks` job calls the formatters and the link check
+
+`cargo fmt --all --check`, typos, `taplo fmt --check` and lychee are steps of CI's `checks` job,
+each running even when one before it failed. `cargo xtask checks` keeps only the checks no standard
+tool makes: the toolchain pin, unmounted test files, ADR numbers, the changelog fragments and the
+generated files against their sources. lychee's command line in the job takes the options
+`docs-links` passed it; the extra pass that caught a link climbing above the repository root goes
+with `docs-links`, so such a link is the reader's to catch.
 
 ### Consequences
 
@@ -83,7 +98,8 @@ cargo-audit reads, so cargo-audit is not added beside them.
 ### Confirmation
 
 - `actionlint` (in `checks`) parses the workflows and runs shellcheck over their steps.
-- Each job runs its commands on every run of its lane; `git grep 'cargo xtask (test|deps|doc-strict|gpu-test)'`
+- Each job runs its commands on every run of its lane;
+  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-check)\b'`
   finds none in `.github/`.
 
 ## Pros and cons of the options

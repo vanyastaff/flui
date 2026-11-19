@@ -170,6 +170,9 @@ conversation:
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
 - No Python, Perl or PowerShell scripts for edits.
+- **This guide is the process.** A plugin, skill or hook that brings another one for this
+  repository (roles, review steps, where a spec lives, which checks run and on what) yields to
+  this file and the runtime's own file beside it (`CLAUDE.md`).
 
 ## Commands
 
@@ -180,8 +183,9 @@ Cargo runs through heli: `cargo heli <cargo arguments>`, repository tasks as
 
 Before a PR: `cargo fmt --all`, then heli's clippy (`--all-targets -- -D warnings`) and nextest
 on the changed crates, and their dependents when a public API changed. A docs-only change needs
-only `cargo heli xtask checks`. `flui-native`'s suite runs only on Linux, so a Windows or macOS
-host change needs `cargo heli nextest run -p flui-native` by hand.
+only the `checks` job's steps: typos, the lychee line in `ci.yml` and `cargo heli xtask checks`.
+`flui-native`'s suite runs only on Linux, so a Windows or macOS host change needs
+`cargo heli nextest run -p flui-native` by hand.
 
 - Each worktree keeps its own `target/`: a shared `CARGO_TARGET_DIR` links another worktree's
   sources.
@@ -220,6 +224,8 @@ and the readers of "Before a merge" look for a change that breaks one:
   removes it (ADR-0081).
 - A crate's top-level modules import in one direction (ADR-0081 §5; ADR-0151 §10 for the core
   host), and a Rust source file has at most 3000 production lines.
+- A relative link in markdown stays inside the repository: lychee follows `../` above the root,
+  where the runner's checkout makes it resolve (ADR-0383 §4).
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.
@@ -365,8 +371,17 @@ change read it to break it, all at once, and a judge decides what the author mus
   pushed after the review gets the same lenses, starting from the fix (the workflow's `since`,
   set to the head the review read).
 
-The implementer does not review and the reviewer does not implement. A pull request the `docs`
-lane takes (documentation only) skips the step; its body says so under `## Review`.
+The implementer does not review and the reviewer does not implement.
+
+**A design is read before its code.** A pull request that adds or changes a decision (an ADR's
+decision or options, a spec's `design.md`) gets the same step with the design lenses (the
+workflow's `mode: "design"`), and one that also changes code gets the change read beside it: *alternatives* (options against the drivers, and the defects other
+frameworks record for the same behaviour), *ownership* (one owner for each piece of state),
+*orders* (how each answer finds what asked for it, and every failure and late arrival), *seams*
+(where each policy lives, every host), *records* (the accepted ADRs it contradicts or supersedes)
+and *confirmation* (the test or rung that holds each decision, and how the replaced form goes).
+The defects a design allows cost the most rounds once they are code. Any other pull request the
+`docs` lane takes skips the step; its body says so under `## Review`.
 
 The step never holds a green pull request. A lens that cannot be started (the runtime refuses a
 subagent, a usage limit) is named under `## Review` with its reason, the author reads the diff
@@ -383,10 +398,10 @@ tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRI
 
 ## Review guidelines
 
-Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the readers and the
-judge of "Before a merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
-Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
-would be embarrassed by, with the better shape. What this repository keeps getting wrong:
+Pull request reviewers (Codex, Claude Code Review, the readers and the judge of "Before a merge")
+work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code Review.
+Report defects with a concrete failure scenario, and code an experienced Rust developer would be
+embarrassed by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
 - an edited expectation (a snapshot, a trybuild `*.stderr`, a removed test, a raised baseline)

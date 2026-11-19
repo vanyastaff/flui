@@ -399,8 +399,6 @@ pub(crate) struct SwapchainFrame<'a> {
     /// How the retained target reaches the swapchain.
     pub(crate) output: OutputEncoding,
     pub(crate) scene: &'a flui_layer::Scene,
-    #[cfg(feature = "gpu-profiler")]
-    pub(crate) gpu_profiler: &'a mut Option<crate::profiler::GpuFrameProfiler>,
 }
 
 impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
@@ -410,9 +408,6 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         render_view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<()> {
-        // Hoist the color attachments array before the #[cfg] split so both
-        // the profiled and non-profiled paths share one definition. The descriptor
-        // borrows `render_view`, so the array binding must live at the same scope level.
         let clear_color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: render_view,
             resolve_target: None,
@@ -430,25 +425,6 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             occlusion_query_set: None,
             multiview_mask: None,
         };
-        // Profiler scope wraps the clear render pass. The scope borrows
-        // the frame encoder exclusively; we access the encoder through
-        // `scope.recorder` so the pass sees the same underlying encoder.
-        // Scope drops at the end of the block; queries resolve at submission.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let mut scope = profiler.scope("clear", encoder);
-            {
-                let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
-            }
-            // scope drops here → end_query fires
-        } else {
-            // Feature compiled but no capable adapter (gpu_profiler is None):
-            // fall back to the unprofiled clear pass so the surface is still
-            // cleared. Branching on the Option, not just the Cargo feature, is
-            // what makes the documented "graceful no-op" actually graceful.
-            let _pass = encoder.begin_render_pass(&clear_pass_desc);
-        }
-        #[cfg(not(feature = "gpu-profiler"))]
         {
             let _pass = encoder.begin_render_pass(&clear_pass_desc);
         }
@@ -463,7 +439,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         render_view: &wgpu::TextureView,
         render_texture: &wgpu::Texture,
         _intermediate_active: bool,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
@@ -471,15 +447,6 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
         let painter = &mut *self.painter;
 
-        // Profiler scope wraps painter.render. The scope borrows
-        // the frame encoder exclusively; we pass `scope.recorder` so
-        // painter.render writes into the same underlying encoder.
-        // Scope drops at the end of the block; queries resolve at submission.
-        // Branch on the Option (runtime), not just the Cargo feature
-        // (compile-time): when the feature is compiled but `gpu_profiler` is
-        // None (incapable adapter), the render must STILL run — otherwise the
-        // frame presents only the clear pass (blank content). This is the
-        // documented graceful no-op.
         // The render target is always sampleable in this frame:
         //   - Direct path (supports_copy_src=true, intermediate_active=false):
         //     `render_texture` = `output.texture` which has COPY_SRC.
@@ -491,17 +458,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         // without a backing texture — see the reshaped fallback comments there.
         let frame_target =
             crate::render_target::RenderTarget::sampleable(render_view, render_texture);
-        #[cfg(feature = "gpu-profiler")]
-        let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let mut scope = profiler.scope("final_render", encoder);
-            painter.render(frame_target, scope.recorder())
-            // scope drops here → end_query fires
-        } else {
-            painter.render(frame_target, encoder)
-        };
-        #[cfg(not(feature = "gpu-profiler"))]
-        let render_result = painter.render(frame_target, encoder);
-        render_result?;
+        painter.render(frame_target, encoder)?;
         Ok(recorded)
     }
 
@@ -521,14 +478,6 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         encoder: wgpu::CommandEncoder,
         permits: Vec<Arc<crate::device_domain::PreparedPermit>>,
     ) -> EngineResult<()> {
-        #[cfg(feature = "gpu-profiler")]
-        let encoder = {
-            let mut encoder = encoder;
-            if let Some(profiler) = self.gpu_profiler.as_mut() {
-                profiler.resolve_queries(&mut encoder);
-            }
-            encoder
-        };
         self.painter
             .submit_frame_encoder(encoder, permits)
             .map(|_| ())

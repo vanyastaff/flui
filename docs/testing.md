@@ -36,7 +36,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessHost` | dev-dependency |
-| Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
+| Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::ScriptedSink` and the window double `flui_testing::MockWindow` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the UI runtime's own `UiRuntime::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
@@ -128,7 +128,9 @@ authority ([CI jobs and their local commands](#ci-jobs-and-their-local-commands)
 The one repository task among them:
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), toolchain, unmounted-tests (every test file of an `autotests = false` crate is compiled), adr-numbers, changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
+cargo fmt --all --check; typos; taplo fmt --check   # formatting, spelling, TOML: the first steps of CI's checks job
+                                          # then the job's lychee line: markdown links into the checkout, offline
+cargo xtask checks                        # toolchain, unmounted-tests (every test file of an `autotests = false` crate is compiled), adr-numbers, changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
 ```
 
 The reload-lifecycle fixture is a real plugin image. The `test` job
@@ -144,9 +146,11 @@ module declarations with `syn`; a commented declaration or an example inside
 a string cannot mount a test file. This checks direct mounts, not arbitrary
 macro expansion or conditional module graphs.
 
-Locally, `checks`
-skips typos, taplo or lychee with a message when they are not installed; CI
-passes `--strict`, which makes a missing one a failure. The flui-native step
+typos, taplo and lychee are binaries of their own (`cargo xtask doctor` says
+how to install each); CI's `checks` job installs them. The job's lychee line
+is written for a Linux shell: on Windows its remap needs the checkout as
+`file:///D:/…` (`pwd -W` in Git Bash), or a correct link to this repository's
+`main` on GitHub fails. The flui-native step
 of the `test` job needs `xvfb-run` on Linux (`apt install xvfb`). On Windows
 flui-native's suite runs without it, on the run's own desktop
 ([The Windows test desktop](#the-windows-test-desktop)), and on macOS with
@@ -315,7 +319,7 @@ Two choices in it:
   members switch on (`testing` and friends), so every crate the two runs share
   was built twice under different hashes. No test is lost: the root crate has
   no `cfg(not(feature = ...))` code, so the no-feature facade's tests are a
-  subset of these, and `cargo xtask facade-combos` lints that build.
+  subset of these, and CI's `feature-matrix` job lints that build.
 - **Examples are not linked.** `cargo nextest run` with no target flags builds
   every example of every package it tests: about 60 binaries, each linking the
   whole render stack, on every run. `--lib --bins --tests` selects exactly the
@@ -492,7 +496,8 @@ them together to the machine and holds slots back while memory runs low. Each wo
 ("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by the pool,
 never by sharing a target directory, and disk by the
 [agent-worktree rules](#bounding-disk-use-of-agent-worktrees). A docs-only change never needs a
-workspace build: `cargo xtask checks`, which builds only xtask, is the full local gate for it,
+workspace build: typos, the `checks` job's lychee line and `cargo xtask checks`, which builds
+only xtask, are the full local gate for it,
 so a docs worktree stays green without a multi-GB `target/` or a wait for the workspace builds.
 
 ## Test Commands
@@ -904,7 +909,8 @@ The constitution requires `///` doc comments on every public item and `//!` over
   lists the failing row names. The rows keep their own assertions; the table keeps the
   set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
+- **No mocking frameworks.** Use trait-based test doubles. The headless host is the canonical test surface for platform-dependent code; its type (`HeadlessPlatform`), its window, its doubles (`FakeTextInput`, `FakeAccessibility`) and its `Headless*` controls are named with `flui-native`'s `scripted` feature, which a crate whose tests drive it turns on in its dev-dependency.
+- **One window double.** A test that needs a window and not a host builds `flui_testing::MockWindow` (in a crate below the kit, `flui_platform::testing::MockWindow`, the same type): standalone or over a host's window, with builders for what the test sets, recordings for what it reads back, an observer for code it runs at each call, and values it keeps that drop with the window. No test implements `PlatformWindow` itself; a test that needs something the double lacks adds a builder to it.
 
 ## Test Harnesses (`testing` feature)
 
@@ -1238,16 +1244,22 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, toolchain, unmounted-tests, adr-numbers, changelog fragments, the generated files against their sources; a missing tool fails
+cargo fmt --all --check                                       # checks job, each step running even after one fails:
+typos                                                         # spelling
+RUST_LOG=warn taplo fmt --check                               # TOML formatting
+                                                              # lychee over the markdown, offline: the job's command line
+cargo xtask checks                                            # toolchain, unmounted-tests, adr-numbers, changelog fragments, the generated files against their sources
 cargo test -p xtask --locked                                  # xtask's own tests
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo xtask feature-matrix --slice 1/5                        # feature-matrix job: cargo-hack per-feature clippy, shards 1/5..5/5 (--partition)
-cargo xtask feature-matrix --slice combinations               # same job: each facade feature combination built in isolation
-cargo xtask feature-matrix --packages "-p <crate>"            # no job: the same per-feature clippy over the crates you changed, before a PR
-cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
-cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
+cargo hack clippy -p <crate> --locked --each-feature --keep-going -- -D warnings                  # feature-matrix job's per-feature pass (CI: --workspace --partition k/5), then again with --tests --benches --examples
+cargo clippy -p flui --locked --all-targets --no-default-features --features material -- -D warnings  # same job: one facade combination; ci.yml lists them all
+cargo check --workspace --locked --target wasm32-unknown-unknown --exclude <each wasm = false package>   # wasm-check job; the job reads the excludes from cargo metadata
+cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # same job: the only lint pass over the wasm32-only web backend
+cargo clippy -p flui-native --all-targets --locked --target wasm32-unknown-unknown -- -D warnings  # same job: flui-native's wasm32-only test targets
+cargo check -p flui-hot-reload --locked --target wasm32-unknown-unknown --all-features             # same job
+cargo clippy -p flui --test wasm_consumer --locked --target wasm32-unknown-unknown -- -D warnings   # same job: an application on wasm32 (ADR-0086)
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
 cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
 cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
@@ -1335,7 +1347,7 @@ heavier ones need installed. One row per job:
 
 | CI job | Local command | Difference, or why CI-only |
 |---|---|---|
-| `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
+| `checks` | `cargo fmt --all --check`, `typos`, `taplo fmt --check`, the lychee line, `cargo xtask checks`, `cargo test -p xtask`, `actionlint`, `zizmor .` | each step runs even when one before it failed; CI installs every tool, so none is skipped |
 | `plan` | — | CI only: a shell step over the pull request's changed files decides the lane |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings`, then, on main only, `cargo clippy -p flui-native --locked --no-default-features [--features x11\|wayland\|testing] [--all-targets] -- -D warnings` | the last lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`; from a Windows or macOS checkout add `--target x86_64-unknown-linux-gnu` |
 | `test` | after `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`: the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |
@@ -1346,8 +1358,8 @@ heavier ones need installed. One row per job:
 | `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
-| `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/5` to `5/5` and `combinations` in parallel; locally it is one run over the workspace |
-| `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
+| `feature-matrix` | `cargo hack clippy --workspace --partition k/5 --locked --each-feature --keep-going -- -D warnings`, then with `--tests --benches --examples`; the `combinations` leg runs `cargo clippy -p flui --locked --all-targets <combination> -- -D warnings` for each combination ci.yml lists | locally, `-p <crate>` in place of `--workspace --partition k/5` lints the crates a change touched |
+| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, then `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require; a shell step over the needed jobs' results |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |

@@ -895,7 +895,7 @@ graph LR
   - any regenerated snapshots are explained in the PR;
   - `cargo xtask check-changed` is green across the dependents.
 - **Evidence:**
-  - Render objects, layers, `DisplayList`, `GpuFrameProfile` and the view render adapters implement `Inspect`;
+  - Render objects, layers, `DisplayList` and the view render adapters implement `Inspect`;
     `RenderObject` requires it. `rg Diagnosticable` finds only archival docs and ADR text.
   - The tree walk takes a render node's kind from the object's own `Inspect::kind`, so generic objects
     (`RenderClip<S>`) keep their name.

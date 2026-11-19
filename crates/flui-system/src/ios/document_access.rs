@@ -11,9 +11,10 @@
 //!
 //! The access lasts for the read alone, so a pick is handed over as its
 //! name and contents (`PickedForm::Contents`), never as a path the
-//! application could not open once the access stopped. Access that
-//! outlasts the process (a security-scoped bookmark, made while the access
-//! is held) would travel in the pick made here; no pick carries one yet.
+//! application could not open once the access stopped. A request that keeps
+//! access has each pick carry a bookmark, made while the access is held,
+//! which `Grants::resolve` turns into the document again after a restart,
+//! its access started for as long as the reacquired access lives.
 //!
 //! Nothing is read, and nothing downloaded, for an answer the request will
 //! not get. Every pick is first judged by the request's filters
@@ -154,6 +155,7 @@ mod foundation {
     };
 
     use super::{ReadBudget, admit_judged, admit_sizes, io_failure, picked, read_within};
+    use crate::apple::bookmark::bookmark;
     use crate::apple::content_types::{ContentFilter, HasContentTypes, Judged, NameRule};
     use crate::apple::{error_code, failure, url_path};
     use crate::dialog::{DialogError, OpenResult, PickedFile, Picks};
@@ -277,13 +279,15 @@ mod foundation {
     /// What an open answers for the documents at `urls`, the picker's
     /// picks: each held to `filter`, then their declared sizes to `limit`
     /// bytes together, before any is read or downloaded; then read, within
-    /// `limit` again. Off the main thread only: it reads the file system
-    /// and may wait on a download.
+    /// `limit` again. A request that `keep_access` has each pick carry a
+    /// bookmark, made while its access is held. Off the main thread only: it
+    /// reads the file system and may wait on a download.
     pub(in crate::ios) fn read_picks(
         urls: Vec<Retained<NSURL>>,
         filter: Option<&ContentFilter>,
         content_types: Option<HasContentTypes>,
         limit: u64,
+        keep_access: bool,
     ) -> OpenResult {
         let accesses = urls
             .into_iter()
@@ -297,7 +301,13 @@ mod foundation {
         let mut budget = ReadBudget::new(limit);
         let files = accesses
             .iter()
-            .map(|access| access.pick(&mut budget))
+            .map(|access| {
+                let pick = access.pick(&mut budget)?;
+                Ok(match keep_access.then(|| bookmark(&access.url)).flatten() {
+                    Some(grant) => pick.granted(grant),
+                    None => pick,
+                })
+            })
             .collect::<Result<Vec<PickedFile>, DialogError>>()?;
         // The picker answers a pick with at least one document.
         Picks::try_new(files)

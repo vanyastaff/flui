@@ -21,8 +21,8 @@
   CI decides its lane and judges its run in shell steps of the workflow.
   [ADR-0383](ADR-0383-ci-runs-the-standard-tools-directly-and-xtask-does-not-wrap-them.md) for §1
   only for the command lines that must match between a contributor and CI (`test`, `clippy`,
-  `miri`): a workflow step calls the tool, and xtask keeps `cross-typecheck`, `feature-matrix`
-  and the `wasm-*` steps until a later record moves them.
+  `miri`, `feature-matrix`, the `wasm-check` step): a workflow step calls the tool, and xtask
+  keeps `cross-typecheck`, `wasm-link` and `wasm-test` until a later record moves them.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry
@@ -313,8 +313,8 @@ of its own. The five jobs ADR-0370 §2 moves to main run there without one.
 - `every_self_test_reports_exactly_its_planted_findings` and
   `every_command_with_a_self_test_is_listed` in `checks_contract` (`tools/xtask/src/tasks/checks.rs`)
   run each self-test and fail on a command whose self-test is not listed (§4).
-- `the_in_process_checks_include_the_link_check_under_strict` pins the list `cargo xtask checks`
-  runs, which has no `--self-test` line (§4).
+- `every_in_process_check_is_its_command_line` parses each line `cargo xtask checks` runs, none
+  of them a `--self-test` (§4).
 - `cargo clippy --workspace --all-targets -- -D warnings` fails on a hand-written `catch_unwind`
   without an expectation, and on an expectation that no longer suppresses anything (§5, §6).
 - `cargo xtask workspace` checks the ADR numbers, so a gate's ADR exists; the lines of §3 are read
@@ -373,7 +373,7 @@ own change; a gate that would only be removed is removed after the owner's decis
 
 | Gate | Rung | What follows |
 |---|---|---|
-| `workspace`, `reach`, `globals`, `send-impls`, `send-positions`, `try-new`, `file-length`, `testing`, `toolchain`, `docs-links`, `docs-paths`, `changelog` | 5 | stays; `try-new` has no stock lint, since `clippy::new_ret_no_self` accepts `Result<Self, _>` |
+| `workspace`, `reach`, `globals`, `send-impls`, `send-positions`, `try-new`, `file-length`, `testing`, `toolchain`, `docs-paths`, `changelog` | 5 | stays (`docs-links` is the `checks` job's lychee step, ADR-0383 §4); `try-new` has no stock lint, since `clippy::new_ret_no_self` accepts `Result<Self, _>` |
 | `panic-messages` | 5 (§8) | stays |
 | `inspect-debug` | 2 (§7) | replaced by the deprecated constructor, gate deleted |
 | hand-written `catch_unwind` | 2 (§6) | a `clippy.toml` entry, no gate |

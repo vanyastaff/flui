@@ -59,10 +59,12 @@ this one path (ADR-0151 §9).
   while `PlatformHaptics` and `HapticFeedback` stay at the root),
   `data_transfer`, `drag`, `text_store` (whose four traits are also at the
   root), `pointer`, `keyboard`, `input_capabilities`, `input_regions`,
-  `capability`, `executor`, `http` and `launch`. `testing` exists only under
-  the `testing` feature: what a test double's window is written with
-  (`NoNativeSurface` and the `window_takes_no_frame_verbs!` macro) and the
-  doubles of this crate's contracts, none of which production code uses.
+  `assets`, `capability`, `executor`, `http` and `launch`. `testing` exists only under
+  the `testing` feature and in this crate's own unit tests: the doubles of its contracts, among them the
+  one window double, `MockWindow` (`flui-testing` re-exports it; no crate
+  outside the core host and the kits implements `PlatformWindow`), and
+  `NoNativeSurface`, the surface target of a window with no native surface.
+  Production code uses none of it.
 - **The text store is owner-thread and UTF-16.** `TextStore` is shared as
   `Rc<dyn TextStore>`; `CommitGate` is not `Send`
   (a `static_assertions` test pins it). Every offset on the surface is a
@@ -287,8 +289,9 @@ this one path (ADR-0151 §9).
   (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::honours_input_regions`)
   says none, has no default body, and the window conformance checks
   both. A verb answers its reason itself: nothing admits it against the
-  capabilities, so the capabilities keep no second copy of it. A test double whose window system takes neither writes them with
-  `window_takes_no_frame_verbs!`.
+  capabilities, so the capabilities keep no second copy of it. A standalone `testing::MockWindow`
+  answers both by its own capabilities (input regions: whether it is built
+  `taking_input_regions`); one built over another window hands them to it.
 - **The window stays on its owner thread; other threads get a target and a
   requester (ADR-0254 §5).** `PlatformWindow` is neither `Send` nor `Sync`, so
   no window, nor any `Rc`, `Arc` or borrow of one, crosses a thread
@@ -394,6 +397,11 @@ Text input, haptics, clipboard and system chrome are typed capability traits
 live apart from their implementations, so a crate that names a capability links no OS code and a
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
+
+A capability crate depends on this contract alone (ADR-0154 §1), so the containment its handles
+run backend code under reaches it from here: `capability::FirstPanic` is `flui-foundation`'s,
+re-exported, and a handle that calls a backend with its own state committed keeps the first panic
+and resumes it once the state is whole (ADR-0287).
 
 What only the host owns reaches a provider through its `ProviderContext`
 (ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
@@ -692,3 +700,43 @@ struct and enum `#[non_exhaustive]` and no conversion to the system's own
 values, which stay with the host.
 **Tests:** `a_win32_window_opens_with_its_options` (`flui-native`),
 `config_to_options_keeps_every_field` (`flui-app`).
+
+### The sandbox is detected once, for every crate that needs it
+
+`sandbox` says which sandbox the process runs in (`Confinement`), so `flui-native`'s data folders
+and `flui-system`'s grants read one answer (ADR-0380 §3, §4). A contract crate reads one file
+here, and only this one: `flui-system` and `flui-native` both need the answer, this is the lowest
+crate both depend on, and two readers of one description disagreed before. The read
+(`read_flatpak_info`) is bounded, runs off the owner thread, and happens on Linux alone: no other
+system has a Flatpak, and on Windows the name is a drive's root. Only the file's absence says the
+process is no Flatpak: a description that could not be read is an error, which a caller does not
+keep (the grants ask again at the next resolve, the data store at its next call), and
+`is_flatpak` (the portal's and the X11 input bus's question) counts it as present. The other
+crates ask through these functions and never open the file themselves.
+
+A Flatpak is a process with `/.flatpak-info`: `FLATPAK_ID` alone is inherited by a host process a
+Flatpak's terminal starts. The file's `[Context] filesystems=` is modelled as Flatpak writes it,
+flattened (no entry takes another back): the key file's escapes undone, the access mode dropped,
+an `xdg-*` user folder reached only where the `UserFolder` lookup places it, as Flatpak ignores
+an unconfigured one, `host-os` and `host-etc` at `/run/host` and `/run/host/etc`. Flatpak unsets
+`TMPDIR`, so it is never read there. A path hidden by `--nofilesystem` under an exposed folder is
+a tmpfs the file does not show, and is reached here. The macOS App Sandbox is
+`APP_SANDBOX_CONTAINER_ID`; its container is `HOME` only when `HOME` is that container's path,
+else the container under the user's home; a `TMPDIR` counts only inside the container
+(`usable_temporary`). `Confinement::detect` is a pure function of what it is given;
+`Confinement::of_process` adds the process's environment. The user's home comes from a lookup its
+caller passes, which reads the system's user database (never `HOME`, since this crate has no
+`unsafe` and the standard library's `home_dir` prefers `HOME`), and `detect` calls it only on
+the branch that needs it, so an unconfined process, or an App Sandbox whose `HOME` is its
+container, never asks the database. The description is judged a file within the bound before
+it is opened, and opened without blocking on Unix, so a FIFO at its name never blocks the
+reader. What both callers need is public (the variants, their accessors, `is_flatpak`,
+`is_plain`, `usable_temporary`); the description's path, fields and bound are not.
+**Tests:** `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
+`the_description_is_read_on_linux_alone_and_within_its_bound`,
+`a_description_out_of_reach_is_no_answer_and_still_a_sign_of_flatpak`,
+`a_description_that_is_no_file_is_never_opened` (Unix),
+`the_user_database_is_asked_only_when_a_sandbox_needs_it_and_never_home`,
+`a_key_file_list_is_split_where_its_writer_did_not_escape`,
+`a_manifests_filesystems_name_what_the_flatpak_reaches`,
+`an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`.

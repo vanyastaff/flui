@@ -496,13 +496,18 @@ impl Timeline {
                     })
                 })
                 .collect();
-            let args = json!({
+            let mut args = json!({
                 "ui_runtime": snapshot.address.ui_runtime_id.to_string(),
                 "presentation": snapshot.address.presentation_id.to_string(),
                 "frame_id": snapshot.frame_id.to_string(),
                 "present_outcome": format!("{:?}", snapshot.present_outcome),
                 "inputs": inputs,
             });
+            // A frame's GPU time arrives after its snapshot was recorded
+            // (ADR-0388): a snapshot pulled before it carries none.
+            if let Some(gpu) = snapshot.gpu_time {
+                args["gpu_us"] = json!(saturating_micros(gpu));
+            }
             self.record_completed_event(
                 format!(
                     "Frame {} [{} {}]",

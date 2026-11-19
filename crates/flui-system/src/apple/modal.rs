@@ -53,8 +53,8 @@ impl<T: 'static> Pending<T> {
     /// Take the resolver for an answer the user gave that settles later (a
     /// pick still being read), so no other handler (a cancel, a dismissal)
     /// answers in its place; `None` when someone answered first. A dialog
-    /// dropped meanwhile drops that answer at the handle (ADR-0344).
-    #[cfg(any(target_os = "ios", test))]
+    /// dropped meanwhile drops that answer at the handle (ADR-0344). An iOS
+    /// pick and a macOS pick whose bookmarks are still being made take it.
     pub(crate) fn take(&self) -> Option<Resolver<T>> {
         self.0.take()
     }

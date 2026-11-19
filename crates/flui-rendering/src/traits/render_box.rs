@@ -818,7 +818,7 @@ where
         let blocks_below = T::hit_test(self, &mut ctx);
         HitTestOutcome {
             pointer_target: ctx.self_hit_pointer_target(),
-            cursor: ctx.self_hit_cursor(),
+            cursor: ctx.take_self_hit_cursor(),
             ..HitTestOutcome::new(
                 ctx.self_hit_entry_registered() || blocks_below,
                 blocks_below,

@@ -86,6 +86,9 @@ android {
                     .split(File.pathSeparator)
                     .filter { it.isNotEmpty() }
             )
+            // The directory holding `flui_assets/`, the files flui.toml declares under
+            // `[assets] directories` (ADR-0384); empty without them.
+            fluiProperty("flui.assetsDir").takeIf { it.isNotEmpty() }?.let { assets.srcDirs(it) }
         }
     }
 }

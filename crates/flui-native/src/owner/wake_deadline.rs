@@ -10,12 +10,21 @@
 //!   deadline, and the application does it in the turn it is in or asks for
 //!   an owner turn through the signal.
 //! - The wake deadline (`AppHandler::wake_deadline`) is delivered as frame
-//!   requests, through [`WakeDeadline`], on the hosts that wait with a timeout
-//!   of their own and ask their windows for frames at it.
+//!   requests, through [`WakeDeadline`], on every native host: the Win32,
+//!   X11, Wayland and Android loops wait with a timeout of their own, UIKit
+//!   with a main-queue timer and AppKit with its wake pump, and each asks its
+//!   windows for frames at it.
 
 /// The turn deadline of one loop: the instant armed, and the time of the
 /// last turn delivered for it.
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(
+    not(any(feature = "scripted", native_loop)),
+    expect(
+        dead_code,
+        reason = "only a native loop and the headless host's test controls turn at a deadline"
+    )
+)]
 pub(crate) struct TurnDeadline {
     armed: Option<web_time::Instant>,
     /// The time of the last turn delivered for the deadline: that turn served
@@ -23,6 +32,13 @@ pub(crate) struct TurnDeadline {
     served: Option<web_time::Instant>,
 }
 
+#[cfg_attr(
+    not(any(feature = "scripted", native_loop)),
+    expect(
+        dead_code,
+        reason = "only a native loop and the headless host's test controls turn at a deadline"
+    )
+)]
 impl TurnDeadline {
     /// The application's handler answered `answer`: arm it unless a turn
     /// delivered for the deadline already served it, that is unless it is not
@@ -59,14 +75,30 @@ impl TurnDeadline {
 /// at the instant just serviced, which must be delivered again. The count of
 /// frames that ran is the delivery generation that tells them apart. A run
 /// has one handler, so the instant alone names the answer.
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 struct DeadlineDelivery {
     arm: DeadlineArm,
     /// The count of frames that ran when the delivery was made.
     frames: u64,
 }
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 impl DeadlineDelivery {
     /// Whether `deadline` may be armed after this delivery: a different
     /// instant always, the same one whenever a frame callback ran since. An
@@ -84,11 +116,25 @@ impl DeadlineDelivery {
 /// into it when its handler's `frame_requested` produces a frame, so a frame
 /// request no handler ran a frame for (a declined one, or a window that let go
 /// of its handler) leaves it unchanged.
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios"))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android"
+))]
 #[derive(Default)]
 pub(crate) struct FrameCount(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios"))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android"
+))]
 impl FrameCount {
     pub(crate) fn get(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
@@ -100,8 +146,64 @@ impl FrameCount {
     }
 }
 
+/// What a look at the wake deadline found ([`WakeDeadline::turn`]).
+#[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WakeTurn {
+    /// The armed deadline, at the instant it carries, is due and is
+    /// delivered now: the caller asks for frames.
+    Due(web_time::Instant),
+    /// The armed deadline is still ahead: the caller waits no later than it.
+    Wait(web_time::Instant),
+    /// Nothing is armed: no deadline, or the one delivered with no frame run
+    /// since.
+    Idle,
+}
+
+#[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+impl WakeTurn {
+    /// Whether the look delivered the deadline. The AppKit pump matches the
+    /// variants instead.
+    #[cfg(any(windows, target_os = "android", test))]
+    pub(crate) fn is_due(self) -> bool {
+        matches!(self, Self::Due(_))
+    }
+
+    /// The instant of the deadline the look found armed, delivered or still
+    /// ahead. A loop whose delivery left frame requests behind waits for
+    /// those, not for a delivered instant (`wait`); the Win32
+    /// modal pace, which no frame's run follows up, looks again at it, and
+    /// finds it armed only once a frame ran.
+    #[cfg(any(windows, test))]
+    pub(crate) fn instant(self) -> Option<web_time::Instant> {
+        match self {
+            Self::Due(at) | Self::Wait(at) => Some(at),
+            Self::Idle => None,
+        }
+    }
+
+    /// The instant still ahead to wait until for the deadline, if any: a
+    /// delivered deadline bounds no wait of a loop whose delivery left frame
+    /// requests behind.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn wait(self) -> Option<web_time::Instant> {
+        match self {
+            Self::Wait(at) => Some(at),
+            Self::Due(_) | Self::Idle => None,
+        }
+    }
+}
+
 /// A deadline the loop waits for.
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 struct DeadlineArm {
     deadline: web_time::Instant,
 }
@@ -109,14 +211,30 @@ struct DeadlineArm {
 /// The wake deadline of a loop that waits with a timeout of its own: the
 /// deadline armed, and the last one delivered, by the rule of
 /// [`DeadlineDelivery`].
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 #[derive(Default)]
 pub(crate) struct WakeDeadline {
     armed: Option<DeadlineArm>,
     delivered: Option<DeadlineDelivery>,
 }
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 impl WakeDeadline {
     /// Whether the armed deadline is due at `now`. A due deadline is delivery
     /// debt: the caller asks every window for a frame, and the delivery is
@@ -154,6 +272,25 @@ impl WakeDeadline {
         };
         self.armed.as_ref().map(|arm| arm.deadline)
     }
+
+    /// A look at `now`: [`arm`](Self::arm) the handler's `answer` at the
+    /// frame count `frames`, then [`take_due`](Self::take_due) it. A loop
+    /// that asks for the answer and takes a due deadline in one instant looks
+    /// with this; a loop that arms right before it waits calls the two apart,
+    /// taking at the start of its next turn what it armed before the wait.
+    #[cfg(any(windows, target_os = "macos", target_os = "android", test))]
+    pub(crate) fn turn(
+        &mut self,
+        answer: Option<web_time::Instant>,
+        now: web_time::Instant,
+        frames: u64,
+    ) -> WakeTurn {
+        match self.arm(answer, frames) {
+            Some(at) if self.take_due(now, frames) => WakeTurn::Due(at),
+            Some(at) => WakeTurn::Wait(at),
+            None => WakeTurn::Idle,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -162,7 +299,7 @@ mod tests {
 
     use web_time::Instant;
 
-    use super::{TurnDeadline, WakeDeadline};
+    use super::{TurnDeadline, WakeDeadline, WakeTurn};
 
     /// A turn delivered for the deadline serves every answer not later than
     /// its time: a past instant answered again is not armed again, a later
@@ -238,5 +375,82 @@ mod tests {
             Some(at),
             "after a quiet answer, the old instant is new again"
         );
+    }
+
+    /// A loop's looks over its deadline: a due instant is delivered once per
+    /// frame generation, a look before the frame it asked for has run (or
+    /// after the handler declined it) finds nothing armed, the frame that
+    /// runs late still lets the same instant be delivered again at the look
+    /// that follows it, and a look that comes long after the instant still
+    /// delivers it. Red-check: deliver whenever the answer is not later than
+    /// `now`, the rule the AppKit pump and the Android loop had before.
+    #[test]
+    fn a_look_delivers_a_due_deadline_once_per_frame_generation() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let at = start + ms(5);
+        let later = start + ms(100);
+        let mut deadline = WakeDeadline::default();
+        // (case, answer, now, frames run, what the look finds)
+        for (case, answer, now, frames, found) in [
+            ("nothing asked for", None, start, 0, WakeTurn::Idle),
+            ("a deadline ahead", Some(at), start, 0, WakeTurn::Wait(at)),
+            ("due at its instant", Some(at), at, 0, WakeTurn::Due(at)),
+            (
+                "a look before its frame ran, or after it was declined",
+                Some(at),
+                at + ms(8),
+                0,
+                WakeTurn::Idle,
+            ),
+            (
+                "the frame ran late and left it due: delivered again",
+                Some(at),
+                at + ms(40),
+                1,
+                WakeTurn::Due(at),
+            ),
+            (
+                "and once for that generation",
+                Some(at),
+                at + ms(48),
+                1,
+                WakeTurn::Idle,
+            ),
+            (
+                "another instant is a new deadline",
+                Some(later),
+                at + ms(48),
+                1,
+                WakeTurn::Wait(later),
+            ),
+            (
+                "a look long after its instant still delivers it",
+                Some(later),
+                later + ms(900),
+                1,
+                WakeTurn::Due(later),
+            ),
+        ] {
+            assert_eq!(deadline.turn(answer, now, frames), found, "{case}");
+        }
+    }
+
+    /// A delivered deadline is told apart from one to wait for: it bounds no
+    /// wait of a loop whose delivery left frame requests, and the Win32 modal
+    /// pace reads the instant of either to look again.
+    #[test]
+    fn a_delivered_deadline_is_told_apart_from_a_wait() {
+        let at = Instant::now();
+        // (look, delivered, the instant found, to wait for)
+        for (turn, due, instant, wait) in [
+            (WakeTurn::Due(at), true, Some(at), None),
+            (WakeTurn::Wait(at), false, Some(at), Some(at)),
+            (WakeTurn::Idle, false, None, None),
+        ] {
+            assert_eq!(turn.is_due(), due, "{turn:?}");
+            assert_eq!(turn.instant(), instant, "{turn:?}");
+            assert_eq!(turn.wait(), wait, "{turn:?}");
+        }
     }
 }

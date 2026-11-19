@@ -1775,7 +1775,6 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "flui-app",
- "flui-assets",
  "flui-engine",
  "flui-foundation",
  "flui-interaction",
@@ -1836,6 +1835,7 @@ dependencies = [
  "dialoguer",
  "flui-foundation",
  "flui-hot-reload",
+ "flui-platform",
  "flui-protocol",
  "getrandom 0.4.3",
  "insta",
@@ -1913,6 +1913,7 @@ name = "flui-devtools"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
+ "flui-foundation",
  "flui-log",
  "flui-objects",
  "flui-platform",
@@ -1960,7 +1961,6 @@ dependencies = [
  "web-time",
  "wesl",
  "wgpu",
- "wgpu-profiler",
  "wgsl_bindgen",
 ]
 
@@ -2248,6 +2248,7 @@ dependencies = [
  "flui-foundation",
  "js-sys",
  "language-tags",
+ "libc",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -2304,6 +2305,7 @@ dependencies = [
  "accesskit",
  "crossbeam-channel",
  "flui-animation",
+ "flui-assets",
  "flui-foundation",
  "flui-interaction",
  "flui-layer",
@@ -2432,7 +2434,6 @@ version = "0.2.0-dev"
 dependencies = [
  "accesskit",
  "flui-animation",
- "flui-assets",
  "flui-foundation",
  "flui-interaction",
  "flui-log",
@@ -2455,6 +2456,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -6928,17 +6930,6 @@ checksum = "d2f62e73117bb7a62bfd9c5a5841438a823f6566c6442a808ee269d2d055c081"
 dependencies = [
  "naga",
  "wgpu-types",
-]
-
-[[package]]
-name = "wgpu-profiler"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a15a635a2a2ec0b9787589f17dbbffaa7960e779bcf0348a67f73c3e7665f9eb"
-dependencies = [
- "parking_lot",
- "thiserror 2.0.21",
- "wgpu",
 ]
 
 [[package]]

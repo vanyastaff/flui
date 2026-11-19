@@ -121,5 +121,12 @@ mod registration {
         not_a_page::<UserDirCapability>(registrar);
         not_a_page::<JumpListCapability>(registrar);
         not_a_page::<OsCapability>(registrar);
+        // A browser's lasting access is a `FileSystemHandle` kept in the
+        // page's IndexedDB, an object and not bytes; no provider keeps one.
+        registrar.provide::<crate::grant::GrantCapability>(|_: &ProviderContext<'_>| {
+            Err::<crate::grant::Grants, _>(Unsupported::of::<crate::grant::GrantCapability>(
+                UnsupportedReason::NotYetOnThisHost,
+            ))
+        });
     }
 }

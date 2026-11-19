@@ -287,7 +287,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - **R12.** КОГДА переименован публичный путь из закреплённого списка `flui-sdk/tests/surface.rs`, СИСТЕМА ДОЛЖНА падать на
   тесте поверхности, пока список не обновлён в том же PR (поведение есть, требование — не обходить его).
 - **R13.** КОГДА переименован файл или якорь, на который ссылается неархивный Markdown, СИСТЕМА ДОЛЖНА падать в
-  `docs-links`/`docs-paths` (есть). PR переименования прогоняет `cargo xtask checks`.
+  lychee в джобе `checks` (есть). PR переименования прогоняет `cargo xtask checks`.
 - **R14.** КОГДА гейт впервые запускается с `--seed`, СИСТЕМА ДОЛЖНА записывать allowlist, счёт которого совпадает с
   инвентарём этого документа ±5 % по каждому классу. Расхождение больше — повод исправить либо гейт, либо документ.
 - **R15.** КОГДА публичное имя переименовано, СИСТЕМА ДОЛЖНА иметь фрагмент `changelog.d/` в разделе `### Changed` со старым
@@ -298,7 +298,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 
 ### Сценарии отказа при переименовании
 
-- **Ссылка в документе:** `crates/flui-testing/ARCHITECTURE.md` ссылается на `text_store_kit.rs` → `docs-links` падает (R13).
+- **Ссылка в документе:** `crates/flui-testing/ARCHITECTURE.md` ссылается на `text_store_kit.rs` → lychee в джобе `checks` падает (R13).
 - **Имя теста, процитированное в ADR или ARCHITECTURE:** `cancelling_renderer_new` в `flui-engine/ARCHITECTURE.md`,
   `text_store_kit_matrix` в `flui-testing/ARCHITECTURE.md`. Сегодня этого не ловит ни один гейт (R11).
 - **Фича, которой пользуются потребители:** `test-utils` в dev-зависимости `flui-runtime`, `test-support` в `flui-app` и

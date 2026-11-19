@@ -314,7 +314,7 @@ crates need it:
 ### 10. Testing, and claimed support
 
 - **A scripting primitive in the contract crate's `scripted` feature** (not `testing`: ADR-0243
-  keeps that name for test support, and `flui-app` uses the primitive under `driver`): an ordered
+  keeps that name for test support, and a driver turns it on where it scripts an answer): an ordered
   script of responses to prompts, service toggles, revocations and injected errors, plus
   virtual-time event streams, all resolved at an owner turn boundary. It sits in the contract
   because a capability crate may not depend on `flui-testing`, and because every call the OS
@@ -502,7 +502,7 @@ first capability crate that needs them.
   and shows the registration. `cargo xtask workspace` requires every capability crate to be the
   facade's optional normal dependency, with `<service> = ["dep:<crate>"]` as its only feature
   entry; its self-test plants a mandatory dependency, a missing feature and a wrong feature.
-  `cargo xtask facade-combos` builds each capability feature on its own.
+  CI's `feature-matrix` job builds each capability feature on its own.
 - **Open until the first crate that needs it.** The schema in decision 7 is illustrative, and its
   keys are fixed with the first crate that needs a declaration; Win32 has nothing in the host
   bridge until a capability has a consumer for a message hook (decision 9, item 4); each later

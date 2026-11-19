@@ -54,9 +54,12 @@ impl From<CursorIcon> for Cursor {
 /// that measures a cursor in logical units shows it at the nearest size it
 /// can (the web at one image pixel per CSS pixel).
 ///
-/// The pixels are shared: a clone costs a reference count, and equality looks
+/// The image is shared: a clone costs a reference count, and equality looks
 /// at the pixels only when the two images do not share them, so a host that
-/// keeps the last image it made a native cursor of compares it cheaply.
+/// keeps the last image it made a native cursor of compares it cheaply. It is
+/// one pointer wide, so a [`Cursor`] stays two words and every value that can
+/// carry one (a hit target's cursor request, each render object that asks
+/// for a cursor) pays for an icon, not for an image's size and hotspot.
 ///
 /// ```
 /// use flui_platform::{CursorImage, CursorImageError};
@@ -72,6 +75,11 @@ impl From<CursorIcon> for Cursor {
 /// ```
 #[derive(Clone)]
 pub struct CursorImage {
+    shared: Arc<CursorPixels>,
+}
+
+/// What a [`CursorImage`] shares between its clones.
+struct CursorPixels {
     width: u16,
     height: u16,
     hotspot: (u16, u16),
@@ -120,45 +128,49 @@ impl CursorImage {
             });
         }
         Ok(Self {
-            width,
-            height,
-            hotspot,
-            rgba,
+            shared: Arc::new(CursorPixels {
+                width,
+                height,
+                hotspot,
+                rgba,
+            }),
         })
     }
 
     /// The width in pixels, `1..=MAX_SIDE`.
     #[must_use]
-    pub const fn width(&self) -> u16 {
-        self.width
+    pub fn width(&self) -> u16 {
+        self.shared.width
     }
 
     /// The height in pixels, `1..=MAX_SIDE`.
     #[must_use]
-    pub const fn height(&self) -> u16 {
-        self.height
+    pub fn height(&self) -> u16 {
+        self.shared.height
     }
 
     /// The pixel that is the pointer's position (x, y), inside the image.
     #[must_use]
-    pub const fn hotspot(&self) -> (u16, u16) {
-        self.hotspot
+    pub fn hotspot(&self) -> (u16, u16) {
+        self.shared.hotspot
     }
 
     /// The pixels: `width * height * 4` bytes, red, green, blue and straight
     /// alpha, row by row from the top.
     #[must_use]
     pub fn rgba(&self) -> &[u8] {
-        &self.rgba
+        &self.shared.rgba
     }
 }
 
 impl PartialEq for CursorImage {
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width
-            && self.height == other.height
-            && self.hotspot == other.hotspot
-            && (Arc::ptr_eq(&self.rgba, &other.rgba) || self.rgba == other.rgba)
+        let (this, that) = (&*self.shared, &*other.shared);
+        Arc::ptr_eq(&self.shared, &other.shared)
+            || (this.width == that.width
+                && this.height == that.height
+                && this.hotspot == that.hotspot
+                && (Arc::ptr_eq(&this.rgba, &that.rgba) || this.rgba == that.rgba))
     }
 }
 
@@ -167,9 +179,9 @@ impl Eq for CursorImage {}
 impl std::fmt::Debug for CursorImage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CursorImage")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("hotspot", &self.hotspot)
+            .field("width", &self.shared.width)
+            .field("height", &self.shared.height)
+            .field("hotspot", &self.shared.hotspot)
             .finish_non_exhaustive()
     }
 }

@@ -18,7 +18,7 @@ use flui_layer::{
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 
-use crate::damage::{FramePlan, RegionPlan};
+use crate::damage::FramePlan;
 use crate::headless::RetainedCapture;
 use crate::recording_cache::admission::DRAWS_TO_ADMIT;
 
@@ -490,9 +490,6 @@ fn region_frames_match_a_full_frame() {
         return;
     };
     let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
-    // Production plans the bounding box (`RegionPlan::of`); this pins the
-    // rect-by-rect plan it switches to once a frame records once.
-    partial.plan_rect_by_rect();
     let mut corners = Corners::new();
     apply(
         &mut partial,
@@ -520,7 +517,7 @@ fn region_frames_match_a_full_frame() {
         .expect("the region frame renders");
     assert_eq!(
         partial.last_plan(),
-        Some(FramePlan::RetainedPartial(RegionPlan::Rects(region))),
+        Some(FramePlan::RetainedPartial(region)),
         "two distant rects redraw rect by rect"
     );
     assert_eq!(partial.counters().region_passes, 2, "one pass per rect");
@@ -570,8 +567,16 @@ fn region_frames_match_a_full_frame() {
 
 /// Two tall boxes of `color` over stripes and, when `root_too`, the root:
 /// the stripes, the boxes' slots and between them a backdrop filter that
-/// reaches below them, which neither box's damage meets.
-fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Color, root_too: bool) {
+/// reaches below them, which neither box's damage meets. `heavy` more 2×2
+/// squares, the background's colour, make the root's chunk one that costs
+/// a pass per rect it meets.
+fn gap_reader(
+    writer: &mut SceneWriter<'_>,
+    boxes: [SceneNodeId; 2],
+    color: Color,
+    root_too: bool,
+    heavy: usize,
+) {
     use flui_layer::{BackdropFilterLayer, Layer};
     use flui_painting::paint::{BlendMode, ImageFilter};
 
@@ -608,6 +613,10 @@ fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Colo
         Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
         &Paint::fill(Color::GREEN),
     );
+    for index in 0..heavy {
+        let (x, y) = ((index % 64) as f64 * 2.0, ((index / 64) % 64) as f64 * 2.0);
+        canvas.draw_rect(Rect::from_xywh(x, y, 2.0, 2.0), &Paint::fill(Color::GREEN));
+    }
     for x in (0..SIDE).step_by(8) {
         canvas.draw_rect(
             Rect::from_xywh(f64::from(x), 0.0, 4.0, f64::from(SIDE)),
@@ -639,13 +648,13 @@ fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Colo
     });
 }
 
-/// A version's region planned as its bounding box has the box closed over
-/// the version's backdrop readers: a filter in the gap between the damaged
-/// boxes, which neither box's damage meets, is redrawn whole, and the frame
-/// draws as a full one. A version has no straddle self-heal, so a filter
-/// left cut by the box's scissor would stay wrong in the frames after it.
+/// A version's region of two distant boxes is redrawn box by box, and a
+/// filter in the gap between them, which neither box's damage meets and
+/// whose backdrop did not change, is left as the last frame drew it: the
+/// frame draws as a full one, and its two passes redraw only the boxes. The
+/// region's bounding box would redraw the gap, cutting the filter there.
 #[test]
-fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
+fn a_backdrop_effect_in_the_gap_between_a_regions_rects_is_left_alone() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -654,7 +663,7 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     let boxes: [SceneNodeId; 2] = {
         let mut writer = owner.writer();
         let boxes = std::array::from_fn(|_| writer.mint_node());
-        gap_reader(&mut writer, boxes, Color::RED, true);
+        gap_reader(&mut writer, boxes, Color::RED, true, 0);
         boxes
     };
     owner.apply(SURFACE).expect("the scene applies");
@@ -669,8 +678,9 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     partial
         .render_scene(&Scene::of_version(owner.current().clone()))
         .expect("the warm-up renders");
+    let retained = partial.read_retained_rgba().expect("readback");
 
-    gap_reader(&mut owner.writer(), boxes, Color::WHITE, false);
+    gap_reader(&mut owner.writer(), boxes, Color::WHITE, false, 0);
     owner.apply(SURFACE).expect("a recolour applies");
     let damage = owner.patch_damage();
     let DamageRegion::Region(region) = damage else {
@@ -681,14 +691,26 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     partial
         .render_scene(&Scene::of_version(owner.current().clone()))
         .expect("the region frame renders");
-    assert!(
-        matches!(
-            partial.last_plan(),
-            Some(FramePlan::RetainedPartial(RegionPlan::Bounds(_)))
-        ),
-        "{:?}",
-        partial.last_plan()
+    assert_eq!(
+        partial.last_plan(),
+        Some(FramePlan::RetainedPartial(region)),
+        "the closure adds nothing, and the region is redrawn rect by rect"
     );
+    assert_eq!(partial.counters().region_passes, 2, "one pass per box");
+    // The filter's gap, and every other pixel outside the boxes' rects,
+    // holds the bytes the frame started from.
+    let now = partial.read_retained_rgba().expect("readback");
+    let inside = |x: u32, y: u32| {
+        region
+            .rects()
+            .iter()
+            .any(|r| (r.left()..r.right()).contains(&x) && (r.top()..r.bottom()).contains(&y))
+    };
+    let rewritten = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(&retained, x, y) != px(&now, x, y))
+        .count();
+    assert_eq!(rewritten, 0, "pixels outside the rects were rewritten");
     let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     apply(
         &mut full,
@@ -867,8 +889,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    // (case, where the first member is, one pass per rect)
-    for (case, placed, by_rect) in [
+    // (case, where the first member is, a second rect far from the group)
+    for (case, placed, far_rect) in [
         ("first member in the root", FirstMember::InRoot, false),
         ("first member in its own node", FirstMember::Alone, false),
         ("one pass per rect", FirstMember::Alone, true),
@@ -912,9 +934,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         );
         owner.apply(SURFACE).expect("a recolour applies");
         apply(&mut partial, owner.patch_damage());
-        if by_rect {
+        if far_rect {
             // A second rect far from the group.
-            partial.plan_rect_by_rect();
             partial.mark_dirty(Rect::from_xywh(50.0, 100.0, 10.0, 10.0));
         }
         partial
@@ -925,7 +946,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             "{case}: the frame is partial: {:?}",
             partial.last_plan()
         );
-        if by_rect {
+        if far_rect {
             // The group's members share one rect, the far one has its own.
             assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
         }
@@ -1535,6 +1556,178 @@ fn a_frame_counts_the_chunks_it_records() {
         capture.counters(),
         RasterCounters::default(),
         "a skipped frame keeps no count of the frame before it"
+    );
+}
+
+/// A caret boundary over a list boundary of `rows` row boundaries, as
+/// `flui-widgets`' perf scenario `caret_blink_in_10k_list` paints it: the
+/// caret, a 2×16 bar at (4, 4), and below it the list at `y = 24`, whose
+/// rows are 2 px strips that run far past the surface.
+struct CaretOverList {
+    owner: SceneOwner,
+    caret: SceneNodeId,
+    shown: bool,
+}
+
+impl CaretOverList {
+    fn new(rows: usize) -> Self {
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let caret = writer.mint_node();
+        let list = writer.mint_node();
+        let mut list_content = BoundaryContent::builder();
+        for row in 0..rows {
+            let node = writer.mint_node();
+            list_content.slot(node);
+            let version = writer.next_content_version().expect("a content version");
+            let mut canvas = Canvas::new();
+            let shade = u8::try_from(row % 200).expect("a shade below 200");
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, f64::from(SIDE), 2.0),
+                &Paint::fill(Color::rgb(shade, 80, 120)),
+            );
+            let mut content = BoundaryContent::builder();
+            content.chunk(Arc::new(Chunk::new(
+                RenderId::new(row + 3),
+                0,
+                version,
+                canvas.finish(),
+            )));
+            writer.push(SceneOp::Publish {
+                node,
+                content: Arc::new(content.finish()),
+            });
+            writer.push(SceneOp::Place {
+                node,
+                placement: Placement::try_new(Offset::new(0.0, 2.0 * row as f64))
+                    .expect("a finite offset"),
+            });
+        }
+        writer.push(SceneOp::Publish {
+            node: list,
+            content: Arc::new(list_content.finish()),
+        });
+        writer.push(SceneOp::Place {
+            node: list,
+            placement: Placement::try_new(Offset::new(0.0, 24.0)).expect("a finite offset"),
+        });
+        Self::publish_caret(&mut writer, caret, true);
+        writer.push(SceneOp::Place {
+            node: caret,
+            placement: Placement::try_new(Offset::new(4.0, 4.0)).expect("a finite offset"),
+        });
+        let mut content = BoundaryContent::builder();
+        content.slot(caret);
+        content.slot(list);
+        writer.push(SceneOp::Publish {
+            node: root,
+            content: Arc::new(content.finish()),
+        });
+        owner.apply(SURFACE).expect("the list applies");
+        Self {
+            owner,
+            caret,
+            shown: true,
+        }
+    }
+
+    fn publish_caret(writer: &mut SceneWriter<'_>, caret: SceneNodeId, shown: bool) {
+        let version = writer.next_content_version().expect("a content version");
+        let mut canvas = Canvas::new();
+        let color = if shown { Color::BLACK } else { Color::WHITE };
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 2.0, 16.0), &Paint::fill(color));
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::new(Chunk::new(
+            RenderId::new(1),
+            0,
+            version,
+            canvas.finish(),
+        )));
+        writer.push(SceneOp::Publish {
+            node: caret,
+            content: Arc::new(content.finish()),
+        });
+    }
+
+    /// Toggles the caret and answers the damage of the patch.
+    fn blink(&mut self) -> DamageRegion {
+        self.shown = !self.shown;
+        let mut writer = self.owner.writer();
+        Self::publish_caret(&mut writer, self.caret, self.shown);
+        self.owner.apply(SURFACE).expect("a blink applies");
+        self.owner.patch_damage()
+    }
+
+    fn version(&self) -> SceneVersion {
+        self.owner.current().clone()
+    }
+}
+
+/// The counters of `blinks` caret blinks over a list of `rows` row
+/// boundaries, summed, after the first frame and a warm-up frame.
+fn caret_blink_counters(
+    renderer: &crate::headless::HeadlessRenderer,
+    rows: usize,
+    blinks: usize,
+) -> crate::frame_protocol::RasterCounters {
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut list = CaretOverList::new(rows);
+    apply(
+        &mut capture,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    capture
+        .render_scene(&Scene::of_version(list.version()))
+        .expect("the first frame renders");
+    capture.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    capture
+        .render_scene(&Scene::of_version(list.version()))
+        .expect("the warm-up renders");
+    let mut total = crate::frame_protocol::RasterCounters::default();
+    for _ in 0..blinks {
+        let damage = list.blink();
+        apply(&mut capture, damage);
+        capture
+            .render_scene(&Scene::of_version(list.version()))
+            .expect("a blink renders");
+        assert!(
+            matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "{rows} rows: a blink redraws the caret's region, {:?}",
+            capture.last_plan()
+        );
+        let frame = capture.counters();
+        total.nodes_entered += frame.nodes_entered;
+        total.cull_tests += frame.cull_tests;
+        total.chunks_recorded += frame.chunks_recorded;
+        total.region_passes += frame.region_passes;
+        total.recording_cache_hits += frame.recording_cache_hits;
+    }
+    total
+}
+
+/// The engine's half of the gate `caret_blink_in_10k_list` (ADR-0304,
+/// Confirmation): a caret blink over a list of 1 000 row boundaries and over
+/// one of 10 000 enters, asks and records as much, since the walk culls the
+/// list's boundary by its footprint and never reaches a row. Each blink
+/// records the caret's one chunk, in one pass.
+#[test]
+fn a_caret_blink_records_as_many_chunks_at_any_list_size() {
+    const BLINKS: usize = 4;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let small = caret_blink_counters(&renderer, 1_000, BLINKS);
+    let large = caret_blink_counters(&renderer, 10_000, BLINKS);
+    assert_eq!(
+        small, large,
+        "a blink costs the same over 1 000 rows as over 10 000"
+    );
+    let blinks = BLINKS as u64;
+    assert_eq!(
+        (large.chunks_recorded, large.region_passes),
+        (blinks, blinks),
+        "one chunk, the caret's, in one pass per blink: {large:?}"
     );
 }
 
@@ -2191,7 +2384,7 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
     // (row, first chunk in frame one, in frame two, the kept chunk, its
     // rounded clip's radius in each frame)
     type Radii = Option<(f64, f64)>;
-    let rows: [(&str, Painting, Painting, Painting, Radii); 9] = [
+    let rows: [(&str, Painting, Painting, Painting, Radii); 10] = [
         (
             "a rect after a path, then after a rect",
             path,
@@ -2291,6 +2484,17 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
             },
             Some((4.0, 12.0)),
         ),
+        (
+            "a path, text the clip's scissor hides whole and a path",
+            rect,
+            other_rect,
+            |canvas| {
+                paint_triangle(canvas, Offset::new(40.0, 40.0));
+                paint_text(canvas, "cd", Offset::new(60.0, 126.0));
+                paint_triangle(canvas, Offset::new(70.0, 40.0));
+            },
+            Some((4.0, 4.0)),
+        ),
     ];
     for (row, before, after, kept, radius) in rows {
         let mut owner = SceneOwner::new();
@@ -2321,9 +2525,10 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
         draw_until_admitted(&mut cached, &one);
         let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
         let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
-        assert!(
-            cached_one.ir == recorded_one.ir,
-            "{row}: precondition: both captures record the first frame alike"
+        assert_eq!(
+            pixels_differing(&cached_one.pixels, &recorded_one.pixels),
+            0,
+            "{row}: precondition: both captures draw the first frame alike"
         );
         let cached_two = full_frame(&mut cached, &two, FullReason::FirstFrame);
         let recorded_two = full_frame(&mut recorded, &two, FullReason::DamageOff);
@@ -2362,11 +2567,14 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
 /// builds (ADR-0304 §9). Each row draws one boundary of one chunk at one
 /// offset and then at another, under a hard-edged clip or a device-pixel
 /// ratio when it has one: one capture reads the cache, the other draws with
-/// damage off and so records the chunk each frame. A scissor that cuts the
-/// chunk is in its key relative to the chunk's pixel origin, so a chunk cut by
-/// a clip that moves with it replays and one moved under a fixed one records
-/// again, as does a chunk moved by a fraction of a pixel. Text placed across
-/// 0, at a tie between subpixel bins and far from 0 replays as it records.
+/// damage off and so records the chunk each frame. No scissor is in the key:
+/// the splice applies the entry's and culls the glyphs outside it (ADR-0306
+/// §2), so a chunk cut by a clip that moves with it and one moved under a
+/// fixed clip both replay, and a chunk moved by a fraction of a pixel records
+/// again. Text placed across 0, at a tie between subpixel bins and far from
+/// 0 replays as it records. The frame that captures a chunk records every
+/// glyph, the ones its scissor would cull too, so its IR can differ from the
+/// frame drawn with damage off; its pixels do not.
 #[test]
 fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
     use flui_foundation::geometry::{Matrix4, Point, RRect, Radius};
@@ -2651,7 +2859,6 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         },
         MoveRow {
             cut: Cut::Fixed(Rect::from_xywh(0.0, 0.0, 40.0, 128.0)),
-            hits: false,
             ..row("text a fixed clip cuts", text, (24.0, 20.0), (27.0, 17.0))
         },
         MoveRow {
@@ -2754,9 +2961,10 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         draw_until_admitted(&mut cached, &one);
         let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
         let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
-        assert!(
-            cached_one.ir == recorded_one.ir,
-            "{row}: precondition: both captures record the first frame alike"
+        assert_eq!(
+            pixels_differing(&cached_one.pixels, &recorded_one.pixels),
+            0,
+            "{row}: precondition: both captures draw the first frame alike"
         );
         let cached_two = full_frame(&mut cached, &two, FullReason::FirstFrame);
         let recorded_two = full_frame(&mut recorded, &two, FullReason::DamageOff);
@@ -3024,4 +3232,380 @@ fn a_renderer_frame_of_another_owners_version_drops_the_first_owners_recordings(
         }
         assert_eq!(capture.recording_cache_work().0, 4, "{row}'s boxes alone");
     }
+}
+
+/// The height of a row of [`ScrolledList`], in device pixels.
+const ROW_HEIGHT: f64 = 20.0;
+/// The width of [`ScrolledList`]'s target.
+const LIST_WIDTH: u32 = 96;
+/// Where the clip of [`ScrolledList`] begins: inside a row, so its edges
+/// cut the rows they cross.
+const CLIP_TOP: f64 = 7.0;
+
+/// A list of `rows` boundaries `ROW_HEIGHT` apart, each a box and a label in
+/// one chunk, in a list boundary scrolled under a clip of `visible` rows
+/// fixed in the root, whose top and bottom edges cut a row each and the
+/// glyphs of its label.
+struct ScrolledList {
+    owner: SceneOwner,
+    list: SceneNodeId,
+    surface: SurfaceKey,
+}
+
+impl ScrolledList {
+    fn new(visible: usize, rows: usize) -> Self {
+        use flui_layer::{ClipRectLayer, Layer};
+        use flui_painting::paint::Clip;
+
+        let height = visible as f64 * ROW_HEIGHT;
+        let surface = SurfaceKey {
+            size: (LIST_WIDTH, (height + 2.0 * CLIP_TOP) as u32),
+            generation: flui_foundation::SurfaceGeneration::ZERO,
+        };
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let list = writer.mint_node();
+        let mut items = BoundaryContent::builder();
+        for index in 0..rows {
+            let node = writer.mint_node();
+            items.slot(node);
+            let mut canvas = Canvas::new();
+            let shade = [Color::rgb(255, 230, 200), Color::rgb(200, 230, 255)][index % 2];
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, f64::from(LIST_WIDTH) - 8.0, ROW_HEIGHT - 2.0),
+                &Paint::fill(shade),
+            );
+            paint_text(&mut canvas, &format!("Row {index}"), Offset::new(16.0, 2.0));
+            let mut content = BoundaryContent::builder();
+            content.chunk(Arc::new(Chunk::new(
+                RenderId::new(index + 10),
+                0,
+                writer.next_content_version().expect("a content version"),
+                canvas.finish(),
+            )));
+            writer.push(SceneOp::Publish {
+                node,
+                content: Arc::new(content.finish()),
+            });
+            writer.push(SceneOp::Place {
+                node,
+                placement: Placement::try_new(Offset::new(0.0, index as f64 * ROW_HEIGHT))
+                    .expect("a finite offset"),
+            });
+        }
+        writer.push(SceneOp::Publish {
+            node: list,
+            content: Arc::new(items.finish()),
+        });
+        let mut top = BoundaryContent::builder();
+        top.push_effect(
+            Layer::from(ClipRectLayer::new(
+                Rect::from_xywh(0.0, CLIP_TOP, f64::from(LIST_WIDTH), height),
+                Clip::HardEdge,
+            )),
+            RenderId::new(1),
+            0,
+        );
+        top.slot(list);
+        top.pop_effect();
+        writer.push(SceneOp::Publish {
+            node: root,
+            content: Arc::new(top.finish()),
+        });
+        writer.push(SceneOp::Place {
+            node: list,
+            placement: Placement::try_new(Offset::ZERO).expect("a finite offset"),
+        });
+        owner.apply(surface).expect("the list applies");
+        Self {
+            owner,
+            list,
+            surface,
+        }
+    }
+
+    /// Scrolls the list `offset` device pixels down its rows and answers the
+    /// damage of the patch.
+    fn scroll_to(&mut self, offset: f64) -> DamageRegion {
+        let mut writer = self.owner.writer();
+        writer.push(SceneOp::Place {
+            node: self.list,
+            placement: Placement::try_new(Offset::new(0.0, -offset)).expect("a finite offset"),
+        });
+        self.owner.apply(self.surface).expect("the scroll applies");
+        self.owner.patch_damage()
+    }
+
+    fn version(&self) -> SceneVersion {
+        self.owner.current().clone()
+    }
+}
+
+/// A list scrolled by whole pixels under a fixed clip replays every row
+/// from the recording cache, the rows the clip's edges cut included: the
+/// scissor is applied at the splice, not keyed (ADR-0306 §2). Each frame
+/// draws, pixel for pixel, what a capture that records every chunk draws,
+/// the glyphs of a row captured while the clip cut it or hid it whole and
+/// scrolled into view since included.
+///
+/// Red-check: with the scissor in the key, the rows each frame brings under
+/// an edge record again; with the glyphs a captured chunk's scissor hides
+/// culled from its recording, a row scrolled into view lacks them.
+#[test]
+fn scroll_one_row_under_fixed_clip() {
+    const VISIBLE: usize = 10;
+    const FRAMES: usize = 40;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for (row, step) in [("one row a frame", ROW_HEIGHT), ("one pixel a frame", 1.0)] {
+        let rows = VISIBLE + 4 + (FRAMES as f64 * step / ROW_HEIGHT).ceil() as usize;
+        let mut list = ScrolledList::new(VISIBLE, rows);
+        let size = list.surface.size;
+        let mut cached = renderer.retained_capture(size).expect("capture");
+        let mut recorded = renderer.retained_capture(size).expect("capture");
+        recorded.keep_recorded_ir();
+        let first = list.version();
+        for capture in [&mut cached, &mut recorded] {
+            apply(
+                capture,
+                DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+            );
+            capture
+                .render_scene(&Scene::of_version(first.clone()))
+                .expect("the first frame renders");
+        }
+        for frame in 1..=FRAMES {
+            let damage = list.scroll_to(frame as f64 * step);
+            let version = list.version();
+            apply(&mut cached, damage);
+            cached
+                .render_scene(&Scene::of_version(version.clone()))
+                .expect("a scrolled frame renders");
+            full_frame(&mut recorded, &version, flui_layer::FullReason::DamageOff);
+            // The full frame after the first draws, and so captures, every
+            // row: the ones below the clip with their labels wholly outside
+            // it, which a capture that culls by its scissor would keep none
+            // of. From then on every row the clip shows replays and none is
+            // recorded again.
+            let counters = cached.counters();
+            if frame + 1 == usize::from(DRAWS_TO_ADMIT) {
+                assert_eq!(
+                    counters.chunks_recorded, rows as u64,
+                    "{row}: precondition: the capture frame draws the rows the clip hides"
+                );
+            }
+            if frame >= usize::from(DRAWS_TO_ADMIT) {
+                assert!(
+                    counters.recording_cache_hits > VISIBLE as u64,
+                    "{row}, frame {frame}: precondition: every row the clip shows is drawn \
+                     ({counters:?})"
+                );
+                assert_eq!(
+                    counters.chunks_recorded, 0,
+                    "{row}, frame {frame}: every row replays, the cut ones included"
+                );
+            }
+            let pixels = cached.read_rgba().expect("readback");
+            assert_eq!(
+                pixels_differing(&pixels, &recorded.read_rgba().expect("readback")),
+                0,
+                "{row}, frame {frame}: the scrolled frame draws as one that records every row"
+            );
+        }
+    }
+}
+
+/// One chunk drawn under two clips, each cutting its text on another side,
+/// is kept once and spliced under each: its recording holds every glyph,
+/// and each splice culls the ones outside its own scissor, which is the IR
+/// and the pixels a frame that records the chunk twice builds (ADR-0306 §2).
+///
+/// Red-check: with the scissor in the key the chunk is kept twice; with the
+/// cull left at recording, the glyphs the first clip hides are missing
+/// under the second; with no cull at the splice the IR keeps them.
+#[test]
+fn a_chunk_under_two_clips_draws_each_from_one_recording() {
+    use flui_layer::{ClipRectLayer, FullReason, Layer};
+    use flui_painting::paint::Clip;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let chunk = chunk_of(&mut writer, 2, |canvas| {
+        paint_text(canvas, "Clipped", Offset::new(2.0, 2.0));
+    });
+    let nodes = [writer.mint_node(), writer.mint_node()];
+    let mut top = BoundaryContent::builder();
+    // The text spans about 10 to 60 pixels across: the first clip keeps its
+    // left part, the second its right part.
+    for (index, (&node, clip)) in nodes
+        .iter()
+        .zip([
+            Rect::from_xywh(0.0, 0.0, 30.0, 50.0),
+            Rect::from_xywh(30.0, 50.0, 98.0, 78.0),
+        ])
+        .enumerate()
+    {
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::clone(&chunk));
+        writer.push(SceneOp::Publish {
+            node,
+            content: Arc::new(content.finish()),
+        });
+        writer.push(SceneOp::Place {
+            node,
+            placement: Placement::try_new(Offset::new(8.0, 8.0 + 52.0 * index as f64))
+                .expect("a finite offset"),
+        });
+        top.push_effect(
+            Layer::from(ClipRectLayer::new(clip, Clip::HardEdge)),
+            RenderId::new(10 + index),
+            0,
+        );
+        top.slot(node);
+        top.pop_effect();
+    }
+    writer.push(SceneOp::Publish {
+        node: root,
+        content: Arc::new(top.finish()),
+    });
+    owner.apply(SURFACE).expect("the root applies");
+    let version = owner.current().clone();
+
+    let mut cached = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    cached.keep_recorded_ir();
+    let mut recorded = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    recorded.keep_recorded_ir();
+    draw_until_admitted(&mut cached, &version);
+    full_frame(&mut cached, &version, FullReason::FirstFrame);
+    assert_eq!(
+        cached.recording_cache_work().0,
+        1,
+        "one recording serves both clips"
+    );
+    let spliced = full_frame(&mut cached, &version, FullReason::FirstFrame);
+    let fresh = full_frame(&mut recorded, &version, FullReason::DamageOff);
+    assert_eq!(
+        (
+            spliced.counters.chunks_recorded,
+            spliced.counters.recording_cache_hits
+        ),
+        (0, 2),
+        "the chunk is spliced under each clip"
+    );
+    assert!(
+        spliced.ir == fresh.ir,
+        "each splice culls as recording under its clip does ({} and {} bytes)",
+        spliced.ir.len(),
+        fresh.ir.len()
+    );
+    assert_eq!(pixels_differing(&spliced.pixels, &fresh.pixels), 0);
+    let inked = |pixels: &[u8], rows: std::ops::Range<u32>, columns: std::ops::Range<u32>| {
+        rows.flat_map(|y| columns.clone().map(move |x| (x, y)))
+            .any(|(x, y)| px(pixels, x, y) != WHITE)
+    };
+    assert!(
+        inked(&fresh.pixels, 8..30, 10..30) && inked(&fresh.pixels, 60..82, 30..70),
+        "precondition: each clip shows a part of the text"
+    );
+}
+
+/// A version whose root chunk is heavy redraws a region of two distant boxes
+/// under their bounding box, which replays the chunk once instead of once per
+/// box (ADR-0304 §9): the closure then reaches the filter in the gap, and the
+/// frame still draws as a full one, and outside its one pass the bytes are
+/// the last frame's.
+#[test]
+fn a_heavy_chunk_redraws_a_region_under_its_bounding_box() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut owner = SceneOwner::new();
+    let boxes: [SceneNodeId; 2] = {
+        let mut writer = owner.writer();
+        let boxes = std::array::from_fn(|_| writer.mint_node());
+        gap_reader(&mut writer, boxes, Color::RED, true, 20_000);
+        boxes
+    };
+    owner.apply(SURFACE).expect("the scene applies");
+    apply(
+        &mut partial,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    partial
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the first frame renders");
+    partial.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    partial
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the warm-up renders");
+    let before = partial.read_rgba().expect("readback");
+
+    gap_reader(&mut owner.writer(), boxes, Color::WHITE, false, 0);
+    owner.apply(SURFACE).expect("a recolour applies");
+    let damage = owner.patch_damage();
+    let DamageRegion::Region(region) = damage else {
+        panic!("a recolour damages a region: {damage:?}");
+    };
+    assert_eq!(region.rects().len(), 2, "one rect per box: {region:?}");
+    apply(&mut partial, damage);
+    partial
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the region frame renders");
+    let Some(FramePlan::RetainedPartial(planned)) = partial.last_plan() else {
+        panic!("a region frame: {:?}", partial.last_plan());
+    };
+    let [planned] = planned.rects() else {
+        panic!("one pass under the box: {planned:?}");
+    };
+    let planned = *planned;
+    let bounds = region.bounds();
+    assert!(
+        planned.left() <= bounds.left() && planned.right() >= bounds.right(),
+        "the pass covers the gap between the boxes: {planned:?}"
+    );
+    assert!(
+        planned.bottom() > bounds.bottom(),
+        "the closure over the box reaches the filter below it: {planned:?}"
+    );
+    assert_eq!(partial.counters().region_passes, 1, "one pass");
+    let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    apply(
+        &mut full,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    full.render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the full frame renders");
+    let (pixels, oracle) = (
+        partial.read_rgba().expect("readback"),
+        full.read_rgba().expect("readback"),
+    );
+    let stale = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            px(&pixels, x, y)
+                .iter()
+                .zip(px(&oracle, x, y))
+                .any(|(&a, b)| a.abs_diff(b) > 2)
+        })
+        .count();
+    assert_eq!(
+        stale, 0,
+        "pixels the region frame drew unlike the full frame"
+    );
+    // Outside the one pass the frame redrew, the bytes are the warm-up's.
+    let inside = |x: u32, y: u32| {
+        (planned.left()..planned.right()).contains(&x)
+            && (planned.top()..planned.bottom()).contains(&y)
+    };
+    let written_outside = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(&before, x, y) != px(&pixels, x, y))
+        .count();
+    assert_eq!(written_outside, 0, "pixels outside the pass changed");
 }

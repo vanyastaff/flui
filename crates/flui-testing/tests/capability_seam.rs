@@ -985,20 +985,35 @@ pub(crate) fn a_runtime_without_a_primary_selection_answers_not_registered() {
     assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
     assert_eq!(refusal.capability(), Some(PrimarySelectionCapability::NAME));
 
-    for (platform, provided) in [
-        (Linux, true),
-        (Windows, false),
-        (MacOS, false),
-        (Android, false),
-        (iOS, false),
-        (Unknown, false),
+    // A browser's page has no primary selection, whatever platform's
+    // conventions it follows: the built-ins key on the window system.
+    for (platform, in_browser, provided) in [
+        (Linux, false, true),
+        (Linux, true, false),
+        (Windows, false, false),
+        (MacOS, false, false),
+        (Android, false, false),
+        (iOS, false, false),
+        (Unknown, false, false),
+        (Unknown, true, false),
     ] {
-        let mut host = HeadlessHost::new(window().with_platform(platform));
+        let mut window = window().with_platform(platform);
+        if in_browser {
+            window = window.in_browser();
+        }
+        let mut host = HeadlessHost::new(window);
         let acquired = acquire_capability::<PrimarySelectionCapability>(&mut host);
         match acquired {
-            Ok(_) => assert!(provided, "{platform:?} has no primary selection"),
+            Ok(_) => assert!(
+                provided,
+                "{platform:?} (in_browser={in_browser}) has no primary selection, yet provides one"
+            ),
             Err(refusal) => {
-                assert!(!provided, "{platform:?} provides a primary selection");
+                assert!(
+                    !provided,
+                    "{platform:?} (in_browser={in_browser}) provides a primary selection, yet \
+                     refuses one"
+                );
                 assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
             }
         }
@@ -1156,4 +1171,57 @@ pub(crate) fn a_provider_sees_the_activity_the_host_offers() {
     assert!(seen(&registry), "the Activity the host offers");
     assert!(host_bridge.install_activity(None).is_some());
     assert!(!seen(&registry), "none once the host takes it back");
+}
+
+/// A headless window's application reads the assets its test names, and
+/// none without them: the checkout is never a bundle (ADR-0384 §5).
+///
+/// Red-check: register the host's bundle over `DirectoryAssets::new(".")`,
+/// or drop `with_assets`'s source on the way to the registry.
+pub(crate) fn a_headless_window_serves_only_the_assets_its_test_names() {
+    use flui_platform::assets::{AssetBundleCapability, AssetKey, AssetLoadError};
+    use flui_platform::testing::MemoryAssets;
+
+    fn read(
+        bundle: &flui_platform::assets::AssetBundle,
+        key: &AssetKey,
+    ) -> Result<Vec<u8>, AssetLoadError> {
+        let mut load = bundle.load(key, 1024);
+        let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
+        match load.as_mut().poll(&mut ctx) {
+            std::task::Poll::Ready(answer) => answer,
+            std::task::Poll::Pending => panic!("a memory bundle answers at once"),
+        }
+    }
+
+    let logo = AssetKey::try_new("assets/logo.png").expect("a valid key");
+    // `Cargo.toml` is in the directory the test runs in: an empty bundle
+    // still does not read it.
+    let manifest = AssetKey::try_new("Cargo.toml").expect("a valid key");
+
+    let mut host = HeadlessHost::new(
+        window().with_assets(MemoryAssets::new().asset(logo.clone(), b"logo".as_slice())),
+    );
+    let bundle = acquire_capability::<AssetBundleCapability>(&mut host)
+        .expect("a headless host provides the asset bundle");
+    assert_eq!(
+        read(&bundle, &logo).expect("the named asset reads"),
+        b"logo"
+    );
+    assert!(matches!(
+        read(&bundle, &manifest),
+        Err(AssetLoadError::NotFound { .. })
+    ));
+
+    let mut bare = HeadlessHost::new(window());
+    let bundle = acquire_capability::<AssetBundleCapability>(&mut bare)
+        .expect("a headless host provides the asset bundle");
+    assert!(matches!(
+        read(&bundle, &logo),
+        Err(AssetLoadError::NotFound { .. })
+    ));
+    assert!(matches!(
+        read(&bundle, &manifest),
+        Err(AssetLoadError::NotFound { .. })
+    ));
 }

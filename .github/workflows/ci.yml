@@ -66,16 +66,15 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # checks — fast source gate: `cargo xtask checks --strict` (fmt, typos,
-  # Taplo, markdown links, toolchain, unmounted test files, ADR numbers,
-  # changelog
-  # fragments, the generated files against their sources),
-  # xtask's own tests (which include each self-test), and the workflow
-  # linters. It builds only
-  # xtask, never the workspace, so a malformed PR fails before any workspace
-  # build starts. It has no `if:`: a docs-only PR, which skips every compile
-  # job, still runs it, and the link check is what such a PR most needs.
-  # Ubuntu only; clippy lives in its own parallel job.
+  # checks — fast source gate: rustfmt, typos, taplo and lychee called
+  # directly, then `cargo xtask checks` (the toolchain pin, unmounted test
+  # files, ADR numbers, changelog fragments, the generated files against
+  # their sources), xtask's own tests (which include each self-test), and
+  # the workflow linters. It builds only xtask, never the workspace, so a
+  # malformed PR fails before any workspace build starts. It has no `if:`: a
+  # docs-only PR, which skips every compile job, still runs it, and the link
+  # check is what such a PR most needs. Ubuntu only; clippy lives in its own
+  # parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
     name: checks
@@ -89,8 +88,8 @@ jobs:
       # The same for lychee, plus the SHA-256 of that version's
       # x86_64-unknown-linux-gnu tarball. 0.24.2 is also lychee-action
       # v2.9.0's default, which docs.yml runs over the rendered book: bump the
-      # two together. `cargo test -p xtask` pins this line to the version
-      # `cargo xtask doctor` tells a contributor to install.
+      # two together. `cargo test -p xtask` holds `cargo xtask doctor`'s install
+      # hint to this line.
       LYCHEE_VERSION: 0.24.2
       LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
     steps:
@@ -140,7 +139,7 @@ jobs:
           install -m 0755 actionlint ~/.local/bin/actionlint
           rm -f actionlint actionlint.tar.gz
 
-      # lychee (the link check in `cargo xtask checks`) comes the same way:
+      # lychee (the link check below) comes the same way:
       # install-action has no manifest for it, and its cargo-binstall fallback
       # would fetch a binary that no checksum covers. The release tarball is
       # checked against LYCHEE_SHA256 instead, and cached by version like
@@ -195,24 +194,78 @@ jobs:
           path: ~/.local/bin/lychee
           key: ${{ steps.lychee-cache.outputs.cache-primary-key }}
 
+      # Every check below runs even when one before it failed (`!cancelled()`),
+      # so one run reports every problem.
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: typos (spelling)
+        if: ${{ !cancelled() }}
+        run: typos
+
+      # taplo logs every file it formats at INFO; only problems matter here.
+      - name: taplo fmt --check (TOML formatting)
+        if: ${{ !cancelled() }}
+        env:
+          RUST_LOG: warn
+        run: taplo fmt --check
+
+      # Every link from the repository's markdown into the checkout resolves:
+      # lychee, offline, over every markdown file git knows outside the
+      # archival root docs/plans/ (dated records whose rotted links are
+      # history). A relative link names a file or directory that exists, and
+      # an `#anchor` into a markdown file one of its headings (`anchor-only`:
+      # GitHub's `#L10` line anchors into source are not checked). External
+      # URLs are not fetched, so the check cannot flake on the network; links
+      # to this repository's own `main` on GitHub are remapped onto the
+      # checkout, so a doc cited by URL is held to the same rule. A
+      # root-relative link (`/docs/x.md`) resolves against the root, as GitHub
+      # renders it. Linux matches names by case, so a link whose case is wrong
+      # fails here though it passes on Windows. A link that climbs above the
+      # repository root is not caught: from the runner's checkout,
+      # `../flui/<file>` lands in the checkout again.
+      - name: lychee (markdown links into the checkout, offline)
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          # a file still in the index but deleted from the working tree has
+          # nothing to read; grep finding no line is the empty list below
+          files=$(git -c core.quotepath=off ls-files --cached --others --exclude-standard -- '*.md' \
+            | { grep -v '^docs/plans/' || [ "$?" -eq 1 ]; } \
+            | while IFS= read -r file; do if [ -f "$file" ]; then printf '%s\n' "$file"; fi; done)
+          # lychee given no file exits 0, which looks like every link resolving
+          [ -n "$files" ] || { echo "::error::no markdown file listed"; exit 1; }
+          printf '%s\n' "$files" \
+            | lychee --offline --no-progress --include-fragments=anchor-only \
+                --root-dir "$PWD" \
+                --remap "^https://github\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)\$ file://$PWD/\$1" \
+                --files-from -
+
       - name: Rust cache (xtask)
+        if: ${{ !cancelled() }}
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
           shared-key: xtask
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # `--strict`: a missing typos, taplo or lychee is a failure here, not a skip.
+      # The repository's own checks, which no standard tool makes: the
+      # toolchain pin, test files a crate never mounts, ADR numbers, the
+      # changelog fragments, and the generated files against their sources.
       - name: cargo xtask checks
-        run: cargo xtask checks --strict
+        if: ${{ !cancelled() }}
+        run: cargo xtask checks
 
       - name: cargo test -p xtask
+        if: ${{ !cancelled() }}
         run: cargo test -p xtask --locked
 
       - name: actionlint (workflow semantics)
+        if: ${{ !cancelled() }}
         run: actionlint
 
       - name: zizmor (workflow security audit)
+        if: ${{ !cancelled() }}
         run: zizmor .
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -341,8 +394,12 @@ jobs:
           status=0
           for features in "" x11 wayland testing; do
             for targets in "" --all-targets; do
+              label="flui-native features=[$features] $targets"
+              echo "::group::cargo clippy $label"
               cargo clippy -p flui-native --locked --no-default-features \
-                ${features:+--features "$features"} ${targets:+"$targets"} -- -D warnings || status=1
+                ${features:+--features "$features"} ${targets:+"$targets"} -- -D warnings \
+                || { status=1; echo "::error::cargo clippy $label failed"; }
+              echo "::endgroup::"
             done
           done
           exit "$status"
@@ -790,29 +847,21 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # flui-assets and flui-widgets both default to `default = []`, so the
-      # workspace-default run above never compiles their `images`/`network`
-      # decode-and-cache paths or the Image widget's own file-decode test —
-      # exactly the gap that once let the flui-assets↔Image
-      # verification tests go CI-dead. Explicit feature-gated run, same
-      # precedent as `cargo clippy -p flui-engine --features
-      # testing` above.
+      # flui-widgets defaults to `default = []`, so the workspace-default run
+      # above never compiles the Image widget's decode paths or its own
+      # file-decode test, exactly the gap that once let the Image
+      # verification tests go CI-dead. `asset-images` adds the flui-assets
+      # bridge (`AssetImage`/`NetworkImage`, `image::decode_cache`), whose
+      # tests compile only under it. flui-assets has no features of its own:
+      # its suite runs in `test`.
       #
-      # `asset-images` extends the same gap to the
-      # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
-      # `image::decode_cache`): those tests only compile under their own
-      # feature, so they need their own explicit run too, or they are as
-      # CI-dead as the sync path was before this block existed.
-      #
-      # One run with every one of those features on: they are additive, so
-      # each test the separate runs selected still compiles, and one feature
-      # resolution builds the shared crates once instead of once per run.
-      - name: cargo nextest run (flui-assets full, flui-widgets images)
+      # One run with both features on: they are additive, so each test a
+      # separate run would select still compiles, and one feature resolution
+      # builds the shared crates once.
+      - name: cargo nextest run (flui-widgets images and asset-images)
         run: >
-          cargo nextest run
-          -p flui-assets -p flui-widgets
-          --locked --no-fail-fast
-          --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images
+          cargo nextest run -p flui-widgets --locked --no-fail-fast
+          --features images,asset-images
 
       # The one configuration the run above does not cover: `images` without
       # `asset-images`, which a consumer decoding only `Image::memory` and
@@ -1257,8 +1306,9 @@ jobs:
   # command list splits into contiguous blocks, so the shards cover every
   # package and feature exactly once with no hand-kept package lists. That
   # holds only while every shard runs the same cargo-hack, hence the exact
-  # version pin. The commands live in `cargo xtask feature-matrix`, so a local
-  # run and CI cannot drift apart. Five, not three or four: the facade and
+  # version pin. A local run over the crates a change touched takes the same
+  # two lines with `-p <crate>` in place of `--workspace --partition`. Five,
+  # not three or four: the facade and
   # the engine sit next to each other in the command list, and with fewer
   # contiguous blocks one shard takes both (three shards took 11, 22 and
   # 18 min on main); with five the slowest should take about 15 min, beside
@@ -1290,18 +1340,61 @@ jobs:
         with:
           tool: cargo-hack@0.6.45
 
-      - name: cargo xtask feature-matrix --slice ${{ matrix.slice }}
-        run: cargo xtask feature-matrix --slice "$SLICE"
+      - name: cargo hack clippy --each-feature --partition ${{ matrix.slice }}
+        if: matrix.slice != 'combinations'
         env:
           SLICE: ${{ matrix.slice }}
+        run: |
+          status=0
+          for targets in "" "--tests --benches --examples"; do
+            # shellcheck disable=SC2086 # `targets` is a list of flags
+            cargo hack clippy --workspace --partition "$SLICE" --locked --each-feature \
+              --keep-going $targets -- -D warnings || status=1
+          done
+          exit "$status"
+
+      # The facade's supported combinations, each a clippy of the `flui`
+      # package alone: a `--workspace` build proves nothing here, since
+      # feature unification would enable `material` from a sibling and turn a
+      # broken combination green. `--all-targets` is deliberate: a missing
+      # `required-features` on an example or test is exactly the wiring these
+      # builds catch. The defaults are empty, so the last entry builds what
+      # `--no-default-features` does; it stays so that a default someone adds
+      # back is built on its own. Each feature on its own (`testing`,
+      # `devtools`, `driver` and the rest) is the per-feature passes' job.
+      # flui-engine's wgpu backend features get no combination: they only
+      # forward to wgpu's, and no FLUI code is behind them.
+      - name: cargo clippy -p flui, each supported feature combination
+        if: matrix.slice == 'combinations'
+        run: |
+          status=0
+          for combo in \
+            "--no-default-features" \
+            "--no-default-features --features material" \
+            "--no-default-features --features cupertino" \
+            "--no-default-features --features material,cupertino" \
+            "--no-default-features --features serde" \
+            "--no-default-features --features animation-diagnostics" \
+            "--no-default-features --features native" \
+            "--no-default-features --features system" \
+            "--no-default-features --features http" \
+            "--all-features" \
+            ""; do
+            echo "::group::cargo clippy -p flui $combo"
+            # shellcheck disable=SC2086 # `combo` is a list of flags
+            cargo clippy -p flui --locked --all-targets $combo -- -D warnings \
+              || { status=1; echo "::error::cargo clippy -p flui $combo failed"; }
+            echo "::endgroup::"
+          done
+          exit "$status"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # wasm-check — the web platform claim, machine-checked, in three xtask
-  # steps (tools/xtask/src/tasks/web.rs holds the commands and why):
-  #   wasm-check — check + lib/bin clippy of every package that builds for
+  # wasm-check — the web platform claim, machine-checked. Its steps:
+  #   check      — check + lib/bin clippy of every package that builds for
   #                wasm32 (a package opts out with `[package.metadata.flui]
-  #                wasm = false`, a reason beside it), plus `flui-hot-reload`
-  #                with every feature. The clippy pass is the only lint over
+  #                wasm = false`, a reason beside it), flui-native's wasm32
+  #                test targets, `flui-hot-reload` with every feature and the
+  #                facade's `wasm_consumer`. It is the only lint over
   #                flui-native's wasm32-only web backend.
   #   wasm-link  — really links the two web demos and checks their import
   #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
@@ -1310,6 +1403,7 @@ jobs:
   #   wasm-test  — EXECUTES the wasm32 tests on node. Everything before it only
   #                compiles; swapping `web_time::Instant` for std's stays green
   #                there and panics at run time (issue #985).
+  #   then the DOM tests in headless Chrome, which node is not (below).
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check
@@ -1333,8 +1427,27 @@ jobs:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: cargo xtask wasm-check
-        run: cargo xtask wasm-check
+      # The workspace pass is lib and bin targets only: test targets pull
+      # native-only dev-dependencies such as tokio. flui-native's test targets
+      # (`tests/web_browser.rs`, `tests/wasm32/`) compile only for wasm32, so
+      # they get a clippy of their own. `flui-hot-reload` has no web runner,
+      # but an application that keeps it in a cross-target build must still
+      # build for the web. `wasm_consumer` is an application capturing `Rc`
+      # in owner-local callbacks (ADR-0086).
+      - name: cargo check and clippy for wasm32
+        run: |
+          list=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.metadata.flui.wasm == false) | "--exclude\n" + .name')
+          # an empty list would check packages that cannot build for wasm32
+          [ -n "$list" ] || { echo "no package sets [package.metadata.flui] wasm = false"; exit 1; }
+          mapfile -t excludes <<< "$list"
+          echo "excluded: ${excludes[*]}"
+          target=wasm32-unknown-unknown
+          cargo check --workspace --locked --target "$target" "${excludes[@]}"
+          cargo clippy --workspace --lib --bins --locked --target "$target" "${excludes[@]}" -- -D warnings
+          cargo clippy -p flui-native --all-targets --locked --target "$target" -- -D warnings
+          cargo check -p flui-hot-reload --locked --target "$target" --all-features
+          cargo clippy -p flui --test wasm_consumer --locked --target "$target" -- -D warnings
 
       - name: cargo xtask wasm-link
         run: cargo xtask wasm-link

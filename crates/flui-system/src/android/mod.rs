@@ -36,6 +36,7 @@
 //! they spell.
 
 pub(crate) mod documents;
+mod grants;
 #[cfg(target_os = "android")]
 #[expect(
     unsafe_code,

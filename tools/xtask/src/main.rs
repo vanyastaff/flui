@@ -22,7 +22,6 @@ mod adr_numbers;
 mod android_dex;
 mod bench;
 mod changelog;
-mod docs_links;
 mod doctor;
 mod fonts;
 mod icon_import;
@@ -50,14 +49,8 @@ struct Cli {
 enum Command {
     /// Run the source checks that need no workspace build (the CI `checks` job).
     Checks(tasks::ChecksArgs),
-    /// Clippy every feature on its own (cargo-hack).
-    FeatureMatrix(tasks::FeatureMatrixArgs),
-    /// Build each supported facade feature combination on its own.
-    FacadeCombos(tasks::FacadeCombosArgs),
     /// Clippy the Win32, AppKit, Android and iOS backends without linking.
     CrossTypecheck(tasks::CrossTypecheckArgs),
-    /// Check and clippy the workspace for wasm32.
-    WasmCheck(tasks::WasmCheckArgs),
     /// Link the wasm demos and check their imports.
     WasmLink(tasks::WasmLinkArgs),
     /// Run the wasm32 tests under wasm-bindgen-test-runner.
@@ -78,8 +71,6 @@ enum Command {
     WasmTestCrates(wasm::WasmTestCratesArgs),
     /// Print a package's version from Cargo.lock.
     LockedVersion(wasm::LockedVersionArgs),
-    /// Check the links in the repository's markdown (lychee, offline).
-    DocsLinks(docs_links::DocsLinksArgs),
     /// Check or list the bundled font assets.
     FontAssets(fonts::FontAssetsArgs),
     /// Import vector animations as `AnimatedIconData` constants, or check the bundled Material ones.
@@ -112,10 +103,7 @@ fn main() -> ExitCode {
     }
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
-        Command::FeatureMatrix(args) => tasks::feature_matrix(&args),
-        Command::FacadeCombos(args) => tasks::facade_combos(&args),
         Command::CrossTypecheck(args) => tasks::cross_typecheck(&args),
-        Command::WasmCheck(args) => tasks::wasm_check(&args),
         Command::WasmLink(args) => tasks::wasm_link(&args),
         Command::WasmTest(args) => tasks::wasm_test(&args),
         Command::Fuzz(args) => tasks::fuzz(&args),
@@ -126,7 +114,6 @@ fn main() -> ExitCode {
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
-        Command::DocsLinks(args) => docs_links::docs_links(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::IconImport(args) => icon_import::icon_import(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),

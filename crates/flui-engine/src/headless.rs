@@ -214,16 +214,17 @@ impl HeadlessRenderer {
                 context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
                 *slot.insert(id)
             };
-            context.render_slot(slot, content, crate::recording_cache::CacheReads::On)?;
+            context.render_slot(slot, content, crate::recording_cache::CacheReads::On, None)?;
             context.read_slot(slot)
         })();
         // A capture is synchronous, so it returns once its work has retired,
         // refused or not. One that reaches its readback has waited for that
         // work already; one refused partway (a frame past the prepared
-        // budget) leaves what it submitted before the refusal in flight, and
-        // on a hardware queue the next capture would find that room still
-        // held and answer `GpuBackpressure` for room that is only late. The
-        // capture's own failure is the one it reports.
+        // budget) closes its frame with permits wgpu releases only on a poll
+        // (`on_submitted_work_done`), and on a hardware queue the next capture
+        // would find that room still held and answer `GpuBackpressure` for
+        // room that is only late. The capture's own failure is the one it
+        // reports.
         let drained = drain(context);
         let pixels = captured?;
         drained?;
@@ -271,6 +272,7 @@ impl HeadlessRenderer {
         let device = Arc::clone(domain.device());
         let surface = create_capture_texture(&device, width, height);
         let surface_view = surface.create_view(&wgpu::TextureViewDescriptor::default());
+        let timer = crate::gpu_timer::FrameGpuTimer::try_new(domain.device(), domain.queue());
         Ok(RetainedCapture {
             domain: Arc::clone(&domain),
             queue: Arc::clone(domain.queue()),
@@ -289,6 +291,8 @@ impl HeadlessRenderer {
             last_ir: None,
             keep_ir: false,
             lineage: crate::recording_cache::DrawnLineages::new(),
+            timer,
+            epoch: flui_foundation::FrameEpoch::ZERO,
         })
     }
 }
@@ -315,19 +319,16 @@ fn create_capture_texture(device: &wgpu::Device, width: u32, height: u32) -> wgp
     })
 }
 
-/// Clears `view` to the frame background with one submitted pass.
-pub(crate) fn clear_to_background(
-    domain: &crate::device_domain::DeviceDomain,
+/// Records a pass that clears `view` to the frame background into `encoder`,
+/// so the clear reaches the target with the frame it precedes, and a frame
+/// that is never submitted leaves the target as it was.
+pub(crate) fn record_background_clear(
+    encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
-) -> EngineResult<()> {
-    domain.poll()?;
-    let device = domain.device();
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("FLUI Headless Capture Clear Encoder"),
-    });
+) {
     {
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("FLUI Headless Capture Clear Pass"),
+            label: Some("FLUI Slot Clear Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
@@ -343,8 +344,6 @@ pub(crate) fn clear_to_background(
             multiview_mask: None,
         });
     }
-    domain.submit(domain.prepare(vec![encoder.finish()], Vec::new())?)?;
-    Ok(())
 }
 
 /// Copies `texture` to a mappable buffer and de-pads the 256-byte-aligned
@@ -487,6 +486,10 @@ pub(crate) struct RetainedCapture {
     /// The lineage of the version the capture last drew, as a `Renderer`
     /// keeps it.
     lineage: crate::recording_cache::DrawnLineages<()>,
+    /// Times each frame on the GPU, as a window slot's timer does, where the
+    /// device writes timestamps; each frame takes the next epoch.
+    timer: Option<crate::gpu_timer::FrameGpuTimer>,
+    epoch: flui_foundation::FrameEpoch,
 }
 
 #[cfg(test)]
@@ -559,6 +562,17 @@ impl RetainedCapture {
     /// it is submitted.
     pub(crate) fn fail_next_frame_after_record(&mut self) {
         self.fail_after_record = true;
+    }
+
+    /// The oldest GPU frame time read back and not taken yet (ADR-0388).
+    pub(crate) fn take_gpu_time(&mut self) -> Option<crate::raster_executor::GpuFrameTime> {
+        self.timer.as_mut()?.take()
+    }
+
+    /// Whether the capture's device writes timestamps, so its frames are
+    /// timed.
+    pub(crate) fn times_frames(&self) -> bool {
+        self.timer.is_some()
     }
 
     /// Registers a one-texel external texture of `rgba` under `id`, or, when
@@ -766,7 +780,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         _view: &wgpu::TextureView,
         texture: &wgpu::Texture,
         _retained: bool,
-        partial: Option<&crate::damage::RegionPlan>,
+        partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
@@ -857,14 +871,24 @@ impl RetainedCapture {
             fail_recorded: &mut self.fail_after_record,
             ir: self.keep_ir.then_some(&mut self.last_ir),
         };
-        self.frame.run(
+        self.epoch = self.epoch.next();
+        let epoch = self.epoch;
+        let ran = self.frame.run(
             plan,
             &self.domain,
-            self.size,
-            CAPTURE_FORMAT,
-            (&self.surface_view, &self.surface),
+            crate::frame_protocol::FrameTarget {
+                view: &self.surface_view,
+                texture: &self.surface,
+                size: self.size,
+                format: CAPTURE_FORMAT,
+            },
             &mut steps,
-        )?;
+            self.timer.as_mut().map(|timer| (timer, epoch)),
+        );
+        if let Some(timer) = self.timer.as_mut() {
+            timer.collect();
+        }
+        ran?;
         self.frame.presented();
         Ok(PresentDisposition::Presented)
     }
@@ -900,12 +924,6 @@ impl RetainedCapture {
     /// a region rect by rect.
     pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
         self.frame.apply_damage(damage);
-    }
-
-    /// Plans every later partial frame rect by rect, as production does not
-    /// yet.
-    pub(crate) fn plan_rect_by_rect(&mut self) {
-        self.frame.plan_rect_by_rect();
     }
 
     /// What the last frame's walk and recording did.
@@ -1166,8 +1184,8 @@ mod twin_readback_tests {
                 )),
             );
         }
-        // Refused partway, after it submitted its target clear and the passes
-        // before the refusal.
+        // Refused partway, at the prepared budget: its encoder is discarded
+        // unsubmitted, and the frame's permits wait for the next poll.
         let outcome = renderer.render_layer_tree(&tree, (side, side));
         assert!(
             matches!(

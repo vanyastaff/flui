@@ -3,7 +3,7 @@
 //! the owner's thread.
 //!
 //! The scene is a grid of N × N cells, each a coloured box with a short text
-//! label, at N = 10, 30 and 60. Three frames are measured for each N:
+//! label, at N = 10, 30 and 60. Six frames are measured for each N:
 //!
 //! - **first**: a freshly mounted tree's first frame, drawn in full, on a
 //!   device that an earlier mount already warmed: pipelines built, and the
@@ -14,7 +14,21 @@
 //! - **update, no boundary**: the same change to a cell that paints into the
 //!   grid's content without a boundary of its own: the content repaints, every
 //!   other cell keeps its chunk (ADR-0304 §2), and the slot draws the changed
-//!   cell in region passes too.
+//!   cell in region passes too;
+//! - **update, two far cells**: two cells near opposite corners, each under a
+//!   repaint boundary of its own, change colour together, so the damage is
+//!   two disjoint rects whose bounding box covers most of the surface;
+//! - **update, eight cells**: eight cells spread over two rows near the top
+//!   and the bottom, each under a boundary of its own, change together: a
+//!   region of eight rects, the most it holds;
+//! - **update, eight packed cells**: eight cells around the middle, one cell
+//!   apart in two rows two apart, change together: eight rects that cover
+//!   more than a third of their bounding box, large ones at N = 10.
+//!
+//! Each row also gives the share of the surface the frame redrew (the
+//! region's bounding box when the slot drew it in one pass, its rects when it
+//! drew one pass per rect) and the chunks the frame recorded and replayed
+//! from the engine's recording cache (ADR-0304 §9).
 //!
 //! The frame is the UI runtime's frame transaction (`UiRuntime::pump`) over a
 //! sink that hands each publication to an inline [`RasterExecutor`] on the
@@ -144,12 +158,12 @@ mod grid {
             }
             Err(error) => panic!("the GPU context over the bench's window: {error}"),
         };
-        let region_passes = Arc::new(Mutex::new(None));
-        tracing::subscriber::set_global_default(RegionPasses {
-            last: Arc::clone(&region_passes),
+        let counts = Arc::new(Mutex::new(None));
+        tracing::subscriber::set_global_default(FrameCountsSubscriber {
+            last: Arc::clone(&counts),
         })
         .expect("BUG: the bench installs the only subscriber");
-        let mut sink = GpuSink::attach(bootstrap, target, region_passes);
+        let mut sink = GpuSink::attach(bootstrap, target, counts);
         let fonts = FontCollection::new();
 
         // The first mount builds the pipelines and fills the glyph atlas.
@@ -161,24 +175,33 @@ mod grid {
         );
         println!();
         println!(
-            "| N | frame | damage | owner ms | raster ms | raster cpu ms | present ms | raster share % | cpu share % |"
+            "| N | frame | damage | redrawn | recorded | replayed | owner ms | raster ms | raster cpu ms | present ms | raster share % | cpu share % |"
         );
-        println!("|---|---|---|---|---|---|---|---|---|");
+        println!("|---|---|---|---|---|---|---|---|---|---|---|---|");
         for n in SIZES {
             let firsts: Vec<Split> = (0..MOUNTS)
                 .map(|_| first_frame(&mut sink, &fonts, n))
                 .collect();
             report(n, "first", Drawn::Full, &firsts);
-            let grid = Grid::new(n, Isolation::Boundary);
+            let grid = Grid::new(n, Isolation::Boundary, Cells::Middle);
             report(
                 n,
                 "update",
                 Drawn::Partial,
                 &update_frames(&mut sink, &fonts, grid),
             );
-            let grid = Grid::new(n, Isolation::None);
+            let grid = Grid::new(n, Isolation::None, Cells::Middle);
             let updates = update_frames(&mut sink, &fonts, grid);
             report(n, "update, no boundary", Drawn::Partial, &updates);
+            let grid = Grid::new(n, Isolation::Boundary, Cells::FarApart);
+            let updates = update_frames(&mut sink, &fonts, grid);
+            report(n, "update, two far cells", Drawn::Partial, &updates);
+            let grid = Grid::new(n, Isolation::Boundary, Cells::Eight);
+            let updates = update_frames(&mut sink, &fonts, grid);
+            report(n, "update, eight cells", Drawn::Partial, &updates);
+            let grid = Grid::new(n, Isolation::Boundary, Cells::Packed);
+            let updates = update_frames(&mut sink, &fonts, grid);
+            report(n, "update, eight packed cells", Drawn::Partial, &updates);
         }
         println!();
         println!(
@@ -216,16 +239,19 @@ mod grid {
         raster: Duration,
         present: Duration,
         damage: Damaged,
-        /// The region passes the window slot drew the frame in: `0` for a
-        /// frame drawn in full.
-        region_passes: u64,
+        /// What the window slot's frame protocol counted for the frame.
+        counts: FrameCounts,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum Damaged {
         Full(FullReason),
-        /// The fraction of the surface the region covers.
-        Region(f64),
+        /// The fractions of the surface the region's rects and its bounding
+        /// box cover.
+        Region {
+            rects: f64,
+            bounds: f64,
+        },
         Unchanged,
     }
 
@@ -237,7 +263,7 @@ mod grid {
     }
 
     fn first_frame(sink: &mut GpuSink, fonts: &FontCollection, n: usize) -> Split {
-        let grid = Grid::new(n, Isolation::None);
+        let grid = Grid::new(n, Isolation::None, Cells::Middle);
         let mut ui_runtime = mount(&grid, fonts);
         let split = frame(&mut ui_runtime, sink);
         drop(ui_runtime);
@@ -251,7 +277,9 @@ mod grid {
         std::thread::sleep(SETTLE);
         (0..WARM_UPDATES + UPDATES)
             .map(|index| {
-                grid.changed.set(CHANGED[index % CHANGED.len()]);
+                for changed in &grid.changed {
+                    changed.set(CHANGED[index % CHANGED.len()]);
+                }
                 let split = frame(&mut ui_runtime, sink);
                 std::thread::sleep(SETTLE);
                 split
@@ -308,8 +336,9 @@ mod grid {
 
     fn report(n: usize, kind: &str, drawn: Drawn, frames: &[Split]) {
         for split in frames {
-            let partial = matches!(split.damage, Damaged::Region(_)) && split.region_passes > 0;
-            let full = matches!(split.damage, Damaged::Full(_)) && split.region_passes == 0;
+            let passes = split.counts.region_passes;
+            let partial = matches!(split.damage, Damaged::Region { .. }) && passes > 0;
+            let full = matches!(split.damage, Damaged::Full(_)) && passes == 0;
             match drawn {
                 Drawn::Partial => assert!(
                     partial,
@@ -327,15 +356,29 @@ mod grid {
         );
         let damage = match frames[0].damage {
             Damaged::Full(reason) => format!("full ({reason:?})"),
-            Damaged::Region(fraction) => format!("{:.2} %", fraction * 100.0),
+            Damaged::Region { rects, .. } => format!("{:.2} %", rects * 100.0),
             Damaged::Unchanged => "none".to_owned(),
+        };
+        // A frame drawn in one pass redraws the region's bounding box, one
+        // drawn in a pass per rect only its rects.
+        let redrawn = |split: &Split| match split.damage {
+            Damaged::Full(_) => 1.0,
+            Damaged::Region { bounds, .. } if split.counts.region_passes == 1 => bounds,
+            Damaged::Region { rects, .. } => rects,
+            Damaged::Unchanged => 0.0,
         };
         let cpu = |split: &Split| split.raster.saturating_sub(split.present);
         let share = |part: Duration, owner: Duration| {
             100.0 * part.as_secs_f64() / (part + owner).as_secs_f64()
         };
+        let count = |value: fn(&FrameCounts) -> u64| {
+            median(frames.iter().map(|split| value(&split.counts) as f64))
+        };
         println!(
-            "| {n} | {kind} | {damage} | {:.2} | {:.2} | {:.2} | {:.2} | {:.1} | {:.1} |",
+            "| {n} | {kind} | {damage} | {:.2} % | {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.1} | {:.1} |",
+            median(frames.iter().map(|split| redrawn(split) * 100.0)),
+            count(|counts| counts.chunks_recorded),
+            count(|counts| counts.recording_cache_hits),
             median(frames.iter().map(|split| ms(split.owner))),
             median(frames.iter().map(|split| ms(split.raster))),
             median(frames.iter().map(|split| ms(cpu(split)))),
@@ -364,20 +407,71 @@ mod grid {
         None,
     }
 
-    /// The grid: N rows of N cells, the middle one coloured by `changed`.
+    /// Which cells a frame changes.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Cells {
+        /// The middle cell.
+        Middle,
+        /// The cell one in from the top-left corner and the one one in from
+        /// the bottom-right corner.
+        FarApart,
+        /// Eight cells spread over the grid, one per region rect.
+        Eight,
+        /// Eight cells packed around the middle, one cell apart, in two rows
+        /// two apart: eight rects that cover more than a third of their
+        /// bounding box.
+        Packed,
+    }
+
+    impl Cells {
+        /// The indices of the cells a frame changes.
+        fn indices(self, n: usize) -> Vec<usize> {
+            let middle = (n / 2) * n + n / 2;
+            match self {
+                Self::Middle => vec![middle],
+                Self::FarApart => vec![n + 1, (n - 2) * n + n - 2],
+                Self::Eight => (0..8)
+                    .map(|k| {
+                        let row = 1 + (k / 4) * (n - 3);
+                        let column = 1 + (k % 4) * (n - 3) / 3;
+                        row * n + column
+                    })
+                    .collect::<Vec<usize>>(),
+                Self::Packed => (0..8)
+                    .map(|k| {
+                        let row = n / 2 - 1 + (k / 4) * 2;
+                        let column = n / 2 - 3 + (k % 4) * 2;
+                        row * n + column
+                    })
+                    .collect::<Vec<usize>>(),
+            }
+        }
+
+        /// Which of the grid's signals colours the cell at `index`, if any.
+        fn signal(self, n: usize, index: usize) -> Option<usize> {
+            self.indices(n).iter().position(|&cell| cell == index)
+        }
+    }
+
+    /// The grid: N rows of N cells, the ones `cells` names each coloured by
+    /// its signal of `changed` (a signal binds one view).
     #[derive(Clone, StatelessView)]
     struct Grid {
         n: usize,
         isolation: Isolation,
-        changed: SharedSignal<Color>,
+        cells: Cells,
+        changed: Vec<SharedSignal<Color>>,
     }
 
     impl Grid {
-        fn new(n: usize, isolation: Isolation) -> Self {
+        fn new(n: usize, isolation: Isolation, cells: Cells) -> Self {
             Self {
                 n,
                 isolation,
-                changed: SharedSignal::new(CHANGED[1]),
+                cells,
+                changed: (0..cells.indices(n).len())
+                    .map(|_| SharedSignal::new(CHANGED[1]))
+                    .collect::<Vec<SharedSignal<Color>>>(),
             }
         }
     }
@@ -385,7 +479,6 @@ mod grid {
     impl StatelessView for Grid {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             let n = self.n;
-            let middle = (n / 2) * n + n / 2;
             let font_size = (f64::from(SIDE) / n as f64 * 0.4).clamp(8.0, 16.0);
             let rows = (0..n)
                 .map(|row| {
@@ -399,9 +492,9 @@ mod grid {
                                         .with_color(Color::WHITE),
                                 )
                                 .max_lines(1);
-                            let cell = if index == middle {
+                            let cell = if let Some(signal) = self.cells.signal(n, index) {
                                 let changing = Changing {
-                                    color: self.changed.clone(),
+                                    color: self.changed[signal].clone(),
                                     label,
                                 };
                                 match self.isolation {
@@ -499,17 +592,26 @@ mod grid {
         }
     }
 
-    /// A subscriber that hears one event alone: the window slot's frame
-    /// protocol reporting how many region passes it drew the frame in, the
-    /// engine's own record of whether it took the partial path. Every other
-    /// callsite is never enabled, so the frames it watches pay for nothing
-    /// else.
-    struct RegionPasses {
-        /// `Subscriber` is `Send + Sync`; only the owner thread writes it.
-        last: Arc<Mutex<Option<u64>>>,
+    /// What the window slot's frame protocol counted for one frame: the
+    /// region passes it drew the frame in (`0` for a frame drawn in full,
+    /// the engine's own record of whether it took the partial path), the
+    /// chunks it recorded and the chunks it replayed from the recording cache.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    struct FrameCounts {
+        region_passes: u64,
+        chunks_recorded: u64,
+        recording_cache_hits: u64,
     }
 
-    impl RegionPasses {
+    /// A subscriber that hears one event alone: the window slot's frame
+    /// protocol reporting its [`FrameCounts`]. Every other callsite is never
+    /// enabled, so the frames it watches pay for nothing else.
+    struct FrameCountsSubscriber {
+        /// `Subscriber` is `Send + Sync`; only the owner thread writes it.
+        last: Arc<Mutex<Option<FrameCounts>>>,
+    }
+
+    impl FrameCountsSubscriber {
         const TARGET: &'static str = "flui_engine::frame_protocol";
         const FIELD: &'static str = "region_passes";
 
@@ -520,7 +622,7 @@ mod grid {
         }
     }
 
-    impl tracing::Subscriber for RegionPasses {
+    impl tracing::Subscriber for FrameCountsSubscriber {
         fn register_callsite(
             &self,
             metadata: &'static tracing::Metadata<'static>,
@@ -546,13 +648,13 @@ mod grid {
         fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
 
         fn event(&self, event: &tracing::Event<'_>) {
-            let mut passes = Passes(None);
-            event.record(&mut passes);
-            if let Some(passes) = passes.0 {
+            let mut counts = CountFields::default();
+            event.record(&mut counts);
+            if counts.passes_seen {
                 *self
                     .last
                     .lock()
-                    .expect("BUG: nothing panics holding the count") = Some(passes);
+                    .expect("BUG: nothing panics holding the counts") = Some(counts.counts);
             }
         }
 
@@ -561,19 +663,35 @@ mod grid {
         fn exit(&self, _: &tracing::span::Id) {}
     }
 
-    /// The `region_passes` field of the frame protocol's event.
-    struct Passes(Option<u64>);
+    /// The fields of the frame protocol's event that [`FrameCounts`] holds.
+    #[derive(Default)]
+    struct CountFields {
+        counts: FrameCounts,
+        passes_seen: bool,
+    }
 
-    impl tracing::field::Visit for Passes {
-        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-            if field.name() == RegionPasses::FIELD {
-                self.0 = Some(value);
+    impl CountFields {
+        fn set(&mut self, field: &tracing::field::Field, value: u64) {
+            match field.name() {
+                FrameCountsSubscriber::FIELD => {
+                    self.counts.region_passes = value;
+                    self.passes_seen = true;
+                }
+                "chunks_recorded" => self.counts.chunks_recorded = value,
+                "recording_cache_hits" => self.counts.recording_cache_hits = value,
+                _ => {}
             }
+        }
+    }
+
+    impl tracing::field::Visit for CountFields {
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.set(field, value);
         }
 
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            if field.name() == RegionPasses::FIELD {
-                self.0 = format!("{value:?}").parse::<u64>().ok();
+            if let Ok(value) = format!("{value:?}").parse::<u64>() {
+                self.set(field, value);
             }
         }
     }
@@ -596,7 +714,7 @@ mod grid {
         generation: SurfaceGeneration,
         base: RasterBase,
         target: Arc<TimedTarget>,
-        region_passes: Arc<Mutex<Option<u64>>>,
+        counts: Arc<Mutex<Option<FrameCounts>>>,
         settlements: Vec<SlotSettlement>,
         /// The slot's own sequence: each mount's UI runtime numbers its frames
         /// from the start, and a slot's stamps only grow.
@@ -609,7 +727,7 @@ mod grid {
         fn attach(
             bootstrap: flui_engine::GpuBootstrap,
             target: Arc<TimedTarget>,
-            region_passes: Arc<Mutex<Option<u64>>>,
+            counts: Arc<Mutex<Option<FrameCounts>>>,
         ) -> Self {
             let first = bootstrap.first.expect("the window's surface was made");
             let (mut executor, sender) = RasterExecutor::new(
@@ -650,7 +768,7 @@ mod grid {
                 generation,
                 base: RasterBase::new(DamageMode::default()),
                 target,
-                region_passes,
+                counts,
                 settlements: Vec::new(),
                 epoch: FrameEpoch::ZERO,
                 last: None,
@@ -679,7 +797,11 @@ mod grid {
             let damaged = match &damage {
                 DamageRegion::Full(reason) => Damaged::Full(*reason),
                 DamageRegion::Region(region) => {
-                    Damaged::Region(region.area() as f64 / f64::from(SIDE * SIDE))
+                    let surface = f64::from(SIDE * SIDE);
+                    Damaged::Region {
+                        rects: region.area() as f64 / surface,
+                        bounds: region.bounds().area() as f64 / surface,
+                    }
                 }
                 DamageRegion::Unchanged => Damaged::Unchanged,
             };
@@ -702,12 +824,12 @@ mod grid {
                 .drain_settlements(self.slot, &mut self.settlements);
             let raster = started.elapsed();
             let pre_presents = self.target.take_pre_presents();
-            let region_passes = self
-                .region_passes
+            let counts = self
+                .counts
                 .lock()
-                .expect("BUG: nothing panics holding the count")
+                .expect("BUG: nothing panics holding the counts")
                 .take()
-                .expect("the window slot reports the passes it drew the frame in");
+                .expect("the window slot reports what it counted for the frame");
             let verdict = self
                 .settlements
                 .iter()
@@ -727,7 +849,7 @@ mod grid {
                 raster,
                 present: (started + raster) - presented_at,
                 damage: damaged,
-                region_passes,
+                counts,
             });
             SubmitVerdict::Presented
         }

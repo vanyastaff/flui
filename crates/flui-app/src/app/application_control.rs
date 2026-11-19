@@ -1,6 +1,9 @@
 //! Closed cross-thread application commands. UI factories never enter this state.
 use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, PresentationAddress, claim_slot};
 use flui_native::PlatformProxy;
+use flui_runtime::owner_turn::{
+    QuitAnswered, QuitConsultation, QuitFinished, QuitRequest, QuitVerdict,
+};
 use parking_lot::Mutex;
 use std::{
     future::Future,
@@ -108,31 +111,11 @@ enum Phase {
     Quitting,
     Closed,
 }
-/// A quit the application asked for through [`AppHandle::request_quit`],
-/// until the owner commits it or it is cancelled.
-#[derive(Debug, Default, PartialEq, Eq)]
-enum QuitAsk {
-    #[default]
-    None,
-    /// The owner asks every presentation on its next turn.
-    Asked,
-    /// The owner is asking now.
-    Consulting,
-    /// Presentations refused, each recording the close on its guard; the
-    /// quit waits for each record to be carried out.
-    Deferred(Vec<PresentationAddress>),
-}
-/// What the presentations answered a quit the application asked for.
-pub(crate) enum QuitAnswer {
-    /// A refusal recorded nothing to wait on: the quit is cancelled.
-    Cancelled,
-    /// The presentations whose recorded close the quit waits on; none, and
-    /// the quit goes ahead.
-    Waiting(Vec<PresentationAddress>),
-}
 struct State {
     phase: Phase,
-    quit: QuitAsk,
+    /// A quit the application or the platform asked for, until the owner
+    /// commits it or it is cancelled.
+    quit: QuitRequest,
     intent: bool,
     /// A reopen asked while a quit was asked, consulted or deferred: shown
     /// once the quit is abandoned, dropped once it commits.
@@ -193,7 +176,7 @@ impl AppHandle {
             Phase::Accepting => {}
         }
         self.ingress.proxy.wake().map_err(control_error)?;
-        state.quit = QuitAsk::Asked;
+        state.quit.ask();
         Ok(())
     }
     /// Ask every window whose GPU device rebuild was given up to try again
@@ -320,7 +303,7 @@ impl Ingress {
             proxy,
             state: Mutex::new(State {
                 phase: Phase::Accepting,
-                quit: QuitAsk::None,
+                quit: QuitRequest::new(),
                 intent: startup_open,
                 reopen_after_quit: false,
                 failed_openings: 0,
@@ -380,7 +363,7 @@ impl Ingress {
         if state.phase != Phase::Accepting {
             return false;
         }
-        if !matches!(state.quit, QuitAsk::None) {
+        if state.quit.is_pending() {
             state.reopen_after_quit = true;
             return true;
         }
@@ -425,7 +408,6 @@ impl Ingress {
     /// The quit was abandoned: show the main window a reopen asked for while
     /// it was pending.
     fn quit_abandoned(mut state: parking_lot::MutexGuard<'_, State>, proxy: &PlatformProxy) {
-        state.quit = QuitAsk::None;
         if std::mem::take(&mut state.reopen_after_quit) {
             Self::show_for_reopen(state, proxy);
         }
@@ -590,86 +572,101 @@ impl Ingress {
 
     fn commit_quit(state: &mut State, proxy: &PlatformProxy) -> Result<(), AppControlError> {
         state.phase = Phase::Quitting;
-        state.quit = QuitAsk::None;
+        state.quit.clear();
         state.reopen_after_quit = false;
         proxy.request_quit().map_err(control_error)
     }
 
-    /// Start the owner's consultation of a quit the application asked for:
-    /// `true` when one is asked and nothing has fenced the application yet.
-    pub(crate) fn begin_quit_consult(&self) -> bool {
-        let mut state = self.state.lock();
-        if state.phase != Phase::Accepting || state.quit != QuitAsk::Asked {
-            return false;
-        }
-        state.quit = QuitAsk::Consulting;
-        true
-    }
-
-    /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
-    /// started with what the presentations answered. A quit asked again
-    /// while they were asked stays asked for the next turn.
-    pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) {
-        let mut state = self.state.lock();
-        if state.quit != QuitAsk::Consulting {
-            return;
-        }
-        match answer {
-            QuitAnswer::Cancelled => {
-                Self::quit_abandoned(state, &self.proxy);
-                tracing::info!(
-                    "a presentation refused the quit without recording it; quit cancelled"
-                );
-            }
-            QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
-                state.quit = QuitAsk::Deferred(waiting);
-            }
-            QuitAnswer::Waiting(_) => {
+    /// Carry out what a change of the quit asks: commit it, or show the main
+    /// window a reopen asked for while it was pending.
+    fn follow_quit(&self, mut state: parking_lot::MutexGuard<'_, State>, verdict: QuitVerdict) {
+        match verdict {
+            QuitVerdict::Commit => {
                 if let Err(error) = Self::commit_quit(&mut state, &self.proxy) {
                     drop(state);
                     tracing::error!(%error, "quit notification failed");
                 }
             }
+            QuitVerdict::Abandoned => Self::quit_abandoned(state, &self.proxy),
+            // Nothing for the owner to do; a verdict added later asks
+            // nothing of this host either.
+            QuitVerdict::Unchanged | QuitVerdict::Deferred | _ => {}
         }
+    }
+
+    /// Whether a quit is asked, being asked or deferred
+    /// ([`QuitRequest::is_pending`]).
+    pub(crate) fn is_quit_pending(&self) -> bool {
+        self.state.lock().quit.is_pending()
+    }
+
+    /// Start the owner's consultation of a quit the application asked for:
+    /// the consultation when one is asked and nothing has fenced the
+    /// application yet.
+    pub(crate) fn begin_quit_consult(&self) -> Option<QuitConsultation> {
+        let mut state = self.state.lock();
+        if state.phase != Phase::Accepting {
+            return None;
+        }
+        state.quit.begin_consult()
+    }
+
+    /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
+    /// started with what the presentations answered
+    /// ([`QuitRequest::finish_consult`]) and follow its verdict; the caller
+    /// resumes the consultation's panic, with nothing of this state held.
+    pub(crate) fn finish_quit_consult(&self, answered: QuitAnswered) -> QuitFinished {
+        let mut state = self.state.lock();
+        let mut finished = state.quit.finish_consult(answered);
+        let (verdict, panicked) = (finished.verdict(), finished.cancelled_by_panic());
+        // A panic of the follow-up or of a subscriber stays behind the
+        // consultation's own, so the first failure is the one resumed.
+        finished.contain(|| self.follow_quit(state, verdict));
+        // With the state unlocked: a subscriber is user code.
+        if verdict == QuitVerdict::Abandoned {
+            finished.contain(|| {
+                if panicked {
+                    tracing::info!(
+                        "asking the presentations about the quit panicked; quit cancelled"
+                    );
+                } else {
+                    tracing::info!(
+                        "a presentation refused the quit without recording it; quit cancelled"
+                    );
+                }
+            });
+        }
+        finished
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its
-    /// recorded close was carried out, or it is gone. The quit goes ahead
-    /// once no presentation is left to wait on.
+    /// recorded close was carried out ([`QuitRequest::consented`]).
     pub(crate) fn quit_consented(&self, address: PresentationAddress) {
         let mut state = self.state.lock();
-        let QuitAsk::Deferred(waiting) = &mut state.quit else {
-            return;
-        };
-        waiting.retain(|waited| *waited != address);
-        if waiting.is_empty()
-            && let Err(error) = Self::commit_quit(&mut state, &self.proxy)
-        {
-            drop(state);
-            tracing::error!(%error, "deferred quit notification failed");
-        }
+        let verdict = state.quit.consented(address);
+        self.follow_quit(state, verdict);
+    }
+
+    /// Every presentation the deferred quit waits on and that `registered`
+    /// no longer holds consents ([`QuitRequest::forget_gone`]).
+    pub(crate) fn quit_forget_gone(&self, registered: &[PresentationAddress]) {
+        let mut state = self.state.lock();
+        let verdict = state.quit.forget_gone(registered);
+        self.follow_quit(state, verdict);
     }
 
     /// The presentation at `address` kept itself open: the deferred quit it
-    /// was waited on for is cancelled.
+    /// was waited on for is cancelled ([`QuitRequest::declined`]).
     pub(crate) fn quit_declined(&self, address: PresentationAddress) {
-        let state = self.state.lock();
-        if let QuitAsk::Deferred(waiting) = &state.quit
-            && waiting.contains(&address)
-        {
-            Self::quit_abandoned(state, &self.proxy);
+        let mut state = self.state.lock();
+        let verdict = state.quit.declined(address);
+        self.follow_quit(state, verdict);
+        // With the state unlocked: a subscriber is user code.
+        if verdict == QuitVerdict::Abandoned {
             tracing::info!(
                 ?address,
                 "a presentation stayed open; deferred quit cancelled"
             );
-        }
-    }
-
-    /// The presentations a deferred quit still waits on.
-    pub(crate) fn quit_waiting(&self) -> Vec<PresentationAddress> {
-        match &self.state.lock().quit {
-            QuitAsk::Deferred(waiting) => waiting.clone(),
-            QuitAsk::None | QuitAsk::Asked | QuitAsk::Consulting => Vec::new(),
         }
     }
 
@@ -790,6 +787,88 @@ mod tests {
         }
     }
 
+    /// Panics as it drops, as a handler's capture whose destructor fails does.
+    struct FailsToDrop;
+
+    impl Drop for FailsToDrop {
+        fn drop(&mut self) {
+            panic!("the handler's capture failed to drop");
+        }
+    }
+
+    /// A reopen held while a quit is asked is shown once that quit's
+    /// consultation panics: the panicked answer cancels the quit, its
+    /// follow-up releases the reopen, the cancel is reported as a panic and
+    /// not as a refusal, and the panic resumes once, with the ingress free.
+    ///
+    /// Fails against a finish that does not follow a panicked answer's
+    /// verdict: the reopen stays held and no window is asked for.
+    fn a_panicked_quit_consultation_releases_the_held_reopen() {
+        use flui_runtime::owner_turn::{
+            CloseRequestHandler, CloseRequestRouter, CloseResponse, PreparedCloseRequest,
+        };
+
+        let (ingress, _owner) = ingress();
+        ingress
+            .handle()
+            .request_quit()
+            .expect("the quit is accepted");
+        assert!(ingress.request_native_show(), "the reopen is taken");
+        assert!(!ingress.is_opening(), "the reopen waits for the quit");
+
+        let router = Rc::new(CloseRequestRouter::new());
+        let window: Rc<dyn flui_platform::PlatformWindow> =
+            Rc::new(flui_testing::MockWindow::new());
+        let at = PresentationAddress {
+            ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+            presentation_id: flui_foundation::PresentationId::new(1),
+        };
+        let own_router = Rc::downgrade(&router);
+        let capture = FailsToDrop;
+        let prepared = PreparedCloseRequest::new(
+            at,
+            &window,
+            Some(CloseRequestHandler::new(move |_| {
+                let _ = &capture;
+                let router = own_router.upgrade().expect("the router asks");
+                drop(router.take(at));
+                CloseResponse::Close
+            })),
+        );
+        router
+            .publication(&prepared)
+            .expect("a fresh router has room")
+            .publish(prepared);
+
+        let consultation = ingress.begin_quit_consult().expect("the quit is asked");
+        let answered = consultation.ask(&router, [at]);
+        let (finished, log) =
+            flui_testing::log_capture::capture(|| ingress.finish_quit_consult(answered));
+        assert_eq!(finished.verdict(), QuitVerdict::Abandoned);
+        assert!(finished.cancelled_by_panic());
+        assert!(
+            log.records()
+                .iter()
+                .any(|record| record.message.contains("quit panicked")),
+            "the cancel is reported as a panic"
+        );
+        assert!(
+            !log.records()
+                .iter()
+                .any(|record| record.message.contains("refused the quit")),
+            "not as a refusal"
+        );
+        assert!(!ingress.is_quit_pending(), "the quit is cancelled");
+        assert!(ingress.is_opening(), "the held reopen asks for the window");
+        let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finished.resume()))
+            .expect_err("the consultation's panic resumes");
+        assert_eq!(
+            resumed.downcast_ref::<&str>().copied(),
+            Some("the handler's capture failed to drop")
+        );
+        ingress.close();
+    }
+
     #[test]
     fn application_control_admission_matrix() {
         crate::table_test::run_table(
@@ -803,6 +882,10 @@ mod tests {
                     "main_window_worker_admission_races_autoexit_without_lost_accepted_intent",
                     main_window_worker_admission_races_autoexit_without_lost_accepted_intent
                         as fn(),
+                ),
+                (
+                    "a_panicked_quit_consultation_releases_the_held_reopen",
+                    a_panicked_quit_consultation_releases_the_held_reopen as fn(),
                 ),
             ],
         );

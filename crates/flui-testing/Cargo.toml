@@ -30,10 +30,11 @@ workspace = true
 # a test runs with the capabilities the application's build has. This crate's
 # own tests turn it on through the dev-dependency on itself.
 http = []
-# The image cache the headless host keeps for each UI runtime
+# The image cache the headless host's built-ins keep for each UI runtime
 # (`flui_assets::ImageCacheCapability`), as a runner keeps one only with its
-# own `images` feature: the facade's `images` turns both on.
-images = ["dep:flui-assets"]
+# own `images` feature: both forward `flui-runtime`'s, which registers it, and
+# the facade's `images` turns both on.
+images = ["flui-runtime/images"]
 
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline
@@ -74,8 +75,6 @@ flui-rendering = { workspace = true, features = ["testing"] }
 # concrete render objects its probes downcast.
 flui-widgets = { workspace = true }
 flui-objects = { workspace = true }
-# The image cache each hosted UI runtime keeps (`images`).
-flui-assets = { workspace = true, optional = true }
 # `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction
 # (`UiRuntime::pump`, ADR-0083 §4). The runtime admits this crate as a normal
 # dependent beside the host. `testing` exposes the test-only UI runtime hooks
@@ -83,6 +82,9 @@ flui-assets = { workspace = true, optional = true }
 flui-runtime = { workspace = true, features = ["testing"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
+# The instant a session end's deadlines are named in (`SessionEndHost`), the
+# std one on native targets and `performance.now()`'s on wasm32.
+web-time = { workspace = true }
 # The font collection a headless UI runtime shapes on (bundled faces only, so text
 # measures alike on every host) and the painting values the widget harness
 # reads.
@@ -127,8 +129,9 @@ rustc-hash = { workspace = true }
 flui-testing = { path = ".", features = ["http"] }
 # `CountingWaker` and `panicking_waker` for tests that count or fail a waker.
 flui-foundation = { workspace = true, features = ["testing"] }
-# The headless backend whose windows the conformance checks run against.
-flui-native = { workspace = true }
+# The headless host whose windows the conformance checks run against, named
+# through its doubles (`scripted`).
+flui-native = { workspace = true, features = ["scripted"] }
 # The painting values the integration tests' widgets paint with.
 flui-painting = { workspace = true }
 

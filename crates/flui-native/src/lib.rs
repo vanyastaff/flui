@@ -69,10 +69,16 @@
 //!
 //! ## The headless host
 //!
-//! The [`HeadlessPlatform`] is a host whose every position is simulated in
-//! memory: no display server, GPU or windowing system, for unit tests, CI and
+//! The headless host is a host whose every position is simulated in memory:
+//! no display server, GPU or windowing system, for unit tests, CI and
 //! benchmarks that do not render. It has no event loop of its own: `run`
 //! runs the bootstrap and returns, and the test drives what follows.
+//!
+//! Every build runs it, as a `dyn Platform`; its type (`HeadlessPlatform`),
+//! its window (`HeadlessHostWindow`), its doubles (`FakeTextInput`,
+//! `FakeAccessibility`) and the handles a test drives it with (the other
+//! `Headless*` types) are named at the crate root only with the `scripted`
+//! feature.
 //!
 //! ### Direct Usage
 //!
@@ -101,14 +107,14 @@
 //! ```rust,ignore
 //! use flui_native::current_platform;
 //!
-//! // Returns HeadlessPlatform when FLUI_HEADLESS=1
+//! // The headless host when FLUI_HEADLESS=1
 //! let platform = current_platform()?;
 //! assert_eq!(platform.name(), "Headless");
 //! ```
 //!
 //! ### What the headless host simulates
 //!
-//! - **Windows**: `open_window()` returns [`HeadlessHostWindow`]s, with no OS
+//! - **Windows**: `open_window()` returns `HeadlessHostWindow`s, with no OS
 //!   window behind them
 //! - **Clipboard**: in memory; it reads back what the application wrote
 //! - **Displays**: one display, 1920 by 1080 at scale 1, unless the platform
@@ -152,12 +158,14 @@
 //!   client the display source reads the compositor's outputs with. `x11`: the
 //!   native X11 host (`X11Platform`) and the display source's RandR client. On
 //!   other targets they add nothing.
-//! - `testing`: the `testing` module, test support for a native host's own
-//!   windows (ADR-0243). Not part of the release API.
+//! - `scripted`: the headless host's type, window, doubles and test controls
+//!   at the crate root (ADR-0243). Not part of the release API.
+//! - `testing`: `scripted`, and the `testing` module, test support for a
+//!   native host's own windows (ADR-0243). Not part of the release API.
 //!
 //! Accessibility has no feature: Win32, AppKit, Wayland and X11
-//! windows always hand out their operating system's AccessKit adapter. The headless testing
-//! platform needs no feature.
+//! windows always hand out their operating system's AccessKit adapter. The
+//! headless host runs in every build; naming its doubles takes `scripted`.
 //!
 //! # Input capabilities
 //!
@@ -193,6 +201,7 @@
 #![deny(missing_docs)]
 
 pub(crate) mod accessibility;
+pub mod assets;
 pub(crate) mod clipboard;
 mod display;
 mod display_connection;
@@ -279,6 +288,9 @@ pub use host::{ExpiredClear, ExpiredEntry, NativeClipboard, NativePrimarySelecti
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::NativeExecutor;
 // Each host's platform: the one implementation of `Platform` over its table.
+// The headless host's is named only with `scripted`: without it the host runs
+// (`FLUI_HEADLESS`, `headless_platform`) as a `dyn Platform`.
+#[cfg(feature = "scripted")]
 pub use hosts::HeadlessPlatform;
 #[cfg(target_os = "ios")]
 pub use hosts::IOSPlatform;
@@ -296,19 +308,29 @@ pub use hosts::WaylandPlatform;
 pub use hosts::WindowsPlatform;
 #[cfg(x11_host)]
 pub use hosts::X11Platform;
-// The headless host's test controls and doubles, each its feature's.
+// The headless host's test controls and doubles, each its feature's: a test's
+// surface, so only with `scripted`: the release API opens no double.
+#[cfg(feature = "scripted")]
 pub use accessibility::headless::FakeAccessibility;
+#[cfg(feature = "scripted")]
 pub use display::headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
 };
+#[cfg(feature = "scripted")]
 pub use drag::headless::HeadlessDragAndDrop;
+#[cfg(feature = "scripted")]
 pub use input::headless::HeadlessInputDevices;
+#[cfg(feature = "scripted")]
 pub use lifecycle::headless::HeadlessHostEvents;
+#[cfg(feature = "scripted")]
 pub use owner::headless::{
     HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
 };
+#[cfg(feature = "scripted")]
 pub use preferences::headless::HeadlessPreferences;
+#[cfg(feature = "scripted")]
 pub use text::headless::FakeTextInput;
+#[cfg(feature = "scripted")]
 pub use window::headless::{
     HeadlessHostWindow, HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem,
     UnknownDisplay,
@@ -752,7 +774,7 @@ impl CurrentHost {
         #[cfg(not(any(target_os = "linux", windows, target_arch = "wasm32")))]
         let _ = instance;
         match self {
-            Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
+            Self::Headless => Ok(Box::new(hosts::HeadlessPlatform::new())),
             #[cfg(windows)]
             Self::Windows => Ok(Box::new(WindowsPlatform::try_new_with(instance)?)),
             #[cfg(target_os = "macos")]
@@ -938,7 +960,7 @@ fn choose_linux_host(
 /// assert_eq!(platform.name(), "Headless");
 /// ```
 pub fn headless_platform() -> Box<dyn Platform> {
-    Box::new(HeadlessPlatform::new())
+    Box::new(hosts::HeadlessPlatform::new())
 }
 
 /// What the Android host hands the runner at start ([`android_platform`]).

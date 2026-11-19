@@ -51,10 +51,12 @@ Option 1.
    name `image-cache`) lives beside the cache it hands out (ADR-0152 §1).
    `ImageCacheCapability::per_runtime` is the built-in provider: it keeps one cache per UI
    runtime, made with `ImageCacheConfig::default()` at the runtime's first acquisition, so a
-   runtime that shows no asset or network image keeps none. `flui-app` registers it with its
-   `images` feature, the headless host of `flui-testing` with its own, and the facade's `images`
-   turns both on with `flui-widgets`' loaders and publishes `flui::assets`. An application that
-   wants another budget or one cache across its runtimes provides its own with
+   runtime that shows no asset or network image keeps none. The UI runtime's built-ins
+   (`flui_runtime::capability::BuiltIns`) register it in every window system with
+   `flui-runtime`'s `images` feature, which `flui-app` and the headless host of `flui-testing`
+   forward from their own, so a test acquires the cache exactly when a run does; the facade's
+   `images` turns them on with `flui-widgets`' loaders and publishes `flui::assets`. An
+   application that wants another budget or one cache across its runtimes provides its own with
    `Application::capability::<ImageCacheCapability>(provider)`.
 2. **A runtime trims the caches its providers keep.** `ProviderContext::runtime_cache::<T>()`
    (`RuntimeLocals::get_or_default_reclaimed`) is `runtime_local::<T>()` for a `T` that is also

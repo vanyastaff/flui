@@ -113,7 +113,10 @@ trait depends on `flui-platform` instead.
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
-  whose loop it is. The launch values (an Android intent's extras, the
+  whose loop it is. The headless host's name, window, doubles (`FakeTextInput`,
+  `FakeAccessibility`) and test controls are public only with the `scripted` feature: without it
+  the host still runs under `FLUI_HEADLESS` as a `dyn Platform`, and no public path names a
+  double. The launch values (an Android intent's extras, the
   environment elsewhere; ADR-0288 §7) and the page's origin are no position:
   the loop answers them (`host::Launch`). Opening a URL or a path, the file
   dialogs and the user's folders are not the core host's at all: they are
@@ -6267,7 +6270,44 @@ keyboard composed, committed, passed Escape on while composing and sent its acti
 
 `Platform::data_store` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
-`storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
+`storage::data_dirs` (the `dirs` crate), in the process's container when it
+runs in one (`storage::container`, over `flui_platform::sandbox`'s detection
+and the package identity): a Flatpak's `~/.var/app/<id>/data` even without
+`XDG_DATA_HOME`, the macOS App Sandbox's container even without `HOME`, a
+packaged Windows application's `LocalState` and `RoamingState` instead of the
+`%APPDATA%` copy Windows would redirect it to (ADR-0380 §4). The host's store
+(`DataStore::of_process`, `storage::process_store`) finds them at its first call
+that can read the container, on the thread the host runs that call on (never
+the owner thread; `flui-app`'s storage host uses the IO runtime's blocking
+threads), since a Flatpak's description is a file. One find runs at a time, the
+calls that arrive meanwhile share its outcome, and one refused (a description
+out of reach) answers all of them, the next call reading again; a packaged application's
+store from before it was packaged is copied over then, once, within
+`MAX_MIGRATED_FILES` and `MAX_MIGRATED_BYTES`, into a staging folder made with
+`create_dir` and renamed into place whole, after the staging folders an earlier
+copy left are swept by their exact name (folders only, no link followed, at most
+`MAX_SWEPT`). One instance migrates at a time, under an exclusive lock on one
+lock file in the package's `LocalState` (`migration_lock`) held for the sweep,
+the copy and the rename (its folder made first); an instance that finds it held
+waits for it, however long the holder's copy takes (the system releases a
+crashed holder's lock), then judges the root again and takes the one the holder
+put in place. The wait blocks: one find runs at a time (`process_store`'s
+`FindState`), every call that arrives meanwhile waits for its outcome, and
+`flui-app`'s storage host runs the store's calls on the IO runtime's blocking
+threads on FLUI's default pools, so there the wait holds none of the IO workers
+other work shares; on a host's own IO pool (an embedder's) the calls run in its
+IO task, and the wait holds that task. What a stalled holder still holds back
+is that instance's storage answers (`docs/gaps.md`). A failed copy or rename
+removes its staging folder and reports its own error, and a root another
+instance placed first is kept. The old store stays the store only where the new
+root was shown to hold none (`roots_after_migration`): after a failed copy,
+which the next start tries again, and for a store past the bound, which is
+never copied; the session reads and writes it where it is, so no new root
+orphans it. A new root that could not be read stays the store, so a session
+never goes back to an old store an earlier copy replaced. The container under
+the user's home is under the
+home the user database records (`getpwuid_r`), never `HOME`. The Flatpak
+description is read on Linux alone. Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
 backs up. Headless never touches the user's directories: it answers with a

@@ -21,8 +21,8 @@ workspace = true
 [features]
 # Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
 # that has no production caller yet, and `ExecutionServices::with_limits`/
-# `default_pools_started`), and the `testing` module's `TestWindow` and
-# `ScriptedSink` doubles, and decoding a recording's rows (`__runtime::record_from_wire`,
+# `default_pools_started`), and the `testing` module's `ScriptedSink` and
+# `SceneTotals`, and decoding a recording's rows (`__runtime::record_from_wire`,
 # which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
 testing = ["flui-platform/testing", "flui-layer/testing"]
@@ -30,6 +30,12 @@ testing = ["flui-platform/testing", "flui-layer/testing"]
 # hot-reload crate; `flui-app` always turns it on and translates an installed
 # `DevReloadHook`'s event into it (ADR-0311 §1).
 hot-reload = []
+# The image cache each UI runtime keeps for `Image::asset` and `Image::network`
+# (`flui_assets::ImageCacheCapability`, ADR-0387), registered among the
+# built-ins in every window system and trimmed by the runtime under memory
+# pressure. A host forwards its own `images` feature here, so a headless test
+# acquires the cache exactly when a run of the same build would.
+images = ["dep:flui-assets"]
 
 [dependencies]
 # `ActionRequest`, the assistive-technology variant of `HostInput` (ADR-0207 §1).
@@ -58,6 +64,8 @@ flui-platform = { workspace = true }
 # Window sizes and geometry; `FontCollection`/`TextContext`, the text service
 # each UI runtime owns over the app's font collection (ADR-0092 §3).
 flui-painting = { workspace = true }
+# The image cache the built-ins register (`images`).
+flui-assets = { workspace = true, optional = true }
 # The UI runtime core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `flui_view::__runtime` is the seam a
 # UI runtime drives it through), its render pipeline, the UI runtime-owned scheduler,
@@ -106,11 +114,11 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 # The UI runtime tests: the headless platform's windows and capability fakes
-# (`headless_platform`, `FakeTextInput`, `FakeAccessibility`),
+# (`headless_platform`, and with `scripted` `FakeTextInput`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.
-flui-native = { workspace = true }
+flui-native = { workspace = true, features = ["scripted"] }
 flui-objects = { workspace = true }
 static_assertions = { workspace = true }
 # Exact diagnostics for owner-thread and frame-entry boundaries.
