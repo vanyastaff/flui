@@ -12,8 +12,9 @@
 //! The accumulator keeps a [`Region`](flui_layer::Region): the rects of every publication owed,
 //! up to [`Region::MAX`](flui_layer::Region::MAX) of them, a further one merging the cheapest pair as
 //! the region itself does. [`crate::damage::plan_frame`] turns it into where a frame renders;
-//! a partial frame redraws its region rect by rect (ADR-0304 §9), one pass per rect, each
-//! under its own scissor and culled by its own rect.
+//! a partial frame redraws its region in one pass per rect, each under its own scissor and culled
+//! by its own rect. The frame protocol has already folded the rects into their bounding box when
+//! `region_cost` predicted the box cheaper (ADR-0304 §9).
 //!
 //! wgpu does not expose a swapchain image's age, so the pixels outside a
 //! scissor on a freshly acquired swapchain image are whatever an older frame
@@ -127,8 +128,9 @@ pub(crate) enum FramePlan {
     /// rect's scissor, everything a walk culled by that rect reaches. No
     /// pixel outside the rects is written, and every chunk that meets a
     /// written pixel is drawn there once, in paint order. The region is the
-    /// damage the frame closed over its backdrop readers
-    /// (`FrameProtocol::include_backdrop_dependencies`).
+    /// damage the frame closed over its backdrop readers, already folded into
+    /// its bounding box where that was predicted cheaper
+    /// (`FrameProtocol::include_backdrop_dependencies`, ADR-0304 §9).
     RetainedPartial(Region),
 }
 

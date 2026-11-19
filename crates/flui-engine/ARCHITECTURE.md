@@ -65,7 +65,7 @@ oversized radii against the same public path commands without a shape hint.
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
 | Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
-| Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders; a partial frame redraws its region in one pass per rect, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
+| Damage | `damage.rs`, `region_cost.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders), `region_cost.rs` (whether a partial frame redraws its region in one pass per rect or one under its bounding box, by their predicted cost, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
@@ -1154,12 +1154,19 @@ to that base with `RasterBase` (ADR-0304 §7). The enum is exhaustive (ADR-0304 
 `Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
 engine matches all three with no wildcard, so a new variant fails to compile
 here. The tracker keeps the region's rects (a further one merges the cheapest
-pair, as `Region` does), and a partial frame redraws them rect by rect
-(ADR-0304 §9): one pass per rect, each clearing its own rect under its own
-scissor and walking the scene culled by that rect, counted as
-`region_passes`. The region's bounding box in one pass is not a plan: it
-redraws the gap between distant rects, on the `raster_share` bench nearly
-the whole surface for two cells in opposite corners. A chunk that meets two
+pair, as `Region` does), and a partial frame redraws them rect by rect or
+under their bounding box (ADR-0304 §9), counted as `region_passes`: each
+pass clears its own rect under its own scissor and walks the scene culled
+by that rect. `region_cost.rs` picks the shape once the damage is closed,
+from one walk of the version culled by the box: per rect costs each reached
+chunk's commands times the rects it meets, plus `PIXEL_COST` a pixel and
+`PASS_COST` a pass; the box costs each chunk's commands once, its own area
+and one pass. Rects in opposite corners of a grid of small chunks stay
+apart (on the `raster_share` bench the box redraws nearly the whole
+surface); a few rects over one large chunk take the box, which replays it
+once (`a_region_is_redrawn_the_way_predicted_cheaper`,
+`a_heavy_chunk_redraws_a_region_under_its_bounding_box`). A box is closed
+again before it is drawn, so a reader it meets is redrawn whole. A chunk that meets two
 rects is drawn in each pass, from its kept recording when it has one, and
 recorded again in each pass otherwise ([gaps](../../docs/gaps.md)). No
 pixel outside the rects is written and every chunk that meets a written
@@ -1169,7 +1176,7 @@ walk culled per rect would clear the gap without redrawing it and blend what
 meets both rects twice. The damage is closed over backdrop readers rect by
 rect (`FrameProtocol::include_backdrop_dependencies`): the closure of a
 region leaves each read footprint it joined inside one rect, and a reader
-in the gap between the rects, which no rect meets, is left as the last
+in the gap between kept rects, which no rect meets, is left as the last
 frame drew it
 (`a_backdrop_reader_in_the_gap_between_a_regions_rects_is_left_alone`,
 `a_backdrop_effect_in_the_gap_between_a_regions_rects_is_left_alone`). Damage

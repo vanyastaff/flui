@@ -3046,6 +3046,17 @@ fn region_frame(
     after: &Scene,
     rects: &[Rect<f64>],
 ) -> RetainedCapture {
+    region_frame_over(renderer, before, after, rects).0
+}
+
+/// [`region_frame`], answering also the retained pixels the region frame
+/// started from.
+fn region_frame_over(
+    renderer: &crate::headless::HeadlessRenderer,
+    before: &Scene,
+    after: &Scene,
+    rects: &[Rect<f64>],
+) -> (RetainedCapture, Vec<u8>) {
     let mut capture = renderer
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
@@ -3054,13 +3065,28 @@ fn region_frame(
         .render_scene(before)
         .expect("the first frame renders");
     warm(&mut capture, before);
+    let retained = capture.read_retained_rgba().expect("readback");
     for &rect in rects {
         capture.mark_dirty(rect);
     }
     capture
         .render_scene(after)
         .expect("the region frame renders");
-    capture
+    (capture, retained)
+}
+
+/// How many pixels outside `rects` differ between `before` and `after`, in
+/// any byte.
+fn written_outside(before: &[u8], after: &[u8], rects: &[flui_layer::DamageRect]) -> usize {
+    let inside = |x: u32, y: u32| {
+        rects
+            .iter()
+            .any(|r| (r.left()..r.right()).contains(&x) && (r.top()..r.bottom()).contains(&y))
+    };
+    (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(before, x, y) != px(after, x, y))
+        .count()
 }
 
 /// The plan's rects, or `None` for a frame that was not partial.
@@ -3103,7 +3129,7 @@ fn a_backdrop_reader_in_the_gap_between_a_regions_rects_is_left_alone() {
         })
     };
     let (before, after) = (build(Color::RED), build(Color::WHITE));
-    let partial = region_frame(
+    let (partial, retained) = region_frame_over(
         &renderer,
         &before,
         &after,
@@ -3122,6 +3148,11 @@ fn a_backdrop_reader_in_the_gap_between_a_regions_rects_is_left_alone() {
     let pixels = partial.read_rgba().expect("readback");
     let stale = mismatches(&pixels, &full_frame_pixels(&renderer, &after), 2);
     assert!(stale.is_empty(), "stale pixels at {stale:?}");
+    // The filter's gap, and every other pixel outside the rects, holds the
+    // bytes the frame started from.
+    let now = partial.read_retained_rgba().expect("readback");
+    let rewritten = written_outside(&retained, &now, &rects);
+    assert_eq!(rewritten, 0, "pixels outside the rects were rewritten");
 }
 
 /// Grouped backdrop filters damaged in two corners of a rect-by-rect frame

@@ -340,9 +340,10 @@ impl DamageRect {
 ```
 
 The rects of a region are non-empty and pairwise disjoint. Inserting a rect merges it with every
-rect it overlaps into their bounding box, and merging repeats until none overlap; a ninth disjoint
-rect merges the pair whose bounding box adds the least area, under the same repetition. A region's
-area is a `u64` that cannot overflow, since disjoint rects inside a surface cover at most its area;
+rect it overlaps, or shares a whole side with, into their bounding box, and merging repeats until
+none qualify; a ninth disjoint rect merges the pair whose bounding box adds the least area, under
+the same repetition. A region's area is a `u64` that cannot overflow, since
+disjoint rects inside a surface cover at most its area;
 above `full_above` of the surface (`DamageMode`, one half by default) the region becomes
 `Full(AboveThreshold)`. `union` keeps the first `Full` reason. `try_covering` refuses a
 non-finite rect with `NonFinite`, which becomes `Full(NonFinite)`; `Ok(None)` means empty or off
@@ -496,23 +497,43 @@ applied version. A device-pixel-ratio change re-records every chunk,
 as the captures are dropped today (`paint.rs:116-120`), and changes the root placement:
 `Full(SurfaceChanged)`.
 
-§9. **The raster side retains recordings and redraws a region rect by rect.** The engine walks the
-held version and culls nodes by their subtree footprint and chunks by their bounds, each through
-the chain above it. A partial frame redraws its `Region` in one pass per rect, at most
-`Region::MAX`, counted as `region_passes`: each pass clears its rect under that rect's scissor
-and redraws what a walk culled by that rect reaches, and a chunk that meets two rects is drawn in
-each, from its kept recording when it has one. Damage is closed over the backdrop readers of the
-rects, so a reader in the gap between them, which no rect meets, is left as the last frame drew
-it. The invariant: no pixel outside the rects is written, and every chunk that meets a written
-pixel is drawn there in paint order. One scissor around the region with culling per rect breaks
-it: the pixels between the rects are cleared and not redrawn, or drawn and blended twice. The
-region's bounding box in one pass is not taken: on the `raster_share` bench, under lavapipe at
-1200², two cells in opposite corners of a 60 × 60 grid redraw 0.12 % of the surface in 4.2 ms of
-raster against 95 % in 90 ms under the box, and eight cells 0.50 % in 5.9 ms against 96 % in
-89 ms, the box's frame replaying the 7 000 chunks inside it. A chunk that meets several rects and
-has no kept recording is recorded once per pass; recording it once and splicing it into the later
-passes is not built, since on that bench no chunk was recorded in more than one pass
-([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)).
+§9. **The raster side retains recordings and redraws a region rect by rect or under its box,
+whichever costs less.** The engine walks the held version and culls nodes by their subtree
+footprint and chunks by their bounds, each through the chain above it. A partial frame redraws its
+`Region` in one pass per rect, at most `Region::MAX`, or in one pass under the region's bounding
+box, counted as `region_passes`: each pass clears its rect under that rect's scissor and redraws
+what a walk culled by that rect reaches, and a chunk that meets two rects is drawn in each, from
+its kept recording when it has one. The invariant: no pixel outside the pass rects is written, and
+every chunk that meets a written pixel is drawn there in paint order. One scissor around the region
+with culling per rect breaks it: the pixels between the rects are cleared and not redrawn, or drawn
+and blended twice.
+
+The choice is made once the damage is closed over its backdrop readers, from one walk of the
+version culled by the bounding box (`crates/flui-engine/src/region_cost.rs`). For each chunk it
+reaches, the walk counts its commands and the rects its device bounds meet, `m`, and predicts:
+
+```text
+per rect  = Σ commands · m + PIXEL_COST · Σ rect area + PASS_COST · rects
+box       = Σ commands     + PIXEL_COST · box area    + PASS_COST
+```
+
+The cheaper is taken, the rects on a tie. When the box is taken it is closed again, since it can
+meet readers the rects did not, until one rect is owed or the rects win; a closure that has not
+settled after `Region::MAX` rounds becomes a full frame. With the rects, a reader in the gap
+between them, which no rect meets, is left as the last frame drew it. The precedents are Flutter,
+whose raster cache redraws one bounding rect of the frame's damage, and Chromium, whose compositor
+keeps a few damage rects or their union. Neither rule alone fits what was measured under lavapipe: on the `raster_share` bench at 1200², two cells in
+opposite corners of a 60 × 60 grid redraw 0.12 % of the surface in 4.2 ms per rect against 95 % in
+90 ms under the box, which replays the 7 000 chunks inside it; at 512² over one chunk of 20 000
+rects, eight small rects cost 81 ms per rect against 25 ms under the box, which replays the chunk
+once instead of eight times. `PIXEL_COST` (0.15 commands a pixel), `PASS_COST` (500 commands) and
+the cap `Region::MAX` are hypotheses fitted on lavapipe so that every measured case picks the
+faster plan (`docs/plans/specs/render-scaling/tasks.md`); a desktop and a tiling mobile GPU are
+owed a run ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)). The decision walk
+costs under 1 ms at the bench's largest box, and nothing for a region of one rect. A chunk that
+meets several rects and has no kept recording is recorded once per pass; recording it once and
+splicing it into the later passes is not built, since on that bench no chunk was recorded in more
+than one pass ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)).
 
 A chunk's IR outlives the frame in a recording cache:
 
@@ -624,7 +645,7 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_place_damages_the_subtree_under_both_placements`,
   `an_effect_chain_change_damages_every_slot_under_it`,
   `a_follower_resolves_after_its_leaders_boundary_moves_parents`); the `region_contract` table
-  (`a_ninth_rect_merges_the_cheapest_pair`, `merged_rects_stay_pairwise_disjoint`,
+  (`a_ninth_rect_merges_the_cheapest_pair`, `rects_that_share_a_side_merge`, `merged_rects_stay_pairwise_disjoint`,
   `a_non_finite_rect_escalates_to_full`, `full_keeps_its_first_reason`); the
   `content_version_contract` table (`a_replaced_owner_never_reports_unchanged`,
   `an_exhausted_mint_renews_the_lineage_and_publishes_full`, through `IdMint::starting_after`); the
@@ -653,7 +674,9 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_raster_panic_renders_the_next_frame_in_full`, and the readback row
   `region_frames_match_a_full_frame`, whose two damaged rects sit in opposite corners with
   translucent content between them, so a plan that clears the gap without redrawing it, or blends
-  it twice, fails. The existing
+  it twice, fails; `a_region_is_redrawn_the_way_predicted_cheaper`, whose cases fail with the
+  plan fixed to either shape, and `a_heavy_chunk_redraws_a_region_under_its_bounding_box`. The
+  existing
   `latest_frame_wins_and_superseded_damage_folds_into_the_survivor`
   (`crates/flui-engine/tests/raster_executor.rs`) and
   `a_moved_box_repaints_its_old_and_new_positions_only`
@@ -710,6 +733,6 @@ consecutive versions. The patch damage must cover the diff damage.
 - The measurements cited are `flui-engine`'s `damage_scissor` bench (ADR-0061), `flui-layer`'s
   `damage_diff` bench (`crates/flui-layer/ARCHITECTURE.md:172-173`) and `flui-app`'s
   `raster_share` bench.
-- Revisit `Region::MAX`, the `Bounds` plan's factor of two, the pending log's 16 entries and the
+- Revisit `Region::MAX`, the region cost's `PIXEL_COST` and `PASS_COST` (§9), the pending log's 16 entries and the
   recording cache's budget and admission threshold when the `caret_blink_in_10k_list` counts or a
   readback bench show another value wins; each is a constant, not a contract.

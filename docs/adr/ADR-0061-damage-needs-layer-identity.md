@@ -106,7 +106,8 @@ the field is always `None` in production. Populating it, or an equivalent
 `DamageTracker` moved from `flui-layer` to `flui-engine/src/damage.rs`, crate-private:
 it is the renderer's runtime state, and the layer crate defines only the seam message
 `DamageRegion`. The tracker keeps the seam's `Region` of up to eight disjoint rects, and a partial
-frame redraws it rect by rect (ADR-0304 §9), each rect under its own scissor.
+frame redraws it rect by rect or under its bounding box, whichever ADR-0304 §9 predicts costs
+less, each pass under its own scissor.
 Everything else above stands: the consuming half is written and tested, the
 producer is the missing piece, and `damage_scissor` remains the baseline.
 

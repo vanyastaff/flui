@@ -3,7 +3,7 @@
 //! the owner's thread.
 //!
 //! The scene is a grid of N × N cells, each a coloured box with a short text
-//! label, at N = 10, 30 and 60. Five frames are measured for each N:
+//! label, at N = 10, 30 and 60. Six frames are measured for each N:
 //!
 //! - **first**: a freshly mounted tree's first frame, drawn in full, on a
 //!   device that an earlier mount already warmed: pipelines built, and the
@@ -20,7 +20,10 @@
 //!   two disjoint rects whose bounding box covers most of the surface;
 //! - **update, eight cells**: eight cells spread over two rows near the top
 //!   and the bottom, each under a boundary of its own, change together: a
-//!   region of eight rects, the most it holds.
+//!   region of eight rects, the most it holds;
+//! - **update, eight packed cells**: eight cells around the middle, one cell
+//!   apart in two rows two apart, change together: eight rects that cover
+//!   more than a third of their bounding box, large ones at N = 10.
 //!
 //! Each row also gives the share of the surface the frame redrew (the
 //! region's bounding box when the slot drew it in one pass, its rects when it
@@ -196,6 +199,9 @@ mod grid {
             let grid = Grid::new(n, Isolation::Boundary, Cells::Eight);
             let updates = update_frames(&mut sink, &fonts, grid);
             report(n, "update, eight cells", Drawn::Partial, &updates);
+            let grid = Grid::new(n, Isolation::Boundary, Cells::Packed);
+            let updates = update_frames(&mut sink, &fonts, grid);
+            report(n, "update, eight packed cells", Drawn::Partial, &updates);
         }
         println!();
         println!(
@@ -411,6 +417,10 @@ mod grid {
         FarApart,
         /// Eight cells spread over the grid, one per region rect.
         Eight,
+        /// Eight cells packed around the middle, one cell apart, in two rows
+        /// two apart: eight rects that cover more than a third of their
+        /// bounding box.
+        Packed,
     }
 
     impl Cells {
@@ -424,6 +434,13 @@ mod grid {
                     .map(|k| {
                         let row = 1 + (k / 4) * (n - 3);
                         let column = 1 + (k % 4) * (n - 3) / 3;
+                        row * n + column
+                    })
+                    .collect::<Vec<usize>>(),
+                Self::Packed => (0..8)
+                    .map(|k| {
+                        let row = n / 2 - 1 + (k / 4) * 2;
+                        let column = n / 2 - 3 + (k % 4) * 2;
                         row * n + column
                     })
                     .collect::<Vec<usize>>(),

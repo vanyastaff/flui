@@ -338,36 +338,63 @@ impl FrameProtocol {
     /// Retained pixels outside damage contain the previous frame's *final*
     /// composition, including later siblings, not the current ordered backdrop.
     ///
-    /// The damage is closed as the frame redraws it, rect by rect: the
-    /// closure of a region holds each read footprint it joined inside one
-    /// rect, which that rect's pass redraws whole, and a reader no rect meets
-    /// is left as the last frame drew it.
+    /// The damage is closed as the frame redraws it. A region of a version
+    /// whose bounding box is predicted cheaper than its rects
+    /// ([`region_cost`](crate::region_cost)) becomes that box, which then
+    /// closes as itself: a box redraws the gap between the rects, where a
+    /// reader no rect met is cut by the box's scissor. Otherwise the closure
+    /// of the region holds each read footprint it joined inside one rect,
+    /// which that rect's pass redraws whole, and a reader no rect meets is
+    /// left as the last frame drew it. A closure that adds a rect outside the
+    /// box is planned and closed again, at most [`Region::MAX`] rounds before
+    /// the frame repaints in full.
+    ///
+    /// [`Region::MAX`]: flui_layer::Region::MAX
     pub(crate) fn include_backdrop_dependencies(
         &mut self,
         scene: &flui_layer::Scene,
         size: (u32, u32),
     ) {
-        use flui_layer::{DamageRegion, SceneContent};
+        use flui_layer::{DamageRegion, Region, SceneContent};
 
-        let Some(region) = self.damage.region() else {
-            return;
-        };
-        let owed = DamageRegion::Region(region);
-        let closed = match scene.content() {
-            // A retained version closes the damage over its own filters and
-            // destination-reading chunks, reading only those (ADR-0304 §6):
-            // each publication's damage was closed under its version, and the
-            // damage owed here may join several.
-            SceneContent::Version(version) => version.close_damage(owed, size),
-            SceneContent::Tree(tree) => {
-                let closures = tree_backdrop_closures(tree);
-                // Growing one read region can expose a second filter: the
-                // fixed point is reached before the partial clear and any
-                // recording, not next frame (ADR-0304 §6).
-                flui_layer::close_over(owed, &closures, size)
+        for _ in 0..Region::MAX {
+            let Some(region) = self.damage.region() else {
+                return;
+            };
+            let owed = DamageRegion::Region(region);
+            let closed = match scene.content() {
+                // A retained version closes the damage over its own filters and
+                // destination-reading chunks, reading only those (ADR-0304 §6):
+                // each publication's damage was closed under its version, and the
+                // damage owed here may join several.
+                SceneContent::Version(version) => version.close_damage(owed, size),
+                SceneContent::Tree(tree) => {
+                    let closures = tree_backdrop_closures(tree);
+                    // Growing one read region can expose a second filter: the
+                    // fixed point is reached before the partial clear and any
+                    // recording, not next frame (ADR-0304 §6).
+                    flui_layer::close_over(owed, &closures, size)
+                }
+            };
+            self.apply_closed(owed, closed);
+            let Some(region) = self.damage.region() else {
+                return;
+            };
+            // A hand-built tree has no chunks to weigh: it is redrawn rect by
+            // rect.
+            let SceneContent::Version(version) = scene.content() else {
+                return;
+            };
+            if region.rects().len() == 1
+                || crate::region_cost::predict(version, &region).shape()
+                    == crate::region_cost::RegionShape::Rects
+            {
+                return;
             }
-        };
-        self.apply_closed(owed, closed);
+            // Every rect overlaps the box, so the tracker folds them into it.
+            self.damage.mark_rect(region.bounds());
+        }
+        self.damage.mark_full_repaint();
     }
 
     /// Marks what closing `region` added, rect by rect.
@@ -495,6 +522,13 @@ impl FrameProtocol {
     #[cfg(test)]
     pub(crate) fn counters(&self) -> RasterCounters {
         self.counters
+    }
+
+    /// The region a partial frame would redraw now: `None` when the frame
+    /// repaints in full or owes nothing.
+    #[cfg(test)]
+    pub(crate) fn owed_region(&self) -> Option<flui_layer::Region> {
+        self.damage.region()
     }
 
     /// The frame presented: the damage it covered is paid.
