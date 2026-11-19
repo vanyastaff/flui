@@ -265,11 +265,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// Composite-resolved transforms for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing), resolved
-    /// against each applied scene version (`scene_applied`) by
     /// against each applied scene version (`scene_applied`) through
-    /// `SceneVersion::follower_transform`, the same resolution the engine
-    /// draws by over the flattened version.
-    /// against. Present ⟹ the follower is visible this frame under the
+    /// `SceneVersion::follower_transform`, the resolution the engine's walk
+    /// draws by. Present ⟹ the follower is visible this frame under the
     /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
     /// hit-test walk (`accessors.rs`) so a visually-displaced
@@ -344,7 +342,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// `last_follower_transforms`. The hit-test walk must distinguish "not a
     /// follower" (fall through to normal traversal) from "a follower that
     /// is currently hidden" (skip the subtree entirely, mirroring
-    /// `resolve_follower_transform -> None -> don't descend` on the render
+    /// `SceneVersion::follower_transform -> None -> don't descend` on the render
     /// path); `last_follower_transforms`'s absence alone conflates both
     /// cases, so this set carries follower identity independent of
     /// resolution outcome.

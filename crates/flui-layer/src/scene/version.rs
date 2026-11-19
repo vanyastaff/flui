@@ -64,10 +64,6 @@ impl NodeRecord {
         }
     }
 
-    pub(crate) fn key(&self) -> NodeKey {
-        self.key
-    }
-
     pub(crate) fn parent(&self) -> Option<NodeKey> {
         self.parent
     }

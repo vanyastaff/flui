@@ -513,8 +513,12 @@ every `Place`. A disposed boundary's node is retired. The runtime applies
 the patch where it now freezes the per-frame tree
 (`crates/flui-runtime/src/ui_runtime/frame.rs:625-639`), with its own node for the performance
 overlay, republished when the overlay's numbers change; the overlay-style probe, input regions,
-leader watches (`paint.rs:370`) and follower hit-test placement (`paint.rs:326-352`) read the
-applied version. A device-pixel-ratio change re-records every chunk,
+leader watches and follower hit-test placement read the applied version. The runtime reports it to
+`PipelineOwner::scene_applied`, which reads off it each follower's transform for hit-testing and
+input regions (`SceneVersion::follower_transform`, the resolution the engine draws by) and each
+watched leader's geometry (`leader_size`, `leader_origin`); the runtime then probes the overlay
+style (`SceneVersion::find_annotation`) and collects the input regions. A device-pixel-ratio
+change re-records every chunk,
 as the captures are dropped today (`paint.rs:116-120`), and changes the root placement:
 `Full(SurfaceChanged)`.
 
@@ -703,7 +707,8 @@ consecutive versions. The patch damage must cover the diff damage.
 - Good, because a retry after an unshown frame republishes the held version and re-records
   nothing (§7), where ADR-0068 §3 repainted the whole tree.
 - Neutral, because the inspector's layer link (`Link::Layer`, `crates/flui-layer/src/scene/inspect.rs`)
-  names a node by its slot, generation and lineage, so a boundary keeps its link across frames
+  is made from the node's `SceneNodeId` (its lineage, slot and generation) and resolves only in a
+  version of that lineage, so a boundary keeps its link across frames
   and a link into an old lineage resolves to nothing.
 
 ### Confirmation

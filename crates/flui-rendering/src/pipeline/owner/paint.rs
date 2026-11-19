@@ -2609,7 +2609,7 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         }
         // `Layer::Follower` carries no resolved transform at all — its
         // anchors and offsets are inputs to the composite-time
-        // `flui_layer::resolve_follower_transform`. `target_offset` is
+        // `SceneVersion::follower_transform`. `target_offset` is
         // recorded as-authored (not origin-shifted), like `size`.
         FragmentScope::Follower(follower) => Layer::Follower(follower),
     }
