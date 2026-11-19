@@ -941,6 +941,10 @@ impl ScriptedBuiltIns {
             self.primary_selection.register(&mut registrar);
         }
         self.background.register(&mut registrar);
+        #[cfg(feature = "images")]
+        registrar.provide::<flui_assets::ImageCacheCapability>(
+            flui_assets::ImageCacheCapability::per_runtime,
+        );
         #[cfg(feature = "http")]
         self.http.register(&mut registrar);
         registrar

@@ -472,6 +472,9 @@ impl UiRuntime {
             first.contain(|| {
                 let _ = self.text.try_with(|text| text.reclaim(*level));
             });
+            // The caches providers keep for this runtime, its decoded images
+            // among them (`ProviderContext::runtime_cache`).
+            self.owner_jobs.locals().reclaim(*level, &mut first);
         }
         // A locked or sleeping session shows no window, so no covered window
         // owes its surface a frame while either holds (ADR-0357).

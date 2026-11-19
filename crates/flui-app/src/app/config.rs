@@ -773,11 +773,10 @@ impl AppConfig {
 
     /// Give `receiver` memory back when the system reports memory pressure.
     ///
-    /// The framework reclaims its own caches (text, GPU buffers, the glyph
-    /// atlas and image textures) itself; register what the application owns
-    /// beside them, above all the `flui_assets::ImageCache` its images load
-    /// through, which keeps their decoded pixels (an `Arc` of a receiver is a
-    /// receiver). Receivers are reclaimed once per notice, in the
+    /// The framework reclaims its own caches (text, decoded images, GPU
+    /// buffers, the glyph atlas and image textures) itself; register what the
+    /// application owns beside them (an `Arc` of a receiver is a receiver).
+    /// Receivers are reclaimed once per notice, in the
     /// order registered, before any subscriber of
     /// [`HostNotice::MemoryPressure`](flui_platform::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the

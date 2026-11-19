@@ -111,7 +111,7 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # so no type of this crate meets its twin. Keep the harness checkout-only:
 # Cargo omits this versionless dev edge from archives, breaking the publication
 # cycle while retaining the public, versioned testing-to-widgets dependency.
-flui-testing = { path = "../flui-testing", features = ["http"] }
+flui-testing = { path = "../flui-testing", features = ["http", "images"] }
 # A capability registry without the background lanes, for the `Image` test of
 # a host that has none. Checkout-only test edge, like `flui-testing` above.
 flui-runtime = { path = "../flui-runtime" }
@@ -183,8 +183,8 @@ testing = []
 # without it.
 images = ["flui-painting/decode"]
 # Async, `flui-assets`-backed image loading: `AssetImage` and `NetworkImage`
-# resolve through an injected `Arc<flui_assets::ImageCache>` on the UI
-# runtime's lanes, a network image fetched with the host's HTTP capability,
+# resolve through the image cache each UI runtime keeps (ADR-0387) on its
+# lanes, a network image fetched with the host's HTTP capability,
 # decoded by the same `Image::decode` `images` activates. Pulls in
 # `flui-assets`, whose `ImageCache` keeps the
 # decoded images and coalesces their loads.

@@ -34,6 +34,12 @@ default = []
 # is refused as not registered, and the application links no TLS stack.
 http = ["flui-native/http"]
 
+# The image cache each UI runtime keeps for `Image::asset` and `Image::network`
+# (`flui_assets::ImageCacheCapability`, ADR-0387), trimmed by the runtime under
+# memory pressure. The facade's `images` turns it on with the widgets' loaders.
+# Without it a widget acquiring the cache is refused as not registered.
+images = ["dep:flui-assets"]
+
 # One instance per user session (ADR-0254 §4): `Application::single_instance`,
 # on by itself when the application declares a URL scheme, and on Linux and
 # Windows a later launch handing the running instance what it opens. The
@@ -70,6 +76,8 @@ driver = []
 
 [dependencies]
 flui-platform = { workspace = true }
+# The image cache each UI runtime keeps (`images`).
+flui-assets = { workspace = true, optional = true }
 # Core FLUI crates
 flui-view = { workspace = true }
 # `#[flui::main]`, the entry attribute this crate re-exports beside the run it

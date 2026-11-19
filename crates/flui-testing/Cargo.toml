@@ -30,6 +30,10 @@ workspace = true
 # a test runs with the capabilities the application's build has. This crate's
 # own tests turn it on through the dev-dependency on itself.
 http = []
+# The image cache the headless host keeps for each UI runtime
+# (`flui_assets::ImageCacheCapability`), as a runner keeps one only with its
+# own `images` feature: the facade's `images` turns both on.
+images = ["dep:flui-assets"]
 
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline
@@ -70,6 +74,8 @@ flui-rendering = { workspace = true, features = ["testing"] }
 # concrete render objects its probes downcast.
 flui-widgets = { workspace = true }
 flui-objects = { workspace = true }
+# The image cache each hosted UI runtime keeps (`images`).
+flui-assets = { workspace = true, optional = true }
 # `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction
 # (`UiRuntime::pump`, ADR-0083 §4). The runtime admits this crate as a normal
 # dependent beside the host. `testing` exposes the test-only UI runtime hooks

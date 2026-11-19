@@ -1,5 +1,6 @@
 //! State a provider keeps for one UI runtime (ADR-0152 §5).
 
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory, reclaim_each};
 use flui_foundation::panic::FirstPanic;
 use std::{
     any::{Any, TypeId},
@@ -18,6 +19,11 @@ use std::{
 /// one slot per type: a capability names a private type for its slot, so two
 /// capabilities never share one.
 ///
+/// A slot made with [`get_or_default_reclaimed`](Self::get_or_default_reclaimed)
+/// is a cache: the runtime trims it under memory pressure
+/// ([`reclaim`](Self::reclaim)), so a cache kept for one runtime gives memory
+/// back with it and needs no registration of its own.
+///
 /// Owner-local. The UI runtime retires its slots after its pending
 /// completions; a slot the runtime retired is dropped once no handle holds
 /// it, and an acquisition after retirement gets a fresh value kept nowhere.
@@ -29,6 +35,9 @@ pub struct RuntimeLocals {
 #[derive(Default)]
 struct Inner {
     slots: RefCell<HashMap<TypeId, Rc<dyn Any>>>,
+    /// The slots trimmed under memory pressure, in the order first asked for,
+    /// each listed once.
+    reclaimed: RefCell<Vec<(TypeId, Rc<dyn ReclaimMemory>)>>,
     retired: Cell<bool>,
 }
 
@@ -69,6 +78,39 @@ impl RuntimeLocals {
         }
     }
 
+    /// This runtime's `T`, as [`get_or_default`](Self::get_or_default) makes
+    /// it, which the runtime also trims under memory pressure
+    /// ([`reclaim`](Self::reclaim)) for as long as it keeps the slot.
+    #[must_use]
+    pub fn get_or_default_reclaimed<T: Default + ReclaimMemory + 'static>(&self) -> Rc<T> {
+        let slot = self.get_or_default::<T>();
+        if self.inner.retired.get() {
+            return slot;
+        }
+        let mut reclaimed = self.inner.reclaimed.borrow_mut();
+        if !reclaimed.iter().any(|(id, _)| *id == TypeId::of::<T>()) {
+            reclaimed.push((TypeId::of::<T>(), Rc::clone(&slot) as Rc<dyn ReclaimMemory>));
+        }
+        drop(reclaimed);
+        slot
+    }
+
+    /// Trim every slot made with
+    /// [`get_or_default_reclaimed`](Self::get_or_default_reclaimed) for
+    /// `level`, in the order they were first asked for, with no borrow held
+    /// while one runs. A slot that panics leaves the later ones trimmed; the
+    /// first panic is held in `failure`.
+    pub fn reclaim(&self, level: MemoryPressureLevel, failure: &mut FirstPanic) {
+        let slots: Vec<Rc<dyn ReclaimMemory>> = self
+            .inner
+            .reclaimed
+            .borrow()
+            .iter()
+            .map(|(_, slot)| Rc::clone(slot))
+            .collect();
+        reclaim_each(slots.iter().map(|slot| &**slot), level, failure);
+    }
+
     fn slot<T: 'static>(&self) -> Option<Rc<T>> {
         let slot = self.inner.slots.borrow().get(&TypeId::of::<T>()).cloned();
         slot.map(Self::downcast)
@@ -86,8 +128,12 @@ impl RuntimeLocals {
     /// keep nothing.
     pub fn retire(&self) -> Option<Box<dyn Any + Send>> {
         self.inner.retired.set(true);
+        let reclaimed = std::mem::take(&mut *self.inner.reclaimed.borrow_mut());
         let slots = std::mem::take(&mut *self.inner.slots.borrow_mut());
         let mut first = FirstPanic::new();
+        // The list holds a second count of each of its slots, so it goes first
+        // and each slot ends with the map's count.
+        drop(reclaimed);
         for (_, slot) in slots {
             first.contain(move || drop(slot));
         }

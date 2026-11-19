@@ -8,13 +8,17 @@
 
 #[path = "common/cases.rs"]
 mod cases;
+#[path = "common/image_cache.rs"]
+mod image_cache;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_assets::ImageCache;
 use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedHttp, ScriptedResponse};
-use flui_widgets::{Image, ImageProvider, ImageServices, NetworkImage};
+use flui_widgets::{
+    AssetImage, Image, ImageProvider, ImageProviderError, ImageServices, NetworkImage,
+};
 
 const DECODE_BUDGET: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
@@ -27,22 +31,23 @@ fn fixture_bytes() -> Vec<u8> {
 }
 
 /// `Image::network` on the headless host: the widget acquires the host's
-/// HTTP client, the request goes out from the deterministic lanes, which run
-/// no async runtime, and the decoded image lands in the cache.
+/// HTTP client and its UI runtime's image cache, the request goes out from
+/// the deterministic lanes, which run no async runtime, and the decoded image
+/// lands in that cache.
 ///
-/// Red-check: leave `HttpCapability` out of what `Image` acquires (the load
-/// answers `HttpUnavailable` and the image never decodes).
+/// Red-check: leave `HttpCapability` or `ImageCacheCapability` out of what
+/// `Image` acquires (the load answers `HttpUnavailable` or
+/// `ImageCacheUnavailable` and the image never decodes).
 #[test]
 fn network_image_loads_with_the_hosts_http_client() {
     let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
     host.http()
         .respond(URL, ScriptedResponse::ok(fixture_bytes()));
-    let registry = Arc::new(ImageCache::default());
-    host.attach(&Image::network(Arc::clone(&registry), URL))
-        .expect("root attaches");
+    let cache = image_cache::runtime_image_cache(&mut host);
+    host.attach(&Image::network(URL)).expect("root attaches");
     let source = flui_assets::ImageSource::network(URL, &host.http().handle());
     let deadline = Instant::now() + DECODE_BUDGET;
-    while registry.get(&source).is_none() {
+    while cache.get(&source).is_none() {
         assert!(
             Instant::now() < deadline,
             "the network image did not decode within the {DECODE_BUDGET:?} budget"
@@ -50,15 +55,15 @@ fn network_image_loads_with_the_hosts_http_client() {
         let _ = host.pump(Duration::ZERO);
         std::thread::sleep(POLL_INTERVAL);
     }
-    let image = registry.get(&source).expect("the image is kept");
+    let image = cache.get(&source).expect("the image is kept");
     assert_eq!((image.width(), image.height()), (5, 3));
     assert_eq!(host.http().requests_to(URL), 1);
 }
 
 #[test]
-fn network_images_scope_cached_and_pending_responses_to_the_registry() {
+fn network_images_scope_cached_and_pending_responses_to_their_cache() {
     cases::run_cases(
-        "network registry identity",
+        "network cache identity",
         &[
             ("cached responses", cached_responses),
             ("pending responses", pending_responses),
@@ -67,17 +72,17 @@ fn network_images_scope_cached_and_pending_responses_to_the_registry() {
 }
 
 fn cached_responses() {
-    registry_responses(false);
+    cache_responses(false);
 }
 
 fn pending_responses() {
-    registry_responses(true);
+    cache_responses(true);
 }
 
-/// Two registries fetch the same URL with clients that answer different
-/// images: a registry that served another's response would show the other
-/// image and send no request of its own.
-fn registry_responses(concurrent: bool) {
+/// Two caches fetch the same URL with clients that answer different images:
+/// a cache that served another's response would show the other image and
+/// send no request of its own.
+fn cache_responses(concurrent: bool) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -90,35 +95,35 @@ fn registry_responses(concurrent: bool) {
         url,
         ScriptedResponse::ok(include_bytes!("fixtures/tiny_4x2.png").to_vec()),
     );
-    let first_services = ImageServices::new().with_http(first_http.handle());
-    let second_services = ImageServices::new().with_http(second_http.handle());
-    let first_registry = Arc::new(ImageCache::default());
-    let second_registry = Arc::new(ImageCache::default());
-    let owner = Arc::downgrade(&first_registry);
-    let first = NetworkImage::new(Arc::clone(&first_registry), url);
-    let second = NetworkImage::new(second_registry, url);
-    let retained_key = first.cache_key().expect("network provider has a key");
+    let first_services = ImageServices::new()
+        .with_http(first_http.handle())
+        .with_image_cache(Arc::new(ImageCache::default()));
+    let second_services = ImageServices::new()
+        .with_http(second_http.handle())
+        .with_image_cache(Arc::new(ImageCache::default()));
+    let first = NetworkImage::new(url);
+    let second = NetworkImage::new(url);
     let mut dimensions = runtime.block_on(async {
         let load = async {
             let (a, b) = if concurrent {
-                let (a, same_owner, b) = tokio::join!(
+                let (a, same_cache, b) = tokio::join!(
                     first.resolve_async(&first_services),
                     first.clone().resolve_async(&first_services),
                     second.resolve_async(&second_services)
                 );
                 let original = a.as_ref().expect("first image decodes");
-                let shared = same_owner.expect("same-owner image decodes");
+                let shared = same_cache.expect("same-cache image decodes");
                 assert_eq!(
                     (original.width(), original.height()),
                     (shared.width(), shared.height()),
-                    "same-registry subscribers must share the response"
+                    "subscribers of one cache must share the response"
                 );
                 (a, b)
             } else {
                 let a = first.resolve_async(&first_services).await;
                 assert!(
                     second.cached(&second_services).is_none(),
-                    "another registry must not inherit the first registry's cached response"
+                    "another cache must not inherit the first cache's response"
                 );
                 let b = second.resolve_async(&second_services).await;
                 (a, b)
@@ -137,42 +142,55 @@ fn registry_responses(concurrent: bool) {
     assert_eq!(
         dimensions,
         [(4, 2), (5, 3)],
-        "distinct registries must not share HTTP responses (concurrent={concurrent})"
+        "distinct caches must not share HTTP responses (concurrent={concurrent})"
     );
     let cached = first
         .cached(&first_services)
-        .expect("same registry can use its decoded cache");
+        .expect("the same cache keeps its decoded image");
     assert_eq!(
         (cached.width(), cached.height()),
         first_dimensions,
-        "another registry must not overwrite the first registry's cached response"
+        "another cache must not overwrite the first cache's response"
     );
-    assert_eq!(first_http.requests_to(url), 1, "one request per registry");
-    assert_eq!(second_http.requests_to(url), 1, "one request per registry");
-    drop(first);
-    drop(first_registry);
-    assert!(
-        owner.upgrade().is_none(),
-        "retained cache keys must not own the registry"
-    );
-    drop(retained_key);
+    assert_eq!(first_http.requests_to(url), 1, "one request per cache");
+    assert_eq!(second_http.requests_to(url), 1, "one request per cache");
 }
 
-/// Where the host provides no HTTP client, a network image answers
-/// `HttpUnavailable` and nothing reaches the cache.
+/// An image whose host lacks a service it needs answers which one, and
+/// nothing is read or sent: a network image without an HTTP client answers
+/// `HttpUnavailable`, and an asset or network image without an image cache
+/// answers `ImageCacheUnavailable`.
 ///
-/// The check itself is a type: a network source cannot be built without its
-/// client, so this pins the answer, not the check.
+/// The client check itself is a type: a network source cannot be built
+/// without its client, so this pins the answer, not the check.
 #[test]
-fn a_network_image_without_a_client_answers_http_unavailable() {
-    let registry = Arc::new(ImageCache::default());
-    let image = NetworkImage::new(Arc::clone(&registry), URL);
-    let answered = block_on(image.resolve_async(&ImageServices::new()));
+fn an_image_missing_a_service_answers_which_one() {
+    let http = ScriptedHttp::new();
+    let network = NetworkImage::new(URL);
+    let cache_only = ImageServices::new().with_image_cache(Arc::new(ImageCache::default()));
+    let answered = block_on(network.resolve_async(&cache_only));
     assert!(
-        matches!(&answered, Err(flui_widgets::ImageProviderError::HttpUnavailable { url }) if url == URL),
+        matches!(&answered, Err(ImageProviderError::HttpUnavailable { url }) if url == URL),
         "{answered:?}"
     );
-    assert!(image.cached(&ImageServices::new()).is_none());
+    assert!(network.cached(&cache_only).is_none());
+
+    let client_only = ImageServices::new().with_http(http.handle());
+    let answered = block_on(network.resolve_async(&client_only));
+    assert!(
+        matches!(&answered, Err(ImageProviderError::ImageCacheUnavailable { image }) if image == URL),
+        "{answered:?}"
+    );
+    assert!(network.cached(&client_only).is_none());
+    assert_eq!(http.requests_to(URL), 0, "nothing is sent");
+
+    let asset = AssetImage::new("logo.png");
+    let answered = block_on(asset.resolve_async(&ImageServices::new()));
+    assert!(
+        matches!(&answered, Err(ImageProviderError::ImageCacheUnavailable { image }) if image == "logo.png"),
+        "{answered:?}"
+    );
+    assert!(asset.cached(&ImageServices::new()).is_none());
 }
 
 /// Polls `future` on this thread until it is ready.

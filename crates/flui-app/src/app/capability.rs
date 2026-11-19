@@ -119,6 +119,10 @@ fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     registrar.provide::<flui_platform::http::HttpCapability>(super::http_host::HostHttp::new(
         Rc::clone(&slots.execution),
     ));
+    #[cfg(feature = "images")]
+    registrar.provide::<flui_assets::ImageCacheCapability>(
+        flui_assets::ImageCacheCapability::per_runtime,
+    );
     registrar.provide::<StorageCapability>(HostStorageProvider {
         slot: slots.storage.clone(),
     });

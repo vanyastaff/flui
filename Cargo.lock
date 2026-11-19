@@ -1719,6 +1719,7 @@ dependencies = [
  "cargo_metadata",
  "flui-animation",
  "flui-app",
+ "flui-assets",
  "flui-cupertino",
  "flui-devtools",
  "flui-engine",
@@ -1774,6 +1775,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "flui-app",
+ "flui-assets",
  "flui-engine",
  "flui-foundation",
  "flui-interaction",
@@ -2430,6 +2432,7 @@ version = "0.2.0-dev"
 dependencies = [
  "accesskit",
  "flui-animation",
+ "flui-assets",
  "flui-foundation",
  "flui-interaction",
  "flui-log",
