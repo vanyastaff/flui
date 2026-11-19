@@ -12,7 +12,7 @@ mod cases;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_assets::AssetRegistry;
+use flui_assets::ImageCache;
 use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedHttp, ScriptedResponse};
 use flui_widgets::{Image, ImageProvider, ImageServices, NetworkImage};
 
@@ -37,7 +37,7 @@ fn network_image_loads_with_the_hosts_http_client() {
     let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
     host.http()
         .respond(URL, ScriptedResponse::ok(fixture_bytes()));
-    let registry = Arc::new(AssetRegistry::default());
+    let registry = Arc::new(ImageCache::default());
     host.attach(&Image::network(Arc::clone(&registry), URL))
         .expect("root attaches");
     let source = flui_assets::ImageSource::network(URL, &host.http().handle());
@@ -92,8 +92,8 @@ fn registry_responses(concurrent: bool) {
     );
     let first_services = ImageServices::new().with_http(first_http.handle());
     let second_services = ImageServices::new().with_http(second_http.handle());
-    let first_registry = Arc::new(AssetRegistry::default());
-    let second_registry = Arc::new(AssetRegistry::default());
+    let first_registry = Arc::new(ImageCache::default());
+    let second_registry = Arc::new(ImageCache::default());
     let owner = Arc::downgrade(&first_registry);
     let first = NetworkImage::new(Arc::clone(&first_registry), url);
     let second = NetworkImage::new(second_registry, url);

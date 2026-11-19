@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::{AssetRegistry, ImageSource};
+use flui_assets::{ImageCache, ImageSource};
 use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
@@ -13,7 +13,7 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 
 /// An [`ImageProvider`] that fetches an image over HTTP/HTTPS with the
 /// host's HTTP capability and decodes it through a `flui-assets`
-/// [`AssetRegistry`], off the calling thread.
+/// [`ImageCache`], off the calling thread.
 ///
 /// Like [`AssetImage`](super::AssetImage), the registry is an explicit
 /// constructor argument, so the decoded image is kept by the registry the
@@ -27,14 +27,14 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 /// constructor.
 #[derive(Debug, Clone)]
 pub struct NetworkImage {
-    registry: Arc<AssetRegistry>,
+    registry: Arc<ImageCache>,
     url: Arc<str>,
 }
 
 impl NetworkImage {
     /// Creates a provider that fetches `url` through `registry` on a decoded
     /// cache miss during asynchronous resolution.
-    pub fn new(registry: Arc<AssetRegistry>, url: impl Into<String>) -> Self {
+    pub fn new(registry: Arc<ImageCache>, url: impl Into<String>) -> Self {
         Self {
             registry,
             url: Arc::from(url.into()),

@@ -1,8 +1,8 @@
 # ADR-0120: Typed asset-cache retention and shared initialization
 
-- **Status:** Accepted (2026-10-04)
+- **Status:** Superseded (2026-11-19)
 - **Date:** 2026-10-04
-- **Superseded-by:** [ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md) for the Consequences paragraph on the widget image bridge only: the registry keeps decoded images itself, and the widget layer has no LRU of its own.
+- **Superseded-by:** [ADR-0385](ADR-0385-flui-assets-is-the-decoded-image-cache.md) in full: `flui-assets` is the decoded-image cache and has no typed asset framework. The decoded-image rules are ADR-0250, ADR-0279 and ADR-0280.
 - **Related:** ADR-0105 (asset runtime ownership), ADR-0107 (asset byte sources)
 
 ## Context
