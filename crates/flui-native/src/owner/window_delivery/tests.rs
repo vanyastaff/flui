@@ -603,6 +603,71 @@ fn the_run_hook_follows_every_run_an_unwinding_one_too() {
     assert_eq!(runs(), 3, "a run that unwinds");
 }
 
+/// The run hook follows each run whatever it delivered: input alone, a state
+/// change, a surface change, a declined, a failed and an unwound frame, once
+/// each; a run that delivers input and the state change raised inside it ends
+/// in one call. AppKit's pump and UIKit's loop look at the wake deadline
+/// there. Red-check: skip runs of input alone, or call the hook per delivery.
+fn the_run_hook_follows_each_run_whatever_it_delivered() {
+    struct FailedFrames;
+    impl flui_platform::WindowHandler for FailedFrames {
+        fn input(&self, _: PlatformInput) -> DispatchEventResult {
+            DispatchEventResult::default()
+        }
+        fn state_changed(&self) {}
+        fn frame_requested(&self, _: FrameRequest) -> flui_platform::FrameOutcome {
+            flui_platform::FrameOutcome::Failed
+        }
+        fn close_requested(&self) -> CloseDecision {
+            CloseDecision::Close
+        }
+        fn closed(&self) {}
+        fn surface_changed(&self, _: SurfaceChange) {}
+    }
+    let runs = Rc::new(Cell::new(0_u32));
+    let counting = |runs: &Rc<Cell<u32>>| {
+        let runs = Rc::clone(runs);
+        move || runs.set(runs.get() + 1)
+    };
+
+    let handler = RecordingWindowHandler::new();
+    let delivery = Rc::new(
+        WindowDelivery::new(handler.clone(), InputCapabilities::UNAVAILABLE)
+            .after_each_run(counting(&runs)),
+    );
+    let _ = delivery.dispatch_input(ime());
+    assert_eq!(runs.get(), 1, "a run of input alone");
+    delivery.dispatch_state_changed();
+    assert_eq!(runs.get(), 2, "a state change's run");
+    delivery.dispatch_surface_change(SurfaceChange::Rebuild);
+    assert_eq!(runs.get(), 3, "a surface change's run");
+    delivery.dispatch_request_frame();
+    assert_eq!(runs.get(), 4, "a declined frame's run");
+    let raising = Rc::downgrade(&delivery);
+    handler.react_to_input(move |_| {
+        if let Some(delivery) = raising.upgrade() {
+            delivery.dispatch_state_changed();
+        }
+        DispatchEventResult::default()
+    });
+    let _ = delivery.dispatch_input(ime());
+    assert_eq!(
+        handler.count(&HandlerCall::StateChanged),
+        2,
+        "the state change raised inside the input was delivered"
+    );
+    assert_eq!(runs.get(), 5, "an input and its state change: one run");
+    handler.react_to_frame(|_| panic!("a frame that unwinds"));
+    let unwound = catch_unwind(AssertUnwindSafe(|| delivery.dispatch_request_frame()));
+    assert!(unwound.is_err(), "the frame's panic resumes");
+    assert_eq!(runs.get(), 6, "a run that unwinds");
+
+    let failed = WindowDelivery::new(Rc::new(FailedFrames), InputCapabilities::UNAVAILABLE)
+        .after_each_run(counting(&runs));
+    failed.dispatch_request_frame();
+    assert_eq!(runs.get(), 7, "a failed frame's run");
+}
+
 /// A keep that reaches the window before its host settles the native
 /// window's fate keeps it, once; the settle answers `Keep` every time after.
 /// A keep after the settle, or after a settle the OS's destruction made,
@@ -668,6 +733,10 @@ fn window_handler_obligation_table() {
         (
             "the run hook follows every run, an unwinding one too",
             the_run_hook_follows_every_run_an_unwinding_one_too,
+        ),
+        (
+            "the run hook follows each run whatever it delivered",
+            the_run_hook_follows_each_run_whatever_it_delivered,
         ),
         (
             "a delivery raised off the owner thread waits for an owner turn",

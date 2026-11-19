@@ -104,12 +104,10 @@ impl ModalFrames {
         let answer = WindowsLoop::ask_wake_deadline(&self.app);
         let now = web_time::Instant::now();
         let frames = self.frames.get();
-        let (armed, due) = {
-            let mut deadline = self.deadline.borrow_mut();
-            let armed = deadline.arm(answer, frames);
-            (armed, deadline.take_due(now, frames))
-        };
-        if due && let Some(windows) = self.windows.upgrade() {
+        let wake = self.deadline.borrow_mut().turn(answer, now, frames);
+        if wake.is_due()
+            && let Some(windows) = self.windows.upgrade()
+        {
             windows.redraw_for_deadline();
         }
         // The turn deadline, as the main loop asks it: only while the owner
@@ -133,7 +131,10 @@ impl ModalFrames {
         if let Some(windows) = self.windows.upgrade() {
             windows.paint_invalid();
         }
-        [armed, turn_armed].into_iter().flatten().min()
+        // A delivered instant is returned too: no frame's run follows a modal
+        // delivery up, so the pace looks again at it, and that look finds it
+        // armed only once a frame ran.
+        [wake.instant(), turn_armed].into_iter().flatten().min()
     }
 }
 

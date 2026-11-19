@@ -555,6 +555,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIColor",
     # `UIUserInterfaceIdiom`: whether the device shows a pointer.
     "UIDevice",
+    # Whether the system holds a scene's pointer locked (iPadOS 14).
+    "UIPointerLockState",
     # The feedback generators, the window's haptic actuator (ADR-0210).
     "UIFeedbackGenerator",
     "UIImpactFeedbackGenerator",

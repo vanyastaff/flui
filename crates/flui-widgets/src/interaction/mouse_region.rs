@@ -7,7 +7,7 @@ use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
 use flui_platform::pointer::PointerSource;
 use flui_rendering::hit_testing::{
-    CursorIcon, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
+    Cursor, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,
 };
 use flui_rendering::protocol::BoxProtocol;
@@ -127,10 +127,16 @@ impl MouseRegion {
         self
     }
 
-    /// Sets the mouse cursor reported while this region is active.
+    /// Sets the cursor the window shows while the pointer is over this region:
+    /// a [`CursorIcon`](crate::CursorIcon), an application's [`CursorImage`](crate::CursorImage)
+    /// as [`Cursor::Image`], or [`Cursor::Hidden`] for none. A window that
+    /// refuses the image (it shows none, by `WindowCapabilities::cursor_image`,
+    /// or its window system failed to make the cursor) shows the arrow over
+    /// the region; a window with no pointer cursor at all (a phone's) shows
+    /// nothing either way.
     #[must_use]
-    pub fn cursor(mut self, cursor: CursorIcon) -> Self {
-        self.cursor = CursorRequest::Icon(cursor);
+    pub fn cursor(mut self, cursor: impl Into<Cursor>) -> Self {
+        self.cursor = CursorRequest::Show(cursor.into());
         self
     }
 
@@ -169,7 +175,7 @@ impl MouseRegion {
     }
 
     fn configure(&self, render_object: &mut RenderMouseRegion) {
-        render_object.set_cursor(self.cursor);
+        render_object.set_cursor(self.cursor.clone());
         render_object.set_opaque(self.opaque);
         render_object.set_behavior(self.behavior);
     }

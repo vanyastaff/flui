@@ -47,6 +47,7 @@ use crate::version::gate::android::AndroidApi;
 
 use super::{ActivityWindow, ActivityWindowId};
 use crate::owner::android::activity::with_activity;
+use crate::window::pointer_capture::{CaptureCall, CaptureOwner, CaptureStep};
 
 /// The binary name of the view class.
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
@@ -169,6 +170,23 @@ pub(crate) enum ViewEvent {
     KeyboardMotion(KeyboardReport),
     /// The keyboard's motion ended or was cancelled (API 30).
     KeyboardSettled,
+    /// Whether the system holds the pointer capture for `window` changed, as
+    /// the capture owner attributes it ([`CaptureOwner`]).
+    PointerCaptureChanged {
+        /// The window whose capture changed.
+        window: ActivityWindowId,
+        /// Whether the system holds the capture for it now.
+        held: bool,
+    },
+}
+
+/// What a window tells the capture owner, which runs on the Java main thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureCommand {
+    /// The window asks for the mouse.
+    Request(ActivityWindowId),
+    /// The window lets go: its release command, or its retirement.
+    Release(ActivityWindowId),
 }
 
 /// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
@@ -334,6 +352,14 @@ pub(crate) struct JavaView {
     /// pixel coordinates. A lock held only to copy the value: its type, not a
     /// check at each read, keeps it a ratio.
     scale: Mutex<DevicePixelRatio>,
+    /// The Activity's pointer capture, which every window's commands and
+    /// every system answer go through on the Java main thread. A lock, though
+    /// that one thread alone touches it: the bridge is an `Arc` the owner
+    /// thread shares, so its fields are `Sync`, and no dependency binds a
+    /// value to the Java main thread without an `unsafe impl Send`/`Sync`
+    /// (the debt `docs/gaps.md` names under ADR-0327 §1). Never contended,
+    /// and no JNI call runs under it.
+    capture: Mutex<CaptureOwner<ActivityWindowId>>,
 }
 
 impl std::fmt::Debug for JavaView {
@@ -365,6 +391,7 @@ impl JavaView {
             events: Mutex::new(VecDeque::new()),
             composing: AtomicBool::new(false),
             scale: Mutex::new(DevicePixelRatio::ONE),
+            capture: Mutex::new(CaptureOwner::default()),
         });
         let (installing, unsettled) = (Arc::clone(&view), Arc::clone(&view));
         main_thread::post(
@@ -517,6 +544,66 @@ impl JavaView {
             )
             .map(drop)
         });
+    }
+
+    /// Hand `command` to the capture owner on the Java main thread
+    /// (API 26), which makes the one call it calls for and reports each
+    /// window whose capture changed as [`ViewEvent::PointerCaptureChanged`].
+    /// A command that never reaches the main thread changes nothing. Owner
+    /// thread.
+    pub(crate) fn capture_command(self: &Arc<Self>, command: CaptureCommand) {
+        let this = Arc::clone(self);
+        main_thread::run(&self.app, "a pointer capture command", move || {
+            let step = {
+                let mut owner = this.capture.lock();
+                match command {
+                    CaptureCommand::Request(window) => owner.request(window),
+                    CaptureCommand::Release(window) => owner.release(window),
+                }
+            };
+            this.carry_out_capture(step);
+        });
+    }
+
+    /// The system answered (`onPointerCaptureChange`). Java main thread.
+    fn capture_answered(self: &Arc<Self>, has_capture: bool) {
+        let step = self.capture.lock().answered(has_capture);
+        self.carry_out_capture(step);
+    }
+
+    /// The Activity window has the focus or not (`onWindowFocusChanged`, and
+    /// once as `FluiView` enters the window), heard with the capture's
+    /// answers. Java main thread.
+    fn window_focus_changed(self: &Arc<Self>, focused: bool) {
+        let step = self.capture.lock().focus_changed(focused);
+        self.carry_out_capture(step);
+    }
+
+    /// Report each window whose capture changed, then make the call `step`
+    /// calls for; a call that does not reach the system (no view, or it
+    /// threw) is told to the owner, which changes nothing for it. Java main
+    /// thread, with the owner's lock let go.
+    fn carry_out_capture(self: &Arc<Self>, step: CaptureStep<ActivityWindowId>) {
+        for (window, held) in step.changed.into_iter().flatten() {
+            self.push_event(ViewEvent::PointerCaptureChanged { window, held });
+        }
+        let Some(call) = step.call else {
+            return;
+        };
+        let method = match call {
+            CaptureCall::Request(_) => jni_str!("requestPointerCapture"),
+            CaptureCall::Release => jni_str!("releasePointerCapture"),
+        };
+        let made = self.view().is_some_and(|view| {
+            self.attached(|env| {
+                env.call_method(view.as_ref(), method, jni_sig!("()V"), &[])
+                    .map(drop)
+            })
+            .is_ok()
+        });
+        if !made {
+            self.capture.lock().call_failed(call);
+        }
     }
 
     /// The bridge answering the node provider, cloned out of the lock so no
@@ -791,6 +878,16 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 jni_str!("nativeKeyboardSettled"),
                 jni_str!("(J)V"),
                 native_keyboard_settled as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativePointerCaptureChanged"),
+                jni_str!("(JZ)V"),
+                native_pointer_capture_changed as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeWindowFocusChanged"),
+                jni_str!("(JZ)V"),
+                native_window_focus_changed as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeNodeInfo"),
@@ -1106,6 +1203,44 @@ extern "system" fn native_keyboard_settled<'local>(
         |_| {
             if let Some(view) = bridge(handle) {
                 view.push_event(ViewEvent::KeyboardSettled);
+            }
+            Ok(())
+        },
+    );
+}
+
+extern "system" fn native_pointer_capture_changed<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    has_capture: jboolean,
+) {
+    jni_native(
+        "nativePointerCaptureChanged",
+        &mut env,
+        |()| (),
+        |_| {
+            if let Some(view) = bridge(handle) {
+                view.capture_answered(has_capture);
+            }
+            Ok(())
+        },
+    );
+}
+
+extern "system" fn native_window_focus_changed<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    has_window_focus: jboolean,
+) {
+    jni_native(
+        "nativeWindowFocusChanged",
+        &mut env,
+        |()| (),
+        |_| {
+            if let Some(view) = bridge(handle) {
+                view.window_focus_changed(has_window_focus);
             }
             Ok(())
         },

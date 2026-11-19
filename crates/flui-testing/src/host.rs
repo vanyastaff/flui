@@ -149,6 +149,9 @@ pub struct HeadlessWindow {
     /// How the window is named to a portal, when it plays an exported
     /// Wayland window ([`HeadlessWindow::with_portal_export`]).
     portal_exports: Option<HeadlessPortalExports>,
+    /// Whether the window system fails to make a cursor of an image
+    /// ([`HeadlessWindow::failing_cursor_images`]).
+    fails_cursor_images: bool,
     /// The application's answer to the window's close requests, taken by the
     /// host that opens the window
     /// ([`HeadlessWindow::with_close_request_handler`]).
@@ -223,8 +226,11 @@ impl HeadlessWindow {
     }
 
     /// The commands a window honours: its frame and its mode, which have no
-    /// window system to refuse them; published, as a host's first snapshot
-    /// is. The reports a test asks for are added by its builders.
+    /// window system to refuse them, and every cursor, an application's image
+    /// included, as a desktop window shows it; published, as a host's first
+    /// snapshot is. The reports a test asks for are added by its builders,
+    /// and [`without_cursor_images`](Self::without_cursor_images) takes the
+    /// images away.
     fn published_capabilities() -> flui_platform::WindowCapabilities {
         use flui_platform::WindowCapability::Native;
         let mut capabilities = flui_platform::WindowCapabilities::NONE.into_parts();
@@ -232,6 +238,7 @@ impl HeadlessWindow {
         capabilities.app_title_bar = Native;
         capabilities.minimizes = Native;
         capabilities.maximizes = Native;
+        capabilities.cursor_image = flui_platform::Availability::Native;
         Self::publish(capabilities)
     }
 
@@ -333,6 +340,7 @@ impl HeadlessWindow {
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
             portal_exports: None,
+            fails_cursor_images: false,
             close_request_handler: None,
         }
     }
@@ -507,6 +515,29 @@ impl HeadlessWindow {
         self
     }
 
+    /// Play a platform that shows no application's cursor image (a Wayland
+    /// compositor without shared memory, a phone): the window's
+    /// `cursor_image` capability is unavailable and it refuses an image
+    /// `Unsupported`, as such a host does. Without it the window shows every
+    /// cursor.
+    #[must_use]
+    pub fn without_cursor_images(mut self) -> Self {
+        let mut parts = self.capabilities.into_parts();
+        parts.cursor_image = flui_platform::Availability::Unavailable;
+        self.capabilities = Self::publish(parts);
+        self
+    }
+
+    /// Play a window system that takes cursor images and fails to make one
+    /// (a Win32 `CreateIconIndirect` or an AppKit `NSCursor` that fails): the
+    /// window refuses every image with `CursorError::Platform` though its
+    /// `cursor_image` capability is available.
+    #[must_use]
+    pub fn failing_cursor_images(mut self) -> Self {
+        self.fails_cursor_images = true;
+        self
+    }
+
     /// Offer a text-input capability that records every call the UI runtime's
     /// text-input owner makes, so the presentation installs a working
     /// `TextInputHandle` over it.
@@ -612,7 +643,24 @@ impl PlatformWindow for HeadlessWindow {
             .map(|input| Arc::clone(input) as Arc<dyn PlatformTextInput>)
     }
 
+    /// Records `cursor`; an image is refused `Unsupported`, as `set_cursor`
+    /// answers, exactly when the window's `cursor_image` capability is
+    /// unavailable, and `Platform` where the window plays one that fails to
+    /// make it.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        if matches!(cursor, Cursor::Image(_)) {
+            if !self.capabilities.cursor_image().is_available() {
+                return Err(flui_platform::Unsupported::from(
+                    flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+                )
+                .into());
+            }
+            if self.fails_cursor_images {
+                return Err(CursorError::failed(
+                    "the window system made no cursor of the image".to_owned(),
+                ));
+            }
+        }
         cursor.clone_into(&mut self.cursor.lock());
         Ok(())
     }
