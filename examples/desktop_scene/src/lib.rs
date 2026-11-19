@@ -24,12 +24,11 @@
 
 use flui_foundation::geometry::Rect;
 use flui_hot_reload::scene_plugin;
-use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_painting::{paint::Paint, styling::Color};
+use flui_layer::{Layer, LayerTree, PictureLayer, Scene};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 
 fn my_scene(width: f64, height: f64) -> Scene {
-    let mut canvas_layer = CanvasLayer::new();
-    let canvas = canvas_layer.canvas_mut();
+    let mut canvas = Canvas::new();
 
     // Background — deep purple (change this and rebuild to test hot-reload!)
     canvas.draw_rect(
@@ -61,7 +60,9 @@ fn my_scene(width: f64, height: f64) -> Scene {
         &Paint::fill(Color::WHITE),
     );
 
-    Scene::new(LayerTree::new(Layer::from(canvas_layer)))
+    Scene::new(LayerTree::new(Layer::from(PictureLayer::new(
+        canvas.finish(),
+    ))))
 }
 
 scene_plugin!(my_scene);

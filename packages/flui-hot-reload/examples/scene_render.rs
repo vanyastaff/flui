@@ -1,7 +1,7 @@
 //! Scene Render - End-to-end GPU compositor proof
 //!
 //! Demonstrates the full rendering pipeline:
-//! Canvas (draw commands) -> DisplayList -> CanvasLayer -> Scene -> Renderer ->
+//! Canvas (draw commands) -> DisplayList -> PictureLayer -> Scene -> Renderer ->
 //! GPU -> pixels
 //!
 //! This proves that flui-engine's `render_scene()` correctly traverses the
@@ -49,9 +49,9 @@ use std::sync::{Arc, Mutex};
 use flui_engine::Renderer;
 use flui_foundation::geometry::{Rect, Size, WindowMetrics};
 use flui_hot_reload::HotReloadDriver;
-use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
+use flui_layer::{Layer, LayerTree, PictureLayer, Scene};
 use flui_native::current_platform;
-use flui_painting::{paint::Paint, styling::Color};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 use flui_platform::{
     CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
     WindowExtent, WindowFrame, WindowHandler, WindowOptions,
@@ -107,8 +107,7 @@ fn physical_size(window: &dyn flui_platform::PlatformWindow) -> Size<i32> {
 }
 
 fn build_test_scene(width: f64, height: f64) -> Scene {
-    let mut canvas_layer = CanvasLayer::new();
-    let canvas = canvas_layer.canvas_mut();
+    let mut canvas = Canvas::new();
 
     // Background — dark blue
     canvas.draw_rect(
@@ -146,7 +145,9 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
         &Paint::fill(Color::rgb(255, 200, 0)),
     );
 
-    Scene::new(LayerTree::new(Layer::from(canvas_layer)))
+    Scene::new(LayerTree::new(Layer::from(PictureLayer::new(
+        canvas.finish(),
+    ))))
 }
 
 fn capture_effects(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {

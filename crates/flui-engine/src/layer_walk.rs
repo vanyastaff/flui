@@ -447,7 +447,6 @@ mod tests {
         fn enter(&mut self, site: Site<'_>, item: &Item<'_>) -> Step {
             let kind = match item {
                 Item::Layer(flui_layer::Layer::Offset(_)) => "offset",
-                Item::Layer(flui_layer::Layer::Canvas(_)) => "canvas",
                 Item::Layer(flui_layer::Layer::ClipRect(_)) => "clip",
                 Item::Layer(_) => "other",
                 Item::Placed(_) => "node",

@@ -322,18 +322,6 @@ impl Frame {
                     }
                     picture.picture().damage_extent()
                 }
-                Layer::Canvas(canvas) => {
-                    ctx.volatile = true;
-                    canvas.display_list().damage_extent()
-                }
-                Layer::Texture(texture) => {
-                    ctx.volatile = true;
-                    Some(DamageExtent::rect(texture.bounds()))
-                }
-                Layer::PlatformView(view) => {
-                    ctx.volatile = true;
-                    Some(DamageExtent::rect(view.bounds()))
-                }
                 Layer::PerformanceOverlay(overlay) => {
                     ctx.volatile = true;
                     Some(DamageExtent::rect(overlay.bounds()))

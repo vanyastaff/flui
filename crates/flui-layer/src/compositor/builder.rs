@@ -12,9 +12,8 @@ use flui_painting::paint::{Clip, ColorFilter, ImageFilter, Path};
 
 use crate::{
     layer::{
-        CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer,
-        ColorFilterLayer, ImageFilterLayer, Layer, OffsetLayer, OpacityLayer, PictureLayer,
-        TransformLayer,
+        ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
+        ImageFilterLayer, Layer, OffsetLayer, OpacityLayer, PictureLayer, TransformLayer,
     },
     tree::LayerTree,
 };
@@ -160,11 +159,6 @@ impl SceneBuilder {
         self.push(ImageFilterLayer::new(filter))
     }
 
-    /// Adds a [`CanvasLayer`] leaf.
-    pub fn add_canvas(&mut self, canvas: CanvasLayer) -> LayerId {
-        self.add(canvas)
-    }
-
     /// Adds a [`PictureLayer`] leaf.
     pub fn add_picture(&mut self, picture: flui_painting::DisplayList) -> LayerId {
         self.add(PictureLayer::new(picture))
@@ -183,7 +177,7 @@ mod tests {
         let mut builder = SceneBuilder::new();
         let offset = builder.push_offset(Offset::ZERO);
         let clip = builder.push_clip_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Clip::HardEdge);
-        let leaf = builder.add_canvas(CanvasLayer::new());
+        let leaf = builder.add_picture(flui_painting::DisplayList::new());
         assert_eq!(builder.depth(), 2);
         assert_eq!(builder.current(), clip);
         assert_eq!(builder.pop(), Some(clip));

@@ -11,9 +11,9 @@ Citations below name symbols, not line numbers.
 
 | Layer | FLUI | Notes |
 |---|---|---|
-| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 19 variants; no `Box<dyn Layer>` (decision 1). |
+| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 16 variants; no `Box<dyn Layer>` (decision 1). |
 | `PictureLayer` | [`src/layer/picture.rs`](src/layer/picture.rs) | `Arc<DisplayList>`; the leaf the paint walk emits. |
-| `TextureLayer`, `PlatformViewLayer`, `PerformanceOverlayLayer` | `texture.rs`, `platform_view.rs`, `performance_overlay.rs` | Present as vocabulary; see [Producers](#producers). |
+| `PerformanceOverlayLayer` | `performance_overlay.rs` | Written by `flui-runtime`; see [Producers](#producers). |
 | `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
 | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
@@ -24,7 +24,7 @@ Citations below name symbols, not line numbers.
 | Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
 | Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary and each chunk a partial frame's damage cannot reach (`SceneVersion::subtree_cull`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
-| `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
+| `TextureLayer`, `PlatformViewLayer` | none | A texture is a `DrawOp::Texture` in a picture (ADR-0233), so it sits under the clips and transforms of its chunk and in its recording; a native view inside the UI has no scene form yet ([`docs/gaps.md`](../../docs/gaps.md), "No native views inside the UI"). |
 
 ---
 
@@ -324,8 +324,8 @@ feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `pre
 
 ## Producers
 
-Six variants have no production producer today: `Picture`, `Canvas`, `Texture`, `PlatformView`,
-`ColorFilter`, `ImageFilter`. The other thirteen are written into the retained scene, all but one
+Three variants have no production producer today: `Picture`, `ColorFilter` and `ImageFilter`.
+The other thirteen are written into the retained scene, all but one
 by `flui-rendering`'s paint composer (`crates/flui-rendering/src/pipeline/owner/paint.rs`), each
 as an effect entry of its boundary's content (`push_layer`, over `ContentBuilder::push_effect`):
 
@@ -342,12 +342,13 @@ as an effect entry of its boundary's content (`push_layer`, over `ContentBuilder
 - `flui-runtime` adds `PerformanceOverlay` (`PerformanceOverlayLayer::record` in
   `crates/flui-runtime/src/presentation.rs`).
 
-`Texture` and `PlatformView` carry real contracts (`freeze`, `hit_test_behavior`) awaiting the
-platform layer. External textures reach the GPU without the layer: `RenderTexture`
-(`flui-objects`) records a `DrawOp::Texture` into its picture, and the host hands each frame's
-`TextureRegistry` updates to the backend before it renders. `Canvas` is a recorder inside the output
-vocabulary that `PictureLayer` already covers, built only by tests and benches; `Picture` itself is
-what a hand-built tree and `SceneVersion::flatten` draw a chunk as. `ColorFilter` and
+An external texture is not a layer: `RenderTexture` (`flui-objects`) records a `DrawOp::Texture`
+into its picture (ADR-0233), the version indexes each chunk's texture draws, and a texture frame
+damages those users (`SceneVersion::texture_damage`), while the host hands each frame's
+`TextureRegistry` updates to the backend before it renders. A native view inside the UI has no
+form in the scene: the ADR that brings one decides its compositing, hit-testing and semantics
+([`docs/gaps.md`](../../docs/gaps.md)). `Picture` is what a hand-built tree and
+`SceneVersion::flatten` draw a chunk as. `ColorFilter` and
 `ImageFilter` are lowered by `flui-engine` (`layer_render.rs`), but no `FragmentScope` produces
 them: a widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
 `flui-painting`) inside a picture. `AnnotatedRegion` has both halves: the writer above and the
