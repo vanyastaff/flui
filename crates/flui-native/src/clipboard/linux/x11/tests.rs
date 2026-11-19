@@ -1085,11 +1085,86 @@ fn a_requestor_that_goes_before_its_answer_is_written_hears_nothing() {
     }
 }
 
-/// The answers the clipboard's thread decides in the batch of commands that
-/// stops it are still written: a requestor waiting on the owner thread's
-/// text hears it, though `Stop` came right behind the text.
+/// Every requestor the clipboard's thread owes an answer when it stops is
+/// told, though `Stop` comes in the same batch as the owner thread's text:
+/// text that fits one request is written; text that would go `INCR` is
+/// refused, since the transfer would not outlive the connection, and nothing
+/// of it is written; a request still waiting on the owner thread is refused,
+/// since the owner is going.
 #[test]
-fn answers_decided_as_the_thread_stops_are_written() {
+fn every_requestor_owed_an_answer_as_the_thread_stops_is_told() {
+    use super::selection::Command;
+
+    let Some(_server) = server() else {
+        return;
+    };
+    let incr = atom("INCR");
+    let rows = [
+        ("whole text decided", "selected".to_owned(), true, true),
+        ("INCR text decided", "x".repeat(1 << 20), true, false),
+        (
+            "still waiting on the owner",
+            "selected".to_owned(),
+            false,
+            false,
+        ),
+    ];
+    for (case, text, delivered, written) in rows {
+        let mut owner = clipboard();
+        let asked = Rc::new(Cell::new(0));
+        offer_primary(&owner, counted(&text, &asked));
+        let requestor = Requestor::new();
+        let property = atom("FLUI_BEFORE_STOP");
+        requestor.send_request(property);
+        assert_eq!(
+            requestor.heard(),
+            Vec::<xproto::Atom>::new(),
+            "{case}: the request waits on the owner thread"
+        );
+
+        let (release, _read) = hold_in_a_command(&owner);
+        if delivered {
+            owner.deliver();
+        }
+        owner.send(Command::Stop);
+        drop(release);
+        owner
+            .thread
+            .take()
+            .expect("the thread runs")
+            .join()
+            .expect("the thread ends without a panic");
+
+        let expected = if written { property } else { x11rb::NONE };
+        assert_eq!(requestor.answer(&owner), expected, "{case}: told");
+        let kind = requestor
+            .connection
+            .get_property(
+                false,
+                requestor.window,
+                property,
+                xproto::AtomEnum::ANY,
+                0,
+                1,
+            )
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers")
+            .type_;
+        assert_ne!(kind, incr, "{case}: no transfer starts as the thread ends");
+        if !written {
+            assert_eq!(kind, x11rb::NONE, "{case}: nothing is written");
+        }
+    }
+}
+
+/// A panic in the clipboard's thread ends its loop, not the answers it
+/// decided: here the delivery of a read's answer fails in the batch right
+/// behind the owner thread's text, and the requestor still hears it.
+#[test]
+fn a_panic_in_the_thread_still_answers_what_it_decided() {
+    use super::selection::{Command, Name, Owed};
+
     let Some(_server) = server() else {
         return;
     };
@@ -1097,7 +1172,7 @@ fn answers_decided_as_the_thread_stops_are_written() {
     let asked = Rc::new(Cell::new(0));
     offer_primary(&owner, counted("selected", &asked));
     let requestor = Requestor::new();
-    let property = atom("FLUI_BEFORE_STOP");
+    let property = atom("FLUI_BEFORE_PANIC");
     requestor.send_request(property);
     assert_eq!(
         requestor.heard(),
@@ -1107,19 +1182,127 @@ fn answers_decided_as_the_thread_stops_are_written() {
 
     let (release, _read) = hold_in_a_command(&owner);
     owner.deliver();
-    owner.send(super::selection::Command::Stop);
+    let failing = CompletionSource::new(
+        OwnerPoster::new(|_| panic!("the owner's queue failed")),
+        PendingCompletions::new(),
+    );
+    let (_failed, answer) = failing.pending::<ClipboardRead>();
+    owner.send(Command::Read(Name::Primary, Owed::new(answer)));
     drop(release);
     owner
         .thread
         .take()
         .expect("the thread runs")
         .join()
-        .expect("the thread ends without a panic");
+        .expect("the thread contains its panic");
 
     assert_eq!(
         requestor.answer(&owner),
         property,
-        "the waiting requestor hears its answer"
+        "the requestor hears the answer decided before the panic"
+    );
+}
+
+/// The clipboard's thread ends in time though another client holds the
+/// server, which then reads none of its requests: dropping the clipboard,
+/// as an application exits, does not wait on the server.
+#[test]
+fn the_thread_ends_in_time_while_another_client_holds_the_server() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    let (holder, _) = RustConnection::connect(None).expect("the X server answers");
+    holder.grab_server().expect("the request is sent");
+    holder
+        .get_input_focus()
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    // Lets the server go once the case is done, or after `STEP` if the
+    // clipboard never lets the case go on.
+    let (done, waiting) = std::sync::mpsc::channel::<()>();
+    let holding = std::thread::spawn(move || {
+        let _ = waiting.recv_timeout(STEP);
+        let _ = holder.ungrab_server();
+        let _ = holder.flush();
+    });
+
+    let started = Instant::now();
+    drop(owner);
+    let ended = started.elapsed();
+    drop(done);
+    holding.join().expect("the holder lets the server go");
+    assert!(
+        ended < Duration::from_secs(2),
+        "the clipboard ended after {ended:?}, waiting on a held server"
+    );
+}
+
+/// Clients that flood the clipboard's thread with requests do not hold up
+/// an answer the owner thread sends meanwhile: it is written once the events
+/// ahead of its mark are handled, while the flood behind it goes on.
+#[test]
+fn a_flood_of_requests_does_not_hold_up_a_decided_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    offer_primary(&owner, counted("selected", &asked));
+    let requestor = Requestor::new();
+    let property = atom("FLUI_IN_THE_FLOOD");
+    requestor.send_request(property);
+    assert_eq!(
+        requestor.heard(),
+        Vec::<xproto::Atom>::new(),
+        "the request waits on the owner thread"
+    );
+
+    let flooding = Arc::new(AtomicBool::new(true));
+    let flooders: Vec<std::thread::JoinHandle<()>> = (0..4)
+        .map(|_| {
+            let flooding = Arc::clone(&flooding);
+            std::thread::spawn(move || {
+                let flooder = Requestor::new();
+                let target = atom("FLUI_FLOOD");
+                let primary = xproto::Atom::from(xproto::AtomEnum::PRIMARY);
+                while flooding.load(Ordering::Relaxed) {
+                    for _ in 0..256 {
+                        flooder
+                            .connection
+                            .convert_selection(
+                                flooder.window,
+                                primary,
+                                flooder.targets,
+                                target,
+                                x11rb::CURRENT_TIME,
+                            )
+                            .expect("the request is sent");
+                    }
+                    flooder.connection.flush().expect("the request is sent");
+                    while let Ok(Some(_)) = flooder.connection.poll_for_event() {}
+                }
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // The flood stops whether or not the answer came, so no later case
+    // runs in it.
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    let answered = failure.contain(|| requestor.answer(&owner));
+    flooding.store(false, Ordering::Relaxed);
+    for flooder in flooders {
+        flooder.join().expect("the flooder ends");
+    }
+    failure.resume();
+    assert_eq!(
+        answered,
+        Some(property),
+        "the answer is written during the flood"
     );
 }
 
