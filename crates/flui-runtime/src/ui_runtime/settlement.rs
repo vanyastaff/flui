@@ -92,12 +92,24 @@ pub(super) struct SubmittedTelemetry {
     pub(super) cut: FrameTelemetryCut,
 }
 
+/// What the retry a verdict arms needs the next frame to draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RetryDraw {
+    /// The wake alone: whatever is dirty draws.
+    Wake,
+    /// The submit consumed the paint work: the tree repaints in full.
+    Repaint,
+    /// The surface withheld this version, which the next frame publishes again as it is,
+    /// unless its target changed or a newer version was applied (ADR-0304 §7).
+    Republish(SceneVersionId),
+}
+
 /// What a frame's verdict leaves for the rest of the frame's tail, and the first panic held on
 /// the way.
 pub(super) struct VerdictTail {
     pub(super) presented: bool,
     pub(super) retry_needed: bool,
-    pub(super) retry_needs_repaint: bool,
+    pub(super) retry_draw: RetryDraw,
     pub(super) replay_committed_input: bool,
     pub(super) overlay_style: Option<SystemUiOverlayStyle>,
     pub(super) held: FirstPanic,
@@ -108,7 +120,7 @@ impl VerdictTail {
         Self {
             presented: false,
             retry_needed: false,
-            retry_needs_repaint: false,
+            retry_draw: RetryDraw::Wake,
             replay_committed_input: false,
             overlay_style: None,
             held,
@@ -177,7 +189,7 @@ impl UiRuntime {
                 .any(|pending| pending.tree_revision >= current);
             if !shown_by_later && !producer.device_abandoned() {
                 tail.retry_needed = true;
-                tail.retry_needs_repaint = true;
+                tail.retry_draw = RetryDraw::Repaint;
             }
         }
     }
@@ -303,7 +315,7 @@ impl UiRuntime {
     fn finish_settlement(&self, producer: &PresentationState, tail: VerdictTail) {
         let VerdictTail {
             retry_needed,
-            retry_needs_repaint,
+            retry_draw,
             replay_committed_input,
             overlay_style,
             mut held,
@@ -316,9 +328,7 @@ impl UiRuntime {
         }
         held.contain(|| {
             if retry_needed {
-                if retry_needs_repaint {
-                    self.mark_needs_full_repaint_for(producer);
-                }
+                self.owe_retry_draw(producer, retry_draw);
                 // An unseen presentation retries once it is seen, which wakes it.
                 if !producer.clock().is_hidden() {
                     self.wake_frame();
@@ -393,9 +403,9 @@ impl UiRuntime {
         // What the log held drops at the end of this function, after the replies and the
         // commit, with no borrow held: an annotation's `Drop` is user code.
         let released = shown_on_screen
-            // A scene lent to a frame still producing it misses this acknowledgement:
-            // the next publication then over-reports damage, never under-reports it.
-            .then(|| producer.scene.completed(shown).ok());
+            // A scene lent to a frame still producing it takes this acknowledgement when the
+            // frame gives it back (`SceneSlot::completed`).
+            .then(|| producer.scene.completed(shown));
         // Before anything else that can panic: the frame's layer reads are answered if the
         // window showed the scene, and parked again if it did not.
         held.absorb(producer.settle_agent_layer_reads(layer_reads, shown_on_screen));
@@ -495,10 +505,13 @@ impl UiRuntime {
                 // The backend had content in hand and could not put it on screen (ADR-0335). The
                 // frame commits nothing: the tree revision stays uncommitted, the input regions of
                 // the last presented frame stay in force, and pointer input waits for the frame
-                // that shows the tree (ADR-0305 §4). The work that produced the scene was consumed
-                // out of the pipeline, so the retry repaints in full, until ADR-0304 §7 retries
-                // from the held version: a wake alone would find nothing dirty and park with the
-                // tree never shown.
+                // that shows the tree (ADR-0305 §4). The retry publishes the withheld version again
+                // as it is (ADR-0304 §7): the scene owes it, so the next frame, finding nothing to
+                // paint, republishes it with its damage still counted from the acknowledged base,
+                // and the raster side draws it in full, replaying its chunks from the recording
+                // cache. A frame that finds another target, a newer version, or a painter the
+                // host reports let go repaints in full instead; the settlement of a frame older
+                // than the current tree owes no version and repaints.
                 //
                 // The first `MAX_NOT_SHOWN_RETRIES` consecutive attempts retry on the next display
                 // period, which rides out a drawable that is withdrawn for a few frames (AppKit's
@@ -518,7 +531,14 @@ impl UiRuntime {
                     if streak <= MAX_NOT_SHOWN_RETRIES {
                         // Armed before the trace: a subscriber's panic there keeps the retry.
                         tail.retry_needed = true;
-                        tail.retry_needs_repaint = true;
+                        // Only a frame of the current tree leaves its version owed: an older
+                        // frame's version is not what the screen should show, and the retry
+                        // repaints, as a frame painted since owes the current tree.
+                        tail.retry_draw = if shows_current_tree {
+                            RetryDraw::Republish(shown)
+                        } else {
+                            RetryDraw::Repaint
+                        };
                         tracing::debug!(
                             frame = frame_number,
                             streak,
@@ -539,9 +559,11 @@ impl UiRuntime {
                         if shows_current_tree && !producer.device_abandoned() {
                             producer.note_frame_failure();
                             Self::arm_failure_retry(producer);
-                            // The mark's platform wake is user code and can unwind: the wait is
+                            // The debt's platform wake is user code and can unwind: the wait is
                             // armed first, and the panic is held until the trace below ran.
-                            held.contain(|| self.mark_needs_full_repaint_for(producer));
+                            held.contain(|| {
+                                self.owe_retry_draw(producer, RetryDraw::Republish(shown));
+                            });
                         }
                         let first_report = producer.first_withdrawal_past_budget();
                         held.contain(|| {
@@ -594,7 +616,7 @@ impl UiRuntime {
                     // and dirty the producer for the ordinary paced retry,
                     // armed before the telemetry's subscriber can panic.
                     tail.retry_needed = true;
-                    tail.retry_needs_repaint = true;
+                    tail.retry_draw = RetryDraw::Repaint;
                     self.record_submit_telemetry(
                         epoch,
                         telemetry,
@@ -717,7 +739,7 @@ impl UiRuntime {
         // What the log held drops here, after the replies and the commit, with no borrow
         // held, beside the first panic of the work above; what nobody else holds goes back
         // to the scene's owner.
-        if let Some(Some(released)) = released {
+        if let Some(released) = released {
             post_submit.contain(|| producer.scene.restock(released));
         }
         // A panic of the work after the commit is held behind the first one, a layer read's reply
