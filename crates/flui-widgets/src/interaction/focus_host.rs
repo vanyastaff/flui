@@ -23,17 +23,14 @@ use flui_foundation::Subscription;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration,
-    FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
+    FocusTraversalOverrides, KeyEventHandler, KeyEventResult, NodeContext, RectProvider,
 };
 use flui_platform::input::keyboard::KeyEvent;
 use flui_view::prelude::*;
 use flui_view::{Provided, RebuildHandle};
 
 use super::actions::FocusRecord;
-use super::focus::{
-    FocusChangeHandler, FocusParent, enclosing_focus_parent, record_focus_context,
-    request_autofocus,
-};
+use super::focus::{FocusChangeHandler, FocusParent, enclosing_focus_parent, request_autofocus};
 use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 
 /// A key handler as a focus widget stores it: it decides the event's
@@ -77,6 +74,24 @@ struct Shared {
     attachment: RefCell<Option<FocusAttachment>>,
     /// Where the node's shown focus is revealed (`focus_reveal.rs`).
     reveal: RevealSlot,
+    /// The bindings in force at the element (ADR-0079), which a `Shortcuts`
+    /// above reads from the node: this state is the node's context, so the
+    /// record costs no allocation of its own.
+    record: Cell<Option<FocusRecord>>,
+}
+
+impl Shared {
+    /// Make this state `node`'s context, until the returned registration
+    /// drops.
+    fn register_on(self: &Rc<Self>, node: &Rc<FocusNode>) -> FocusNodeRegistration {
+        node.register_context(Rc::clone(self) as NodeContext)
+    }
+}
+
+/// The record a focus host left as `context` of its node, or `None` when
+/// the context is another widget's or the host records nothing.
+pub(crate) fn hosted_record(context: &NodeContext) -> Option<FocusRecord> {
+    cloned(&context.downcast_ref::<Shared>()?.record)
 }
 
 /// Wrap a key handler into the node's shape, opening its write from the
@@ -372,10 +387,8 @@ pub(crate) struct FocusHost {
     /// Generation-checked ownership of the geometry source installed on the
     /// current node.
     rect_provider_registration: Option<FocusNodeRegistration>,
-    /// The `Actions` chain visible at the element, recorded on the node so a
-    /// `Shortcuts` above resolves intents from here (ADR-0079).
-    action_chain: Option<FocusRecord>,
-    /// Generation-checked ownership of that record on the current node.
+    /// Generation-checked ownership of the node's context: the shared
+    /// state, whose record is the bindings in force at the element.
     context_registration: Option<FocusNodeRegistration>,
     /// Listener installed on the current node. It drives both inherited
     /// dependents and the optional focus-edge callbacks.
@@ -408,6 +421,7 @@ impl FocusHost {
             on_visible_focus_change: Cell::new(edges.shown),
             attachment: RefCell::new(None),
             reveal: RevealSlot::default(),
+            record: Cell::new(None),
         });
         let mut rare = RareHostRegistrations::default();
         config.configure(&node, &mut rare, &shared);
@@ -420,7 +434,6 @@ impl FocusHost {
             focus_manager: ctx.focus_manager(),
             parent: None,
             rect_provider_registration: None,
-            action_chain: None,
             context_registration: None,
             focus_subscription: None,
             autofocus: config.autofocus,
@@ -493,12 +506,26 @@ impl FocusHost {
     /// the owner's `Actions` chain and platform convention. The owner calls
     /// it when its own bindings change between dependency changes.
     pub(crate) fn record(&mut self, record: Option<FocusRecord>) {
-        record_focus_context(
-            &self.node,
-            record,
-            &mut self.action_chain,
-            &mut self.context_registration,
-        );
+        let held = cloned(&self.shared.record);
+        let unchanged = match (&record, &held) {
+            (Some(new), Some(held)) => new.same_as(held),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged
+            && self
+                .context_registration
+                .as_ref()
+                .is_none_or(FocusNodeRegistration::is_current)
+        {
+            return;
+        }
+        let recorded = record.is_some();
+        // The replaced record drops once the cell holds its successor.
+        drop(self.shared.record.replace(record));
+        // Register before the old token drops: the old one is no longer
+        // current then, so dropping it leaves the new one in place.
+        self.context_registration = recorded.then(|| self.shared.register_on(&self.node));
     }
 
     fn install_focus_listener(&mut self) {
@@ -618,10 +645,9 @@ impl FocusHost {
             let provider = cloned(&self.shared.reveal.rect);
             let replacement_rect_provider_registration =
                 provider.map(|provider| replacement.register_rect_provider(provider));
-            let replacement_context_registration = self
-                .action_chain
-                .as_ref()
-                .map(|record| record.register_on(&replacement));
+            let replacement_context_registration = cloned(&self.shared.record)
+                .is_some()
+                .then(|| self.shared.register_on(&replacement));
             let replacement_focus_subscription = self.add_focus_listener(&replacement);
 
             // Observe the replacement before the core transaction delivers
