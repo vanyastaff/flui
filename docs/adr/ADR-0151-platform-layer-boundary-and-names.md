@@ -758,8 +758,10 @@ secrets in diagnostics) are decided by the records the table cites.
   same `WindowHandler::input` obligation ADR-0254 gives every window, so a driven app and a real
   one share one path.
 - **Scripted providers are reachable from a driven app.** The scripting primitive of ADR-0154 sits
-  behind the contract's `scripted` feature, which `flui-testing` and `flui-app` under `driver`
-  both enable, so a driver scenario can answer a dialog or a permission without the OS. The
+  behind the contract's `scripted` feature, which `flui-testing` enables. A driven app reaches it
+  once the driver crate turns on `flui-platform/scripted` where it substitutes a dialog's or a
+  permission's answer, so a driver scenario answers it without the OS; `flui-app`'s `driver`
+  feature does not turn it on, since nothing in `flui-app` reads it. The
   window double is one: `flui_platform::testing::MockWindow`, the double of the contract crate's
   own trait (ADR-0243), which `flui-testing` re-exports as `flui_testing::MockWindow`; no crate
   outside the core host and the kits implements `PlatformWindow`. The core host's doubles and

@@ -28,7 +28,7 @@ fn invoke(slot: &'static std::thread::LocalKey<Callback>) {
 /// A headless window that plays its haptics on `haptics`.
 fn haptic_window(
     haptics: &Arc<flui_platform::testing::FakeHaptics>,
-) -> flui_testing::MockWindow<flui_testing::Wrapping> {
+) -> flui_testing::MockWindow<flui_testing::mock_window::Over> {
     flui_testing::MockWindow::over(
         flui_native::headless_platform()
             .open_window(

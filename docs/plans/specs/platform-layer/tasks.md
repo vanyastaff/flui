@@ -6236,12 +6236,13 @@ GPU-память простаивающего или невидимого окн
   станет подменять ответ диалога или разрешения (в задачах спеки flui-driver такой задачи нет).
   (2) Один двойник окна — `flui_platform::testing::MockWindow`, двойник трейта своего крейта
   (ADR-0243 D4), который `flui-testing` реэкспортирует как `flui_testing::MockWindow` (с
-  `WindowCall`, `Standalone`, `Wrapping`): окно само по себе, чьи глаголы вне очереди команд
-  (подсказка частоты, курсор-изображение, области ввода) отвечают по его возможностям, как велит
-  контракт, или `MockWindow<Wrapping>` поверх окна хоста (`over`) — у него нет строителей
+  `WindowCall` и модулем `mock_window` с `Standalone` и `Over`): окно само по себе, чьи глаголы вне очереди команд
+  (подсказка частоты и курсор-изображение) отвечают по его возможностям, а области ввода — по
+  строителю `taking_input_regions`, как велит
+  контракт, или `MockWindow<Over>` поверх окна хоста (`over`) — у него нет строителей
   состояния (размер, масштаб, фокус, видимость, возможности, id), это состояние обёрнутого окна, и
-  вызов такого строителя не компилируется; команду он записывает и сообщает наблюдателю только
-  после того, как её приняло обёрнутое окно. Строители того, что задаёт тест, записи
+  вызов такого строителя не компилируется; команду, курсор и области ввода он записывает и сообщает наблюдателю только
+  после того, как их приняло обёрнутое окно. Строители того, что задаёт тест, записи
   (`redraw_requests`, `applied`, `input_regions`), наблюдатель каждого вызова (`with_observer`),
   крючок перерисовки и значения, падающие вместе с окном (`keeping`). Удалены
   `flui_runtime::testing::TestWindow`,
@@ -6269,9 +6270,11 @@ GPU-память простаивающего или невидимого окн
   виджета, сценарная система отвечает на headless, виджет показывает ответ; compile-fail
   `tests/ui/native/headless_doubles_need_scripted.rs` (`thread_boundary_ui`): без `scripted` ни
   одно из имён двойников ядра не разрешается; юнит-тесты `flui-platform`
-  `testing::window::tests::a_standalone_windows_verbs_answer_as_its_capabilities_say` (таблица
-  глаголов × возможность есть или нет) и `a_wrapped_window_records_only_what_the_inner_window_took`
-  (отказ обёрнутого окна не оставляет записи и не доходит до наблюдателя) — каждый падает, если
+  `testing::mock_window::tests::a_standalone_windows_verbs_answer_as_its_capabilities_say` (по строке
+  на каждый вход с одним им открытым: открыт только свой глагол), `a_wrapped_window_records_only_what_the_inner_window_took`,
+  `a_wrapped_window_records_only_the_input_regions_the_inner_window_took` и
+  `the_observer_hears_only_cursors_the_window_took`
+  (отказ окна не оставляет записи и не доходит до наблюдателя) — каждый падает, если
   откатить исправление. **Проверки.** `rg --multiline
   "^\s*impl[^{;/]*PlatformWindow\s+for"` вне `crates/flui-native` и kit — ноль. На Windows
   `cargo heli clippy --workspace --all-targets -- -D warnings` с `--all-features` и без —

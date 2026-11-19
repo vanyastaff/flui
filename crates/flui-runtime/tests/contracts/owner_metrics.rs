@@ -2093,7 +2093,7 @@ type GeometryAnswer =
 /// A window over the shared one whose gesture-geometry query the test scripts, counts, slows
 /// and fails.
 struct ScriptedGeometry {
-    window: Rc<flui_testing::MockWindow<flui_testing::Wrapping>>,
+    window: Rc<flui_testing::MockWindow<flui_testing::mock_window::Over>>,
     /// How many gesture-geometry queries the window took.
     calls: Rc<Cell<usize>>,
     /// A clock the next queries advance, and by how much, while they read.

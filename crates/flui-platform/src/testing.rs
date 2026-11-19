@@ -44,9 +44,9 @@ mod launcher;
 
 pub use launcher::{LaunchRequest, ScriptedLauncher};
 
-mod window;
+pub mod mock_window;
 
-pub use window::{MockWindow, Standalone, WindowCall, Wrapping};
+pub use mock_window::{MockWindow, WindowCall};
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,

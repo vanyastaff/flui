@@ -40,11 +40,13 @@ pub enum WindowCall<'a> {
     /// it (over another window, once that window did) and recorded it, never
     /// for a command refused.
     Apply(&'a WindowCommand),
-    /// [`PlatformWindow::set_cursor`], before the window takes the cursor.
+    /// [`PlatformWindow::set_cursor`] took this cursor (over another window,
+    /// once that window did); never told for a cursor refused.
     SetCursor(&'a Cursor),
-    /// [`PlatformWindow::set_input_regions`] on a window that
-    /// [takes them](MockWindow::taking_input_regions): told after it recorded
-    /// them.
+    /// [`PlatformWindow::set_input_regions`] on a window built
+    /// [taking them](MockWindow::taking_input_regions): told once the window
+    /// took the set (over another window, once that window did) and recorded
+    /// it, never for a set refused.
     SetInputRegions(&'a [InputRegion]),
 }
 
@@ -64,7 +66,7 @@ enum DisplayReport {
 }
 
 /// What a [`MockWindow`] stands on: a window of its own ([`Standalone`]) or
-/// another window ([`Wrapping`]), which answers what the double's builders do
+/// another window ([`Over`]), which answers what the double's builders do
 /// not set.
 mod base {
     use super::{
@@ -77,7 +79,7 @@ mod base {
 
     /// The answers of what a [`MockWindow`](super::MockWindow) stands on.
     /// Sealed: [`Standalone`](super::Standalone) and
-    /// [`Wrapping`](super::Wrapping) are the two.
+    /// [`Over`](super::Over) are the two.
     pub trait Base {
         fn id(&self) -> WindowId;
         fn state(&self) -> WindowState;
@@ -96,7 +98,13 @@ mod base {
         fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>>;
         fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>>;
         fn window_at(&self, position: Point<f64>) -> WindowAt;
-        fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported>;
+        /// Take `regions`; `taking` is whether the double was built
+        /// [`taking_input_regions`](super::MockWindow::taking_input_regions).
+        fn set_input_regions(
+            &self,
+            regions: &[InputRegion],
+            taking: bool,
+        ) -> Result<(), Unsupported>;
         fn reveal_after_first_frame(&self);
         fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError>;
         fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported>;
@@ -121,11 +129,11 @@ pub struct Standalone {
 /// Another window under a [`MockWindow`] built [`over`](MockWindow::over) it:
 /// its id, state, commands and every handle the double's builders leave
 /// unset are that window's.
-pub struct Wrapping(Rc<dyn PlatformWindow>);
+pub struct Over(Rc<dyn PlatformWindow>);
 
-impl std::fmt::Debug for Wrapping {
+impl std::fmt::Debug for Over {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Wrapping").field(&self.0.id()).finish()
+        f.debug_tuple("Over").field(&self.0.id()).finish()
     }
 }
 
@@ -196,10 +204,15 @@ impl Base for Standalone {
         WindowAt::Unknown
     }
 
-    /// A window that does not [take them](MockWindow::taking_input_regions)
+    /// Taken exactly when the double was built
+    /// [taking them](MockWindow::taking_input_regions); else the window
     /// honours no kind of input region.
-    fn set_input_regions(&self, _: &[InputRegion]) -> Result<(), Unsupported> {
-        Err(not_on_this_platform())
+    fn set_input_regions(&self, _: &[InputRegion], taking: bool) -> Result<(), Unsupported> {
+        if taking {
+            Ok(())
+        } else {
+            Err(not_on_this_platform())
+        }
     }
 
     fn reveal_after_first_frame(&self) {}
@@ -228,7 +241,7 @@ impl Base for Standalone {
     }
 }
 
-impl Base for Wrapping {
+impl Base for Over {
     fn id(&self) -> WindowId {
         self.0.id()
     }
@@ -285,7 +298,9 @@ impl Base for Wrapping {
         self.0.window_at(position)
     }
 
-    fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
+    /// The wrapped window answers, whether the double records what it takes
+    /// or not.
+    fn set_input_regions(&self, regions: &[InputRegion], _: bool) -> Result<(), Unsupported> {
         self.0.set_input_regions(regions)
     }
 
@@ -364,6 +379,16 @@ impl Default for MockWindow {
     }
 }
 
+impl MockWindow<Over> {
+    /// `inner`, with what the builders set in front of it: its id, its state,
+    /// its commands and every call this window does not answer itself are
+    /// `inner`'s.
+    #[must_use]
+    pub fn over(inner: Rc<dyn PlatformWindow>) -> Self {
+        MockWindow::on(Over(inner))
+    }
+}
+
 impl MockWindow {
     /// A window of its own: a fresh id, a zero extent at scale 1, visible and
     /// unfocused, honouring no command but the normal mode.
@@ -384,14 +409,6 @@ impl MockWindow {
             visible: true,
             capabilities: publish(WindowCapabilities::NONE),
         })
-    }
-
-    /// `inner`, with what the builders set in front of it: its id, its state,
-    /// its commands and every call this window does not answer itself are
-    /// `inner`'s.
-    #[must_use]
-    pub fn over(inner: Rc<dyn PlatformWindow>) -> MockWindow<Wrapping> {
-        MockWindow::on(Wrapping(inner))
     }
 
     /// Answer `id` from [`PlatformWindow::id`].
@@ -554,10 +571,11 @@ impl<B: Base> MockWindow<B> {
         self
     }
 
-    /// Take input regions, recording each set
-    /// ([`input_regions`](Self::input_regions)); without it a window of its
-    /// own refuses them, as one whose system honours no kind of input region,
-    /// and a window over another hands them to it.
+    /// Record each input-region set the window takes
+    /// ([`input_regions`](Self::input_regions)). A window of its own takes
+    /// them exactly when built with this, and refuses them without it, as one
+    /// whose system honours no kind of input region; a window over another
+    /// hands every set to it either way, and records the sets it took.
     #[must_use]
     pub fn taking_input_regions(mut self) -> Self {
         self.input_regions = Some(RefCell::new(Vec::new()));
@@ -709,12 +727,16 @@ impl<B: Base> PlatformWindow for MockWindow<B> {
         self.base.window_at(position)
     }
 
+    /// A set the window took is recorded and told to the observer: a window
+    /// of its own takes them when built [taking them](Self::taking_input_regions),
+    /// a window over another once that window took them.
     fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
-        let Some(taken) = &self.input_regions else {
-            return self.base.set_input_regions(regions);
-        };
-        taken.borrow_mut().push(regions.to_vec());
-        self.observe(WindowCall::SetInputRegions(regions));
+        self.base
+            .set_input_regions(regions, self.input_regions.is_some())?;
+        if let Some(taken) = &self.input_regions {
+            taken.borrow_mut().push(regions.to_vec());
+            self.observe(WindowCall::SetInputRegions(regions));
+        }
         Ok(())
     }
 
@@ -722,9 +744,11 @@ impl<B: Base> PlatformWindow for MockWindow<B> {
         self.base.reveal_after_first_frame();
     }
 
+    /// A cursor the window took is told to the observer once it is taken.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        self.base.set_cursor(cursor)?;
         self.observe(WindowCall::SetCursor(cursor));
-        self.base.set_cursor(cursor)
+        Ok(())
     }
 
     fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported> {
@@ -754,17 +778,31 @@ mod tests {
         WindowCapabilities, WindowCommand,
     };
 
-    /// Capabilities honouring nothing, with the verbs' own two set to `on`.
-    fn verbs(on: bool) -> WindowCapabilities {
-        let availability = if on {
-            Availability::Native
-        } else {
-            Availability::Unavailable
-        };
+    /// What a standalone window is built with that a verb outside the command
+    /// queue answers by.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Gate {
+        FrameRateHint,
+        CursorImage,
+        TakingInputRegions,
+    }
+
+    /// A standalone window with `gate` alone available.
+    fn window_with(gate: Option<Gate>) -> MockWindow {
         let mut parts = WindowCapabilities::NONE.into_parts();
-        parts.frame_rate_hint = availability;
-        parts.cursor_image = availability;
-        parts.into_capabilities()
+        parts.frame_rate_hint = Availability::Unavailable;
+        parts.cursor_image = Availability::Unavailable;
+        match gate {
+            Some(Gate::FrameRateHint) => parts.frame_rate_hint = Availability::Native,
+            Some(Gate::CursorImage) => parts.cursor_image = Availability::Native,
+            Some(Gate::TakingInputRegions) | None => {}
+        }
+        let window = MockWindow::new().with_capabilities(parts.into_capabilities());
+        if gate == Some(Gate::TakingInputRegions) {
+            window.taking_input_regions()
+        } else {
+            window
+        }
     }
 
     fn image() -> Cursor {
@@ -773,37 +811,98 @@ mod tests {
         )
     }
 
-    /// Each verb a window takes outside the command queue answers as its
-    /// capabilities say, refused exactly when the capability is unavailable
-    /// (`PlatformWindow::set_frame_rate_hint`, `set_cursor` for an image,
-    /// `set_input_regions`).
+    /// Each verb a window takes outside the command queue answers by its own
+    /// gate and no other, refused exactly when that gate is shut:
+    /// `set_frame_rate_hint` by `frame_rate_hint`, `set_cursor` for an image
+    /// by `cursor_image`, `set_input_regions` by the `taking_input_regions`
+    /// builder. One row per gate, with only it open.
     #[test]
     fn a_standalone_windows_verbs_answer_as_its_capabilities_say() {
-        for on in [true, false] {
-            let window = MockWindow::new().with_capabilities(verbs(on));
-            let window = if on {
-                window.taking_input_regions()
-            } else {
-                window
-            };
-            let rows: [(&str, bool); 3] = [
+        for gate in [
+            None,
+            Some(Gate::FrameRateHint),
+            Some(Gate::CursorImage),
+            Some(Gate::TakingInputRegions),
+        ] {
+            let window = window_with(gate);
+            let verbs = [
                 (
-                    "frame rate hint",
+                    Gate::FrameRateHint,
                     window.set_frame_rate_hint(FrameRateHint::High).is_ok(),
                 ),
-                ("image cursor", window.set_cursor(&image()).is_ok()),
-                ("input regions", window.set_input_regions(&[]).is_ok()),
+                (Gate::CursorImage, window.set_cursor(&image()).is_ok()),
+                (
+                    Gate::TakingInputRegions,
+                    window.set_input_regions(&[]).is_ok(),
+                ),
             ];
-            for (verb, taken) in rows {
-                assert_eq!(taken, on, "{verb} with the capability available: {on}");
+            for (verb, taken) in verbs {
+                assert_eq!(
+                    taken,
+                    gate == Some(verb),
+                    "the verb gated by {verb:?} with only {gate:?} open"
+                );
             }
             assert!(
                 window
                     .set_cursor(&Cursor::Icon(crate::CursorIcon::Default))
                     .is_ok(),
-                "an icon cursor is taken either way"
+                "an icon cursor is taken with only {gate:?} open"
             );
         }
+    }
+
+    /// Over another window, an input-region set reaches that window first:
+    /// one it refuses is refused, and neither recorded nor told to the
+    /// observer, though the wrapper records the sets it takes.
+    #[test]
+    fn a_wrapped_window_records_only_the_input_regions_the_inner_window_took() {
+        for honours in [true, false] {
+            let inner = if honours {
+                MockWindow::new().taking_input_regions()
+            } else {
+                MockWindow::new()
+            };
+            let told = Rc::new(Cell::new(0));
+            let counted = Rc::clone(&told);
+            let wrapper = MockWindow::over(Rc::new(inner))
+                .taking_input_regions()
+                .with_observer(move |call| {
+                    if matches!(call, WindowCall::SetInputRegions(_)) {
+                        counted.set(counted.get() + 1);
+                    }
+                });
+
+            let outcome = wrapper.set_input_regions(&[]);
+
+            assert_eq!(outcome.is_ok(), honours);
+            let recorded: Vec<Vec<crate::input_regions::InputRegion>> =
+                if honours { vec![vec![]] } else { vec![] };
+            assert_eq!(wrapper.input_regions(), recorded, "honoured: {honours}");
+            assert_eq!(told.get(), usize::from(honours), "honoured: {honours}");
+        }
+    }
+
+    /// The observer hears a cursor only once the window took it: an image a
+    /// window without cursor images refuses is not reported.
+    #[test]
+    fn the_observer_hears_only_cursors_the_window_took() {
+        let told = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&told);
+        let window = window_with(None).with_observer(move |call| {
+            if matches!(call, WindowCall::SetCursor(_)) {
+                counted.set(counted.get() + 1);
+            }
+        });
+
+        assert!(window.set_cursor(&image()).is_err());
+        assert_eq!(told.get(), 0, "a refused image is not reported");
+        assert!(
+            window
+                .set_cursor(&Cursor::Icon(crate::CursorIcon::Default))
+                .is_ok()
+        );
+        assert_eq!(told.get(), 1, "a taken icon is");
     }
 
     /// Over another window, a command is recorded and told to the observer
@@ -845,8 +944,7 @@ mod tests {
     /// window's, which answers the rest.
     #[test]
     fn a_wrapped_window_answers_what_its_builders_leave_unset() {
-        let inner: Rc<dyn PlatformWindow> =
-            Rc::new(MockWindow::new().with_capabilities(verbs(true)));
+        let inner: Rc<dyn PlatformWindow> = Rc::new(window_with(Some(Gate::FrameRateHint)));
         let haptics = Arc::new(crate::testing::FakeHaptics::new());
         let wrapper = MockWindow::over(Rc::clone(&inner)).with_haptics(haptics);
 

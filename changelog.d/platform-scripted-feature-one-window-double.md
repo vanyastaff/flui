@@ -2,10 +2,11 @@
 
 - **`flui_testing::MockWindow`** (also `flui_platform::testing::MockWindow` under
   `flui-platform`'s `testing`): the one test double of `PlatformWindow`. Standalone, its
-  refresh-rate request, image cursor and input regions answer as its capabilities say;
-  `MockWindow::over(window)` is a `MockWindow<Wrapping>` whose state, id and commands are the
-  wrapped window's, with no builders for them. Both record redraws, the commands they took and
-  input regions, run the test's code at each call through an observer (`WindowCall`), and keep
+  refresh-rate request and image cursor answer as its capabilities say, and it takes input
+  regions exactly when built `taking_input_regions`; `MockWindow::over(window)` is a
+  `MockWindow<mock_window::Over>` whose state, id, commands and verbs are the wrapped window's,
+  with no builders for its state. Both record redraws and the commands and input regions they
+  took, run the test's code at each call they take through an observer (`WindowCall`), and keep
   values that drop with the window.
 - **`flui-native`'s `scripted` feature**: names the headless host's type, window, doubles and test
   controls at the crate root; `testing` includes it, and `flui-app`'s `testing` turns it on.
