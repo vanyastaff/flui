@@ -111,6 +111,8 @@ mod agent_act;
 mod agent_input;
 #[path = "contracts/announce.rs"]
 mod announce;
+#[path = "contracts/close_vetoes.rs"]
+mod close_vetoes;
 #[path = "contracts/device_loss.rs"]
 mod device_loss;
 #[path = "contracts/display_timing.rs"]
@@ -148,10 +150,16 @@ mod owner_publication;
 mod owner_registry;
 #[path = "contracts/owner_sampling.rs"]
 mod owner_sampling;
+#[path = "contracts/quit_consultation.rs"]
+mod quit_consultation;
 #[path = "contracts/recovered_panic_context.rs"]
 mod recovered_panic_context;
 #[path = "contracts/render_view_lending.rs"]
 mod render_view_lending;
+#[path = "contracts/session_end_report.rs"]
+mod session_end_report;
+#[path = "contracts/session_end_steps.rs"]
+mod session_end_steps;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]

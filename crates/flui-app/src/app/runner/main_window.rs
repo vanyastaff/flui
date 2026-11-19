@@ -611,9 +611,6 @@ pub(super) fn drive_main_window() {
 /// handler. A presentation the deferred quit waits on and that is gone
 /// consents. Runs on the owner's turn, outside every runtime lease.
 pub(super) fn drive_program_quit() {
-    use crate::app::application_control::QuitAnswer;
-    use crate::app::{CloseReason, CloseResponse};
-
     let Some((ingress, router)) = APP_RUNTIME.with(|slot| {
         let runtime = slot.borrow();
         runtime
@@ -623,34 +620,22 @@ pub(super) fn drive_program_quit() {
     }) else {
         return;
     };
-    let registered = router.addresses();
-    for address in ingress.quit_waiting() {
-        if !registered.contains(&address) {
-            ingress.quit_consented(address);
-        }
-    }
-    if !ingress.begin_quit_consult() {
+    // Most turns have no quit: they collect no presentations, so a steady
+    // frame allocates nothing. A quit asked after this check is the next
+    // turn's.
+    if !ingress.is_quit_pending() {
         return;
     }
-    // The router contains every handler's panic, so the consultation always
-    // ends with an answer; asking every presentation, not only up to the
-    // first refusal, records the close on each one that refuses.
-    let mut waiting = Vec::new();
-    let mut cancelled = false;
-    for address in registered {
-        if router.consult(address, CloseReason::Program) == CloseResponse::KeepOpen {
-            if router.is_recorded(address, CloseReason::Program) {
-                waiting.push(address);
-            } else {
-                cancelled = true;
-            }
-        }
-    }
-    ingress.finish_quit_consult(if cancelled {
-        QuitAnswer::Cancelled
-    } else {
-        QuitAnswer::Waiting(waiting)
-    });
+    let registered = router.addresses();
+    ingress.quit_forget_gone(&registered);
+    let Some(consultation) = ingress.begin_quit_consult() else {
+        return;
+    };
+    // The consultation keeps a panic of the code it runs (the drop of a
+    // handler that closed its own window) and cancels the quit; the panic
+    // resumes once the quit is finished and nothing of the host is held.
+    let answered = consultation.ask(&router, registered);
+    ingress.finish_quit_consult(answered).resume();
 }
 
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {

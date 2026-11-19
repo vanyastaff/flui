@@ -3,6 +3,7 @@ use std::rc::Rc;
 use flui_foundation::panic::FirstPanic;
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
+use flui_runtime::owner_turn::NoticeDelivery;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 use flui_scheduler::AppLifecycleState;
 
@@ -772,11 +773,11 @@ pub(super) fn deliver_host_notice_while(
 /// composition and its observers hear `Detached`, so what they publish reaches
 /// the flush after it. A runtime that is checked out runs none of its code; its
 /// composition is lost, a documented limit. A runtime's observers start only
-/// while `margin` is left before `deadline`, whatever the runtimes before it
-/// spent, so the flush keeps the rest. The first panic is contained and
-/// reported by the caller.
+/// while `may_start` allows, whatever the runtimes before it spent, so the
+/// flush keeps the rest. The first panic is contained and reported by the
+/// caller.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: std::time::Duration) {
+pub(super) fn deliver_session_end_close(may_start: &dyn Fn() -> bool) {
     let dispatchers = APP_RUNTIME.with(|slot| {
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
@@ -797,7 +798,7 @@ pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: st
         })
     });
     for dispatcher in dispatchers {
-        if deadline.saturating_duration_since(std::time::Instant::now()) < margin {
+        if !may_start() {
             tracing::warn!(
                 ?dispatcher,
                 "the session end's budget is spent; the remaining windows hear no Detached"
@@ -807,25 +808,6 @@ pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: st
         if let Err(error) = dispatcher.lifecycle(AppLifecycleState::Detached) {
             tracing::debug!(?dispatcher, ?error, "session-end close not delivered");
         }
-    }
-}
-
-/// How a system notice reached the UI runtimes: on the spot, queued behind a
-/// turn that was already running, or not at all.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct NoticeDelivery {
-    /// Runtimes whose subscribers had heard it when the call returned.
-    pub(super) ran: usize,
-    /// Runtimes whose turn was busy: they hear it later, after the call.
-    pub(super) queued: usize,
-    /// Runtimes that could not take it.
-    pub(super) refused: usize,
-}
-
-impl NoticeDelivery {
-    /// Whether every subscriber has heard the notice by now.
-    pub(super) fn is_complete(self) -> bool {
-        self.queued == 0 && self.refused == 0
     }
 }
 
