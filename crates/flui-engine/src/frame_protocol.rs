@@ -524,6 +524,8 @@ impl FrameProtocol {
         if let Some(candidate) = retained {
             self.retained.commit(candidate);
         }
+        // The frame committed: the full retry armed when it began is withdrawn.
+        self.force_full_next_frame = false;
         self.damage_off = false;
         self.counters = recorded;
         let (evictions, bytes) = steps.0.recording_cache_counts();
