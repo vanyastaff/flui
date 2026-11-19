@@ -11207,6 +11207,45 @@ fn harness_single_child_layouts_preserve_live_and_dry_baselines() {
     );
 }
 
+/// A wrap's description names both directions that flip its axes, and marks
+/// only `VerticalDirection::Down` as the unremarkable vertical direction.
+fn harness_wrap_describes_its_reading_and_vertical_directions() {
+    for (vertical, text, vertical_name, text_name) in [
+        (VerticalDirection::Up, TextDirection::Rtl, "Up", "Rtl"),
+        (VerticalDirection::Down, TextDirection::Ltr, "Down", "Ltr"),
+    ] {
+        let run = RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_vertical_direction(vertical)
+                    .with_text_direction(text),
+            )
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        )
+        .with_size(Size::new(100.0, 100.0))
+        .run_layout();
+        let tree = run.render_snapshot();
+        let wrap = tree.find_by_kind("RenderWrap").unique().expect("wrap");
+        assert_eq!(
+            wrap.get::<Variant<'_>>("vertical_direction")
+                .map(|direction| direction.name),
+            Ok(vertical_name),
+        );
+        assert_eq!(
+            wrap.get::<Variant<'_>>("text_direction")
+                .map(|direction| direction.name),
+            Ok(text_name),
+        );
+        assert_eq!(
+            wrap.field("vertical_direction")
+                .expect("described")
+                .is_default(),
+            vertical == VerticalDirection::Down,
+            "{vertical_name}"
+        );
+    }
+}
+
 fn harness_wrap_reports_its_highest_positioned_baseline() {
     for (name, wrap, sizes, baselines, expected) in [
         (
@@ -15339,6 +15378,10 @@ fn family_wrap_flow_table() {
             (
                 "wrap_horizontal_rtl_packs_its_run_against_the_right_edge",
                 harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge,
+            ),
+            (
+                "wrap_describes_its_reading_and_vertical_directions",
+                harness_wrap_describes_its_reading_and_vertical_directions,
             ),
             (
                 "flow_paints_children_in_delegate_order_under_per_child_transform_layers",
