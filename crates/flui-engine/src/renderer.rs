@@ -1068,7 +1068,19 @@ impl Renderer {
         attempt: crate::gpu_backend::Attempt,
         surface: Option<&wgpu::Surface<'static>>,
     ) -> EngineResult<(wgpu::Adapter, GpuCapabilities, wgpu::Device, wgpu::Queue)> {
-        let adapter = instance
+        let adapter = Self::adapter_for(instance, attempt, surface).await?;
+        let (capabilities, device, queue) = Self::device_on(&adapter).await?;
+        Ok((adapter, capabilities, device, queue))
+    }
+
+    /// The adapter `attempt` asks `instance` for, one that can present to
+    /// `surface` when one is given.
+    pub(crate) async fn adapter_for(
+        instance: &wgpu::Instance,
+        attempt: crate::gpu_backend::Attempt,
+        surface: Option<&wgpu::Surface<'static>>,
+    ) -> EngineResult<wgpu::Adapter> {
+        instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 // WARP is asked for by name: the software adapter is this
                 // attempt, not a host's configuration.
@@ -1079,12 +1091,18 @@ impl Renderer {
                 )
             })
             .await
-            .map_err(EngineError::adapter_request)?;
+            .map_err(EngineError::adapter_request)
+    }
 
-        let capabilities = GpuCapabilities::detect(&adapter);
+    /// The capability-negotiated device on `adapter`, and the capabilities
+    /// it was negotiated from.
+    pub(crate) async fn device_on(
+        adapter: &wgpu::Adapter,
+    ) -> EngineResult<(GpuCapabilities, wgpu::Device, wgpu::Queue)> {
+        let capabilities = GpuCapabilities::detect(adapter);
         let (device, queue) =
-            crate::adapter::request_flui_device(&adapter, &capabilities, "FLUI GPU Device").await?;
-        Ok((adapter, capabilities, device, queue))
+            crate::adapter::request_flui_device(adapter, &capabilities, "FLUI GPU Device").await?;
+        Ok((capabilities, device, queue))
     }
 
     /// Installs diagnostic callbacks on a freshly created device.

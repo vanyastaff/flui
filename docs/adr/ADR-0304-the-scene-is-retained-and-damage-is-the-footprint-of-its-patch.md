@@ -558,8 +558,8 @@ is inserted only after its recording completed and placed every glyph it asked f
 capture starts its key over as a candidate. Eviction is least recently rastered first under a byte budget (a hypothesis), and a presentation's
 entries go when its slot detaches. Counters: `recording_cache_bytes`, `recording_cache_hits`,
 `recording_cache_evictions`. A chunk has one parent entry, so it never straddles an effect scope,
-and the renderer's straddle self-heal (`crates/flui-engine/src/renderer.rs:2654-2675`) becomes a
-debug assertion that the producer kept that rule.
+so a version's frame skips the renderer's straddle self-heal (`record_passes` in
+`crates/flui-engine/src/renderer.rs`), which only a hand-built tree keeps.
 
 A texture frame drained with a publication (`raster_lane.rs:350-358`) damages the device
 footprints of that texture's users in the held version, closed under §6; a texture no chunk draws

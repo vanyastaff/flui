@@ -568,7 +568,8 @@ impl Executor {
     }
 }
 
-/// The redraw requesters a raster thread's wake calls, as one list it clones
+/// The redraw requesters a raster thread's wake or a device request's answer
+/// calls, as one list it clones
 /// out under the lock and calls with the lock released: a requester is the
 /// platform's code.
 #[derive(Clone, Default)]
@@ -579,10 +580,6 @@ type RedrawList = Arc<[Arc<dyn RedrawRequester>]>;
 
 impl Redraws {
     /// Ask every listed window for a frame.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(dead_code, reason = "the web has no raster thread to wake its windows")
-    )]
     fn wake(&self) {
         let listed = Arc::clone(
             &*self
@@ -832,8 +829,10 @@ impl RasterHost {
         display: Option<DisplayColor>,
     ) -> Result<(), EngineError> {
         let surface_target = self.surface_target(window);
-        let redraw =
-            (self.placement == RasterPlacement::Threaded).then(|| window.redraw_requester());
+        // Every window's requester is listed: the raster thread's wake asks
+        // for frames through it, and so does a device request's answer on
+        // every placement (ADR-0305 §8).
+        let redraw = Some(window.redraw_requester());
         self.attach_target(surface_target, redraw, address, config, textures, display)
     }
 
@@ -1116,7 +1115,13 @@ impl RasterHost {
                 let clock: Rc<dyn flui_foundation::MonotonicClock> =
                     Rc::new(flui_foundation::SystemClock);
                 let backend: Box<dyn RasterBackend> = backend;
-                let (executor, sender) = RasterExecutor::new(backend, clock, || {});
+                // A lost device's replacement is asked for on a worker, which
+                // asks every attached window for a frame: the frame gate
+                // counts the request's deadline, so that frame's turn installs
+                // the device (ADR-0305 §8).
+                let woken = redraws.clone();
+                let (executor, sender) =
+                    RasterExecutor::new(backend, clock, || {}, move || woken.wake());
                 (Executor::Inline(executor), sender)
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1380,7 +1385,8 @@ impl RasterHost {
     }
 
     /// Turn the executor for `address`'s window with no frame of its own: a
-    /// lost device whose rebuild is due is rebuilt, whether or not a window
+    /// lost device whose rebuild is due is asked for, and one whose request
+    /// answered is installed, whether or not a window
     /// has anything new to draw. What the turn left for the window (a
     /// refusal, a panic) is settled now, so the frame's own turn finds its
     /// failure slot empty.
@@ -1520,13 +1526,15 @@ impl RasterHost {
         let Some(backend) = placed.executor.inline().map(RasterExecutor::backend) else {
             return health;
         };
-        if backend.rebuilds_inline() || !(health.is_lost() || backend.device_lost()) {
+        if backend.requests_devices() || !(health.is_lost() || backend.device_lost()) {
             return health;
         }
         DeviceHealth::Rebuilding { attempts: 0 }
     }
 
-    /// When the executor next rebuilds a lost device, for the loop's wake;
+    /// When the executor must next turn for a lost device (its next rebuild,
+    /// or its request's deadline), for the
+    /// loop's wake;
     /// `None` once it died, since a dead executor rebuilds nothing.
     #[cfg_attr(
         target_arch = "wasm32",
@@ -1895,7 +1903,8 @@ impl RasterHost {
     /// frame of its own: a retry of a given-up device the application
     /// asked for (`retry`), a surface it is owed whose pace is due, the
     /// colour of the display it is on, and a turn of the executor, which
-    /// rebuilds a lost device that is due. Answers what came of it ([`BeforeFrame`]).
+    /// asks for a lost device that is due and installs one whose request
+    /// answered. Answers what came of it ([`BeforeFrame`]).
     fn before_frame(
         &mut self,
         address: PresentationAddress,
@@ -1960,7 +1969,7 @@ impl RasterHost {
 
     /// The deadline `address`'s own frame serves, which its frame's dirty
     /// gate counts and the loop wakes for while its frames run
-    /// ([`wake_deadline`](Self::wake_deadline)): the device's next rebuild,
+    /// ([`wake_deadline`](Self::wake_deadline)): the device's next turn,
     /// which any window's turn runs, and the next attempt at the surface
     /// this window is owed. Another window's surface deadline is that
     /// window's: counted here, it would render this window on every wake
@@ -2816,12 +2825,13 @@ impl RasterSlot {
     /// the application the device is given up again), a surface the window is owed whose pace is due
     /// ([`RasterHost::restore_due`]), the colour of the display the window is
     /// on (`display`; a changed profile sets the surface up again, ADR-0256
-    /// §6), and a turn of the executor, which rebuilds a lost device that is
-    /// due even when the frame has nothing new to draw. A device or a surface
+    /// §6), and a turn of the executor, which asks for a lost device that is
+    /// due, or installs one whose request answered, even when the frame has
+    /// nothing new to draw. A device or a surface
     /// that came back, or a display that changed, repaints the window in
     /// full. After it: the frame's GPU
     /// panic goes to the application's frame-failure handler, and a device
-    /// the frame lost is reported with the frames it drops; its rebuild is
+    /// the frame lost is reported with the frames it drops; its next turn is
     /// due at the executor's deadline, which [`RasterHost::window_deadline`] reads.
     pub(crate) fn pump(
         &mut self,

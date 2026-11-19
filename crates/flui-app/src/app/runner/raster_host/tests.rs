@@ -490,7 +490,7 @@ fn a_refused_surface_is_asked_again_at_its_pace() {
 /// Give the scripted device up: lost, with a backend that cannot rebuild
 /// where the executor runs.
 fn give_device_up(host: &mut RasterHost, slots: &ScriptedSlots) {
-    slots.cannot_rebuild_inline();
+    slots.cannot_request_devices();
     slots.lose_device();
     host.service(address());
     let placed = host.placed.as_ref().expect("placed");
@@ -667,10 +667,10 @@ fn window_over_a_given_up_device() -> (crate::app::ui_runtime::UiRuntime, Raster
     // The executor gives the device up at once where it cannot rebuild; the
     // backend then answers that it could, so the give-up is the
     // application's to retry rather than the owner's to replace.
-    slots.cannot_rebuild_inline();
+    slots.cannot_request_devices();
     slots.lose_device();
     let _ = window_frame(&mut slot, &mut ui_runtime);
-    slots.can_rebuild_inline();
+    slots.can_request_devices();
     let _ = window_frame(&mut slot, &mut ui_runtime);
     assert!(matches!(slot.device, DeviceHealth::GivenUp { .. }));
     assert!(
@@ -947,7 +947,7 @@ fn what_the_full_queue_refused_is_sent_again() {
     let (mut host, slots) = self::host();
     let mut scene = TestScene::new(AT);
     assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
-    slots.cannot_rebuild_inline();
+    slots.cannot_request_devices();
     slots.lose_device();
     host.service(address());
     let _ = host.set_surface(address(), false);
@@ -957,7 +957,7 @@ fn what_the_full_queue_refused_is_sent_again() {
         .expect("placed")
         .sender
         .take_device_failure();
-    slots.can_rebuild_inline();
+    slots.can_request_devices();
     fill_the_lifecycle_queue(&mut host);
     let _ = host.set_surface(address(), true);
     assert_eq!(
@@ -1225,7 +1225,7 @@ fn an_owner_replaced_device_is_never_given_up_to_the_application() {
     let (mut host, slots) = host();
     let mut scene = TestScene::new(AT);
     assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
-    slots.cannot_rebuild_inline();
+    slots.cannot_request_devices();
     slots.lose_device();
     assert_eq!(
         host.device_health(),
@@ -2402,4 +2402,54 @@ pub(in crate::app::runner) fn threaded_host_for_two(
         .expect("the host is idle")
         .expect("the scripted backend attaches any window");
     (shared, slots, wakes)
+}
+
+/// An inline host's device request answers on its worker, which asks the
+/// window it attached for a frame, and the frame gate, which counts the
+/// request's deadline, runs the frame whose turn installs the device. The
+/// deadline is the request's own, so a driver that
+/// never answers still wakes the window.
+///
+/// Red-check: attach an inline window with no redraw requester (as the host
+/// did for the threaded placement only) and the answer asks for no frame.
+#[test]
+fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
+    let slots = ScriptedSlots::new();
+    let mut host = RasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
+    let window = flui_runtime::testing::TestWindow::new();
+    let redraws = window.redraw_calls_handle();
+    host.attach(
+        &window,
+        address(),
+        &crate::app::AppConfig::default(),
+        None,
+        None,
+    )
+    .expect("the scripted backend attaches any window");
+    slots.hold_device_requests();
+    slots.lose_device();
+    host.service(address());
+    assert_eq!(slots.held_device_requests(), 1);
+    assert!(host.device_health().is_lost());
+    let waiting = host
+        .window_deadline(address())
+        .expect("a request under way owes its deadline");
+    assert!(
+        waiting > web_time::Instant::now() + std::time::Duration::from_secs(1),
+        "the request's deadline is seconds away"
+    );
+
+    let asked = redraws.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(slots.answer_device_request());
+    assert_eq!(
+        redraws.load(std::sync::atomic::Ordering::SeqCst),
+        asked + 1,
+        "the answer asks the window for a frame"
+    );
+    host.service(address());
+    assert_eq!(host.device_health(), DeviceHealth::Healthy);
+    assert_eq!(host.window_deadline(address()), None);
 }

@@ -200,7 +200,9 @@ impl AppHandle {
     /// (ADR-0267).
     ///
     /// A device that keeps failing to rebuild is given up after ten failures
-    /// at the one-second retry ceiling, about twelve seconds after the loss:
+    /// at the one-second retry ceiling, about twelve seconds after the loss
+    /// when each attempt fails at once (each request whose driver hangs adds
+    /// its five-second deadline, so about ninety seconds when every one does):
     /// the window reports
     /// [`DeviceRecovery::Abandoned`](crate::DeviceRecovery::Abandoned) through
     /// its [`FrameFailureHandler`](crate::FrameFailureHandler), attempts no
