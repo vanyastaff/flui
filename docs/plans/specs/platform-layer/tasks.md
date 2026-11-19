@@ -6284,10 +6284,10 @@ GPU-память простаивающего или невидимого окн
   trybuild `compile_fail`, чей вывод на этой машине без строк исходников std), `flui-app`
   146/147 — `the_driver_agent_contains_every_failure` (агент на `HeadlessHost`, файлов этой
   задачи не касается) падает на Windows и под этой веткой, и отдельно, а в WSL проходит. Фикстуры
-  фасада `thread_boundary_ui` проходят; `.stderr` новой — вывод trybuild. **Остаток:**
-  `flui-system/src/web/tests.rs` не собран под wasm32 (на машине нет std wasm32); сборки ядра
-  без `scripted` под macOS, iOS, Android и wasm32 не запускались: списки целей в `expect(dead_code)`
-  взяты из вызовов вне тестов по целям, а не из сборки.
+  фасада `thread_boundary_ui` проходят; `.stderr` новой — вывод trybuild. В WSL nightly
+  (`CC=/bin/true AR=/bin/true SDKROOT=/tmp cargo +nightly check --locked`) под `aarch64-apple-darwin`,
+  `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown`: `-p flui-native --lib` с фичами по умолчанию и без них,
+  `-p flui-platform -p flui-system --lib`, `--tests` трёх крейтов под нативные цели и `-p flui-system --lib --tests --features testing` под wasm32 — ни одного предупреждения: каждое `expect(dead_code)` исполнено.
 
 - [ ] **LY102** (открыта, не начата) — `crates/flui-platform/src/lib.rs:113–161`
   объявляет плоские модули; каталоги есть у `capability/`, `haptics/`, `input_capabilities/`,
