@@ -57,6 +57,8 @@ const noAgent = () => assert.fail('no agent may run')
     [{ key: 'a', focus: 'A' }, { key: 'a b', focus: 'B' }],
     [{ key: 'a', focus: 'A' }, { key: 'b-', focus: 'B' }],
     [{ key: 'a', focus: 'A' }, { key: 7, focus: 'B' }],
+    [{ key: 'a', focus: 'A' }, { key: ['b'], focus: 'B' }],
+    [{ key: 'a', focus: 'A' }, { key: ['red-team'], focus: 'B' }],
     [{ key: 'a', focus: 'A' }, { key: 'b', focus: 7 }],
     Array.from({ length: 7 }, (_, i) => ({ key: `s${i}`, focus: 'F' })),
     'a,b',
@@ -66,10 +68,16 @@ const noAgent = () => assert.fail('no agent may run')
     assert.match(refused.error, /stances must be/, JSON.stringify(given))
     assert.equal(none.length, 0)
   }
-  for (const checkout of ["it's", 'a\nb', 5, '']) {
+  for (const checkout of ["it's", 'O‘Neil', 'O‛Neil', 'a\nb', 'a\rb', 'a\0b', ' ', 5]) {
     const { result: refused, calls: none } = await run({ topic: 'T', checkout }, noAgent)
     assert.match(refused.error, /checkout must be/, JSON.stringify(checkout))
     assert.equal(none.length, 0)
+  }
+  // An empty or null checkout means the default, as in review-before-merge.
+  for (const checkout of ['', null]) {
+    const { result: accepted, prompts } = await run({ topic: 'T', stances, checkout }, happy())
+    assert.equal(accepted.error, undefined)
+    assert.match(prompts['research:code'], /in the checkout '\.'/)
   }
   for (const n of [2, 6]) {
     const given = Array.from({ length: n }, (_, i) => ({ key: `s${i}-x`, focus: 'F' }))
@@ -100,11 +108,11 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(prompts['revise:b'], /"by": "red-team"/)
   const b = result.proposals.find((p) => p.stance === 'b')
   assert.deepEqual(b.unanswered.map((x) => x.claim).sort(), ['c on b', 'red-team on b'])
-  assert.deepEqual(result.unanswered.map((x) => x.claim).sort(), ['c on b', 'red-team on b'])
-  const judgeUnanswered = prompts.judge.split('left unanswered')[1].split('The second round')[0]
-  assert.match(judgeUnanswered, /"claim": "c on b"[\s\S]*"claim": "red-team on b"/)
-  assert.doesNotMatch(judgeUnanswered, /"claim": "a on b"/)
-  assert.match(result.markdown, /Unanswered by their authors \(2\): #\d+ on b by c: c on b; #\d+ on b by red-team: red-team on b/)
+  assert.deepEqual(result.open.map((x) => [x.claim, x.why]).sort(), [['c on b', 'unanswered'], ['red-team on b', 'unanswered']])
+  const judgeOpen = prompts.judge.split('left unanswered or conceded')[1].split('The second round')[0]
+  assert.match(judgeOpen, /"claim": "c on b"[\s\S]*"claim": "red-team on b"/)
+  assert.doesNotMatch(judgeOpen, /"claim": "a on b"/)
+  assert.match(result.markdown, /## Attacks still open in the record\n- #\d+ on b by c, unanswered: c on b\n- #\d+ on b by red-team, unanswered: red-team on b\n/)
   // The attack b answered travels with its answer to the second round and the judge.
   for (const label of ['second-round', 'judge']) {
     const revisedB = prompts[label].split('### b: b revised')[1].split('### c:')[0]
@@ -126,8 +134,9 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(result.gaps, [])
 }
 
-// 3. An attack is answered once, by an answer that says how: an answer to another design's attack,
-//    a repeat, or a `how` the agent wrote as a quoted empty string answers nothing.
+// 3. An attack is answered once, by an answer that says how: an answer that names no attack on this
+//    design, a repeat, or a blank `how` (spaces, or a quoted empty string) answers nothing. A
+//    conceded attack stays open in the record and reaches the judge.
 {
   let own = []
   const { result } = await run({ topic: 'T', stances }, happy({
@@ -140,6 +149,8 @@ const noAgent = () => assert.fail('no agent may run')
           { id: own[0], verdict: 'fixed', how: 'h' },
           { id: own[0], verdict: 'conceded', how: 'h2' },
           { id: own[1], verdict: 'refuted', how: '""' },
+          { id: own[2], verdict: 'refuted', how: '   ' },
+          { id: 999, verdict: 'fixed', how: 'h' },
         ],
         design: design('a revised'),
       }
@@ -149,7 +160,21 @@ const noAgent = () => assert.fail('no agent may run')
   assert.equal(own.length, 3)
   assert.deepEqual(a.answers.map((x) => [x.id, x.verdict]), [[own[0], 'fixed']])
   assert.deepEqual(a.unanswered.map((x) => x.id), own.slice(1))
-  assert.ok(result.gaps.includes("revision of a: 3 answers named another design's attack, repeated one, or said nothing, and answer nothing"))
+  assert.ok(result.gaps.includes('revision of a: 5 answers named no attack on this design, repeated one, or said nothing, and answer nothing'))
+
+  let conceded = 0
+  const { result: owned, prompts } = await run({ topic: 'T', stances }, happy({
+    'revise:a': (p) => {
+      const ids = [...p.matchAll(/"id": (\d+)/g)].map((m) => Number(m[1]))
+      conceded = ids[0]
+      return { answers: ids.map((id) => ({ id, verdict: id === conceded ? 'conceded' : 'fixed', how: id === conceded ? 'costs a second allocation' : 'h' })), design: design('a revised') }
+    },
+  }))
+  const open = owned.open.find((x) => x.id === conceded)
+  assert.equal(open.why, 'conceded')
+  assert.equal(open.how, 'costs a second allocation')
+  assert.match(prompts.judge.split('left unanswered or conceded')[1].split('The second round')[0], new RegExp(`"id": ${conceded},[\\s\\S]*"why": "conceded"`))
+  assert.match(owned.markdown, new RegExp(`- #${conceded} on a by [a-z-]+, conceded: `))
 }
 
 // 4. A refused proposal is a named gap, an attack on it is left out with a gap, and fewer than two
@@ -197,6 +222,7 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(prompts.judge.split('The second round')[1], /"claim": "the fix of b leaks"/)
   assert.deepEqual(result.second, [late])
   assert.match(result.markdown, /and 1 in the second/)
+  assert.match(result.markdown, /- second round on b \(fatal\): the fix of b leaks/)
   // The second round keeps the first round's target filter and bound, with their gaps.
   const many = [...Array.from({ length: 15 }, (_, i) => ({ ...late, claim: `late ${i}` })), { ...late, target: 'zzz' }]
   const { result: bounded } = await run({ topic: 'T', stances }, happy({ 'second-round': { attacks: many } }))
@@ -216,6 +242,7 @@ const noAgent = () => assert.fail('no agent may run')
     'research:code': { facts: many(35, (i) => ({ claim: `fact ${i}`, evidence: 'x.rs:1' })), summary: 'sum' },
     'attack:red-team': { attacks: many(15, (i) => ({ target: 'a', claim: `red ${i}`, scenario: 'sc', evidence: 'ev', severity: 'minor' })) },
     'propose:a': { ...design('a'), debt_removed: many(15, (i) => `debt ${i}`) },
+    'revise:b': () => ({ answers: [], design: { ...design('b revised'), debt_removed: many(14, (i) => `rdebt ${i}`) } }),
     judge: (p, o) => ({ ...verdict(p, o), scores: [{ stance: 'a', score: 150, why: 'w' }, { stance: 'a', score: 30, why: 'w2' }, { stance: 'b', score: -5, why: 'w' }, { stance: 'zzz', score: 10, why: 'w' }] }),
   }))
   assert.equal(result.research.find((r) => r.key === 'code').facts.length, 30)
@@ -226,6 +253,9 @@ const noAgent = () => assert.fail('no agent may run')
   assert.ok(result.gaps.includes('proposal a: 3 debt items past the bound of 12 were left out'))
   assert.match(prompts['attack:b'], /debt 11/)
   assert.doesNotMatch(prompts['attack:b'], /debt 12/)
+  assert.ok(result.gaps.includes('revision of b: 2 debt items past the bound of 12 were left out'))
+  assert.match(prompts.judge, /rdebt 11/)
+  assert.doesNotMatch(prompts.judge, /rdebt 12/)
   assert.deepEqual(result.scores, [{ stance: 'a', score: 100, why: 'w' }, { stance: 'b', score: 0, why: 'w' }])
   assert.ok(result.gaps.includes('judge: a scored 2 times'))
   assert.ok(result.gaps.includes('judge: c scored 0 times'))

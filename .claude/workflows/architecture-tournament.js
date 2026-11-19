@@ -19,16 +19,20 @@ export const meta = {
 //   drivers   the forces a design must satisfy, one sentence each
 //   stances   optional [{ key, focus }], two to six: the schools the proposals come from (default:
 //             four); a key is lower-case words joined by dashes, unique, and not "red-team"
-//   checkout  the checkout to read (default: the session's working directory)
+//   checkout  the checkout to read (default, also for an empty or null value: the session's working
+//             directory)
 const opts = args || {}
 const gaps = []
 if (typeof opts.topic !== 'string' || !opts.topic.trim()) {
   return { error: 'a topic is required: the problem, its measured facts and the target' }
 }
-const checkout = opts.checkout === undefined ? '.' : opts.checkout
-// Every agent's brief quotes the checkout in single quotes.
-if (typeof checkout !== 'string' || !checkout || /['\n\r]/.test(checkout)) {
-  return { error: 'checkout must be a path with no single quote or line break' }
+const checkout = opts.checkout === undefined || opts.checkout === null || opts.checkout === '' ? '.' : opts.checkout
+// Every agent's brief quotes the checkout as one single-quoted word, the rule review-before-merge
+// holds for the same path: the word ends at a quote (in PowerShell also at U+2018 to U+201B) or a
+// line break, and a blank path names nothing.
+const QUOTABLE = /^[^'‘-‛\r\n\0]+$/
+if (typeof checkout !== 'string' || !QUOTABLE.test(checkout) || !checkout.trim()) {
+  return { error: 'checkout must be a path with no single quote, line break or NUL' }
 }
 const paths = Array.isArray(opts.paths) ? opts.paths : []
 const drivers = Array.isArray(opts.drivers) ? opts.drivers : []
@@ -68,8 +72,8 @@ if (opts.stances !== undefined) {
 }
 const stanceKeys = stances.map((s) => s.key)
 
-// Every list an agent returns is re-embedded in later prompts, so each is bounded and what is left
-// out is a gap: facts, a design's debt, each round's attacks, and answers (one per attack).
+// A list an agent returns that a later prompt re-embeds is bounded, and what is left out is a gap:
+// facts, a design's debt, each round's attacks, and answers (one per attack).
 const MAX_FACTS = 30
 const MAX_ATTACKS = 12
 const MAX_DEBT = 12
@@ -271,8 +275,8 @@ const revised = await parallel(proposals.map((p) => async () => {
     gaps.push(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
     return { stance: p.stance, design: p.design, answers: [], unanswered: against }
   }
-  // An attack is answered once, by the first answer that names it and says how; an answer to another
-  // design's attack, a repeat, or an empty `how` answers nothing.
+  // An attack is answered once, by the first answer that names it and says how; an answer that names
+  // no attack on this design, repeats one, or has a blank `how` answers nothing.
   const answers = []
   let refused = 0
   for (const x of got.value.answers) {
@@ -280,10 +284,14 @@ const revised = await parallel(proposals.map((p) => async () => {
     if (attack && x.how.trim() && !answers.some((y) => y.id === x.id)) answers.push({ ...x, attack })
     else refused += 1
   }
-  if (refused) gaps.push(`revision of ${p.stance}: ${refused} answers named another design's attack, repeated one, or said nothing, and answer nothing`)
+  if (refused) gaps.push(`revision of ${p.stance}: ${refused} answers named no attack on this design, repeated one, or said nothing, and answer nothing`)
   return { stance: p.stance, design: boundDesign(`revision of ${p.stance}`, got.value.design), answers, unanswered: against.filter((x) => !answers.some((y) => y.id === x.id)) }
 }))
 const unanswered = revised.flatMap((r) => r.unanswered.map((x) => ({ ...x, stance: r.stance })))
+// An attack its author leaves unanswered or concedes is open: the script carries both to the judge
+// and to the result, whatever the judge lists.
+const conceded = revised.flatMap((r) => r.answers.filter((x) => x.verdict === 'conceded').map((x) => ({ ...x.attack, stance: r.stance, how: x.how })))
+const open = [...unanswered.map((x) => ({ ...x, why: 'unanswered' })), ...conceded.map((x) => ({ ...x, why: 'conceded' }))]
 // Each answer travels with the attack it answers, so a reader can check it.
 const showRevised = (r) => `${show(r)}\nAnswers, each with the attack it answers (JSON):\n${JSON.stringify(r.answers, null, 1)}`
 
@@ -331,7 +339,7 @@ const verdictSchema = {
 }
 
 phase('Judge')
-const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map(showRevised).join('\n\n')}\n\nAttacks their authors left unanswered, which count as conceded (JSON):\n${JSON.stringify(unanswered, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every unanswered attack above and every second-round attack the synthesis does not answer.`
+const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map(showRevised).join('\n\n')}\n\nAttacks their authors left unanswered or conceded (JSON; \`why\` says which, and a conceded one carries what conceding costs in \`how\`):\n${JSON.stringify(open, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every unanswered or conceded attack above and every second-round attack the synthesis does not answer.`
 // The judge runs on the strongest model the account can start; a note is written once the outcome
 // it reports is known.
 const judgeOptions = { phase: 'Judge', label: 'judge', schema: verdictSchema, effort: 'high' }
@@ -342,7 +350,7 @@ if (verdict.error) {
   verdict = await attempt(judgePrompt, { ...judgeOptions, label: 'judge:opus', model: 'opus' })
   if (verdict.error) {
     gaps.push(`no judge: fable returned ${fableError}; opus returned ${verdict.error}`)
-    return { error: `no judge (${verdict.error})`, gaps, research: found, proposals: revised, attacks: numbered, unanswered, second: secondAttacks }
+    return { error: `no judge (${verdict.error})`, gaps, research: found, proposals: revised, attacks: numbered, open, second: secondAttacks }
   }
   judge = 'opus'
   gaps.push(`judged on opus after the fable judge returned ${fableError}`)
@@ -391,7 +399,13 @@ ${v.debt.map((x) => `- ${x}`).join('\n')}
 
 ## Attacks no design answered
 ${v.unresolved.length ? v.unresolved.map((x) => `- ${x}`).join('\n') : 'None.'}
-${unanswered.length ? `\nUnanswered by their authors (${unanswered.length}): ${unanswered.map((x) => `#${x.id} on ${x.stance} by ${x.by}: ${x.claim}`).join('; ')}\n` : ''}${gaps.length ? `\n## Gaps in this run\n${gaps.map((x) => `- ${x}`).join('\n')}\n` : ''}
+
+## Attacks still open in the record
+${open.length || secondAttacks.length ? [
+  ...open.map((x) => `- #${x.id} on ${x.stance} by ${x.by}, ${x.why}: ${x.claim}`),
+  ...secondAttacks.map((x) => `- second round on ${x.target} (${x.severity}): ${x.claim}`),
+].join('\n') : 'None.'}
+${gaps.length ? `\n## Gaps in this run\n${gaps.map((x) => `- ${x}`).join('\n')}\n` : ''}
 Judged on ${judge}; ${proposals.length} designs, ${numbered.length} attacks in the first round and ${secondAttacks.length} in the second.`
 
-return { judge, gaps, scores, synthesis, experiments: v.experiments, debt: v.debt, unresolved: v.unresolved, unanswered, markdown, research: found, proposals: revised, attacks: numbered, second: secondAttacks }
+return { judge, gaps, scores, synthesis, experiments: v.experiments, debt: v.debt, unresolved: v.unresolved, open, markdown, research: found, proposals: revised, attacks: numbered, second: secondAttacks }
