@@ -34,7 +34,7 @@ use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCapability};
 use crate::version::gate::Gate;
 #[cfg(any(target_os = "android", test))]
 use crate::version::gate::android::{
-    AndroidApi, BackgroundBlur, PointerIcons, SystemGestureInsets,
+    AndroidApi, BackgroundBlur, PointerCapture, PointerIcons, SystemGestureInsets,
 };
 #[cfg(any(target_os = "ios", test))]
 use crate::version::gate::apple::AppleVersion;
@@ -49,19 +49,25 @@ use crate::version::gate::apple::MacOSVersion;
 /// UIKit draws a material behind a view (`UIVisualEffectView`), which this
 /// host does not place yet. The window reports the keyboard's occlusion from
 /// `UIKeyboardWillChangeFrameNotification`; UIKit names no system gesture
-/// insets, only edges an app may defer.
+/// insets, only edges an app may defer. The pointer is locked where
+/// `pointer_lock` names no absence ([`pointer_lock_absence`]).
 #[cfg(any(target_os = "ios", test))]
-pub(crate) const fn scene_capabilities() -> WindowCapabilities {
+pub(crate) const fn scene_capabilities(
+    pointer_lock: Option<CapabilityAbsence>,
+) -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.material = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
     capabilities.reports_keyboard_inset = WindowCapability::Native;
     capabilities.closes = WindowCapability::Native;
     capabilities.frame_rate_hint = Availability::Native;
-    // An iPad's pointer is locked by a view controller that prefers it
-    // (`prefersPointerLocked`, iPadOS 14), which this host does not answer
-    // yet; UIKit keeps no pointer inside a window short of that.
-    capabilities.locks_cursor = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    // The root view controller prefers the pointer locked
+    // (`prefersPointerLocked`); UIKit keeps no pointer inside a window short
+    // of that.
+    capabilities.locks_cursor = match pointer_lock {
+        Some(absence) => WindowCapability::Absent(absence),
+        None => WindowCapability::Native,
+    };
     capabilities.confines_cursor =
         WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
     // A scene's window is not stacked among others, and the system sizes it.
@@ -91,13 +97,48 @@ impl Gate for PointerInteraction {
 }
 
 /// Why a UIKit window does not set the pointer's shape. An iPad from iOS 13.4
-/// shows a pointer whose style a view chooses, which this host does not set
-/// yet; an iPhone shows none, nor does an iPad below 13.4.
+/// shows a pointer whose style a view chooses (`UIPointerStyle`, a shape and an
+/// effect around the view under it, not an image of the application's or no
+/// pointer), which this host does not set yet; an iPhone shows none, nor does
+/// an iPad below 13.4.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> CapabilityAbsence {
     match version.since::<PointerInteraction>() {
         Some(_) if shows_a_pointer => CapabilityAbsence::NOT_YET_ON_THIS_HOST,
         Some(_) | None => CapabilityAbsence::NOT_ON_THIS_DEVICE,
+    }
+}
+
+/// `UIViewController.prefersPointerLocked`, `setNeedsUpdateOfPrefersPointerLocked`
+/// and `UIWindowScene.pointerLockState` (iPadOS 14): a full-screen scene's
+/// controller holds the pointer of a trackpad or mouse in place, and
+/// `GCMouse` reports its motion.
+#[cfg(any(target_os = "ios", test))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PointerLock;
+
+#[cfg(any(target_os = "ios", test))]
+impl Gate for PointerLock {
+    type Version = AppleVersion;
+    const SINCE: u64 = AppleVersion::new(14, 0, 0).rank();
+}
+
+/// Why a UIKit window does not lock the pointer, `None` where it does: an iPad
+/// from iPadOS 14 whose UIKit tells when it locks (`tells_locks`, its lock
+/// notification read at run time). An iPhone shows no pointer to lock, an
+/// iPad below 14 has no call, and a UIKit that tells nothing would leave the
+/// snapshot guessing. A scene that does not fill its screen is refused at the
+/// command (UIKit locks only a full-screen scene's pointer), as that changes
+/// while the window lives.
+#[cfg(any(target_os = "ios", test))]
+pub(crate) fn pointer_lock_absence(
+    version: AppleVersion,
+    shows_a_pointer: bool,
+    tells_locks: bool,
+) -> Option<CapabilityAbsence> {
+    match version.since::<PointerLock>() {
+        Some(_) if shows_a_pointer && tells_locks => None,
+        Some(_) | None => Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     }
 }
 
@@ -251,10 +292,14 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
         None => WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     };
     capabilities.frame_rate_hint = facts.frame_rate_hint;
-    // A view takes the mouse's relative motion through pointer capture
-    // (`View.requestPointerCapture`, API 26), which this host does not ask
-    // for yet; nothing keeps the pointer inside a window short of that.
-    capabilities.locks_cursor = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    // `FluiView` takes the mouse through pointer capture
+    // (`View.requestPointerCapture`, API 26), whose relative motion reaches
+    // the native input queue; nothing keeps the pointer inside a window
+    // short of that.
+    capabilities.locks_cursor = match facts.api.since::<PointerCapture>() {
+        Some(_) => WindowCapability::Native,
+        None => WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+    };
     capabilities.confines_cursor =
         WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
     // The system stacks and sizes an Activity's window.
@@ -329,9 +374,10 @@ mod tests {
     use super::CapabilityReading as _;
 
     use super::{
-        ActivityFacts, AppleVersion, MacOSVersion, PointerInteraction, ViewDisplayLink,
-        activity_capabilities, appkit_presentation, appkit_window_capabilities, frame_rate_absence,
-        pointer_absence, pointer_icon_absence, scene_capabilities,
+        ActivityFacts, AppleVersion, MacOSVersion, PointerInteraction, PointerLock,
+        ViewDisplayLink, activity_capabilities, appkit_presentation, appkit_window_capabilities,
+        frame_rate_absence, pointer_absence, pointer_icon_absence, pointer_lock_absence,
+        scene_capabilities,
     };
     use crate::version::gate::android::AndroidApi;
     use crate::version::gate::testing::row;
@@ -354,11 +400,39 @@ mod tests {
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
         const PLATFORM: CapabilityAbsence = CapabilityAbsence::NOT_ON_THIS_PLATFORM;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 28] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 33] = [
             (
-                "UIKit pointer lock",
-                scene_capabilities().locks_cursor().absence(),
-                Some(HOST),
+                "UIKit pointer lock on an iPad, iPadOS 14",
+                scene_capabilities(pointer_lock_absence(ios(14, 0, 0), true, true))
+                    .locks_cursor()
+                    .absence(),
+                None,
+            ),
+            (
+                "UIKit pointer lock on an iPad, iOS 13.7",
+                scene_capabilities(pointer_lock_absence(ios(13, 7, 0), true, true))
+                    .locks_cursor()
+                    .absence(),
+                Some(DEVICE),
+            ),
+            (
+                "UIKit pointer lock on an iPhone, iOS 17",
+                scene_capabilities(pointer_lock_absence(ios(17, 0, 0), false, true))
+                    .locks_cursor()
+                    .absence(),
+                Some(DEVICE),
+            ),
+            (
+                "UIKit pointer lock where UIKit tells no lock",
+                scene_capabilities(pointer_lock_absence(ios(17, 0, 0), true, false))
+                    .locks_cursor()
+                    .absence(),
+                Some(DEVICE),
+            ),
+            (
+                "UIKit pointer confinement",
+                scene_capabilities(None).confines_cursor().absence(),
+                Some(PLATFORM),
             ),
             (
                 "AppKit pointer lock",
@@ -371,15 +445,22 @@ mod tests {
                 Some(PLATFORM),
             ),
             (
-                "Activity pointer lock",
+                "Activity pointer lock, API 26",
                 activity_capabilities(activity(26, false))
                     .locks_cursor()
                     .absence(),
-                Some(HOST),
+                None,
+            ),
+            (
+                "Activity pointer lock, API 25",
+                activity_capabilities(activity(25, false))
+                    .locks_cursor()
+                    .absence(),
+                Some(DEVICE),
             ),
             (
                 "UIKit material",
-                scene_capabilities().material().absence(),
+                scene_capabilities(None).material().absence(),
                 Some(HOST),
             ),
             (
@@ -438,12 +519,12 @@ mod tests {
             ),
             (
                 "UIKit keyboard inset",
-                scene_capabilities().reports_keyboard_inset().absence(),
+                scene_capabilities(None).reports_keyboard_inset().absence(),
                 None,
             ),
             (
                 "UIKit presentation report",
-                scene_capabilities().reports_presentation().absence(),
+                scene_capabilities(None).reports_presentation().absence(),
                 Some(HOST),
             ),
             (
@@ -550,6 +631,12 @@ mod tests {
             "PointerInteraction",
             AppleVersion::new(13, 3, 9),
             AppleVersion::new(13, 4, 0),
+            AppleVersion::UNKNOWN,
+        ));
+        failures.extend(row::<PointerLock>(
+            "PointerLock",
+            AppleVersion::new(13, 7, 9),
+            AppleVersion::new(14, 0, 0),
             AppleVersion::UNKNOWN,
         ));
         failures.extend(row::<ViewDisplayLink>(

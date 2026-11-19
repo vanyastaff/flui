@@ -196,6 +196,10 @@ pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
     /// The keyboard's motion ended: read it at rest again.
     fn keyboard_settled(&self);
 
+    /// The system gave the window the mouse (`held`) or took it back: the
+    /// snapshot's grab follows.
+    fn pointer_capture_changed(&self, held: bool);
+
     /// Delivers the night mode the configuration reports.
     fn settle_appearance(&self);
 
@@ -532,6 +536,18 @@ impl AndroidLoop {
                 java_view::ViewEvent::KeyboardSettled => {
                     if let Some(window) = &window {
                         window.keyboard_settled();
+                    }
+                }
+                // The capture owner attributed it: a window replaced since
+                // is reached no more.
+                java_view::ViewEvent::PointerCaptureChanged {
+                    window: changed,
+                    held,
+                } => {
+                    if let Some(window) = &window
+                        && window.activity_id() == changed
+                    {
+                        window.pointer_capture_changed(held);
                     }
                 }
             }

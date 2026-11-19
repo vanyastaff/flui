@@ -16,11 +16,20 @@ use flui_interaction::pointer::{
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{
-    events::CursorIcon,
+    events::{Cursor, CursorIcon},
     ids::{DeviceId, PointerId},
     pointer::{EventPropagation, HitTestEntry, HitTestResult},
 };
 use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
+
+/// The icon a published cursor names; the paths of these tests ask for icons
+/// only.
+fn icon(cursor: &Cursor) -> CursorIcon {
+    match cursor {
+        Cursor::Icon(icon) => *icon,
+        other => panic!("these paths ask for icons, not {other:?}"),
+    }
+}
 
 const MOUSE: u64 = 2;
 const PEN: u64 = 3;
@@ -253,7 +262,9 @@ fn departure_exits_once_and_releases_the_region(departure: Departure) {
     let sink = Rc::clone(&cursors);
     binding
         .mouse_tracker()
-        .set_cursor_change_callback(Rc::new(move |_, cursor| sink.borrow_mut().push(cursor)));
+        .set_cursor_change_callback(Rc::new(move |_, cursor| {
+            sink.borrow_mut().push(icon(cursor));
+        }));
     let mut movement = hover(
         PEN,
         PointerKind::Pen { tool: PenTool::Tip },
@@ -775,26 +786,42 @@ fn cursor_path(cursors: &[Option<CursorIcon>]) -> HitTestResult {
 fn explicit_arrow_overrides_an_ancestor_cursor() {
     let resolved =
         cursor_path(&[Some(CursorIcon::Default), Some(CursorIcon::Text)]).resolve_cursor();
-    assert_eq!(resolved, CursorIcon::Default);
+    assert_eq!(resolved, Cursor::Icon(CursorIcon::Default));
 }
 
 fn deferring_child_shows_the_ancestor_cursor() {
     let resolved = cursor_path(&[None, Some(CursorIcon::Text)]).resolve_cursor();
-    assert_eq!(resolved, CursorIcon::Text);
+    assert_eq!(resolved, Cursor::Icon(CursorIcon::Text));
 }
 
 fn path_without_requests_shows_the_arrow() {
     assert_eq!(
         cursor_path(&[None, None]).resolve_cursor(),
-        CursorIcon::Default
+        Cursor::Icon(CursorIcon::Default)
     );
+}
+
+/// A target that hides the cursor, or shows an image, wins over an ancestor's
+/// icon as an icon does, and a deferring target lets either through.
+fn hidden_and_image_cursors_resolve_as_icons_do() {
+    let image = flui_platform::CursorImage::try_new(1, 1, (0, 0), vec![0, 0, 0, 255])
+        .expect("a one-pixel image");
+    for asked in [Cursor::Hidden, Cursor::Image(image)] {
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)));
+        path.add(HitTestEntry::new(RenderId::new(2)).cursor(asked.clone()));
+        path.add(HitTestEntry::new(RenderId::new(3)).cursor(CursorIcon::Text));
+        assert_eq!(path.resolve_cursor(), asked);
+    }
 }
 
 fn tracker_reports_the_explicit_arrow() {
     let tracker = MouseTracker::new();
     let changes = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&changes);
-    tracker.set_cursor_change_callback(Rc::new(move |_, cursor| sink.borrow_mut().push(cursor)));
+    tracker.set_cursor_change_callback(Rc::new(move |_, cursor| {
+        sink.borrow_mut().push(icon(cursor));
+    }));
     let at = Offset::new(10.0, 10.0);
     let text_area = cursor_path(&[None, Some(CursorIcon::Text)]);
     let button = cursor_path(&[Some(CursorIcon::Default), Some(CursorIcon::Text)]);
@@ -847,7 +874,9 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         let next_observed = Rc::clone(&observed);
         let replacement: flui_interaction::pointer::CursorChangeCallback =
             Rc::new(move |pointer, cursor| {
-                next_observed.borrow_mut().push(("new", pointer.id, cursor));
+                next_observed
+                    .borrow_mut()
+                    .push(("new", pointer.id, icon(cursor)));
             });
         let failed = Rc::new(Cell::new(matches!(
             case,
@@ -861,7 +890,9 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         let hook_failed = Rc::clone(&failed);
         let entered_hook = Cell::new(false);
         tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
-            old_observed.borrow_mut().push(("old", pointer.id, cursor));
+            old_observed
+                .borrow_mut()
+                .push(("old", pointer.id, icon(cursor)));
             if case == CursorReentryCase::HookReentry && !entered_hook.replace(true) {
                 hook_tracker.set_cursor_change_callback(Rc::clone(&next_hook));
                 hook_tracker.update_with_motion(
@@ -968,7 +999,10 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         match case {
             CursorReentryCase::Arrow => {
                 assert_eq!(*observed.borrow(), [("old", pointer, CursorIcon::Default)]);
-                assert_eq!(tracker.device_cursor(device(MOUSE)), CursorIcon::Default);
+                assert_eq!(
+                    icon(&tracker.device_cursor(device(MOUSE))),
+                    CursorIcon::Default
+                );
             }
             CursorReentryCase::SameCursor => assert_eq!(
                 *observed.borrow(),
@@ -1066,7 +1100,7 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
     let observed = Rc::new(RefCell::new(Vec::new()));
     let callback_log = Rc::clone(&observed);
     tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
-        callback_log.borrow_mut().push((pointer.id, cursor));
+        callback_log.borrow_mut().push((pointer.id, icon(cursor)));
     }));
     let mouse_at = Offset::new(5.0, 5.0);
     let pen_at = Offset::new(15.0, 15.0);
@@ -1178,7 +1212,7 @@ fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, reti
     let observed = Rc::new(RefCell::new(Vec::new()));
     let callback_log = Rc::clone(&observed);
     tracker.set_cursor_change_callback(Rc::new(move |_, cursor| {
-        callback_log.borrow_mut().push(cursor);
+        callback_log.borrow_mut().push(icon(cursor));
     }));
     lane.enter(|| {
         tracker.update_with_motion(
@@ -1207,7 +1241,7 @@ fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, reti
         });
         assert_eq!(tracker.device_position(device(MOUSE)), Some(fresh_position));
         assert_eq!(
-            tracker.device_cursor(device(MOUSE)),
+            icon(&tracker.device_cursor(device(MOUSE))),
             CursorIcon::Pointer,
             "stale probe cannot overwrite a newer physical observation, even at the same position"
         );
@@ -1400,9 +1434,9 @@ fn removed_cursor_owner_failure_keeps_default_publication_deliverable() {
     let observed = Rc::new(RefCell::new(Vec::new()));
     let callback_log = Rc::clone(&observed);
     tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
-        callback_log.borrow_mut().push((pointer.id, cursor));
+        callback_log.borrow_mut().push((pointer.id, icon(cursor)));
         assert!(
-            !(cursor == CursorIcon::Default && callback_failed.get()),
+            !(icon(cursor) == CursorIcon::Default && callback_failed.get()),
             "removed owner cursor failure"
         );
     }));
@@ -1859,6 +1893,10 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
                 deferring_child_shows_the_ancestor_cursor,
             ),
             ("no cursor request", path_without_requests_shows_the_arrow),
+            (
+                "hidden and image cursors",
+                hidden_and_image_cursors_resolve_as_icons_do,
+            ),
         ],
     );
 }
