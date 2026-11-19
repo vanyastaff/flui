@@ -89,13 +89,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
         // The paint walk's own gates: nothing of this subtree is drawn. A
         // follower the last composite resolved to hidden draws nothing either.
-        if self.last_hidden_follower_ids.contains(&id)
-            || node.skip_paint()
-            || node.needs_layout()
-            || node
-                .geometry_sliver()
-                .is_some_and(|geometry| !geometry.visible)
-        {
+        if !self.paint_walk_draws(id, node) {
             return;
         }
         let Some(size) = node.laid_out_size() else {
@@ -246,17 +240,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// The mapping from `id`'s local coordinates into the window, and the clip every
-    /// ancestor (and the window) imposes on it, in window coordinates. `None` when the
-    /// mapping is not finite.
+    /// ancestor (and the window) imposes on it, in window coordinates, composed along the
+    /// walk's path by the step the presented-node walk takes (`child_placement`, with the
+    /// follower placement the last composite resolved; an unmappable clip refuses coverage
+    /// rather than lifting the limit). `None` when the mapping is not finite.
     fn transform_and_clip_to_root(
         &self,
         id: RenderId,
         walk: &RegionWalk<'_>,
     ) -> Option<(Matrix4, Rect)> {
-        let mut transform = Matrix4::IDENTITY;
-        let mut clip = walk.window;
         let root = walk.path.first().map_or(id, |&(root, _)| root);
-        self.compose_follower_transform(root, &mut transform);
+        let mut placement = self.root_placement(root)?;
+        placement.clip = walk.window;
         let children = walk
             .path
             .iter()
@@ -266,32 +261,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         for (&(ancestor_id, slot), child_id) in walk.path.iter().zip(children) {
             let ancestor = self.render_tree.get(ancestor_id)?;
             let child = self.render_tree.get(child_id)?;
-            let size = ancestor.laid_out_size()?;
-            if let Some(local) = approximate_paint_clip(ancestor, slot, size) {
-                // An unmappable clip refuses coverage rather than lifting the limit.
-                let mapped = map_rect(&transform, local).unwrap_or(Rect::ZERO);
-                clip = clip.intersect(&mapped).unwrap_or(Rect::ZERO);
-            }
-            ancestor.apply_paint_transform(slot, child.offset(), &mut transform)?;
-            self.compose_follower_transform(child_id, &mut transform);
-            if transform
-                .to_col_major_array()
-                .iter()
-                .any(|value| !value.is_finite())
-            {
-                return None;
-            }
+            placement =
+                self.child_placement((ancestor_id, ancestor), slot, (child_id, child), placement)?;
         }
-        Some((transform, clip))
-    }
-
-    /// Composes the transform the last composite resolved for follower `id` (a
-    /// `CompositedTransformFollower` placed against its leader), the same placement the
-    /// engine paints its subtree with and hit-testing applies.
-    fn compose_follower_transform(&self, id: RenderId, transform: &mut Matrix4) {
-        if let Some(follower) = self.last_follower_transforms.get(&id) {
-            *transform *= *follower;
-        }
+        Some((placement.transform, placement.clip))
     }
 }
 
@@ -318,17 +291,6 @@ fn visits_child(node: &RenderNode, slot: usize, size: Size) -> bool {
     match node {
         RenderNode::Box(entry) => entry.render_object().visits_child_for_semantics(slot, size),
         RenderNode::Sliver(entry) => entry.render_object().visits_child_for_semantics(slot, size),
-    }
-}
-
-fn approximate_paint_clip(node: &RenderNode, slot: usize, size: Size) -> Option<Rect> {
-    match node {
-        RenderNode::Box(entry) => entry
-            .render_object()
-            .describe_approximate_paint_clip(slot, size),
-        RenderNode::Sliver(entry) => entry
-            .render_object()
-            .describe_approximate_paint_clip(slot, size),
     }
 }
 

@@ -310,20 +310,25 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A Down with a finite position in both spaces.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        let finite = |position: Option<flui_foundation::geometry::Offset<f64>>| {
+            position.is_some_and(|at| at.dx.is_finite() && at.dy.is_finite())
+        };
+        (matches!(down.local, PointerEvent::Down(_))
+            && finite(down.local.position())
+            && finite(down.global.position()))
+        .then_some(super::recognizer::DownTake::Press)
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
-        let PointerEvent::Down(data) = down.local else {
-            return;
-        };
-        let (Some(local), Some(global)) = (down.local.position(), down.global.position()) else {
-            return;
-        };
-        if !local.dx.is_finite()
-            || !local.dy.is_finite()
-            || !global.dx.is_finite()
-            || !global.dy.is_finite()
-        {
+        if self.takes_down(down).is_none() {
             return;
         }
+        let (PointerEvent::Down(data), Some(local), Some(global)) =
+            (down.local, down.local.position(), down.global.position())
+        else {
+            return;
+        };
         let pointer = data.pointer.id;
         let generation = self.last_id.get();
         let existing = self.sequence.borrow().as_ref().map(|sequence| {

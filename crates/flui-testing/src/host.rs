@@ -53,7 +53,7 @@ use flui_platform::drag::{
 };
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
-use flui_platform::text_store::TextStoreStatus;
+use flui_platform::text_store::{SelectionUi, TextStoreStatus};
 use flui_platform::{
     Cursor, CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
@@ -108,7 +108,8 @@ pub struct HeadlessWindow {
     scale_factor: Mutex<DevicePixelRatio>,
     cursor: Mutex<Cursor>,
     text_input: Option<Arc<RecordingTextInput>>,
-    text_store_host: bool,
+    /// The pull host to offer, by who it says draws the selection UI.
+    text_store_host: Option<SelectionUi>,
     gesture_preset: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
     /// Whether the window plays a browser's page ([`HeadlessWindow::in_browser`]).
@@ -318,7 +319,7 @@ impl HeadlessWindow {
             scale_factor: Mutex::new(DevicePixelRatio::ONE),
             cursor: Mutex::new(Cursor::Icon(CursorIcon::Default)),
             text_input: None,
-            text_store_host: false,
+            text_store_host: None,
             gesture_preset: flui_interaction::gesture::GestureSettings::default().into(),
             platform: flui_platform::TargetPlatform::Unknown,
             in_browser: false,
@@ -471,7 +472,16 @@ impl HeadlessWindow {
     /// services. It wins over [`Self::with_text_input`].
     #[must_use]
     pub fn with_text_store_host(mut self) -> Self {
-        self.text_store_host = true;
+        self.text_store_host = Some(SelectionUi::Field);
+        self
+    }
+
+    /// [`Self::with_text_store_host`], with a host that answers `ui` for who
+    /// draws the served field's selection UI, as iOS's host answers
+    /// [`SelectionUi::Platform`].
+    #[must_use]
+    pub fn with_text_store_host_drawing(mut self, ui: SelectionUi) -> Self {
+        self.text_store_host = Some(ui);
         self
     }
 
@@ -1350,7 +1360,9 @@ impl HeadlessHost {
             reason = "the window size came from u32 pixel counts"
         )]
         let surface = (window.size.width() as u32, window.size.height() as u32);
-        let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
+        let text_store_host = window
+            .text_store_host
+            .map(RecordingTextStoreHost::with_selection_ui);
         let gesture_preset = window.gesture_preset.clone();
         let platform = window.platform;
         let window_system = window.window_system();
@@ -2170,7 +2182,9 @@ impl HeadlessHost {
             .window_ids
             .next()
             .expect("BUG: a test opens far fewer than u64::MAX windows");
-        let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
+        let text_store_host = window
+            .text_store_host
+            .map(RecordingTextStoreHost::with_selection_ui);
         let gesture_preset = window.gesture_preset.clone();
         let platform = window.platform;
         let close_handler = window.close_request_handler.take();

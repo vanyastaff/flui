@@ -11,7 +11,7 @@ help: the trait `GestureRecognizer` is not implemented for `Swipe`
    |
  5 | struct Swipe;
    | ^^^^^^^^^^^^
-   = note: a recognizer implements `GestureRecognizer` (`add_pointer`, `handle_event`, `cancel`) and its supertrait `GestureArenaMember` (`accept_gesture`, `reject_gesture`), and joins the arena through `ArenaMembership` or `PrimaryContact`
+   = note: a recognizer implements `GestureRecognizer` (`takes_down`, `add_pointer`, `handle_event`, `cancel`) and its supertrait `GestureArenaMember` (`accept_gesture`, `reject_gesture`), and joins the arena through `ArenaMembership` or `PrimaryContact`
    = help: the following other types implement trait `GestureRecognizer`:
              DoubleTapGestureRecognizer
              DragGestureRecognizer

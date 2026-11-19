@@ -211,7 +211,8 @@ pub mod platform {
 /// `flui::interaction` uses.
 ///
 /// A third-party recognizer implements `GestureArenaMember` and
-/// `GestureRecognizer`, joins the arena through `ArenaMembership` (with a
+/// `GestureRecognizer` (whose `takes_down` answers a `DownTake` for the
+/// Down its `add_pointer` would admit), joins the arena through `ArenaMembership` (with a
 /// `MotionRole` when it moves) or `PrimaryContact`, composes with
 /// `GestureComposition` or a `SequencedBranch`, admits device kinds through
 /// `PointerKindSet`, and is mounted by `widgets::RawGestureDetector` through a
@@ -235,6 +236,7 @@ pub mod interaction {
     pub use flui_interaction::gesture::ContactId;
     pub use flui_interaction::gesture::ContactSnapshot;
     pub use flui_interaction::gesture::ContestCancel;
+    pub use flui_interaction::gesture::DownTake;
     pub use flui_interaction::gesture::DragDownDetails;
     pub use flui_interaction::gesture::GestureArena;
     pub use flui_interaction::gesture::GestureArenaEntry;

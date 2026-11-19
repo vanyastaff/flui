@@ -331,6 +331,10 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A primary Down.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        is_primary_down(down.local).then_some(super::recognizer::DownTake::Press)
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         let pointer = down.local.pointer_id();
         let _span = tracing::trace_span!(
@@ -340,7 +344,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
         )
         .entered();
-        if !is_primary_down(down.local) {
+        if self.takes_down(down).is_none() {
             return;
         }
         let settings = self

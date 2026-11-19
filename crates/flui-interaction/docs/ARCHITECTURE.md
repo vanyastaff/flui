@@ -737,6 +737,43 @@ callback, the retirement failure propagates, and a healthy sibling still uses
 the parent coordinate space. It does not promise containment of multiple
 panicking destructors within one opaque capture.
 
+## Press claims
+
+A platform's own gesture asks, before it takes a touch over the window, whether
+a widget there would contend for the press (iOS's text interaction near a
+selection handle). One source answers it and dispatch: every recognizer has a
+required `GestureRecognizer::takes_down`, judged from the Down and its
+configuration alone. `RecognizerSet::dispatch` is the gate: it offers
+`add_pointer` only a Down `takes_down` takes, and a built-in recognizer may
+check again in its own `add_pointer`. `None` refuses the Down
+(a button no callback handles, a secondary press of a primary-only tap),
+`DownTake::Press` contends for the press itself, `DownTake::Motion` claims the
+contact only past its slop (a drag, a scale, a swipe, a multi-drag). A
+`DownTake` is a single answer rather than a default flag a custom recognizer
+could forget: the trait has no default for it.
+
+`RecognizerSet::claims_press` asks what `RecognizerSet::dispatch` would admit:
+the recognizer's device, `takes_down` answering `Press`, and its attachment's
+`DownAdmission` (the predicate `attach_when` and a widget's `ContactAdmission`
+hold) accepting the Down. An admission narrows a press; it never makes a drag
+claim one. A pointer target's handler (`PointerTargetHandler`) answers
+`claims_press`: a `Listener` from its recognizers, a text link from its tap's
+set; a closure registered with `register_pointer` only observes, so a raw
+pointer-down callback claims nothing.
+
+A `PressProbe` asks a hit entry's handler with a Down built and localised as
+dispatch localises one, delivering nothing and keeping no copy of any answer:
+the lane holds only the handler it already holds. It answers on the lane's
+owner thread while the lane lives, without the UI runtime's scope a
+registration needs, since the question arrives between owner turns; off that
+thread, or once the lane is gone, it refuses with `WrongThread` or `OwnerGone`,
+which its callers treat as "do not begin". The handler's answer may run user
+code (admission predicates) and runs with no lane borrow held.
+
+`RenderListener::claims_presses` answers a different question, a title bar's:
+whether a press must reach the application instead of moving the window, which
+any pointer-down callback or recognizer makes so.
+
 ## Pointer route capture retirement
 
 `PointerRouter::remove_all_routes`, `clear_global_handlers` and `clear` detach

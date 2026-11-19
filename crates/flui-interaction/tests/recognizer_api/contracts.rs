@@ -104,6 +104,10 @@ impl GestureArenaMember for Extension {
 }
 
 impl GestureRecognizer for Extension {
+    fn takes_down(&self, _: PointerDispatch<'_>) -> Option<flui_interaction::gesture::DownTake> {
+        Some(flui_interaction::gesture::DownTake::Press)
+    }
+
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         self.log.borrow_mut().push(self.name);
         let _ = self.contact.begin(down, &GestureSettings::default());
@@ -278,6 +282,51 @@ fn predicates_only_gate_admission_and_sets_do_not_own_recognizers() {
     log.borrow_mut().clear();
     set.clone().dispatch(PointerDispatch::at_root(&up));
     assert!(log.borrow().is_empty());
+}
+
+/// A recognizer whose `add_pointer` takes any Down it is handed, and whose
+/// `takes_down` takes none.
+#[derive(Default)]
+struct RefusesEveryDown {
+    added: Cell<usize>,
+}
+
+impl GestureArenaMember for RefusesEveryDown {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
+}
+
+impl GestureRecognizer for RefusesEveryDown {
+    fn takes_down(&self, _: PointerDispatch<'_>) -> Option<flui_interaction::gesture::DownTake> {
+        None
+    }
+
+    fn add_pointer(&self, _: PointerDispatch<'_>) {
+        self.added.set(self.added.get() + 1);
+    }
+
+    fn handle_event(&self, _: PointerDispatch<'_>) {}
+
+    fn cancel(&self) -> CancelOutcome {
+        CancelOutcome::Idle
+    }
+}
+
+/// The set holds the Down gate, not each recognizer: one whose `add_pointer`
+/// does not ask its own `takes_down` is still offered only a Down it takes.
+///
+/// Fails with the set handing every admitted Down to `add_pointer`.
+fn a_set_offers_a_recognizer_only_a_down_it_takes() {
+    let recognizer = Rc::new(RefusesEveryDown::default());
+    let mut set = RecognizerSet::default();
+    set.attach(&recognizer);
+    let event = down(pointer(76));
+    set.dispatch(PointerDispatch::at_root(&event));
+    assert_eq!(
+        recognizer.added.get(),
+        0,
+        "a refused Down never reaches add_pointer"
+    );
 }
 
 fn contact_drop_defers_rival_notifications_and_closed_arena_refuses_admission() {
@@ -701,6 +750,10 @@ fn public_recognizer_extension_contracts() {
         (
             "listener_admits_by_predicate_and_forwards_terminal_events",
             predicates_only_gate_admission_and_sets_do_not_own_recognizers,
+        ),
+        (
+            "a_set_offers_a_recognizer_only_a_down_it_takes",
+            a_set_offers_a_recognizer_only_a_down_it_takes,
         ),
         (
             "contact_drop_defers_rival_notifications_and_closed_arena_refuses_admission",

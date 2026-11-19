@@ -10,6 +10,10 @@ impl GestureArenaMember for ExternalRecognizer {
 }
 
 impl GestureRecognizer for ExternalRecognizer {
+    fn takes_down(&self, _down: PointerDispatch<'_>) -> Option<flui_interaction::gesture::DownTake> {
+        None
+    }
+
     fn add_pointer(&self, _down: PointerDispatch<'_>) {}
 
     fn handle_event(&self, _dispatch: PointerDispatch<'_>) {}

@@ -4,10 +4,7 @@ use super::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks, withdraw_cancelled,
     },
     contact::{ArenaMembership, ContactId},
-    recognizer::{
-        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
-        motion_history,
-    },
+    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, motion_history},
 };
 use crate::containment::keep_first;
 use crate::gesture::observer::GestureContest;
@@ -495,6 +492,12 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A primary Down at a finite position, each drag claimed only past its
+    /// slop.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        super::recognizer::primary_down_at_a_point(down)
+            .then_some(super::recognizer::DownTake::Motion)
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;
@@ -506,7 +509,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
         )
         .entered();
-        if !is_primary_down(dispatch.local) {
+        if self.takes_down(dispatch).is_none() {
             return;
         }
         let (Some(position), Some(global)) =
@@ -514,13 +517,6 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         else {
             return;
         };
-        if !position.dx.is_finite()
-            || !position.dy.is_finite()
-            || !global.dx.is_finite()
-            || !global.dy.is_finite()
-        {
-            return;
-        }
         let removed = self.pointers.borrow_mut().remove(&pointer);
         if let Some(state) = removed {
             let mut failure = FirstPanic::new();

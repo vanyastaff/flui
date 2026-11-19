@@ -66,6 +66,8 @@ mod paint_before_layout;
 mod paint_fragment_snapshot;
 #[path = "pipeline_scenarios.rs"]
 mod pipeline_scenarios;
+#[path = "presented_placement.rs"]
+mod presented_placement;
 #[path = "render_viewport.rs"]
 mod render_viewport;
 #[path = "semantics_assembly.rs"]

@@ -154,6 +154,11 @@ pub enum TextStoreError {
     /// The field this store belonged to is gone.
     #[error("the text store is detached from its field")]
     Detached,
+    /// The window that holds the field cannot answer now: asked off its
+    /// owner thread, or while it closes. No answer, which a platform treats
+    /// as "do not begin" rather than as "nothing is there".
+    #[error("the field's window cannot answer now")]
+    WindowUnavailable,
 }
 
 /// Whether the stores behind it may commit: shut for the length of their

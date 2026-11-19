@@ -1457,6 +1457,18 @@ has its transform and clip composed along its path from the root, through
 and each ancestor's `describe_approximate_paint_clip`, starting from the root's box as the
 window (ADR-0217 §5).
 
+The gate (a follower resolved hidden, a skipped node, a node needing layout, a sliver that
+is not visible) and the step from a parent to a child (its clip, its paint transform, the
+follower placement the last composite resolved) live once, in `pipeline::owner::placement`:
+the input-region walk, `presented_nodes` and `PipelineOwner::presented_placement`, which
+answers one node (a text field's visible part), all compose through them, so a node the
+three reach is placed and clipped alike. `presented_nodes` and `presented_placement` also
+skip a child its parent left out of the last paint (an offstage subtree):
+`a_nodes_placement_agrees_with_what_the_presented_walk_reports` holds the two to the same
+answer for every node of its scenes. The input-region walk filters further: it enters a
+child only where the parent presents it to semantics (`visits_child_for_semantics`), and
+only toward the nodes that report regions.
+
 **Why only toward sources.** The collection runs on every composited frame. A node that
 only claims or passes presses contributes nothing outside a move area, and a move area is
 a source's region, so a subtree with no source and no source above it adds nothing; walking

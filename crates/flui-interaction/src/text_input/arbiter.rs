@@ -454,6 +454,9 @@ mod tests {
         ) -> Result<Utf16Offset, TextStoreError> {
             Err(TextStoreError::NoLayout)
         }
+        fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+            Err(TextStoreError::NoLayout)
+        }
     }
 
     fn open(grant: LockGrant) {

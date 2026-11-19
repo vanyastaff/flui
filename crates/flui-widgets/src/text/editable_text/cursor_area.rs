@@ -11,7 +11,7 @@ use flui_platform::text_store::OwnerCalls;
 use flui_rendering::pipeline::PipelineCell;
 
 use super::bounds_from_rect;
-use crate::text::text_store::{EditableTextStore, with_editable_global};
+use crate::text::text_store::{EditableTextStore, FieldPlacement, with_editable_global};
 
 /// The self-rescheduling IME cursor-area tracking loop (ADR-0030).
 ///
@@ -48,6 +48,20 @@ pub(super) struct CursorAreaLoop {
     /// a brand-new IME session must always get the first rect, even at an
     /// unchanged caret position.
     pub(super) last_sent: Rc<Cell<Option<Bounds<f64>>>>,
+    /// The field's placement as of the last firing. Fresh per attach, so a
+    /// new session starts from the placement it finds and reports no move
+    /// for it.
+    pub(super) last_placement: Rc<Cell<SeenPlacement>>,
+}
+
+/// The field's placement in the window as a cursor-area loop last read it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SeenPlacement {
+    /// No firing has read it yet.
+    Unread,
+    /// Its box and the part of it the window showed, `None` when the window
+    /// drew nothing of it.
+    Read(Option<FieldPlacement>),
 }
 
 impl CursorAreaLoop {
@@ -118,6 +132,23 @@ impl CursorAreaLoop {
                     }
                 }
                 None => {}
+            }
+        }
+        // The field itself moving in the window (a scroll, a transform, an
+        // ancestor's clip) is told apart from its caret moving: only the
+        // first makes a platform that draws over the field ask for its
+        // geometry again. Its box and its visible part are compared both: a
+        // field taller than its viewport scrolled inside it keeps the same
+        // visible part while its text moves. A placement that cannot be read
+        // now is skipped, as the caret rect is.
+        if let Some(store) = &store
+            && let Some(Ok(placement)) = calls.run(|| store.placement())
+        {
+            let read = SeenPlacement::Read(placement);
+            let previous = self.last_placement.replace(read);
+            let moved = previous != SeenPlacement::Unread && previous != read;
+            if moved {
+                calls.run(|| store.field_moved());
             }
         }
         // A read the store answered `NoLayout` inside an edit session owes the
