@@ -17,7 +17,8 @@
 //! screen as it is: the retry publishes it again, with the damage still
 //! counted from the acknowledged base, and paints nothing (ADR-0304 §7). The
 //! scene holds that debt beside the target the version was applied for, so a
-//! retry that finds another target or a newer version repaints instead.
+//! retry that finds another target or a newer version repaints instead. Only a
+//! verdict that shows the version, or a new version applied, pays the debt.
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -44,9 +45,10 @@ pub(crate) struct PresentationScene {
     /// The target the current version was applied for; `None` before the
     /// first version and after a renewal.
     target: Option<SceneTarget>,
-    /// The version a withheld frame left owed to the screen, until the next
-    /// frame applies a version or republishes it ([`Self::held_retry`]), or a
-    /// frame shows it.
+    /// The version a withheld frame left owed to the screen, until a frame
+    /// applies a version or the raster side shows it or a later version of
+    /// its lineage ([`Self::held_retry`]). A republish leaves it: the
+    /// republished frame may be discarded before any verdict.
     owed: Option<SceneVersionId>,
 }
 
@@ -224,16 +226,25 @@ impl PresentationScene {
     }
 
     /// The surface withheld `version`: the next frame owes it to the screen.
+    /// A debt for a later version of the same lineage stays: a withheld
+    /// settlement that arrives late never replaces a newer debt with an older
+    /// version.
     fn owe(&mut self, version: SceneVersionId) {
-        self.owed = Some(version);
+        let newer_owed = self
+            .owed
+            .is_some_and(|owed| owed.lineage() == version.lineage() && owed.seq() > version.seq());
+        if !newer_owed {
+            self.owed = Some(version);
+        }
     }
 
     /// What a withheld version owes the frame about to draw for `target`:
     /// [`HeldRetry::Republish`] when it is the current version and was applied
     /// for `target`, [`HeldRetry::Repaint`] otherwise. The debt stays until a
-    /// frame pays it: a frame that applies a version
-    /// ([`Self::apply`]) or republishes this one ([`Self::republish`]), so a
-    /// frame that fails before either leaves it to the next.
+    /// verdict or a new version pays it: a frame that applies a version
+    /// ([`Self::apply`]), or the raster side showing it ([`Self::completed`]).
+    /// A republish ([`Self::republish`]) pays nothing, so a republished frame
+    /// that is discarded before its submit, or fails, leaves it to the next.
     pub(crate) fn held_retry(&self, target: SceneTarget) -> HeldRetry {
         match self.owed {
             None => HeldRetry::None,
@@ -245,9 +256,10 @@ impl PresentationScene {
     }
 
     /// The withheld version again, with the damage since the acknowledged
-    /// base, for a frame that painted nothing: the debt is paid.
-    pub(crate) fn republish(&mut self) -> ScenePublication {
-        self.owed = None;
+    /// base, for a frame that painted nothing. The debt stays until the
+    /// frame's verdict: shown, it is paid ([`Self::completed`]); withheld
+    /// again, it is owed again.
+    pub(crate) fn republish(&self) -> ScenePublication {
         self.owner.publication()
     }
 
@@ -276,6 +288,9 @@ pub(crate) struct SceneSlot {
     scene: RefCell<Option<PresentationScene>>,
     /// A renewal asked for while the scene was lent, run when it returns.
     renew_owed: Cell<Option<ResyncReason>>,
+    /// The newest version the raster side showed while the scene was lent,
+    /// acknowledged when it returns.
+    completed_owed: Cell<Option<SceneVersionId>>,
 }
 
 impl Default for SceneSlot {
@@ -283,6 +298,7 @@ impl Default for SceneSlot {
         Self {
             scene: RefCell::new(Some(PresentationScene::default())),
             renew_owed: Cell::new(None),
+            completed_owed: Cell::new(None),
         }
     }
 }
@@ -327,12 +343,21 @@ impl SceneSlot {
     }
 
     /// The raster side shows `rastered`; see [`PresentationScene::completed`].
-    pub(crate) fn completed(
-        &self,
-        rastered: SceneVersionId,
-    ) -> Result<ReleasedContents, SceneLent> {
+    /// While a frame holds the scene the acknowledgement waits for its return
+    /// (the newest of a lineage kept), so the debt of a withheld version it
+    /// pays is not left standing, and nothing is released now.
+    pub(crate) fn completed(&self, rastered: SceneVersionId) -> ReleasedContents {
         let mut scene = self.scene.borrow_mut();
-        Ok(scene.as_mut().ok_or(SceneLent)?.completed(rastered))
+        if let Some(scene) = scene.as_mut() {
+            return scene.completed(rastered);
+        }
+        let newer_owed = self.completed_owed.get().is_some_and(|owed| {
+            owed.lineage() == rastered.lineage() && owed.seq() > rastered.seq()
+        });
+        if !newer_owed {
+            self.completed_owed.set(Some(rastered));
+        }
+        ReleasedContents::default()
     }
 
     /// The surface withheld `version`; see [`PresentationScene::held_retry`].
@@ -399,14 +424,21 @@ impl Drop for LentScene<'_> {
         let Some(mut scene) = self.scene.take() else {
             return;
         };
-        // A renewal owed while the frame held the scene runs before it is
-        // back; what it releases drops with the slot free.
+        // An acknowledgement, then a renewal, owed while the frame held the
+        // scene run before it is back; what they release drops with the slot
+        // free.
+        let acknowledged = self
+            .slot
+            .completed_owed
+            .take()
+            .map(|rastered| scene.completed(rastered));
         let released = self
             .slot
             .renew_owed
             .take()
             .map(|reason| scene.renew_lineage(reason));
         *self.slot.scene.borrow_mut() = Some(scene);
+        drop(acknowledged);
         drop(released);
     }
 }
@@ -439,7 +471,7 @@ mod tests {
     }
 
     /// While a frame holds the scene, code it runs that reaches the slot is
-    /// refused with `SceneLent`, never a borrow error, and a renewal asked
+    /// refused with `SceneLent`, never a borrow error, and an acknowledgement or a renewal asked
     /// for meanwhile runs when the scene returns, panic or not.
     #[test]
     #[cfg(feature = "hot-reload")]
@@ -461,7 +493,7 @@ mod tests {
             assert_eq!(slot.lend().err(), Some(SceneLent));
             assert_eq!(slot.publication().err(), Some(SceneLent));
             let shown = scene.publication().scene.id();
-            assert!(slot.completed(shown).is_err());
+            drop(slot.completed(shown));
             drop(slot.renew(ResyncReason::Rebuilt));
             assert_eq!(
                 scene.publication().scene.id().lineage(),
@@ -543,11 +575,12 @@ mod tests {
     }
 
     /// A withheld version is republished only for the target it was applied for and while it is
-    /// the current version; the debt lasts until a frame applies a version, republishes it, or
-    /// the raster side shows it.
+    /// the current version; the debt lasts until a frame applies a version or the raster side
+    /// shows it or a later one, and a late older debt never replaces a newer one.
     ///
     /// Fails when the retry republishes a version drawn for another size or scale, or one a newer
-    /// version replaced, or when a paid debt is owed again.
+    /// version replaced, when a paid debt is owed again, or when a republish or an older debt
+    /// pays it.
     #[test]
     fn a_withheld_version_is_republished_only_for_its_own_target() {
         let applied = SceneTarget {
@@ -584,12 +617,33 @@ mod tests {
             assert_eq!(scene.held_retry(target), owed, "a look pays nothing");
         }
 
+        // A republished frame can be discarded before its submit (a sibling's scene went, the
+        // first frame is deferred): only its verdict pays the debt.
         let (mut scene, withheld) = owing();
         assert_eq!(scene.republish().scene.id(), withheld);
         assert_eq!(
             scene.held_retry(applied),
+            HeldRetry::Republish,
+            "a republish pays nothing"
+        );
+        let _released = scene.completed(withheld);
+        assert_eq!(
+            scene.held_retry(applied),
             HeldRetry::None,
-            "a republish pays it"
+            "the republished version shown pays it"
+        );
+
+        // A withheld settlement that arrives late does not replace a newer debt.
+        let (mut scene, older) = owing();
+        let _released = scene.completed(older);
+        assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+        let newer = scene.publication().scene.id();
+        scene.owe(newer);
+        scene.owe(older);
+        assert_eq!(
+            scene.held_retry(applied),
+            HeldRetry::Republish,
+            "the newer version stays owed"
         );
 
         let (mut scene, withheld) = owing();
@@ -626,5 +680,35 @@ mod tests {
             HeldRetry::None,
             "a later version shown pays it"
         );
+    }
+
+    /// The raster side showing a version while a frame holds the scene pays its debt once the
+    /// frame gives the scene back.
+    ///
+    /// Fails when the acknowledgement of a lent scene is dropped, which leaves the shown version
+    /// owed and republished by the next frame.
+    #[test]
+    fn a_version_shown_while_the_scene_is_lent_pays_its_debt_on_return() {
+        let target = SceneTarget {
+            size: (800, 600),
+            scale: DevicePixelRatio::ONE,
+        };
+        let slot = SceneSlot::default();
+        let withheld = {
+            let mut scene = slot.lend().expect("the scene is in its slot");
+            assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+            scene.publication().scene.id()
+        };
+        slot.owe(withheld).expect("the scene is back");
+        {
+            let _lent = slot.lend().expect("the scene is in its slot");
+            let _released = slot.completed(withheld);
+        }
+        let held = slot
+            .scene
+            .borrow()
+            .as_ref()
+            .map(|scene| scene.held_retry(target));
+        assert_eq!(held, Some(HeldRetry::None));
     }
 }

@@ -400,9 +400,9 @@ impl UiRuntime {
         // What the log held drops at the end of this function, after the replies and the
         // commit, with no borrow held: an annotation's `Drop` is user code.
         let released = shown_on_screen
-            // A scene lent to a frame still producing it misses this acknowledgement:
-            // the next publication then over-reports damage, never under-reports it.
-            .then(|| producer.scene.completed(shown).ok());
+            // A scene lent to a frame still producing it takes this acknowledgement when the
+            // frame gives it back (`SceneSlot::completed`).
+            .then(|| producer.scene.completed(shown));
         // Before anything else that can panic: the frame's layer reads are answered if the
         // window showed the scene, and parked again if it did not.
         held.absorb(producer.settle_agent_layer_reads(layer_reads, shown_on_screen));
@@ -504,8 +504,10 @@ impl UiRuntime {
                 // that shows the tree (ADR-0305 §4). The retry publishes the withheld version again
                 // as it is (ADR-0304 §7): the scene owes it, so the next frame, finding nothing to
                 // paint, republishes it with its damage still counted from the acknowledged base,
-                // and the raster side replays its chunks from the recording cache. A frame that
-                // finds another target or a newer version repaints in full instead.
+                // and the raster side draws it in full, replaying its chunks from the recording
+                // cache. A frame that finds another target, a newer version, or a painter the
+                // host reports let go repaints in full instead; the settlement of a frame older
+                // than the current tree owes no version and repaints.
                 //
                 // The first `MAX_NOT_SHOWN_RETRIES` consecutive attempts retry on the next display
                 // period, which rides out a drawable that is withdrawn for a few frames (AppKit's
@@ -525,7 +527,14 @@ impl UiRuntime {
                     if streak <= MAX_NOT_SHOWN_RETRIES {
                         // Armed before the trace: a subscriber's panic there keeps the retry.
                         tail.retry_needed = true;
-                        tail.retry_draw = RetryDraw::Republish(shown);
+                        // Only a frame of the current tree leaves its version owed: an older
+                        // frame's version is not what the screen should show, and the retry
+                        // repaints, as a frame painted since owes the current tree.
+                        tail.retry_draw = if shows_current_tree {
+                            RetryDraw::Republish(shown)
+                        } else {
+                            RetryDraw::Repaint
+                        };
                         tracing::debug!(
                             frame = frame_number,
                             streak,
@@ -723,7 +732,7 @@ impl UiRuntime {
         // What the log held drops here, after the replies and the commit, with no borrow
         // held, beside the first panic of the work above; what nobody else holds goes back
         // to the scene's owner.
-        if let Some(Some(released)) = released {
+        if let Some(released) = released {
             post_submit.contain(|| producer.scene.restock(released));
         }
         // A panic of the work after the commit is held behind the first one, a layer read's reply

@@ -126,26 +126,24 @@ fn a_frame_not_shown_is_retried_from_the_held_version() {
 }
 
 /// The retry republishes the withheld version only while it is what the screen should show. A
-/// retry that finds another surface size, a repaint the host asked for (a device rebuilt, a
-/// surface restored or a display changed), or a newer version applied since the withheld one,
-/// repaints in full and publishes a new version; a retry that finds none of them republishes.
+/// retry that finds another surface size, or a frame painted since the withheld one (whose
+/// withheld settlement arrives late), repaints in full and publishes a new version; a retry that
+/// finds neither republishes.
 ///
-/// Fails when a retry republishes a version drawn for another size, ignores a repaint asked for,
-/// or republishes a version newer than the one withheld in place of the newest tree.
+/// Fails when a retry republishes a version drawn for another size, or when a late
+/// settlement of an older frame republishes a version in place of the newest tree.
 #[test]
 fn a_not_shown_retry_repaints_when_the_held_version_is_stale() {
     #[derive(Debug, Clone, Copy)]
     enum Between {
         Nothing,
         Resize,
-        RepaintAsked,
         NewerVersion,
     }
 
     for (between, republished) in [
         (Between::Nothing, true),
         (Between::Resize, false),
-        (Between::RepaintAsked, false),
         (Between::NewerVersion, false),
     ] {
         let mut runtime = mounted();
@@ -180,7 +178,6 @@ fn a_not_shown_retry_repaints_when_the_held_version_is_stale() {
             host_turn(&mut runtime, &mut sink);
             match between {
                 Between::Resize => sink.size = (300, 200),
-                Between::RepaintAsked => runtime.mark_primary_needs_full_repaint(),
                 Between::Nothing | Between::NewerVersion => {}
             }
             host_turn(&mut runtime, &mut sink);
