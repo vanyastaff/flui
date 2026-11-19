@@ -396,7 +396,34 @@ fn a_gpu_time_lands_on_the_snapshot_of_the_frame_its_stamp_names() {
             .is_none(),
         "a frame keeps its first time"
     );
-    assert!(clock.record_gpu_time(FrameEpoch::ZERO, gpu).is_none());
+    let unstamped = record(0);
+    assert!(
+        clock.record_gpu_time(FrameEpoch::ZERO, gpu).is_none(),
+        "an unstamped frame takes no time"
+    );
+
+    // A queued frame is recorded when its settlement is drained, which can come after its time.
+    let early = Duration::from_micros(300);
+    assert!(
+        clock
+            .record_gpu_time(FrameEpoch::from_raw(50_000), early)
+            .is_none(),
+        "the frame is not recorded yet"
+    );
+    let settled = record(50_000);
+    assert_eq!(
+        settled.gpu_time,
+        Some(early),
+        "the held time rides on its frame"
+    );
+    assert_eq!(
+        clock
+            .frames_since(Some(unstamped.frame_id))
+            .iter()
+            .map(|snapshot| snapshot.gpu_time)
+            .collect::<Vec<_>>(),
+        [Some(early)]
+    );
 
     for epoch in 3..=(2 + flui_scheduler::FRAME_HISTORY_CAPACITY as u64) {
         let _ = record(epoch);

@@ -1465,6 +1465,8 @@ impl UiRuntime {
                 ),
             };
             Self::emit_frame_telemetry(presentation, &snapshot);
+            // A GPU time that arrived before this frame was recorded rides on its snapshot.
+            Self::emit_frame_gpu_time(&snapshot);
         }
     }
 
@@ -1513,8 +1515,10 @@ impl UiRuntime {
     /// Take from `sink` the GPU times of `presentation`'s earlier frames and record each on its
     /// frame's snapshot, tracing a `frame_gpu_time` event for each one that landed (ADR-0388): the
     /// snapshot was recorded, and its `frame_telemetry` event sent, before the time existed. A
-    /// time for a frame the history no longer holds is dropped. A subscriber that panics on one
-    /// event loses no later time; the first panic is returned for the frame's tail.
+    /// time whose frame is not recorded yet waits in the presentation's clock and is traced
+    /// with that frame's `frame_telemetry` ([`Self::record_submit_telemetry`]). The sink and the
+    /// subscriber run contained: a panic in either is returned for the frame's tail, which
+    /// still settles, and a subscriber that panics on one event loses no later time.
     fn record_gpu_times<S: crate::sink::FrameSink + ?Sized>(
         &self,
         presentation: &PresentationState,
@@ -1523,29 +1527,28 @@ impl UiRuntime {
         let mut caught = FirstPanic::new();
         let mut times = self.gpu_times.take();
         times.clear();
-        sink.take_gpu_times(&mut times);
-        let traced = tracing::enabled!(target: "flui.frame", tracing::Level::TRACE);
+        caught.contain(|| sink.take_gpu_times(&mut times));
         for time in times.drain(..) {
-            let Some(snapshot) = presentation.clock().record_gpu_time(time.epoch, time.gpu) else {
-                continue;
-            };
-            if traced {
-                caught.contain(|| Self::emit_frame_gpu_time(&snapshot, time));
+            if let Some(snapshot) = presentation.clock().record_gpu_time(time.epoch, time.gpu) {
+                caught.contain(|| Self::emit_frame_gpu_time(&snapshot));
             }
         }
         self.gpu_times.set(times);
         caught
     }
 
-    fn emit_frame_gpu_time(snapshot: &FrameSnapshot, time: flui_foundation::GpuFrameTime) {
+    fn emit_frame_gpu_time(snapshot: &FrameSnapshot) {
+        let Some(gpu) = snapshot.gpu_time else {
+            return;
+        };
         tracing::trace!(
             target: "flui.frame",
             event = "frame_gpu_time",
             ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
             presentation = %snapshot.address.presentation_id,
             frame_id = %snapshot.frame_id,
-            epoch = time.epoch.get(),
-            gpu_us = Self::duration_micros_saturated(time.gpu),
+            epoch = snapshot.epoch.get(),
+            gpu_us = Self::duration_micros_saturated(gpu),
             "frame GPU time"
         );
     }

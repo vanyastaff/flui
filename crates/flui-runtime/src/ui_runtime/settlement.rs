@@ -65,9 +65,7 @@ impl PendingFrame {
     pub(super) fn stamped(self, epoch: FrameEpoch) -> Self {
         Self { epoch, ..self }
     }
-}
 
-impl PendingFrame {
     /// When the frame was handed to its sink.
     pub(crate) fn submitted_at(&self) -> Instant {
         self.submitted_at

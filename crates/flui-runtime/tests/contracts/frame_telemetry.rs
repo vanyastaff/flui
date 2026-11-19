@@ -102,14 +102,19 @@ fn frames_of_two_ui_runtimes_name_their_runtime() {
     );
 }
 
-/// A sink that presents each frame and, like a GPU slot, hands back a frame's
+/// A sink that presents each frame and, like a GPU slot, hands back its first frame's
 /// GPU time once a later frame was submitted, plus one time for a frame this
-/// runtime never made.
+/// runtime never made. After its second frame it also answers, ahead of time,
+/// for the epoch the next frame will be stamped with: the order a queued frame
+/// meets when its time is read back before its settlement is drained.
 #[derive(Default)]
 struct TimedSink {
     submitted: Vec<flui_foundation::FrameEpoch>,
     answered: usize,
 }
+
+/// The time [`TimedSink`] answers for a frame before it is recorded.
+const AHEAD_US: u64 = 77;
 
 impl FrameSink for TimedSink {
     fn surface_size(&mut self) -> (u32, u32) {
@@ -126,7 +131,7 @@ impl FrameSink for TimedSink {
     }
 
     fn take_gpu_times(&mut self, into: &mut Vec<flui_foundation::GpuFrameTime>) {
-        let finished = self.submitted.len().saturating_sub(1);
+        let finished = self.submitted.len().saturating_sub(1).min(1);
         for &epoch in &self.submitted[self.answered..finished] {
             into.push(flui_foundation::GpuFrameTime::new(
                 epoch,
@@ -139,15 +144,24 @@ impl FrameSink for TimedSink {
                 std::time::Duration::from_micros(1),
             ));
         }
+        if self.submitted.len() == 2 {
+            let next = self.submitted[1].get() + 1;
+            into.push(flui_foundation::GpuFrameTime::new(
+                flui_foundation::FrameEpoch::from_raw(next),
+                std::time::Duration::from_micros(AHEAD_US),
+            ));
+        }
         self.answered = self.answered.max(finished);
     }
 }
 
 /// A frame's GPU time reaches the runtime after the frame's own telemetry was
 /// sent, so it is traced as an event of its own that names the frame; a time
-/// for a frame the runtime never made is dropped (ADR-0388).
+/// for a frame the runtime never made traces nothing, and a time that comes
+/// before its frame is recorded is traced with that frame (ADR-0388).
 ///
-/// Red-check: skip `record_gpu_times` after a submit and no event is traced.
+/// Red-check: skip `record_gpu_times` after a submit and no event is traced;
+/// skip the GPU event in `record_submit_telemetry` and the early time is lost.
 #[test]
 fn a_frames_gpu_time_is_traced_once_it_arrives() {
     let mut clock = ManualClock::new();
@@ -156,11 +170,17 @@ fn a_frames_gpu_time_is_traced_once_it_arrives() {
     let mut sink = TimedSink::default();
 
     let ((), log) = capture(|| {
-        assert!(runtime.pump(&mut clock, &mut sink).presented());
-        runtime.mark_primary_needs_full_repaint();
-        clock.advance(std::time::Duration::from_millis(16));
-        assert!(runtime.pump(&mut clock, &mut sink).presented());
+        for _ in 0..3 {
+            assert!(runtime.pump(&mut clock, &mut sink).presented());
+            runtime.mark_primary_needs_full_repaint();
+            clock.advance(std::time::Duration::from_millis(16));
+        }
     });
+    assert_eq!(
+        sink.submitted[2].get(),
+        sink.submitted[1].get() + 1,
+        "the sink's guess of the next epoch held"
+    );
     let frames = frame_events(log.records());
     let timed: Vec<_> = log
         .records()
@@ -171,8 +191,9 @@ fn a_frames_gpu_time_is_traced_once_it_arrives() {
         .collect();
     assert_eq!(
         timed.len(),
-        1,
-        "one time, for the first frame; the stranger's is dropped: {timed:?}"
+        2,
+        "the first frame's time and the third's early one; the stranger's traces nothing: \
+         {timed:?}"
     );
     assert_eq!(timed[0].field("gpu_us"), Some("250"));
     assert_eq!(
@@ -187,5 +208,14 @@ fn a_frames_gpu_time_is_traced_once_it_arrives() {
     assert_eq!(
         timed[0].field("ui_runtime_id"),
         Some(runtime.id().as_u64().to_string().as_str())
+    );
+    assert_eq!(
+        timed[1].field("gpu_us"),
+        Some(AHEAD_US.to_string().as_str())
+    );
+    assert_eq!(
+        timed[1].field("frame_id"),
+        frames[2].field("frame_id"),
+        "the early time waited for its own frame"
     );
 }

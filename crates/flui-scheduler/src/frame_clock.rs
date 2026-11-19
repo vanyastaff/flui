@@ -893,7 +893,8 @@ impl FrameClock {
     /// presentation I happened to have a reference to."
     ///
     /// `epoch` is the stamp the frame was handed to its sink under, which a
-    /// later answer about the frame names it by ([`Self::record_gpu_time`]).
+    /// later answer about the frame names it by ([`Self::record_gpu_time`]);
+    /// the snapshot carries the GPU time already when that answer came first.
     ///
     /// `frame_id` is deliberately derived from [`Self::produced_count`] at the cut
     /// (`FrameId::from_count(produced_count())`, valid because `poll` has already
@@ -984,7 +985,7 @@ impl FrameClock {
              produced a frame -- only call this after a real submit attempt, whose produce \
              already incremented produced_count",
         );
-        let snapshot = FrameSnapshot {
+        let mut snapshot = FrameSnapshot {
             address,
             frame_id,
             epoch,
@@ -997,7 +998,7 @@ impl FrameClock {
             phases: times.phases,
             gpu_time: None,
         };
-        self.history.borrow_mut().record(&snapshot);
+        self.history.borrow_mut().record(&mut snapshot);
         snapshot
     }
 
@@ -1022,11 +1023,16 @@ impl FrameClock {
 
     /// Record `gpu`, how long the frame stamped `epoch` ran on the GPU, on its
     /// [`FrameSnapshot`] in the history ring, and return the snapshot as it
-    /// now stands. The answer arrives a frame or more after the snapshot was
-    /// recorded (ADR-0388), so a consumer that already pulled the snapshot
-    /// sees the time only through this return or a later pull. `None` when
-    /// the ring no longer holds that frame, or holds it with a time already.
-    /// An index-and-assign over the ring: no allocation.
+    /// now stands. The answer usually arrives a frame or more after the
+    /// snapshot was recorded (ADR-0388), so a consumer that already pulled the
+    /// snapshot sees the time only through this return or a later pull.
+    ///
+    /// `None` when the ring holds that frame with a time already, for an
+    /// unstamped frame ([`FrameEpoch::ZERO`]), and when no retained frame has
+    /// that epoch: then the time is held, a few at most, and the snapshot that
+    /// `record_frame` records under that epoch next carries it. A queued
+    /// frame's snapshot is recorded when its settlement is drained, which can
+    /// come after its time. No allocation.
     pub fn record_gpu_time(&self, epoch: FrameEpoch, gpu: Duration) -> Option<FrameSnapshot> {
         self.history.borrow_mut().record_gpu_time(epoch, gpu)
     }

@@ -131,11 +131,17 @@ impl FrameClock {
     of `None`. After each frame it sends, the UI runtime takes the sink's times
     (`FrameSink::take_gpu_times`, which a window's sink answers from its slots'
     `drain_gpu_times`, into a buffer the runtime keeps) and hands each to the presentation
-    clock's `record_gpu_time`, which fills the snapshot whose epoch matches, once. A time
-    whose frame left the ring, a second time for one frame, and a zero time are dropped. The
-    time arrives after the frame's `frame_telemetry` event, so a filled snapshot emits its own
-    `flui.frame` event, `frame_gpu_time`, with `frame_id`, `epoch` and `gpu_us`, and a reader
-    joins the two by `frame_id`. `GpuFrameTime` lives in `flui-foundation`, below both the
+    clock's `record_gpu_time`, which fills the snapshot whose epoch matches, once. A second
+    time for one frame, and a time for an unstamped frame, are dropped. A time no retained
+    snapshot matches is held in a fixed list of four, the oldest overwritten: a queued frame's
+    snapshot is recorded when its settlement is drained, and the raster thread can hand back
+    the time first. The snapshot recorded next under that epoch takes it; a time whose frame
+    left the ring, or never records, ages out. A time usually arrives after the frame's
+    `frame_telemetry` event, so a filled snapshot emits its own `flui.frame` event,
+    `frame_gpu_time`, with `frame_id`, `epoch` and `gpu_us`, and a reader joins the two by
+    `frame_id`; a snapshot that took a held time emits it right after its `frame_telemetry`.
+    The sink's call and every event run contained, so a panic in either is held for the
+    frame's tail, which still settles. `GpuFrameTime` lives in `flui-foundation`, below both the
     engine and the runtime, so the runtime names it without an engine edge (ADR-0083). The
     devtools Timeline puts `gpu_us` in a timed frame's arguments. The agent protocol carries
     no `FrameSnapshot`, so its version is unchanged.
@@ -157,11 +163,12 @@ impl FrameClock {
 - `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full` draws timed frames
   across a rebuild, which fails if the old device's timers outlive it.
 - `a_gpu_time_lands_on_the_snapshot_of_the_frame_its_stamp_names` (`flui-scheduler`) checks
-  that a time fills its own frame's snapshot once, and that a zero time or one for an evicted
-  frame is dropped.
+  that a time fills its own frame's snapshot once, that an unstamped frame takes none, and
+  that a time that comes before its frame rides on the snapshot recorded under its epoch.
 - `a_frames_gpu_time_is_traced_once_it_arrives` (`flui-runtime`) checks that a sink's time
-  reaches one `frame_gpu_time` event whose `frame_id` is its frame's, and that a time under an
-  epoch no frame had is dropped.
+  reaches one `frame_gpu_time` event whose `frame_id` is its frame's, that a time under an
+  epoch no frame had traces nothing, and that a time handed back before its frame was
+  recorded is traced with that frame.
 - `a_windows_sink_hands_back_the_gpu_times_of_its_frames` (`flui-app`) checks that a window's
   sink drains its slots' times.
 - `a_timed_frame_carries_its_gpu_time_into_the_trace` (`flui-devtools`) checks `gpu_us` on a
