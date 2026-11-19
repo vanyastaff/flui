@@ -94,6 +94,13 @@ impl TextStore for Faulty {
         self.inner.status()
     }
 
+    fn press_target_at(
+        &self,
+        point: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -233,13 +240,6 @@ impl TextStoreRead for ReadFault<'_> {
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         self.inner.visible_bounds()
     }
-
-    fn press_target_at(
-        &self,
-        point: Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
-        self.inner.press_target_at(point)
-    }
 }
 
 struct EditFault<'a> {
@@ -302,13 +302,6 @@ impl TextStoreRead for EditFault<'_> {
 
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         self.inner.visible_bounds()
-    }
-
-    fn press_target_at(
-        &self,
-        point: Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
-        self.inner.press_target_at(point)
     }
 }
 

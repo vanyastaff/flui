@@ -1307,13 +1307,16 @@ press, double tap or secondary tap; its listener stays opaque, so a touch on the
 reaches nothing behind it. It keeps painting its text and its composition's underline. One
 value owns the state, the field's `PlatformSelection`: the build, the handles and the
 magnifier all read it, and losing the input gives the field its own gestures back. The
-field's store answers what a press lands on (`TextStoreRead::press_target_at`) with the
-window's own hit test, the one a touch is dispatched by, and asks each target on the path
-whether it would take a touch going down there (the `PressProbe` its render view hands
-the store; a `Listener` declares what its press recognizers, pointer-down handler and
-admission would do), so a control drawn over, beside or around the field keeps its tap
-(a scrollbar's thumb, a tappable row), while a scroll view's drag, which claims only past
-its slop, takes no press from it; it answers the part of itself the window shows
+field's store answers what a press lands on (`TextStore::press_target_at`, asked outside
+any lock) with the window's own hit test, the one a touch is dispatched by, and asks each
+target on the path, through the `PressProbe` its render view hands the store, whether a
+recognizer there would contend for the press by the gate its own `add_pointer` applies
+(`GestureRecognizer::takes_down`, with the attachment's admission). So a control drawn
+over, beside or around the field keeps its tap (a scrollbar's thumb, a tappable row),
+while a scroll view's drag or an edge swipe, which claims only past its slop, a raw
+listener that only observes the Down (a `RawTextField`'s padding focusing it), and a
+detector whose recognizers refuse the touch (a secondary tap only) take no press from it;
+it answers the part of itself the window shows
 (`TextStoreRead::visible_bounds`) from the pipeline's placement query
 (`PipelineOwner::presented_placement`: the paint walk's gates and composition, so an
 offstage field shows nothing), which the platform draws inside; and its cursor-area loop
@@ -1328,6 +1331,7 @@ in an obscured field. The `text_editing` family pins this with
 `a_control_over_the_field_keeps_its_press`,
 `a_scroll_view_around_the_field_leaves_the_handles_their_reach`,
 `a_control_an_ancestor_draws_beside_the_field_keeps_its_press`,
+`only_a_recognizer_that_would_take_the_press_keeps_it`,
 `a_field_shows_only_what_its_ancestors_clip_leaves`,
 `a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved`,
 `an_offstage_field_shows_nothing`,

@@ -790,6 +790,13 @@ struct MovesFocusOnStatus {
 }
 
 impl TextStore for MovesFocusOnStatus {
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.press_target_at(point)
+    }
     fn status(&self) -> flui_platform::text_store::TextStoreStatus {
         let on_status = self.on_status.borrow_mut().take();
         if let Some(on_status) = on_status {

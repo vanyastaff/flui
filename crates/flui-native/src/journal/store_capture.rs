@@ -218,6 +218,10 @@ impl TextStore for JournaledStore {
         self.inner.status()
     }
 
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -711,10 +715,6 @@ impl TextStoreRead for ReadTap<'_> {
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         self.session.visible_bounds()
     }
-
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-        self.session.press_target_at(point)
-    }
 }
 
 /// A read-write lock's session as the input method sees it, journaling each
@@ -759,10 +759,6 @@ impl TextStoreRead for EditTap<'_> {
 
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         self.session.visible_bounds()
-    }
-
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-        self.session.press_target_at(point)
     }
 }
 

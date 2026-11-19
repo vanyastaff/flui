@@ -67,6 +67,33 @@ pub trait TextStore {
     /// own has no layout to report.
     fn screen_moved(&self) {}
 
+    /// What a press at `point` (window-root logical pixels) would land on, by
+    /// the window's own hit test and what each target there would do with a
+    /// touch going down: the field, another target that would contend for
+    /// the press, or nothing that does ([`PressTarget`]). A platform that
+    /// recognizes gestures over the field itself (iOS's `UITextInteraction`)
+    /// begins one only on the field, or where nothing else contends for the
+    /// press, so every control keeps its tap.
+    ///
+    /// Asked of the store, outside any lock, on the owner thread with no
+    /// borrow held: answering runs code the store does not own (render
+    /// objects' hit tests, recognizers' admission predicates), which must not
+    /// run inside a read lock. The caller contains a panic.
+    ///
+    /// No default: a store that wraps another forwards it, and one that left
+    /// it out would hand a control's tap to the platform.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::NoLayout`] when the field is not laid out or its tree
+    /// cannot be hit-tested now, and [`TextStoreError::WindowUnavailable`]
+    /// when the window cannot be asked now (off its owner thread, closing): a
+    /// platform begins no gesture on either.
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<super::PressTarget, TextStoreError>;
+
     /// Whether the field would perform `command` now, as its own menu would
     /// offer it: a platform shows the command in its edit menu only when it
     /// would. Called on the owner thread with no borrow held, outside a lock.

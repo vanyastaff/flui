@@ -565,16 +565,19 @@ the other way, through the store (`TextStore::edit_command_enabled` and
 `perform_edit_command` with an `EditCommand`): the store is the one object a host
 holds of the field, so the field's own clipboard and selection rules perform it.
 Such a platform draws inside `TextStoreRead::visible_bounds` (the field's box cut
-by its ancestors' clips) and begins its gestures by `TextStoreRead::press_target_at`
+by its ancestors' clips) and begins its gestures by `TextStore::press_target_at`
 (the field, another target, or nothing, from the window's own hit test and
-what each target on the path says it would do with a touch going down there:
-a scroll view's drag takes no press, a scrollbar's thumb or a tappable row
-around the field does), so a control drawn over, beside or around the field
-keeps its tap; it asks for the field's geometry
-again on `TextStoreObserver::field_moved`, which a caret move never sends. The
-two session reads have no default, so a wrapper session cannot drop them; a
-wrapper store, session, observer or host forwards all of these (the journal's
-do).
+whether a recognizer on the path would contend for a touch going down there:
+a scroll view's drag and a raw pointer-down listener take no press, a
+scrollbar's thumb or a tappable row around the field does), so a control drawn
+over, beside or around the field keeps its tap. It is asked of the store, not
+inside a session, because answering runs code the store does not own, which
+must not run under a read lock; `TextStoreError::WindowUnavailable` (asked off
+the owner thread, a closing window) and `NoLayout` begin no gesture. It asks
+for the field's geometry again on `TextStoreObserver::field_moved`, which a
+caret move never sends. `visible_bounds` and `press_target_at` have no default,
+so a wrapper cannot drop them; a wrapper store, session, observer or host
+forwards all of these (the journal's do).
 
 A push preedit's cursor is the input method's target clause: the projection
 selects it inside the composition, as AppKit's `setMarkedText:selectedRange:`

@@ -63,6 +63,13 @@ pub(crate) mod read_only {
             TextStoreStatus::EDITABLE_SINGLE_LINE
         }
 
+        fn press_target_at(
+            &self,
+            _: Point<f64>,
+        ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+            Err(TextStoreError::NoLayout)
+        }
+
         fn request_lock(
             &self,
             grant: LockGrant,
@@ -130,12 +137,6 @@ pub(crate) mod read_only {
             Err(TextStoreError::NoLayout)
         }
         fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
-            Err(TextStoreError::NoLayout)
-        }
-        fn press_target_at(
-            &self,
-            _: Point<f64>,
-        ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
             Err(TextStoreError::NoLayout)
         }
     }

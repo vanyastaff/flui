@@ -210,6 +210,12 @@ impl FailingStore {
 }
 
 impl TextStore for FailingStore {
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
     fn status(&self) -> TextStoreStatus {
         let hook = self.on_status.borrow_mut().take();
         if let Some(hook) = hook {

@@ -817,6 +817,14 @@ impl TextStore for EditableTextStore {
             .with_text_input(self.text_input.get())
     }
 
+    /// The window's own hit test, the one a touch is dispatched by, and the
+    /// entries' handlers asked through the press probe
+    /// (`EditableTextStore::press_target`); a probe that cannot be asked (off
+    /// the owner thread, a closing window) is `WindowUnavailable`.
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.press_target(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -1058,19 +1066,6 @@ impl TextStoreRead for Session<'_> {
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         self.store.visible_box()
     }
-
-    /// The window's own hit test, the one a touch is dispatched by, run at
-    /// `point`: the field when its editable is on the path (a control drawn
-    /// over it keeps it off), another target when an entry on the path would
-    /// take a touch going down there (`EditableTextStore::press_target_at`),
-    /// nothing otherwise. A render object's hit test and a target's press
-    /// admission are user code: a panic in the walk is resumed once the path
-    /// is complete (`PipelineOwner::hit_test`), one in an admission unwinds
-    /// directly, and either leaves this call; the platform's entry contains
-    /// it (iOS's `interactionShouldBegin:atPoint:` answers no gesture).
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-        self.store.press_target_at(point)
-    }
 }
 
 impl EditableTextStore {
@@ -1125,17 +1120,24 @@ impl EditableTextStore {
         Ok(self.placement()?.and_then(|placement| placement.visible))
     }
 
-    /// What a press at `point` lands on, by the window's own hit test
-    /// ([`TextStoreRead::press_target_at`]): the field when its editable is
-    /// on the path; another target when an entry on the path would take a
-    /// touch going down there, by what its pointer target declared (a press
-    /// recognizer or a pointer-down handler, or an admission that accepts the
-    /// Down: a scrollbar's thumb, a list row's tap, a control over or beside
-    /// the field), whether or not it is one of the field's ancestors; nothing
-    /// otherwise, a scroll view's drag included, which claims only past its
-    /// slop. The targets' predicates are user code and run after the
-    /// pipeline is released; one that panics unwinds out of this call.
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+    /// What a press at `point` lands on ([`TextStore::press_target_at`]):
+    /// the field when its editable is on the window's hit path; another
+    /// target when an entry on the path would contend for a touch going down
+    /// there, asked of the entry's own handler through the press probe (a
+    /// recognizer that takes the Down as a press, its admission accepting it:
+    /// a scrollbar's thumb, a list row's tap, a control over or beside the
+    /// field), whether or not it is one of the field's ancestors; nothing
+    /// otherwise: a raw listener that only observes the Down (the field's own
+    /// padding focusing it) and a drag, which claims only past its slop,
+    /// admission or not, take no press. Without a probe (a window with no
+    /// interaction lane) no target is registered, so none contends.
+    ///
+    /// Render objects' hit tests and recognizers' admission predicates are
+    /// user code: the hit test runs under the pipeline's borrow, which
+    /// resumes a panic once the path is complete, and the targets are asked
+    /// after it is released; a panic leaves this call for the caller to
+    /// contain.
+    fn press_target(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
         let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
         let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
         // The path outlives the pipeline's borrow: the targets are asked, and
@@ -1153,19 +1155,23 @@ impl EditableTextStore {
             })
             .flatten()
             .ok_or(TextStoreError::NoLayout);
-        let target = on_field.map(|on_field| {
-            let global = Offset::new(point.x, point.y);
+        let target = on_field.and_then(|on_field| {
             if on_field {
-                PressTarget::Field
-            } else if self.press_probe.get().is_some_and(|probe| {
-                path.path()
-                    .iter()
-                    .any(|entry| probe.takes_press_on(entry, global, PointerKind::Touch))
-            }) {
-                PressTarget::Other
-            } else {
-                PressTarget::Nothing
+                return Ok(PressTarget::Field);
             }
+            let Some(probe) = self.press_probe.get() else {
+                return Ok(PressTarget::Nothing);
+            };
+            let global = Offset::new(point.x, point.y);
+            for entry in path.path() {
+                let claims = probe
+                    .claims_press_on(entry, global, PointerKind::Touch)
+                    .map_err(|_| TextStoreError::WindowUnavailable)?;
+                if claims {
+                    return Ok(PressTarget::Other);
+                }
+            }
+            Ok(PressTarget::Nothing)
         });
         drop(path);
         target

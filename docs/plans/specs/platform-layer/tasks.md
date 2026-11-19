@@ -5949,10 +5949,15 @@ GPU-память простаивающего или невидимого окн
   (`a_field_move_asks_for_its_geometry_once_and_never_mid_composition_or_gesture`,
   `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`); уход фокуса снимает жест и
   долги старого поля (`a_focus_move_asks_for_the_next_fields_geometry_once_whatever_the_last_one_held`).
-  Жесты начинаются там, где hit test окна находит поле, или у ручки, где нет чужой цели: предки
-  поля (прокрутка, страница) чужой целью не считаются (`TextStoreRead::press_target_at`,
+  Жесты начинаются там, где hit test окна находит поле, или у ручки, где ни один распознаватель
+  не претендует на нажатие по тому же вопросу, что задаёт его `add_pointer`
+  (`GestureRecognizer::takes_down`, с допуском привязки): перетаскивание прокрутки и сырой
+  слушатель нажатия чужой целью не считаются, бегунок полосы и строка со своим касанием —
+  считаются (`TextStore::press_target_at` вне блокировки, `PressProbe` без копии ответов,
   `a_control_over_the_field_keeps_its_press`,
   `a_scroll_view_around_the_field_leaves_the_handles_their_reach`,
+  `a_control_an_ancestor_draws_beside_the_field_keeps_its_press`,
+  `only_a_recognizer_that_would_take_the_press_keeps_it`, `a_press_probe_asks_each_targets_own_handler`,
   `a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers`). Клиент сообщает ответчику уход
   со старого поля без момента «поля нет»
   (`a_focus_move_between_fields_keeps_the_keyboard_and_leaves_the_old_field_once`); что ответчик

@@ -737,22 +737,40 @@ callback, the retirement failure propagates, and a healthy sibling still uses
 the parent coordinate space. It does not promise containment of multiple
 panicking destructors within one opaque capture.
 
-## Press admission
+## Press claims
 
 A platform's own gesture asks, before it takes a touch over the window, whether
-a widget there would take the press (iOS's text interaction near a selection
-handle). A pointer target answers what it declared beside its handler
-(`InteractionDispatchHandle::declare_press_admission`), and a `PressProbe`
-asks it with a Down built and localised as dispatch localises one, delivering
-nothing. A listener declares from its pointer-down handler and recognizers:
-`RecognizerSet::takes_press` asks each live recognizer's admission predicate,
-or, without one, `GestureRecognizer::takes_presses`, which a drag, a scale, a
-swipe and a multi-drag answer `false` since they claim a contact only past
-their slop. A target that declared nothing takes no press. The probe answers on
-the lane's owner thread while the lane lives, without the UI runtime's scope a
-registration needs: the question arrives between owner turns. The predicate is
-user code and runs with no lane borrow held. The declaration goes with the
-target when it is unregistered.
+a widget there would contend for the press (iOS's text interaction near a
+selection handle). One source answers it and dispatch: every recognizer has a
+required `GestureRecognizer::takes_down`, judged from the Down and its
+configuration alone, which its `add_pointer` asks first. `None` refuses the Down
+(a button no callback handles, a secondary press of a primary-only tap),
+`DownTake::Press` contends for the press itself, `DownTake::Motion` claims the
+contact only past its slop (a drag, a scale, a swipe, a multi-drag). A
+`DownTake` is a single answer rather than a default flag a custom recognizer
+could forget: the trait has no default for it.
+
+`RecognizerSet::claims_press` asks what `RecognizerSet::dispatch` would admit:
+the recognizer's device, `takes_down` answering `Press`, and its attachment's
+`DownAdmission` (the predicate `attach_when` and a widget's `ContactAdmission`
+hold) accepting the Down. An admission narrows a press; it never makes a drag
+claim one. A pointer target's handler (`PointerTargetHandler`) answers
+`claims_press`: a `Listener` from its recognizers, a text link from its tap's
+set; a closure registered with `register_pointer` only observes, so a raw
+pointer-down callback claims nothing.
+
+A `PressProbe` asks a hit entry's handler with a Down built and localised as
+dispatch localises one, delivering nothing and keeping no copy of any answer:
+the lane holds only the handler it already holds. It answers on the lane's
+owner thread while the lane lives, without the UI runtime's scope a
+registration needs, since the question arrives between owner turns; off that
+thread, or once the lane is gone, it refuses with `WrongThread` or `OwnerGone`,
+which its callers treat as "do not begin". The handler's answer may run user
+code (admission predicates) and runs with no lane borrow held.
+
+`RenderListener::claims_presses` answers a different question, a title bar's:
+whether a press must reach the application instead of moving the window, which
+any pointer-down callback or recognizer makes so.
 
 ## Pointer route capture retirement
 

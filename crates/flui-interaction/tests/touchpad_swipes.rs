@@ -70,6 +70,11 @@ impl GestureArenaMember for Joiner {
 }
 
 impl GestureRecognizer for Joiner {
+    /// It joins touchpad swipes only.
+    fn takes_down(&self, _: PointerDispatch<'_>) -> Option<flui_interaction::gesture::DownTake> {
+        None
+    }
+
     fn add_pointer(&self, _: PointerDispatch<'_>) {}
 
     fn add_touchpad_swipe(&self, start: PointerDispatch<'_>) {

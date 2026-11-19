@@ -2739,14 +2739,6 @@ impl<S: flui_platform::text_store::TextStoreRead + ?Sized> flui_platform::text_s
     > {
         self.session.visible_bounds()
     }
-
-    fn press_target_at(
-        &self,
-        point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
-    {
-        self.session.press_target_at(point)
-    }
 }
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -2790,6 +2782,14 @@ impl TextStore for CountedReads {
     fn status(&self) -> flui_platform::text_store::TextStoreStatus {
         assert!(!self.panic_status.get(), "the application's status fails");
         self.inner.status()
+    }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.press_target_at(point)
     }
 
     fn request_lock(

@@ -30,10 +30,7 @@ use super::{
         finish_containment, invoke_callback, retire_callback, withdraw_cancelled,
     },
     contact::{ArenaMembership, ContactId},
-    recognizer::{
-        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
-        motion_history,
-    },
+    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, motion_history},
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
@@ -1709,19 +1706,19 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
-    /// A scale claims its contacts only once they move past its slop.
-    fn takes_presses(&self) -> bool {
-        false
+    /// A primary Down of one pointer in both spaces at a finite position,
+    /// claimed only once its contacts move past the scale's slop.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        (down.local.pointer_id() == down.global.pointer_id()
+            && super::recognizer::primary_down_at_a_point(down))
+        .then_some(super::recognizer::DownTake::Motion)
     }
     fn pointer_frame_end(&self) {
         self.settle_frame_moves();
     }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         self.settle_frame_moves();
-        if self.native.borrow().is_some() {
-            return;
-        }
-        if !is_primary_down(down.local) || down.local.pointer_id() != down.global.pointer_id() {
+        if self.native.borrow().is_some() || self.takes_down(down).is_none() {
             return;
         }
         let (Some(pointer), Some(position), Some(global)) = (
@@ -1731,10 +1728,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         ) else {
             return;
         };
-        if !position.is_finite()
-            || !global.is_finite()
-            || self.gesture_state.borrow().index_of(pointer).is_some()
-        {
+        if self.gesture_state.borrow().index_of(pointer).is_some() {
             return;
         }
         let Some(id) = ContactId::next(&self.next_contact) else {

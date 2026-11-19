@@ -101,6 +101,13 @@ impl TextStore for Counted {
         self.store.status()
     }
 
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.store.press_target_at(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,

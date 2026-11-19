@@ -10,8 +10,9 @@ use std::{
 
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::{Offset, Point};
+use flui_interaction::events::{PointerButton, PointerEvent};
 use flui_interaction::gesture::{
-    GestureComposition, MultiTapDetails, PanZoomDisposition, ScaleEndDetails,
+    DownTake, GestureComposition, MultiTapDetails, PanZoomDisposition, ScaleEndDetails,
     ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
     SmartZoomDetails,
 };
@@ -449,6 +450,28 @@ impl PressCallbacks {
         Self {
             tap,
             ..Self::default()
+        }
+    }
+
+    /// Whether a slot set now acts on a press of `button`: a primary press
+    /// for the tap family, a long press, a double tap or a pressed state, a
+    /// secondary press for the secondary tap. The members are built with
+    /// every tap callback and read these slots live, so this is the press
+    /// group's own gate on a Down ([`PressRecognizers::takes_down`]).
+    fn acts_on(&self, button: PointerButton) -> bool {
+        if button == PointerButton::PRIMARY {
+            self.tap.is_some()
+                || self.tap_down.is_some()
+                || self.tap_up.is_some()
+                || self.tap_cancel.is_some()
+                || self.pressed.is_some()
+                || self.long_press.is_some()
+                || self.double_tap.is_some()
+                || self.double_tap_down.is_some()
+        } else if button == PointerButton::SECONDARY {
+            self.secondary_tap.is_some()
+        } else {
+            false
         }
     }
 
@@ -1188,7 +1211,31 @@ impl GestureArenaMember for PressRecognizers {
 }
 
 impl GestureRecognizer for PressRecognizers {
+    /// A Down of a button some slot acts on now ([`PressCallbacks::acts_on`]:
+    /// a detector with only a secondary tap refuses a primary touch), taken
+    /// as the strongest of the members' answers.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake> {
+        let PointerEvent::Down(press) = down.local else {
+            return None;
+        };
+        if !self.live.press().acts_on(press.button()) {
+            return None;
+        }
+        let mut take = None;
+        for member in self.members().recognizers() {
+            match member.takes_down(down) {
+                Some(DownTake::Press) => return Some(DownTake::Press),
+                Some(DownTake::Motion) => take = Some(DownTake::Motion),
+                None => {}
+            }
+        }
+        take
+    }
+
     fn add_pointer(&self, down: PointerDispatch<'_>) {
+        if self.takes_down(down).is_none() {
+            return;
+        }
         self.members().set.dispatch(down);
     }
 

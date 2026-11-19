@@ -12,11 +12,16 @@ use crate::{
 use smallvec::SmallVec;
 use std::rc::{Rc, Weak};
 
-type Admission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
+/// Whether a contact's Down reaches a recognizer: the predicate a recognizer
+/// is attached with ([`RecognizerSet::attach_when`]), and the one a widget's
+/// contact admission holds. Asked of the Down only; the contact's later
+/// events reach the recognizer whatever it answered for a Down it admitted.
+pub type DownAdmission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
+
 #[derive(Clone)]
 struct Attached {
     recognizer: Weak<dyn GestureRecognizer>,
-    admit: Option<Admission>,
+    admit: Option<DownAdmission>,
 }
 
 /// Ordered weak recognizer attachments; widget state retains strong ownership.
@@ -52,7 +57,7 @@ impl RecognizerSet {
     fn attach_inner<R: GestureRecognizer + 'static>(
         &mut self,
         recognizer: &Rc<R>,
-        admit: Option<Admission>,
+        admit: Option<DownAdmission>,
     ) {
         let erased: Rc<dyn GestureRecognizer> = recognizer.clone();
         self.entries.push(Attached {
@@ -104,24 +109,25 @@ impl RecognizerSet {
                 .is_some_and(|recognizer| recognizer.feeds_scroll_contact())
         })
     }
-    /// Whether the Down `dispatch` carries would be taken here: a live
-    /// recognizer admits its device and either its admission predicate
-    /// accepts the Down, or it has none and takes presses
-    /// ([`GestureRecognizer::takes_presses`]). Nothing is delivered. The
-    /// admission predicates are user code and run with no borrow held; one
-    /// that panics unwinds out of this call.
+    /// Whether a live recognizer here would contend for the press the Down
+    /// `dispatch` carries, asked as [`Self::dispatch`] would admit it and
+    /// without delivering anything: the recognizer admits the contact's
+    /// device, takes the Down as a press ([`GestureRecognizer::takes_down`]
+    /// answers [`DownTake::Press`](super::recognizer::DownTake::Press), the
+    /// gate its `add_pointer` applies), and its admission predicate, if any,
+    /// accepts it. A drag, which claims a contact only past its slop, never
+    /// counts, admission or not. The predicates are user code and run with no
+    /// borrow held; one that panics unwinds out of this call.
     #[must_use]
-    pub fn takes_press(&self, dispatch: PointerDispatch<'_>) -> bool {
+    pub fn claims_press(&self, dispatch: PointerDispatch<'_>) -> bool {
         let PointerEvent::Down(down) = dispatch.local else {
             return false;
         };
         self.entries.iter().any(|entry| {
             entry.recognizer.upgrade().is_some_and(|recognizer| {
                 admits_device(recognizer.allowed_devices(), down.pointer.kind)
-                    && entry
-                        .admit
-                        .as_ref()
-                        .map_or_else(|| recognizer.takes_presses(), |admit| admit(dispatch))
+                    && recognizer.takes_down(dispatch) == Some(super::recognizer::DownTake::Press)
+                    && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
             })
         })
     }

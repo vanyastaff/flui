@@ -104,6 +104,10 @@ impl GestureArenaMember for Extension {
 }
 
 impl GestureRecognizer for Extension {
+    fn takes_down(&self, _: PointerDispatch<'_>) -> Option<flui_interaction::gesture::DownTake> {
+        Some(flui_interaction::gesture::DownTake::Press)
+    }
+
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         self.log.borrow_mut().push(self.name);
         let _ = self.contact.begin(down, &GestureSettings::default());

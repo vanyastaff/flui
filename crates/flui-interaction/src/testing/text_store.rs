@@ -426,6 +426,10 @@ impl InMemoryTextStore {
 }
 
 impl TextStore for InMemoryTextStore {
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        Ok(press_target_at(&self.doc.borrow(), point))
+    }
+
     fn status(&self) -> TextStoreStatus {
         TextStoreStatus::EDITABLE_SINGLE_LINE
             .with_protected(self.protected.get())
@@ -767,10 +771,6 @@ impl TextStoreRead for ReadSession<'_> {
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         Ok(Some(document_bounds(self.doc)))
     }
-
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-        Ok(press_target_at(self.doc, point))
-    }
 }
 
 impl TextStoreRead for EditSession<'_> {
@@ -808,10 +808,6 @@ impl TextStoreRead for EditSession<'_> {
 
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         Ok(Some(document_bounds(self.doc)))
-    }
-
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-        Ok(press_target_at(self.doc, point))
     }
 }
 

@@ -776,8 +776,16 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A primary Down with a position in both spaces: its taps contend for
+    /// the press.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        (is_primary_down(down.local)
+            && down.local.position().is_some()
+            && down.global.position().is_some())
+        .then_some(super::recognizer::DownTake::Press)
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
-        if !is_primary_down(down.local) {
+        if self.takes_down(down).is_none() {
             return;
         }
         let PointerEvent::Down(data) = down.local else {

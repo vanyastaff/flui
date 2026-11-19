@@ -579,6 +579,10 @@ struct ReentrantStore {
 }
 
 impl TextStore for ReentrantStore {
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
     fn status(&self) -> TextStoreStatus {
         let on_status = self.on_status.borrow_mut().take();
         if let Some(on_status) = on_status {
@@ -1539,6 +1543,10 @@ impl TextStore for FieldWithCommands {
         self.inner.status()
     }
 
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
     fn request_lock(
         &self,
         grant: flui_platform::text_store::LockGrant,
@@ -1682,6 +1690,10 @@ struct FieldKeepingItsObserver {
 impl TextStore for FieldKeepingItsObserver {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
 
     fn request_lock(
@@ -1856,6 +1868,10 @@ impl TextStore for FieldAwaitingLayout {
         self.inner.status()
     }
 
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -1940,11 +1956,6 @@ impl TextStoreRead for AwaitingLayout<'_> {
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
         self.laid_out()?;
         self.session.visible_bounds()
-    }
-
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-        self.laid_out()?;
-        self.session.press_target_at(point)
     }
 }
 

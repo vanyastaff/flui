@@ -483,14 +483,6 @@ mod tests {
         fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
             Ok(Some(self.visible))
         }
-
-        fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
-            Ok(if self.visible.contains(&point) {
-                PressTarget::Field
-            } else {
-                PressTarget::Nothing
-            })
-        }
     }
 
     fn span(start: usize, end: usize) -> Utf16Range {

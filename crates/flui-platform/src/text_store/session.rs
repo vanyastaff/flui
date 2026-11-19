@@ -252,28 +252,9 @@ pub trait TextStoreRead {
     /// [`TextStoreError::NoLayout`] when the field is not laid out, or the
     /// window's tree cannot be read now.
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError>;
-
-    /// What a press at `point` (window-root logical pixels) would land on, by
-    /// the window's own hit test: the field, another target that would take
-    /// a touch going down there (a control over or beside the field, or one
-    /// an ancestor of the field draws, a scrollbar's thumb or a tappable
-    /// row), or nothing that takes a press (a scroll view's drag, which
-    /// claims only past its slop, included). A platform that recognizes
-    /// gestures over the field itself (iOS's `UITextInteraction`) begins one
-    /// only on the field, or where nothing else takes the press, so every
-    /// control keeps its tap.
-    ///
-    /// No default: a store that wraps another forwards it, and one that left
-    /// it out would hand a control's tap to the platform.
-    ///
-    /// # Errors
-    ///
-    /// [`TextStoreError::NoLayout`] when the field is not laid out, or the
-    /// window's tree cannot be hit-tested now.
-    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError>;
 }
 
-/// What a press at a point would land on ([`TextStoreRead::press_target_at`]).
+/// What a press at a point would land on ([`TextStore::press_target_at`](super::TextStore::press_target_at)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[expect(
     clippy::exhaustive_enums,
@@ -282,13 +263,15 @@ pub trait TextStoreRead {
 pub enum PressTarget {
     /// The field.
     Field,
-    /// Another target that would take a touch going down there: a press
-    /// recognizer or a pointer-down handler, or an admission that accepts the
-    /// Down, whether its widget is drawn over the field, beside it, or around
-    /// it (a scrollbar's thumb, a tappable row).
+    /// Another target that would contend for a touch going down there: a
+    /// recognizer that takes the Down as a press, its admission accepting it,
+    /// whether its widget is drawn over the field, beside it, or around it (a
+    /// scrollbar's thumb, a tappable row).
     Other,
-    /// Nothing that takes a press: the bare page, or only targets that claim
-    /// a contact past their slop (a scroll view's drag).
+    /// Nothing that contends for a press: the bare page, a raw listener that
+    /// only observes the Down (a field's own padding focusing it), or only
+    /// recognizers that claim a contact past their slop (a scroll view's
+    /// drag, an edge swipe), admission or not.
     Nothing,
 }
 

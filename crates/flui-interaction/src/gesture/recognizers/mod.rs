@@ -97,13 +97,15 @@ pub use multidrag::{
     MultiDragGestureRecognizerBuilder, MultiDragHandle, MultiDragStartCallback,
     MultiDragUpdateDetails,
 };
-pub use recognizer::{CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all};
+pub use recognizer::{
+    CancelOutcome, DownTake, GestureRecognizer, GestureRecognizerState, cancel_all,
+};
 pub use scale::{
     PanZoomDisposition, ScaleCancelCallback, ScaleEndCallback, ScaleEndDetails,
     ScaleGestureRecognizer, ScaleGestureRecognizerBuilder, ScaleStartCallback, ScaleStartDetails,
     ScaleStartMode, ScaleUpdateCallback, ScaleUpdateDetails,
 };
-pub use set::RecognizerSet;
+pub use set::{DownAdmission, RecognizerSet};
 pub use smart_zoom::{SmartZoomDetails, SmartZoomSource};
 pub use swipe::{
     PhysicalEdge, SwipeDetails, SwipeGestureRecognizer, SwipeGestureRecognizerBuilder, SwipeStart,

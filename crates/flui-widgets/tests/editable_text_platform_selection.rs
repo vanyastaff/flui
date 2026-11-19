@@ -21,9 +21,10 @@ use flui_platform::text_store::{
 use flui_testing::replay::PointerScript;
 use flui_view::ViewExt;
 use flui_widgets::{
-    ClipRect, Column, EditableText, GestureDetector, HitTestBehavior, LongPressSelection, Offstage,
-    OverflowBox, Padding, Positioned, ScrollController, ScrollView, Scrollbar,
-    SingleChildScrollView, SizedBox, Stack, TextEditingController, WidgetsApp,
+    ClipRect, Column, ContactAdmission, DragSlot, EditableText, GestureDetector, HitTestBehavior,
+    LongPressSelection, Offstage, OverflowBox, Padding, Positioned, RawTextField, ScrollController,
+    ScrollView, Scrollbar, SingleChildScrollView, SizedBox, Stack, TextEditingController,
+    WidgetsApp,
 };
 
 use crate::common::harness::{Harness, mount_with_selection_ui_on};
@@ -196,7 +197,7 @@ fn read_store<R: 'static>(
 }
 
 fn press_target_at(store: &Rc<dyn TextStore>, point: Point<f64>) -> PressTarget {
-    read_store(store, move |session| session.press_target_at(point)).expect("the field is laid out")
+    store.press_target_at(point).expect("the field is laid out")
 }
 
 /// A press lands on the field only where the window's own hit test finds the
@@ -328,6 +329,79 @@ pub(crate) fn a_control_an_ancestor_draws_beside_the_field_keeps_its_press() {
         PressTarget::Field,
         "the field in the row"
     );
+}
+
+/// Only a recognizer that would contend for the press makes a press another
+/// target's, asked the question its own `add_pointer` asks: the padding of a
+/// `RawTextField`, whose raw listener focuses the field on a pointer-down
+/// and claims nothing, is nobody's; a drag beside the field, even one with an
+/// admission that accepts the Down, claims the contact only past its slop; a
+/// detector with only a secondary tap refuses a primary touch.
+///
+/// Fails with a raw pointer-down handler counted as a claim (the padding is
+/// `Other`), with an admission overriding a drag's motion-only answer, and
+/// with a press recognizer counted whatever its Down gate (the secondary-tap
+/// detector is `Other`).
+pub(crate) fn only_a_recognizer_that_would_take_the_press_keeps_it() {
+    let controller = TextEditingController::with_text("hello world");
+    let node = FocusNode::with_debug_label("raw text field");
+    let mut harness = mount_with_selection_ui_on(
+        SizedBox::new(300.0, 60.0)
+            .child(RawTextField::new(controller).focus_node(Rc::clone(&node)))
+            .boxed(),
+        TargetPlatform::iOS,
+        SelectionUi::Platform,
+    );
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    assert_eq!(
+        press_target_at(&store, Point::new(4.0, 30.0)),
+        PressTarget::Nothing,
+        "the field's own padding"
+    );
+
+    let controller = TextEditingController::with_text("hello world");
+    let node = FocusNode::with_debug_label("field beside detectors");
+    let page = SizedBox::new(400.0, 200.0).child(Stack::new((
+        SizedBox::new(200.0, 40.0).child(EditableText::new(controller, Rc::clone(&node))),
+        Positioned::new(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .admission(ContactAdmission::new(|_| true))
+                .drag(DragSlot::horizontal())
+                .child(SizedBox::new(50.0, 40.0)),
+        )
+        .left(205.0)
+        .top(0.0),
+        Positioned::new(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_secondary_tap(|_ctx| {})
+                .child(SizedBox::new(50.0, 40.0)),
+        )
+        .left(260.0)
+        .top(0.0),
+    )));
+    let mut harness =
+        mount_with_selection_ui_on(page.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    for (x, case) in [
+        (210.0, "a drag with an admission beside the field"),
+        (265.0, "a secondary-tap-only detector, a primary touch"),
+    ] {
+        assert_eq!(
+            press_target_at(&store, Point::new(x, 10.0)),
+            PressTarget::Nothing,
+            "{case}"
+        );
+    }
 }
 
 /// Inside a scroll view, whose gesture detector is on every press's path

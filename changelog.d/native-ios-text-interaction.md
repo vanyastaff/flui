@@ -16,17 +16,27 @@
   and Select All, which `EditableText` performs with its own clipboard and selection rules. On iOS
   a command reaches only the field the menu was offered over, and Paste is offered while the
   pasteboard holds text.
-- `TextStoreRead::press_target_at` and `PressTarget`: what a press at a point lands on (the
-  field, another target, nothing), and `TextStoreRead::visible_bounds`: the part of the field the
-  window shows, its ancestors' clips included. Both are required of every store session;
-  `EditableText` answers them with the window's hit test, asking each target there whether it
-  would take the press, and the pipeline's placement query.
-- `PressProbe` and `InteractionDispatchHandle::declare_press_admission` in `flui-interaction`
-  (`RenderObjectContext::declare_press_admission` and `press_probe` in `flui-view`): a pointer
-  target says whether it would take the press a Down starts, and a platform's question is
-  answered without delivering anything. A `Listener` declares it from its pointer-down handler
-  and recognizers (`RecognizerSet::takes_press`, and `GestureRecognizer::takes_presses`, `false`
-  for a drag, a scale, a swipe), and a text link takes the presses on its span.
+- `TextStore::press_target_at` and `PressTarget`: what a press at a point lands on (the field,
+  another target, nothing), asked of the store outside any lock, and
+  `TextStoreRead::visible_bounds`: the part of the field the window shows, its ancestors' clips
+  included. Both are required; `EditableText` answers them with the window's hit test, asking
+  each target there whether a recognizer would contend for the press, and the pipeline's
+  placement query. `TextStoreError::WindowUnavailable` refuses a question the window cannot
+  answer now.
+- `PressProbe`, `PointerTargetHandler` and `InteractionDispatchHandle::register_pointer_handler`
+  in `flui-interaction` (`RenderObjectContext::register_pointer_handler` and `press_probe` in
+  `flui-view`): a platform asks a pointer target's own handler whether it would contend for a
+  press, without anything being delivered. A `Listener` answers from its recognizers
+  (`RecognizerSet::claims_press`); a raw pointer-down callback only observes.
+- `DownTake` and `DownAdmission` in `flui-interaction` (`DownTake` also in `flui_sdk::interaction`
+  and `flui::interaction`).
+
+### Changed
+
+- `GestureRecognizer` has a required `takes_down`: how the recognizer takes a Down, judged from
+  the Down and its configuration alone (`None`, `DownTake::Press`, `DownTake::Motion`), which its
+  `add_pointer` asks first and a platform's press question reuses. A recognizer written outside
+  the framework implements it.
 - `PipelineOwner::presented_placement` and `PresentedPlacement` in `flui-rendering`: where one
   render node's local space is drawn in the window after the last frame and the part of the
   window its ancestors' clips leave it, by the paint walk's gates and composition, which the

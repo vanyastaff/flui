@@ -15,7 +15,7 @@ use flui_interaction::pointer::{
 };
 use flui_interaction::{
     gesture::{GestureRecognizer, RecognizerSet},
-    pointer::{PointerDispatch, PointerTarget},
+    pointer::{PointerDispatch, PointerTarget, PointerTargetHandler},
 };
 use flui_objects::RenderListener;
 use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
@@ -203,6 +203,57 @@ impl RawCallbacks {
         if let Some(callback) = callback {
             writer.write(|ctx| callback(ctx, dispatch));
         }
+    }
+}
+
+/// The owner-local handler a [`Listener`] registers: it routes each event to
+/// the callback of its kind inside one write `writer` opens, then to the
+/// recognizers. A raw `Listener` never claims an event — ordinary pointer
+/// delivery has no propagation result (ADR-0027).
+struct ListenerHandler {
+    callbacks: Option<Rc<RawCallbacks>>,
+    recognizers: RecognizerSet,
+    recognizer_input: RecognizerInput,
+    writer: WriterSource,
+}
+
+impl PointerTargetHandler for ListenerHandler {
+    // The event KIND is the same in both spaces, so the routing match reads
+    // the local one and each callback receives the whole pair.
+    fn deliver(&self, dispatch: PointerDispatch<'_>) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a pointer callback's panic must not stop the recognizers"
+        )]
+        let raw = catch_unwind(AssertUnwindSafe(|| {
+            if let Some(callbacks) = &self.callbacks {
+                callbacks.deliver(&self.writer, dispatch);
+            }
+        }));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a recognizer's panic must not skip the pointer callbacks' result"
+        )]
+        let recognized = catch_unwind(AssertUnwindSafe(|| {
+            if self.recognizer_input.admits(dispatch.local) {
+                self.recognizers.dispatch(dispatch);
+            }
+        }));
+        match (raw, recognized) {
+            (Err(first), Err(later)) => {
+                flui_foundation::panic::discard_payload(later);
+                resume_unwind(first);
+            }
+            (Err(payload), Ok(())) | (Ok(()), Err(payload)) => resume_unwind(payload),
+            (Ok(()), Ok(())) => {}
+        }
+    }
+
+    /// Whether a recognizer here would contend for the press, by the gate
+    /// delivery applies ([`RecognizerSet::claims_press`]). A pointer-down
+    /// callback only observes the Down and claims nothing.
+    fn claims_press(&self, down: PointerDispatch<'_>) -> bool {
+        self.recognizer_input.admits(down.local) && self.recognizers.claims_press(down)
     }
 }
 
@@ -503,54 +554,21 @@ impl Listener {
     }
 
     /// Merge the per-kind callbacks into the single owner-local handler the
-    /// interaction lane invokes: route each event to the matching callback,
-    /// inside one write `writer` opens. A raw `Listener` never claims an
-    /// event — ordinary pointer delivery has no propagation result
-    /// (ADR-0027).
-    fn handler(&self, writer: WriterSource) -> impl Fn(PointerDispatch<'_>) + 'static {
-        // A listener that only feeds recognizers (every gesture detector and
-        // control) captures no callback slots.
-        let callbacks = RawCallbacks::of(self);
-        let recognizers = self.recognizers.clone();
-        let recognizer_input = self.recognizer_input;
-        // The event KIND is the same in both spaces, so the routing match
-        // reads the local one and each callback receives the whole pair.
-        move |dispatch: PointerDispatch<'_>| {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a pointer callback's panic must not stop the recognizers"
-            )]
-            let raw = catch_unwind(AssertUnwindSafe(|| {
-                if let Some(callbacks) = &callbacks {
-                    callbacks.deliver(&writer, dispatch);
-                }
-            }));
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a recognizer's panic must not skip the pointer callbacks' result"
-            )]
-            let recognized = catch_unwind(AssertUnwindSafe(|| {
-                if recognizer_input.admits(dispatch.local) {
-                    recognizers.dispatch(dispatch);
-                }
-            }));
-            match (raw, recognized) {
-                (Err(first), Err(later)) => {
-                    flui_foundation::panic::discard_payload(later);
-                    resume_unwind(first);
-                }
-                (Err(payload), Ok(())) | (Ok(()), Err(payload)) => resume_unwind(payload),
-                (Ok(()), Ok(())) => {}
-            }
+    /// interaction lane invokes ([`ListenerHandler`]).
+    fn handler(&self, writer: WriterSource) -> ListenerHandler {
+        ListenerHandler {
+            // A listener that only feeds recognizers (every gesture detector
+            // and control) captures no callback slots.
+            callbacks: RawCallbacks::of(self),
+            recognizers: self.recognizers.clone(),
+            recognizer_input: self.recognizer_input,
+            writer,
         }
     }
 
     /// The merged handler over the owner's writer source, or `None` when the
     /// context has none (a detached mount).
-    fn owner_handler(
-        &self,
-        ctx: &RenderObjectContext<'_>,
-    ) -> Option<impl Fn(PointerDispatch<'_>) + 'static> {
+    fn owner_handler(&self, ctx: &RenderObjectContext<'_>) -> Option<ListenerHandler> {
         let Some(writer) = ctx.writer_source() else {
             tracing::debug!(
                 "Listener mounted without an owner graph; pointer events will not be delivered"
@@ -560,8 +578,13 @@ impl Listener {
         Some(self.handler(writer))
     }
 
-    /// Whether this listener takes presses: a pointer-down handler or recognizers that
-    /// join the gesture arena. A hover-only listener does not.
+    /// Whether this listener takes presses inside a window-move area: a
+    /// pointer-down handler or recognizers that join the gesture arena; a
+    /// hover-only listener does not. The title bar's question, not a
+    /// platform gesture's: a press it observes must reach the application
+    /// rather than move the window, while a [`PressProbe`](flui_interaction::pointer::PressProbe)
+    /// asks only whether a recognizer would contend for the press
+    /// ([`ListenerHandler`]).
     fn claims_presses(&self) -> bool {
         self.on_pointer_down.is_some() || !self.recognizers.is_empty()
     }
@@ -573,10 +596,9 @@ impl Listener {
     /// listener then participates in hit-testing without pointer delivery.
     fn register(&self, ctx: &RenderObjectContext<'_>) -> Option<PointerTarget> {
         let handler = self.owner_handler(ctx)?;
-        match ctx.register_pointer(handler) {
+        match ctx.register_pointer_handler(handler) {
             Ok(target) => {
                 self.sync_scroll_contact_feed(ctx, target);
-                self.sync_press_admission(ctx, target);
                 Some(target)
             }
             Err(error) => {
@@ -623,28 +645,6 @@ impl Listener {
         };
         if let Err(error) = outcome {
             tracing::debug!(?error, "Listener scroll-axis declaration failed");
-        }
-    }
-
-    /// Mirror on the pointer target whether this listener would take a
-    /// press: a pointer-down callback takes every one; otherwise its
-    /// recognizers answer for the Down (an admission that accepts it, or a
-    /// press recognizer; a drag alone takes none,
-    /// [`RecognizerSet::takes_press`]). A listener that takes none withdraws.
-    fn sync_press_admission(&self, ctx: &RenderObjectContext<'_>, target: PointerTarget) {
-        let outcome = if self.on_pointer_down.is_some() {
-            ctx.declare_press_admission(target, |_dispatch| true)
-        } else if self.recognizers.is_empty() {
-            ctx.withdraw_press_admission(target)
-        } else {
-            let recognizers = self.recognizers.clone();
-            let input = self.recognizer_input;
-            ctx.declare_press_admission(target, move |dispatch| {
-                input.admits(dispatch.local) && recognizers.takes_press(dispatch)
-            })
-        };
-        if let Err(error) = outcome {
-            tracing::debug!(?error, "Listener press-admission declaration failed");
         }
     }
 
@@ -840,12 +840,11 @@ impl RenderView for Listener {
         match render_object.target() {
             Some(target) => {
                 if let Some(handler) = self.owner_handler(ctx)
-                    && let Err(error) = ctx.replace_pointer(target, handler)
+                    && let Err(error) = ctx.replace_pointer_handler(target, handler)
                 {
                     tracing::warn!(?error, "Listener handler replacement failed");
                 }
                 self.sync_scroll_contact_feed(ctx, target);
-                self.sync_press_admission(ctx, target);
             }
             None => render_object.set_target(self.register(ctx)),
         }

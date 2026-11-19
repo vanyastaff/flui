@@ -312,34 +312,35 @@ impl<'a> RenderObjectContext<'a> {
             .withdraw_scroll_contact_feed(target)?)
     }
 
-    /// Declare whether `target` would take the press a Down starts, for a
-    /// [`PressProbe`](flui_interaction::pointer::PressProbe) to ask. See
-    /// [`InteractionDispatchHandle::declare_press_admission`](flui_interaction::pointer::InteractionDispatchHandle::declare_press_admission).
+    /// Register a pointer handler that also answers whether its target would
+    /// contend for a press a [`PressProbe`](flui_interaction::pointer::PressProbe)
+    /// asks about (a listener's recognizers, a text link's span); the returned
+    /// target is data-only, as [`Self::register_pointer`]'s.
     ///
     /// # Errors
     ///
-    /// Returns the lane's typed dispatch error for wrong/detached owner state
-    /// or for a target that no longer belongs to the active owner lane.
-    pub fn declare_press_admission(
+    /// As [`Self::register_pointer`].
+    pub fn register_pointer_handler(
+        &self,
+        handler: impl flui_interaction::pointer::PointerTargetHandler,
+    ) -> Result<flui_interaction::pointer::PointerTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_pointer_handler(handler)?)
+    }
+
+    /// Replace a target's handler with one that also answers a press probe,
+    /// without changing its data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::replace_pointer`].
+    pub fn replace_pointer_handler(
         &self,
         target: flui_interaction::pointer::PointerTarget,
-        takes: impl Fn(flui_interaction::pointer::PointerDispatch<'_>) -> bool + 'static,
+        handler: impl flui_interaction::pointer::PointerTargetHandler,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
-            .declare_press_admission(target, takes)?)
-    }
-
-    /// Take back [`declare_press_admission`](Self::declare_press_admission).
-    ///
-    /// # Errors
-    ///
-    /// As [`declare_press_admission`](Self::declare_press_admission).
-    pub fn withdraw_press_admission(
-        &self,
-        target: flui_interaction::pointer::PointerTarget,
-    ) -> Result<(), RenderObjectContextError> {
-        Ok(self.dispatch_handle()?.withdraw_press_admission(target)?)
+            .replace_pointer_handler(target, handler)?)
     }
 
     /// The probe that asks the pointer targets of this render object's UI

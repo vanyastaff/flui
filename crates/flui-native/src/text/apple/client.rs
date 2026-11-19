@@ -971,6 +971,7 @@ impl TextClient {
         let replaced = self.offered.replace(offered);
         contain_owner_callback(|| drop(replaced));
         self.call_focused(|store| store.edit_command_enabled(command))
+            .unwrap_or(false)
     }
 
     /// `cut:`, `copy:`, `paste:`, `select:` and `selectAll:` from the edit
@@ -994,23 +995,21 @@ impl TextClient {
             return false;
         }
         self.call_focused(|store| store.perform_edit_command(command))
+            .unwrap_or(false)
     }
 
-    /// Run `call` on the focused store as a call into it, with no borrow
-    /// held; `false` when no field has focus or the call panicked, whose
-    /// failure is resumed once the requests it queued have run.
+    /// Run `call` on the focused store as a call into it, outside any lock
+    /// and with no borrow held; `None` when no field has focus or the call
+    /// panicked, whose failure is resumed once the requests it queued have
+    /// run.
     #[cfg(any(target_os = "ios", test))]
-    fn call_focused(&self, call: impl FnOnce(&dyn TextStore) -> bool) -> bool {
-        let Some(store) = self.focused() else {
-            return false;
-        };
+    fn call_focused<R>(&self, call: impl FnOnce(&dyn TextStore) -> R) -> Option<R> {
+        let store = self.focused()?;
         let mut failure = FirstPanic::new();
-        let answer = failure
-            .contain(|| {
-                let _entered = self.queue.enter();
-                call(&*store)
-            })
-            .unwrap_or(false);
+        let answer = failure.contain(|| {
+            let _entered = self.queue.enter();
+            call(&*store)
+        });
         self.drain_after(&mut failure);
         failure.contain(|| drop(store));
         failure.resume();
@@ -1028,12 +1027,15 @@ impl TextClient {
     }
 
     /// What a press at `point`, in the window's logical coordinates, lands
-    /// on by the window's own hit test ([`TextStoreRead::press_target_at`]);
-    /// `None` without a field or a layout.
+    /// on ([`TextStore::press_target_at`]), asked of the focused store as a
+    /// call into it, outside any lock: answering runs code the store does not
+    /// own (hit tests, recognizers' admission predicates). `None` without a
+    /// field, when the store refuses (no layout, its window unavailable) or
+    /// when the call panics: the platform begins no gesture then.
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn press_target_at(&self, point: Point<f64>) -> Option<PressTarget> {
-        self.read(move |session| session.press_target_at(point).ok())
-            .flatten()
+        self.call_focused(|store| store.press_target_at(point))
+            .and_then(Result::ok)
     }
 
     /// The scalar under a point in the focused field.

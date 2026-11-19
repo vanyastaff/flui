@@ -123,7 +123,7 @@ impl<R: GestureRecognizer + 'static> LiveRecognizer for R {
 /// [`GestureDetector::admission`]: crate::GestureDetector::admission
 /// [`AnchoredDrag::admission`]: crate::AnchoredDrag::admission
 #[derive(Clone)]
-pub struct ContactAdmission(Rc<dyn Fn(PointerDispatch<'_>) -> bool>);
+pub struct ContactAdmission(flui_interaction::gesture::DownAdmission);
 
 impl ContactAdmission {
     /// Admit the contacts whose Down `admit` accepts.

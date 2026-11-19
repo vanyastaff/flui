@@ -410,6 +410,12 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
         fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for ContactObserver {
+        fn takes_down(
+            &self,
+            _: PointerDispatch<'_>,
+        ) -> Option<flui_interaction::gesture::DownTake> {
+            Some(flui_interaction::gesture::DownTake::Press)
+        }
         fn add_pointer(&self, _: PointerDispatch<'_>) {
             self.0.borrow_mut().push("down");
         }
@@ -465,6 +471,12 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
         fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for Observer {
+        fn takes_down(
+            &self,
+            _: PointerDispatch<'_>,
+        ) -> Option<flui_interaction::gesture::DownTake> {
+            Some(flui_interaction::gesture::DownTake::Press)
+        }
         fn add_pointer(&self, _: PointerDispatch<'_>) {
             self.0.set(self.0.get() + 1);
         }
@@ -529,6 +541,12 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
         }
     }
     impl GestureRecognizer for ExternalRecognizer {
+        fn takes_down(
+            &self,
+            _: PointerDispatch<'_>,
+        ) -> Option<flui_interaction::gesture::DownTake> {
+            Some(flui_interaction::gesture::DownTake::Press)
+        }
         fn add_pointer(&self, down: PointerDispatch<'_>) {
             self.contact
                 .begin(down, &GestureSettings::default())

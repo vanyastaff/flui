@@ -54,6 +54,13 @@ impl TextStore for ReadOnlyField {
     fn set_commit_gate(&self, _: CommitGate) {}
 
     fn set_observer(&self, _: Option<Rc<dyn TextStoreObserver>>) {}
+
+    fn press_target_at(
+        &self,
+        _: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        Err(TextStoreError::NoLayout)
+    }
 }
 
 fn run(grant: LockGrant) {
@@ -94,12 +101,6 @@ impl TextStoreRead for ReadOnlySession {
         Err(TextStoreError::NoLayout)
     }
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
-        Err(TextStoreError::NoLayout)
-    }
-    fn press_target_at(
-        &self,
-        _: Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
         Err(TextStoreError::NoLayout)
     }
 }

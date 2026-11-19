@@ -412,7 +412,35 @@ impl<'a> PointerDispatch<'a> {
     }
 }
 
-type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
+/// A pointer target's owner-local handler: what dispatch delivers to the
+/// target, and what a [`PressProbe`] asks of it. A closure registered with
+/// [`InteractionDispatchHandle::register_pointer`] is one that only delivers.
+pub trait PointerTargetHandler: 'static {
+    /// Deliver `dispatch` to the target.
+    fn deliver(&self, dispatch: PointerDispatch<'_>);
+
+    /// Whether the target would contend for the press whose Down `down`
+    /// carries, asked without delivering anything: a listener answers what
+    /// its recognizers would do with the Down
+    /// ([`RecognizerSet::claims_press`](crate::gesture::RecognizerSet::claims_press)).
+    /// `false` by default: a raw handler observes a Down without claiming it;
+    /// one that does claim (a text link's tap over its span) says so.
+    fn claims_press(&self, down: PointerDispatch<'_>) -> bool {
+        let _ = down;
+        false
+    }
+}
+
+/// A closure registered as a pointer handler: it delivers and claims no press.
+struct ObservingHandler<F>(F);
+
+impl<F: Fn(PointerDispatch<'_>) + 'static> PointerTargetHandler for ObservingHandler<F> {
+    fn deliver(&self, dispatch: PointerDispatch<'_>) {
+        (self.0)(dispatch);
+    }
+}
+
+type PointerHandler = Rc<dyn PointerTargetHandler>;
 
 /// A smart zoom in the receiving target's space and the root's space.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -823,7 +851,7 @@ impl ResolvedHitRoute {
                 },
             };
             let delivered = caught(|| {
-                handler(dispatch);
+                handler.deliver(dispatch);
             });
             keep_first(&mut first_panic, delivered, "pointer target");
 
@@ -932,10 +960,6 @@ impl HitTestSnapshot {
 /// anywhere to go (ADR-0251).
 type ScrollAxisDeclaration = (flui_foundation::geometry::Axis, Rc<dyn Fn() -> bool>);
 
-/// Whether a pointer target would take the press a Down starts
-/// ([`InteractionDispatchHandle::declare_press_admission`]).
-type PressAdmission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
-
 struct LocalLaneInner {
     owner: std::sync::Arc<DispatchOwner>,
     target_owners: RefCell<FxHashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
@@ -953,9 +977,6 @@ struct LocalLaneInner {
     /// Pointer targets that declared they feed a drag-family recognizer
     /// (ADR-0251 §2).
     scroll_contact_feeds: RefCell<FxHashSet<TargetId>>,
-    /// What each pointer target says of a Down it is asked about: whether it
-    /// would take that press ([`PressProbe`]).
-    press_admissions: RefCell<FxHashMap<TargetId, PressAdmission>>,
     /// The axis each scroll target scrolls along, for targets that take part in
     /// a scroll-fed contact as a competitor (ADR-0251 §2).
     scroll_target_axes: RefCell<FxHashMap<TargetId, ScrollAxisDeclaration>>,
@@ -1020,7 +1041,6 @@ impl InteractionLane {
             shader_mask_targets: RefCell::new(FxHashMap::default()),
             payload_targets: RefCell::new(FxHashMap::default()),
             scroll_contact_feeds: RefCell::new(FxHashSet::default()),
-            press_admissions: RefCell::new(FxHashMap::default()),
             scroll_target_axes: RefCell::new(FxHashMap::default()),
             routes: RefCell::new(FxHashMap::default()),
         });
@@ -1229,14 +1249,15 @@ pub struct InteractionDispatchHandle {
 /// Asks one UI runtime's pointer targets whether they would take a press,
 /// without delivering anything: what a platform asks before its own gesture
 /// takes a touch over a widget (iOS's text interaction near a selection
-/// handle). Each target answers what it declared
-/// ([`InteractionDispatchHandle::declare_press_admission`]); one that declared
-/// nothing takes no press.
+/// handle). Each target's own handler answers
+/// ([`PointerTargetHandler::claims_press`]): a listener asks its recognizers
+/// the question their `add_pointer` asks, so the probe keeps no copy of any
+/// target's answer.
 ///
 /// A probe holds only the lane's identity. It answers on the lane's owner
 /// thread while the lane lives, inside or outside the UI runtime's scope, since
-/// a platform's question arrives between owner turns; elsewhere every target
-/// answers `false`.
+/// a platform's question arrives between owner turns; anywhere else it refuses
+/// with a typed error, which a caller treats as "do not begin".
 #[derive(Clone, Copy)]
 pub struct PressProbe {
     ticket: LaneTicket,
@@ -1249,60 +1270,79 @@ impl std::fmt::Debug for PressProbe {
 }
 
 impl PressProbe {
-    /// Whether `target` would take the press whose Down `dispatch` carries,
-    /// in `target`'s space (`dispatch.local`) and the root's
-    /// (`dispatch.global`). `false` for a target this probe's lane did not
-    /// register, one since unregistered, or one that declared nothing. The
-    /// target's predicate is user code: it runs with no lane borrow held, and
-    /// a panic in it unwinds out of this call.
-    #[must_use]
-    pub fn takes_press(&self, target: PointerTarget, dispatch: PointerDispatch<'_>) -> bool {
-        if target.lane_id != self.ticket.lane_id || thread::current().id() != self.ticket.owner {
-            return false;
+    /// Whether `target` would contend for the press whose Down `dispatch`
+    /// carries, in `target`'s space (`dispatch.local`) and the root's
+    /// (`dispatch.global`): what its handler answers
+    /// ([`PointerTargetHandler::claims_press`]); `false` for a target another
+    /// lane registered, one since unregistered, or one retired. The handler's
+    /// answer may run user code (recognizers' admission predicates): it runs
+    /// with no lane borrow held, and a panic in it unwinds out of this call.
+    ///
+    /// # Errors
+    ///
+    /// [`WrongThread`](InteractionDispatchError::WrongThread) off the lane's
+    /// owner thread, and [`OwnerGone`](InteractionDispatchError::OwnerGone)
+    /// once the lane is gone: no answer, which a caller treats as "do not
+    /// begin", never as "nothing takes it".
+    pub fn claims_press(
+        &self,
+        target: PointerTarget,
+        dispatch: PointerDispatch<'_>,
+    ) -> Result<bool, InteractionDispatchError> {
+        if thread::current().id() != self.ticket.owner {
+            return Err(InteractionDispatchError::WrongThread);
         }
-        let Some(lane) = LOCAL_LANES.with(|registry| {
-            registry
-                .borrow()
-                .get(&self.ticket.lane_id)
-                .and_then(Weak::upgrade)
-        }) else {
-            return false;
-        };
-        if !lane.targets.borrow().contains_key(&target.target_id) {
-            return false;
+        let lane = LOCAL_LANES
+            .with(|registry| {
+                registry
+                    .borrow()
+                    .get(&self.ticket.lane_id)
+                    .and_then(Weak::upgrade)
+            })
+            .ok_or(InteractionDispatchError::OwnerGone)?;
+        if target.lane_id != self.ticket.lane_id {
+            return Ok(false);
         }
-        let takes = lane
-            .press_admissions
+        let handler = lane
+            .targets
             .borrow()
             .get(&target.target_id)
-            .cloned();
+            .filter(|cell| !cell.retired.get())
+            .map(|cell| cell.snapshot());
         drop(lane);
-        takes.is_some_and(|takes| takes(dispatch))
+        Ok(handler.is_some_and(|handler| handler.claims_press(dispatch)))
     }
 
-    /// Whether the hit `entry` would take a primary press of a `kind` contact
-    /// going down at `global`, in the root's space: [`Self::takes_press`] for
-    /// that Down, localised into the entry's space as dispatch localises it.
-    /// `false` for an entry without a pointer target, and for a point that is
-    /// not finite or does not meet the entry's plane.
-    #[must_use]
-    pub fn takes_press_on(
+    /// Whether the hit `entry` would contend for a primary press of a `kind`
+    /// contact going down at `global`, in the root's space:
+    /// [`Self::claims_press`] for that Down, localised into the entry's space
+    /// as dispatch localises it. `false` for an entry without a pointer
+    /// target, and for a point that is not finite or does not meet the
+    /// entry's plane.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::claims_press`].
+    pub fn claims_press_on(
         &self,
         entry: &HitTestEntry,
         global: Offset<f64>,
         kind: crate::events::PointerKind,
-    ) -> bool {
+    ) -> Result<bool, InteractionDispatchError> {
         use crate::events::{
             PointerButton, PointerButtons, PointerId, PointerPosition, PointerPress, PointerRole,
             PointerSample, PointerSource,
         };
+        if thread::current().id() != self.ticket.owner {
+            return Err(InteractionDispatchError::WrongThread);
+        }
         let Some(target) = entry.pointer_target else {
-            return false;
+            return Ok(false);
         };
         let Ok(position) =
             PointerPosition::try_new(flui_foundation::geometry::Point::new(global.dx, global.dy))
         else {
-            return false;
+            return Ok(false);
         };
         let down = PointerEvent::Down(PointerPress::new(
             PointerSource::new(PointerId::new(std::num::NonZeroU64::MIN), kind)
@@ -1314,11 +1354,11 @@ impl PressProbe {
         let local = match &entry.transform {
             Some(transform) => match transform_pointer_event(&down, transform) {
                 Some(local) => local,
-                None => return false,
+                None => return Ok(false),
             },
             None => down.clone(),
         };
-        self.takes_press(target, PointerDispatch::new(&local, &down))
+        self.claims_press(target, PointerDispatch::new(&local, &down))
     }
 }
 
@@ -1688,10 +1728,21 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
-    /// Register an ordinary pointer handler in the active owner lane.
+    /// Register an ordinary pointer handler in the active owner lane: it
+    /// observes what is delivered and claims no press a [`PressProbe`] asks
+    /// about.
     pub fn register_pointer(
         &self,
         handler: impl Fn(PointerDispatch<'_>) + 'static,
+    ) -> Result<PointerTarget, InteractionDispatchError> {
+        self.register_pointer_handler(ObservingHandler(handler))
+    }
+
+    /// Register a pointer handler that also answers whether its target
+    /// would contend for a press ([`PointerTargetHandler::claims_press`]).
+    pub fn register_pointer_handler(
+        &self,
+        handler: impl PointerTargetHandler,
     ) -> Result<PointerTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1711,6 +1762,16 @@ impl InteractionDispatchHandle {
         &self,
         target: PointerTarget,
         handler: impl Fn(PointerDispatch<'_>) + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        self.replace_pointer_handler(target, ObservingHandler(handler))
+    }
+
+    /// Replace a target's current handler with one that also answers a
+    /// [`PressProbe`], without changing its identity.
+    pub fn replace_pointer_handler(
+        &self,
+        target: PointerTarget,
+        handler: impl PointerTargetHandler,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1757,53 +1818,6 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
-    /// Declare whether `target` would take the press a Down starts: `takes`
-    /// answers for the Down a [`PressProbe`] asks about, in the target's own
-    /// space and the root's, without anything being delivered. A target that
-    /// declares nothing takes no press it is asked about. A listener declares
-    /// what its recognizers' admissions and press recognizers would do with
-    /// the Down ([`RecognizerSet::takes_press`](crate::gesture::RecognizerSet::takes_press)).
-    ///
-    /// Replaces an earlier declaration; the replaced predicate is dropped
-    /// with no borrow held.
-    ///
-    /// # Errors
-    ///
-    /// The typed dispatch error for wrong or detached owner state, or for a
-    /// target that no longer belongs to the active owner lane.
-    pub fn declare_press_admission(
-        &self,
-        target: PointerTarget,
-        takes: impl Fn(PointerDispatch<'_>) -> bool + 'static,
-    ) -> Result<(), InteractionDispatchError> {
-        let takes: PressAdmission = Rc::new(takes);
-        let lane = self.active_lane()?;
-        self.validate_target(&lane, target.lane_id, target.target_id)?;
-        let replaced = lane
-            .press_admissions
-            .borrow_mut()
-            .insert(target.target_id, takes);
-        drop(replaced);
-        Ok(())
-    }
-
-    /// Take back a [`declare_press_admission`](Self::declare_press_admission),
-    /// for a target that no longer takes presses.
-    ///
-    /// # Errors
-    ///
-    /// As [`declare_press_admission`](Self::declare_press_admission).
-    pub fn withdraw_press_admission(
-        &self,
-        target: PointerTarget,
-    ) -> Result<(), InteractionDispatchError> {
-        let lane = self.active_lane()?;
-        self.validate_target(&lane, target.lane_id, target.target_id)?;
-        let withdrawn = lane.press_admissions.borrow_mut().remove(&target.target_id);
-        drop(withdrawn);
-        Ok(())
-    }
-
     /// The probe that asks this lane's pointer targets whether they would
     /// take a press.
     #[must_use]
@@ -1842,9 +1856,7 @@ impl InteractionDispatchHandle {
         lane.scroll_contact_feeds
             .borrow_mut()
             .remove(&target.target_id);
-        let admission = lane.press_admissions.borrow_mut().remove(&target.target_id);
         drop(removed);
-        drop(admission);
         Ok(())
     }
 
@@ -2865,7 +2877,7 @@ impl InteractionDispatchHandle {
                         None => PointerDispatch::at_root(event),
                     };
                     let delivered = caught(|| {
-                        handler(dispatch);
+                        handler.deliver(dispatch);
                     });
                     keep_first(
                         &mut first_panic,
