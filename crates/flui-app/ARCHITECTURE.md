@@ -380,7 +380,7 @@ the dispatch layer moves there too.
   healthy and draws in full; its texture images come from the slot it
   replaces. A build that fails is asked again at the next animation frame and
   never given up (`docs/gaps.md`). wasm-only: CI's `wasm-check` job
-  compile it; nothing on this host runs it.
+  compiles it; nothing on this host runs it.
 - **A window reaches a UI runtime with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
   window in a `PresentationWindow`.

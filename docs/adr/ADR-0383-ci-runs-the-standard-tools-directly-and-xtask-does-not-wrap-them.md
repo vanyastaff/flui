@@ -108,10 +108,13 @@ step.
   and the reader of the change holds it.
 - Bad, because the test that pinned the `nested-cargo` group's packages to the job's `-p` list is
   gone with the code it read.
-- Bad, because the import check's own tests go with it (a malformed module refused, compact
-  import groups read, the committed allowlist refusing `env`): wasm-tools, which reads the module
+- Bad, because §5's three rules lose their tests with the code they read, and the reader of a
+  change to the `wasm-check` job holds them: the import check (a malformed module refused, compact
+  import groups read, the committed allowlist refusing `env`; wasm-tools, which reads the module
   with the same `wasmparser` grammar, is trusted to parse it, and a pull request that adds `env`
-  to the allowlist is the reader's to refuse.
+  to the allowlist is the reader's to refuse), the discovery (a comment, a normal dependency or a
+  dev-dependency outside a wasm32 target table does not opt a package in), and the count of
+  passed assertions (which lines of the runner's output count).
 
 ### Confirmation
 

@@ -1470,7 +1470,8 @@ jobs:
           target=wasm32-unknown-unknown
           cargo build --locked --target "$target" -p flui-web-demo -p flui-painting-demo
           target_dir=$(cargo metadata --locked --no-deps --format-version 1 | jq -r .target_directory)
-          allowed=$(sort -u .github/wasm-import-allowlist.txt)
+          # a blank line would admit a module with an empty name
+          allowed=$(grep -v '^[[:space:]]*$' .github/wasm-import-allowlist.txt | sort -u)
           status=0
           for artifact in flui_web_demo flui_painting_demo; do
             module="$target_dir/$target/debug/$artifact.wasm"
@@ -1545,10 +1546,14 @@ jobs:
             # stdin is the crate list: the runner must not read it
             if ! cargo test -p "$package" --locked --target wasm32-unknown-unknown "${targets[@]}" \
                 < /dev/null 2>&1 | tee "$log"; then
+              echo "::endgroup::"
               echo "::error::$package failed on wasm32"
               status=1
+              continue
             fi
             echo "::endgroup::"
+            # counted only after a run that passed: a failed one prints no
+            # `ok` line, and its cause is the error above
             passed=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' "$log" \
               | awk '{ sum += $1 } END { print sum + 0 }')
             echo "$package: $passed wasm32 assertions passed"

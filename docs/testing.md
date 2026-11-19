@@ -92,9 +92,9 @@ API, while a `pub(crate)` seam is reachable *only* from a lib test. Two things a
 Three versions must agree or the runner refuses to start: the locked `wasm-bindgen`,
 `wasm-bindgen-test` (pinned `=0.3.77` in flui-foundation — the unpinned `"0.3"` resolves to 0.3.78
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
-`wasm-bindgen-cli`, whose version the step reads from `cargo metadata` (the one `wasm-bindgen` the
-lock resolves) and `cargo xtask doctor full` compares with the installed one. Locally, the step's
-loop is one line per crate:
+`wasm-bindgen-cli`, whose version is the one `wasm-bindgen` the lock resolves: the step reads it
+from `cargo metadata`, `cargo xtask doctor full` compares the installed one with it, and both fail
+on a lock with two. Locally, the step's loop is one line per crate:
 `cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32`.
 
 Discovery rather than a crate list is deliberate: a list is how the next crate to add wasm tests

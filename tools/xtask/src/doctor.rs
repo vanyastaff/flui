@@ -25,20 +25,79 @@ const LYCHEE_VERSION: &str = "0.24.2";
 /// which the install hint names.
 const WASM_TOOLS_VERSION: &str = "1.263.0";
 
-/// The version of the first `[[package]]` named `name` in a Cargo.lock: the
-/// wasm-bindgen CLI must match the locked `wasm-bindgen` exactly, or
-/// `wasm-bindgen-test-runner` refuses to start.
-fn locked_package_version(lock: &str, name: &str) -> anyhow::Result<Option<String>> {
+/// Every version of the `[[package]]`s named `name` in a Cargo.lock, sorted
+/// and without repeats. The wasm-bindgen CLI must match the locked
+/// `wasm-bindgen` exactly, or `wasm-bindgen-test-runner` refuses to start, so
+/// a lock with two of them has no version to install: CI's `wasm-check` job
+/// fails on it, and doctor's row does too.
+fn locked_package_versions(lock: &str, name: &str) -> anyhow::Result<Vec<String>> {
     let parsed: toml::Table = lock.parse().context("parsing Cargo.lock")?;
     let packages = parsed
         .get("package")
         .and_then(toml::Value::as_array)
         .context("Cargo.lock has no [[package]] array")?;
-    Ok(packages
+    let mut versions: Vec<String> = packages
         .iter()
-        .find(|pkg| pkg.get("name").and_then(toml::Value::as_str) == Some(name))
-        .and_then(|pkg| pkg.get("version")?.as_str())
-        .map(str::to_owned))
+        .filter(|pkg| pkg.get("name").and_then(toml::Value::as_str) == Some(name))
+        .filter_map(|pkg| pkg.get("version")?.as_str())
+        .map(str::to_owned)
+        .collect();
+    versions.sort();
+    versions.dedup();
+    Ok(versions)
+}
+
+/// The `wasm-bindgen` versions this repository's Cargo.lock pins; none when
+/// it cannot be read.
+fn locked_wasm_bindgen() -> Vec<String> {
+    read("Cargo.lock")
+        .and_then(|lock| locked_package_versions(&lock, "wasm-bindgen"))
+        .unwrap_or_default()
+}
+
+/// A doctor row's verdict: whether the tool is usable, what the row says, and
+/// how to install it when it is not.
+#[derive(Debug, PartialEq, Eq)]
+struct Verdict {
+    ok: bool,
+    detail: String,
+    install: String,
+}
+
+/// The wasm-bindgen CLI's row, from the versions Cargo.lock pins and the one
+/// installed: usable only when the lock pins exactly one and it is installed.
+fn wasm_bindgen_row(locked: &[String], have: Option<&str>) -> Verdict {
+    match (locked, have) {
+        ([want], Some(have)) if want == have => Verdict {
+            ok: true,
+            detail: format!("{have} (= Cargo.lock)"),
+            install: String::new(),
+        },
+        ([want], have) => Verdict {
+            ok: false,
+            detail: format!(
+                "have {}, Cargo.lock pins {want} (the runner refuses a mismatch)",
+                have.unwrap_or("none")
+            ),
+            install: format!("cargo install --locked wasm-bindgen-cli --version {want}"),
+        },
+        ([], _) => Verdict {
+            ok: false,
+            detail: "Cargo.lock has no wasm-bindgen package to pin the CLI to".to_owned(),
+            install: "cargo install --locked wasm-bindgen-cli --version <Cargo.lock's wasm-bindgen>"
+                .to_owned(),
+        },
+        (several, _) => Verdict {
+            ok: false,
+            detail: format!(
+                "Cargo.lock pins {} wasm-bindgen versions ({}); the runner matches one",
+                several.len(),
+                several.join(", ")
+            ),
+            install: "leave one wasm-bindgen in Cargo.lock (`cargo tree -i wasm-bindgen` shows who needs each)"
+                .to_owned(),
+        },
+    }
 }
 
 /// Which set of tools is required.
@@ -440,40 +499,16 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
         &format!("cargo install --locked wasm-tools --version {WASM_TOOLS_VERSION}"),
         &["--version"],
     );
-    let want = read("Cargo.lock")
-        .and_then(|lock| locked_package_version(&lock, "wasm-bindgen"))
-        .ok()
-        .flatten();
     let have = succeeded_first_line("wasm-bindgen", &["--version"])
         .and_then(|line| line.split(' ').nth(1).map(str::to_owned));
-    match (&want, &have) {
-        (Some(want), Some(have)) if want == have => {
-            doctor.row(
-                Scope::Full,
-                "wasm-bindgen-cli",
-                true,
-                &format!("{have} (= Cargo.lock)"),
-                "",
-            );
-        }
-        (Some(want), have) => doctor.row(
-            Scope::Full,
-            "wasm-bindgen-cli",
-            false,
-            &format!(
-                "have {}, Cargo.lock pins {want} (the runner refuses a mismatch)",
-                have.as_deref().unwrap_or("none")
-            ),
-            &format!("cargo install --locked wasm-bindgen-cli --version {want}"),
-        ),
-        (None, _) => doctor.row(
-            Scope::Full,
-            "wasm-bindgen-cli",
-            false,
-            "Cargo.lock has no wasm-bindgen package to pin the CLI to",
-            "cargo install --locked wasm-bindgen-cli --version <Cargo.lock's wasm-bindgen>",
-        ),
-    }
+    let row = wasm_bindgen_row(&locked_wasm_bindgen(), have.as_deref());
+    doctor.row(
+        Scope::Full,
+        "wasm-bindgen-cli",
+        row.ok,
+        &row.detail,
+        &row.install,
+    );
     let actionlint = doctor.brew_or(
         "actionlint",
         "go install github.com/rhysd/actionlint/cmd/actionlint@latest",
@@ -599,18 +634,76 @@ mod tests {
         }
     }
 
-    fn the_locked_version_is_the_named_packages() {
-        let lock = "version = 4\n\n[[package]]\nname = \"wasm-bindgen-macro\"\nversion = \"9.9.9\"\n\n\
-                    [[package]]\nname = \"wasm-bindgen\"\nversion = \"0.2.1\"\n";
-        assert_eq!(
-            locked_package_version(lock, "wasm-bindgen").expect("parses"),
-            Some("0.2.1".to_owned())
+    /// Every locked version of the named package, and only of that one: a
+    /// lock with two `wasm-bindgen`s yields both, which doctor reports as a
+    /// failed row as CI's `wasm-check` fails the job.
+    fn the_locked_versions_are_the_named_packages() {
+        let package = |name: &str, version: &str| {
+            format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n\n")
+        };
+        let one = format!(
+            "version = 4\n\n{}{}",
+            package("wasm-bindgen-macro", "9.9.9"),
+            package("wasm-bindgen", "0.2.1")
         );
         assert_eq!(
-            locked_package_version(lock, "absent").expect("parses"),
-            None
+            locked_package_versions(&one, "wasm-bindgen").expect("parses"),
+            ["0.2.1"]
         );
-        assert!(locked_package_version("[[package]\n", "wasm-bindgen").is_err());
+        assert_eq!(
+            locked_package_versions(&one, "absent").expect("parses"),
+            Vec::<String>::new()
+        );
+        let two = format!(
+            "{one}{}{}",
+            package("wasm-bindgen", "0.1.9"),
+            package("wasm-bindgen", "0.2.1")
+        );
+        assert_eq!(
+            locked_package_versions(&two, "wasm-bindgen").expect("parses"),
+            ["0.1.9", "0.2.1"]
+        );
+        assert!(locked_package_versions("[[package]\n", "wasm-bindgen").is_err());
+    }
+
+    /// This repository's lock pins one wasm-bindgen, the version CI's
+    /// `wasm-check` installs the CLI at.
+    fn this_lock_pins_one_wasm_bindgen() {
+        let locked = locked_wasm_bindgen();
+        assert_eq!(locked.len(), 1, "{locked:?}");
+    }
+
+    /// The row is usable only for one locked version equal to the installed
+    /// one, and each other case names what to do.
+    fn the_wasm_bindgen_row_needs_one_locked_version_installed() {
+        let one = ["0.2.1".to_owned()];
+        assert_eq!(
+            wasm_bindgen_row(&one, Some("0.2.1")),
+            Verdict {
+                ok: true,
+                detail: "0.2.1 (= Cargo.lock)".to_owned(),
+                install: String::new(),
+            }
+        );
+        for have in [Some("0.2.0"), None] {
+            let row = wasm_bindgen_row(&one, have);
+            assert!(!row.ok, "{have:?}");
+            assert_eq!(
+                row.install,
+                "cargo install --locked wasm-bindgen-cli --version 0.2.1"
+            );
+            assert!(row.detail.contains(have.unwrap_or("none")), "{row:?}");
+        }
+        let none = wasm_bindgen_row(&[], Some("0.2.1"));
+        assert!(!none.ok);
+        assert!(none.detail.contains("no wasm-bindgen"), "{none:?}");
+        let two = wasm_bindgen_row(&["0.1.9".to_owned(), "0.2.1".to_owned()], Some("0.2.1"));
+        assert!(!two.ok, "a lock with two versions has none to install");
+        assert!(
+            two.detail
+                .contains("pins 2 wasm-bindgen versions (0.1.9, 0.2.1)"),
+            "{two:?}"
+        );
     }
 
     fn only_apple_hosts_require_the_ios_target() {
@@ -639,8 +732,16 @@ mod tests {
                     each_pinned_hint_names_the_version_ci_installs as fn(),
                 ),
                 (
-                    "the_locked_version_is_the_named_packages",
-                    the_locked_version_is_the_named_packages as fn(),
+                    "the_locked_versions_are_the_named_packages",
+                    the_locked_versions_are_the_named_packages as fn(),
+                ),
+                (
+                    "this_lock_pins_one_wasm_bindgen",
+                    this_lock_pins_one_wasm_bindgen as fn(),
+                ),
+                (
+                    "the_wasm_bindgen_row_needs_one_locked_version_installed",
+                    the_wasm_bindgen_row_needs_one_locked_version_installed as fn(),
                 ),
                 (
                     "only_apple_hosts_require_the_ios_target",
