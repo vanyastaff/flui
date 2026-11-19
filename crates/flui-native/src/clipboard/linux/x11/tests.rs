@@ -69,14 +69,14 @@ fn clipboard_on(display: &str) -> X11Clipboard {
 /// `None` without Xvfb installed. One at a time in a process: two started
 /// at once may try the same number, and the one that loses it can still be
 /// starting as the other answers its probe.
-struct PrivateServer {
+pub(super) struct PrivateServer {
     server: std::process::Child,
-    display: String,
+    pub(super) display: String,
     _one_at_a_time: std::sync::MutexGuard<'static, ()>,
 }
 
 impl PrivateServer {
-    fn start() -> Option<Self> {
+    pub(super) fn start() -> Option<Self> {
         static STARTED: Mutex<()> = Mutex::new(());
         let one_at_a_time = STARTED
             .lock()
@@ -1403,9 +1403,135 @@ fn the_thread_ends_in_time_while_another_client_holds_the_server() {
     }
 }
 
+/// A write breaks the clipboard's connection only once it sends nothing for
+/// [`REPLY_TIMEOUT`](super::connection::REPLY_TIMEOUT): one larger than a
+/// socket's buffer, after a quiet spell longer than that since the step's
+/// first request, goes out whole, while one to a server another client holds
+/// breaks the connection by then. (That events arriving meanwhile do not
+/// keep it going is the stream's own test.) The server is the case's own.
+#[test]
+fn a_write_breaks_the_connection_only_when_it_sends_nothing() {
+    use super::connection::{REPLY_TIMEOUT, Replied, connect, reply_within};
+    use x11rb::wrapper::ConnectionExt as _;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Server {
+        /// Nobody holds it; the write comes past a reply's time after the
+        /// step's first request.
+        Quiet,
+        /// Another client holds it as the write starts.
+        Held,
+    }
+
+    let Some(private) = PrivateServer::start() else {
+        return;
+    };
+    let display = Some(private.display.as_str());
+    let margin = Duration::from_secs(1);
+    // Whole, but past what a socket's buffer holds.
+    let large = vec![b'x'; 250_000];
+    for server in [Server::Quiet, Server::Held] {
+        let (connection, screen) = connect(display).expect("the X server answers");
+        let root = connection.setup().roots[screen].root;
+        let window = connection.generate_id().expect("an id");
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                xproto::WindowClass::INPUT_ONLY,
+                x11rb::COPY_FROM_PARENT,
+                &xproto::CreateWindowAux::new(),
+            )
+            .expect("the request is sent");
+        connection.stream().bound_waits();
+        connection.stream().begin_step();
+        // The step's first request, a small one.
+        let sync = connection.get_input_focus().expect("the request is sent");
+        assert!(
+            matches!(
+                reply_within(&connection, sync).expect("the connection holds"),
+                Replied::Reply(_)
+            ),
+            "{server:?}: the server answers before the write"
+        );
+        let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+        let (done, waiting) = std::sync::mpsc::channel::<()>();
+        let holding = if server == Server::Quiet {
+            std::thread::sleep(REPLY_TIMEOUT + Duration::from_millis(100));
+            None
+        } else {
+            holder.grab_server().expect("the request is sent");
+            holder
+                .get_input_focus()
+                .expect("the request is sent")
+                .reply()
+                .expect("the server answers");
+            // Holds the server until the case is done, or `STEP` has passed
+            // if the write never ends.
+            Some(std::thread::spawn(move || {
+                let _ = waiting.recv_timeout(STEP);
+                let _ = holder.ungrab_server();
+                let _ = holder.flush();
+            }))
+        };
+
+        let started = Instant::now();
+        let written = connection
+            .change_property8(
+                xproto::PropMode::REPLACE,
+                window,
+                xproto::AtomEnum::STRING,
+                xproto::AtomEnum::STRING,
+                &large,
+            )
+            .and_then(|_| connection.flush());
+        let took = started.elapsed();
+        drop(done);
+        if let Some(holding) = holding {
+            holding.join().expect("the holder lets the server go");
+        }
+        if server == Server::Quiet {
+            written.expect("the write goes out");
+            let cookie = connection
+                .get_property(
+                    false,
+                    window,
+                    xproto::AtomEnum::STRING,
+                    xproto::AtomEnum::STRING,
+                    0,
+                    u32::MAX,
+                )
+                .expect("the request is sent");
+            let Replied::Reply(reply) =
+                reply_within(&connection, cookie).expect("the connection holds")
+            else {
+                panic!("the server answers");
+            };
+            assert_eq!(reply.value.len(), large.len(), "the write went out whole");
+        } else {
+            assert!(
+                written.is_err(),
+                "{server:?}: a write to a held server breaks the connection"
+            );
+            assert!(
+                took < REPLY_TIMEOUT + margin,
+                "{server:?}: the write broke after {took:?}, past {:?}",
+                REPLY_TIMEOUT + margin
+            );
+        }
+    }
+}
+
 /// Commands queued behind a held server cost it one reply's wait at most: a
-/// reply that comes too late leaves the server counted as held for the rest
-/// of the thread's step, so the reads queued with it answer at once; and
+/// reply that comes too late leaves the server counted as held in the
+/// thread's step until it shows it answers again, so the reads queued with
+/// it answer at once; and
 /// with `Stop` among them none waits at all, the clipboard ending within the
 /// close's bound. The server is the case's own.
 #[test]

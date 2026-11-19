@@ -38,26 +38,30 @@
 //!   at most [`MAX_EVENTS_PER_STEP`] events, so a flood delays a decided
 //!   answer only by the events ahead of its mark.
 //! - **No wait for the server is unbounded** (the `connection` module).
-//!   Each wait has one absolute deadline, which events arriving meanwhile do
-//!   not move: a reply's ends at [`REPLY_TIMEOUT`] from its request, the
-//!   request counting as failed (an ownership unconfirmed is given back, a
-//!   read ends [`ClipboardError::Timeout`], a requestor that cannot be
-//!   checked is refused, a selection the server may still carry out is
-//!   followed by the one its window needs) and the server as held for the
-//!   rest of the step, so no further reply is waited for; the step's writes
-//!   share one ending at [`REPLY_TIMEOUT`] from the first that waits, and a
-//!   write that cannot finish by it breaks the connection, which closes the
-//!   thread as any connection failure does. A batch of commands holding
-//!   `Stop` waits on no reply at all. When the loop ends (at `Stop`, as the
-//!   connection fails, or by a panic, which is carried past this), the
-//!   requests still waiting on the owner thread are refused, no transfer
-//!   starts and no write takes a selection, and the answers owed are written
-//!   under a mark; the close waits on the server, marks, replies and writes
-//!   alike, at most [`CLOSE_TIMEOUT`], with a last mark to see the server
-//!   carry them out, and reports the answers it had to drop. Reports go to
-//!   `tracing` once the state is committed, each contained, a subscriber's
-//!   panic discarded, so a subscriber that fails costs no answer and leaves
-//!   the clipboard serving.
+//!   Each wait has a deadline, which events arriving meanwhile, a flood of
+//!   them included, do not move. A reply's ends at [`REPLY_TIMEOUT`] from
+//!   its request, the request counting as failed (an ownership unconfirmed
+//!   is given back, a read ends [`ClipboardError::Timeout`], a requestor
+//!   that cannot be checked is refused, a selection the server may still
+//!   carry out is followed by the one its window needs) and the server as
+//!   held, so no further reply is waited for in the step until an event
+//!   shows the server carried out the late request. A write's ends at
+//!   [`REPLY_TIMEOUT`] from the last write that sent bytes, so a slow link
+//!   delays it and only a server that takes nothing for that long stalls
+//!   it; a stalled write breaks the connection, and a connection broken or
+//!   lost ends the clipboard for the rest of the process, its handles
+//!   answering `Gone`, as any connection failure does. A batch of commands
+//!   holding `Stop` waits on no reply: what needed one answers as the
+//!   thread's end does, with no report of a late server. When the loop ends
+//!   (at `Stop`, as the connection fails, or by a panic, which is carried
+//!   past this), the requests still waiting on the owner thread are refused,
+//!   no transfer starts and no write takes a selection, and the answers owed
+//!   are written under a mark; the close, a step of its own, waits on the
+//!   server, marks, replies and writes alike, at most [`CLOSE_TIMEOUT`],
+//!   with a last mark to see the server carry them out, and reports the
+//!   answers it had to drop. Reports go to `tracing` once the state is
+//!   committed, each contained, a subscriber's panic discarded, so a
+//!   subscriber that fails costs no answer and leaves the clipboard serving.
 //! - **Known limits.** X cannot tell apart a window that ends, and whose id
 //!   a new window takes, after the thread last met the server (the request
 //!   itself, for an answer in the step that heard it; the mark, for one
@@ -101,7 +105,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use super::connection::{Connection, REPLY_TIMEOUT, checked, reply_within};
+use super::connection::{Connection, REPLY_TIMEOUT, Replied, checked, reply_within};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     ClipboardEntryId, ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten,
@@ -155,11 +159,12 @@ const MAX_EVENTS_PER_STEP: usize = 64;
 /// How long the thread, as it ends, waits on the server: for its marks to
 /// come back (the answers still owed are written once the first does, and
 /// the last shows the server carried them out before the connection closes)
-/// and for any reply or write a handler waits on meanwhile. A server another
-/// client holds, or a link that died, holds up the application's exit no
-/// longer than this once the thread reads its `Stop`, the batch that holds
-/// it waiting on no reply; a reply or write the thread waited on when `Stop`
-/// came ends first, at [`REPLY_TIMEOUT`].
+/// and for any reply or write a handler waits on meanwhile, the close being
+/// a step of its own. A server another client holds, or a link that died,
+/// holds up the application's exit no longer than this once the thread
+/// reads its `Stop`, the batch that holds it waiting on no reply. What the
+/// thread waited on when `Stop` came ends first: a reply at
+/// [`REPLY_TIMEOUT`], a write once it sends nothing for as long.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// What the thread hears of a requestor's window while a transfer writes to
@@ -1088,7 +1093,8 @@ impl Selection {
     /// Read and delete the window's destination property, at most `limit`
     /// bytes of it, rounded up to whole 32-bit units; a longer value says
     /// so in `bytes_after`. A server that does not answer in time ends the
-    /// read with [`ClipboardError::Timeout`]: `None`.
+    /// read with [`ClipboardError::Timeout`], a thread that stops with
+    /// [`ClipboardError::Gone`]: `None`.
     fn take_property(
         &mut self,
         connection: &Connection,
@@ -1098,13 +1104,15 @@ impl Selection {
         let longs = u32::try_from(limit.div_ceil(4)).expect("BUG: the text limit fits a request");
         let cookie =
             connection.get_property(true, window, self.destination(), AtomEnum::ANY, 0, longs)?;
-        let reply = reply_within(connection, cookie)?;
-        if reply.is_none() {
-            // Its answer, should it come, lands where no read looks.
-            self.retire_destination();
-            self.answer(Err(ClipboardError::Timeout));
-        }
-        Ok(reply)
+        let failed = match reply_within(connection, cookie)? {
+            Replied::Reply(reply) => return Ok(Some(reply)),
+            Replied::Late => ClipboardError::Timeout,
+            Replied::Stopping => ClipboardError::Gone,
+        };
+        // Its answer, should it come, lands where no read looks.
+        self.retire_destination();
+        self.answer(Err(failed));
+        Ok(None)
     }
 
     /// End the read under way if it waited past `now`: `true` when it did,
@@ -1169,20 +1177,19 @@ enum NotHeard {
     /// The window is gone (`BadWindow`): its request is never answered.
     Gone,
     /// The server refused otherwise (an allocation failure, a security
-    /// policy) or did not answer in time: the requestor is there and waits,
-    /// so it is refused.
+    /// policy) or did not answer in time, or the thread stops and did not
+    /// ask: the requestor is there and waits, so it is refused.
     Refused,
 }
 
 impl NotHeard {
     /// What selecting on the requestor's window came to, as [`checked`]
-    /// tells it (`None`: the server did not answer in time): `Ok` when the
-    /// thread hears it.
-    fn of(selected: Option<Result<(), X11Error>>) -> Result<(), Self> {
+    /// tells it: `Ok` when the thread hears it.
+    fn of(selected: Replied<Result<(), X11Error>>) -> Result<(), Self> {
         match selected {
-            Some(Ok(())) => Ok(()),
-            Some(Err(error)) if error.error_kind == ErrorKind::Window => Err(Self::Gone),
-            Some(Err(_)) | None => Err(Self::Refused),
+            Replied::Reply(Ok(())) => Ok(()),
+            Replied::Reply(Err(error)) if error.error_kind == ErrorKind::Window => Err(Self::Gone),
+            Replied::Reply(Err(_)) | Replied::Late | Replied::Stopping => Err(Self::Refused),
         }
     }
 
@@ -1334,7 +1341,7 @@ impl Selections {
                     // A clear queued behind this read would answer it from
                     // what the window no longer owns. A server that does not
                     // say leaves the ownership as the thread knows it.
-                    if self.still_owned(name)? == Some(false) {
+                    if matches!(self.still_owned(name)?, Replied::Reply(false)) {
                         self.lost(name);
                     }
                     let (connection, window, _, selection) = self.split(name);
@@ -1373,7 +1380,7 @@ impl Selections {
             return Ok(ExpiredClear::NotHeld);
         };
         let owned = self.still_owned(Name::Clipboard)?;
-        if owned == Some(false) {
+        if matches!(owned, Replied::Reply(false)) {
             self.lost(Name::Clipboard);
             return Ok(ExpiredClear::NotHeld);
         }
@@ -1384,8 +1391,9 @@ impl Selections {
         connection.set_selection_owner(NONE, clipboard.atom, time)?;
         connection.flush()?;
         Ok(match owned {
-            Some(_) => ExpiredClear::Cleared,
-            None => ExpiredClear::Failed(ClipboardError::Timeout),
+            Replied::Reply(_) => ExpiredClear::Cleared,
+            Replied::Late => ExpiredClear::Failed(ClipboardError::Timeout),
+            Replied::Stopping => ExpiredClear::Failed(ClipboardError::Gone),
         })
     }
 
@@ -1515,20 +1523,24 @@ impl Selections {
             self.connection
                 .set_selection_owner(self.window, atom, time)?;
             let cookie = self.connection.get_selection_owner(atom)?;
-            match reply_within(&self.connection, cookie)? {
-                Some(reply) if reply.owner == self.window => Ok(()),
-                Some(_) => {
+            let replied = reply_within(&self.connection, cookie)?;
+            if matches!(replied, Replied::Late | Replied::Stopping) {
+                // Whether it took is unknown: it is given back at the same
+                // time, which the server carries out in order.
+                self.connection.set_selection_owner(NONE, atom, time)?;
+            }
+            match replied {
+                Replied::Reply(reply) if reply.owner == self.window => Ok(()),
+                Replied::Reply(_) => {
                     // A client took it at a later time than ours.
                     self.diagnostics.push(Diagnostic::TakenBeforeOwned);
                     Err(ClipboardError::Unavailable)
                 }
-                None => {
-                    // Whether it took is unknown: it is given back at the
-                    // same time, which the server carries out in order.
-                    self.connection.set_selection_owner(NONE, atom, time)?;
+                Replied::Late => {
                     self.diagnostics.push(Diagnostic::ServerLate);
                     Err(ClipboardError::Timeout)
                 }
+                Replied::Stopping => Err(ClipboardError::Gone),
             }
         };
         let selection = self.split(name).3;
@@ -1567,25 +1579,29 @@ impl Selections {
             return Ok(());
         };
         // The server took it away, as far as anyone can tell.
-        if self.still_owned(name)? != Some(true) {
+        if !matches!(self.still_owned(name)?, Replied::Reply(true)) {
             self.lost(name);
         }
         Ok(())
     }
 
     /// Whether the window owns selection `name` as far as the server says,
-    /// or owns nothing to lose; `None` when the server did not say in time.
-    fn still_owned(&mut self, name: Name) -> Result<Option<bool>, ReplyOrIdError> {
+    /// or owns nothing to lose; a server that did not say in time is
+    /// reported.
+    fn still_owned(&mut self, name: Name) -> Result<Replied<bool>, ReplyOrIdError> {
         let (connection, window, _, selection) = self.split(name);
         if selection.owned.is_none() {
-            return Ok(Some(true));
+            return Ok(Replied::Reply(true));
         }
         let cookie = connection.get_selection_owner(selection.atom)?;
-        let owned = reply_within(connection, cookie)?.map(|reply| reply.owner == window);
-        if owned.is_none() {
-            self.diagnostics.push(Diagnostic::ServerLate);
-        }
-        Ok(owned)
+        Ok(match reply_within(connection, cookie)? {
+            Replied::Reply(reply) => Replied::Reply(reply.owner == window),
+            Replied::Late => {
+                self.diagnostics.push(Diagnostic::ServerLate);
+                Replied::Late
+            }
+            Replied::Stopping => Replied::Stopping,
+        })
     }
 
     /// Another client took selection `name`: the ownership ends, and an
@@ -1907,18 +1923,22 @@ impl Selections {
     fn mark_overdue(&mut self) -> Result<(), ReplyOrIdError> {
         let sync = self.connection.get_input_focus()?;
         let after = sync.sequence_number();
-        if reply_within(&self.connection, sync)?.is_none() {
-            self.diagnostics.push(Diagnostic::ServerLate);
-            self.pending.deadline = Some(Instant::now() + REPLY_TIMEOUT);
-        } else {
-            self.pending.stand_in = Some(after);
+        match reply_within(&self.connection, sync)? {
+            Replied::Reply(_) => self.pending.stand_in = Some(after),
+            Replied::Late => {
+                self.diagnostics.push(Diagnostic::ServerLate);
+                self.pending.deadline = Some(Instant::now() + REPLY_TIMEOUT);
+            }
+            Replied::Stopping => self.pending.deadline = Some(Instant::now() + REPLY_TIMEOUT),
         }
         Ok(())
     }
 
     /// Handle at most `limit` events; `true` when one was handled. An event
     /// the server sent after the reply standing in for a mark, or a queue
-    /// emptied with such a reply read, counts as the mark back.
+    /// emptied with such a reply read, counts as the mark back; one sent
+    /// after a request whose reply was late shows the server answers again
+    /// ([`super::connection::ReplyStream::heard`]).
     fn handle_events(&mut self, limit: usize) -> Result<bool, ReplyOrIdError> {
         let mut handled = false;
         for _ in 0..limit {
@@ -1927,6 +1947,9 @@ impl Selections {
                 return Ok(handled);
             };
             handled = true;
+            // Before the event is handled, so what it waits on is waited for
+            // once the server shows it answers again.
+            self.connection.stream().heard(sequence);
             self.event(event)?;
             self.stood_in(Some(sequence))?;
         }
@@ -2188,7 +2211,7 @@ impl Selections {
             &ChangeWindowAttributesAux::new().event_mask(mask),
         )?;
         let selected = checked(&self.connection, cookie)?;
-        if selected.is_none() {
+        if !matches!(selected, Replied::Reply(_)) {
             self.select(requestor, self.needs(requestor))?;
         }
         Ok(NotHeard::of(selected))
@@ -2285,12 +2308,16 @@ impl Selections {
     /// connection would not outlive. A mark covers them, and they are written
     /// as it comes back; a last mark shows the server carried them out
     /// before the connection closes. A server that does not read the marks
-    /// back in time is left, the answers dropped reported; every wait for a
-    /// reply meanwhile ends at the same deadline. The reports come last,
-    /// each contained, so one that fails costs no answer and no mark.
+    /// back in time is left, the answers dropped reported. The close is a
+    /// step of its own, whatever the last step found of the server: a reply
+    /// a handler needs meanwhile is waited for, and every wait ends at the
+    /// same deadline. The reports come last, each contained, so one that
+    /// fails costs no answer and no mark.
     fn close(&mut self) -> Result<(), ReplyOrIdError> {
         let deadline = Instant::now() + CLOSE_TIMEOUT;
-        self.connection.stream().end_by(deadline);
+        let stream = self.connection.stream();
+        stream.end_by(deadline);
+        stream.begin_step();
         let delivered = self.deliver_owed(deadline);
         self.report();
         delivered
@@ -2467,13 +2494,14 @@ fn steps(
 
 /// Carry out a batch of commands; `false` once one asks the thread to end.
 /// `Stop` is looked for first: when the batch holds it, the commands ahead
-/// of it are carried out as if the server did not answer, so none waits on
-/// a held server as the application exits. The commands behind it are
-/// never carried out: each answers `Gone` as it drops, contained, as do
-/// those left when one fails the connection.
+/// of it wait on no reply, so none waits on a held server as the
+/// application exits; what needed one answers as the thread's end does
+/// (`Gone`, a requestor refused), with no report of a late server. The
+/// commands behind it are never carried out: each answers `Gone` as it
+/// drops, contained, as do those left when one fails the connection.
 fn carry_out(selections: &mut Selections, batch: Vec<Command>) -> Result<bool, ReplyOrIdError> {
     if batch.iter().any(|command| matches!(command, Command::Stop)) {
-        selections.connection.stream().hold();
+        selections.connection.stream().stopping();
     }
     let mut batch = batch.into_iter();
     let mut carried = Ok(true);
@@ -2547,11 +2575,14 @@ mod tests {
     use x11rb::protocol::xproto::{self, ConnectionExt as _, Property};
     use x11rb::rust_connection::RustConnection;
 
-    use super::super::connection::connect;
+    use flui_platform::{ClipboardError, ClipboardExpiry, ClipboardWrite};
+
+    use super::super::connection::{Replied, connect, reply_within};
+    use super::super::tests::PrivateServer;
     use super::{
-        Answer, Ask, Decided, DeletionsHeard, Diagnostic, Generation, MAX_EVENTS_PER_STEP,
-        MAX_TEXT, NotHeard, Notice, Reply, SENT_EVENT, Selections, TRANSFER_TIMEOUT, TextForm,
-        Verdict, append, not_before,
+        Answer, Ask, Content, Decided, DeletionsHeard, Diagnostic, Encodings, ExpiredClear,
+        ExpiredEntry, Generation, MAX_EVENTS_PER_STEP, MAX_TEXT, Name, NotHeard, Notice, Owned,
+        Reply, SENT_EVENT, Selections, TRANSFER_TIMEOUT, TextForm, Verdict, append, not_before,
     };
 
     /// The clipboard thread's state on the run's X server, driven by the case
@@ -2561,9 +2592,34 @@ mod tests {
             eprintln!("skipped: no X server (DISPLAY is not set); CI runs this under xvfb-run");
             return None;
         }
-        let (connection, screen) = connect(None).expect("the X server answers");
+        Some(selections_on(None))
+    }
+
+    /// The clipboard thread's state on the X server `display` names.
+    fn selections_on(display: Option<&str>) -> Selections {
+        let (connection, screen) = connect(display).expect("the X server answers");
         let notice = Arc::new(Notice::new(Box::new(|| {})));
-        Some(Selections::try_new(connection, screen, notice).expect("the window is made"))
+        Selections::try_new(connection, screen, notice).expect("the window is made")
+    }
+
+    /// Write text to the clipboard and handle events, as the thread's steps
+    /// do, until the write owns it or fails to.
+    fn write_clipboard(selections: &mut Selections) {
+        selections
+            .claim(
+                Name::Clipboard,
+                Content::Text(Encodings::new(ClipboardWrite::text("owned"))),
+            )
+            .expect("the connection holds");
+        selections.connection.flush().expect("the connection holds");
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while selections.clipboard.pending.is_some() {
+            assert!(Instant::now() < deadline, "the write's time never came");
+            selections
+                .handle_events(MAX_EVENTS_PER_STEP)
+                .expect("the connection holds");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
 
     /// A requestor's window on a connection of its own.
@@ -2796,17 +2852,148 @@ mod tests {
         assert!(!selections.pending.in_flight);
     }
 
+    /// A server that answered a reply late counts as held only until it shows
+    /// it answers again: an event it sent after the late request ends the
+    /// hold, so a write whose server time comes in such an event, in the same
+    /// step, waits for the server's word on its ownership and owns, rather
+    /// than failing as if the server still held. The grab is on the case's
+    /// own server.
+    #[test]
+    fn a_server_heard_again_after_a_late_reply_is_waited_on() {
+        let Some(private) = PrivateServer::start() else {
+            return;
+        };
+        let display = Some(private.display.as_str());
+        let mut selections = selections_on(display);
+        let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+        selections.connection.stream().bound_waits();
+        selections.connection.stream().begin_step();
+        holder.grab_server().expect("the request is sent");
+        holder
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        let late = selections
+            .connection
+            .get_input_focus()
+            .expect("the request is sent");
+        assert!(
+            matches!(
+                reply_within(&selections.connection, late).expect("the connection holds"),
+                Replied::Late
+            ),
+            "the reply is late while the server is held"
+        );
+        holder.ungrab_server().expect("the request is sent");
+        holder.flush().expect("the request is sent");
+
+        write_clipboard(&mut selections);
+        assert!(
+            selections.clipboard.owned.is_some(),
+            "the write owns the clipboard"
+        );
+        assert!(
+            !selections
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, Diagnostic::ServerLate)),
+            "the server answered the write in time"
+        );
+    }
+
+    /// The close is a step of its own: after a batch holding `Stop`, which
+    /// waits on no reply, a handler in the close still asks the server what
+    /// it needs. A `SelectionClear` another client forges is checked against
+    /// the server, which says the window still owns the clipboard, so the
+    /// ownership stands. The case's own server.
+    #[test]
+    fn the_close_asks_the_server_after_a_batch_that_stops() {
+        let Some(private) = PrivateServer::start() else {
+            return;
+        };
+        let display = Some(private.display.as_str());
+        let mut selections = selections_on(display);
+        selections.connection.stream().bound_waits();
+        selections.connection.stream().begin_step();
+        write_clipboard(&mut selections);
+        assert!(selections.clipboard.owned.is_some(), "the write owns");
+
+        let (forger, _) = RustConnection::connect(display).expect("the X server answers");
+        let forged = xproto::SelectionClearEvent {
+            response_type: xproto::SELECTION_CLEAR_EVENT,
+            sequence: 0,
+            time: x11rb::CURRENT_TIME,
+            owner: selections.window,
+            selection: selections.clipboard.atom,
+        };
+        forger
+            .send_event(
+                false,
+                selections.window,
+                xproto::EventMask::NO_EVENT,
+                forged,
+            )
+            .expect("the request is sent");
+        forger
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        selections.connection.stream().stopping();
+        selections.close().expect("the connection holds");
+        assert!(
+            selections.clipboard.owned.is_some(),
+            "the server said the window still owns the clipboard"
+        );
+    }
+
+    /// A clear in the batch that stops the thread waits on no reply, and
+    /// answers as the thread's end does: `Gone`, not a timeout, with no report
+    /// of a late server, since the server was never waited on. The case's own
+    /// server, as the clear gives the clipboard up.
+    #[test]
+    fn a_clear_in_the_batch_that_stops_the_thread_is_not_asked() {
+        let Some(private) = PrivateServer::start() else {
+            return;
+        };
+        let mut selections = selections_on(Some(private.display.as_str()));
+        let expiring = ClipboardWrite::text("expiring").expires_after(
+            ClipboardExpiry::try_new(std::time::Duration::from_secs(30))
+                .expect("thirty seconds expire"),
+        );
+        selections.clipboard.owned = Some(Owned {
+            content: Content::Text(Encodings::new(expiring)),
+            time: x11rb::CURRENT_TIME,
+        });
+        selections.connection.stream().bound_waits();
+        selections.connection.stream().begin_step();
+        selections.connection.stream().stopping();
+        let cleared = selections
+            .clear_expired(ExpiredEntry::Any)
+            .expect("the connection holds");
+        assert_eq!(cleared, ExpiredClear::Failed(ClipboardError::Gone));
+        assert!(
+            !selections
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, Diagnostic::ServerLate)),
+            "no late server is reported"
+        );
+    }
+
     /// A requestor whose window is gone is never answered, since the window
     /// that takes its id did not ask; one the server will not let the thread
-    /// hear for another reason, or does not answer about in time, is there and
-    /// waiting, and is sent a refusal (ICCCM §2.2). The same holds for the
+    /// hear for another reason, or does not answer about in time, or that the
+    /// stopping thread did not ask about, is there and waiting, and is sent a
+    /// refusal (ICCCM §2.2). The same holds for the
     /// selection of its property deletions an `INCR` transfer needs. Xvfb
     /// refuses these selections only with `BadWindow`, so the other refusals
     /// are fed in at the seam.
     #[test]
     fn a_requestor_that_cannot_be_heard_is_refused_unless_it_is_gone() {
         let refused = |error_kind| {
-            Some(Err(X11Error {
+            Replied::Reply(Err(X11Error {
                 error_kind,
                 error_code: 0,
                 sequence: 0,
@@ -2818,7 +3005,7 @@ mod tests {
             }))
         };
         let table = [
-            ("heard", Some(Ok(())), Ok(()), None),
+            ("heard", Replied::Reply(Ok(())), Ok(()), None),
             (
                 "gone",
                 refused(ErrorKind::Window),
@@ -2837,7 +3024,18 @@ mod tests {
                 Err(NotHeard::Refused),
                 Some(Reply::Refused),
             ),
-            ("late", None, Err(NotHeard::Refused), Some(Reply::Refused)),
+            (
+                "late",
+                Replied::Late,
+                Err(NotHeard::Refused),
+                Some(Reply::Refused),
+            ),
+            (
+                "not asked as the thread stops",
+                Replied::Stopping,
+                Err(NotHeard::Refused),
+                Some(Reply::Refused),
+            ),
         ];
         for (case, selected, heard, sent) in table {
             let found = NotHeard::of(selected);
