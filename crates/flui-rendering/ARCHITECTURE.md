@@ -805,6 +805,13 @@ enclosing boundary's content, through `RenderClip<S>::paint_effects` /
   (a property), `RenderFlow`'s is an absence at `Clip::None` (derived from
   the same field it reads for the gate) — and a future reader should not
   "fix" either toward the other.
+- `RenderStack` and `RenderIndexedStack`: the clip applies only while the
+  last layout overflowed and `clip_behavior` is not `Clip::None`, and one
+  answer (`overflow_clip`) serves `paint`'s clip scope and
+  `describe_approximate_paint_clip`, so a child cut off from paint is cut off
+  from semantics and the input regions too. `set_clip_behavior` reports
+  `PAINT | SEMANTICS`. Pinned by
+  `a_stack_clips_overflow_unless_its_clip_behavior_is_none`.
 
 **Benchmark** (`cargo bench -p flui-rendering --bench paint -- '_change/(inline|layered)/(update|repaint)'`):
 every `paint_effects` producer has an update arm and a repaint arm on an `inline` shape
