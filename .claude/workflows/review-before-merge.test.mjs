@@ -58,7 +58,7 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
   assert.equal(result.judge, 'opus')
   assert.deepEqual(result.findings.map((f) => [f.n, f.lens]), [[1, 'records'], [2, 'records']])
   assert.deepEqual(result.unaccounted.map((f) => f.n), [2])
-  assert.match(result.markdown, /^Read at b{40} \(base a{40}, fix since c{40}\)\./)
+  assert.match(result.markdown, /^Read \(change\) at b{40} \(base a{40}, fix since c{40}\)\./)
   assert.match(result.markdown, /1\. \*\*one\*\* \(important; c\)/)
   assert.match(result.markdown, /reader finding 2: \*\*two\*\*/)
   assert.match(result.markdown, /"unread" names "unwind", not a lens .*no lens was spared the fix note/)
@@ -252,5 +252,67 @@ for (const mutants of ["D:/it's", 42]) {
     const listCommand = mutantsPrompt.match(new RegExp(`${field}: (?:the lines of )?\`(jq -r [^\`]+)\``))[1]
     assert.deepEqual(sh(listCommand).split('\n').map((l) => Number(l.split('\t')[1])), lines, field)
   }
+}
+// 11. mode "design" reads with the design lenses and their wording, validates `unread` against
+//     them, and neither starts nor reads a mutation run.
+{
+  const prompts = {}
+  let judgePrompt = ''
+  const { result, calls } = await run({ mode: 'design', mutants: 'D:/m', unread: ['orders', 'tests'], since: 'old' }, (p, o) => {
+    if (o.label === 'scope') return scope({ since: SHA('c'), since_base: SHA('a') })
+    if (o.label === 'read:mutants') assert.fail('a design reads no mutation run')
+    if (o.label.startsWith('read:')) { prompts[o.label] = p; return { findings: [], tried: ['t'] } }
+    judgePrompt = p
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.deepEqual(Object.keys(prompts).sort(), ['read:alternatives', 'read:confirmation', 'read:orders', 'read:ownership', 'read:records', 'read:seams'])
+  assert.ok(!calls.includes('read:mutants'))
+  assert.match(prompts['read:ownership'], /^You are one of 6 independent readers of a design for FLUI/)
+  assert.match(prompts['read:ownership'], /the section \(file:line\) that permits it/)
+  assert.doesNotMatch(prompts['read:orders'], /An earlier read covered/)
+  assert.match(prompts['read:ownership'], /An earlier read covered/)
+  assert.match(judgePrompt, /reported on a design to FLUI/)
+  assert.match(judgePrompt, /a section of the design, an accepted ADR, or a line of the code it governs/)
+  assert.match(result.markdown, /"unread" names "tests", not a lens \(alternatives, ownership, orders, seams, records, confirmation\)/)
+  assert.match(result.markdown, /Mutation run: not used for a design\./)
+  assert.match(result.markdown, /the one at D:\/m was not read/)
+  assert.match(result.markdown, /^Read \(design\) at /)
+  assert.match(judgePrompt, /REVIEW\.md's narrower scope for docs\/plans\/specs\/ does not apply/)
+  // scope() names x.rs: a design read of a diff holding code owes the change read beside it.
+  assert.match(result.markdown, /also changes 1 files that are not documents; the change read \(no mode\) is owed/)
+}
+{
+  // A design read with no mutation run says nothing about one, and a diff of only a decision owes
+  // no change read.
+  const { result } = await run({ mode: 'design' }, (p, o) => {
+    if (o.label === 'scope') return scope({ files: ['docs/adr/ADR-0400-x.md'] })
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.doesNotMatch(result.markdown, /was not read|No mutation run/)
+  assert.doesNotMatch(result.markdown, /change read \(no mode\) is owed/)
+}
+{
+  // A change read keeps its own wording, and one whose diff changes a decision owes the design read.
+  const prompts = {}
+  let judgePrompt = ''
+  const { result } = await run({ mode: 'change' }, (p, o) => {
+    if (o.label === 'scope') return scope({ files: ['x.rs', 'docs/plans/specs/feat/design.md'] })
+    if (o.label.startsWith('read:')) { prompts[o.label] = p; return { findings: [], tried: ['t'] } }
+    judgePrompt = p
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.equal(Object.keys(prompts).length, 7)
+  assert.match(prompts['read:tests'], /^You are one of 7 independent readers of a change to FLUI/)
+  assert.match(prompts['read:tests'], /the file:line that produces it/)
+  assert.match(judgePrompt, /reported on a change to FLUI/)
+  assert.match(judgePrompt, /only when a line or a test shows/)
+  assert.match(judgePrompt, /By REVIEW\.md "What Important means here"/)
+  assert.match(result.markdown, /changes a decision \(docs\/plans\/specs\/feat\/design\.md\); the design read \(mode "design"\) is owed/)
+}
+for (const mode of ['Design', 'adr', 7]) {
+  const { result, calls } = await run({ mode }, () => assert.fail('no agent may run'))
+  assert.match(result.markdown, /^Independent read unavailable: mode .* is neither "change" nor "design"/)
+  assert.equal(calls.length, 0)
 }
 console.log('all branches behave')
