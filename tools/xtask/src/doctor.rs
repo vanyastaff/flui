@@ -12,7 +12,6 @@ use std::ffi::OsStr;
 use std::io::Write as _;
 use std::process::{Command, ExitCode, Stdio};
 
-use crate::docs_links;
 use crate::fonts::find_python;
 use crate::util::repo_root;
 use crate::wasm::repo_locked_version;
@@ -382,7 +381,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     doctor.check_bin(
         Scope::Local,
         "lychee",
-        &docs_links::install_hint(),
+        "cargo install --locked lychee --version 0.24.2 (the version ci.yml's checks job installs)",
         &["--version"],
     );
 

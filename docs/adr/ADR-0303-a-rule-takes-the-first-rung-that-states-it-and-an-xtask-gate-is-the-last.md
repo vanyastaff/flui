@@ -313,8 +313,8 @@ of its own. The five jobs ADR-0370 §2 moves to main run there without one.
 - `every_self_test_reports_exactly_its_planted_findings` and
   `every_command_with_a_self_test_is_listed` in `checks_contract` (`tools/xtask/src/tasks/checks.rs`)
   run each self-test and fail on a command whose self-test is not listed (§4).
-- `the_in_process_checks_include_the_link_check_under_strict` pins the list `cargo xtask checks`
-  runs, which has no `--self-test` line (§4).
+- `every_in_process_check_is_its_command_line` parses each line `cargo xtask checks` runs, none
+  of them a `--self-test` (§4).
 - `cargo clippy --workspace --all-targets -- -D warnings` fails on a hand-written `catch_unwind`
   without an expectation, and on an expectation that no longer suppresses anything (§5, §6).
 - `cargo xtask workspace` checks the ADR numbers, so a gate's ADR exists; the lines of §3 are read

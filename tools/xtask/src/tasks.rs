@@ -67,21 +67,18 @@ fn done(stage: anyhow::Result<()>) -> anyhow::Result<ExitCode> {
 /// Arguments for `cargo xtask checks`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct ChecksArgs {
-    /// Fail when typos, taplo or lychee is not installed instead of skipping it (CI).
-    #[arg(long)]
-    strict: bool,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
 
-/// `cargo xtask checks`: run the source checks that need no workspace build (the CI `checks` job).
+/// `cargo xtask checks`: the repository's own source checks, which no
+/// standard tool makes.
 ///
-/// `cargo fmt --check`, typos, taplo, and this crate's own checks in-process:
-/// `docs-links` (lychee), `toolchain`, `unmounted-tests`, `adr-numbers`,
-/// `changelog --check` and the generated files against their sources
-/// (`font-assets --package-list` and the rest). All of them run; exit 1 if any failed.
+/// `toolchain`, `unmounted-tests`, `adr-numbers`, `changelog --check` and the
+/// generated files against their sources (`font-assets --package-list` and
+/// the rest), in this process. All of them run; exit 1 if any failed.
 pub(crate) fn checks(args: &ChecksArgs) -> anyhow::Result<ExitCode> {
-    done(checks::run(args.run.runner(), args.strict))
+    done(checks::run(args.run.runner()))
 }
 
 /// Arguments for `cargo xtask cross-typecheck`.

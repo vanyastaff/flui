@@ -8,6 +8,9 @@
   (`deps`, `doc-strict`, `gpu-test`, `platform-test`, `wayland-optional`, `native-features`,
   `build-all-targets`, `facade-combos`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a
   workflow step calls the tool.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
+  `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -58,7 +61,7 @@ and macOS) is a shell loop that runs every iteration before it fails.
 
 `lint`, `gate`, `test`, `platform-test`, `cli-test`, `wayland-optional`, `build-all-targets`, `ci`,
 `ci-full`, `deps`, `native-features`, `gpu-test`, `miri`, `doc-strict`, `feature-matrix`,
-`facade-combos` and `wasm-check` leave `tools/xtask`.
+`facade-combos`, `wasm-check` and `docs-links` leave `tools/xtask`.
 There is no local command that mirrors CI: `docs/testing.md` names, for each job, the commands a
 contributor runs, and the job holds them.
 
@@ -70,6 +73,15 @@ suite added there goes into one shard. The same comment says `test-nested` build
 packages the `nested-cargo` filter names, so a test of another package joins the job's `-p`
 list. cargo-deny's advisories read the RustSec database
 cargo-audit reads, so cargo-audit is not added beside them.
+
+### §4. The `checks` job calls the formatters and the link check
+
+`cargo fmt --all --check`, typos, `taplo fmt --check` and lychee are steps of CI's `checks` job,
+each running even when one before it failed. `cargo xtask checks` keeps only the checks no standard
+tool makes: the toolchain pin, unmounted test files, ADR numbers, the changelog fragments and the
+generated files against their sources. lychee's command line in the job takes the options
+`docs-links` passed it; the extra pass that caught a link climbing above the repository root goes
+with `docs-links`, so such a link is the reader's to catch.
 
 ### Consequences
 

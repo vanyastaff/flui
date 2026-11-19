@@ -183,8 +183,9 @@ Cargo runs through heli: `cargo heli <cargo arguments>`, repository tasks as
 
 Before a PR: `cargo fmt --all`, then heli's clippy (`--all-targets -- -D warnings`) and nextest
 on the changed crates, and their dependents when a public API changed. A docs-only change needs
-only `cargo heli xtask checks`. `flui-native`'s suite runs only on Linux, so a Windows or macOS
-host change needs `cargo heli nextest run -p flui-native` by hand.
+only the `checks` job's steps: typos, the lychee line in `ci.yml` and `cargo heli xtask checks`.
+`flui-native`'s suite runs only on Linux, so a Windows or macOS host change needs
+`cargo heli nextest run -p flui-native` by hand.
 
 - Each worktree keeps its own `target/`: a shared `CARGO_TARGET_DIR` links another worktree's
   sources.
