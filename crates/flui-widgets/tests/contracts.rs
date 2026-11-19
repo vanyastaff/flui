@@ -1006,7 +1006,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_horizontal_item_scroll_moves_one_character", crate::semantics::a_horizontal_item_scroll_moves_one_character),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
             ("semantics::a_fitted_child_moved_by_a_fit_change_moves_its_semantics", crate::semantics::a_fitted_child_moved_by_a_fit_change_moves_its_semantics),
-            ("semantics::a_merged_node_inside_its_clip_ignores_its_clipped_content", crate::semantics::a_merged_node_inside_its_clip_ignores_its_clipped_content),
+            ("semantics::content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms", crate::semantics::content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms),
             ("semantics::published_bounds_are_physical_and_follow_the_scale_factor", crate::semantics::published_bounds_are_physical_and_follow_the_scale_factor),
             ("semantics::animated_slide_publishes_bounds_at_its_current_sample", crate::semantics::animated_slide_publishes_bounds_at_its_current_sample),
             ("semantics::animated_scale_and_rotation_publish_clipped_bounds", crate::semantics::animated_scale_and_rotation_publish_clipped_bounds),

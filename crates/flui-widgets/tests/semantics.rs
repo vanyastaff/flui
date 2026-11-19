@@ -1160,11 +1160,12 @@ pub(crate) fn a_fitted_child_moved_by_a_fit_change_moves_its_semantics() {
         "None: the child keeps its size, centred"
     );
 }
-/// A merged node in view stays visible when content merged into it is painted
-/// in the viewport's cache extent: the hidden flag the clips give a node
-/// belongs to the node it forms, and the merged node's own rect is in view. On
-/// its own, the same content forms a node that is hidden.
-pub(crate) fn a_merged_node_inside_its_clip_ignores_its_clipped_content() {
+/// Content painted in a viewport's cache extent, past its paint clip, is hidden
+/// only on the node it forms: on its own it forms a hidden node (an annotated
+/// node, an unannotated wrapper, a link region), and merged into a node in view
+/// it leaves that node visible. A container and its child both past the clip
+/// merge into one hidden node, as they merge in view.
+pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() {
     use flui_view::{BoxedView, ViewExt as _};
     use flui_widgets::{Column, ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
 
@@ -1222,9 +1223,9 @@ pub(crate) fn a_merged_node_inside_its_clip_ignores_its_clipped_content() {
         "the merged node's own rect is inside the clip, so it is not hidden"
     );
 
-    // An ordinary merge: an annotated child past the clip merges into the
-    // labelled container in view, as it does in view, and leaves the
-    // container visible.
+    // An ordinary merge: an annotated child past the clip merges into a
+    // labelled container whose own rect is in view, and the container stays
+    // visible.
     let holder = || {
         Semantics::new()
             .container(true)
@@ -1240,6 +1241,26 @@ pub(crate) fn a_merged_node_inside_its_clip_ignores_its_clipped_content() {
     assert!(
         !hidden(clipped(holder().boxed()), "holder x"),
         "the container takes the label of content past the clip and stays visible"
+    );
+
+    // The container past the clip too: both are hidden, and they merge into one
+    // hidden node rather than refusing each other over the flag.
+    let hidden_holder = || {
+        Column::new((
+            Transform::translate(0.0, 150.0)
+                .child(
+                    Semantics::new()
+                        .container(true)
+                        .label("holder")
+                        .child(Semantics::new().label("x").child(SizedBox::new(40.0, 20.0))),
+                )
+                .boxed(),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    assert!(
+        hidden(clipped(hidden_holder().boxed()), "holder x"),
+        "a container and its child past the clip form one hidden node"
     );
 
     // An unannotated wrapper past the clip still forms a node of its own, the
