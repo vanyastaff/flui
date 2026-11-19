@@ -580,6 +580,7 @@ fn focus_actions_and_shortcuts() {
             ("focus::spatial_tab_preserves_geometric_ties_and_row_boundaries", crate::focus::spatial_tab_preserves_geometric_ties_and_row_boundaries as fn()),
             ("focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus", crate::focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus as fn()),
             ("focus::an_adopted_external_node_ignores_the_old_elements_focus_action", crate::focus::an_adopted_external_node_ignores_the_old_elements_focus_action as fn()),
+            ("focus::a_superseded_focus_takes_its_record_and_callbacks_when_disposed", crate::focus::a_superseded_focus_takes_its_record_and_callbacks_when_disposed as fn()),
             ("focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable", crate::focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable as fn()),
             ("focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag", crate::focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag as fn()),
             ("focus::a_failing_frame_request_still_delivers_every_focus_edge", crate::focus::a_failing_frame_request_still_delivers_every_focus_edge as fn()),

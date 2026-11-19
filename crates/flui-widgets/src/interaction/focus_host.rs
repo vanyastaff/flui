@@ -739,7 +739,6 @@ impl FocusHost {
         if owns_attachment {
             drop(std::mem::take(&mut self.rare));
             self.rect_provider_registration.take();
-            self.context_registration.take();
         } else if let Some(registration) = self.rare.take_key_handler() {
             // A superseded attachment has no authority to mutate this node.
             registration.relinquish();
@@ -750,9 +749,12 @@ impl FocusHost {
         if !owns_attachment && let Some(registration) = self.rare.take_traversal() {
             registration.relinquish();
         }
-        if !owns_attachment && let Some(registration) = self.context_registration.take() {
-            registration.relinquish();
-        }
+        // The context is this host's state, never the caller's, so it goes
+        // whoever owns the attachment: dropping the registration clears it
+        // only while the node still holds this host's generation of it. A
+        // node kept past its host would otherwise hold the host's handlers
+        // and record, and a `Shortcuts` above would resolve through them.
+        drop(self.context_registration.take());
         drop(self.focus_subscription.take());
         drop(self.shared.reveal.target.take());
         drop(self.shared.reveal.rect.take());
@@ -761,6 +763,13 @@ impl FocusHost {
         if let Some(attachment) = self.shared.attachment.take() {
             let _ = attachment.detach();
         }
+        // Whatever still names the shared state (a node listener or key
+        // handler a caller kept) keeps none of the host's callbacks or
+        // bindings. They drop last: a handler's captures are user code.
+        let record = self.shared.record.take();
+        let focused = self.shared.on_focus_change.take();
+        let shown = self.shared.on_visible_focus_change.take();
+        drop((record, focused, shown));
         self.parent = None;
     }
 
