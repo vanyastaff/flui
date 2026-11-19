@@ -177,8 +177,17 @@ impl GestureRecognizer for HoldGestureRecognizer {
         self.allowed_devices
     }
 
+    /// A primary Down with a position in both spaces: the press that stops
+    /// the motion is the hold's.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        (is_primary_down(down.local)
+            && down.local.position().is_some()
+            && down.global.position().is_some())
+        .then_some(super::recognizer::DownTake::Press)
+    }
+
     fn add_pointer(&self, down: PointerDispatch<'_>) {
-        if !is_primary_down(down.local) {
+        if self.takes_down(down).is_none() {
             return;
         }
         let (Some(local_position), Some(global_position)) =

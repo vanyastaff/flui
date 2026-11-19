@@ -33,7 +33,7 @@ use flui_interaction::{
     gesture::{GestureRecognizer, RecognizerSet, TapGestureRecognizer, cancel_all},
     pointer::{
         InteractionDispatchError, LocalPayloadTarget, PointerDispatch, PointerTarget,
-        resolve_local_payload,
+        PointerTargetHandler, resolve_local_payload,
     },
 };
 use flui_objects::{
@@ -611,10 +611,20 @@ fn run_link_action(target: LocalPayloadTarget, call: &ActionCall) {
 
 /// Hand a link's contacts to its recognizer. A revision corrects a reading
 /// recognizers already decided on, so it never reaches one (ADR-0143).
-fn pointer_handler(tap: &Rc<TapGestureRecognizer>) -> impl Fn(PointerDispatch<'_>) + 'static {
+fn pointer_handler(tap: &Rc<TapGestureRecognizer>) -> LinkPointer {
     let mut recognizers = RecognizerSet::default();
     recognizers.attach(tap);
-    move |dispatch: PointerDispatch<'_>| {
+    LinkPointer { recognizers }
+}
+
+/// A link's pointer handler: its tap recognizer, hit only over the link's
+/// span, takes the contact events and answers a press probe there.
+struct LinkPointer {
+    recognizers: RecognizerSet,
+}
+
+impl PointerTargetHandler for LinkPointer {
+    fn deliver(&self, dispatch: PointerDispatch<'_>) {
         if matches!(
             dispatch.local,
             PointerEvent::Down(_)
@@ -623,8 +633,12 @@ fn pointer_handler(tap: &Rc<TapGestureRecognizer>) -> impl Fn(PointerDispatch<'_
                 | PointerEvent::Up(_)
                 | PointerEvent::Cancel(_)
         ) {
-            recognizers.dispatch(dispatch);
+            self.recognizers.dispatch(dispatch);
         }
+    }
+
+    fn claims_press(&self, down: PointerDispatch<'_>) -> bool {
+        self.recognizers.claims_press(down)
     }
 }
 
@@ -650,7 +664,7 @@ impl LinkRouting {
         ctx: &RenderObjectContext<'_>,
         routed: &RoutedLink,
     ) -> Option<TextLinkRoute> {
-        let pointer = ctx.register_pointer(pointer_handler(&routed.tap));
+        let pointer = ctx.register_pointer_handler(pointer_handler(&routed.tap));
         let activation = ctx.register_local_payload(self.activation(routed));
         match (pointer, activation) {
             (Ok(pointer), Ok(target)) => {
@@ -688,7 +702,7 @@ impl LinkRouting {
         routed: &RoutedLink,
     ) -> Option<TextLinkRoute> {
         let replaced = ctx
-            .replace_pointer(route.pointer_target(), pointer_handler(&routed.tap))
+            .replace_pointer_handler(route.pointer_target(), pointer_handler(&routed.tap))
             .and_then(|()| {
                 ctx.replace_local_payload(route.activation().target(), self.activation(routed))
             });

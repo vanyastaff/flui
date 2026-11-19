@@ -22,10 +22,10 @@ use flui_foundation::IdMint;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionEnd, LockGrant, LockKind, LockOutcome, LockTiming,
-    OwnerCalls, PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, LockKind, LockOutcome,
+    LockTiming, OwnerCalls, PointMode, PressTarget, RangeRect, Selection, SelectionUi, TextChange,
+    TextStore, TextStoreChange, TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError,
+    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
 use super::capture::{Captured, Journal};
@@ -177,6 +177,10 @@ impl TextStoreHost for JournaledHost {
         };
         self.inner.show_keyboard(&served);
     }
+
+    fn selection_ui(&self) -> SelectionUi {
+        self.inner.selection_ui()
+    }
 }
 
 /// What the recording holds of a journaled store's document.
@@ -212,6 +216,10 @@ pub(crate) struct JournaledStore {
 impl TextStore for JournaledStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
 
     fn request_lock(
@@ -304,6 +312,16 @@ impl TextStore for JournaledStore {
 
     fn screen_moved(&self) {
         self.inner.screen_moved();
+    }
+
+    /// Unrecorded: an edit command's effect on the document reaches the
+    /// recording as the application edit it is.
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.inner.edit_command_enabled(command)
+    }
+
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        self.inner.perform_edit_command(command)
     }
 }
 
@@ -435,6 +453,10 @@ impl TextStoreObserver for ChangeWatch {
 
     fn layout_changed(&self) {
         self.inner.layout_changed();
+    }
+
+    fn field_moved(&self) {
+        self.inner.field_moved();
     }
 
     fn status_changed(&self) {
@@ -689,6 +711,10 @@ impl TextStoreRead for ReadTap<'_> {
     ) -> Result<Utf16Offset, TextStoreError> {
         self.log.index_at_point(self.session, point, mode)
     }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.session.visible_bounds()
+    }
 }
 
 /// A read-write lock's session as the input method sees it, journaling each
@@ -729,6 +755,10 @@ impl TextStoreRead for EditTap<'_> {
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         self.log.index_at_point(&*self.session, point, mode)
+    }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.session.visible_bounds()
     }
 }
 

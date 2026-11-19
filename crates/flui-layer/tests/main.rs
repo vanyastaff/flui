@@ -361,6 +361,10 @@ fn scene_patch_damage() {
                 d::damage_under_a_backdrop_takes_what_it_reads,
             ),
             (
+                "a_texture_frame_damages_the_footprint_of_its_users",
+                d::a_texture_frame_damages_the_footprint_of_its_users,
+            ),
+            (
                 "an_unattached_leader_never_shadows_the_attached_one",
                 d::an_unattached_leader_never_shadows_the_attached_one,
             ),

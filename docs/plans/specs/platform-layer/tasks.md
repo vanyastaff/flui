@@ -1,11 +1,10 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 128 закрыты и 6 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `4793762dd` и закрытием LY100); открытые — неотмеченные записи раздела «Ход
+  Из 134 задач серии 129 закрыты и 5 открыты (сверено с отметками записей «Хода исполнения» на
+  `main` @ `4793762dd` и закрытиями LY100 и LY69); открытые — неотмеченные записи раздела «Ход
   исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
@@ -5901,15 +5900,64 @@ GPU-память простаивающего или невидимого окн
   Режим клавиатуры — `adjustResize` с окном от края до края на всех уровнях (ADR-0340 §3,
   `the_window_resizes_its_insets_not_its_surface_on_every_level`); счёт `WindowResized` во время
   анимации клавиатуры и прогон клавиатуры — на устройстве, в parity «Soft-keyboard insets».
-- [ ] **LY69** (открыта: прямоугольники выделения и `UITextInteraction`) — невидимый responder
+- [x] **LY69** (закрыта веткой `native/ios-text-interaction`: код собран, прогоны Simulator — в
+  parity) — невидимый responder
   (`crates/flui-native/src/text/apple/ios/responder.rs`) отвечает `UITextInput` из хранилища поля
   через общий store host (`text::apple::client::TextClient`): `firstRectForRange:` и
   `caretRectForPosition:` по диапазону, `replaceRange:withText:` вдали от каретки, клавиатура по
   назначению поля (`text/apple/traits.rs`). Тесты: `a_fields_purpose_picks_its_keyboard`,
   `the_candidate_window_follows_the_composition`, `uikit_replaces_selects_and_measures_the_field`,
-  `uikit_ranges_keep_supplementary_scalars_whole`. Остаётся код: `selectionRectsForRange:` отвечает
-  пустым массивом (`responder.rs:499`) вместо прямоугольников выделения из геометрии поля;
-  `UITextInteraction` (выделение, лупа, меню правки) на responder. Резервные шрифты iOS спрашивают
+  `uikit_ranges_keep_supplementary_scalars_whole`. `selectionRectsForRange:` отвечает
+  `FluiTextSelectionRect` на каждую строку диапазона: чистая модель
+  `text/apple/selection_rects.rs` находит строки по кареткам хранилища (двоичный поиск, не больше
+  `MAX_LINES` прямоугольников), прямоугольник строки — `rect_for_range` её части, направление — по
+  каретке у первого скаляра, `containsStart`/`containsEnd` у первой и последней; таблица
+  `a_range_gets_a_rectangle_for_each_line_it_crosses` (одна строка, три строки, конец на начале
+  строки, RTL после LTR, пустой диапазон — каретка, концы внутри суррогатной пары) красная, когда
+  модель отвечает пустым массивом. `UITextInteraction` (editable) ставится на view окна, пока поле
+  обслуживается, и снимается без поля; жесты начинаются только над полем и у ручек выделения
+  (`interactionShouldBegin:atPoint:`, края ручек — `SelectionRect::handle_edges`, таблица
+  `the_handles_stand_on_the_starts_leading_and_the_ends_trailing_edge`). Store host iOS отвечает
+  `SelectionUi::Platform` (`TextStoreHost::selection_ui`), и `EditableText`, пока держит ввод,
+  не рисует своих каретки, выделения, ручек, лупы и панели и не ставит своих распознавателей
+  касаний в поле: `a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
+  `the_fields_own_handles_go_when_the_platform_takes_the_selection_ui` (обе красные без
+  переключателя). Меню правки: `cut:`/`copy:`/`paste:`/`selectAll:` и
+  `canPerformAction:withSender:` у responder, команда — `EditCommand` через
+  `TextStore::perform_edit_command`, исполняют действия поля:
+  `uikit_edit_commands_reach_the_focused_field`,
+  `the_platforms_edit_menu_reaches_the_field_through_its_store`,
+  `an_obscured_field_offers_the_platform_no_copy_or_cut` (красные без команды); `select:` —
+  `EditCommand::SelectWord`, Paste предлагается по `hasStrings`; команда доходит только до поля,
+  над которым меню предложено (`an_edit_command_reaches_only_the_field_it_was_offered_for`).
+  Прямоугольники обрезаны видимой частью поля, которую считает запрос конвейера
+  `PipelineOwner::presented_placement` (ворота и шаг обхода отрисовки; им же пользуются обход
+  input regions и `presented_nodes`): `TextStoreRead::visible_bounds`,
+  `a_field_shows_only_what_its_ancestors_clip_leaves`, `an_offstage_field_shows_nothing`;
+  каретка удерживается внутри неё
+  (`the_caret_stays_inside_the_part_of_the_field_the_window_shows`); UIKit спрашивает геометрию
+  снова только при сдвиге самого поля, его рамки или видимой части (`TextStoreObserver::field_moved`,
+  `a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved`), или после чтения геометрии,
+  отказанного без раскладки (`a_geometry_read_refused_for_lack_of_layout_is_asked_again_once_laid_out`),
+  не при движении каретки и не во время составления или жеста
+  (`a_field_move_asks_for_its_geometry_once_and_never_mid_composition_or_gesture`,
+  `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`); уход фокуса снимает жест и
+  долги старого поля (`a_focus_move_asks_for_the_next_fields_geometry_once_whatever_the_last_one_held`).
+  Жесты начинаются там, где hit test окна находит поле, или у ручки, где ни один распознаватель
+  не претендует на нажатие по тому же вопросу, которым `RecognizerSet::dispatch` пропускает
+  нажатие к `add_pointer` (`GestureRecognizer::takes_down`, с допуском привязки): перетаскивание прокрутки и сырой
+  слушатель нажатия чужой целью не считаются, бегунок полосы и строка со своим касанием —
+  считаются (`TextStore::press_target_at` вне блокировки, `PressProbe` без копии ответов,
+  `a_control_over_the_field_keeps_its_press`,
+  `a_scroll_view_around_the_field_leaves_the_handles_their_reach`,
+  `a_control_an_ancestor_draws_beside_the_field_keeps_its_press`,
+  `only_a_recognizer_that_would_take_the_press_keeps_it`, `a_press_probe_asks_each_targets_own_handler`,
+  `a_gesture_begins_on_the_field_or_on_a_handle_nothing_covers`). Клиент сообщает ответчику уход
+  со старого поля без момента «поля нет»
+  (`a_focus_move_between_fields_keeps_the_keyboard_and_leaves_the_old_field_once`); что ответчик
+  при этом закрывает меню правки и не снимает interaction, проверено только проверкой типов и
+  остаётся прогону Simulator (заметка строки parity). Клаузы
+  составления CJK не различаются: хранилище держит один диапазон составления. Резервные шрифты iOS спрашивают
   CoreText по языку (`crates/flui-native/src/fonts/apple.rs`); квадраты вместо кана и кандзи
   ([gaps](../../../gaps.md#no-text-input-on-mobile-and-the-web)) видел прогон, сделанный до этого,
   и решит прогон Simulator. Прогон на пути через store host — заметка строки parity «IME

@@ -166,6 +166,13 @@ impl<P> TextStore for DroppingStore<P> {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -358,6 +365,13 @@ impl TextStore for CountingStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -501,6 +515,13 @@ impl TextStore for ClosingStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -561,6 +582,13 @@ struct CloseOnDropStore {
 impl TextStore for CloseOnDropStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
     fn request_lock(
         &self,
@@ -715,6 +743,13 @@ impl TextStore for ReentrantCommitStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -742,6 +777,13 @@ struct FailingGateStore(Rc<InMemoryTextStore>);
 impl TextStore for FailingGateStore {
     fn status(&self) -> TextStoreStatus {
         self.0.status()
+    }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.0.press_target_at(point)
     }
 
     fn request_lock(
@@ -1042,6 +1084,13 @@ struct ProbedClosingStore {
 impl TextStore for ProbedClosingStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
     fn request_lock(
         &self,

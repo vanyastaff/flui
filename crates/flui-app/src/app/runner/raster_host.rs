@@ -35,7 +35,9 @@ use flui_engine::{
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress, SurfaceGeneration};
-use flui_layer::{DamageMode, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey};
+use flui_layer::{
+    DamageMode, DamageRegion, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey,
+};
 use flui_platform::{DisplayColor, FramePacing, PlatformWindow, RedrawRequester, SurfaceTarget};
 use flui_runtime::pump::SampledClock;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
@@ -512,6 +514,9 @@ struct Placed {
     /// The executor's count of unadopted retries when the owner last read
     /// it: one more since is a retry whose adoption panicked, answered once.
     retries_unadopted: u64,
+    /// The working vectors of a texture frame's damage, kept between
+    /// frames.
+    texture_damage: flui_layer::TextureDamageScratch,
 }
 
 /// The executor as the owner holds it in each placement (ADR-0305 §10).
@@ -2083,16 +2088,29 @@ impl RasterHost {
             generation,
         };
         let stamp = FrameStamp::new(address, epoch, generation);
-        let damage = slot.base.damage_for(&publication, key);
-        let shown = publication.scene.id();
-        let mut snapshot =
-            SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
         // The images a replaced context kept go first, so the registry's
         // newer frames replace them.
         let mut updates = std::mem::take(&mut slot.carried);
         if let Some(textures) = &slot.textures {
             updates.merge(textures.take_updates());
         }
+        let mut damage = slot.base.damage_for(&publication, key);
+        // A new image or a retirement changes the pixels of the texture's
+        // users and of nothing else, whatever the patch damaged (ADR-0304 §9).
+        // Damage already full has nothing to add; the union is held to the
+        // threshold the patch's damage was.
+        if !matches!(damage, DamageRegion::Full(_)) && !updates.is_empty() {
+            let textures = updates.frames.iter().map(|(id, _)| *id);
+            let users = publication.scene.texture_damage(
+                textures.chain(updates.retired.iter().copied()),
+                key.size,
+                &mut placed.texture_damage,
+            );
+            damage = slot.base.thresholded(damage.union(users), key.size);
+        }
+        let shown = publication.scene.id();
+        let mut snapshot =
+            SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
         if !updates.is_empty() {
             snapshot = snapshot.textures(updates);
         }
@@ -2530,6 +2548,7 @@ impl Placed {
             redraws,
             retries_sent: 0,
             retries_unadopted: 0,
+            texture_damage: flui_layer::TextureDamageScratch::default(),
         }
     }
 }

@@ -1217,6 +1217,119 @@ pub(crate) fn damage_under_a_backdrop_takes_what_it_reads() {
     );
 }
 
+/// New images of a texture damage the device footprint of each attached
+/// entry that draws it, a chunk's texture draw and a texture layer alike,
+/// closed over the backdrop that reads one of them, and nothing else: not a
+/// sibling, not an unattached node that draws it, nothing for a texture no
+/// entry draws (ADR-0304 §9).
+pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
+    let (texture, other) = (
+        flui_painting::paint::TextureId::new(7),
+        flui_painting::paint::TextureId::new(8),
+    );
+    let drawing = |version: ContentVersion| {
+        let mut canvas = Canvas::new();
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+            None,
+            flui_painting::paint::FilterQuality::Low,
+            1.0,
+        );
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::new(Chunk::new(
+            RenderId::new(2),
+            0,
+            version,
+            canvas.finish(),
+        )));
+        content.finish()
+    };
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (a, b, c, loose) = (
+        writer.mint_node(),
+        writer.mint_node(),
+        writer.mint_node(),
+        writer.mint_node(),
+    );
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(a, drawing(version)));
+    let mut layer = BoundaryContent::builder();
+    layer.push_effect(
+        Layer::from(flui_layer::TextureLayer::new(
+            texture,
+            Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
+        )),
+        RenderId::new(3),
+        0,
+    );
+    layer.pop_effect();
+    writer.push(publish(b, layer.finish()));
+    let version = writer.next_content_version().expect("a version");
+    let mut plain = BoundaryContent::builder();
+    plain.chunk(chunk(4, version, Rect::from_xywh(0.0, 0.0, 30.0, 30.0)));
+    writer.push(publish(c, plain.finish()));
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(loose, drawing(version)));
+    let mut top = BoundaryContent::builder();
+    top.slot(a);
+    top.slot(b);
+    top.push_effect(
+        Layer::from(BackdropFilterLayer::new(
+            ImageFilter::blur(2.0),
+            BlendMode::SrcOver,
+            Rect::from_xywh(290.0, 290.0, 60.0, 60.0),
+        )),
+        RenderId::new(1),
+        0,
+    );
+    top.pop_effect();
+    top.slot(c);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(a, 100.0, 100.0));
+    writer.push(place(b, 300.0, 300.0));
+    writer.push(place(c, 500.0, 100.0));
+    owner
+        .apply(SURFACE)
+        .expect("two users, a plain sibling and a loose user");
+
+    let version = owner.current();
+    // One scratch serves every call: each clears what it reads.
+    let mut scratch = flui_layer::TextureDamageScratch::default();
+    let damage = rects(version.texture_damage([texture], SURFACE.size, &mut scratch));
+    assert!(
+        covered(&damage, covering(110.0, 110.0, 130.0, 130.0)),
+        "the chunk's texture draw: {damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(283.0, 283.0, 357.0, 357.0)),
+        "the texture layer and what the backdrop over it reads: {damage:?}"
+    );
+    let sibling = covering(500.0, 100.0, 530.0, 130.0);
+    assert!(
+        damage.iter().all(|rect| !rect.overlaps(sibling)),
+        "the plain sibling: {damage:?}"
+    );
+    // Unplaced and unslotted, the loose user would land on its own draw's
+    // rect, which nothing attached meets.
+    let loose = covering(10.0, 10.0, 30.0, 30.0);
+    assert!(
+        damage.iter().all(|rect| !rect.overlaps(loose)),
+        "the loose user draws nowhere: {damage:?}"
+    );
+    assert_eq!(
+        version.texture_damage([other], SURFACE.size, &mut scratch),
+        DamageRegion::Unchanged,
+        "a texture no entry draws"
+    );
+    assert_eq!(
+        version.texture_damage([], SURFACE.size, &mut scratch),
+        DamageRegion::Unchanged
+    );
+}
+
 // patch_damage_covers_diff_damage
 
 /// A small deterministic generator, so a failing case is reproducible by its

@@ -545,6 +545,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::gesture::ContactId;",
         "pub use flui_interaction::gesture::ContactSnapshot;",
         "pub use flui_interaction::gesture::ContestCancel;",
+        "pub use flui_interaction::gesture::DownTake;",
         "pub use flui_interaction::gesture::DragDownDetails;",
         "pub use flui_interaction::gesture::GestureArena;",
         "pub use flui_interaction::gesture::GestureArenaEntry;",

@@ -86,12 +86,21 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
         _ctx: &mut EventContext<'_>,
         intent: &CopySelectionTextIntent,
     ) -> ActionOutcome {
+        self.copy(*intent)
+    }
+}
+
+impl ClipboardTextAction {
+    /// Copy the selection, and for a cut delete what the clipboard took: what
+    /// the copy and cut chords, the field's menu and the platform's edit menu
+    /// do alike.
+    pub(super) fn copy(&self, intent: CopySelectionTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };
         // A cut starts under the rule its answer re-checks, as a paste does:
         // a field that does not take an edit now is not written from.
-        if *intent == CopySelectionTextIntent::Cut && !self.admits_edit() {
+        if intent == CopySelectionTextIntent::Cut && !self.admits_edit() {
             return ActionOutcome::NotPerformed;
         }
         let controller = self.controller();
@@ -148,10 +157,19 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
         self.clipboard.is_some() && self.admits_edit()
     }
 
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
+        self.paste()
+    }
+}
+
+impl ClipboardTextAction {
+    /// Paste the clipboard's text at the selection: what the paste chord, the
+    /// field's menu and the platform's edit menu do alike.
+    ///
     /// Commits an active composition first, keeping its text, so the paste
     /// lands after it (ADR-0142 item 4); the paste runs though the commit's
     /// owner code failed, and that failure is resumed after it.
-    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
+    pub(super) fn paste(&self) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };

@@ -23,7 +23,9 @@
 //!   on-screen keyboard.
 //! - [`TextStoreHost`]: what a pull-model window offers the presentation:
 //!   which field it serves, and ending that field's composition (ADR-0135);
-//!   [`commit_composition_in_place`] when the platform cannot end it.
+//!   [`commit_composition_in_place`] when the platform cannot end it. Its
+//!   [`SelectionUi`] says whether the platform draws the served field's
+//!   selection UI, whose edit menu reaches the field as an [`EditCommand`].
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   applied as store edits, so there is one editing path.
 //!
@@ -42,7 +44,9 @@ mod session;
 mod store;
 pub mod utf16;
 
-pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError, commit_composition_in_place};
+pub use host::{
+    CompositionEnd, SelectionUi, TextStoreHost, TextStoreHostError, commit_composition_in_place,
+};
 pub use input_options::{
     Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions,
     TextInputPurpose,
@@ -54,8 +58,8 @@ pub use lock::{
 pub use owner_calls::OwnerCalls;
 pub use projection::project_ime_event;
 pub use session::{
-    Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
-    TextStoreStatus,
+    Composition, PointMode, PressTarget, RangeRect, Selection, TextChange, TextStoreEdit,
+    TextStoreRead, TextStoreStatus,
 };
-pub use store::{TextStore, TextStoreChange, TextStoreObserver};
+pub use store::{EditCommand, TextStore, TextStoreChange, TextStoreObserver};
 pub use utf16::{OffsetError, Utf16Offset, Utf16Range};

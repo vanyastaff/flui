@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use flui_interaction::{
-    gesture::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer},
+    gesture::{CancelOutcome, DownTake, GestureArenaMember, GestureContest, GestureRecognizer},
     pointer::PointerDispatch,
 };
 
@@ -41,6 +41,11 @@ impl<R: GestureRecognizer> GestureArenaMember for RecognizerAttachment<R> {
 }
 
 impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
+    /// The current owner's answer; none without an owner.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake> {
+        self.owner().and_then(|owner| owner.takes_down(down))
+    }
+
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         if let Some(owner) = self.owner() {
             owner.add_pointer(dispatch);

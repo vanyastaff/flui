@@ -15,10 +15,38 @@ use web_time::{Duration, Instant};
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a gesture recognizer",
     label = "missing `impl GestureRecognizer for {Self}`",
-    note = "a recognizer implements `GestureRecognizer` (`add_pointer`, `handle_event`, `cancel`) and its supertrait `GestureArenaMember` (`accept_gesture`, `reject_gesture`), and joins the arena through `ArenaMembership` or `PrimaryContact`"
+    note = "a recognizer implements `GestureRecognizer` (`takes_down`, `add_pointer`, `handle_event`, `cancel`) and its supertrait `GestureArenaMember` (`accept_gesture`, `reject_gesture`), and joins the arena through `ArenaMembership` or `PrimaryContact`"
 )]
 pub trait GestureRecognizer: GestureArenaMember {
-    /// Admit a Down, committing membership before invoking user callbacks.
+    /// How this recognizer takes the Down `down` carries, judged from the
+    /// Down and the recognizer's configuration alone, never its in-flight
+    /// state: `None` when it refuses it (a button it has no callback for, a
+    /// secondary press it does not handle, a Down without a position),
+    /// [`DownTake::Press`] when it contends for the press itself (a tap, a
+    /// long press, a hold), [`DownTake::Motion`] when it joins the contact but
+    /// claims it only once it moves past its slop (a drag, a scale, a swipe).
+    ///
+    /// The one answer both questions ask: [`RecognizerSet::dispatch`](super::RecognizerSet::dispatch)
+    /// is the gate, offering [`Self::add_pointer`] only a Down this takes, and
+    /// a platform asking whether a widget would take a press counts only
+    /// `Press` ([`RecognizerSet::claims_press`](super::RecognizerSet::claims_press)).
+    /// The built-in recognizers ask it again in `add_pointer`, so a direct call
+    /// is gated too; a recognizer need not.
+    /// No default: a recognizer that left it out would either take every
+    /// press from the platform or none.
+    ///
+    /// It must be pure: a platform asks it between owner turns, outside the
+    /// UI runtime's scope, where no signal can be read or written. Because it
+    /// reads configuration, never in-flight state, a Down the recognizer
+    /// would still refuse for a moment's reason (a tap already in progress, a
+    /// contact its arena membership cannot begin) answers `Press` all the
+    /// same: a platform's gesture then stands back from a touch that nobody
+    /// takes, the cautious side of the question.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake>;
+    /// Admit a Down, committing membership before invoking user callbacks. A
+    /// [`RecognizerSet`](super::RecognizerSet) offers only a Down
+    /// [`Self::takes_down`] takes; whether a call made directly is checked
+    /// again is the recognizer's choice (the built-in ones check).
     fn add_pointer(&self, down: PointerDispatch<'_>);
     /// Admit the `Start` of a touchpad swipe
     /// ([`TouchpadSwipe`](crate::events::PointerEvent::TouchpadSwipe)), whose
@@ -57,6 +85,29 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn feeds_scroll_contact(&self) -> bool {
         false
     }
+}
+
+/// How a recognizer takes a Down it accepts ([`GestureRecognizer::takes_down`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a recognizer contends for a press either from the Down or once the contact moves: there is no third way"
+)]
+pub enum DownTake {
+    /// It contends for the press itself: a tap, a long press, a hold.
+    Press,
+    /// It joins the contact but claims it only once it moves past its slop:
+    /// a drag, a scale, a swipe.
+    Motion,
+}
+
+/// [`GestureRecognizer::takes_down`]'s shape test shared by the recognizers
+/// that admit only a primary Down with a finite position in both spaces.
+pub(crate) fn primary_down_at_a_point(down: PointerDispatch<'_>) -> bool {
+    use crate::events::PointerEventExt;
+    is_primary_down(down.local)
+        && down.local.position().is_some_and(Offset::is_finite)
+        && down.global.position().is_some_and(Offset::is_finite)
 }
 
 /// Whether a recognizer allowing `devices` admits a contact of `kind`.

@@ -312,6 +312,46 @@ impl<'a> RenderObjectContext<'a> {
             .withdraw_scroll_contact_feed(target)?)
     }
 
+    /// Register a pointer handler that also answers whether its target would
+    /// contend for a press a [`PressProbe`](flui_interaction::pointer::PressProbe)
+    /// asks about (a listener's recognizers, a text link's span); the returned
+    /// target is data-only, as [`Self::register_pointer`]'s.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::register_pointer`].
+    pub fn register_pointer_handler(
+        &self,
+        handler: impl flui_interaction::pointer::PointerTargetHandler,
+    ) -> Result<flui_interaction::pointer::PointerTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_pointer_handler(handler)?)
+    }
+
+    /// Replace a target's handler with one that also answers a press probe,
+    /// without changing its data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::replace_pointer`].
+    pub fn replace_pointer_handler(
+        &self,
+        target: flui_interaction::pointer::PointerTarget,
+        handler: impl flui_interaction::pointer::PointerTargetHandler,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_pointer_handler(target, handler)?)
+    }
+
+    /// The probe that asks the pointer targets of this render object's UI
+    /// runtime whether they would take a press; `None` in a context mounted
+    /// without an interaction lane.
+    #[must_use]
+    pub fn press_probe(&self) -> Option<flui_interaction::pointer::PressProbe> {
+        self.interaction_dispatch
+            .map(flui_interaction::pointer::InteractionDispatchHandle::press_probe)
+    }
+
     /// Declare the axis a scroll target scrolls along and whether it has
     /// anywhere to go, so it competes for a touchpad pan (ADR-0251). See
     /// [`InteractionDispatchHandle::declare_scroll_target_axis`](flui_interaction::pointer::InteractionDispatchHandle::declare_scroll_target_axis).

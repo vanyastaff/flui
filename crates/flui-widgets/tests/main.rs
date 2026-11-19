@@ -76,6 +76,8 @@ mod editable_text;
 mod editable_text_clipboard;
 #[path = "editable_text_handles.rs"]
 mod editable_text_handles;
+#[path = "editable_text_platform_selection.rs"]
+mod editable_text_platform_selection;
 #[path = "first_click.rs"]
 mod first_click;
 #[path = "flex_parent_data.rs"]

@@ -210,6 +210,51 @@ pub(crate) fn patch_damage(
     (damage, cost)
 }
 
+/// The working vectors of [`SceneVersion::texture_damage`], kept by the
+/// raster side between texture frames so a frame allocates only when it
+/// outgrows them. Each call clears what it uses before it reads it.
+///
+/// [`SceneVersion::texture_damage`]: super::SceneVersion::texture_damage
+#[derive(Debug, Default)]
+pub struct TextureDamageScratch {
+    /// The users' footprints, in surface pixels.
+    rects: Vec<Rect<f64>>,
+    closures: Closures,
+}
+
+/// The damage new images of `textures` make in `version`, on a surface of
+/// `surface` device pixels: the footprint of every attached entry that draws
+/// one, closed over what filters read (ADR-0304 §9). It costs the users of
+/// `textures`, each by the depth of its node, read off the texture index;
+/// when they damage anything, the closure reads the version's filtered
+/// nodes too.
+pub(crate) fn texture_damage(
+    version: &VersionInner,
+    textures: impl IntoIterator<Item = flui_painting::paint::TextureId>,
+    surface: (u32, u32),
+    scratch: &mut TextureDamageScratch,
+) -> DamageRegion {
+    let geometry = Geometry::new(version);
+    let TextureDamageScratch { rects, closures } = scratch;
+    let mut footprints = Footprints::new(rects);
+    for texture in textures {
+        for user in version.textures.get(texture.get()).into_iter().flatten() {
+            footprints.add(geometry.entry_reach(user.node, user.entry));
+        }
+    }
+    let region = footprints.region(surface);
+    if region == DamageRegion::Unchanged {
+        return region;
+    }
+    close_filtered(
+        region,
+        &[(geometry, version)],
+        surface,
+        &mut FootprintCost::default(),
+        closures,
+    )
+}
+
 /// The followers of `next` whose transform differs from their pair's in
 /// `base`, as `(before, after)` addresses, into `moved`. A follower is paired
 /// with the one of the same rank on the same link in the same node.

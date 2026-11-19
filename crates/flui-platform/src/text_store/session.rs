@@ -236,6 +236,43 @@ pub trait TextStoreRead {
         point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError>;
+
+    /// The part of the field's box the window shows, in window-root logical
+    /// pixels: [`Self::document_bounds`] cut by every clip of the field's
+    /// ancestors (a scroll view, an app bar's clip) and by the window. `None`
+    /// when none of it is shown. What a platform draws over the field (iOS's
+    /// caret, selection highlight and handles) stays inside it.
+    ///
+    /// No default: a store that wraps another forwards it, and one that left
+    /// it out would draw a platform's selection over whatever clips the
+    /// field.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::NoLayout`] when the field is not laid out, or the
+    /// window's tree cannot be read now.
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError>;
+}
+
+/// What a press at a point would land on ([`TextStore::press_target_at`](super::TextStore::press_target_at)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a press lands on the field, on another target or on none: there is no fourth place"
+)]
+pub enum PressTarget {
+    /// The field.
+    Field,
+    /// Another target that would contend for a touch going down there: a
+    /// recognizer that takes the Down as a press, its admission accepting it,
+    /// whether its widget is drawn over the field, beside it, or around it (a
+    /// scrollbar's thumb, a tappable row).
+    Other,
+    /// Nothing that contends for a press: the bare page, a raw listener that
+    /// only observes the Down (a field's own padding focusing it), or only
+    /// recognizers that claim a contact past their slop (a scroll view's
+    /// drag, an edge swipe), admission or not.
+    Nothing,
 }
 
 /// The edits a platform makes under a read-write lock.

@@ -31,7 +31,7 @@ pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, PipelineCell,
-    PipelineCounters, PipelineOwner, ReleaseDetachedRenderSubtreesError,
+    PipelineCounters, PipelineOwner, PresentedPlacement, ReleaseDetachedRenderSubtreesError,
     ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 #[cfg(any(test, feature = "testing"))]
