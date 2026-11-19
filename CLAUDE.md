@@ -6,6 +6,11 @@ The project guide is shared by every agent runtime and lives in one place:
 
 @AGENTS.md
 
+A plugin, skill or hook that brings another process for this repository (roles, review steps,
+where a spec lives, which checks run) yields to AGENTS.md and this file. `.claude/settings.json`
+turns off the rust-studio prompts that repeat the session's memory and steer toward its own
+skills.
+
 ## Delegating
 
 The session keeps what needs the whole picture: the decomposition, the design decisions and the

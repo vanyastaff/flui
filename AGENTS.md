@@ -383,9 +383,8 @@ tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRI
 
 ## Review guidelines
 
-Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the readers and the
-judge of "Before a merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
-Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
+Pull request reviewers (Codex, Claude Code Review, the readers and the judge of "Before a merge")
+work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
 would be embarrassed by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
