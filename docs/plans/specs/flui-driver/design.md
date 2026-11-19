@@ -959,8 +959,10 @@ fixture, with an identifier on every interactive widget.
   applies to the element and layer ids that `InspectId` wraps.
 - One owner per window serializes jobs (F7). The endpoint keeps a bounded queue per connection
   (`busy` beyond it) and a connection cap. OS lanes take the desktop's input lock (an OS file lock
-  in the user's temporary directory, one per user's desktop; a lock file another user owns is
-  `busy` too), so two drivers never interleave real input on one desktop.
+  in the user's temporary directory, one per user's desktop; `busy` only while another handle
+  holds the lock, a lock file this user may only read opened for reading, one it cannot open the
+  driver's I/O failure, never retried), so two drivers never interleave real input on one
+  desktop.
 - Accepted work stays deliverable (F3). An action enqueued before its deadline stays queued; the
   reply says `may_have_run`. The driver never resends an `Acts` method on timeout; front ends
   surface the effect.

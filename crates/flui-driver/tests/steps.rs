@@ -134,6 +134,54 @@ fn every_move_is_a_single_step_followed_by_a_pause() {
             ],
         ),
         (
+            "a jump beside a stroke stays a jump, and the stroke keeps its pace",
+            ActionSequence::new(vec![
+                touch(
+                    "a",
+                    vec![move_to(100.0, 100.0, 0), move_to(150.0, 100.0, 0)],
+                ),
+                touch(
+                    "b",
+                    vec![move_to(200.0, 100.0, 0), move_to(232.0, 100.0, 32)],
+                ),
+            ]),
+            vec![
+                a(200),
+                b(400),
+                OsEvent::Pause(STEP),
+                a(300),
+                b(432),
+                OsEvent::Pause(step),
+                b(464),
+                OsEvent::Pause(step),
+            ],
+        ),
+        (
+            "a short stroke beside a long one is not slowed to the long one's pace",
+            ActionSequence::new(vec![
+                touch(
+                    "a",
+                    vec![move_to(100.0, 100.0, 0), move_to(116.0, 100.0, 16)],
+                ),
+                touch(
+                    "b",
+                    vec![move_to(200.0, 100.0, 0), move_to(248.0, 100.0, 48)],
+                ),
+            ]),
+            vec![
+                a(200),
+                b(400),
+                OsEvent::Pause(STEP),
+                a(232),
+                b(432),
+                OsEvent::Pause(step),
+                b(464),
+                OsEvent::Pause(step),
+                b(496),
+                OsEvent::Pause(step),
+            ],
+        ),
+        (
             "a lasting move is split into steps of its duration, each paused",
             pointer(vec![move_to(0.0, 0.0, 0), move_to(30.0, 0.0, 48)]),
             vec![

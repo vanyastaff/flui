@@ -13,11 +13,16 @@
 //!   bytes. Past that the thread stops reading until the caller takes one, so the app's own bound
 //!   on what a client leaves unread applies, and nothing is dropped unseen.
 //! - **One owner of the broken state.** Every line reaches the caller through
-//!   [`SocketConnection::receive`], which records why the connection broke the first time it
-//!   hears; once broken, every later call fails at once as the app's process gone, never waiting.
+//!   [`SocketConnection::receive`], and why the connection broke is recorded in one place
+//!   ([`SocketConnection::take`]) the first time it is heard; once broken, every later call fails
+//!   at once as the app's process gone, never waiting. The lines that came before the break still
+//!   reach the caller, in order: the thread hands over every line it read, and those the stream
+//!   has ready, before why it ended, whether the app closed or a write to it failed, and a send
+//!   that finds the thread ended keeps the lines it reads off the channel to learn why.
 //! - A call takes the first line that answers its id: a late answer to an earlier call that timed
 //!   out is passed over.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
@@ -88,6 +93,9 @@ pub(crate) struct SocketConnection {
     events: Events,
     /// Why the connection broke, once it did.
     broken: Option<String>,
+    /// Lines the thread handed over before it ended, read off its channel to learn why: the caller
+    /// takes them before the break.
+    held: VecDeque<Vec<u8>>,
     opened: Instant,
 }
 
@@ -129,6 +137,7 @@ impl SocketConnection {
             next_id: 1,
             events: Events::default(),
             broken: None,
+            held: VecDeque::new(),
             opened: Instant::now(),
         };
         connection.greet(token)?;
@@ -173,21 +182,35 @@ impl SocketConnection {
         if sent {
             return Ok(());
         }
-        // The thread ended: why is waiting on its channel.
-        let why = match self.receive(Some(Instant::now())) {
-            Err(why) => why,
-            Ok(_) => "the connection to the app closed".to_owned(),
+        // The thread ended: why is on its channel, after the lines it handed over before. Those
+        // lines are kept for the caller, and the first failure is the one reported.
+        let why = loop {
+            match self.take(None) {
+                Ok(Some(line)) => self.held.push_back(line),
+                Err(why) => break why,
+                // The thread ended, so its channel is closed: `take` answers the end.
+                Ok(None) => break "the connection to the app closed".to_owned(),
+            }
         };
         Err(Error::process_gone(why, None))
     }
 
     /// The next line, waiting until `deadline` for it (not at all with `None`): `Ok(None)` when
-    /// none came by then, `Err` with why once the connection broke. The one place the broken state
-    /// is recorded.
+    /// none came by then, `Err` with why once the connection broke and every line before the break
+    /// was taken.
     fn receive(
         &mut self,
         deadline: Option<Instant>,
     ) -> std::result::Result<Option<Vec<u8>>, String> {
+        if let Some(line) = self.held.pop_front() {
+            return Ok(Some(line));
+        }
+        self.take(deadline)
+    }
+
+    /// The next line off the thread's channel, as [`Self::receive`] answers it: the one place the
+    /// broken state is recorded, the first failure kept.
+    fn take(&mut self, deadline: Option<Instant>) -> std::result::Result<Option<Vec<u8>>, String> {
         if let Some(why) = &self.broken {
             return Err(why.clone());
         }
@@ -412,20 +435,15 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
                 Err(_) => return stream.shutdown(),
             }
         }
-        if waiting.is_none()
-            && let Some(why) = ended.take()
-        {
-            // Every line before the end was handed over: the end is reported once.
-            let _ = lines.send(Err(why));
-            return stream.shutdown();
+        if let Some(why) = ended.take() {
+            return finish(stream, lines, waiting, &mut reader, &mut chunk, why);
         }
         // Send what the driver handed over; its channel closing is the driver leaving.
         loop {
             match to_send.try_recv() {
                 Ok(line) => {
                     if let Err(why) = stream.write_line(&line) {
-                        let _ = lines.send(Err(why));
-                        return stream.shutdown();
+                        return finish(stream, lines, waiting, &mut reader, &mut chunk, why);
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -451,14 +469,53 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
         match to_send.recv_timeout(IDLE) {
             Ok(line) => {
                 if let Err(why) = stream.write_line(&line) {
-                    let _ = lines.send(Err(why));
-                    return stream.shutdown();
+                    return finish(stream, lines, waiting, &mut reader, &mut chunk, why);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return stream.shutdown(),
         }
     }
+}
+
+/// The end of the conversation, for `why`, its first failure: the line `waiting` for room, the
+/// complete lines `reader` holds and those the stream has ready, at most [`MAX_REPLY`] bytes more,
+/// are handed over in order, each as the caller makes room, and then `why`. A driver that leaves
+/// meanwhile takes what is left in its drop, so no hand-over waits for ever.
+fn finish(
+    stream: &Io,
+    lines: &SyncSender<Incoming>,
+    waiting: Option<Vec<u8>>,
+    reader: &mut LineReader,
+    chunk: &mut [u8],
+    why: String,
+) {
+    let mut pending = waiting;
+    let mut residue = MAX_REPLY;
+    loop {
+        let line = match pending.take() {
+            Some(line) => line,
+            None => match reader.next_line() {
+                Ok(Some(line)) => line,
+                Ok(None) if residue > 0 => match stream.read(chunk) {
+                    Ok(Received::Bytes(count)) => {
+                        reader.push(&chunk[..count]);
+                        residue = residue.saturating_sub(count);
+                        continue;
+                    }
+                    // Nothing ready, the end or a break: what came before it is handed over.
+                    Ok(Received::Nothing | Received::End) | Err(_) => break,
+                },
+                // The bound is spent, or a line too long: the first failure stays the one reported.
+                Ok(None) | Err(_) => break,
+            },
+        };
+        if lines.send(Ok(line)).is_err() {
+            return stream.shutdown();
+        }
+    }
+    let _ = lines.send(Err(why));
+    stream.shutdown();
 }
 
 /// The endpoint's name for `address`, as the app binds it.

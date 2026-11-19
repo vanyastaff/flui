@@ -129,9 +129,14 @@ impl fmt::Display for Announcement {
 /// The lock of an OS-input session: one per user's desktop at a time.
 ///
 /// An OS file lock on a file in the user's temporary directory, so it is released when the process
-/// holding it ends, however it ends. A desktop is a user's session, so the lock is per user; where
-/// the temporary directory is shared between users (`/tmp`), a lock file another user created and
-/// holds cannot be opened for writing, and that is answered `busy` too, as another session's.
+/// holding it ends, however it ends. A desktop is a user's session, so the lock is per user.
+///
+/// The lock is the OS's file lock, not the file's contents or permissions, so `busy` is answered
+/// only when the lock is shown to be held: the OS refuses it because another handle has it. A file
+/// this user may only read (another user's file in a shared `/tmp`, or one made read-only) is
+/// opened for reading, which is enough to take the lock, so a lock file left by a session that
+/// ended never blocks the next one. A file that cannot be opened at all is a typed [`Error::Io`]
+/// with no retry: no waiting makes it open.
 #[derive(Debug)]
 #[must_use = "the lock is released when this is dropped"]
 pub struct OsInputLock {
@@ -150,24 +155,19 @@ impl OsInputLock {
     ///
     /// # Errors
     ///
-    /// [`Error::Busy`] while another session holds it, or another user owns the file;
-    /// [`Error::Io`] when the file cannot be opened for another reason.
+    /// [`Error::Busy`] while another session holds the lock; [`Error::Io`] when the file cannot
+    /// be opened, even for reading, or the OS fails the lock for another reason.
     pub fn acquire(path: &Path) -> Result<Self> {
-        let busy = |whose: &str| {
-            Error::busy(format!(
-                "{whose} sends OS input on this desktop ({}); one runs at a time",
-                path.display()
-            ))
-        };
-        let opened = OpenOptions::new()
+        let created = OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
             .open(path);
-        let file = match opened {
+        let file = match created {
             Ok(file) => file,
+            // Reading is enough to take an OS file lock.
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                return Err(busy("another user's session"));
+                File::open(path).map_err(|_| Error::Io(error))?
             }
             Err(error) => return Err(Error::Io(error)),
         };
@@ -176,7 +176,10 @@ impl OsInputLock {
                 file,
                 path: path.to_owned(),
             }),
-            Err(std::fs::TryLockError::WouldBlock) => Err(busy("another session")),
+            Err(std::fs::TryLockError::WouldBlock) => Err(Error::busy(format!(
+                "another session sends OS input on this desktop ({}); one runs at a time",
+                path.display()
+            ))),
             Err(std::fs::TryLockError::Error(error)) => Err(Error::Io(error)),
         }
     }

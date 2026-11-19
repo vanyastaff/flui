@@ -9,11 +9,13 @@ use flui_driver::lane::LaneWorker;
 use flui_driver::os_input::OsInputLock;
 use flui_driver::protocol::act::EffectKind;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
+use flui_driver::protocol::events::Event;
 use flui_driver::protocol::geometry::LogicalPoint;
+use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::method::{self, Method};
 use flui_driver::protocol::tree::{ElementRef, WindowId};
 use flui_driver::steps::OsEvent;
-use flui_driver::testing::{Reply, ScriptedAgent, ScriptedLane};
+use flui_driver::testing::{AfterLines, Reply, ScriptedAgent, ScriptedLane};
 use flui_driver::{Driver, Error, InputPath, InputPolicy, Isolation, Launch};
 use serde_json::json;
 
@@ -169,6 +171,222 @@ fn a_connection_the_app_closed_between_calls_answers_gone_at_once() {
     );
 }
 
+/// A frame event numbered `frame`, a short line.
+fn frame_event(frame: u64) -> serde_json::Value {
+    json!({
+        "event": "frame",
+        "params": { "window": "w1", "frame": frame, "presented": true },
+    })
+}
+
+/// A frame event numbered `frame`, padded to about 16 KiB so a few of them fill a socket's
+/// buffers.
+fn padded_frame(frame: u64) -> serde_json::Value {
+    json!({
+        "event": "frame",
+        "params": { "window": "w1", "frame": frame, "presented": true, "padding": "x".repeat(16 << 10) },
+    })
+}
+
+/// The frame numbers of `events`, in order.
+fn frames(events: &[Event]) -> Vec<u64> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Frame(frame) => Some(frame.frame),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_caller_that_stops_reading_stops_the_connection_reading_and_loses_nothing() {
+    const SENT: u64 = 256;
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME],
+        Box::new(|_, _| Reply::ResultThenLines {
+            result: json!({ "windows": ["w1"] }),
+            lines: (1..=SENT).map(padded_frame).collect(),
+            then: AfterLines::Serve,
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    driver.windows().expect("the answer before the lines");
+    // The caller reads nothing for a while: the connection holds its 16 lines, stops reading, and
+    // the app's writes back up behind the socket's buffers. Wait until the app's writing stalls.
+    let mut written = agent.lines_written();
+    let stalled_by = Instant::now() + Duration::from_secs(20);
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = agent.lines_written();
+        if now == written || Instant::now() >= stalled_by {
+            break;
+        }
+        written = now;
+    }
+    let all = usize::try_from(SENT).expect("a small count") + 2;
+    assert!(
+        written < all,
+        "the connection stopped reading: the app wrote {written} of {all} lines"
+    );
+    // Once the caller reads again, every line arrives, in order, none dropped.
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while seen.len() < usize::try_from(SENT).expect("a small count") {
+        assert!(
+            Instant::now() < deadline,
+            "only {} lines arrived",
+            seen.len()
+        );
+        let (events, dropped) = driver.take_events();
+        assert_eq!(dropped, 0, "no event was dropped");
+        seen.extend(frames(&events));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(seen, (1..=SENT).collect::<Vec<_>>());
+}
+
+#[test]
+fn lines_the_app_sent_before_it_closed_still_reach_the_caller_after_a_failed_send() {
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME],
+        Box::new(|_, _| Reply::ResultThenLines {
+            result: json!({ "windows": ["w1"] }),
+            lines: vec![padded_frame(7)],
+            then: AfterLines::Close,
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    driver
+        .windows()
+        .expect("the answer before the event and the close");
+    agent
+        .join(Duration::from_secs(5))
+        .expect("the stand-in closed its end");
+    // Let the connection's thread take the event and the end, and stop.
+    std::thread::sleep(Duration::from_millis(300));
+    match driver.windows() {
+        Err(Error::Gone {
+            kind: Some(HandleKind::Process),
+            ref message,
+            ..
+        }) => assert!(
+            message.contains("the app closed the connection"),
+            "the first failure is the one reported: {message}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    let (events, dropped) = driver.take_events();
+    assert_eq!(
+        (frames(&events), dropped),
+        (vec![7], 0),
+        "the event sent before the close is kept"
+    );
+}
+
+#[test]
+fn lines_waiting_for_the_caller_still_reach_it_when_a_write_to_the_app_fails() {
+    // More than wait for a caller that is not reading, and few enough that the stand-in's own
+    // buffer takes the rest, so it reaches its stop.
+    const SENT: u64 = 20;
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME, method::InputInject::NAME],
+        Box::new(|_, _| Reply::ResultThenLines {
+            result: json!({ "windows": ["w1"] }),
+            lines: (1..=SENT).map(frame_event).collect(),
+            then: AfterLines::StopReading(Duration::from_secs(20)),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    let mut window = driver.main_window().expect("the answer before the events");
+    // Let the connection's thread fill the caller's room and stop reading.
+    std::thread::sleep(Duration::from_millis(300));
+    // A request larger than the stream's buffers, to an app that reads nothing: the write fails.
+    let text = ActionSequence::new(vec![InputSource::Text {
+        text: "x".repeat(900 << 10),
+    }]);
+    match window.perform(text) {
+        Err(Error::Gone {
+            kind: Some(HandleKind::Process),
+            ref message,
+            ..
+        }) => assert!(
+            message.contains("the app stopped reading"),
+            "the write's failure is the one reported: {message}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    let (events, dropped) = driver.take_events();
+    assert_eq!(
+        (frames(&events), dropped),
+        ((1..=SENT).collect::<Vec<u64>>(), 0),
+        "every event sent before the write failed is kept, in order"
+    );
+}
+
+#[test]
+fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
+    let readings = Arc::new(AtomicUsize::new(0));
+    let read = Arc::clone(&readings);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementActionability::NAME,
+            method::WaitUntil::NAME,
+            method::InputInject::NAME,
+        ],
+        Box::new(move |name, params| match name {
+            "element.actionability" => {
+                // Disabled until the frame that ends the wait.
+                let enabled = read.fetch_add(1, Ordering::SeqCst) > 0;
+                Reply::Result(json!({
+                    "attached": true,
+                    "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
+                    "visible": true,
+                    "stable": true,
+                    "enabled": enabled,
+                    "receives": true,
+                    "point": { "x": 5.0, "y": 5.0 },
+                    "revision": 1,
+                }))
+            }
+            "wait.until" => {
+                // The frame presents at the very end of the wait's timeout.
+                let timeout_ms = params["timeout_ms"].as_u64().unwrap_or(5_000).min(2_000);
+                std::thread::sleep(Duration::from_millis(timeout_ms));
+                Reply::Result(json!({
+                    "satisfied": true,
+                    "frames": 1,
+                    "observation": { "revision": 2, "count": 0 },
+                }))
+            }
+            "input.inject" => Reply::Result(json!({
+                "via": "synthetic",
+                "effect": { "kind": "ran" },
+            })),
+            _ => Reply::Result(json!({ "windows": ["w1"] })),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    let element: ElementRef = "w1/e1".parse().expect("an element handle");
+    let tapped = driver
+        .window(element.window)
+        .element(element)
+        .timeout(Duration::from_millis(150))
+        .tap()
+        .expect("the element turned actionable on the frame the wait ended on");
+    assert_eq!(tapped.effect.kind, EffectKind::Ran);
+    assert_eq!(
+        readings.load(Ordering::SeqCst),
+        2,
+        "the facts were read again after the last frame"
+    );
+}
+
 #[test]
 fn actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing() {
     let agent = ScriptedAgent::start(
@@ -279,26 +497,31 @@ fn os_input_whose_effect_cannot_be_read_back_may_have_run() {
 }
 
 #[test]
-fn a_lock_file_another_user_owns_is_busy() {
+fn the_desktop_lock_is_busy_only_while_another_session_holds_it() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let path = dir.path().join("os-input.lock");
-    std::fs::write(&path, b"").expect("the lock file");
-    let mut permissions = std::fs::metadata(&path)
-        .expect("its metadata")
-        .permissions();
-    permissions.set_readonly(true);
-    std::fs::set_permissions(&path, permissions).expect("read-only, as another user's file is");
+    let held = OsInputLock::acquire(&path).expect("the first session takes the lock");
     let refused = OsInputLock::acquire(&path);
-    assert!(matches!(refused, Err(Error::Busy { .. })), "{refused:?}");
-    let mut writable = std::fs::metadata(&path)
-        .expect("its metadata")
-        .permissions();
-    #[expect(
-        clippy::permissions_set_readonly_false,
-        reason = "the test gives its own file back so its directory can be removed"
-    )]
-    writable.set_readonly(false);
-    let _ = std::fs::set_permissions(&path, writable);
+    assert!(
+        matches!(
+            refused,
+            Err(Error::Busy {
+                retry: Retry::Soon,
+                ..
+            })
+        ),
+        "a held lock is busy, worth asking again soon: {refused:?}"
+    );
+    drop(held);
+    drop(OsInputLock::acquire(&path).expect("free once the first session ends"));
+
+    // What cannot be a lock file at all (here a directory) is refused as what it is, with no
+    // retry: no session holds it, so waiting never makes it open.
+    let refused = OsInputLock::acquire(dir.path());
+    match refused {
+        Err(ref error @ Error::Io(_)) => assert_eq!(error.retry(), Retry::Never),
+        other => panic!("a lock file that cannot open is not busy: {other:?}"),
+    }
 }
 
 #[test]
