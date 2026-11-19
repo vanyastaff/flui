@@ -650,7 +650,7 @@ pub(crate) fn a_close_from_a_thread_without_a_loop_is_refused() {
         .expect("the request does not panic");
     assert_eq!(
         answered,
-        Err(flui_app::app::CloseRequestError::NoHostedRuntime)
+        Err(flui_app::app::PresentationCloseError::NoHostedRuntime)
     );
     started.run.run_owner_turn();
     assert!(started.run.is_running(), "the window stayed open");

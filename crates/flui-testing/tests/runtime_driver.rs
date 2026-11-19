@@ -24,13 +24,13 @@ use flui_rendering::hit_testing::CursorIcon;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_scheduler::SchedulerPhase;
 use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, loose, tight};
-use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
+use flui_testing::{A11yTree, Action, ActionRequest, HeadlessHost, HeadlessWindow, TreeId};
 use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_view::prelude::*;
 use flui_view::{RenderView, View};
 use flui_widgets::{
-    ColoredBox, EditableText, GestureDetector, MouseRegion, Padding, Semantics, SizedBox, Text,
-    TextEditingController,
+    ColoredBox, EditableText, GestureDetector, MouseRegion, Padding, Row, Semantics, SizedBox,
+    Text, TextEditingController,
 };
 
 // ---------------------------------------------------------------------------
@@ -462,22 +462,114 @@ fn the_harness_paints_after_a_post_frame_unwind() {
 // ---------------------------------------------------------------------------
 
 /// A hovered `MouseRegion`'s cursor reaches the UI runtime's window, through the
-/// presentation's mouse tracker.
+/// presentation's mouse tracker: a system icon, an application's image and
+/// no cursor at all alike, and the arrow comes back once the pointer leaves
+/// the region.
 ///
-/// Fails against a harness with no window: the cursor goes nowhere.
+/// Fails against a harness with no window: the cursor goes nowhere; and,
+/// for the image and the hidden cursor, where a region's request carries
+/// only an icon.
 #[test]
 fn mouse_region_cursor_reaches_the_window_through_the_ui_runtime() {
-    let laid = lay_out(
-        MouseRegion::new()
-            .cursor(CursorIcon::Pointer)
-            .child(SizedBox::new(40.0, 40.0)),
-        tight(100.0, 100.0),
-    );
-    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Default));
+    let image = flui_platform::CursorImage::try_new(2, 2, (1, 1), vec![255; 16])
+        .expect("a 2x2 image with its hotspot inside");
+    let cases = [
+        ("icon", Cursor::Icon(CursorIcon::Pointer)),
+        ("image", Cursor::Image(image)),
+        ("hidden", Cursor::Hidden),
+    ];
+    for (case, asked) in cases {
+        // Loose: the region keeps its 40 by 40 at the window's top left.
+        let laid = lay_out(
+            MouseRegion::new()
+                .cursor(asked.clone())
+                .child(SizedBox::new(40.0, 40.0)),
+            loose(100.0),
+        );
+        assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Default), "{case}");
 
-    laid.dispatch_pointer_hover(20.0, 20.0);
+        laid.dispatch_pointer_hover(20.0, 20.0);
+        assert_eq!(laid.cursor(), asked, "{case}: over the region");
 
-    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Pointer));
+        laid.dispatch_pointer_hover(80.0, 80.0);
+        assert_eq!(
+            laid.cursor(),
+            Cursor::Icon(CursorIcon::Default),
+            "{case}: off the region"
+        );
+    }
+}
+
+/// A region asking for an image over a window that refuses it gets the arrow,
+/// not the cursor of the region the pointer came from, whichever refusal: a
+/// window that shows no image (`Unsupported`, as its `cursor_image`
+/// capability says) and one whose window system fails to make the cursor
+/// (`Platform`). Back over the hand, the hand shows again.
+///
+/// Fails without the fallback: the window keeps the pointing hand; and, with
+/// a fallback for `Unsupported` alone, in the `Platform` case.
+#[test]
+fn a_refused_image_cursor_shows_the_arrow() {
+    let windows = [
+        (
+            "shows no image",
+            HeadlessWindow::new(100, 100).without_cursor_images(),
+        ),
+        (
+            "fails to make one",
+            HeadlessWindow::new(100, 100).failing_cursor_images(),
+        ),
+    ];
+    for (case, window) in windows {
+        let image = flui_platform::CursorImage::try_new(2, 2, (0, 0), vec![255; 16])
+            .expect("a 2x2 image with its hotspot inside");
+        let mut host = HeadlessHost::new(window);
+        host.attach(&Row::new((
+            MouseRegion::new()
+                .cursor(CursorIcon::Pointer)
+                .child(SizedBox::new(40.0, 40.0)),
+            MouseRegion::new()
+                .cursor(Cursor::Image(image))
+                .child(SizedBox::new(40.0, 40.0)),
+        )))
+        .expect("the tree attaches");
+        let _ = host.pump(std::time::Duration::from_millis(16));
+        let hover = |x: f64| {
+            let mouse = flui_interaction::ids::PointerId::try_from(1).expect("nonzero pointer id");
+            let mut event = flui_interaction::events::make_move_event_for_id(
+                mouse,
+                // The row centres its 40 by 40 regions across its 100 pixels.
+                flui_foundation::geometry::Offset::new(x, 50.0),
+                flui_interaction::events::PointerKind::Mouse,
+            )
+            .expect("a finite position");
+            if let flui_interaction::events::PointerEvent::Move(update) = &mut event {
+                update.buttons = flui_interaction::events::PointerButtons::NONE;
+            }
+            host.dispatch(flui_platform::PlatformInput::Pointer(event));
+        };
+
+        hover(20.0);
+        assert_eq!(
+            host.window().cursor(),
+            Cursor::Icon(CursorIcon::Pointer),
+            "{case}"
+        );
+
+        hover(60.0);
+        assert_eq!(
+            host.window().cursor(),
+            Cursor::Icon(CursorIcon::Default),
+            "{case}: the image refused"
+        );
+
+        hover(20.0);
+        assert_eq!(
+            host.window().cursor(),
+            Cursor::Icon(CursorIcon::Pointer),
+            "{case}: back over the hand"
+        );
+    }
 }
 
 #[derive(Clone, StatefulView)]

@@ -297,13 +297,6 @@ pub(crate) struct PlatformDataTransfer {
     pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
-/// The windows that refused a session end, each with the block it holds on
-/// the session end's request.
-pub(super) type SessionEndRefusals = Vec<(
-    flui_foundation::PresentationAddress,
-    flui_platform::SessionEndBlock,
-)>;
-
 /// The loop-scoped composition root: installed host, platform event-loop
 /// capabilities and the once-resolved [`SharedEngineServices`].
 ///
@@ -339,19 +332,10 @@ pub(crate) struct AppRuntime {
     /// main window shows its first frame, taken by that frame.
     #[cfg(windows)]
     pub(super) pending_registration: Option<super::runner::PendingRegistration>,
-    /// The session end the host is answering: every presentation's subscribers
-    /// hold their blocks on this one request, so the answer to the operating
-    /// system is the aggregate. Kept from the query until the session end is
-    /// cancelled or happens.
-    pub(super) session_end: Option<flui_platform::SessionEndRequest>,
-    /// Whether that request may still tell the platform it was released:
-    /// cleared when a later query displaces it, so dropping the displaced
-    /// request's blocks never releases the session the new one holds.
-    pub(super) session_end_current: Option<Rc<std::cell::Cell<bool>>>,
-    /// The blocks the session end's query took on that request for the
-    /// windows whose handler or guard refused, each released when its window
-    /// carries the close out, or when the session end is cancelled or happens.
-    pub(super) session_end_refusals: SessionEndRefusals,
+    /// The session end the host is answering: the query's request every
+    /// presentation's subscribers hold their blocks on, and the windows that
+    /// refused it, kept until the session end is cancelled or happens.
+    pub(super) session_end: Rc<flui_runtime::owner_turn::SessionEnd>,
     /// The writes a phone's session end left in flight, which hold the
     /// process in the background until they end or their window does: set by
     /// a waiting thread when they end, and released to the platform on the
@@ -633,7 +617,6 @@ impl AppRuntime {
             platform_data_transfer: RefCell::new(None),
             execution_slot: Rc::default(),
             host_storage: crate::app::capability::StorageSlot::default(),
-            assets: crate::app::asset_host::AssetSlot::default(),
             flush_host: None,
             terminal: None,
             window_commands: Rc::default(),
@@ -644,9 +627,7 @@ impl AppRuntime {
             entry_declarations: None,
             #[cfg(windows)]
             pending_registration: None,
-            session_end: None,
-            session_end_current: None,
-            session_end_refusals: Vec::new(),
+            session_end: Rc::default(),
             #[cfg(not(target_arch = "wasm32"))]
             background_writes: None,
             host_memory: Rc::default(),
@@ -657,6 +638,7 @@ impl AppRuntime {
             ))]
             placement: super::runner::placement::PlacementHost::default(),
             window_routes: super::runner::window_routes::RouteBook::default(),
+            assets: crate::app::asset_host::AssetSlot::default(),
         }
     }
 
@@ -1185,7 +1167,7 @@ impl AppRuntime {
             .is_ok_and(|status| status.frames_enabled)
     }
 
-    pub(super) fn close_requests(&self) -> Rc<super::close_request::CloseRequestRouter> {
+    pub(super) fn close_requests(&self) -> Rc<flui_runtime::owner_turn::CloseRequestRouter> {
         self.installed_host.native().close_requests()
     }
 

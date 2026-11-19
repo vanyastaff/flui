@@ -74,10 +74,11 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
    instance is missing.
 2. **A frame waits for the choreographer's next one.** `owner::android::frame_clock::FrameClock`
    holds the loop thread's choreographer. A turn that would deliver a frame posts one callback,
-   unless one is still posted, and blocks: `LoopTurn::awaiting_vsync` makes `poll_timeout` wait
-   until woken, or until a deadline or preference sample still ahead. A deadline already behind is
-   the frame being waited for. It is offered to the owner once (`owner::android::poll::DueDeadline`):
-   that offer wakes the looper, and offered on every turn it would spin until the callback came.
+   unless one is still posted, and blocks: it has no frame to deliver now, so `poll_timeout` waits
+   until woken, or until a deadline or preference sample still ahead. A due wake deadline is
+   delivered once as a frame request, which waits for the callback like any other, and is armed
+   again only after a frame ran (the hosts' shared `WakeDeadline::turn`): delivered on every
+   turn it would spin until the callback came.
 3. **The callback records and wakes.** It runs as one `os_entry`, records a `VsyncTick` (the frame
    time, and on API 33 the preferred timeline's expected presentation) and wakes the looper. It
    calls no user code. Each post hands the callback a counted reference to the state it records
@@ -85,8 +86,8 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
    state, because a frame callback cannot be removed.
 4. **A tick serves the turn whose poll ran it.** After the poll, the loop takes the tick. The frame
    runs only when there is one and the same turn can deliver (`PostPollRedraw::take_if_deliverable`:
-   resumed, and a request or a due deadline). A tick that turn can't deliver is dropped and the next
-   frame posts again, so no frame runs on a stale vsync. A Pause during the poll keeps the request
+   on screen, and a request, a due deadline's included). A tick that turn can't deliver is dropped
+   and the next frame posts again, so no frame runs on a stale vsync. A Pause during the poll keeps the request
    for the Resume, as before.
 5. **The request carries the tick.** `VsyncTick::timing` places the vsync `age` before a
    `CLOCK_MONOTONIC` reading and the expected presentation `until_present` after it.
@@ -111,9 +112,10 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
 - `ndk_gate_table` rows for each marker, and `the_frame_callback_is_the_newest_the_system_has` in
   `os_capability_table` (`flui-native`, run on the Linux CI host).
 - `a_tick_places_its_vsync_and_presentation_around_the_reading` (`owner::android::frame_clock`).
-- `a_deadline_left_behind_is_offered_once` and `a_stopped_loop_blocks_until_it_is_woken`
-  (`owner::android::poll`), the latter with rows for a turn waiting for the
-  next frame.
+- `a_look_delivers_a_due_deadline_once_per_frame_generation` (`owner::wake_deadline`),
+  `a_declined_frame_does_not_keep_the_loop_awake`,
+  `a_deadline_delivered_while_stopped_blocks_the_loop` and `a_stopped_loop_blocks_until_it_is_woken`
+  (`owner::android::poll`), the last with rows for a turn waiting for the next frame.
 - `os_entry` around both callbacks: `xtask panic-boundary`.
 - CI's `cross-typecheck (aarch64-linux-android)` builds the loop. A run on a device: frames follow
   the display's rate, and `FrameRequest::target_present` is set on API 33.

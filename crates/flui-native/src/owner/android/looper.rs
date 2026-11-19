@@ -83,7 +83,6 @@ use crate::{
     owner::android::activity_callbacks::Reaction,
     owner::android::frame_clock::{FrameClock, FrameStamp},
     owner::android::ndk::{FrameCallbacks, SymbolSource},
-    owner::android::poll::DueDeadline,
     owner::android::poll::LoopReads,
     owner::android::poll::LoopTurn,
     owner::android::poll::PreferenceNotice,
@@ -92,40 +91,12 @@ use crate::{
     owner::notices::{LifecycleHooks, NoticeChannel},
     owner::redraw_poll::RedrawPoll,
     owner::signal::OwnerSignal,
+    owner::wake_deadline::{FrameCount, WakeDeadline},
     platform::AppHandler,
     platform::Platform,
     version::gate::android::AndroidApi,
     version::gate::android::StylusHandwriting,
 };
-
-/// Whether the registered wake-deadline hook's answer means `run`'s loop
-/// should WANT to force a frame dispatch this iteration, even though
-/// nothing explicitly requested a redraw. Pulled out of `run`'s loop as its
-/// own pure, free function — unlike the rest of that loop, which needs a
-/// live `AndroidApp` (constructible only by the real Android runtime; no
-/// test double exists for it, so `run` itself cannot be exercised in a unit
-/// test on any host) — this one decision is entirely independent of that:
-/// `None` (no hook installed, or the hook itself has nothing pending) is
-/// never due; `Some(deadline)` is due once `now` has reached it.
-///
-/// This function is STATELESS and NOT self-limiting: called again with the
-/// same `deadline` and a `now` that has not gone backwards, it answers
-/// `true` again, and keeps answering `true` on every subsequent call until
-/// either `deadline` itself advances/clears or `now` regresses (it never
-/// does). It does not know, and cannot know, whether some earlier call's
-/// `true` already caused a dispatch — it has no memory of ever being
-/// called before. Something else has to be the actuator that stops asking:
-/// either the deadline source's own consumer advances `deadline` in
-/// response to acting on it (the raster host's device-rebuild and
-/// surface-restore paces do this: an attempt moves the deadline on), or
-/// the CALLER stops treating "due" as "act now" once acting is impossible
-/// (`run`'s loop does this by gating this answer's effect on `should_render`
-/// on the Activity running — see that call site's own comment for the
-/// busy-spin this prevents while backgrounded). Read this function's own `true` as "the
-/// deadline has passed", never as "and therefore something happened".
-fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) -> bool {
-    deadline.is_some_and(|deadline| now >= deadline)
-}
 
 /// The Activity's lifecycle as its callbacks reported it, shared by the
 /// platform's event loop and the window it opened.
@@ -225,6 +196,10 @@ pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
     /// The keyboard's motion ended: read it at rest again.
     fn keyboard_settled(&self);
 
+    /// The system gave the window the mouse (`held`) or took it back: the
+    /// snapshot's grab follows.
+    fn pointer_capture_changed(&self, held: bool);
+
     /// Delivers the night mode the configuration reports.
     fn settle_appearance(&self);
 
@@ -300,6 +275,9 @@ pub struct AndroidLoop {
     library: Arc<dyn SymbolSource>,
     /// The identities of the windows it opens.
     pub(crate) window_ids: ActivityWindowIds,
+    /// The frames its windows' handlers ran, which tell the wake deadline a
+    /// frame left due again from one nothing serviced.
+    pub(crate) frames: FrameCount,
     /// Keeps the loop off other threads where every field would allow it
     /// (ADR-0327 §5).
     _owner_local: std::marker::PhantomData<Rc<()>>,
@@ -403,6 +381,7 @@ impl AndroidLoop {
             api,
             library,
             window_ids: ActivityWindowIds::default(),
+            frames: FrameCount::default(),
             _owner_local: std::marker::PhantomData,
         }
     }
@@ -557,6 +536,18 @@ impl AndroidLoop {
                 java_view::ViewEvent::KeyboardSettled => {
                     if let Some(window) = &window {
                         window.keyboard_settled();
+                    }
+                }
+                // The capture owner attributed it: a window replaced since
+                // is reached no more.
+                java_view::ViewEvent::PointerCaptureChanged {
+                    window: changed,
+                    held,
+                } => {
+                    if let Some(window) = &window
+                        && window.activity_id() == changed
+                    {
+                        window.pointer_capture_changed(held);
                     }
                 }
             }
@@ -795,7 +786,7 @@ impl host::Loop for AndroidLoop {
                 message: error.to_string(),
             })?;
         self.loop_reads.set(LoopReads::first());
-        let mut due_deadline = DueDeadline::default();
+        let mut wake_deadline = WakeDeadline::default();
         let mut turn_deadline = crate::owner::wake_deadline::TurnDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
@@ -873,7 +864,7 @@ impl host::Loop for AndroidLoop {
             // or every deadline clearing must all be reflected immediately.
             // The handler re-enters `flui-app`, so it is asked through the
             // call point with no lock held (ADR-0287).
-            let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
+            let wake_answer = self.app_delivery.wake_deadline().or_resume(None);
             let now = web_time::Instant::now();
             // The turn deadline: the owner's turn at its instant, whether the
             // Activity shows a window or not, and no frame asked for.
@@ -891,11 +882,21 @@ impl host::Loop for AndroidLoop {
                 }
             }
             let turn_wait = turn_armed.filter(|at| *at > now);
-            let deadline_due = is_deadline_due(wake_deadline, now);
-            if due_deadline.offer(wake_deadline, now) {
-                // Owner services remain deliverable while execution gates frames.
-                // Once per deadline: the wake also wakes the looper, and a
-                // deadline only a frame clears stays behind until one runs.
+            // The wake deadline, by the rule every native host shares: a due
+            // instant is delivered once, as a frame request to the window,
+            // and the same instant is armed again only after a frame ran, so
+            // a deadline whose frames the handler declines does not keep the
+            // loop turning. The request waits for a turn that can deliver it
+            // (a running Activity, the choreographer's next frame), and the
+            // owner is woken with it, so its services run while frames are
+            // gated. The window is cloned out of its cell: a redraw request
+            // runs no user code, but the cell is the loop's.
+            let wake_turn = wake_deadline.turn(wake_answer, now, self.frames.get());
+            if wake_turn.is_due() {
+                let window = self.window.borrow().clone();
+                if let Some(window) = window {
+                    window.request_redraw();
+                }
                 let _ = self.owner_signal.wake();
                 if self.owner_signal.drive_in(&self.turn) {
                     self.running.set(false);
@@ -903,10 +904,9 @@ impl host::Loop for AndroidLoop {
                 }
             }
 
-            // Check if we should render before polling. Pending sources are
-            // gated on the Activity running, and so is a deadline that is
-            // already behind (`poll_timeout`): the backgrounded app cannot
-            // consume it, and either would turn the poll into a 0ms busy loop.
+            // Check if we should render before polling. A pending redraw is
+            // gated on the Activity running: the backgrounded app cannot
+            // consume it, and it would turn the poll into a 0ms busy loop.
             // The redraw is observed without consumption because `poll_events`
             // may suspend execution before the callback can be delivered.
             let redraw_requested = self
@@ -917,7 +917,7 @@ impl host::Loop for AndroidLoop {
             let running = self.activity.standing().gate().frames;
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
-                RedrawPoll::new(deadline_due, redraw_requested).poll(running, |should_render| {
+                RedrawPoll::new(redraw_requested).poll(running, |should_render| {
                     // Where the choreographer paces the frames, the frame waits
                     // for its next one, whose callback wakes the poll.
                     let awaiting_vsync = match frame_clock.as_ref() {
@@ -930,9 +930,9 @@ impl host::Loop for AndroidLoop {
                     let timeout = poll_timeout(
                         LoopTurn {
                             should_render: should_render && !awaiting_vsync,
-                            awaiting_vsync,
                             running,
-                            wake_deadline: [wake_deadline, turn_wait].into_iter().flatten().min(),
+                            wake: wake_turn,
+                            turn_deadline: turn_wait,
                             next_preference_sample: self.loop_reads.get().next(
                                 self.preferences.retry_deadline(),
                                 web_time::Instant::now(),

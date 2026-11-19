@@ -10,5 +10,12 @@
   },
   "enabledPlugins": {
     "rust-studio@rust-studio": true
+  },
+  "env": {
+    "RUST_STUDIO_MEMORY_RECALL": "off",
+    "RUST_STUDIO_ROUTING_NUDGE": "off",
+    "RUST_STUDIO_LIFECYCLE_NOTES": "off",
+    "RUST_STUDIO_AUTO_CAPTURE": "off",
+    "RUST_STUDIO_PROCESS_BRIEFING": "off"
   }
 }

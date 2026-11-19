@@ -16,6 +16,7 @@ pub mod keyboard {
 }
 
 pub use cursor_icon::CursorIcon;
+pub use flui_platform::{Cursor, CursorImage};
 pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,

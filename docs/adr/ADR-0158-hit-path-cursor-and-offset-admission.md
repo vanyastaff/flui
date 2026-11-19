@@ -12,19 +12,21 @@
 
 ## Decision
 
-A hit entry contributes `CursorRequest::Defer` or `Icon(CursorIcon)`.
-The first explicit icon in the leaf-first path wins, including
-`Icon(CursorIcon::Default)`, which selects the platform arrow. A path containing
+A hit entry contributes `CursorRequest::Defer` or `Show(Cursor)`, the cursor
+of ADR-0354 §1 (an icon, an application's image or none).
+The first explicit cursor in the leaf-first path wins, including
+`Show(Cursor::Icon(CursorIcon::Default))`, which selects the platform arrow. A path containing
 only deferrals resolves to that arrow. Treating `CursorIcon::Default` as a
 deferral sentinel made an explicit child arrow indistinguishable from an absent
 request, so an ancestor's text cursor could override it.
 
-`MouseRegion` defaults to deferral; its existing `cursor(icon)` builder selects
-an explicit icon. `RenderMouseRegion` stores that request, the render traits
+`MouseRegion` defaults to deferral; its `cursor(cursor)` builder selects an
+explicit cursor. `RenderMouseRegion` stores that request, the render traits
 return it, and both pipeline hit-test paths attach it to the canonical
 `HitTestEntry`. Ordinary render objects defer. The request enum remains
 exhaustive: absence and explicit choice are the complete contribution states;
-additional platform icons belong to `CursorIcon`, not additional request modes.
+additional platform icons belong to `CursorIcon` and additional kinds of cursor
+to `Cursor`, not additional request modes.
 
 `HitTestResult::with_paint_offset` returns `Option<R>` just like the transform
 scope. A non-finite offset returns `None`, does not call its subtree, and leaves

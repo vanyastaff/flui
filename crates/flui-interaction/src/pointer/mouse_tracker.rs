@@ -42,13 +42,17 @@ pub use super::interaction_lane::{
 use super::{HitTestResult, OwnerLatch, active_dispatch_handle};
 use crate::containment::{FirstPanic, caught};
 use crate::{
-    events::{CursorIcon, PointerEvent, PointerKind, PointerSource},
+    events::{Cursor, CursorIcon, PointerEvent, PointerKind, PointerSource},
     ids::{InputSurface, RegionId},
     pointer::interaction_lane::MouseRegionCell,
 };
 
 /// Device ID type (re-exported from events).
 pub use crate::events::DeviceId;
+
+/// What the window shows where no region asks for a cursor: the system's
+/// arrow.
+const ARROW: Cursor = Cursor::Icon(CursorIcon::Default);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum SourceKey {
@@ -200,8 +204,8 @@ struct DeviceState {
     last_position: Offset<f64>,
     /// Hit-test order of regions currently under this device.
     active_order: RegionOrder,
-    /// Current mouse cursor for this device.
-    current_cursor: CursorIcon,
+    /// The cursor the regions under this device ask for.
+    current_cursor: Cursor,
     /// Whether the device's pointer is inside the hosting window. Cleared by
     /// the window-leave sweep, restored by any subsequent motion — while
     /// false, ambient re-hit-testing (`update_all_devices`) must skip the
@@ -217,7 +221,7 @@ impl DeviceState {
             pointer,
             last_position: position,
             active_order: RegionOrder::new(),
-            current_cursor: CursorIcon::Default,
+            current_cursor: ARROW,
             inside_window: true,
         }
     }
@@ -246,31 +250,47 @@ impl std::fmt::Debug for MouseTracker {
     }
 }
 
-/// Callback for cursor changes with the source's actual contact and optional hardware identity.
-pub type CursorChangeCallback = Rc<dyn Fn(PointerSource, CursorIcon) + 'static>;
+/// Callback for cursor changes with the source's actual contact and optional
+/// hardware identity: the cursor the window is to show now, an icon, an image
+/// or none, as the hovered region asked for it.
+pub type CursorChangeCallback = Rc<CursorChange>;
 
-#[derive(Default)]
+/// What a [`CursorChangeCallback`] calls: the source whose motion moved the
+/// cursor, and the cursor the window is to show.
+pub type CursorChange = dyn Fn(PointerSource, &Cursor) + 'static;
+
 struct CursorPublication {
     observation: Rc<()>,
-    published: CursorIcon,
+    published: Cursor,
     pending: bool,
     in_flight: SmallVec<[CursorFlight; 1]>,
 }
 
+impl Default for CursorPublication {
+    fn default() -> Self {
+        Self {
+            observation: Rc::default(),
+            published: ARROW,
+            pending: false,
+            in_flight: SmallVec::new(),
+        }
+    }
+}
+
 struct CursorFlight {
     observation: Rc<()>,
-    callback: std::rc::Weak<dyn Fn(PointerSource, CursorIcon)>,
-    cursor: CursorIcon,
+    callback: std::rc::Weak<CursorChange>,
+    cursor: Cursor,
 }
 
 impl CursorPublication {
-    fn observe(&mut self, cursor: CursorIcon) -> Rc<()> {
+    fn observe(&mut self, cursor: &Cursor) -> Rc<()> {
         // Only overlapping work needs another allocation; ordinary sequential
         // mouse packets reuse the uniquely held observation identity.
         if Rc::strong_count(&self.observation) > 1 {
             self.observation = Rc::new(());
         }
-        self.pending |= self.published != cursor;
+        self.pending |= self.published != *cursor;
         Rc::clone(&self.observation)
     }
 }
@@ -326,16 +346,17 @@ struct MouseTrackerInner {
 impl MouseTrackerInner {
     /// What the window shows for `resolved`, the hovered regions' cursor: an
     /// override wins while it is held.
-    fn shown(&self, resolved: CursorIcon) -> CursorIcon {
-        self.cursor_override.map_or(resolved, |(_, cursor)| cursor)
+    fn shown(&self, resolved: &Cursor) -> Cursor {
+        self.cursor_override
+            .map_or_else(|| resolved.clone(), |(_, icon)| Cursor::Icon(icon))
     }
 
     /// The cursor the hovered regions ask for, for the source that last moved.
-    fn resolved(&self) -> CursorIcon {
+    fn resolved(&self) -> &Cursor {
         self.cursor_owner
             .physical_source()
             .and_then(|source| self.devices.get(&source))
-            .map_or(CursorIcon::Default, |state| state.current_cursor)
+            .map_or(&ARROW, |state| &state.current_cursor)
     }
 
     /// Whether any source on `surface` hovers `region`.
@@ -353,7 +374,7 @@ impl MouseTrackerInner {
         &mut self,
         source: TrackedSource,
         resolved: ResolvedHitAnnotations,
-        cursor: CursorIcon,
+        cursor: Cursor,
     ) -> Transition {
         let surface = source.0;
         let mut retired = Retired::new();
@@ -458,8 +479,7 @@ impl MouseTrackerInner {
             && let CursorOwner::Physical(_, pointer) = self.cursor_owner
         {
             self.cursor_owner = CursorOwner::Removed(pointer);
-            self.cursor_publication.pending |=
-                self.cursor_publication.published != CursorIcon::Default;
+            self.cursor_publication.pending |= self.cursor_publication.published != ARROW;
         }
     }
 
@@ -576,7 +596,7 @@ fn publish_shown(tracker: &Rc<RefCell<MouseTrackerInner>>, pointer: PointerSourc
         DeviceWork::cursor(
             tracker,
             pointer,
-            inner.cursor_publication.observe(shown),
+            inner.cursor_publication.observe(&shown),
             shown,
         )
     };
@@ -735,11 +755,11 @@ impl MouseTracker {
         if inner.closed || !inner.cursor_publication.pending {
             return None;
         }
-        let shown = inner.shown(CursorIcon::Default);
+        let shown = inner.shown(&ARROW);
         Some(DeviceWork::cursor(
             &self.inner,
             pointer,
-            inner.cursor_publication.observe(shown),
+            inner.cursor_publication.observe(&shown),
             shown,
         ))
     }
@@ -767,8 +787,7 @@ impl MouseTracker {
             let inner = &mut *inner;
             if let CursorOwner::Physical(_, pointer) = inner.cursor_owner {
                 inner.cursor_owner = CursorOwner::Removed(pointer);
-                inner.cursor_publication.pending |=
-                    inner.cursor_publication.published != CursorIcon::Default;
+                inner.cursor_publication.pending |= inner.cursor_publication.published != ARROW;
             }
             let mut sweeps: SmallVec<[DeviceWork; 1]> = SmallVec::new();
             let keys: SmallVec<[TrackedSource; 2]> = inner.devices.keys().copied().collect();
@@ -784,12 +803,12 @@ impl MouseTracker {
                     .expect("BUG: a collected source is tracked");
                 state.advance_observation();
                 state.inside_window = false;
-                if state.active_order.is_empty() && state.current_cursor == CursorIcon::Default {
+                if state.active_order.is_empty() && state.current_cursor == ARROW {
                     continue;
                 }
                 let (pointer, position) = (state.pointer, state.last_position);
                 state.active_order.clear();
-                state.current_cursor = CursorIcon::Default;
+                state.current_cursor = ARROW;
                 sweeps.push(DeviceWork::exits(
                     &self.inner,
                     pointer,
@@ -927,16 +946,16 @@ impl MouseTracker {
             state.pointer = pointer;
             state.inside_window = true;
             state.last_position = position;
+            let shown = inner.shown(&new_cursor);
             let transition = inner.commit_hover(device_id, annotations, new_cursor);
             inner.cursor_owner = CursorOwner::Physical(surface, pointer);
-            let shown = inner.shown(new_cursor);
             DeviceWork {
                 tracker: Rc::clone(&self.inner),
                 pointer,
                 position,
                 enter_callbacks: transition.enter_callbacks,
                 exit_callbacks: transition.exit_callbacks,
-                cursor_observation: Some(inner.cursor_publication.observe(shown)),
+                cursor_observation: Some(inner.cursor_publication.observe(&shown)),
                 new_cursor: shown,
                 retired_annotations: transition.retired,
             }
@@ -1060,21 +1079,19 @@ impl MouseTracker {
                     .get_mut(&device_id)
                     .expect("BUG: refresh checked the device before borrowing the tracker")
                     .advance_observation();
+                let shown = inner.shown(&resolution.cursor);
                 let transition =
                     inner.commit_hover(device_id, resolution.annotations, resolution.cursor);
+                let cursor_observation = (inner.cursor_owner.physical_source() == Some(device_id))
+                    .then(|| inner.cursor_publication.observe(&shown));
                 DeviceWork {
                     tracker: Rc::clone(&self.inner),
                     pointer,
                     position,
                     enter_callbacks: transition.enter_callbacks,
                     exit_callbacks: transition.exit_callbacks,
-                    cursor_observation: if inner.cursor_owner.physical_source() == Some(device_id) {
-                        let shown = inner.shown(resolution.cursor);
-                        Some(inner.cursor_publication.observe(shown))
-                    } else {
-                        None
-                    },
-                    new_cursor: inner.shown(resolution.cursor),
+                    cursor_observation,
+                    new_cursor: shown,
                     retired_annotations: transition.retired,
                 }
             };
@@ -1127,14 +1144,15 @@ impl MouseTracker {
             .map_or_default(|state| state.active_order.to_vec())
     }
 
-    /// Gets the current window cursor for a device.
+    /// The cursor the window regions under a device ask for; the arrow where
+    /// none asks.
     #[must_use]
-    pub fn device_cursor(&self, device_id: DeviceId) -> CursorIcon {
+    pub fn device_cursor(&self, device_id: DeviceId) -> Cursor {
         self.inner
             .borrow()
             .devices
             .get(&(InputSurface::Window, SourceKey::KnownDevice(device_id)))
-            .map_or(CursorIcon::Default, |state| state.current_cursor)
+            .map_or(ARROW, |state| state.current_cursor.clone())
     }
 
     /// Sets the callback for cursor changes.
@@ -1208,7 +1226,7 @@ type ResolvedHitAnnotations = SmallVec<[(RegionId, ResolvedMouseTrackerAnnotatio
 /// A hit path resolved for hover: its regions and the cursor it asks for.
 pub(crate) struct HoverResolution {
     annotations: ResolvedHitAnnotations,
-    cursor: CursorIcon,
+    cursor: Cursor,
 }
 
 fn resolve_hit_test_annotations(result: &HitTestResult) -> ResolvedHitAnnotations {
@@ -1272,7 +1290,7 @@ struct DeviceWork {
     enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]>,
     exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
     cursor_observation: Option<Rc<()>>,
-    new_cursor: CursorIcon,
+    new_cursor: Cursor,
     /// Replaced and departed annotations whose captures retire after dispatch.
     retired_annotations: Retired,
 }
@@ -1283,7 +1301,7 @@ impl DeviceWork {
         tracker: &Rc<RefCell<MouseTrackerInner>>,
         pointer: PointerSource,
         observation: Rc<()>,
-        shown: CursorIcon,
+        shown: Cursor,
     ) -> Self {
         Self {
             tracker: Rc::clone(tracker),
@@ -1311,7 +1329,7 @@ impl DeviceWork {
             enter_callbacks: SmallVec::new(),
             exit_callbacks,
             cursor_observation: None,
-            new_cursor: CursorIcon::Default,
+            new_cursor: ARROW,
             retired_annotations: Retired::new(),
         }
     }
@@ -1358,7 +1376,7 @@ impl DeviceWork {
                             inner.cursor_publication.in_flight.push(CursorFlight {
                                 observation: Rc::clone(&observation),
                                 callback: identity,
-                                cursor: self.new_cursor,
+                                cursor: self.new_cursor.clone(),
                             });
                             Some(Rc::clone(callback))
                         }
@@ -1370,8 +1388,10 @@ impl DeviceWork {
                 }
             };
             if let Some(callback) = callback {
-                let delivered = failure.invoke(|| callback(self.pointer, self.new_cursor));
+                let delivered = failure.invoke(|| callback(self.pointer, &self.new_cursor));
                 {
+                    // A cursor this releases holds only pixels: no code runs
+                    // under the borrow as it goes.
                     let mut inner = self.tracker.borrow_mut();
                     if let Some(index) = inner
                         .cursor_publication
@@ -1383,7 +1403,7 @@ impl DeviceWork {
                     }
                     if Rc::ptr_eq(&inner.cursor_publication.observation, &observation) {
                         if delivered.is_some() {
-                            inner.cursor_publication.published = self.new_cursor;
+                            inner.cursor_publication.published = self.new_cursor.clone();
                             if inner
                                 .cursor_change_callback
                                 .as_ref()

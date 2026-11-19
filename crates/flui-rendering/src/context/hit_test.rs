@@ -184,8 +184,8 @@ where
         self.self_hit_pointer_target
     }
 
-    pub(crate) fn self_hit_cursor(&self) -> Option<CursorRequest> {
-        self.self_hit_cursor
+    pub(crate) fn take_self_hit_cursor(&mut self) -> Option<CursorRequest> {
+        self.self_hit_cursor.take()
     }
 
     // ════════════════════════════════════════════════════════════════════════

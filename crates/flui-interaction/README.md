@@ -199,7 +199,8 @@ non-invertible paint transform refuses traversal.
 occlusion. Ordinary pointer delivery visits every hit target leaf-first;
 scroll and pan-zoom walks allow a handler to claim an event.
 `CursorRequest::Defer` leaves cursor selection to the next target, whereas
-`Icon(CursorIcon::Default)` explicitly requests the arrow.
+`Show(Cursor::Icon(CursorIcon::Default))` explicitly requests the arrow, and
+`Show` with `Cursor::Image` or `Cursor::Hidden` an application's image or none.
 See [HIT_TESTING.md](docs/HIT_TESTING.md).
 
 ## Settings and processing

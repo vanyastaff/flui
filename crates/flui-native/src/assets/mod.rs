@@ -38,7 +38,7 @@ pub(crate) const DEVELOPMENT_ROOT_VAR: &str = "FLUI_ASSET_ROOT";
 
 /// The bundle this process's package holds: the directory `flui_assets/`
 /// beside the executable or under the main bundle's resources, or the
-/// project root a desktop development run names in [`DEVELOPMENT_ROOT_VAR`].
+/// project root a desktop development run names in `FLUI_ASSET_ROOT`.
 ///
 /// A process whose package cannot be located (no executable path, no main
 /// bundle) gets a bundle that holds nothing, never the current directory.

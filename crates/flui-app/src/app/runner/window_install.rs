@@ -6,13 +6,13 @@ use std::rc::Rc;
 use flui_platform::PlatformWindow;
 use flui_runtime::owner::{InstallInitialization, PreparedInstall, WindowObservation};
 
+use crate::app::window_registry::PreparedWindowRegistration;
 #[cfg(all(
     not(target_os = "android"),
     not(target_arch = "wasm32"),
     any(test, not(target_os = "ios"))
 ))]
-use crate::app::close_request::{CloseRequestHandler, CloseResponse, PreparedCloseRequest};
-use crate::app::window_registry::PreparedWindowRegistration;
+use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse, PreparedCloseRequest};
 
 use super::InstalledHost;
 use super::frame_driver::{FrameDriver, FrameInstallError, FrameRegistration, PreparedFrame};
@@ -267,9 +267,14 @@ impl WindowInstall {
         let router = self.host.native().close_requests();
         let closing = Rc::downgrade(self.window.native());
         WindowRoutes::of(&**self.window.native()).route_close_requested(
-            move || match router.consult(address, crate::app::close_request::CloseReason::User) {
-                CloseResponse::Close => flui_platform::CloseDecision::Close,
-                CloseResponse::KeepOpen => flui_platform::CloseDecision::KeepOpen,
+            // An answer other than `Close` keeps the window open: closing on
+            // an answer this host does not know could discard unsaved work.
+            move || {
+                if router.consult(address, flui_view::CloseReason::User) == CloseResponse::Close {
+                    flui_platform::CloseDecision::Close
+                } else {
+                    flui_platform::CloseDecision::KeepOpen
+                }
             },
             move || {
                 if let Some(window) = closing.upgrade() {
