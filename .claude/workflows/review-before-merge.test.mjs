@@ -41,7 +41,7 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
   assert.match(result.markdown, /Independent read unavailable: the scope step failed: no result/)
 }
 
-// 2b. An empty file list (or one holding only a blank entry) is "no change" only when a second agent,
+// 2b. An empty file list (an empty string in it counts for nothing) is "no change" only when a second agent,
 //     which never sees the first answer, works the range out again from the refs, names the same
 //     base and head, and reports that `git diff --quiet` exited 0; any other answer leaves the read
 //     unavailable, and no reader runs.
