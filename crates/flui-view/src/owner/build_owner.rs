@@ -1993,6 +1993,26 @@ impl BuildOwner {
                 self.inherited_dependencies.reset_build_misses(id);
             }
             let mut recorded: Vec<crate::context::DependentRecord> = dep_sink.into_inner();
+            for (at, record) in recorded.iter().enumerate() {
+                if recorded[..at]
+                    .iter()
+                    .any(|earlier| earlier.dependent == record.dependent)
+                {
+                    continue;
+                }
+                // The providers the loop below registers for this dependent.
+                let tree = &*tree;
+                let providers = recorded
+                    .iter()
+                    .filter(|other| other.dependent == record.dependent)
+                    .filter_map(|other| other.provider)
+                    .filter(|&provider| {
+                        tree.get(provider)
+                            .is_some_and(|node| node.element().as_inherited().is_some())
+                    });
+                self.inherited_dependencies
+                    .reserve(record.dependent, providers);
+            }
             for record in recorded.drain(..) {
                 let Some(provider) = record.provider else {
                     self.inherited_dependencies
