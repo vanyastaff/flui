@@ -115,11 +115,31 @@ pub(crate) struct FocusConfig {
     pub(crate) can_request_focus: Option<bool>,
     pub(crate) skip_traversal: Option<bool>,
     pub(crate) descendants_are_focusable: Option<bool>,
+    pub(crate) debug_label: Option<&'static str>,
+    /// What few widgets set, shared, so a copy of the view clones a
+    /// pointer, and absent otherwise: a control's view holds none of it.
+    pub(crate) rare: Option<Rc<RareFocusConfig>>,
+}
+
+/// The parts of a [`FocusConfig`] a control on the interactive node never
+/// sets: the handlers a [`Focus`](super::focus::Focus) is given and its
+/// traversal links.
+#[derive(Clone, Default)]
+pub(crate) struct RareFocusConfig {
     pub(crate) on_focus_change: Option<FocusChangeHandler>,
     pub(crate) on_visible_focus_change: Option<FocusChangeHandler>,
     pub(crate) on_key_event: Option<FocusKeyHandler>,
-    pub(crate) debug_label: Option<&'static str>,
     pub(crate) traversal_overrides: Option<FocusTraversalOverrides>,
+}
+
+/// The two focus edges a host reports: the handlers its widget was given,
+/// or what its owner wraps them in for one build.
+#[derive(Clone, Default)]
+pub(crate) struct FocusEdges {
+    /// Called as the node or a descendant gains or loses the focus.
+    pub(crate) focused: Option<FocusChangeHandler>,
+    /// Called as the node gains or loses the shown primary focus.
+    pub(crate) shown: Option<FocusChangeHandler>,
 }
 
 impl FocusConfig {
@@ -131,12 +151,32 @@ impl FocusConfig {
             can_request_focus: None,
             skip_traversal: None,
             descendants_are_focusable: None,
-            on_focus_change: None,
-            on_visible_focus_change: None,
-            on_key_event: None,
             debug_label: None,
-            traversal_overrides: None,
+            rare: None,
         }
+    }
+
+    /// The rare parts to write, allocated on the first one a widget sets.
+    pub(crate) fn rare_mut(&mut self) -> &mut RareFocusConfig {
+        Rc::make_mut(self.rare.get_or_insert_with(Rc::default))
+    }
+
+    /// The edge handlers this configuration was given.
+    pub(crate) fn edges(&self) -> FocusEdges {
+        self.rare
+            .as_deref()
+            .map_or_else(FocusEdges::default, |rare| FocusEdges {
+                focused: rare.on_focus_change.clone(),
+                shown: rare.on_visible_focus_change.clone(),
+            })
+    }
+
+    fn on_key_event(&self) -> Option<&FocusKeyHandler> {
+        self.rare.as_deref()?.on_key_event.as_ref()
+    }
+
+    fn traversal_overrides(&self) -> Option<&FocusTraversalOverrides> {
+        self.rare.as_deref()?.traversal_overrides.as_ref()
     }
 
     fn sync_traversal_overrides(
@@ -150,8 +190,7 @@ impl FocusConfig {
             }
         } else {
             *registration = self
-                .traversal_overrides
-                .as_ref()
+                .traversal_overrides()
                 .map(|overrides| node.register_traversal_overrides(overrides.clone()));
         }
     }
@@ -194,7 +233,7 @@ impl FocusConfig {
                 node.set_can_request_focus(self.can_request_focus.unwrap_or(true));
                 node.set_skip_traversal(self.skip_traversal.unwrap_or(false));
                 node.set_descendants_are_focusable(self.descendants_are_focusable.unwrap_or(true));
-                if let Some(handler) = &self.on_key_event {
+                if let Some(handler) = self.on_key_event() {
                     *key_handler_registration =
                         Some(node.register_on_key_event(key_handler(handler, shared)));
                 } else {
@@ -212,7 +251,7 @@ impl FocusConfig {
                 if let Some(descendants_are_focusable) = self.descendants_are_focusable {
                     node.set_descendants_are_focusable(descendants_are_focusable);
                 }
-                if let Some(handler) = &self.on_key_event {
+                if let Some(handler) = self.on_key_event() {
                     *key_handler_registration =
                         Some(node.register_on_key_event(key_handler(handler, shared)));
                 }
@@ -310,11 +349,12 @@ pub(crate) struct FocusHost {
 }
 
 impl FocusHost {
-    /// Makes or takes the node and configures it, holding the owner's focus
-    /// manager and rebuild handle from `ctx`. Nothing is acquired that
+    /// Makes or takes the node and configures it, reporting the node's focus
+    /// edges to `edges` and holding the owner's focus manager and rebuild
+    /// handle from `ctx`. Nothing is acquired that
     /// [`dispose`](Self::dispose) would have to release: the node is not
     /// attached until [`init`](Self::init).
-    pub(crate) fn new(config: &FocusConfig, ctx: &dyn LifecycleContext) -> Self {
+    pub(crate) fn new(config: &FocusConfig, edges: FocusEdges, ctx: &dyn LifecycleContext) -> Self {
         let node = config.make_node();
         let shared = Rc::new(Shared {
             writer: ctx.writer_source(),
@@ -322,8 +362,8 @@ impl FocusHost {
             observed_node: Cell::new(Rc::downgrade(&node)),
             was_focused: Cell::new(false),
             node_revision: Cell::new(0),
-            on_focus_change: Cell::new(config.on_focus_change.clone()),
-            on_visible_focus_change: Cell::new(config.on_visible_focus_change.clone()),
+            on_focus_change: Cell::new(edges.focused),
+            on_visible_focus_change: Cell::new(edges.shown),
             attachment: RefCell::new(None),
             reveal: RevealSlot::default(),
         });
@@ -364,7 +404,9 @@ impl FocusHost {
                 .checked_add(1)
                 .expect("BUG: Focus inherited revision exhausted");
             shared.node_revision.set(next_revision);
-            shared.rebuild.schedule(flui_view::RebuildReason::StateChange);
+            shared
+                .rebuild
+                .schedule(flui_view::RebuildReason::StateChange);
 
             // The host holds the node it observes; a notification that
             // arrives after the host let it go has nothing to report.
@@ -505,19 +547,16 @@ impl FocusHost {
         self.shared.reveal.target.set(FocusRevealScope::of(ctx));
     }
 
-    /// The owner's `did_update_view`: follow a new configuration.
-    pub(crate) fn update(&mut self, config: &FocusConfig) {
+    /// The owner's `did_update_view`: follow a new configuration, reporting
+    /// to `edges`.
+    pub(crate) fn update(&mut self, config: &FocusConfig, edges: FocusEdges) {
         // Install the current callbacks before any node replacement can emit
         // a focus edge. The node subscription always reads these cells.
         // The replaced handlers drop once the cells hold the new ones: a
         // capture's destructor is user code.
         let replaced = (
-            self.shared
-                .on_focus_change
-                .replace(config.on_focus_change.clone()),
-            self.shared
-                .on_visible_focus_change
-                .replace(config.on_visible_focus_change.clone()),
+            self.shared.on_focus_change.replace(edges.focused),
+            self.shared.on_visible_focus_change.replace(edges.shown),
         );
         drop(replaced);
 
