@@ -20,6 +20,7 @@
 //! host; the Foundation calls are each file's `foundation` module, built
 //! for macOS and iOS.
 
+pub(crate) mod bookmark;
 pub(crate) mod content_types;
 mod floor;
 pub(crate) mod modal;

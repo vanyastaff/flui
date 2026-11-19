@@ -457,6 +457,7 @@ mod uikit {
             let queue = Rc::clone(&self.queue);
             let content_types = self.content_types;
             let limit = request.max_bytes;
+            let keep_access = request.keep_access;
             let delegate = PickerDelegate::new(self.mtm, move |end| match end {
                 PickerEnd::Cancelled => ended.answer(|| Ok(None)),
                 PickerEnd::Picked(urls) => {
@@ -468,7 +469,7 @@ mod uikit {
                     let busy = Err(unsupported(UnsupportedReason::Unavailable));
                     let filter = filter.clone();
                     queue.run(answer, busy, move || {
-                        read_picks(urls, filter.as_ref(), content_types, limit)
+                        read_picks(urls, filter.as_ref(), content_types, limit, keep_access)
                     });
                 }
             });

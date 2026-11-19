@@ -1,20 +1,16 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 124 закрыты и 10 открыты (сверено с `main` @ `5b4e3202b` и закрытием
-  LY139, LY61, LY148, LY145, LY107 и LY69); записи — в разделе «Ход исполнения». Прогоны на
-  устройствах, которых ждут закрытые задачи, — строки
+  Из 134 задач серии 128 закрыты и 6 открыты (сверено с `main` @ `5b4e3202b` и закрытиями
+  LY61, LY67, LY69, LY89, LY93, LY107, LY121, LY139, LY145 и LY148); открытые — неотмеченные
+  записи раздела «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY67 — провайдеры `flui-system` на Android (в работе);
-  - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
-  - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
   - LY100 — `flui-app[driver]` включает `scripted`, один двойник окна вместо шестнадцати, двойники
     ядра за фичей;
-  - LY102 — модули `flui-platform` по областям (не начата, после LY100);
-  - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета.
+  - LY102 — модули `flui-platform` по областям (не начата, после LY100).
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -6257,15 +6253,40 @@ GPU-память простаивающего или невидимого окн
   кадентности. Остаётся: пробуждения за минуту простоя на Mac (vanyastaff/flui#1840), на Android
   — за минуту за Home и пока `FluiView` входит в окно; строка качества parity «Zero CPU when
   idle».
-- [ ] **LY93** (открыта, не начата) — `flui_system::PickedFile`
-  (`crates/flui-system/src/dialog/request.rs:1242`) — свой тип с формами `Path`, `Contents`,
-  `Folder` и `Download`, чтобы нести доступ песочницы без смены API; iOS читает выбранный документ
-  под его security-scoped доступом и отдаёт имя и содержимое
-  (`crates/flui-system/src/ios/document_access.rs`). Остаётся код: доступ, переживающий
-  перезапуск — security-scoped bookmarks (macOS, iOS), постоянное разрешение URI Storage Access
-  Framework (Android, после LY67), портал документов (Flatpak), пути с учётом AppContainer и MSIX
-  (Windows); `data_dirs`, знающий контейнер; таблица `flui-system` на симулируемой песочнице
-  ([gaps](../../../gaps.md#sandbox-aware-file-access-is-absent)).
+- [x] **LY93** (закрыта: код и тесты в ветке `system/sandboxed-file-access`; прогоны в песочницах
+  записаны в `platform-parity.toml`, строка «Sandbox-aware file and resource access») — решение в
+  ADR-0380. Открытие с `OpenRequest::keep_access` отдаёт каждый выбор с `flui_system::grant::Grant`
+  (`PickedFile::grant`): байты, которые приложение хранит (`Grant::to_bytes`, обратно
+  `Grant::try_from_bytes` или типизированный `MalformedGrant`). Форма по ОС: macOS — security-scoped
+  bookmark, сделанный на рабочей очереди после ответа панели; iOS — минимальный bookmark под
+  доступом пикера; Android — URI, чьё право на чтение закреплено
+  (`takePersistableUriPermission`) после чтения всех выборов; Linux — путь (во Flatpak это путь
+  портала документов, который портал хранит между запусками); Windows — путь (настольный процесс,
+  упакованный или нет). Новая возможность `GrantCapability` (`Grants`, без окна):
+  `Grants::resolve` отдаёт `Access` (файл, область `AccessScope`, которая держит security-scoped
+  доступ на macOS и iOS до своего `Drop`, свежий grant для устаревшего bookmark) или
+  `GrantError::{Foreign, Revoked, Missing, TooLarge, …}`. Правило слоя — в ручке, для каждого
+  бэкенда и двойника: путь, которого не достаёт `flui_system::sandbox::Sandbox` процесса (App
+  Sandbox, контейнер iOS, Flatpak, Android — из окружения, без файловой системы) и который не
+  держит открытая область, — `Revoked`. `data_dirs` отдаёт песочнице её контейнер (Flatpak,
+  App Sandbox, `LocalState`/`RoamingState` пакета MSIX); папки пользователя на Linux отвечают
+  «нет» для папки, которой у процесса нет. Тесты (Windows nextest, Linux в WSL под
+  `dbus-run-session`): таблица на симулируемой песочнице
+  `a_reacquired_path_is_handed_out_only_where_the_process_can_open_it`, перезапуск
+  `a_picks_access_survives_a_restart_through_the_bytes_the_application_kept` (сериализация →
+  новый хост и новый провайдер над тем же хранилищем → resolve), отзыв
+  `a_grant_the_system_no_longer_honours_answers_why`, строка conformance
+  `a_foreign_grant_is_refused_without_asking_the_system`, портал
+  `a_picks_path_is_its_grant_and_resolves_while_the_file_is_there`, модели Android
+  (`a_kept_pick_carries_its_uri_once_every_pick_was_read`,
+  `a_document_is_reacquired_only_while_its_permission_is_held_and_within_the_bound`), Apple
+  (`a_bookmark_that_does_not_resolve_answers_why`, `each_pick_carries_the_bookmark_made_of_it_or_none`)
+  и контейнера (`a_sandboxed_process_keeps_its_data_in_its_container`). С откатом правила красные:
+  без проверки песочницы — таблица; без проверки вида grant — отзыв (двойник отвечает `Revoked`
+  вместо `Foreign`); без `PickedFile::granted` — перезапуск. Код Apple и Android проверен только
+  `cargo +nightly check` в WSL. Не построено и записано в `docs/gaps.md` («Sandbox-aware file
+  access is partial»): процесс в AppContainer, Snap, `FileSystemHandle` браузера, grant у
+  сохранения.
 - [x] **LY94** (закрыта: флаги ОС и скрытые записи на `main`, прогоны — в parity) — защищённое
   поле: macOS держит `EnableSecureEventInput`, пока поле в фокусе в ключевом окне
   (`a_protected_field_holds_secure_input_while_it_has_focus`); iOS ставит `isSecureTextEntry`

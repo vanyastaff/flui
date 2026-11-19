@@ -640,11 +640,11 @@ fn effects_damage(
     // Whether each effect, or one it sits under, changed.
     let mut changed: SmallVec<[bool; 32]> = SmallVec::with_capacity(effects.len());
     let mut tops: SmallVec<[EntryIndex; 4]> = SmallVec::new();
-    for (position, &index) in effects.iter().enumerate() {
+    for (position, index) in effects.iter().map(|effect| effect.entry).enumerate() {
         let own = !old_layers[position].same_effect(&new_layers[position]);
         let above = entries[index.get()].parent().is_some_and(|parent| {
             let at = effects[..position]
-                .binary_search(&parent)
+                .binary_search_by_key(&parent, |effect| effect.entry)
                 .expect("BUG: an effect's parent is an earlier effect");
             changed[at]
         });
@@ -666,11 +666,11 @@ fn effects_damage(
         let position = after
             .effect_position(index)
             .expect("BUG: a changed effect is among its content's effects");
-        let end = after.effect_scope(position).end;
+        let end = after.effect_scope(position).end();
         let under_changed = effects[position + 1..]
             .iter()
             .zip(&changed[position + 1..])
-            .take_while(|(entry, _)| entry.get() < end)
+            .take_while(|(effect, _)| effect.entry.get() < end)
             .any(|(_, &changed)| changed);
         let from = structural.partition_point(|entry| *entry <= index);
         let to = structural.partition_point(|entry| entry.get() < end);

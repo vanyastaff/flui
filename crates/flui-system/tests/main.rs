@@ -4,6 +4,7 @@
 mod capability;
 mod conformance;
 mod dialogs;
+mod grants;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod portal;

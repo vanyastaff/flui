@@ -395,6 +395,11 @@ live apart from their implementations, so a crate that names a capability links 
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
 
+A capability crate depends on this contract alone (ADR-0154 §1), so the containment its handles
+run backend code under reaches it from here: `capability::FirstPanic` is `flui-foundation`'s,
+re-exported, and a handle that calls a backend with its own state committed keeps the first panic
+and resumes it once the state is whole (ADR-0287).
+
 What only the host owns reaches a provider through its `ProviderContext`
 (ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
 `window()`, and `activity()`, the running Android Activity, read from the
@@ -713,3 +718,43 @@ struct and enum `#[non_exhaustive]` and no conversion to the system's own
 values, which stay with the host.
 **Tests:** `a_win32_window_opens_with_its_options` (`flui-native`),
 `config_to_options_keeps_every_field` (`flui-app`).
+
+### The sandbox is detected once, for every crate that needs it
+
+`sandbox` says which sandbox the process runs in (`Confinement`), so `flui-native`'s data folders
+and `flui-system`'s grants read one answer (ADR-0380 §3, §4). A contract crate reads one file
+here, and only this one: `flui-system` and `flui-native` both need the answer, this is the lowest
+crate both depend on, and two readers of one description disagreed before. The read
+(`read_flatpak_info`) is bounded, runs off the owner thread, and happens on Linux alone: no other
+system has a Flatpak, and on Windows the name is a drive's root. Only the file's absence says the
+process is no Flatpak: a description that could not be read is an error, which a caller does not
+keep (the grants ask again at the next resolve, the data store at its next call), and
+`is_flatpak` (the portal's and the X11 input bus's question) counts it as present. The other
+crates ask through these functions and never open the file themselves.
+
+A Flatpak is a process with `/.flatpak-info`: `FLATPAK_ID` alone is inherited by a host process a
+Flatpak's terminal starts. The file's `[Context] filesystems=` is modelled as Flatpak writes it,
+flattened (no entry takes another back): the key file's escapes undone, the access mode dropped,
+an `xdg-*` user folder reached only where the `UserFolder` lookup places it, as Flatpak ignores
+an unconfigured one, `host-os` and `host-etc` at `/run/host` and `/run/host/etc`. Flatpak unsets
+`TMPDIR`, so it is never read there. A path hidden by `--nofilesystem` under an exposed folder is
+a tmpfs the file does not show, and is reached here. The macOS App Sandbox is
+`APP_SANDBOX_CONTAINER_ID`; its container is `HOME` only when `HOME` is that container's path,
+else the container under the user's home; a `TMPDIR` counts only inside the container
+(`usable_temporary`). `Confinement::detect` is a pure function of what it is given;
+`Confinement::of_process` adds the process's environment. The user's home comes from a lookup its
+caller passes, which reads the system's user database (never `HOME`, since this crate has no
+`unsafe` and the standard library's `home_dir` prefers `HOME`), and `detect` calls it only on
+the branch that needs it, so an unconfined process, or an App Sandbox whose `HOME` is its
+container, never asks the database. The description is judged a file within the bound before
+it is opened, and opened without blocking on Unix, so a FIFO at its name never blocks the
+reader. What both callers need is public (the variants, their accessors, `is_flatpak`,
+`is_plain`, `usable_temporary`); the description's path, fields and bound are not.
+**Tests:** `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
+`the_description_is_read_on_linux_alone_and_within_its_bound`,
+`a_description_out_of_reach_is_no_answer_and_still_a_sign_of_flatpak`,
+`a_description_that_is_no_file_is_never_opened` (Unix),
+`the_user_database_is_asked_only_when_a_sandbox_needs_it_and_never_home`,
+`a_key_file_list_is_split_where_its_writer_did_not_escape`,
+`a_manifests_filesystems_name_what_the_flatpak_reaches`,
+`an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`.

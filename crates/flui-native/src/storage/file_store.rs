@@ -41,7 +41,10 @@ const STALE_STAGED_AGE: Duration = Duration::from_secs(60);
 /// A store of named byte values, one file each, under the two roots of a
 /// [`DataDirs`].
 ///
-/// Each call blocks on the disk until it is done: run it on an IO thread.
+/// Each call blocks on the disk until it is done: run it off the owner
+/// thread. `flui-app`'s storage host runs it on the IO runtime's blocking
+/// threads on FLUI's default pools, off the IO workers, and in the IO task
+/// on a host's own IO pool (an embedder's).
 /// Calls on the same root from several threads or processes are safe: a
 /// value is replaced by one rename of a fully written file, and a write
 /// based on a version holds the root's lock while it compares and replaces;

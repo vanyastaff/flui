@@ -576,3 +576,10 @@ fn scene_effect_update() {
 fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
     scene_damage::a_cull_asked_in_walk_order_answers_as_one_asked_alone();
 }
+
+/// A cull skips a run of chunks only where it would skip each of them alone,
+/// under one parent (ADR-0304 §9).
+#[test]
+fn a_cull_skips_a_run_of_chunks_only_where_it_skips_each() {
+    scene_damage::a_cull_skips_a_run_of_chunks_only_where_it_skips_each();
+}

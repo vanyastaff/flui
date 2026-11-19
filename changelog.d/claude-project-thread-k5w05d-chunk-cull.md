@@ -1,8 +1,3 @@
-### Added
-
-- `SubtreeCull::meets_chunk`: whether a chunk of a retained version can reach the cull's rect,
-  through the effects above it and its node's chain.
-
 ### Fixed
 
 - A partial frame replays only the chunks of a repaint boundary that its damage can reach, instead

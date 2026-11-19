@@ -84,16 +84,13 @@ pub(crate) fn shape(version: &SceneVersion, region: &Region, commands: u64) -> R
 }
 
 /// The commands of every chunk `version` holds, attached or not, summed
-/// over its nodes' entries with no cull: what bounds a chunk's share of
-/// either plan.
+/// over its nodes, each content's own sum read rather than its chunks: what
+/// bounds a chunk's share of either plan, at a cost that follows the
+/// boundaries, not the chunks.
 pub(crate) fn version_commands(version: &SceneVersion) -> u64 {
     version
         .nodes()
-        .flat_map(|node| node.content().entries().iter())
-        .map(|entry| match entry {
-            flui_layer::Entry::Chunk { chunk, .. } => chunk.commands().len() as u64,
-            flui_layer::Entry::Effect { .. } | flui_layer::Entry::Slot { .. } => 0,
-        })
+        .map(|node| node.content().commands())
         .fold(0_u64, u64::saturating_add)
 }
 
