@@ -1091,8 +1091,7 @@ impl GpuContext {
             painter.begin_frame_in_scope();
             painter.resize(size.0, size.1);
             let drawn = (|| {
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                crate::headless::clear_to_background(domain, &view)?;
+                domain.poll()?;
                 let counters = {
                     let mut backend = LayerDispatcher::new(&mut painter);
                     crate::layer_walk::record_scene(scene, None, reads, &mut backend)?
@@ -1106,6 +1105,11 @@ impl GpuContext {
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                             label: Some("FLUI Slot Render Encoder"),
                         });
+                // The clear goes in the frame's own encoder, so a frame that
+                // fails or unwinds before its submission leaves the slot's
+                // committed image in place (ADR-0100).
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                crate::headless::record_background_clear(&mut encoder, &view);
                 painter.render_to_texture(&texture, &mut encoder)?;
                 painter.submit_encoder(encoder).map(|_submitted| counters)
             })();
@@ -2182,13 +2186,15 @@ mod tests {
     /// keep their own payload, and the next turn draws every slot over a
     /// fresh glyph atlas with no pipeline built again (ADR-0305 §7).
     ///
-    /// An offscreen slot is cleared before it records, so a frame that panics
-    /// leaves its target cleared, not as it was: the slot's committed image
-    /// does not survive, and its `Retry` is what makes the owner draw it again.
+    /// The clear an offscreen frame starts with is recorded in that frame's
+    /// encoder, so a frame that panics before its submission leaves the
+    /// slot's committed image in place; its `Retry` makes the owner draw it
+    /// again.
     ///
     /// Red-check: drop the pipelines with the painter in
     /// `GpuContext::keep_pipelines` and the next painter builds its pipeline
-    /// set again.
+    /// set again; submit the clear on its own before the frame records and
+    /// the panicking frame leaves its target cleared.
     #[test]
     fn a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines() {
         use crate::raster_executor::SlotFailure;
@@ -2262,13 +2268,13 @@ mod tests {
                 "each slot's record holds its own panic"
             );
         }
-        assert_ne!(
+        assert_eq!(
             executor
                 .backend()
                 .read_slot(second_slot)
                 .expect("the slot reads back"),
             committed,
-            "the panicking frame cleared its target before it recorded"
+            "the panicking frame left the slot's committed image"
         );
 
         assert_eq!(
