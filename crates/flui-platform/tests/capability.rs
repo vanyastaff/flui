@@ -612,6 +612,49 @@ fn runtime_locals_keep_one_value_per_type_until_retirement() {
     );
 }
 
+/// A runtime-local cache that logs each trim, or panics on one.
+#[derive(Default)]
+struct Trimmed<const PANICS: bool>(RefCell<Vec<flui_foundation::memory::MemoryPressureLevel>>);
+
+impl<const PANICS: bool> flui_foundation::memory::ReclaimMemory for Trimmed<PANICS> {
+    fn reclaim(&self, level: flui_foundation::memory::MemoryPressureLevel) {
+        assert!(!PANICS, "a cache that fails its trim");
+        self.0.borrow_mut().push(level);
+    }
+}
+
+#[test]
+fn reclaimed_runtime_locals_are_trimmed_until_retirement() {
+    use flui_foundation::memory::MemoryPressureLevel::{Critical, Moderate};
+    use flui_foundation::panic::FirstPanic;
+
+    let locals = RuntimeLocals::new();
+    // Made as a plain slot first: asking for it as a cache lists it too.
+    let early = locals.get_or_default::<Trimmed<false>>();
+    let faulty = locals.get_or_default_reclaimed::<Trimmed<true>>();
+    let cache = locals.get_or_default_reclaimed::<Trimmed<false>>();
+    assert!(Rc::ptr_eq(&early, &cache), "one value per type");
+    let _ = locals.get_or_default_reclaimed::<Trimmed<false>>();
+
+    let mut failure = FirstPanic::new();
+    locals.reclaim(Moderate, &mut failure);
+    assert!(failure.held().is_some(), "the faulty cache's panic is held");
+    assert_eq!(
+        *cache.0.borrow(),
+        vec![Moderate],
+        "the cache after the faulty one is trimmed, once however often it was asked for"
+    );
+    drop(faulty);
+
+    let _ = locals.retire();
+    locals.reclaim(Critical, &mut FirstPanic::new());
+    assert_eq!(
+        *cache.0.borrow(),
+        vec![Moderate],
+        "a retired runtime trims nothing"
+    );
+}
+
 /// A host's side of the Activity that records what a provider asked of it
 /// and answers each launch with a pending request, made with the mint the
 /// composition root handed it.

@@ -23,7 +23,7 @@
 //! outright — the future is dropped, not merely ignored, so an abandoned load
 //! stops costing whatever it held open. (What that does to a *shared* load is
 //! the provider's business, not this module's: for the built-in providers the
-//! asset registry keeps loading a source another widget still awaits, and
+//! image cache keeps loading a source another widget still awaits, and
 //! aborts one nobody else wants before it decodes. Either way this widget is
 //! no longer a subscriber.)
 //!
@@ -101,8 +101,9 @@ pub(super) struct ImageResolver {
     handle: RebuildHandle,
     /// The binding's async driver, captured in `init_state`.
     driver: Option<AsyncDriver>,
-    /// The UI runtime's background lanes and the host's HTTP client, likewise
-    /// captured in `init_state`; without lanes, decode jobs run on this thread.
+    /// The UI runtime's background lanes and image cache and the host's HTTP
+    /// client, likewise captured in `init_state`; without lanes, decode jobs
+    /// run on this thread.
     services: ImageServices,
     /// Cancels the live load on drop.
     token: Option<TaskToken>,
@@ -171,6 +172,14 @@ impl ImageResolver {
             Err(unsupported) => tracing::debug!(
                 %unsupported,
                 "Image: no HTTP client; a network image fails to load"
+            ),
+        }
+        #[cfg(feature = "asset-images")]
+        match ctx.capability::<flui_assets::ImageCacheCapability>() {
+            Ok(cache) => services = services.with_image_cache(cache),
+            Err(unsupported) => tracing::debug!(
+                %unsupported,
+                "Image: no image cache; an asset or network image fails to load"
             ),
         }
         self.services = services;

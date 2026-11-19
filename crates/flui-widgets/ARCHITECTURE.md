@@ -1409,21 +1409,26 @@ caret paint share the viewport clip. The `text_editing` rows
 `editable_paint_places_long_text_under_the_viewport_clip` pin the producer and
 paint commands, including RTL and obscured cases.
 
-### Network responses belong to their cache
+### Asset and network images load through their UI runtime's cache
 
-The cache keeps the decoded images and the loads in flight (ADR-0250), so
-`AssetImage` and `NetworkImage` share a decode only with providers on the same
-cache. Their `ImageCacheKey` holds the cache's weak allocation identity
-beside the source (ADR-0118): equal paths in two caches are two images.
-Clones sharing one cache still share keys. Two HTTP clients can be answered
-different images at one URL, so the cache keeps a network image under its
-client's `HttpAuthority` as well (ADR-0280 §6), and `NetworkImage::cached`
-probes with the client its `Image` acquired; the key leaves the client out,
-since it does not change while that `Image` is mounted. Retained keys do not keep the cache alive,
-and their addresses cannot alias a later owner. A custom
-provider keys by a typed value (`ImageCacheKey::custom`), never equal to a
-built-in key or to a value of another type.
-**Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`,
+Each UI runtime keeps one `flui_assets::ImageCache`, which `Image` acquires in
+`init_state` as `ImageCacheCapability` beside its lanes and HTTP client and
+hands its provider in `ImageServices` (ADR-0387). The cache keeps the decoded
+images and the loads in flight (ADR-0250), so every `AssetImage` and
+`NetworkImage` of one source in one runtime shares a decode, another runtime
+keeps its own, and the runtime trims its cache under memory pressure. On a host
+without the capability a load answers `ImageProviderError::ImageCacheUnavailable` and
+reads nothing. Their `ImageCacheKey` holds the path or the URL alone: the cache
+and the client an `Image` acquired do not change while it is mounted, so the key
+need not name them. Two HTTP clients can be answered different images at one
+URL, so the cache keeps a network image under its client's `HttpAuthority` as
+well (ADR-0280 §6), and `NetworkImage::cached` probes with the client its
+`Image` acquired. A custom provider keys by a typed value
+(`ImageCacheKey::custom`), never equal to a built-in key or to a value of
+another type.
+**Test:** `asset_images_share_their_runtimes_cache_until_memory_pressure`,
+`network_images_scope_cached_and_pending_responses_to_their_cache`,
+`an_image_missing_a_service_answers_which_one`,
 `one_cache_keeps_two_clients_images_of_one_url_apart` (`flui-assets`).
 
 ### 1. `DropTarget` registers one `DropReceiver` for its whole life
@@ -3447,7 +3452,7 @@ Raw text-store/IME scalar selection remains exact under ADR-0090.
 
 `Image` probes `ImageProvider::cached` before it starts a load, so an image the
 provider already holds renders in the same frame. For `AssetImage` and
-`NetworkImage` that probe and the load both go to the `flui_assets::ImageCache`, which
+`NetworkImage` that probe and the load both go to their UI runtime's `flui_assets::ImageCache`, which
 keeps decoded images within a byte budget, coalesces loads and cancels a load
 when its last waiter is dropped (`flui-assets`' ARCHITECTURE.md). Eviction
 cannot invalidate a pixel handle held by an already displayed image.
