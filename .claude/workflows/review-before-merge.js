@@ -385,10 +385,19 @@ const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
 // An agent that a usage limit or a skip refuses resolves to null, and one started past the turn's
 // token target throws; the runtime does not say which. Each is a failure the result names, and
 // none may read as an empty answer.
+// An agent asked for an empty string sometimes writes the quotes themselves (`""`); every string an
+// agent returns is read through `blankQuotes`, so such a field is empty wherever the script tests it.
+function blankQuotes(value) {
+  if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
+  if (Array.isArray(value)) return value.map(blankQuotes)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
+  return value
+}
+
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
-    return value ? { value } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
+    return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
     return { error: String(e && e.message ? e.message : e) }
   }

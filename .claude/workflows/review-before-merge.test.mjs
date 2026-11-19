@@ -310,6 +310,17 @@ for (const mutants of ["D:/it's", 42]) {
   assert.match(judgePrompt, /By REVIEW\.md "What Important means here"/)
   assert.match(result.markdown, /changes a decision \(docs\/plans\/specs\/feat\/design\.md\); the design read \(mode "design"\) is owed/)
 }
+{
+  // An agent that writes the quotes of an empty string ("") in its error and since fields has
+  // returned empty fields, not a failure: the review runs.
+  const { result } = await run({}, (p, o) => {
+    if (o.label === 'scope') return scope({ error: '""', since: '""', since_base: "''", warnings: [] })
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.equal(result.unavailable, undefined)
+  assert.equal(result.judge, 'fable')
+}
 for (const mode of ['Design', 'adr', 7]) {
   const { result, calls } = await run({ mode }, () => assert.fail('no agent may run'))
   assert.match(result.markdown, /^Independent read unavailable: mode .* is neither "change" nor "design"/)
