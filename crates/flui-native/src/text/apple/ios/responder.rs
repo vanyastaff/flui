@@ -8,7 +8,12 @@
 //!
 //! UIKit asks a `UITextInput` for positions and ranges as objects of its own
 //! making: [`TextPosition`] and [`TextRange`] carry an offset into the
-//! field's document, in UTF-16 units, as the store counts.
+//! field's document, in UTF-16 units, as the store counts, and
+//! [`TextSelectionRect`] one line of a range's selection.
+//!
+//! While a field is served, a `UITextInteraction` in editable mode on the
+//! window's view gives it UIKit's selection gestures, handles, loupe and edit
+//! menu, beginning only over the field (ADR-0255 decision 11).
 //!
 //! The view sits at the window view's origin, so the store's logical window
 //! coordinates are its own.
@@ -17,35 +22,46 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::Weak;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{Autofill, TextStoreStatus};
+use flui_platform::text_store::{Autofill, EditCommand, PressTarget, TextStoreStatus};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
-use objc2::runtime::ProtocolObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 
 use objc2_foundation::{
     NSArray, NSAttributedStringKey, NSComparisonResult, NSDictionary, NSInteger, NSObject,
     NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSSize as CGSize, NSString,
 };
 use objc2_ui_kit::{
-    NSWritingDirection, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
-    UITextAutocapitalizationType, UITextAutocorrectionType, UITextContentTypeNewPassword,
-    UITextContentTypeOneTimeCode, UITextContentTypePassword, UITextContentTypeUsername,
-    UITextInput, UITextInputDelegate, UITextInputStringTokenizer, UITextInputTokenizer,
-    UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
-    UITextSpellCheckingType, UITextStorageDirection, UIView,
+    NSWritingDirection, UIEditMenuInteraction, UIInteraction, UIKeyInput, UIKeyboardType,
+    UIPasteboard, UIResponder, UIReturnKeyType, UITextAutocapitalizationType,
+    UITextAutocorrectionType, UITextContentTypeNewPassword, UITextContentTypeOneTimeCode,
+    UITextContentTypePassword, UITextContentTypeUsername, UITextInput, UITextInputDelegate,
+    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextInteraction,
+    UITextInteractionDelegate, UITextInteractionMode, UITextLayoutDirection, UITextPosition,
+    UITextRange, UITextSelectionRect, UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
 use super::super::client::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
+use super::super::selection_rects::{SelectionRect, gesture_begins};
 use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
 
 /// What the target of the keyboard's log lines is.
 const LOG: &str = "flui.text.ios";
+
+/// How far around the edge a selection handle stands on, in points, UIKit's
+/// selection gestures still begin: half of the 44-point touch target Apple's
+/// Human Interface Guidelines ask for, so a touch on the handle's knob, which
+/// UIKit draws past the line it ends and may lie outside the field's box,
+/// still reaches the handle. Only around the handles: a band around the whole
+/// field would take a tap on a control beside it.
+const HANDLE_REACH: f64 = 22.0;
 
 define_class!(
     /// An offset into a [`TextInputView`]'s document.
@@ -122,6 +138,68 @@ impl TextRange {
     }
 }
 
+define_class!(
+    /// One line of a range of a [`TextInputView`]'s document: UIKit draws
+    /// the selection's highlight from these and puts its handles at the
+    /// leading edge of the one that holds the start and the trailing edge of
+    /// the one that holds the end.
+    #[unsafe(super(UITextSelectionRect, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FluiTextSelectionRect"]
+    #[ivars = ContainedIvars<SelectionRect>]
+    pub(super) struct TextSelectionRect;
+
+    impl TextSelectionRect {
+        #[unsafe(method(rect))]
+        fn rect(&self) -> CGRect {
+            os_entry("FluiTextSelectionRect rect", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
+                cg_rect(self.ivars().bounds)
+            })
+        }
+
+        #[unsafe(method(writingDirection))]
+        fn writing_direction(&self) -> NSWritingDirection {
+            os_entry(
+                "FluiTextSelectionRect writingDirection",
+                (),
+                AfterPanic::Answer(|()| NSWritingDirection::Natural),
+                || match self.ivars().direction {
+                    TextDirection::Ltr => NSWritingDirection::LeftToRight,
+                    TextDirection::Rtl => NSWritingDirection::RightToLeft,
+                },
+            )
+        }
+
+        #[unsafe(method(containsStart))]
+        fn contains_start(&self) -> bool {
+            os_entry("FluiTextSelectionRect containsStart", (), AfterPanic::Answer(|()| false), || {
+                self.ivars().contains_start
+            })
+        }
+
+        #[unsafe(method(containsEnd))]
+        fn contains_end(&self) -> bool {
+            os_entry("FluiTextSelectionRect containsEnd", (), AfterPanic::Answer(|()| false), || {
+                self.ivars().contains_end
+            })
+        }
+
+        /// Fields lay text out horizontally.
+        #[unsafe(method(isVertical))]
+        fn is_vertical(&self) -> bool {
+            false
+        }
+    }
+);
+
+impl TextSelectionRect {
+    fn new(mtm: MainThreadMarker, rect: SelectionRect) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(rect));
+        // SAFETY: NSObject's designated initializer, on a fresh allocation.
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
 /// What a [`TextInputView`] keeps.
 pub(super) struct ResponderIvars {
     /// The window's store host, which serves the focused field.
@@ -135,6 +213,10 @@ pub(super) struct ResponderIvars {
     reload_owed: Cell<bool>,
     tokenizer: OnceCell<Retained<UITextInputStringTokenizer>>,
     input_delegate: RefCell<Option<ObjcWeak<ProtocolObject<dyn UITextInputDelegate>>>>,
+    /// UIKit's selection gestures, handles, loupe and edit menu over the
+    /// focused field: set once the view exists, and on the window's view
+    /// exactly while a field is served ([`TextInputView::serve`]).
+    interaction: OnceCell<Retained<UITextInteraction>>,
 }
 
 define_class!(
@@ -149,6 +231,60 @@ define_class!(
         #[unsafe(method(canBecomeFirstResponder))]
         fn can_become_first_responder(&self) -> bool {
             true
+        }
+
+        /// The edit menu's Cut, Copy, Paste, Select and Select All, offered
+        /// when the focused field would perform them, Paste only while the
+        /// pasteboard holds text (`hasStrings`, which reads no content and so
+        /// shows no paste prompt); any other action is UIKit's to answer.
+        #[unsafe(method(canPerformAction:withSender:))]
+        fn can_perform_action(&self, action: Sel, sender: Option<&AnyObject>) -> bool {
+            os_entry("FluiTextInputView canPerformAction:withSender:", (), AfterPanic::Answer(|()| false), || {
+                match edit_command(action) {
+                    Some(EditCommand::Paste) => {
+                        self.client().edit_command_enabled(EditCommand::Paste) && pasteboard_has_text()
+                    }
+                    Some(command) => self.client().edit_command_enabled(command),
+                    // SAFETY: UIResponder's `canPerformAction:withSender:`,
+                    // with the selector and sender UIKit passed.
+                    None => unsafe { msg_send![super(self), canPerformAction: action, withSender: sender] },
+                }
+            })
+        }
+
+        #[unsafe(method(select:))]
+        fn select(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView select:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::SelectWord);
+            });
+        }
+
+        #[unsafe(method(cut:))]
+        fn cut(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView cut:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::Cut);
+            });
+        }
+
+        #[unsafe(method(copy:))]
+        fn copy(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView copy:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::Copy);
+            });
+        }
+
+        #[unsafe(method(paste:))]
+        fn paste(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView paste:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::Paste);
+            });
+        }
+
+        #[unsafe(method(selectAll:))]
+        fn select_all(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView selectAll:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::SelectAll);
+            });
         }
     }
 
@@ -488,17 +624,36 @@ define_class!(
             })
         }
 
+        /// The caret, held inside the part of the field the window shows: one
+        /// scrolled out stands at the nearest edge of that part
+        /// ([`TextClient::caret_rect`]); an empty rectangle only when no
+        /// field is served or it shows nothing.
         #[unsafe(method(caretRectForPosition:))]
         fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
             os_entry("FluiTextInputView caretRectForPosition:", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
-                let at = offset(position).map(|at| self.range(at, at));
-                self.rect(at)
+                offset(position)
+                    .and_then(|at| self.client().caret_rect(at))
+                    .map_or(CGRect::ZERO, cg_rect)
             })
         }
 
+        /// One rectangle per line of the range, from the field's layout; none
+        /// for a range UIKit made (a keyboard switching to Japanese asks
+        /// with positions of its own) or a field with no layout.
         #[unsafe(method_id(selectionRectsForRange:))]
-        fn selection_rects_for_range(&self, _range: &UITextRange) -> Retained<NSArray<UITextSelectionRect>> {
-            os_entry("FluiTextInputView selectionRectsForRange:", (), AfterPanic::Abort, NSArray::new)
+        fn selection_rects_for_range(&self, range: &UITextRange) -> Retained<NSArray<UITextSelectionRect>> {
+            os_entry("FluiTextInputView selectionRectsForRange:", (), AfterPanic::Answer(|()| NSArray::new()), || {
+                let Some(range) = ours(range) else {
+                    return NSArray::new();
+                };
+                let rects: Vec<Retained<UITextSelectionRect>> = self
+                    .client()
+                    .selection_rects(range)
+                    .into_iter()
+                    .map(|rect| Retained::into_super(TextSelectionRect::new(self.mtm(), rect)))
+                    .collect();
+                NSArray::from_retained_slice(&rects)
+            })
         }
 
         #[unsafe(method_id(closestPositionToPoint:))]
@@ -530,13 +685,46 @@ define_class!(
             })
         }
     }
+
+    // SAFETY: the method below carries UIKit's selector and signature for
+    // this protocol and runs on the main thread, where UIKit calls it.
+    unsafe impl UITextInteractionDelegate for TextInputView {
+        /// The interaction sits on the window's view, so its gestures begin
+        /// only over the focused field and on its selection's handles:
+        /// anywhere else, a control beside the field included, the touch is
+        /// the application's. `point` is in the window's view, whose
+        /// coordinates the store's are.
+        #[unsafe(method(interactionShouldBegin:atPoint:))]
+        fn interaction_should_begin(&self, _interaction: &UITextInteraction, point: CGPoint) -> bool {
+            os_entry("FluiTextInputView interactionShouldBegin:atPoint:", (), AfterPanic::Answer(|()| false), || {
+                self.begins_at(Point::new(point.x, point.y))
+            })
+        }
+
+        /// The interaction's own gesture began (a drag of the caret or a
+        /// handle, a long press): a move of the field during it is told once,
+        /// when it ends.
+        #[unsafe(method(interactionWillBegin:))]
+        fn interaction_will_begin(&self, _interaction: &UITextInteraction) {
+            os_entry("FluiTextInputView interactionWillBegin:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().set_interacting(true);
+            });
+        }
+
+        #[unsafe(method(interactionDidEnd:))]
+        fn interaction_did_end(&self, _interaction: &UITextInteraction) {
+            os_entry("FluiTextInputView interactionDidEnd:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().set_interacting(false);
+            });
+        }
+    }
 );
 
 impl TextInputView {
     /// A responder serving the field the window's store host focuses, which
     /// tells `delivery`'s window the Return and Backspace presses.
     pub(super) fn new(mtm: MainThreadMarker, delivery: Weak<WindowDelivery>) -> Retained<Self> {
-        let client = TextClient::new();
+        let client = TextClient::for_uikit();
         let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(ResponderIvars {
             client: Rc::clone(&client),
             delivery,
@@ -544,9 +732,23 @@ impl TextInputView {
             reload_owed: Cell::new(false),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
+            interaction: OnceCell::new(),
         }));
         // SAFETY: UIView's designated initializer, on a fresh allocation.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] };
+        let interaction =
+            UITextInteraction::textInteractionForMode(UITextInteractionMode::Editable, mtm);
+        let responder: &UIResponder = &this;
+        // SAFETY: `setTextInput:` requires a responder that implements
+        // `UITextInput`, which a `FluiTextInputView` does (`unsafe impl
+        // UITextInput` above). The interaction holds it weakly, as it holds
+        // its delegate, so the interaction in the view's ivar makes no cycle.
+        unsafe { interaction.setTextInput(Some(responder)) };
+        interaction.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        this.ivars()
+            .interaction
+            .set(interaction)
+            .expect("BUG: a new view's interaction is set once, here");
         // The context holds the view weakly: the view holds the client.
         client.bind(Rc::new(ResponderContext {
             view: ObjcWeak::from_retained(&this),
@@ -594,15 +796,9 @@ impl TextInputView {
     /// The rectangle of `range`'s first line in this view's points, from the
     /// field's layout; empty where no field has focus or its layout has none.
     fn rect(&self, range: Option<Utf16Range>) -> CGRect {
-        let Some((bounds, _)) = range.and_then(|range| self.client().first_rect(Some(range)))
-        else {
-            return CGRect::ZERO;
-        };
-        let Bounds { origin, size } = bounds;
-        CGRect::new(
-            CGPoint::new(origin.x, origin.y),
-            CGSize::new(size.width, size.height),
-        )
+        range
+            .and_then(|range| self.client().first_rect(Some(range)))
+            .map_or(CGRect::ZERO, |(bounds, _)| cg_rect(bounds))
     }
 
     /// A press and release of `key`, told to the window as a hardware key
@@ -631,10 +827,15 @@ impl TextInputView {
             if self.isFirstResponder() {
                 self.resignFirstResponder();
             }
+            self.remove_interaction();
             return;
         };
         let traits = keyboard_traits(status);
         let changed = self.ivars().traits.replace(traits) != traits;
+        // Before the view becomes first responder: installing an interaction
+        // may clear the text input's `inputDelegate`, which becoming first
+        // responder then sets to the keyboard's.
+        self.install_interaction();
         if !self.isFirstResponder() {
             self.becomeFirstResponder();
         } else if changed {
@@ -647,6 +848,58 @@ impl TextInputView {
                 self.reloadInputViews();
             }
         }
+    }
+
+    /// Whether UIKit's selection gestures begin at `point`
+    /// ([`gesture_begins`]): where a press lands on the focused field by the
+    /// window's own hit test, or, where nothing else takes the press, within
+    /// a handle's reach of the edge a shown selection handle stands on. The
+    /// edges come from the rectangles cut to the part of the field the window
+    /// shows, so a handle scrolled or clipped out of view reaches nothing,
+    /// and a control over the field or beside a handle keeps its tap.
+    fn begins_at(&self, point: Point<f64>) -> bool {
+        let client = self.client();
+        let Some(target) = client.press_target_at(point) else {
+            return false;
+        };
+        let rects = if target == PressTarget::Nothing {
+            client
+                .selected_range()
+                .filter(|range| !range.is_empty())
+                .map(|selection| client.selection_rects(selection))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        gesture_begins(target, point, &rects, HANDLE_REACH)
+    }
+
+    /// Put UIKit's text interaction on the window's view, the view the
+    /// touches land on, unless it is there already: the view's own frame is
+    /// empty, so no touch would reach a gesture on it.
+    fn install_interaction(&self) {
+        let Some(interaction) = self.ivars().interaction.get() else {
+            return;
+        };
+        if interaction.view().is_some() {
+            return;
+        }
+        if let Some(window_view) = self.superview() {
+            window_view.addInteraction(ProtocolObject::from_ref(&**interaction));
+        }
+    }
+
+    /// Take UIKit's text interaction off the view it is on, if any. A
+    /// gesture under way ends with it, though UIKit may never send its
+    /// `interactionDidEnd:`.
+    fn remove_interaction(&self) {
+        let Some(interaction) = self.ivars().interaction.get() else {
+            return;
+        };
+        if let Some(view) = interaction.view() {
+            view.removeInteraction(ProtocolObject::from_ref(&**interaction));
+        }
+        self.client().set_interacting(false);
     }
 
     /// Reload the keyboard for traits that changed while it composed, once
@@ -664,6 +917,58 @@ impl TextInputView {
         let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
         if let Some(delegate) = &delegate {
             delegate.textDidChange(Some(input));
+        }
+    }
+
+    /// Tell UIKit the field itself moved in the window (a scroll, a
+    /// transform, the keyboard lifting the view), or another field is
+    /// served: `UITextInteraction` keeps the caret, highlight and handles it
+    /// drew, and told the selection changed it asks `caretRectForPosition:`
+    /// and `selectionRectsForRange:` again (`UITextInputDelegate`'s
+    /// `selectionWillChange:` and `selectionDidChange:`, the pair a text input
+    /// sends when what UIKit shows of its selection is out of date). The
+    /// client sends it only for such a move, never for a caret move, and
+    /// never while the keyboard holds marked text or the interaction's own
+    /// gesture is under way: a keyboard told the selection changed mid
+    /// composition may end it.
+    fn geometry_changed_under_keyboard(&self) {
+        let delegate = self.delegate();
+        let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
+        if let Some(delegate) = &delegate {
+            delegate.selectionWillChange(Some(input));
+            delegate.selectionDidChange(Some(input));
+        }
+    }
+
+    /// Focus moved off the field an edit menu may be open over: the menu is
+    /// dismissed, and the interaction and the keyboard's input delegate stay
+    /// as they are. iOS 16 and later present the text interaction's edit
+    /// menu through a `UIEditMenuInteraction` on its view, which
+    /// `dismissMenu` closes; before iOS 16 the menu is `UIMenuController`'s,
+    /// which `hideMenu` (iOS 13) closes.
+    fn dismiss_edit_menu(&self) {
+        if objc2::available!(ios = 16.0) {
+            let views = [
+                self.ivars()
+                    .interaction
+                    .get()
+                    .and_then(|interaction| interaction.view()),
+                Some(Retained::into_super(self.retain())),
+            ];
+            for view in views.iter().flatten() {
+                for interaction in view.interactions().iter() {
+                    let object: &AnyObject = interaction.as_ref();
+                    if let Some(menu) = object.downcast_ref::<UIEditMenuInteraction>() {
+                        menu.dismissMenu();
+                    }
+                }
+            }
+        } else {
+            #[expect(
+                deprecated,
+                reason = "UIMenuController is the edit menu below iOS 16, the floor being 13"
+            )]
+            objc2_ui_kit::UIMenuController::sharedMenuController(self.mtm()).hideMenu();
         }
     }
 
@@ -708,12 +1013,31 @@ impl InputContext for ResponderContext {
     }
 
     /// UIKit asks `firstRectForRange:` each time it places the candidate
-    /// bar, and keeps no rectangle to invalidate.
+    /// bar and keeps no rectangle to invalidate: a caret or composition move
+    /// is told nothing, so the keyboard is never told the selection changed
+    /// while it composes.
     fn invalidate_character_coordinates(&self) {}
+
+    /// The field itself moved, or another is served: UIKit's text
+    /// interaction asks for the caret and selection rectangles again
+    /// ([`TextInputView::geometry_changed_under_keyboard`]).
+    fn geometry_changed(&self) {
+        if let Some(view) = self.view.load() {
+            view.geometry_changed_under_keyboard();
+        }
+    }
 
     fn field_changed(&self, status: Option<TextStoreStatus>) {
         if let Some(view) = self.view.load() {
             view.serve(status);
+        }
+    }
+
+    /// An edit menu open over the field focus left is dismissed; the
+    /// interaction and the input delegate stay.
+    fn field_left(&self) {
+        if let Some(view) = self.view.load() {
+            view.dismiss_edit_menu();
         }
     }
 
@@ -733,6 +1057,40 @@ impl InputContext for ResponderContext {
             view.document_will_change(change);
         }
     }
+}
+
+/// `bounds`, in the window's logical coordinates, in the responder's points,
+/// which are the same.
+fn cg_rect(bounds: Bounds<f64>) -> CGRect {
+    let Bounds { origin, size } = bounds;
+    CGRect::new(
+        CGPoint::new(origin.x, origin.y),
+        CGSize::new(size.width, size.height),
+    )
+}
+
+/// The edit command an edit-menu action asks the field for; `None` for an
+/// action that is not one of the field's.
+fn edit_command(action: Sel) -> Option<EditCommand> {
+    [
+        (sel!(cut:), EditCommand::Cut),
+        (sel!(copy:), EditCommand::Copy),
+        (sel!(paste:), EditCommand::Paste),
+        (sel!(select:), EditCommand::SelectWord),
+        (sel!(selectAll:), EditCommand::SelectAll),
+    ]
+    .into_iter()
+    .find_map(|(selector, command)| (selector == action).then_some(command))
+}
+
+/// Whether the general pasteboard holds text. `hasStrings` answers from the
+/// pasteboard's types without reading an item, which UIKit does not count as
+/// a paste: it shows no paste prompt or banner, as reading `string` would.
+fn pasteboard_has_text() -> bool {
+    let pasteboard = UIPasteboard::generalPasteboard();
+    // SAFETY: a getter of the general pasteboard on the main thread, which
+    // `canPerformAction:withSender:` runs on; it takes no argument.
+    unsafe { pasteboard.hasStrings() }
 }
 
 /// The range of one of this view's ranges; `None` for one UIKit made.

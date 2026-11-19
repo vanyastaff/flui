@@ -262,6 +262,9 @@ mod measured {
         SingleActivator as _, WidgetsLocalizations as _, ZoomIntent as _,
     };
     use flui_sdk::widgets::{
+        AnimatedIcon as _, AnimatedIconData as _, IconCommand as _, IconPath as _,
+    };
+    use flui_sdk::widgets::{
         CellPosition as _, SetSize as _, SortDirection as _, TableShape as _, TextSelection as _,
     };
     use flui_sdk::widgets::{
@@ -545,6 +548,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::gesture::ContactId;",
         "pub use flui_interaction::gesture::ContactSnapshot;",
         "pub use flui_interaction::gesture::ContestCancel;",
+        "pub use flui_interaction::gesture::DownTake;",
         "pub use flui_interaction::gesture::DragDownDetails;",
         "pub use flui_interaction::gesture::GestureArena;",
         "pub use flui_interaction::gesture::GestureArenaEntry;",

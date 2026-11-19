@@ -1,14 +1,10 @@
 //! What each render node shows in the window now: its box mapped into window coordinates, the
 //! part of it its ancestors' clips leave, and the opacity it is drawn at (ADR-0321 §1).
 //!
-//! The walk applies the same gates and the same composition as the paint walk and the input
-//! region walk: a node the paint walk skips, and a child its parent left out of the last paint,
-//! are not reported; a transform step is
-//! [`RenderObject::apply_paint_transform`](crate::traits::RenderObject::apply_paint_transform)
-//! with the follower placement the last composite resolved, a clip is the parent's
-//! [`describe_approximate_paint_clip`](crate::traits::RenderObject::describe_approximate_paint_clip),
-//! and opacity is the product of the group opacity of the scopes a parent painted the child in
-//! and the
+//! The walk applies the paint walk's gate and composition step (the `placement` module, which
+//! the input-region walk and [`PipelineOwner::presented_placement`] share): a node the paint
+//! walk skips, and a child its parent left out of the last paint, are not reported. Opacity is
+//! the product of the group opacity of the scopes a parent painted the child in and the
 //! [`PaintEffects::opacity`](crate::traits::PaintEffects::opacity) of the node and its ancestors.
 //! Every hook it calls is pure in `(self, size)` and runs no user code.
 
@@ -20,6 +16,7 @@ use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderNode;
 
 use super::PipelineOwner;
+use super::placement::PresentedPlacement;
 use super::subtree_arena::ensure_stack;
 
 /// The protocol a [`PresentedNode`] lays out under.
@@ -66,8 +63,7 @@ pub struct PresentedNode {
 struct Inherited {
     parent: Option<RenderId>,
     slot: usize,
-    transform: Matrix4,
-    clip: Rect,
+    placement: PresentedPlacement,
     opacity: f64,
 }
 
@@ -84,21 +80,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Some(root) = self.root_id() else {
             return nodes;
         };
-        let Some(window) = self
-            .render_tree
-            .get(root)
-            .and_then(RenderNode::laid_out_size)
-            .map(|size| Rect::from_origin_size(Point::ZERO, size))
-        else {
+        let Some(placement) = self.root_placement(root) else {
             return nodes;
         };
-        let mut transform = Matrix4::IDENTITY;
-        self.compose_presented_follower(root, &mut transform);
         let inherited = Inherited {
             parent: None,
             slot: 0,
-            transform,
-            clip: window,
+            placement,
             opacity: 1.0,
         };
         self.collect_presented(root, inherited, &mut nodes);
@@ -118,13 +106,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Some(node) = self.render_tree.get(id) else {
             return;
         };
-        if self.last_hidden_follower_ids.contains(&id)
-            || node.skip_paint()
-            || node.needs_layout()
-            || node
-                .geometry_sliver()
-                .is_some_and(|geometry| !geometry.visible)
-        {
+        if !self.paint_walk_draws(id, node) {
             return;
         }
         let Some(size) = node.laid_out_size() else {
@@ -134,7 +116,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // The node's own drawing is placed under its drawn transform (its effect layer, or an
         // offset its paint applies itself); its children reach theirs through
         // `apply_paint_transform` below.
-        let mut content = inherited.transform;
+        let mut content = inherited.placement.transform;
         if let Some(own) = drawn_transform(node, size) {
             content *= own;
         }
@@ -146,6 +128,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .map_or(1.0, crate::traits::PaintOpacity::alpha);
         let opacity = inherited.opacity * own_alpha;
         let visible = inherited
+            .placement
             .clip
             .intersect(&rect)
             .filter(|kept| !kept.is_empty());
@@ -164,7 +147,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             opacity,
         });
 
-        let generation = node.layout_generation();
         let children = node.children();
         let painted = self.last_child_paint_orders.get(&id);
         let count = painted.map_or(children.len(), smallvec::SmallVec::len);
@@ -178,47 +160,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child) = self.render_tree.get(child_id) else {
                 continue;
             };
-            if !child.was_placed_by(id, generation) {
+            let Some(placement) =
+                self.child_placement((id, node), slot, (child_id, child), inherited.placement)
+            else {
                 continue;
-            }
-            let mut clip = inherited.clip;
-            if let Some(local) = approximate_paint_clip(node, slot, size) {
-                // An unmappable clip hides the subtree rather than lifting the limit.
-                let mapped = map_rect(&inherited.transform, local).unwrap_or(Rect::ZERO);
-                clip = clip.intersect(&mapped).unwrap_or(Rect::ZERO);
-            }
-            let mut transform = inherited.transform;
-            if node
-                .apply_paint_transform(slot, child.offset(), &mut transform)
-                .is_none()
-            {
-                continue;
-            }
-            self.compose_presented_follower(child_id, &mut transform);
-            if transform
-                .to_col_major_array()
-                .iter()
-                .any(|value| !value.is_finite())
-            {
-                continue;
-            }
+            };
             self.collect_presented(
                 child_id,
                 Inherited {
                     parent: Some(id),
                     slot,
-                    transform,
-                    clip,
+                    placement,
                     opacity: opacity * scope_opacity,
                 },
                 out,
             );
-        }
-    }
-
-    fn compose_presented_follower(&self, id: RenderId, transform: &mut Matrix4) {
-        if let Some(follower) = self.last_follower_transforms.get(&id) {
-            *transform *= *follower;
         }
     }
 }
@@ -234,20 +190,5 @@ fn drawn_transform(node: &RenderNode, size: flui_foundation::geometry::Size) -> 
     match node {
         RenderNode::Box(entry) => entry.render_object().drawn_transform(size),
         RenderNode::Sliver(entry) => entry.render_object().drawn_transform(size),
-    }
-}
-
-fn approximate_paint_clip(
-    node: &RenderNode,
-    slot: usize,
-    size: flui_foundation::geometry::Size,
-) -> Option<Rect> {
-    match node {
-        RenderNode::Box(entry) => entry
-            .render_object()
-            .describe_approximate_paint_clip(slot, size),
-        RenderNode::Sliver(entry) => entry
-            .render_object()
-            .describe_approximate_paint_clip(slot, size),
     }
 }

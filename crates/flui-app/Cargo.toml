@@ -34,6 +34,13 @@ default = []
 # is refused as not registered, and the application links no TLS stack.
 http = ["flui-native/http"]
 
+# The image cache each UI runtime keeps for `Image::asset` and `Image::network`
+# (`flui_assets::ImageCacheCapability`, ADR-0387), which the runtime's built-ins
+# register and the runtime trims under memory pressure. The facade's `images`
+# turns it on with the widgets' loaders. Without it a widget acquiring the cache
+# is refused as not registered.
+images = ["flui-runtime/images"]
+
 # One instance per user session (ADR-0254 §4): `Application::single_instance`,
 # on by itself when the application declares a URL scheme, and on Linux and
 # Windows a later launch handing the running instance what it opens. The

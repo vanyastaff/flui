@@ -10,7 +10,7 @@ use std::{
 use flui_sdk::foundation::ValueKey;
 use flui_sdk::geometry::Size;
 use flui_sdk::interaction::{
-    ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureContest,
+    ArenaMembership, CancelOutcome, ContactEnd, DownTake, GestureArenaMember, GestureContest,
     GestureRecognizer, MotionRole, PointerDispatch, PointerEvent, PointerEventExt, PointerKind,
     PointerKindSet, PrimaryContact,
 };
@@ -65,6 +65,11 @@ impl GestureArenaMember for ThresholdDrag {
 impl GestureRecognizer for ThresholdDrag {
     fn allowed_devices(&self) -> PointerKindSet {
         self.config.borrow().devices
+    }
+
+    /// A drag past a threshold: it claims the contact only once it moves.
+    fn takes_down(&self, _: PointerDispatch<'_>) -> Option<DownTake> {
+        Some(DownTake::Motion)
     }
 
     fn add_pointer(&self, down: PointerDispatch<'_>) {

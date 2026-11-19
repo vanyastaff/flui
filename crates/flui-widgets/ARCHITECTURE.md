@@ -1290,6 +1290,57 @@ unconsumed and the clipboard untouched. A concealed clipboard entry
 family pins this with
 `copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed`.
 
+### A platform that draws the selection UI owns it while the field holds the input
+
+Who draws a focused field's caret, selection highlight, handles, magnifier and edit menu,
+and recognizes the taps, long presses and drags that make its selection, is the answer of
+the text-store host that serves it (`TextStoreHost::selection_ui`), which the field reads
+through `TextInputHandle::selection_ui` when it attaches its client. iOS's host answers
+`SelectionUi::Platform` (its `UITextInteraction`); every other host, a push platform and a
+test without a host answer `SelectionUi::Field`. The switch follows the host, not
+`PlatformConvention`: a convention says how a platform's own fields look and behave, and an
+iOS convention under a host that draws nothing (a test, the Web on an iPhone) still needs the
+field's own selection UI. While the platform owns it, `EditableText` paints no caret or
+highlight, hides its menu, takes down the handles, magnifier and toolbar a touch of its own
+showed and shows none at the end of one under way, and builds no pointer handlers, long
+press, double tap or secondary tap; its listener stays opaque, so a touch on the field still
+reaches nothing behind it. It keeps painting its text and its composition's underline. One
+value owns the state, the field's `PlatformSelection`: the build, the handles and the
+magnifier all read it, and losing the input gives the field its own gestures back. The
+field's store answers what a press lands on (`TextStore::press_target_at`, asked outside
+any lock) with the window's own hit test, the one a touch is dispatched by, and asks each
+target on the path, through the `PressProbe` its render view hands the store, whether a
+recognizer there would contend for the press by the gate `RecognizerSet::dispatch` applies
+before `add_pointer` (`GestureRecognizer::takes_down`, with the attachment's admission;
+a detector's press members each carry an admission for the buttons their own slots act
+on). So a control drawn
+over, beside or around the field keeps its tap (a scrollbar's thumb, a tappable row),
+while a scroll view's drag or an edge swipe, which claims only past its slop, a raw
+listener that only observes the Down (a `RawTextField`'s padding focusing it), and a
+detector whose recognizers refuse the touch (a secondary tap only) take no press from it;
+it answers the part of itself the window shows
+(`TextStoreRead::visible_bounds`) from the pipeline's placement query
+(`PipelineOwner::presented_placement`: the paint walk's gates and composition, so an
+offstage field shows nothing), which the platform draws inside; and its cursor-area loop
+tells the observer when its box or its visible part moves (`TextStoreObserver::field_moved`),
+apart from the layout change every caret move sends. The platform's edit menu reaches the
+field as `EditCommand`s through its store (`TextStore::perform_edit_command`), performed by
+the actions its chords invoke, under the same rules; Select picks the word at a collapsed
+caret, the word before it past punctuation, never one past a line break, and is not offered
+in an obscured field. The `text_editing` family pins this with
+`a_field_leaves_its_selection_ui_to_a_platform_that_draws_it`,
+`the_fields_own_handles_go_when_the_platform_takes_the_selection_ui`,
+`a_control_over_the_field_keeps_its_press`,
+`a_scroll_view_around_the_field_leaves_the_handles_their_reach`,
+`a_control_an_ancestor_draws_beside_the_field_keeps_its_press`,
+`only_a_recognizer_that_would_take_the_press_keeps_it`,
+`a_field_shows_only_what_its_ancestors_clip_leaves`,
+`a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved`,
+`an_offstage_field_shows_nothing`,
+`typing_moves_the_caret_and_only_a_moved_field_says_it_moved`,
+`the_platforms_edit_menu_reaches_the_field_through_its_store` and
+`an_obscured_field_offers_the_platform_no_copy_or_cut`.
+
 ### A field commits its composition before it loses its input
 
 `EditableText` commits an active composition, keeping its text, through
@@ -1358,21 +1409,26 @@ caret paint share the viewport clip. The `text_editing` rows
 `editable_paint_places_long_text_under_the_viewport_clip` pin the producer and
 paint commands, including RTL and obscured cases.
 
-### Network responses belong to their cache
+### Asset and network images load through their UI runtime's cache
 
-The cache keeps the decoded images and the loads in flight (ADR-0250), so
-`AssetImage` and `NetworkImage` share a decode only with providers on the same
-cache. Their `ImageCacheKey` holds the cache's weak allocation identity
-beside the source (ADR-0118): equal paths in two caches are two images.
-Clones sharing one cache still share keys. Two HTTP clients can be answered
-different images at one URL, so the cache keeps a network image under its
-client's `HttpAuthority` as well (ADR-0280 §6), and `NetworkImage::cached`
-probes with the client its `Image` acquired; the key leaves the client out,
-since it does not change while that `Image` is mounted. Retained keys do not keep the cache alive,
-and their addresses cannot alias a later owner. A custom
-provider keys by a typed value (`ImageCacheKey::custom`), never equal to a
-built-in key or to a value of another type.
-**Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`,
+Each UI runtime keeps one `flui_assets::ImageCache`, which `Image` acquires in
+`init_state` as `ImageCacheCapability` beside its lanes and HTTP client and
+hands its provider in `ImageServices` (ADR-0387). The cache keeps the decoded
+images and the loads in flight (ADR-0250), so every `AssetImage` and
+`NetworkImage` of one source in one runtime shares a decode, another runtime
+keeps its own, and the runtime trims its cache under memory pressure. On a host
+without the capability a load answers `ImageProviderError::ImageCacheUnavailable` and
+reads nothing. Their `ImageCacheKey` holds the path or the URL alone: the cache
+and the client an `Image` acquired do not change while it is mounted, so the key
+need not name them. Two HTTP clients can be answered different images at one
+URL, so the cache keeps a network image under its client's `HttpAuthority` as
+well (ADR-0280 §6), and `NetworkImage::cached` probes with the client its
+`Image` acquired. A custom provider keys by a typed value
+(`ImageCacheKey::custom`), never equal to a built-in key or to a value of
+another type.
+**Test:** `asset_images_share_their_runtimes_cache_until_memory_pressure`,
+`network_images_scope_cached_and_pending_responses_to_their_cache`,
+`an_image_missing_a_service_answers_which_one`,
 `one_cache_keeps_two_clients_images_of_one_url_apart` (`flui-assets`).
 
 ### 1. `DropTarget` registers one `DropReceiver` for its whole life
@@ -3396,7 +3452,7 @@ Raw text-store/IME scalar selection remains exact under ADR-0090.
 
 `Image` probes `ImageProvider::cached` before it starts a load, so an image the
 provider already holds renders in the same frame. For `AssetImage` and
-`NetworkImage` that probe and the load both go to the `flui_assets::ImageCache`, which
+`NetworkImage` that probe and the load both go to their UI runtime's `flui_assets::ImageCache`, which
 keeps decoded images within a byte budget, coalesces loads and cancels a load
 when its last waiter is dropped (`flui-assets`' ARCHITECTURE.md). Eviction
 cannot invalidate a pixel handle held by an already displayed image.

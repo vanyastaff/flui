@@ -4,15 +4,19 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_foundation::geometry::Point;
+use flui_foundation::TextDirection;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionEnd, Selection, TextStore, TextStoreHost,
-    TextStoreHostError, TextStoreObserver, TextStoreStatus, commit_composition_in_place,
+    CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, PointMode, PressTarget,
+    RangeRect, Selection, SelectionUi, TextStore, TextStoreError, TextStoreHost,
+    TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
+    commit_composition_in_place,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
 use super::super::secure_input::SecureHold;
+use super::super::selection_rects::SelectionRect;
 use super::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 
 /// The input method's context as the client reaches it: the calls it got,
@@ -22,6 +26,11 @@ use super::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 struct Context {
     discards: Cell<usize>,
     invalidations: Cell<usize>,
+    /// How many times focus moved off the field the context served.
+    fields_left: Cell<usize>,
+    /// How many times the input method was asked for the field's geometry
+    /// again.
+    geometry_queries: Cell<usize>,
     on_discard: RefCell<Option<Box<dyn Fn()>>>,
     /// Each status the client told, in order.
     statuses: RefCell<Vec<Option<TextStoreStatus>>>,
@@ -63,6 +72,8 @@ impl Default for Context {
         Self {
             discards: Cell::new(0),
             invalidations: Cell::new(0),
+            fields_left: Cell::new(0),
+            geometry_queries: Cell::new(0),
             on_discard: RefCell::new(None),
             statuses: RefCell::new(Vec::new()),
             changes: RefCell::new(Vec::new()),
@@ -127,6 +138,14 @@ impl InputContext for Context {
         if let Some(answer) = answer {
             answer();
         }
+    }
+
+    fn field_left(&self) {
+        self.fields_left.set(self.fields_left.get() + 1);
+    }
+
+    fn geometry_changed(&self) {
+        self.geometry_queries.set(self.geometry_queries.get() + 1);
     }
 }
 
@@ -560,6 +579,10 @@ struct ReentrantStore {
 }
 
 impl TextStore for ReentrantStore {
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
     fn status(&self) -> TextStoreStatus {
         let on_status = self.on_status.borrow_mut().take();
         if let Some(on_status) = on_status {
@@ -765,8 +788,46 @@ fn uikit_replaces_selects_and_measures_the_field() {
             active: Utf16Offset::new(7),
         }
     );
+    let advance = InMemoryTextStore::ADVANCE;
+    let line = InMemoryTextStore::LINE_HEIGHT;
+    assert_eq!(
+        client.selection_rects(span(4, 99)),
+        vec![SelectionRect {
+            bounds: Bounds::new(
+                Point::new(4.0 * advance, 0.0),
+                Size::new(3.0 * advance, line)
+            ),
+            direction: TextDirection::Ltr,
+            contains_start: true,
+            contains_end: true,
+        }],
+        "the selection's one line, clamped to the document"
+    );
+    assert_eq!(
+        client.caret_rect(Utf16Offset::new(99)),
+        Some(Bounds::new(
+            Point::new(7.0 * advance, 0.0),
+            Size::new(0.0, line)
+        )),
+        "the caret at the end, clamped to the document"
+    );
+    assert_eq!(
+        client.press_target_at(Point::new(advance, line / 2.0)),
+        Some(PressTarget::Field)
+    );
+    assert_eq!(
+        client.press_target_at(Point::new(8.0 * advance, line / 2.0)),
+        Some(PressTarget::Nothing),
+        "past the field's box"
+    );
     client.focus_store(None);
     assert_eq!(client.document_len(), None, "no field has focus");
+    assert_eq!(client.selection_rects(span(0, 3)), Vec::new());
+    assert_eq!(client.caret_rect(Utf16Offset::ZERO), None);
+    assert_eq!(
+        client.press_target_at(Point::new(advance, line / 2.0)),
+        None
+    );
 }
 
 #[test]
@@ -1465,4 +1526,520 @@ fn an_application_commit_with_identical_text_still_ends_marked_text() {
     );
     assert_eq!(context.discards.get(), 1);
     assert!(client.reports_key_release());
+}
+
+/// The reference store as a field that performs the edit commands it is
+/// told to enable, running `on_perform` inside the command, as an
+/// application's paste handler may move the focus there.
+struct FieldWithCommands {
+    inner: Rc<InMemoryTextStore>,
+    enabled: Vec<EditCommand>,
+    performed: RefCell<Vec<EditCommand>>,
+    on_perform: RefCell<Option<Box<dyn FnOnce()>>>,
+}
+
+impl TextStore for FieldWithCommands {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.enabled.contains(&command)
+    }
+
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        if !self.enabled.contains(&command) {
+            return false;
+        }
+        self.performed.borrow_mut().push(command);
+        let on_perform = self.on_perform.borrow_mut().take();
+        if let Some(on_perform) = on_perform {
+            on_perform();
+        }
+        true
+    }
+}
+
+#[test]
+fn uikit_edit_commands_reach_the_focused_field() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    assert_eq!(client.selection_ui(), SelectionUi::Platform);
+    assert_eq!(TextClient::new().selection_ui(), SelectionUi::Field);
+    assert!(
+        !client.edit_command_enabled(EditCommand::Copy),
+        "no field has focus"
+    );
+    assert!(!client.perform_edit_command(EditCommand::Copy));
+
+    let field = Rc::new(FieldWithCommands {
+        inner: InMemoryTextStore::new("abc"),
+        enabled: vec![EditCommand::Copy, EditCommand::SelectAll],
+        performed: RefCell::new(Vec::new()),
+        on_perform: RefCell::new(None),
+    });
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    assert!(client.edit_command_enabled(EditCommand::Copy));
+    assert!(!client.edit_command_enabled(EditCommand::Paste));
+    assert!(client.perform_edit_command(EditCommand::SelectAll));
+    assert!(!client.perform_edit_command(EditCommand::Paste));
+    assert_eq!(*field.performed.borrow(), [EditCommand::SelectAll]);
+
+    // A focus move the field's own code asks for inside the command waits
+    // for the command to return.
+    *field.on_perform.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        move || {
+            client.focus_store(None);
+            assert_eq!(
+                client.document_len(),
+                Some(Utf16Offset::new(3)),
+                "the field still has focus inside its command"
+            );
+        }
+    }));
+    assert!(client.perform_edit_command(EditCommand::Copy));
+    assert_eq!(
+        client.document_len(),
+        None,
+        "the queued focus move ran after it"
+    );
+}
+
+fn field_with_commands(text: &str) -> Rc<FieldWithCommands> {
+    Rc::new(FieldWithCommands {
+        inner: InMemoryTextStore::new(text),
+        enabled: vec![EditCommand::Paste, EditCommand::SelectAll],
+        performed: RefCell::new(Vec::new()),
+        on_perform: RefCell::new(None),
+    })
+}
+
+/// An edit menu UIKit offered over one field never edits the field focus
+/// moved to since: the command is refused there, and the context hears once
+/// that focus left the field the menu was shown over. A command UIKit never
+/// asked about is refused too.
+#[test]
+fn an_edit_command_reaches_only_the_field_it_was_offered_for() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let first = field_with_commands("one");
+    let second = field_with_commands("two");
+    client.focus_store(Some(Rc::clone(&first) as Rc<dyn TextStore>));
+    assert!(
+        !client.perform_edit_command(EditCommand::SelectAll),
+        "never offered"
+    );
+
+    assert!(client.edit_command_enabled(EditCommand::Paste));
+    client.focus_store(Some(Rc::clone(&second) as Rc<dyn TextStore>));
+    assert_eq!(context.fields_left.get(), 1, "focus left the first field");
+    assert!(
+        !client.perform_edit_command(EditCommand::Paste),
+        "offered over the first field"
+    );
+    assert!(first.performed.borrow().is_empty());
+    assert!(second.performed.borrow().is_empty());
+
+    assert!(client.edit_command_enabled(EditCommand::Paste));
+    assert!(client.perform_edit_command(EditCommand::Paste));
+    assert_eq!(*second.performed.borrow(), [EditCommand::Paste]);
+    client.focus_store(Some(Rc::clone(&second) as Rc<dyn TextStore>));
+    assert_eq!(
+        context.fields_left.get(),
+        1,
+        "the same field again is no move"
+    );
+}
+
+/// The reference store as a field that keeps the observer it was given when
+/// told to drop it, as a store with a publication under way when focus moved
+/// still reports through it.
+struct FieldKeepingItsObserver {
+    inner: Rc<InMemoryTextStore>,
+    kept: RefCell<Option<Rc<dyn TextStoreObserver>>>,
+}
+
+impl TextStore for FieldKeepingItsObserver {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        if let Some(observer) = &observer {
+            *self.kept.borrow_mut() = Some(Rc::clone(observer));
+        }
+        self.inner.set_observer(observer);
+    }
+}
+
+/// A layout change of the focused field asks the candidate window for its
+/// rectangle once (AppKit's `invalidateCharacterCoordinates`); one a field
+/// focus moved off still reports asks nothing, nor is its edit the input
+/// method's.
+#[test]
+fn a_layout_change_asks_for_the_geometry_of_the_focused_field_only() {
+    let kept = Rc::new(FieldKeepingItsObserver {
+        inner: InMemoryTextStore::new("one"),
+        kept: RefCell::new(None),
+    });
+    let (client, context) = serving(&kept);
+    let other = InMemoryTextStore::new("two");
+
+    let before = context.invalidations.get();
+    kept.inner.screen_moved();
+    assert_eq!(context.invalidations.get(), before + 1, "the focused field");
+
+    client.focus_store(Some(as_store(&other)));
+    let before = context.invalidations.get();
+    let changes = context.changes.borrow().len();
+    let observer = kept.kept.borrow().clone().expect("the field was observed");
+    observer.layout_changed();
+    observer.text_changed(flui_platform::text_store::TextChange {
+        start: Utf16Offset::ZERO,
+        old_end: Utf16Offset::ZERO,
+        new_end: Utf16Offset::ZERO,
+    });
+    assert_eq!(
+        context.invalidations.get(),
+        before,
+        "a field focus moved off"
+    );
+    assert_eq!(
+        context.changes.borrow().len(),
+        changes,
+        "nor is its edit the input method's"
+    );
+    other.screen_moved();
+    assert_eq!(
+        context.invalidations.get(),
+        before + 1,
+        "the field focus moved to"
+    );
+}
+
+/// UIKit's text interaction asks for the field's geometry again when the
+/// field itself moves, once per move, and never for a caret move: typing
+/// asks nothing. A move while the keyboard holds marked text, or while the
+/// interaction's own gesture is under way, is told once, when that ends, so
+/// the keyboard is never told the selection changed mid composition.
+#[test]
+fn a_field_move_asks_for_its_geometry_once_and_never_mid_composition_or_gesture() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let field = Rc::new(FieldKeepingItsObserver {
+        inner: InMemoryTextStore::new(""),
+        kept: RefCell::new(None),
+    });
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    let observer = field.kept.borrow().clone().expect("the field was observed");
+    let queries = || context.geometry_queries.get();
+    let served = queries();
+
+    for text in ["a", "b", "c"] {
+        client.insert_text(text.to_owned(), None);
+        field.inner.screen_moved();
+    }
+    assert_eq!(queries(), served, "typing moved the caret, not the field");
+
+    observer.field_moved();
+    assert_eq!(queries(), served + 1, "a scroll of the field");
+
+    client.set_marked_text("ni".to_owned(), span(0, 2), None);
+    observer.field_moved();
+    observer.field_moved();
+    assert_eq!(queries(), served + 1, "not while the keyboard composes");
+    client.unmark_text();
+    assert_eq!(queries(), served + 2, "once, when the composition ended");
+
+    client.set_interacting(true);
+    observer.field_moved();
+    assert_eq!(
+        queries(),
+        served + 2,
+        "not during the interaction's gesture"
+    );
+    client.set_interacting(false);
+    assert_eq!(queries(), served + 3, "once, when the gesture ended");
+    client.set_interacting(false);
+    assert_eq!(queries(), served + 3, "a move is told once");
+}
+
+/// A focus move from one field to another tells the context of the new
+/// field and that the old one was left (UIKit's responder dismisses the edit
+/// menu over it), and never that no field is served in between, which would
+/// take the keyboard and the interaction down with the input delegate.
+#[test]
+fn a_focus_move_between_fields_keeps_the_keyboard_and_leaves_the_old_field_once() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let first = InMemoryTextStore::new("one");
+    let second = InMemoryTextStore::new("two");
+    client.focus_store(Some(as_store(&first)));
+    let told = context.statuses.borrow().len();
+    client.focus_store(Some(as_store(&second)));
+    let since: Vec<Option<TextStoreStatus>> = context.statuses.borrow()[told..].to_vec();
+    assert!(!since.is_empty(), "the next field was told");
+    assert!(
+        since.iter().all(Option::is_some),
+        "no field-less moment between the two: {since:?}"
+    );
+    assert_eq!(
+        context.fields_left.get(),
+        1,
+        "the first field was left once"
+    );
+}
+
+/// A retired client keeps no store alive: the field an edit menu was last
+/// offered over is let go with the focused one.
+#[test]
+fn a_retired_client_lets_go_of_the_field_a_menu_was_offered_over() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let field = field_with_commands("one");
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    assert!(client.edit_command_enabled(EditCommand::Paste));
+    client.retire();
+    assert_eq!(Rc::strong_count(&field), 1, "only the test holds the field");
+}
+
+/// The reference store as a field whose geometry reads are refused for lack
+/// of layout until `laid_out` is set, as a field typed into before its next
+/// frame refuses them.
+struct FieldAwaitingLayout {
+    inner: Rc<InMemoryTextStore>,
+    laid_out: Rc<Cell<bool>>,
+}
+
+impl TextStore for FieldAwaitingLayout {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
+
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, TextStoreError> {
+        let grant = match grant {
+            LockGrant::Read(body) => {
+                let laid_out = self.laid_out.get();
+                LockGrant::read(move |session| body(&AwaitingLayout { session, laid_out }))
+            }
+            edit @ LockGrant::ReadWrite(_) => edit,
+        };
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// A read session of a [`FieldAwaitingLayout`]: its text as it is, its
+/// geometry refused with `NoLayout` until it is laid out.
+struct AwaitingLayout<'a> {
+    session: &'a dyn TextStoreRead,
+    laid_out: bool,
+}
+
+impl AwaitingLayout<'_> {
+    fn laid_out(&self) -> Result<(), TextStoreError> {
+        if self.laid_out {
+            Ok(())
+        } else {
+            Err(TextStoreError::NoLayout)
+        }
+    }
+}
+
+impl TextStoreRead for AwaitingLayout<'_> {
+    fn document_len(&self) -> Utf16Offset {
+        self.session.document_len()
+    }
+
+    fn text(&self, range: Utf16Range) -> Result<String, TextStoreError> {
+        self.session.text(range)
+    }
+
+    fn selection(&self) -> Selection {
+        self.session.selection()
+    }
+
+    fn composition(&self) -> Option<Composition> {
+        self.session.composition()
+    }
+
+    fn rect_for_range(&self, range: Utf16Range) -> Result<RangeRect, TextStoreError> {
+        self.laid_out()?;
+        self.session.rect_for_range(range)
+    }
+
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
+        self.laid_out()?;
+        self.session.document_bounds()
+    }
+
+    fn index_at_point(
+        &self,
+        point: Point<f64>,
+        mode: PointMode,
+    ) -> Result<Utf16Offset, TextStoreError> {
+        self.laid_out()?;
+        self.session.index_at_point(point, mode)
+    }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.laid_out()?;
+        self.session.visible_bounds()
+    }
+}
+
+/// A geometry read the field refuses for lack of layout (UIKit asking for
+/// the caret, the selection or the candidate bar's rectangle right after an
+/// `insertText:`) makes the field's next layout notice ask UIKit for its
+/// geometry again, once, under the holds a move of the field has: not while
+/// the keyboard composes, and once when it stops. A read the field answered
+/// owes nothing.
+#[test]
+fn a_geometry_read_refused_for_lack_of_layout_is_asked_again_once_laid_out() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let field = Rc::new(FieldAwaitingLayout {
+        inner: InMemoryTextStore::new("abc"),
+        laid_out: Rc::new(Cell::new(true)),
+    });
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    let queries = || context.geometry_queries.get();
+    let served = queries();
+
+    assert!(client.caret_rect(Utf16Offset::ZERO).is_some());
+    field.inner.screen_moved();
+    assert_eq!(queries(), served, "an answered read owes nothing");
+
+    field.laid_out.set(false);
+    assert_eq!(client.caret_rect(Utf16Offset::ZERO), None);
+    assert_eq!(client.selection_rects(span(0, 1)), Vec::new());
+    assert_eq!(client.first_rect(None), None);
+    assert_eq!(queries(), served, "a refusal asks nothing yet");
+    field.laid_out.set(true);
+    field.inner.screen_moved();
+    assert_eq!(queries(), served + 1, "once the layout settles");
+    field.inner.screen_moved();
+    assert_eq!(queries(), served + 1, "and only once");
+
+    client.set_marked_text("ni".to_owned(), span(0, 2), None);
+    field.laid_out.set(false);
+    assert_eq!(client.first_rect(None), None);
+    field.laid_out.set(true);
+    field.inner.screen_moved();
+    assert_eq!(queries(), served + 1, "not while the keyboard composes");
+    client.unmark_text();
+    assert_eq!(queries(), served + 2, "once the composition ended");
+}
+
+/// A focus move ends what the client held for the field it left: a UIKit
+/// gesture whose `interactionDidEnd:` never comes (focus left mid-gesture)
+/// does not hold back the next field's geometry, and a move owed to the old
+/// field while the keyboard composed is not told for it on the way out, so
+/// the next field's geometry is asked for once.
+#[test]
+fn a_focus_move_asks_for_the_next_fields_geometry_once_whatever_the_last_one_held() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let first = Rc::new(FieldKeepingItsObserver {
+        inner: InMemoryTextStore::new("one"),
+        kept: RefCell::new(None),
+    });
+    let second = InMemoryTextStore::new("two");
+    let third = InMemoryTextStore::new("three");
+    let queries = || context.geometry_queries.get();
+
+    client.focus_store(Some(Rc::clone(&first) as Rc<dyn TextStore>));
+    client.set_interacting(true);
+    let before = queries();
+    client.focus_store(Some(as_store(&second)));
+    assert_eq!(
+        queries(),
+        before + 1,
+        "a gesture over the field left holds nothing back"
+    );
+
+    client.focus_store(Some(Rc::clone(&first) as Rc<dyn TextStore>));
+    let observer = first.kept.borrow().clone().expect("the field was observed");
+    client.set_marked_text("ni".to_owned(), span(0, 2), None);
+    observer.field_moved();
+    let before = queries();
+    client.focus_store(Some(as_store(&third)));
+    assert_eq!(
+        queries(),
+        before + 1,
+        "the next field's geometry, and nothing for the one left"
+    );
 }

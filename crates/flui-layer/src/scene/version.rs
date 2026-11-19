@@ -10,6 +10,7 @@ use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use super::content::{
     BlockHolds, BoundaryContent, Bounds, ChunkBlock, Entry, EntryIndex, LinkRole,
 };
+use super::footprint::TextureDamageScratch;
 use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
@@ -484,6 +485,24 @@ impl SceneVersion {
             &mut cost,
             &mut closures,
         )
+    }
+
+    /// What new images of `textures` damage on a surface of `surface`
+    /// pixels: the device footprint of every attached entry of this version
+    /// that draws one of them, closed over what its filters and
+    /// destination-reading chunks read (ADR-0304 §9). `Unchanged` when no
+    /// attached entry draws one. It costs the users of `textures`, read off
+    /// the texture index, each by the depth of its node; when they damage
+    /// anything, the closure reads this version's filtered nodes too. It
+    /// works in `scratch`, which the caller keeps between frames.
+    #[must_use]
+    pub fn texture_damage(
+        &self,
+        textures: impl IntoIterator<Item = TextureId>,
+        surface: (u32, u32),
+        scratch: &mut TextureDamageScratch,
+    ) -> DamageRegion {
+        super::footprint::texture_damage(&self.0, textures, surface, scratch)
     }
 }
 

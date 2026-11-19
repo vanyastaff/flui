@@ -68,8 +68,9 @@ use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, TextChange, TextStore, TextStoreError,
-    TextStoreHost, TextStoreObserver, commit_composition_in_place, project_ime_event,
+    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, SelectionUi, TextChange, TextStore,
+    TextStoreError, TextStoreHost, TextStoreObserver, commit_composition_in_place,
+    project_ime_event,
 };
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
@@ -1570,6 +1571,23 @@ impl TextInputHandle {
             owner.show_keyboard();
         }
         Ok(())
+    }
+
+    /// Who draws the selection UI of `token`'s field while it holds the
+    /// input: the pull host's answer ([`TextStoreHost::selection_ui`]) for
+    /// the active client, the field itself for a push platform, a stale
+    /// token or a closing presentation.
+    #[must_use]
+    pub fn selection_ui(&self, token: ClientToken) -> SelectionUi {
+        let Ok(owner) = self.owner() else {
+            return SelectionUi::Field;
+        };
+        if owner.ensure_open().is_err() || !owner.is_attached(token) {
+            return SelectionUi::Field;
+        }
+        owner
+            .pull_host()
+            .map_or(SelectionUi::Field, |host| host.selection_ui())
     }
 }
 

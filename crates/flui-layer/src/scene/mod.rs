@@ -13,6 +13,7 @@ mod table;
 mod version;
 
 pub use content::{BoundaryContent, Bounds, Chunk, ContentBuilder, Entry, EntryIndex};
+pub use footprint::TextureDamageScratch;
 pub use id::{ContentVersion, Lineage, SceneNodeId, SceneNodeMarker, SceneVersionId};
 pub use owner::{
     Applied, Placement, Reclaimed, ReleasedContents, SceneError, SceneOp, SceneOwner,

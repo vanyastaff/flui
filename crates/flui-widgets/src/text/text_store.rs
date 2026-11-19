@@ -54,6 +54,8 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
+use flui_interaction::events::PointerKind;
+use flui_interaction::pointer::{HitTestResult, PressProbe};
 use flui_interaction::text_input::TextInputHandle;
 use flui_interaction::text_input::{
     CompositionLedger, EditGeneration, LockArbiter, committed_text,
@@ -61,15 +63,15 @@ use flui_interaction::text_input::{
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
-    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    Selection, TextChange, TextInputOptions, TextStore, TextStoreChange, TextStoreEdit,
-    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
-    utf16,
+    CommitGate, Composition, EditCommand, LockGrant, LockOutcome, LockTiming, OwnerCalls,
+    PointMode, PressTarget, RangeRect, Selection, TextChange, TextInputOptions, TextStore,
+    TextStoreChange, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
 use super::controller::{self, ComposingState, SessionWrite, TextEditingController};
-use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
+use super::editable_text::{EditObserver, FieldCommands, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
 /// the render root, handed to `f`; `None` when the field is not mounted or
@@ -227,6 +229,8 @@ pub(super) struct EditableTextStore {
     /// A layout or status change the observer has not heard of yet, because
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
+    /// A move of the field's visible box the observer has not heard of yet.
+    field_moved_dirty: Cell<bool>,
     /// The store answered `NoLayout` to a read and the observer has not been
     /// told that layout now exists (TSF's `OnLayoutChange` owes one).
     layout_owed: Cell<bool>,
@@ -244,10 +248,18 @@ pub(super) struct EditableTextStore {
     handle: Option<TextInputHandle>,
     pipeline: Option<PipelineCell>,
     inner_anchor: SubtreeAnchor,
+    /// Asks the window's pointer targets whether they would take a press
+    /// ([`Self::press_target_at`]); set by the field's render view, `None`
+    /// before it is mounted or in a window without an interaction lane.
+    press_probe: Rc<Cell<Option<PressProbe>>>,
     obscure: Rc<Cell<bool>>,
     text_input: Rc<Cell<TextInputOptions>>,
     obscuring_character: Rc<Cell<char>>,
     edits: EditObserver,
+    /// What a platform's edit menu asks of the field. `None` only inside
+    /// `Drop`, which retires it: it holds the controller and `on_changed`
+    /// too.
+    commands: Option<FieldCommands>,
 }
 
 impl Drop for EditableTextStore {
@@ -258,6 +270,9 @@ impl Drop for EditableTextStore {
     /// during an unwind too (ADR-0281). The arbiter retires its queued grants
     /// the same way. A failure is not raised while the thread already unwinds.
     fn drop(&mut self) {
+        // The commands' copies of the controller and `on_changed` go first,
+        // so the store's own are the last ones retired below.
+        let commands = self.commands.take();
         let observer = self.observer.get_mut().take();
         let controller = std::mem::replace(
             &mut self.controller,
@@ -265,6 +280,7 @@ impl Drop for EditableTextStore {
         );
         let owed = std::mem::take(self.owed.get_mut());
         let mut calls = OwnerCalls::new();
+        calls.retire(commands);
         calls.retire(observer);
         calls.retire(owed);
         self.edits.retire(&mut calls);
@@ -281,10 +297,12 @@ pub(super) struct FieldParts {
     pub(super) handle: Option<TextInputHandle>,
     pub(super) pipeline: Option<PipelineCell>,
     pub(super) inner_anchor: SubtreeAnchor,
+    pub(super) press_probe: Rc<Cell<Option<PressProbe>>>,
     pub(super) obscure: Rc<Cell<bool>>,
     pub(super) text_input: Rc<Cell<TextInputOptions>>,
     pub(super) obscuring_character: Rc<Cell<char>>,
     pub(super) edits: EditObserver,
+    pub(super) commands: FieldCommands,
 }
 
 impl EditableTextStore {
@@ -298,6 +316,7 @@ impl EditableTextStore {
             publication: RefCell::new(Publication::Idle),
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
+            field_moved_dirty: Cell::new(false),
             layout_owed: Cell::new(false),
             diffed: RefCell::new(None),
             status_dirty: Cell::new(false),
@@ -305,10 +324,12 @@ impl EditableTextStore {
             handle: parts.handle,
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
+            press_probe: parts.press_probe,
             obscure: parts.obscure,
             text_input: parts.text_input,
             obscuring_character: parts.obscuring_character,
             edits: parts.edits,
+            commands: Some(parts.commands),
         })
     }
 
@@ -405,6 +426,17 @@ impl EditableTextStore {
         if self.layout_dirty.replace(false) {
             self.notify(calls, |observer| observer.layout_changed());
         }
+        if self.field_moved_dirty.replace(false) {
+            self.notify(calls, |observer| observer.field_moved());
+        }
+    }
+
+    /// The field's visible box moved in the window (a scroll, a transform,
+    /// an ancestor's clip): reported now if the store may notify, otherwise
+    /// at the next point it may. A caret move alone is [`Self::layout_changed`].
+    pub(super) fn field_moved(&self) {
+        self.field_moved_dirty.set(true);
+        self.flush_now();
     }
 
     /// The field is gone: refuse every later lock and drop queued ones
@@ -785,6 +817,14 @@ impl TextStore for EditableTextStore {
             .with_text_input(self.text_input.get())
     }
 
+    /// The window's own hit test, the one a touch is dispatched by, and the
+    /// entries' handlers asked through the press probe
+    /// (`EditableTextStore::press_target`); a probe that cannot be asked (off
+    /// the owner thread, a closing window) is `WindowUnavailable`.
+    fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        self.press_target(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -878,6 +918,34 @@ impl TextStore for EditableTextStore {
 
     fn screen_moved(&self) {
         self.layout_changed();
+    }
+
+    /// The field's own copy, cut, paste and select-all rules decide; a
+    /// disposed field or one inside a lock performs nothing.
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.alive.get()
+            && matches!(*self.publication.borrow(), Publication::Idle)
+            && self
+                .commands
+                .as_ref()
+                .is_some_and(|commands| commands.is_enabled(command))
+    }
+
+    /// A selection the command makes (select all, select word) reaches the
+    /// observer at once, as a key edit does. A cut and a paste edit the text
+    /// only when the clipboard's answer is delivered, at a later owner turn,
+    /// never inside this call, and that edit reaches the observer at the next
+    /// lock request or frame, as any other application edit.
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        if !self.edit_command_enabled(command) {
+            return false;
+        }
+        let performed = self
+            .commands
+            .as_ref()
+            .is_some_and(|commands| commands.perform(command));
+        self.controller_changed();
+        performed
     }
 }
 
@@ -994,6 +1062,131 @@ impl TextStoreRead for Session<'_> {
         let source = self.store.source_offset(&self.doc.text, rendered);
         Ok(self.doc.units(source))
     }
+
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.store.visible_box()
+    }
+}
+
+impl EditableTextStore {
+    /// Where the field is in the window after the last frame: its box, and
+    /// the part of it the window and every ancestor's paint clip leave, by
+    /// the pipeline's own placement query (`PipelineOwner::presented_placement`,
+    /// the paint walk's gates and composition, follower placement included).
+    /// `Ok(None)` when the paint walk draws nothing of the field (it is
+    /// offstage, skipped or left out of its parent's paint); `NoLayout`,
+    /// which owes the observer a layout notice, before the field is laid out.
+    pub(super) fn placement(&self) -> Result<Option<FieldPlacement>, TextStoreError> {
+        let viewport = self.viewport()?;
+        let measured = self
+            .pipeline
+            .as_ref()
+            .zip(self.inner_anchor.get())
+            .and_then(|(pipeline, anchor)| {
+                pipeline
+                    .try_with_layout(|owner| {
+                        let editable = *owner.render_tree().children(anchor).first()?;
+                        let Some(placement) = owner.presented_placement(editable) else {
+                            return Some(None);
+                        };
+                        let rect = placement.transform.transform_rect(&viewport);
+                        let finite = [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                            .iter()
+                            .all(|edge| edge.is_finite());
+                        if !finite {
+                            return Some(None);
+                        }
+                        let visible = placement
+                            .clip
+                            .intersect(&rect)
+                            .filter(|kept| !kept.is_empty())
+                            .map(bounds_from_rect);
+                        Some(Some(FieldPlacement {
+                            rect: bounds_from_rect(rect),
+                            visible,
+                        }))
+                    })
+                    .flatten()
+            });
+        measured.ok_or_else(|| {
+            self.layout_owed.set(true);
+            TextStoreError::NoLayout
+        })
+    }
+
+    /// The part of the field the window shows ([`Self::placement`]); `None`
+    /// when it shows nothing of it.
+    pub(super) fn visible_box(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        Ok(self.placement()?.and_then(|placement| placement.visible))
+    }
+
+    /// What a press at `point` lands on ([`TextStore::press_target_at`]):
+    /// the field when its editable is on the window's hit path; another
+    /// target when an entry on the path would contend for a touch going down
+    /// there, asked of the entry's own handler through the press probe (a
+    /// recognizer that takes the Down as a press, its admission accepting it:
+    /// a scrollbar's thumb, a list row's tap, a control over or beside the
+    /// field), whether or not it is one of the field's ancestors; nothing
+    /// otherwise: a raw listener that only observes the Down (the field's own
+    /// padding focusing it) and a drag, which claims only past its slop,
+    /// admission or not, take no press. Without a probe (a window with no
+    /// interaction lane) no target is registered, so none contends.
+    ///
+    /// Render objects' hit tests and recognizers' admission predicates are
+    /// user code: the hit test runs under the pipeline's borrow, which
+    /// resumes a panic once the path is complete, and the targets are asked
+    /// after it is released; a panic leaves this call for the caller to
+    /// contain.
+    fn press_target(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
+        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
+        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
+        // The path outlives the pipeline's borrow: the targets are asked, and
+        // the entries' payloads destroyed, after it is released.
+        let mut path = HitTestResult::new();
+        let on_field = pipeline
+            .try_with_layout(|owner| {
+                let editable = *owner.render_tree().children(anchor).first()?;
+                owner.hit_test(Offset::new(point.x, point.y), PointerKind::Touch, &mut path);
+                Some(
+                    path.path()
+                        .iter()
+                        .any(|entry| entry.target == editable || entry.target == anchor),
+                )
+            })
+            .flatten()
+            .ok_or(TextStoreError::NoLayout);
+        let target = on_field.and_then(|on_field| {
+            if on_field {
+                return Ok(PressTarget::Field);
+            }
+            let Some(probe) = self.press_probe.get() else {
+                return Ok(PressTarget::Nothing);
+            };
+            let global = Offset::new(point.x, point.y);
+            for entry in path.path() {
+                let claims = probe
+                    .claims_press_on(entry, global, PointerKind::Touch)
+                    .map_err(|_| TextStoreError::WindowUnavailable)?;
+                if claims {
+                    return Ok(PressTarget::Other);
+                }
+            }
+            Ok(PressTarget::Nothing)
+        });
+        drop(path);
+        target
+    }
+}
+
+/// Where a field is in the window ([`EditableTextStore::placement`]), in
+/// window-root logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct FieldPlacement {
+    /// The field's box.
+    pub(super) rect: Bounds<f64>,
+    /// The part of it the window and its ancestors' clips leave; `None` for
+    /// nothing.
+    pub(super) visible: Option<Bounds<f64>>,
 }
 
 /// The rendered byte offset at a local point. A point inside a scalar's box

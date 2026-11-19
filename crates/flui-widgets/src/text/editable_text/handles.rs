@@ -29,7 +29,8 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
 use super::{
-    CompositionCommit, EditableText, source_offset_at_global, source_word_range_at_global,
+    CompositionCommit, EditableText, PlatformSelection, source_offset_at_global,
+    source_word_range_at_global,
 };
 #[cfg(doc)]
 use crate::DefaultSelectionControls;
@@ -228,6 +229,10 @@ pub(super) struct HandleParts {
     pub(super) repaint: ChangeNotifier,
     pub(super) commit: CompositionCommit,
     pub(super) post_frame: Option<flui_scheduler::PostFrameHandle>,
+    /// While the platform draws the field's selection UI, the handles, the
+    /// magnifier and the toolbar show nothing, a touch under way when the
+    /// platform took over included.
+    pub(super) platform_selection: Rc<PlatformSelection>,
 }
 
 /// A field's handles: which are shown, the links the field publishes its
@@ -593,6 +598,9 @@ impl FieldHandles {
     /// `bare_caret`, for a toolbar the caller shows. Without an overlay
     /// there are none, which a debug build reports once.
     pub(super) fn show_for_touch(self: &Rc<Self>, bare_caret: bool, failure: &mut FirstPanic) {
+        if self.platform_draws() {
+            return;
+        }
         let Some((selection, caret, revision)) = self.controller_state() else {
             return;
         };
@@ -647,6 +655,23 @@ impl FieldHandles {
         });
         *self.entry.borrow_mut() = Some(entry.clone());
         Some(entry)
+    }
+
+    /// Whether the platform draws the field's selection UI now, as the
+    /// field's [`PlatformSelection`] says.
+    fn platform_draws(&self) -> bool {
+        self.parts
+            .borrow()
+            .as_ref()
+            .is_some_and(|parts| parts.platform_selection.is_active())
+    }
+
+    /// The platform took the field's selection UI over: what the field
+    /// shows of its own goes, and [`Self::platform_draws`] keeps any more
+    /// from showing while the platform holds it.
+    pub(super) fn platform_took_over(&self, failure: &mut FirstPanic) {
+        self.abandon(failure);
+        failure.contain(|| self.menu.close());
     }
 
     /// The field stopped taking touches here (it was disabled, given another
@@ -811,7 +836,7 @@ impl FieldHandles {
     /// moves, while the touch stays down; the field publishes its ends for
     /// it. Without a magnifier or an overlay it shows nothing.
     fn magnify_press(self: &Rc<Self>, side: HandleSide, global: Offset<f64>) {
-        if self.magnifier.borrow().is_none() {
+        if self.magnifier.borrow().is_none() || self.platform_draws() {
             return;
         }
         let Some(overlay) = self.overlay.borrow().clone() else {

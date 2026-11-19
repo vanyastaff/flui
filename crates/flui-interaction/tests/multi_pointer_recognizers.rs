@@ -602,6 +602,10 @@ impl GestureArenaMember for Claimant {
 }
 
 impl GestureRecognizer for Claimant {
+    fn takes_down(&self, _: PointerDispatch<'_>) -> Option<flui_interaction::gesture::DownTake> {
+        Some(flui_interaction::gesture::DownTake::Press)
+    }
+
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         let Some(pointer) = pointer_of(down.local) else {
             return;

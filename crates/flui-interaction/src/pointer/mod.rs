@@ -32,9 +32,9 @@ pub use interaction_lane::{
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, MouseEnterCallback,
     MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget,
     PanZoomDispatch, PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget,
-    ResolvedRouteToken, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
-    SmartZoomDispatch, SmartZoomTarget, resolve_local_payload, resolve_path_clip_target,
-    resolve_shader_mask_target,
+    PointerTargetHandler, PressProbe, ResolvedRouteToken, RouteResolution, RouteResolutionMiss,
+    ScrollTarget, ShaderMaskTarget, SmartZoomDispatch, SmartZoomTarget, resolve_local_payload,
+    resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub(crate) use interaction_lane::{PanZoomAdmissionAuthority, PanZoomRetirement};
 pub use mouse_tracker::{

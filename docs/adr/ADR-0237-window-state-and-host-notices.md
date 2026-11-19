@@ -3,8 +3,8 @@
 - **Status:** Accepted (2026-10-18)
 - **Date:** 2026-10-18
 - **Amended:** 2026-10-19 — decision 9's image cache is the renderer's image textures; decoded
-  images belong to the application's asset registry, reclaimed once registered
-  ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
+  images belong to each UI runtime's image cache, which the runtime trims itself
+  ([ADR-0387](ADR-0387-each-ui-runtime-keeps-one-image-cache.md)).
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window-scoped getters
   and per-fact callbacks that sit beside the snapshot (decision 1 keeps `PlatformWindow` as the
   one window trait, but it no longer carries them); decision 3's refusal inside `apply` (it moves

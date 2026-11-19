@@ -232,6 +232,11 @@ pub mod animation {
     mod __runtime {}
 }
 
+/// The decoded-image cache each UI runtime keeps for `Image::asset` and
+/// `Image::network` (`flui-assets`): `ImageCacheCapability` to provide another.
+/// Requires the `images` feature.
+#[cfg(feature = "images")]
+pub use flui_assets as assets;
 /// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
 /// feature.
 #[cfg(feature = "cupertino")]

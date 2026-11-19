@@ -294,8 +294,13 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A primary Down with a position.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        (is_primary_down(down.local) && down.local.position().is_some())
+            .then_some(super::recognizer::DownTake::Press)
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
-        if !is_primary_down(dispatch.local) {
+        if self.takes_down(dispatch).is_none() {
             return;
         }
         let PointerEvent::Down(data) = dispatch.local else {

@@ -3,7 +3,7 @@
 use super::{
     callback_containment::{CallbackSequence, finish_containment, invoke_callback},
     contact::{ArenaMembership, ContactEnd, ContactId, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer},
+    recognizer::{CancelOutcome, DownTake, GestureRecognizer},
 };
 use crate::containment::keep_first;
 use crate::events::PointerButton;
@@ -520,6 +520,14 @@ impl GestureRecognizer for TapGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A Down of a button some callback handles.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake> {
+        let PointerEvent::Down(_) = down.local else {
+            return None;
+        };
+        let button = Self::button(down.local)?;
+        self.callbacks.handles(button).then_some(DownTake::Press)
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let pointer = dispatch.local.pointer_id();
         let _span = tracing::trace_span!(
@@ -529,15 +537,12 @@ impl GestureRecognizer for TapGestureRecognizer {
             event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
         )
         .entered();
-        let PointerEvent::Down(_) = dispatch.local else {
+        if self.takes_down(dispatch).is_none() {
             return;
-        };
+        }
         let Some(button) = Self::button(dispatch.local) else {
             return;
         };
-        if !self.callbacks.handles(button) {
-            return;
-        }
         if self.sequences.borrow().current.is_some() {
             return;
         }

@@ -127,6 +127,9 @@ impl<S: Deref<Target = T>, T: TextStoreRead + ?Sized> TextStoreRead for LateLayo
         let at = Point::new(at.x - FIELD.0, at.y - FIELD.1 - self.shift);
         self.session.index_at_point(at, mode)
     }
+    fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError> {
+        self.document_bounds().map(Some)
+    }
 }
 
 impl<S: DerefMut<Target = T>, T: TextStoreEdit + ?Sized> TextStoreEdit for LateLayoutSession<S> {
@@ -147,6 +150,13 @@ impl<S: DerefMut<Target = T>, T: TextStoreEdit + ?Sized> TextStoreEdit for LateL
 impl TextStore for LateLayoutStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+    /// TSF asks no press target; the field it wraps answers.
+    fn press_target_at(
+        &self,
+        at: Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(at)
     }
     fn request_lock(
         &self,

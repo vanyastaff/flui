@@ -377,8 +377,16 @@ impl GestureRecognizer for SwipeGestureRecognizer {
         self.allowed_devices
     }
 
+    /// A primary Down, claimed only once the contact moves.
+    fn takes_down(
+        &self,
+        down: crate::pointer::PointerDispatch<'_>,
+    ) -> Option<super::recognizer::DownTake> {
+        is_primary_down(down.local).then_some(super::recognizer::DownTake::Motion)
+    }
+
     fn add_pointer(&self, down: crate::pointer::PointerDispatch<'_>) {
-        if is_primary_down(down.local) {
+        if self.takes_down(down).is_some() {
             self.admit(down);
         }
     }

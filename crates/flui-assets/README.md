@@ -1,7 +1,8 @@
 # flui-assets
 
 The decoded-image cache of [FLUI](https://github.com/vanyastaff/flui). `flui-widgets` resolves
-`Image::asset` and `Image::network` through it; an application reaches it through those widgets.
+`Image::asset` and `Image::network` through the one each UI runtime keeps
+(`ImageCacheCapability`); an application reaches it through those widgets.
 
 An `ImageCache` keeps completed images within a byte budget, shares one load among every
 request for the same source, reads each source on the IO lane of the caller's lanes and decodes

@@ -66,6 +66,78 @@ pub trait TextStore {
     /// The default reports nothing: a store without screen geometry of its
     /// own has no layout to report.
     fn screen_moved(&self) {}
+
+    /// What a press at `point` (window-root logical pixels) would land on, by
+    /// the window's own hit test and what each target there would do with a
+    /// touch going down: the field, another target that would contend for
+    /// the press, or nothing that does ([`PressTarget`](super::PressTarget)). A platform that
+    /// recognizes gestures over the field itself (iOS's `UITextInteraction`)
+    /// begins one only on the field, or where nothing else contends for the
+    /// press, so every control keeps its tap.
+    ///
+    /// Asked of the store, outside any lock, on the owner thread with no
+    /// borrow held: answering runs code the store does not own (render
+    /// objects' hit tests, recognizers' admission predicates), which must not
+    /// run inside a read lock. The caller contains a panic.
+    ///
+    /// No default: a store that wraps another forwards it, and one that left
+    /// it out would hand a control's tap to the platform.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::NoLayout`] when the field is not laid out or its tree
+    /// cannot be hit-tested now, and [`TextStoreError::WindowUnavailable`]
+    /// when the window cannot be asked now (off its owner thread, closing): a
+    /// platform begins no gesture on either.
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<super::PressTarget, TextStoreError>;
+
+    /// Whether the field would perform `command` now, as its own menu would
+    /// offer it: a platform shows the command in its edit menu only when it
+    /// would. Called on the owner thread with no borrow held, outside a lock.
+    ///
+    /// The default performs none: a store that is not a field's has no
+    /// clipboard or selection behaviour of its own.
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        let _ = command;
+        false
+    }
+
+    /// Perform `command` as the field's own menu or shortcut performs it,
+    /// with the same rules (a protected field copies nothing, a cut deletes
+    /// only what the clipboard took, a paste ends the composition first), and
+    /// answer whether the field took it. What the edit changes reaches the
+    /// observer as an application edit, which the platform did not make
+    /// through a session. Called on the owner thread with no borrow held,
+    /// outside a lock and outside a frame transaction, as a key press is.
+    ///
+    /// The default performs none.
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        let _ = command;
+        false
+    }
+}
+
+/// An edit the platform's own text UI asks the focused field for: an item of
+/// iOS's edit menu, which `UITextInteraction` shows over the field
+/// (`cut:`, `copy:`, `paste:`, `select:`, `selectAll:`). The field performs it with its
+/// own clipboard and selection rules ([`TextStore::perform_edit_command`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EditCommand {
+    /// Copy the selection to the clipboard and delete it.
+    Cut,
+    /// Copy the selection to the clipboard.
+    Copy,
+    /// Replace the selection with the clipboard's text.
+    Paste,
+    /// Select the word at the caret (`select:`, the item a collapsed caret's
+    /// menu offers).
+    SelectWord,
+    /// Select the whole text.
+    SelectAll,
 }
 
 /// An application change about to become visible to the input method.
@@ -130,8 +202,21 @@ pub trait TextStoreObserver {
     /// publishes it; its preceding read sees the previous composition.
     fn composition_changed(&self) {}
 
-    /// The document's geometry changed (`OnLayoutChange`).
+    /// The document's geometry changed (`OnLayoutChange`): its caret or
+    /// composition moved, or its text was laid out again. Reported on every
+    /// caret move, typing included, so an input method's candidate window
+    /// follows it.
     fn layout_changed(&self);
+
+    /// The field itself moved in the window: its visible box moved or changed
+    /// size (a scroll, a transform, the keyboard lifting the view, an
+    /// ancestor's clip changing), whatever its caret did. Not reported for a
+    /// caret move inside an unmoved field, so a platform that redraws its own
+    /// selection UI over the field asks for its geometry again only on this.
+    /// Delivered under the same rule as [`Self::layout_changed`]. The default
+    /// ignores it: an input method that follows the caret alone has the
+    /// layout change.
+    fn field_moved(&self) {}
 
     /// [`TextStore::status`] changed, in some part: a field tells of any
     /// difference, including one a platform has no word for.

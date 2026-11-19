@@ -1929,6 +1929,14 @@ impl TextStore for RefusingStore {
         self.inner.status()
     }
 
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.press_target_at(point)
+    }
+
     fn request_lock(
         &self,
         grant: LockGrant,

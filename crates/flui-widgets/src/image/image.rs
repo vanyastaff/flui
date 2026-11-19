@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
-#[cfg(feature = "asset-images")]
-use std::sync::Arc;
 
 use flui_foundation::geometry::{Rect, Size};
 use flui_objects::RenderImage;
@@ -61,7 +59,7 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// [`ImageProvider::resolve_async`]. On a host without background lanes a
 /// decode job runs on the owner thread, so the image still shows, a frame
 /// late. `memory` and `file` decode per widget; for `asset`/`network`, the
-/// asset registry keeps the decoded images, and two widgets mounted with the
+/// UI runtime's image cache keeps the decoded images, and two widgets mounted with the
 /// same source while a load is in flight share ONE load rather than starting
 /// two; unmounting the last of them cancels it.
 ///
@@ -172,31 +170,29 @@ impl Image {
         Self::new(FileImage::new(path))
     }
 
-    /// Creates an `Image` that loads and decodes `path` asynchronously
-    /// through `registry`, a `flui-assets` asset registry.
+    /// Creates an `Image` that loads and decodes the asset at `path`
+    /// asynchronously, through the image cache of the UI runtime it mounts
+    /// in (`flui_assets::ImageCacheCapability`), so every image of one path
+    /// in that runtime shares a decode.
     ///
-    /// `registry` is an explicit argument, so the load runs on whichever
-    /// background runtime and byte-loader cache the application already owns.
     /// See the [async dispatch](#async-dispatch) section above.
     ///
     /// Requires the `flui-widgets/asset-images` feature.
     #[cfg(feature = "asset-images")]
     #[track_caller]
-    pub fn asset(registry: Arc<flui_assets::ImageCache>, path: impl Into<String>) -> Self {
-        Self::new(super::AssetImage::new(registry, path))
+    pub fn asset(path: impl Into<String>) -> Self {
+        Self::new(super::AssetImage::new(path))
     }
 
-    /// Creates an `Image` that fetches and decodes a URL asynchronously
-    /// through `registry`, a `flui-assets` asset registry.
-    ///
-    /// Same registry-injection contract as [`asset`](Image::asset).
+    /// Creates an `Image` that fetches and decodes `url` asynchronously,
+    /// through the same image cache as [`asset`](Image::asset).
     ///
     /// Requires the `flui-widgets/asset-images` feature. The URL is fetched with
     /// the host's HTTP capability (`flui_platform::http::HttpCapability`).
     #[cfg(feature = "asset-images")]
     #[track_caller]
-    pub fn network(registry: Arc<flui_assets::ImageCache>, url: impl Into<String>) -> Self {
-        Self::new(super::NetworkImage::new(registry, url))
+    pub fn network(url: impl Into<String>) -> Self {
+        Self::new(super::NetworkImage::new(url))
     }
 
     /// Sets how the image is scaled into the laid-out box.

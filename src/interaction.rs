@@ -139,7 +139,7 @@ pub use flui_interaction::gesture::{
 pub use flui_interaction::gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails};
 pub use flui_interaction::{
     gesture::{
-        DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
+        DoubleTapGestureRecognizer, DownTake, DragAxis, DragDownDetails, DragEndDetails,
         DragGestureRecognizer, DragStartDetails, DragUpdateDetails, ForcePressGestureRecognizer,
         GestureEndReason, GestureProfiles, GestureRecognizer, GestureSettings,
         GestureSettingsError, LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails,

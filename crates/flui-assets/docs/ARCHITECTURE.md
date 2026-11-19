@@ -2,7 +2,9 @@
 
 `flui-assets` is the decoded-image cache of FLUI
 ([ADR-0385](../../../docs/adr/ADR-0385-flui-assets-is-the-decoded-image-cache.md)).
-`flui-widgets` resolves `Image::asset` and `Image::network` through an `ImageCache`; nothing
+`flui-widgets` resolves `Image::asset` and `Image::network` through the `ImageCache` each UI
+runtime keeps
+([ADR-0387](../../../docs/adr/ADR-0387-each-ui-runtime-keeps-one-image-cache.md)); nothing
 else in the framework loads through it, and it holds no generic asset type. Its public surface
 is the crate root:
 
@@ -10,12 +12,13 @@ is the crate root:
 |------|------------|
 | `ImageCache` | The decoded images one owner keeps, and the loads that fill them: `load` and the synchronous probe `get`; `ReclaimMemory` gives them back under pressure. |
 | `ImageCacheConfig` | The byte budget and the number of decodes at once. |
+| `ImageCacheCapability` | The cache of the acquiring widget's UI runtime; `per_runtime` is the provider every host registers. |
 | `ImageSource` | What a load reads: a file path, or a URL with the HTTP client that fetches it (ADR-0386). |
 | `LoadServices` | The caller's lanes a load runs on. |
 | `ImageLoad` | The future one request awaits; dropping the last one cancels the load. |
 | `ImageLoadError`, `ImageLoadErrorKind` | The source a load failed for, and why. |
 
-The crate has three private modules: `error`, `image_cache` (the public types) and
+The crate has four private modules: `capability`, `error`, `image_cache` (the public types) and
 `image_cache::loads` (the LRU, the pending map, the load and decode slots and the load's run),
 with `image_cache::ordered_slots` beneath it.
 
@@ -54,7 +57,10 @@ Each cache keeps the decoded images of its loads in its own LRU, bounded by pixe
 image larger than the budget is handed to its waiters and not kept.
 `get` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two caches are two
-images (ADR-0250). Images and loads are kept under the path, or the URL with the
+images (ADR-0250). Each UI runtime keeps one, made by `ImageCacheCapability::per_runtime` at
+its first acquisition and kept in `ProviderContext::runtime_cache`, so the runtime trims it
+under memory pressure before any subscriber hears the notice and ends it when it retires
+(ADR-0387). Images and loads are kept under the path, or the URL with the
 `HttpAuthority` of the source's client, so two clients answered different images at one URL
 never share a decoded image or a load (ADR-0280 §6); the key holds no client, so a kept image
 keeps none alive.
@@ -120,6 +126,8 @@ through the same lock.
 Under memory pressure the cache trims decoded images to half the budget
 (moderate) or drops them all (critical); loads in flight are left alone.
 
+`asset_images_share_their_runtimes_cache_until_memory_pressure` (in `flui-widgets`) pins one
+cache per UI runtime and the runtime trimming it.
 `decoded_images_stay_within_their_byte_budget_and_give_back_under_pressure`
 pins byte eviction, the over-budget image and both pressure levels.
 `image_loads_run_on_their_lanes_and_survive_the_requests_that_leave` pins the

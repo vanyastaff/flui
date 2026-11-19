@@ -513,6 +513,12 @@ impl TextStore for DropHook {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
+    }
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -2240,6 +2246,12 @@ impl TextStore for RefusesGate {
     fn status(&self) -> TextStoreStatus {
         self.0.status()
     }
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.0.press_target_at(point)
+    }
     fn request_lock(
         &self,
         grant: LockGrant,
@@ -2288,6 +2300,12 @@ struct ParksTakingTheGate {
 impl TextStore for ParksTakingTheGate {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
     fn request_lock(
         &self,
@@ -2365,6 +2383,12 @@ struct ParksWhileUnwinding {
 impl TextStore for ParksWhileUnwinding {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
+    }
+    fn press_target_at(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        self.inner.press_target_at(point)
     }
     fn request_lock(
         &self,
@@ -2477,6 +2501,12 @@ struct Refuses;
 impl TextStore for Refuses {
     fn status(&self) -> TextStoreStatus {
         TextStoreStatus::EDITABLE_SINGLE_LINE
+    }
+    fn press_target_at(
+        &self,
+        _: flui_foundation::geometry::Point<f64>,
+    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        Err(TextStoreError::NoLayout)
     }
     fn request_lock(&self, _: LockGrant, _: LockTiming) -> Result<LockOutcome, TextStoreError> {
         Err(TextStoreError::Detached)

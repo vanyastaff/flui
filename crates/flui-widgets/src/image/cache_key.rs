@@ -11,21 +11,25 @@ use std::{rc::Rc, sync::Arc};
 /// [`Image`](super::Image) holds while it is mounted: a rebuild whose provider
 /// has an equal key resolves nothing again.
 ///
-/// Keys are typed, never labels. `AssetImage` and `NetworkImage` key by their
-/// asset registry and source, so equal paths in two registries are two images,
-/// and an asset path never equals a URL with the same text. `MemoryImage` keys
-/// by its bytes and `FileImage` by its path, and neither equals the other or
-/// a registry source. A custom provider keys
-/// by a value of its own type through [`custom`](Self::custom); values of
-/// different types are never equal.
+/// Keys are typed, never labels. `AssetImage` keys by its path and
+/// `NetworkImage` by its URL, and an asset path never equals a URL with the
+/// same text; the image cache they load through is the one the mounted
+/// `Image` acquired, which does not change while it is mounted, so the key
+/// need not name it. `MemoryImage` keys by its bytes and `FileImage` by its
+/// path, and neither equals the other or an asset or network source. A
+/// custom provider keys by a value of its own type through
+/// [`custom`](Self::custom); values of different types are never equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ImageCacheKey(Repr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Repr {
-    /// `AssetImage` and `NetworkImage`: a source within one registry.
+    /// `AssetImage`: its asset path.
     #[cfg(feature = "asset-images")]
-    Registry(RegistryImageKey),
+    Asset(Arc<str>),
+    /// `NetworkImage`: its URL.
+    #[cfg(feature = "asset-images")]
+    Network(Arc<str>),
     /// `MemoryImage`: its encoded bytes.
     Memory(MemoryKey),
     /// `FileImage`: its path.
@@ -53,64 +57,19 @@ impl ImageCacheKey {
         Self(Repr::File(path))
     }
 
-    /// The key of the asset at `path` loaded through `registry`.
+    /// The key of the asset at `path`.
     #[cfg(feature = "asset-images")]
-    pub(super) fn asset(registry: &Arc<flui_assets::ImageCache>, path: Arc<str>) -> Self {
-        Self(Repr::Registry(RegistryImageKey {
-            registry: Arc::downgrade(registry),
-            entry: RegistryEntry::Asset(path),
-        }))
+    pub(super) fn asset(path: Arc<str>) -> Self {
+        Self(Repr::Asset(path))
     }
 
-    /// The key of the image at `url` loaded through `registry`, with
-    /// whatever client the [`Image`](super::Image) holding it acquired: one
-    /// `Image`'s client does not change while it is mounted, so the key need
-    /// not name it, while the registry keeps two clients' images apart.
+    /// The key of the image at `url`, with whatever client the
+    /// [`Image`](super::Image) holding it acquired: one `Image`'s client does
+    /// not change while it is mounted, so the key need not name it, while the
+    /// cache keeps two clients' images apart.
     #[cfg(feature = "asset-images")]
-    pub(super) fn network(registry: &Arc<flui_assets::ImageCache>, url: Arc<str>) -> Self {
-        Self(Repr::Registry(RegistryImageKey {
-            registry: Arc::downgrade(registry),
-            entry: RegistryEntry::Network(url),
-        }))
-    }
-}
-
-/// An image within one asset registry.
-///
-/// The registry is compared by allocation. The key keeps a weak reference to
-/// it, so the address cannot be reused by another registry while the key is
-/// retained, without keeping the registry or its background runtime alive.
-#[cfg(feature = "asset-images")]
-#[derive(Debug, Clone)]
-struct RegistryImageKey {
-    registry: std::sync::Weak<flui_assets::ImageCache>,
-    entry: RegistryEntry,
-}
-
-/// What a registry key names: an asset path and a URL with the same text are
-/// two images.
-#[cfg(feature = "asset-images")]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RegistryEntry {
-    Asset(Arc<str>),
-    Network(Arc<str>),
-}
-
-#[cfg(feature = "asset-images")]
-impl PartialEq for RegistryImageKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.entry == other.entry && self.registry.ptr_eq(&other.registry)
-    }
-}
-
-#[cfg(feature = "asset-images")]
-impl Eq for RegistryImageKey {}
-
-#[cfg(feature = "asset-images")]
-impl Hash for RegistryImageKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.registry.as_ptr().hash(state);
-        self.entry.hash(state);
+    pub(super) fn network(url: Arc<str>) -> Self {
+        Self(Repr::Network(url))
     }
 }
 

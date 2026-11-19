@@ -916,8 +916,12 @@ impl GestureRecognizer for DragGestureRecognizer {
     fn feeds_scroll_contact(&self) -> bool {
         self.allowed_devices.contains_kind(PointerKind::Trackpad)
     }
+    /// A primary Down, claimed only past the drag's slop.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        is_primary_down(down.local).then_some(super::recognizer::DownTake::Motion)
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
-        if !is_primary_down(dispatch.local) {
+        if self.takes_down(dispatch).is_none() {
             return;
         }
         let PointerEvent::Down(down) = dispatch.local else {

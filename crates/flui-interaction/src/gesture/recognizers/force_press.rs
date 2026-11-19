@@ -433,8 +433,13 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A primary Down: the press it contends for is the one the pressure
+    /// deepens.
+    fn takes_down(&self, down: PointerDispatch<'_>) -> Option<super::recognizer::DownTake> {
+        is_primary_down(down.local).then_some(super::recognizer::DownTake::Press)
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
-        if !is_primary_down(down.local) {
+        if self.takes_down(down).is_none() {
             return;
         }
         let settings = self

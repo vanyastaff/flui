@@ -42,7 +42,7 @@ impl RasterBase {
     /// The damage to draw `publication` with on `surface`.
     #[must_use]
     pub fn damage_for(&self, publication: &ScenePublication, surface: SurfaceKey) -> DamageRegion {
-        let DamageMode::On { full_above } = self.mode else {
+        let DamageMode::On { .. } = self.mode else {
             return DamageRegion::Full(FullReason::DamageOff);
         };
         if surface.size.0 == 0 || surface.size.1 == 0 {
@@ -60,9 +60,23 @@ impl RasterBase {
         if base.lineage() != shown.version.lineage() || base.seq() > shown.version.seq() {
             return DamageRegion::Full(FullReason::Resync(ResyncReason::BaseMismatch));
         }
-        match publication.damage {
+        self.thresholded(publication.damage, surface.size)
+    }
+
+    /// `damage` as this raster side draws it on a surface of `surface`
+    /// pixels: `Full(AboveThreshold)` when a region covers more than the
+    /// mode's fraction of the surface, `Full(DamageOff)` with damage off,
+    /// and as it is otherwise. [`Self::damage_for`] answers a publication's
+    /// own damage through it; the raster side asks it again of what it adds
+    /// to that damage (a texture frame's, ADR-0304 §9).
+    #[must_use]
+    pub fn thresholded(&self, damage: DamageRegion, surface: (u32, u32)) -> DamageRegion {
+        let DamageMode::On { full_above } = self.mode else {
+            return DamageRegion::Full(FullReason::DamageOff);
+        };
+        match damage {
             DamageRegion::Region(region) => {
-                let surface_area = f64::from(surface.size.0) * f64::from(surface.size.1);
+                let surface_area = f64::from(surface.0) * f64::from(surface.1);
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "an area compared against a fraction of the surface"
