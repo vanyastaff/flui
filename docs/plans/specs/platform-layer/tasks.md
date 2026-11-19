@@ -7648,8 +7648,9 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
-- [ ] **LY121** (открыта: захват на iOS и Android, курсор из виджета) — решение ADR-0354, на
-  `main`. Построено: курсор области `set_cursor(&Cursor)` (`Icon`, `Image(CursorImage)`, `Hidden`;
+- [x] **LY121** — решение ADR-0354, на `main`; остаток — ветка
+  `platform/pointer-lock-mobile-cursor-request`. Построено раньше: курсор области
+  `set_cursor(&Cursor)` (`Icon`, `Image(CursorImage)`, `Hidden`;
   способность `cursor_image`); `SetCursorGrab(CursorGrab::{None, Confined, Locked})` со слотами
   `confines_cursor`/`locks_cursor`, факт `WindowState::cursor_grab`, который `successor` сбрасывает
   у окна без фокуса, движение при `Locked` — `PointerEvent::RawMotion`; `SetLevel(WindowLevel)`,
@@ -7659,13 +7660,60 @@ GPU-память простаивающего или невидимого окн
   `a_grab_is_published_only_for_a_focused_window`, `a_grab_kept_after_the_focus_went_is_caught`,
   `a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends`,
   `a_frame_drag_keeps_the_steps_and_the_proportion`, живые случаи `x11_input` и `wayland_input`.
-  Остаётся код: `Locked` на iOS (`prefersPointerLocked`) и Android (`View.requestPointerCapture`),
-  сейчас `NOT_YET_ON_THIS_HOST` (`crates/flui-native/src/window/capabilities.rs:62`, `:255`);
-  просьба виджета об образе и скрытом курсоре — `CursorRequest`
-  (`crates/flui-interaction/src/pointer/hit_test.rs:214`) несёт только иконку
-  ([gaps](../../../gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)).
-  Прогоны — заметки строк parity `cursor-shapes`, `pointer-grab-confined-and-locked`,
-  `window-level-resize-steps-and-proportion`.
+  Построено в остатке. Курсор из виджета: `CursorRequest::{Defer, Show(Cursor)}` вместо
+  `Icon(CursorIcon)`, `MouseRegion::cursor(impl Into<Cursor>)`, трекер мыши публикует весь
+  `Cursor` (`CursorChangeCallback` берёт `&Cursor`, `device_cursor` отдаёт `Cursor`);
+  презентация показывает стрелку при любом отказе окна в образе (`Unsupported` или `Platform`;
+  политика на шве, у всех хостов); тестовые окна `flui-testing` и `flui-runtime` отказывают образу ровно при
+  недоступной `cursor_image`, `HeadlessWindow::without_cursor_images` играет такую платформу.
+  iOS: корневой контроллер отвечает `prefersPointerLocked` и зовёт
+  `setNeedsUpdateOfPrefersPointerLocked`; способность `locks_cursor` — iPad с iPadOS 14
+  (`pointer_lock_absence`, ворота `PointerLock`), иначе `NOT_ON_THIS_DEVICE`; сцена, не
+  занимающая экран, получает `ApplyError::Platform` (иначе оставленное предпочтение взяло бы
+  указатель позже без просьбы); без фокуса — не просит. Один владелец захвата на процесс
+  (`PointerLocks` над чистой моделью `LockLedger`): запись просьбы окна несёт флаг «система
+  держит захват», так что держатель — всегда из просящих; просьбу снимают только приложение и
+  жизненный цикл (выход из сцены, потеря фокуса), ответ системы меняет только флаг, и после
+  снятия системой, пока окно просит, владелец просит UIKit перечитать предпочтение; снятие у
+  одной сцены не трогает другую; повторная просьба читает текущее состояние захвата сцены (UIKit
+  не сообщает о захвате, который не кончался). Один набор обработчиков `GCMouse` (и на мыши,
+  подключённые во время захвата), движение — только окну с захватом и только на главном потоке;
+  FLUI возвращает мыши найденный на ней обработчик, если на ней всё ещё его собственный, а копии
+  обработчиков приложения отпускаются через `commit`/`Outbox` после фиксации, обновления и
+  публикации. Имена уведомлений
+  UIKit и GameController читаются из загруженных фреймворков (`dlsym`), без ссылки на символ
+  (пол iOS 13); нет уведомления — способность недоступна. Движение →
+  `ViewTouches::locked_motion` → `ContactRegistry::raw_motion`, `MotionAcceleration::None`.
+  Android: `FluiView.onPointerCaptureChange` → `nativePointerCaptureChanged` и
+  `FluiView.onWindowFocusChanged` и вход вида в окно → `nativeWindowFocusChanged` (протокол 9, dex
+  пересобран `android-dex --write`, JDK 21.0.12 и build-tools 35.0.0 записи), один
+  владелец захвата на главном потоке Java (`CaptureOwner`, чистая модель): `wanted` — из команд
+  окон, `held` — только из ответов системы, не больше одного вызова JNI
+  (`requestPointerCapture`/`releasePointerCapture`) без ответа, и после ответа владелец снова
+  сводит `held` к `wanted`; ответ приписывается окну, которое владелец считает держателем или
+  просившим, а не текущему окну; неудавшийся вызов ничего не меняет; окно публикует только
+  `held`. Фокус приходит на главный поток Java в обе стороны; без фокуса владелец не вызывает
+  ничего (система роняет просьбу окна без фокуса без ответа), просьба тогда ничего не меняет, а
+  возврат фокуса ничего не берёт (ADR-0354 §2), только отпускает захват, не нужный ни одному окну,
+  и забывает ожидание `false` системы; потеря фокуса
+  снимает `wanted` и вызов без ответа, а `held` снимает `false` системы, до или после сообщения о
+  фокусе; вызов, на который система не ответила вовсе при фокусе (такой случай не известен),
+  держит следующие команды до следующей смены фокуса. AOSP android11-release `ViewRootImpl`
+  (строки 4551–4556) молча выходит из `requestPointerCapture`, когда состояние уже то же, а
+  потеря фокуса окна сначала доходит до видов (строка 3257), затем снимает захват (строки
+  3283–3285); просит только окно в фокусе, без `FluiView` — `ApplyError::Platform`; ворота
+  `PointerCapture` (API 26). События `SOURCE_MOUSE_RELATIVE` очереди — `RawMotion` по каждому
+  сэмплу пачки, клики и колесо — там, где указатель покоится. Тесты:
+  `mouse_region_cursor_reaches_the_window_through_the_ui_runtime` (таблица иконка/образ/скрыт;
+  без запроса `Show(Cursor)` не компилируется, без публикации `Cursor` окно получает иконку),
+  `a_refused_image_cursor_shows_the_arrow` (без запасной стрелки окно оставляет руку),
+  `hidden_and_image_cursors_resolve_as_icons_do`,
+  `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests` (без ветки захвата —
+  `Move` вместо `RawMotion`), таблицы `ios_pointer_lock_ledger` и `android_pointer_capture`,
+  строки `native_capability_absences` и ворот. iOS и Android только
+  проверены типами (WSL nightly); прогоны на устройствах — заметки строк parity
+  `cursor-shapes`, `pointer-grab-confined-and-locked`, `window-level-resize-steps-and-proportion`
+  ([gaps](../../../gaps.md#the-pointer-grabs-and-the-cursor-images-have-run-on-no-device)).
 
 - [x] **LY125** — ветка `native/win32-idle-and-reentry`. Все три находки подтверждены на `main`
   @ `9e309039d` тестами, падающими на старом коде. Модальный цикл: без срока таймер ставился
