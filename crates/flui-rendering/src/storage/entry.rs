@@ -29,31 +29,83 @@ use super::{links::NodeLinks, state::RenderState};
 use crate::pipeline::handle::AttachmentEpoch;
 use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObject};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a node stands in its attachment to a pipeline owner. The handle
+/// that lets the node's own object mark it dirty lives in the attached
+/// state, so it exists exactly while the node is attached, and the
+/// unattached states fit beside the handle's non-null pointer: the whole
+/// state is three words.
+#[derive(Debug)]
 enum AttachmentState {
+    Unattached(Unattached),
+    Attached {
+        epoch: AttachmentEpoch,
+        invalidation: crate::pipeline::LocalRenderInvalidationHandle,
+    },
+}
+
+/// A node outside an attached interval.
+#[derive(Debug, Clone, Copy)]
+enum Unattached {
+    /// Never attached, or detached after the interval it names.
     Detached(Option<AttachmentEpoch>),
-    Attached(AttachmentEpoch),
+    /// Leaving the interval it names: admission withdrawn, cleanup running.
     Detaching(AttachmentEpoch),
 }
 
 impl AttachmentState {
-    fn next_epoch(self) -> Option<AttachmentEpoch> {
-        match self {
-            Self::Detached(None) => Some(AttachmentEpoch::FIRST),
-            Self::Detached(Some(previous)) => Some(previous.next()),
-            Self::Attached(_) | Self::Detaching(_) => None,
+    const NEW: Self = Self::Unattached(Unattached::Detached(None));
+
+    fn next_epoch(&self) -> Option<AttachmentEpoch> {
+        match *self {
+            Self::Unattached(Unattached::Detached(None)) => Some(AttachmentEpoch::FIRST),
+            Self::Unattached(Unattached::Detached(Some(previous))) => Some(previous.next()),
+            Self::Attached { .. } | Self::Unattached(Unattached::Detaching(_)) => None,
         }
     }
 
-    fn epoch(self) -> Option<AttachmentEpoch> {
-        match self {
-            Self::Attached(epoch) => Some(epoch),
-            Self::Detached(_) | Self::Detaching(_) => None,
+    fn epoch(&self) -> Option<AttachmentEpoch> {
+        match *self {
+            Self::Attached { epoch, .. } => Some(epoch),
+            Self::Unattached(_) => None,
         }
     }
 
-    fn is_detached_after(self, epoch: AttachmentEpoch) -> bool {
-        self == Self::Detached(Some(epoch))
+    fn is_detached_after(&self, epoch: AttachmentEpoch) -> bool {
+        matches!(
+            *self,
+            Self::Unattached(Unattached::Detached(Some(previous))) if previous == epoch
+        )
+    }
+
+    /// Moves an attached node to detaching and withdraws its handle's
+    /// admission. Calls no user code. Returns `false`, unchanged, when the
+    /// node was not attached.
+    fn begin_detachment(&mut self) -> bool {
+        let Some(epoch) = self.epoch() else {
+            return false;
+        };
+        let detaching = Self::Unattached(Unattached::Detaching(epoch));
+        if let Self::Attached { invalidation, .. } = std::mem::replace(self, detaching) {
+            invalidation.withdraw();
+        }
+        true
+    }
+
+    /// Moves a detaching node to detached. Returns `false`, unchanged, when
+    /// the node was not detaching.
+    fn end_detachment(&mut self) -> bool {
+        let Self::Unattached(Unattached::Detaching(epoch)) = *self else {
+            return false;
+        };
+        *self = Self::Unattached(Unattached::Detached(Some(epoch)));
+        true
+    }
+
+    fn invalidation(&self) -> Option<&crate::pipeline::LocalRenderInvalidationHandle> {
+        match self {
+            Self::Attached { invalidation, .. } => Some(invalidation),
+            Self::Unattached(_) => None,
+        }
     }
 }
 
@@ -105,7 +157,6 @@ pub struct RenderEntry<P: Protocol> {
     /// Kept outside `RenderState`: attachment is storage lifecycle, not
     /// protocol geometry or per-frame state.
     attachment: AttachmentState,
-    local_invalidation: Option<crate::pipeline::LocalRenderInvalidationHandle>,
 
     /// Where the view that made this node was created; unknown for a node no view made.
     site: flui_foundation::CreationSite,
@@ -113,9 +164,7 @@ pub struct RenderEntry<P: Protocol> {
 
 impl<P: Protocol> Drop for RenderEntry<P> {
     fn drop(&mut self) {
-        if let Some(handle) = self.local_invalidation.take() {
-            handle.withdraw();
-        }
+        self.attachment.begin_detachment();
         // The render object before its parent data. A destructor that panics
         // while the thread is already unwinding aborts, as in std (ADR-0281).
         let object = self.render_object.take();
@@ -155,8 +204,7 @@ impl<P: Protocol> RenderEntry<P> {
             render_object: Some(render_object),
             state: RenderState::new(),
             links: NodeLinks::new(),
-            attachment: AttachmentState::Detached(None),
-            local_invalidation: None,
+            attachment: AttachmentState::NEW,
             site: flui_foundation::CreationSite::unknown(),
         }
     }
@@ -167,8 +215,7 @@ impl<P: Protocol> RenderEntry<P> {
             render_object: Some(render_object),
             state: RenderState::new(),
             links: NodeLinks::with_depth(depth),
-            attachment: AttachmentState::Detached(None),
-            local_invalidation: None,
+            attachment: AttachmentState::NEW,
             site: flui_foundation::CreationSite::unknown(),
         }
     }
@@ -185,36 +232,27 @@ impl<P: Protocol> RenderEntry<P> {
         if self.attachment.next_epoch() != Some(epoch) {
             return false;
         }
-        self.attachment = AttachmentState::Attached(epoch);
-        self.local_invalidation = Some(handle);
+        self.attachment = AttachmentState::Attached {
+            epoch,
+            invalidation: handle,
+        };
         true
     }
 
     /// Withdraw admission without calling user code. The whole selected batch
     /// enters this state before its first parent-data or render-object cleanup.
     pub(crate) fn begin_detachment(&mut self) -> bool {
-        let AttachmentState::Attached(epoch) = self.attachment else {
-            return false;
-        };
-        self.attachment = AttachmentState::Detaching(epoch);
-        if let Some(handle) = self.local_invalidation.take() {
-            handle.withdraw();
-        }
-        true
+        self.attachment.begin_detachment()
     }
 
     pub(crate) fn end_attachment(&mut self) -> bool {
-        let AttachmentState::Detaching(epoch) = self.attachment else {
-            return false;
-        };
-        self.attachment = AttachmentState::Detached(Some(epoch));
-        true
+        self.attachment.end_detachment()
     }
 
     pub(crate) fn local_invalidation(
         &self,
     ) -> Option<crate::pipeline::LocalRenderInvalidationHandle> {
-        self.local_invalidation.clone()
+        self.attachment.invalidation().cloned()
     }
 
     pub(crate) fn is_attached_for(&self, epoch: AttachmentEpoch) -> bool {
