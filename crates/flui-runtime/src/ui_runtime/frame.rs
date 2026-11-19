@@ -1464,9 +1464,14 @@ impl UiRuntime {
                     present_outcome,
                 ),
             };
-            Self::emit_frame_telemetry(presentation, &snapshot);
-            // A GPU time that arrived before this frame was recorded rides on its snapshot.
-            Self::emit_frame_gpu_time(&snapshot);
+            // A GPU time that arrived before this frame was recorded rides on its snapshot. Each
+            // event runs contained, so a subscriber that panics on the first still gets the
+            // second, which no later answer could send again; the first panic goes on to the
+            // caller's containment.
+            let mut caught = FirstPanic::new();
+            caught.contain(|| Self::emit_frame_telemetry(presentation, &snapshot));
+            caught.contain(|| Self::emit_frame_gpu_time(&snapshot));
+            caught.resume();
         }
     }
 

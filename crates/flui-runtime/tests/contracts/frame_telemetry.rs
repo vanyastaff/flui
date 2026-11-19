@@ -219,3 +219,66 @@ fn a_frames_gpu_time_is_traced_once_it_arrives() {
         "the early time waited for its own frame"
     );
 }
+
+/// A sink that refuses its first frame for a retry and panics the first time
+/// the runtime asks for its GPU times.
+#[derive(Default)]
+struct PanickingTimesSink {
+    submitted: usize,
+    asked: usize,
+}
+
+impl FrameSink for PanickingTimesSink {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (400, 400)
+    }
+
+    fn submit(
+        &mut self,
+        _: flui_foundation::FrameEpoch,
+        _: flui_layer::ScenePublication,
+    ) -> SubmitVerdict {
+        self.submitted += 1;
+        if self.submitted == 1 {
+            SubmitVerdict::Retry
+        } else {
+            SubmitVerdict::Presented
+        }
+    }
+
+    fn take_gpu_times(&mut self, _: &mut Vec<flui_foundation::GpuFrameTime>) {
+        self.asked += 1;
+        assert!(self.asked > 1, "the sink's GPU times failed");
+    }
+}
+
+/// A sink that panics handing out its GPU times leaves its frame's tail to
+/// run: the retry its refusal asked for still comes, and the panic resumes
+/// after the tail (ADR-0388).
+///
+/// Red-check: call `take_gpu_times` outside `contain` and the retry never
+/// comes.
+#[test]
+fn a_sink_that_panics_handing_out_gpu_times_still_gets_its_retry() {
+    let mut runtime = crate::owner_publication::runtime_with_wake(std::sync::Arc::new(|| {}));
+    runtime
+        .attach_root_widget_with_size(&flui_widgets::Text::new("timed"), 400.0, 400.0)
+        .expect("mount text");
+    let mut sink = PanickingTimesSink::default();
+    let mut now = web_time::Instant::now();
+
+    now += std::time::Duration::from_millis(16);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(&mut flui_runtime::pump::SampledClock(now), &mut sink)
+    }));
+    let payload = failure.expect_err("the sink's panic resumes after the frame");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("the sink's GPU times failed")
+    );
+    assert_eq!(sink.submitted, 1);
+
+    now += std::time::Duration::from_millis(16);
+    let _ = runtime.pump(&mut flui_runtime::pump::SampledClock(now), &mut sink);
+    assert_eq!(sink.submitted, 2, "the refused frame was retried");
+}

@@ -135,9 +135,13 @@ impl FrameClock {
     time for one frame, and a time for an unstamped frame, are dropped. A time no retained
     snapshot matches is held in a fixed list of four, the oldest overwritten: a queued frame's
     snapshot is recorded when its settlement is drained, and the raster thread can hand back
-    the time first. The snapshot recorded next under that epoch takes it; a time whose frame
-    left the ring, or never records, ages out. A time usually arrives after the frame's
-    `frame_telemetry` event, so a filled snapshot emits its own `flui.frame` event,
+    the time first. The snapshot recorded next under that epoch takes it. A time whose frame
+    left the ring, or never records (replaced while queued, not shown), stays until four later
+    holds push it out, and a burst of them can push out a real one; no later snapshot shares
+    its epoch, so none takes it wrongly. The times are recorded on the clock of the
+    presentation whose frame was just sent, so a sink serves one presentation. A time usually
+    arrives after the frame's `frame_telemetry`
+    event, so a filled snapshot emits its own `flui.frame` event,
     `frame_gpu_time`, with `frame_id`, `epoch` and `gpu_us`, and a reader joins the two by
     `frame_id`; a snapshot that took a held time emits it right after its `frame_telemetry`.
     The sink's call and every event run contained, so a panic in either is held for the
@@ -169,6 +173,9 @@ impl FrameClock {
   reaches one `frame_gpu_time` event whose `frame_id` is its frame's, that a time under an
   epoch no frame had traces nothing, and that a time handed back before its frame was
   recorded is traced with that frame.
+- `a_sink_that_panics_handing_out_gpu_times_still_gets_its_retry` (`flui-runtime`) checks
+  that a sink's panic while its times are taken resumes only after the frame's tail armed the
+  retry its refusal asked for.
 - `a_windows_sink_hands_back_the_gpu_times_of_its_frames` (`flui-app`) checks that a window's
   sink drains its slots' times.
 - `a_timed_frame_carries_its_gpu_time_into_the_trace` (`flui-devtools`) checks `gpu_us` on a

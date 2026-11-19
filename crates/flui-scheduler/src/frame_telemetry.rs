@@ -282,10 +282,11 @@ pub struct FrameSnapshot {
     pub input_epochs: InputEpochs,
     /// How long the segment's build, layout and paint took.
     pub phases: FramePhaseDurations,
-    /// How long the frame ran on the GPU (ADR-0388). Filled once the GPU's
-    /// answer arrives, a frame or more after the snapshot was recorded, by
-    /// [`FrameClock::record_gpu_time`](crate::frame_clock::FrameClock::record_gpu_time);
-    /// `None` until then, and for good where the device has no timestamp
+    /// How long the frame ran on the GPU (ADR-0388). Usually filled once the
+    /// GPU's answer arrives, a frame or more after the snapshot was recorded,
+    /// by [`FrameClock::record_gpu_time`](crate::frame_clock::FrameClock::record_gpu_time);
+    /// a queued frame whose answer came before its settlement is recorded with
+    /// it. `None` until then, and for good where the device has no timestamp
     /// queries or the frame was not timed.
     pub gpu_time: Option<Duration>,
 }
@@ -391,14 +392,17 @@ pub(crate) struct FrameHistory {
     next: usize,
     // GPU times that arrived before their frame's snapshot: a queued frame is recorded when its
     // settlement is drained, and the raster thread can hand back its time first (ADR-0388 §10).
-    // Fixed and inline, the oldest overwritten: a time whose frame never records ages out.
+    // Fixed and inline, the oldest overwritten: a time whose frame never records (a frame
+    // replaced while queued, one not shown) stays until four later holds push it out, which
+    // is harmless, since no later snapshot shares its epoch.
     early_gpu_times: [Option<(FrameEpoch, Duration)>; EARLY_GPU_TIMES],
     next_early: usize,
 }
 
 /// How many GPU times [`FrameHistory`] holds for frames not recorded yet. A time waits only
-/// for its own frame's settlement, which the owner drains at its next wake; the ring of three
-/// readbacks a slot keeps (ADR-0388 §4) bounds how many can be ahead of it.
+/// for its own frame's settlement, which the owner drains at its next wake, and a slot has at
+/// most three readbacks in flight (ADR-0388 §4); a time whose frame never records also takes
+/// an entry, so four leaves one to spare, and a burst of such times can push out a real one.
 const EARLY_GPU_TIMES: usize = 4;
 
 impl Default for FrameHistory {
@@ -419,11 +423,11 @@ impl FrameHistory {
     /// `&mut FrameSnapshot` (copying the ~hundred-byte value once, into the
     /// slot) rather than by value, per clippy's `large_types_passed_by_value`.
     pub(crate) fn record(&mut self, snapshot: &mut FrameSnapshot) {
-        if snapshot.epoch != FrameEpoch::ZERO
-            && let Some(early) = self
-                .early_gpu_times
-                .iter_mut()
-                .find(|early| early.is_some_and(|(epoch, _)| epoch == snapshot.epoch))
+        // `record_gpu_time` never holds an unstamped epoch, so an unstamped frame finds nothing.
+        if let Some(early) = self
+            .early_gpu_times
+            .iter_mut()
+            .find(|early| early.is_some_and(|(epoch, _)| epoch == snapshot.epoch))
         {
             snapshot.gpu_time = early.take().map(|(_, gpu)| gpu);
         }
@@ -451,8 +455,15 @@ impl FrameHistory {
             .flatten()
             .find(|snapshot| snapshot.epoch == epoch)
         else {
-            self.early_gpu_times[self.next_early] = Some((epoch, gpu));
-            self.next_early = (self.next_early + 1) % EARLY_GPU_TIMES;
+            // A second time for a frame still waiting keeps the first, as a recorded frame does.
+            let waiting = self
+                .early_gpu_times
+                .iter()
+                .any(|early| early.is_some_and(|(held, _)| held == epoch));
+            if !waiting {
+                self.early_gpu_times[self.next_early] = Some((epoch, gpu));
+                self.next_early = (self.next_early + 1) % EARLY_GPU_TIMES;
+            }
             return None;
         };
         if snapshot.gpu_time.is_some() {

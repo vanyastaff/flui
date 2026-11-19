@@ -201,11 +201,13 @@ pub trait FrameSink {
     /// matched to it by stamp, not by being the latest (ADR-0305 §4).
     fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict;
 
-    /// Move into `into` the GPU times of this presentation's frames read back since the last
-    /// call, each under the epoch its frame was submitted with (ADR-0388). The runtime asks after
-    /// each submit and records each time on its frame's telemetry; a time arrives a frame or two
-    /// after its frame. A sink whose device cannot time frames, or that renders no GPU frames,
-    /// keeps the default, which moves nothing.
+    /// Move into `into` the GPU times of the frames this sink was handed, read back since the
+    /// last call, each under the epoch its frame was submitted with (ADR-0388). The runtime asks
+    /// after each frame it sends and records each time on the clock of the presentation whose
+    /// frame it just sent, so a sink serves one presentation: a time for a frame of another
+    /// presentation finds no snapshot there. A time usually arrives a frame or two after its
+    /// frame. A sink whose device cannot time frames, or that renders no GPU frames, keeps the
+    /// default, which moves nothing.
     fn take_gpu_times(&mut self, into: &mut Vec<flui_foundation::GpuFrameTime>) {
         let _ = into;
     }

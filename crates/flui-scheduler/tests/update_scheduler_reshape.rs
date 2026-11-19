@@ -410,6 +410,12 @@ fn a_gpu_time_lands_on_the_snapshot_of_the_frame_its_stamp_names() {
             .is_none(),
         "the frame is not recorded yet"
     );
+    assert!(
+        clock
+            .record_gpu_time(FrameEpoch::from_raw(50_000), Duration::from_micros(5))
+            .is_none(),
+        "a second answer for a waiting frame is not taken"
+    );
     let settled = record(50_000);
     assert_eq!(
         settled.gpu_time,
