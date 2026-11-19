@@ -36,8 +36,9 @@ poll into a 0 ms busy loop until `Resume`. The runner's backgrounded pump (frame
 2. **The loop has no timer of its own.** `owner::android::poll::poll_timeout` decides how long
    `poll_events` blocks: not at all with a frame to deliver; while resumed, until the next wake
    deadline or the next preference sample; while paused, until a deadline that is still ahead, and
-   otherwise until woken. A deadline already behind while paused was offered to the owner on that
-   turn and is waiting for a frame, which nothing delivers before `Resume`.
+   otherwise until woken. A due deadline is delivered on the turn it falls due, as a frame request
+   that waits until the Activity can draw, and is not armed again before a frame runs
+   (`WakeDeadline::turn`, which `poll_timeout` reads as `LoopTurn::wake`).
 3. **Preferences without a change notification are read every 500 ms only while resumed**, and on
    `Resume` and `ConfigChanged`. *Superseded by
    [ADR-0378](ADR-0378-preferences-arrive-by-notice-and-a-failed-read-backs-off.md) §1 and §2:

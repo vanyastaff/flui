@@ -149,7 +149,7 @@ so on a window whose last frame showed nothing, its handlers run with that frame
 fallback (0.95 display period) late. A deadline source must be in the dirty predicate and
 self-clearing, or its wake arrives and is skipped: each
 desktop loop turns the fallback's deadline into the frame it was asked for (`WakeDeadline::take_due`
-on Win32, X11 and Wayland; the wake pump's `WakeThenLook` on AppKit). The fallback is desktop's:
+on Win32, X11 and Wayland; the wake pump's look, `WakeDeadline::turn`, on AppKit). The fallback is desktop's:
 Android paces a rendering wake by its choreographer and iOS by its display link, and both pass an
 empty `FallbackGate`.
 
