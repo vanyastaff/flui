@@ -571,11 +571,11 @@ impl JavaView {
         self.carry_out_capture(step);
     }
 
-    /// The Activity window lost the focus (`onWindowFocusChanged`), heard in
-    /// order with the capture's answers, before the system's own release of
-    /// a held capture. Java main thread.
-    fn window_focus_lost(self: &Arc<Self>) {
-        let step = self.capture.lock().focus_lost();
+    /// The Activity window has the focus or not (`onWindowFocusChanged`, and
+    /// once as `FluiView` enters the window), heard with the capture's
+    /// answers. Java main thread.
+    fn window_focus_changed(self: &Arc<Self>, focused: bool) {
+        let step = self.capture.lock().focus_changed(focused);
         self.carry_out_capture(step);
     }
 
@@ -885,9 +885,9 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 native_pointer_capture_changed as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
-                jni_str!("nativeWindowFocusLost"),
-                jni_str!("(J)V"),
-                native_window_focus_lost as *mut std::ffi::c_void,
+                jni_str!("nativeWindowFocusChanged"),
+                jni_str!("(JZ)V"),
+                native_window_focus_changed as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeNodeInfo"),
@@ -1228,18 +1228,19 @@ extern "system" fn native_pointer_capture_changed<'local>(
     );
 }
 
-extern "system" fn native_window_focus_lost<'local>(
+extern "system" fn native_window_focus_changed<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
+    has_window_focus: jboolean,
 ) {
     jni_native(
-        "nativeWindowFocusLost",
+        "nativeWindowFocusChanged",
         &mut env,
         |()| (),
         |_| {
             if let Some(view) = bridge(handle) {
-                view.window_focus_lost();
+                view.window_focus_changed(has_window_focus);
             }
             Ok(())
         },

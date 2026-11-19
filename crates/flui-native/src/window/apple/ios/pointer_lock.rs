@@ -187,14 +187,14 @@ impl PointerLocks {
     /// every window published.
     fn carry_out(&self, step: LockStep<WindowId>, mtm: MainThreadMarker) {
         let remains = self.follow_holder(mtm);
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(id) = step.preference
             && let Some(status_bar) = self
                 .window(id, |window| window.status_bar.upgrade())
                 .flatten()
         {
-            status_bar.refresh_pointer_lock(mtm);
+            failure.contain(|| status_bar.refresh_pointer_lock(mtm));
         }
-        let mut failure = flui_foundation::panic::FirstPanic::new();
         for id in step.published.into_iter().flatten() {
             if let Some(delivery) = self
                 .window(id, |window| window.delivery.upgrade())
@@ -205,16 +205,13 @@ impl PointerLocks {
         }
         // The copies of the application's handlers go last, once the state
         // is committed, the preference refreshed and every window published:
-        // their last release is the application's code (ADR-0287), each its
-        // own item, so one copy's panic leaves the next released and the
-        // first failure kept.
-        failure.contain(|| {
-            flui_foundation::panic::commit(&self.mice, |_, outbox| {
-                for copy in remains {
-                    outbox.release(copy);
-                }
-            });
-        });
+        // their last release is the application's code (ADR-0287). Nothing
+        // of the owner is borrowed here, and each is contained on its own, so
+        // one copy's panic leaves the next released and the first failure
+        // kept.
+        for copy in remains {
+            failure.contain(|| drop(copy));
+        }
         failure.resume();
     }
 
