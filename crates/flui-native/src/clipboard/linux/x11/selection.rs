@@ -46,10 +46,14 @@
 //!   carry out is followed by the one its window needs) and the server as
 //!   held, so no further reply is waited for in the step until an event
 //!   shows the server carried out the late request. A write's ends at
-//!   [`REPLY_TIMEOUT`] from the last write that sent bytes, so a slow link
-//!   delays it and only a server that takes nothing for that long stalls
-//!   it; a stalled write breaks the connection, and a connection broken or
-//!   lost ends the clipboard for the rest of the process, its handles
+//!   [`REPLY_TIMEOUT`] from the first wait to write after the last write
+//!   that sent bytes, so a slow link delays it and only a server that takes
+//!   nothing for that long stalls it, and at the latest [`REPLY_TIMEOUT`]
+//!   plus its size at [`MIN_WRITE_RATE`](super::connection::MIN_WRITE_RATE)
+//!   from its first bytes, however it progresses; a wait past its deadline still
+//!   goes on if the socket is ready when it looks once more. A write past
+//!   either breaks the connection, and a connection broken or lost ends the
+//!   clipboard for the rest of the process, its handles
 //!   answering `Gone`, as any connection failure does. A batch of commands
 //!   holding `Stop` waits on no reply: what needed one answers as the
 //!   thread's end does, with no report of a late server. When the loop ends
@@ -105,7 +109,9 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use super::connection::{Connection, REPLY_TIMEOUT, Replied, checked, reply_within};
+use super::connection::{
+    Connection, REPLY_TIMEOUT, Replied, checked, reply_within, serving_reply_within,
+};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     ClipboardEntryId, ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten,
@@ -160,11 +166,15 @@ const MAX_EVENTS_PER_STEP: usize = 64;
 /// come back (the answers still owed are written once the first does, and
 /// the last shows the server carried them out before the connection closes)
 /// and for any reply or write a handler waits on meanwhile, the close being
-/// a step of its own. A server another client holds, or a link that died,
-/// holds up the application's exit no longer than this once the thread
-/// reads its `Stop`, the batch that holds it waiting on no reply. What the
-/// thread waited on when `Stop` came ends first: a reply at
-/// [`REPLY_TIMEOUT`], a write once it sends nothing for as long.
+/// a step of its own; past it, a write the socket takes at once still goes
+/// out. A server another client holds, or a link that died, holds up the
+/// application's exit no longer than this once the thread reads its `Stop`,
+/// the batch that holds it waiting on no reply. What the thread waited on
+/// when `Stop` came ends first: a reply at [`REPLY_TIMEOUT`], a write once
+/// it sends nothing for as long, and at the latest [`REPLY_TIMEOUT`] plus
+/// its size at [`MIN_WRITE_RATE`](super::connection::MIN_WRITE_RATE) from its
+/// first bytes. So an exit waits at most [`REPLY_TIMEOUT`] for that write's
+/// first bytes, its allowance, and then this.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// What the thread hears of a requestor's window while a transfer writes to
@@ -1923,13 +1933,11 @@ impl Selections {
     fn mark_overdue(&mut self) -> Result<(), ReplyOrIdError> {
         let sync = self.connection.get_input_focus()?;
         let after = sync.sequence_number();
-        match reply_within(&self.connection, sync)? {
-            Replied::Reply(_) => self.pending.stand_in = Some(after),
-            Replied::Late => {
-                self.diagnostics.push(Diagnostic::ServerLate);
-                self.pending.deadline = Some(Instant::now() + REPLY_TIMEOUT);
-            }
-            Replied::Stopping => self.pending.deadline = Some(Instant::now() + REPLY_TIMEOUT),
+        if serving_reply_within(&self.connection, sync)?.is_some() {
+            self.pending.stand_in = Some(after);
+        } else {
+            self.diagnostics.push(Diagnostic::ServerLate);
+            self.pending.deadline = Some(Instant::now() + REPLY_TIMEOUT);
         }
         Ok(())
     }
@@ -2343,25 +2351,33 @@ impl Selections {
             if !self.read_marks(deadline)? {
                 self.diagnostics
                     .push(Diagnostic::Dropped(self.pending.len()));
+                // The answers already written go out if the socket takes
+                // them at once.
+                self.connection.flush()?;
                 return Ok(());
             }
         }
-        self.send_mark()?;
-        self.read_marks(deadline)?;
+        // Nothing is owed: the answers written go out, and while time is
+        // left a last mark shows the server carried them out.
+        self.connection.flush()?;
+        if Instant::now() < deadline {
+            self.send_mark()?;
+            self.read_marks(deadline)?;
+        }
         Ok(())
     }
 
     /// Handle events until the mark in flight comes back; `false` when
-    /// `deadline` passes first, a flood of events included.
+    /// `deadline` passes first, a flood of events included. The deadline is
+    /// checked before each flush, so a close past it sends nothing more here.
     fn read_marks(&mut self, deadline: Instant) -> Result<bool, ReplyOrIdError> {
-        self.connection.flush()?;
         while self.pending.in_flight {
             let now = Instant::now();
             if now >= deadline {
                 return Ok(false);
             }
+            self.connection.flush()?;
             if !self.handle_events(1)? && self.pending.in_flight {
-                self.connection.flush()?;
                 wait_for_connection(&self.connection, deadline - now)?;
             }
         }
@@ -2899,6 +2915,35 @@ mod tests {
                 .iter()
                 .any(|diagnostic| matches!(diagnostic, Diagnostic::ServerLate)),
             "the server answered the write in time"
+        );
+    }
+
+    /// A close already past its deadline still sends what the socket takes at
+    /// once, and reports the answers it drops rather than failing the
+    /// connection: a wait past its deadline looks at the socket once more.
+    #[test]
+    fn a_close_past_its_deadline_reports_the_answers_it_drops() {
+        let Some(mut selections) = selections() else {
+            return;
+        };
+        let (_requestor, window) = requestor();
+        selections.pending.unmarked.extend([Decided {
+            request: request(window),
+            property: 1,
+            form: TextForm::Latin1,
+            verdict: Verdict::Refused,
+        }]);
+        let deadline = Instant::now();
+        selections.connection.stream().end_by(deadline);
+        selections
+            .deliver_owed(deadline)
+            .expect("the close sends what the socket takes");
+        assert!(
+            selections
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, Diagnostic::Dropped(1))),
+            "the answer dropped is reported"
         );
     }
 

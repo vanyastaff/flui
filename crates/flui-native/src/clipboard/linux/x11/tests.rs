@@ -1654,19 +1654,22 @@ fn a_selection_the_server_answers_late_ends_as_the_window_needs() {
 
 /// Clients that flood the clipboard's thread with requests do not hold up
 /// an answer the owner thread sends meanwhile: it is written once the events
-/// ahead of its mark are handled, while the flood behind it goes on.
+/// ahead of its mark are handled, while the flood behind it goes on. The
+/// server is the case's own: the flood saturates the server it runs on, and
+/// on the run's shared display it would slow every other test's client.
 #[test]
 fn a_flood_of_requests_does_not_hold_up_a_decided_answer() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    let Some(_server) = server() else {
+    let Some(private) = PrivateServer::start() else {
         return;
     };
-    let owner = clipboard();
+    let display = private.display.clone();
+    let owner = clipboard_on(&display);
     let asked = Rc::new(Cell::new(0));
-    offer_primary(&owner, counted("selected", &asked));
-    let requestor = Requestor::new();
-    let property = atom("FLUI_IN_THE_FLOOD");
+    offer_primary_on(Some(&display), &owner, counted("selected", &asked));
+    let requestor = Requestor::on(Some(&display), "PRIMARY");
+    let property = requestor.atom("FLUI_IN_THE_FLOOD");
     requestor.send_request(property);
     assert_eq!(
         requestor.heard(),
@@ -1678,9 +1681,10 @@ fn a_flood_of_requests_does_not_hold_up_a_decided_answer() {
     let flooders: Vec<std::thread::JoinHandle<()>> = (0..4)
         .map(|_| {
             let flooding = Arc::clone(&flooding);
+            let display = display.clone();
             std::thread::spawn(move || {
-                let flooder = Requestor::new();
-                let target = atom("FLUI_FLOOD");
+                let flooder = Requestor::on(Some(&display), "PRIMARY");
+                let target = flooder.atom("FLUI_FLOOD");
                 let primary = xproto::Atom::from(xproto::AtomEnum::PRIMARY);
                 while flooding.load(Ordering::Relaxed) {
                     for _ in 0..256 {
