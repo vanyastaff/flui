@@ -28,8 +28,8 @@ use flui_foundation::{
 };
 
 use super::{
-    DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, LIFECYCLE_CAPACITY, RasterBackend,
-    RasterCommand, RasterExecutor, RasterSendError, RasterSender, SlotId, SlotPhase,
+    DETACH_DEADLINE, DeviceAnswered, ExecutorFailure, ExecutorHealth, LIFECYCLE_CAPACITY,
+    RasterBackend, RasterCommand, RasterExecutor, RasterSendError, RasterSender, SlotId, SlotPhase,
     sender::Shared,
 };
 
@@ -105,11 +105,19 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
                 caught.contain(|| {
                     let clock: Rc<dyn MonotonicClock> = Rc::new(SharedClock(clock));
                     let turned = Rc::clone(&wake);
+                    // A device request answered on its worker rings the
+                    // thread, which installs the device on its next turn.
+                    let rung = Arc::downgrade(&served);
                     let executor = Self::assemble(
                         backend,
                         read_at,
                         clock,
                         Box::new(move || turned()),
+                        DeviceAnswered::new(Arc::new(move || {
+                            if let Some(shared) = rung.upgrade() {
+                                shared.ring();
+                            }
+                        })),
                         Arc::clone(&served),
                         lifecycle,
                     );

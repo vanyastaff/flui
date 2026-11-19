@@ -26,9 +26,15 @@ minimum-test-timeout = 60.0
 # reject a run whose crates lack the named target.
 cargo-test-args = [
     "--skip",
-    "trybuild_ui",            # flui-engine, flui-rendering, flui-painting, flui-view
+    "trybuild_ui",                 # flui-engine, flui-rendering, flui-painting, flui-interaction, flui-platform
     "--skip",
-    "routable_derive_ui",     # flui-widgets' routable_ui trybuild suite
+    "ui_tests",                    # flui-view, flui-runtime, flui-sdk, flui-native
+    "--skip",
+    "nested_scroll_connection_ui", # flui-widgets' nested_scroll_ui trybuild suite
+    "--skip",
+    "thread_boundary_ui",          # the facade's thread_boundary_ui trybuild suite
+    "--skip",
+    "routable_derive_ui",          # flui-widgets' routable_ui trybuild suite
     "--skip",
     "cli_create::generated_",
     # the facade_consumer target, every test of which builds a project

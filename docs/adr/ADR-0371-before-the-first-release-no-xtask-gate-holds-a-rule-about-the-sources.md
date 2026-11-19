@@ -35,7 +35,7 @@ shapes they describe still move. Does a rule about the sources need a program of
 
 - Pre-1.0 a bad shape is fixed, not worked around (AGENTS.md): a rule that erodes costs a
   refactor, not a user.
-- A pull request is read in a fresh context before it merges (AGENTS.md, "Before a merge"), from
+- A pull request is read by fresh contexts before it merges (AGENTS.md, "Before a merge"), from
   the same rules these gates stated.
 - One pull request in five paid for the gates' own upkeep.
 - A gate removed stays in the history: one revert brings a rule's program back when a release
@@ -46,7 +46,7 @@ shapes they describe still move. Does a rule about the sources need a program of
 1. Keep the fifteen gates.
 2. Keep the architecture gates (tiers, reach, globals, the panic boundary, `unsafe impl Send`),
    remove the naming and counting ones.
-3. Remove all fifteen; the rules stay as text and their reader confirms them.
+3. Remove all fifteen; the rules stay as text and their readers confirm them.
 
 ## Decision
 
@@ -65,8 +65,8 @@ and the `[package.metadata.flui.modules]` table of a manifest.
 
 A rule one of them held is stated where it was: AGENTS.md, the ADR that decided it, the crate's
 `ARCHITECTURE.md`. A manifest's `tier`, `tier-kind`, `order`, `reach-forbid`,
-`allowed-dependents` and its exception lists stay as the statement of the layering. The reader
-of "Before a merge" checks a change against these rules; nothing runs them.
+`allowed-dependents` and its exception lists stay as the statement of the layering. The readers
+of "Before a merge" check a change against these rules; nothing runs them.
 
 A rule that needs a program again takes the first rung of ADR-0303 §2 that states it (a type, a
 lint, a tool CI runs, a test of the owning crate). There is no fifth rung until a release makes
@@ -99,7 +99,7 @@ removed with its generator: the manifests are where a crate's tier, kind and ord
 - Good, because a pull request no longer edits an allowlist to move code a gate counts.
 - Bad, because nothing fails when a crate reaches below its tier, a `static` appears, an OS entry
   skips the panic boundary, an `unsafe impl Send` is added or a shader takes a derivative in
-  non-uniform control flow: the reader has to see it.
+  non-uniform control flow: the readers have to see it.
 - Bad, because the `globals` lists held the reason each `static` is allowed. The debts among
   them, a `static` an ADR removes, move to `docs/gaps.md`; a granted one keeps its reason only
   in the history.
@@ -113,7 +113,7 @@ removed with its generator: the manifests are where a crate's tier, kind and ord
 - `the_in_process_checks_include_the_link_check_under_strict` in `checks_contract`
   (`tools/xtask/src/tasks/checks.rs`) lists the checks `cargo xtask checks` runs; a gate added
   back shows there.
-- The rules themselves have no confirmation but the reader of "Before a merge" (Consequences).
+- The rules themselves have no confirmation but the readers of "Before a merge" (Consequences).
 
 ## Pros and cons of the options
 

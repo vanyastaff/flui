@@ -279,6 +279,8 @@ pub(crate) mod command_ir;
 /// Per-frame dirty-rect accumulator behind the `render_scene` scissor.
 mod damage;
 mod device_domain;
+#[cfg(not(target_arch = "wasm32"))]
+mod device_worker;
 /// Gradient, shadow, and blur instance descriptors: the batch payloads the
 /// shader-paint and shadow dispatch build from a `Paint`/`DrawOp`.
 mod effects;
@@ -513,10 +515,11 @@ pub use raster::PresentDisposition;
 #[cfg(not(target_arch = "wasm32"))]
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
-    DETACH_DEADLINE, DeviceHealth, DeviceRetries, ExecutorFailure, ExecutorHealth, RasterBackend,
-    RasterCommand, RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict,
-    SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord,
-    SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
+    DETACH_DEADLINE, DeviceAnswered, DeviceHealth, DeviceRetries, DeviceTicket, ExecutorFailure,
+    ExecutorHealth, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement, RasterSendError,
+    RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId,
+    SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility,
+    SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;

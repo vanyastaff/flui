@@ -7,5 +7,5 @@
 
 ### Changed
 
-- `RasterExecutor::new` takes the clock the device's rebuilds are paced on, and `SlotBackend` gains
-  `device_lost` and `rebuild_device`.
+- `RasterExecutor::new` takes the clock the device's rebuilds are paced on, and `RasterBackend` gains
+  `device_lost`, `request_device` and `install_requested_device`.
