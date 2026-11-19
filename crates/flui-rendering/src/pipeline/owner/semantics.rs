@@ -2104,7 +2104,8 @@ fn plan_graft_pass<'f>(
 /// `false` when that cannot be shown: a node on the way contributes (a
 /// pending fragment, a boundary the clip dropped last pass), authors
 /// regions, bars its earlier siblings, or lands where a paint clip above it
-/// hides it, which annotates it the way assembly does. The caller then treats
+/// could hide it, which makes it contribute the way assembly counts a node the
+/// clips hide. The caller then treats
 /// `moved` as an ordinary semantics mark.
 fn placement_anchors(
     tree: &RenderTree,
@@ -2156,11 +2157,11 @@ fn placement_anchors(
         {
             return false;
         }
-        // Assembly marks a node that lands outside the paint clip hidden,
-        // and a hidden node contributes: a move can turn a transparent
-        // wrapper into a node of its own, or end the node it formed last pass.
-        // Neither pass's state is kept for a wrapper, so wherever the clips
-        // can hide one the walk refuses.
+        // Assembly counts a node the clips hide as contributing, so a move
+        // can turn a transparent wrapper into a node of its own. No pass's
+        // state is kept for a wrapper that formed nothing, so wherever the
+        // clips can hide one the walk refuses. (A wrapper that formed a node
+        // last pass is an anchor, found above.)
         if clips.can_hide(context.has_reveal_ancestor) {
             return false;
         }

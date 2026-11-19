@@ -1177,8 +1177,8 @@ pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() 
             .boxed()
     };
     // "outside" is laid out below "inside" but painted 150 lower, past the
-    // 100-high viewport and inside its cache extent. The spacer overflows the
-    // viewport, so it clips what it paints.
+    // 100-high viewport and inside its cache extent. The spacer makes the
+    // content overflow the viewport, which only then clips what it paints.
     let row = || {
         Column::new((
             labelled("inside"),
@@ -1220,7 +1220,7 @@ pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() 
             clipped(MergeSemantics::new().child(row()).boxed()),
             "inside outside"
         ),
-        "the merged node's own rect is inside the clip, so it is not hidden"
+        "the merged node's own rect overlaps the clip, so it is not hidden"
     );
 
     // An ordinary merge: an annotated child past the clip merges into a
@@ -1243,8 +1243,8 @@ pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() 
         "the container takes the label of content past the clip and stays visible"
     );
 
-    // The container past the clip too: both are hidden, and they merge into one
-    // hidden node rather than refusing each other over the flag.
+    // The container past the clip too: the child merges into it as it does in
+    // view, and the one node they form is hidden.
     let hidden_holder = || {
         Column::new((
             Transform::translate(0.0, 150.0)

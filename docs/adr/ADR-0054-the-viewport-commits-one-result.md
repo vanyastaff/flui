@@ -183,8 +183,9 @@ of contributes no node (its children are still walked, since an overflowing chil
 into the clip its parent fell outside of), and a node that forms outside the paint clip keeps its
 semantics rect and gains the hidden flag — off-screen but reachable, which is what a "scroll to"
 action needs. The flag belongs to that node: content merged into an ancestor does not carry it
-there, so a node in view stays visible whatever it merges. Paint clips intersect down the chain; a semantics clip REPLACES the inherited one, so a
-scrollable inside a scrollable re-grants its own cache area to its own children.
+there, so a node in view stays visible whatever it merges. Paint clips intersect down the chain; a
+semantics clip REPLACES the inherited one, so a scrollable inside a scrollable re-grants its own
+cache area to its own children.
 
 Both viewports implement both hooks. The semantics clip is the bounds grown by the resolved cache
 extent along the scroll axis; the paint clip is the bounds, with the leading edge pushed in by the
