@@ -13,7 +13,8 @@ pub fn generate(
         .file("src/lib.rs", LIB)
         .file("src/main.rs", super::main_rs(&lib_name))
         .file("flui.toml", flui_toml(name, app_id, platforms))
-        .dir("assets")
+        // Git keeps no empty directory; a hidden file is no asset (ADR-0384 §3).
+        .file("assets/.gitkeep", "")
 }
 
 fn cargo_toml(name: &str, source: &DependencySource) -> String {

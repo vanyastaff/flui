@@ -62,6 +62,9 @@ pub(crate) struct ApkSpec<'a> {
     pub(crate) version_name: &'a str,
     /// The key the APK is signed with.
     pub(crate) signing: &'a SigningKey,
+    /// The application's assets, which the APK carries under
+    /// `assets/flui_assets/<key>` (ADR-0384 §3).
+    pub(crate) assets: &'a [crate::build::assets::PackagedAsset],
 }
 
 /// The SDK pieces the packager runs, resolved once.
@@ -157,9 +160,20 @@ impl BuildTools {
         )?;
         let base = spec.work_dir.join("base.apk");
         let aligned = spec.work_dir.join("aligned.apk");
+        // `aapt2 link -A` puts the directory's contents under the APK's
+        // `assets/`, where `AAssetManager` reads them.
+        let assets = (!spec.assets.is_empty()).then(|| spec.work_dir.join("assets"));
+        if let Some(assets) = &assets {
+            crate::build::assets::stage(spec.assets, assets)?;
+        }
 
-        process::run(Command::new(&self.aapt2).args(self.link_args(&manifest, &base, spec)))
-            .await?;
+        process::run(Command::new(&self.aapt2).args(self.link_args(
+            &manifest,
+            &base,
+            assets.as_deref(),
+            spec,
+        )))
+        .await?;
         add_code(&base, spec.native_libs, spec.dex)?;
         process::run(Command::new(&self.zipalign).args(zipalign_args(&base, &aligned))).await?;
 
@@ -183,8 +197,14 @@ impl BuildTools {
         Ok(())
     }
 
-    fn link_args(&self, manifest: &Path, output: &Path, spec: &ApkSpec<'_>) -> Vec<OsString> {
-        vec![
+    fn link_args(
+        &self,
+        manifest: &Path,
+        output: &Path,
+        assets: Option<&Path>,
+        spec: &ApkSpec<'_>,
+    ) -> Vec<OsString> {
+        let mut args: Vec<OsString> = vec![
             "link".into(),
             "--manifest".into(),
             manifest.as_os_str().to_owned(),
@@ -200,7 +220,12 @@ impl BuildTools {
             spec.version_name.into(),
             "-o".into(),
             output.as_os_str().to_owned(),
-        ]
+        ];
+        if let Some(assets) = assets {
+            args.push("-A".into());
+            args.push(assets.as_os_str().to_owned());
+        }
+        args
     }
 
     async fn create_debug_keystore(&self, keystore: &Path) -> BuildResult<()> {
@@ -441,10 +466,12 @@ mod tests {
             version_code: 10_203,
             version_name: "1.2.3-beta.1",
             signing: &signing,
+            assets: &[],
         };
         let args = tools.link_args(
             Path::new("AndroidManifest.xml"),
             Path::new("base.apk"),
+            Some(Path::new("work/assets")),
             &spec,
         );
         let target = TARGET_SDK.to_string();
@@ -460,6 +487,10 @@ mod tests {
         assert!(
             states("--version-code", "10203") && states("--version-name", "1.2.3-beta.1"),
             "the APK declares the application's version: {args:?}"
+        );
+        assert!(
+            states("-A", "work/assets"),
+            "the APK carries the staged assets under its `assets/`: {args:?}"
         );
     }
 

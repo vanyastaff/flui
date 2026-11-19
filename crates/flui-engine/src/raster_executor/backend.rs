@@ -5,7 +5,7 @@ use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::DisplayColor;
 
 use super::{
-    DeviceAnswered, DeviceTicket, SlotId,
+    DeviceAnswered, DeviceTicket, GpuFrameTime, SlotId,
     command::{SlotConfig, SlotTarget},
 };
 use crate::{
@@ -175,6 +175,12 @@ pub trait RasterBackend {
     /// request is a future the owner spawns) is given up at the first due
     /// attempt instead of walking the backoff.
     fn requests_devices(&self) -> bool;
+
+    /// The oldest GPU time of `slot`'s frames that was read back and not
+    /// taken yet; `None` once none is left, or for a backend that times
+    /// nothing (ADR-0388). The executor takes them after each frame of the
+    /// slot and hands them to the owner.
+    fn take_gpu_time(&mut self, slot: SlotId) -> Option<GpuFrameTime>;
 }
 
 /// A boxed backend is one, so a host that picks its backend at run time (a
@@ -264,5 +270,9 @@ impl<B: RasterBackend + ?Sized> RasterBackend for Box<B> {
 
     fn requests_devices(&self) -> bool {
         (**self).requests_devices()
+    }
+
+    fn take_gpu_time(&mut self, slot: SlotId) -> Option<GpuFrameTime> {
+        (**self).take_gpu_time(slot)
     }
 }

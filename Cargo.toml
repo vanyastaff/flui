@@ -377,9 +377,6 @@ flui-devtools = { path = "packages/flui-devtools", version = "=0.2.0-dev" }
 # Update policy: bump within the same minor on security/bug fixes; bump major after
 # verifying API migration on a dedicated branch (see docs/adr/ADR-0027-owner-affine-ui-realms.md).
 wgpu = { version = "30.0", default-features = false, features = ["wgsl", "naga-ir"] }
-# GPU profiling — optional, reused by flui-engine behind the `gpu-profiler` feature.
-# Pins wgpu ^30.0, consistent with the workspace pin above. Excluded from wasm32.
-wgpu-profiler = { version = "0.28", default-features = false }
 # Linux display source (flui-native `wayland` / `x11` features): the output
 # list and refresh rate from the compositor, on a connection of its own. `x11rb`
 # runs on its pure-Rust connection (no libxcb) and needs RandR only;
@@ -843,7 +840,7 @@ animation-diagnostics = ["flui-animation/diagnostics"]
 # No catalog, tool or capability is on by default: an application names what it
 # uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
 # minus the Material glob, `flui::run_app`) needs no feature at all;
-# `cargo xtask facade-combos` builds every combination.
+# CI's `feature-matrix` job builds every combination.
 default = []
 
 # === Catalogs and localization ===
@@ -969,7 +966,7 @@ path = "tests/surface.rs"
 name = "thread_boundary_ui"
 path = "tests/thread_boundary_ui.rs"
 
-# An application on wasm32 capturing `Rc` in owner-local callbacks; `cargo xtask wasm-check`
+# An application on wasm32 capturing `Rc` in owner-local callbacks; CI's `wasm-check` job
 # compiles it for wasm32.
 [[test]]
 name = "wasm_consumer"

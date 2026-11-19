@@ -484,6 +484,10 @@ impl flui_engine::RasterBackend for ReentersOwner {
     fn requests_devices(&self) -> bool {
         self.inner.requests_devices()
     }
+
+    fn take_gpu_time(&mut self, slot: flui_engine::SlotId) -> Option<flui_engine::GpuFrameTime> {
+        self.inner.take_gpu_time(slot)
+    }
 }
 
 /// A restore sent from inside a frame that then loses its surface carries the

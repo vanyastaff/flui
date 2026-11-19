@@ -299,6 +299,22 @@ impl UiRuntime {
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn for_test_with_window(window: Rc<dyn flui_platform::PlatformWindow>) -> Self {
+        Self::for_test_on(window, ClockSource::Platform)
+    }
+
+    /// [`Self::for_test`] on `clock`, which only the test moves: a deadline the
+    /// runtime arms is read back exactly, however long the test runs between.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test_on_manual_clock(clock: &flui_foundation::ManualClock) -> Self {
+        Self::for_test_on(
+            crate::presentation::test_platform_window(None),
+            ClockSource::Manual(clock.clone()),
+        )
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    fn for_test_on(window: Rc<dyn flui_platform::PlatformWindow>, clock: ClockSource) -> Self {
         let identity = crate::runtime_services::next_identity();
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's
@@ -320,7 +336,7 @@ impl UiRuntime {
                 wake,
                 needs_redraw,
                 &FontCollection::new(),
-                ClockSource::Platform,
+                clock,
             )),
         )
         .expect("test UiRuntime should create an interaction lane")

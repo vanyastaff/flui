@@ -1,7 +1,7 @@
 //! An application on wasm32 keeps `Rc` state in owner-local callbacks: a
 //! `ChangeNotifier` listener and a post-frame callback capture an
-//! `Rc<Cell<_>>`, and nothing asks either to be `Send` (ADR-0086). `cargo
-//! xtask wasm-check` compiles this file for `wasm32-unknown-unknown`, so a
+//! `Rc<Cell<_>>`, and nothing asks either to be `Send` (ADR-0086). CI's
+//! `wasm-check` job compiles this file for `wasm32-unknown-unknown`, so a
 //! bound that creeps back onto either callback breaks the web build here.
 
 use std::any::Any;

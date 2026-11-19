@@ -500,6 +500,8 @@ pub(crate) async fn package_application(
         .join("ios")
         .join(PRIVACY_MANIFEST);
     let app_dir = ctx.workspace_root.clone();
+    // Refused before any tool runs: a project whose assets no bundle can carry.
+    let assets = crate::build::assets::of_project(&ctx.workspace_root)?;
     let built = artifacts.package.clone();
     let cancel = Arc::new(AtomicU8::new(RUNNING));
     let _guard = CancelOnDrop(Arc::clone(&cancel));
@@ -590,6 +592,8 @@ pub(crate) async fn package_application(
             "plutil",
             &["-convert".into(), "xml1".into(), privacy.into_os_string()],
         )?;
+        // The bundle's root is its resources on iOS (ADR-0384 §3).
+        crate::build::assets::stage(&assets, &staged)?;
         let size_bytes = size(&staged)?;
         commit(&mut work, &staged, &parent.join(filename))?;
         Ok(FinalArtifacts {
