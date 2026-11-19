@@ -12,6 +12,9 @@
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
   `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
+- **Revised:** 2026-11-19 — §5 and the wasm names in Supersedes: `wasm-check` links the web demos
+  and runs the wasm32 tests itself, and the import allowlist goes, since the linker now refuses an
+  undefined symbol.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -51,8 +54,8 @@ a task runner would be a second tool to install for what a step already says.
 
 CI's `clippy`, `test`, `test-nested`, `test-trybuild`, `doc`, `deps`, `feature-matrix` and
 `wasm-check` jobs, `advisories.yml` and the `desktop` legs of `nightly-platforms.yml` call
-`cargo nextest`, `cargo test`, `cargo clippy`, `cargo hack`, `cargo doc`, `cargo deny` and
-`wasm-tools` with their arguments in the step. A value two steps share (the test features) is a
+`cargo nextest`, `cargo test`, `cargo build`, `cargo clippy`, `cargo hack`, `cargo doc` and
+`cargo deny` with their arguments in the step. A value two steps share (the test features) is a
 job-level `env`; a list the workspace already states (the packages with a `testing` feature, those
 with `wasm = false`) is read from `cargo metadata` in the step. A step that repeats over a short
 list (the facade's feature combinations, flui-native's features, its two feature sets on Windows
@@ -87,15 +90,24 @@ with `docs-links`, so such a link is the reader's to catch.
 
 ### §5. `wasm-check` links the web demos and runs the wasm32 tests itself
 
-The job builds `flui-web-demo` and `flui-painting-demo` for wasm32 and reads each module's
-imports with `wasm-tools print`, at the version its `WASM_TOOLS_VERSION` pins. A module that
-imports from one not listed in `.github/wasm-import-allowlist.txt` fails the step, and so does a
-module from which no import is read. The job then runs `cargo test --target wasm32-unknown-unknown`
-on node, through the runner `.cargo/config.toml` names, for each package `cargo metadata` shows with
-a wasm32 dev-dependency on `wasm-bindgen-test`: its lib test, and its `wasm32` test target when it
-has one. A package whose run passes no assertion fails the step. The `wasm-bindgen-cli` it installs
-is the one version of `wasm-bindgen` that `cargo metadata` resolves, and more than one fails the
-step.
+The job builds `flui-web-demo` and `flui-painting-demo` for wasm32, so the demos link. Their
+imports are not checked against a list: `wasm-imports` compared them with a committed allowlist
+because an undefined symbol used to link as an import (`env` the catch-all for an accidental
+native extern), and rustc stopped passing `--allow-undefined` to the wasm linker in 1.96
+(rust-lang/rust#149868), so on the pinned toolchain that symbol fails the link. What would still
+become an import is an extern that names its module (`#[link(wasm_import_module = …)]`), code a
+reader sees in the diff that adds it; keeping the list for that class would cost a tool installed
+beside the toolchain, an allowlist and a step no pull request runs.
+
+The job then runs `cargo test --target wasm32-unknown-unknown`, through the runner
+`.cargo/config.toml` names, for each workspace package whose dev-dependencies on wasm32 include
+`wasm-bindgen-test`, as cargo's resolver reports them (`cargo metadata --filter-platform
+wasm32-unknown-unknown`, which evaluates each target table's `cfg`): its lib test, and its
+`wasm32` test target when it has one. A test runs on node, or in the job's pinned headless Chrome
+when its crate configures `run_in_browser`. A package whose run passes no assertion fails the step,
+and so does an empty list. The `wasm-bindgen-cli` the job installs is the one version of
+`wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
+more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
 
 ### Consequences
 
@@ -108,13 +120,13 @@ step.
   and the reader of the change holds it.
 - Bad, because the test that pinned the `nested-cargo` group's packages to the job's `-p` list is
   gone with the code it read.
-- Bad, because §5's three rules lose their tests with the code they read, and the reader of a
-  change to the `wasm-check` job holds them: the import check (a malformed module refused, compact
-  import groups read, the committed allowlist refusing `env`; wasm-tools, which reads the module
-  with the same `wasmparser` grammar, is trusted to parse it, and a pull request that adds `env`
-  to the allowlist is the reader's to refuse), the discovery (a comment, a normal dependency or a
-  dev-dependency outside a wasm32 target table does not opt a package in), and the count of
-  passed assertions (which lines of the runner's output count).
+- Bad, because §5's rules lose their tests with the code they read, and the reader of a change to
+  the `wasm-check` job holds them: the discovery (a normal dependency, or a dev-dependency only a
+  non-wasm32 target table declares, does not opt a package in) and the count of passed assertions
+  (which lines of the runner's output count). The job runs only on main, so such a change is run
+  on its branch before the merge (Confirmation).
+- Bad, because an import from a module the extern names is no longer refused by a list; the
+  reader of the change that adds one holds it.
 
 ### Confirmation
 
@@ -122,8 +134,11 @@ step.
 - Each job runs its commands on every run of its lane;
   `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version)\b'`
   finds none in `.github/`.
-- `cargo test -p xtask` holds `cargo xtask doctor`'s wasm-tools hint to the job's
-  `WASM_TOOLS_VERSION` (`each_pinned_hint_names_the_version_ci_installs`).
+- A pull request that changes the steps of a job only main runs (`wasm-check` among them) runs
+  that job on its branch before the merge: `gh workflow run CI --ref <branch>` takes the full lane,
+  and the pull request's body links the run.
+- `cargo test -p xtask` holds doctor's wasm-bindgen row to one locked version
+  (`the_wasm_bindgen_row_needs_one_locked_version_installed`, `this_lock_pins_one_wasm_bindgen`).
 
 ## Pros and cons of the options
 

@@ -58,9 +58,9 @@ criterion = { workspace = true }
 serde_json = { workspace = true }
 flui-foundation = { path = ".", features = ["testing"] }
 
-# Executing wasm32 tests. Until this landed the workspace only ever COMPILED for
-# wasm32 (CI's `wasm-check` job is `cargo check` + `cargo clippy`), so every "works on
-# the web" claim rested on the linker succeeding -- see issue #985.
+# Executing wasm32 tests: compiling and linking for wasm32 shows nothing about
+# what the code does when it runs there, so every "works on the web" claim
+# needs a test that executes in a wasm VM (issue #985).
 #
 # Pinned exactly, not `"0.3"`. 0.3.78 requires wasm-bindgen 0.2.128, so an
 # unpinned range would bump the workspace lockfile as a side effect of adding a

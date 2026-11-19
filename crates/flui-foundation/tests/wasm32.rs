@@ -1,10 +1,8 @@
 //! Assertions that only mean anything when they EXECUTE on wasm32.
 //!
-//! Until this file landed, the workspace only ever compiled for wasm32 —
-//! CI's `wasm-check` job is `cargo check` plus `cargo clippy`, and there was no
-//! `wasm_bindgen_test` anywhere in the tree, so every "works on the web" claim
-//! rested on the linker succeeding (issue #985). The whole point of the file is
-//! that a green here is produced by running code in a wasm VM.
+//! Compiling and linking for wasm32 shows nothing about what the code does when
+//! it runs there (issue #985). The whole point of the file is that a green here
+//! is produced by running code in a wasm VM.
 //!
 //! Run it with `cargo test -p flui-foundation --target wasm32-unknown-unknown --test wasm32`,
 //! with the `wasm-bindgen-cli` of the version `Cargo.lock` pins — it must match the locked

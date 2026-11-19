@@ -21,10 +21,6 @@ use crate::util::{read, repo_root};
 /// install hint names.
 const LYCHEE_VERSION: &str = "0.24.2";
 
-/// The wasm-tools CI's `wasm-check` job installs (its `WASM_TOOLS_VERSION`),
-/// which the install hint names.
-const WASM_TOOLS_VERSION: &str = "1.263.0";
-
 /// Every version of the `[[package]]`s named `name` in a Cargo.lock, sorted
 /// and without repeats. The wasm-bindgen CLI must match the locked
 /// `wasm-bindgen` exactly, or `wasm-bindgen-test-runner` refuses to start, so
@@ -47,12 +43,10 @@ fn locked_package_versions(lock: &str, name: &str) -> anyhow::Result<Vec<String>
     Ok(versions)
 }
 
-/// The `wasm-bindgen` versions this repository's Cargo.lock pins; none when
-/// it cannot be read.
-fn locked_wasm_bindgen() -> Vec<String> {
-    read("Cargo.lock")
-        .and_then(|lock| locked_package_versions(&lock, "wasm-bindgen"))
-        .unwrap_or_default()
+/// The `wasm-bindgen` versions this repository's Cargo.lock pins, or why it
+/// could not be read.
+fn locked_wasm_bindgen() -> anyhow::Result<Vec<String>> {
+    read("Cargo.lock").and_then(|lock| locked_package_versions(&lock, "wasm-bindgen"))
 }
 
 /// A doctor row's verdict: whether the tool is usable, what the row says, and
@@ -66,7 +60,19 @@ struct Verdict {
 
 /// The wasm-bindgen CLI's row, from the versions Cargo.lock pins and the one
 /// installed: usable only when the lock pins exactly one and it is installed.
-fn wasm_bindgen_row(locked: &[String], have: Option<&str>) -> Verdict {
+/// A lock that cannot be read is its own failure, not a lock with no
+/// wasm-bindgen.
+fn wasm_bindgen_row(locked: &anyhow::Result<Vec<String>>, have: Option<&str>) -> Verdict {
+    let locked = match locked {
+        Ok(versions) => versions.as_slice(),
+        Err(error) => {
+            return Verdict {
+                ok: false,
+                detail: format!("{error:#}"),
+                install: "repair Cargo.lock: cargo refuses it too".to_owned(),
+            };
+        }
+    };
     match (locked, have) {
         ([want], Some(have)) if want == have => Verdict {
             ok: true,
@@ -493,12 +499,6 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     for (sub, krate) in HEAVY_CARGO_SUBS {
         doctor.check_cargo_sub(Scope::Full, sub, &format!("cargo install --locked {krate}"));
     }
-    doctor.check_bin(
-        Scope::Full,
-        "wasm-tools",
-        &format!("cargo install --locked wasm-tools --version {WASM_TOOLS_VERSION}"),
-        &["--version"],
-    );
     let have = succeeded_first_line("wasm-bindgen", &["--version"])
         .and_then(|line| line.split(' ').nth(1).map(str::to_owned));
     let row = wasm_bindgen_row(&locked_wasm_bindgen(), have.as_deref());
@@ -618,20 +618,15 @@ mod tests {
         );
     }
 
-    /// Each install hint that names a version names the one CI installs.
-    fn each_pinned_hint_names_the_version_ci_installs() {
+    /// The install hint names the lychee CI installs.
+    fn the_lychee_hint_names_the_version_ci_installs() {
         let ci =
             std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("ci.yml");
-        for (variable, version) in [
-            ("LYCHEE_VERSION", LYCHEE_VERSION),
-            ("WASM_TOOLS_VERSION", WASM_TOOLS_VERSION),
-        ] {
-            assert!(
-                ci.lines()
-                    .any(|line| line.trim() == format!("{variable}: {version}")),
-                "ci.yml's {variable} is not {version}"
-            );
-        }
+        assert!(
+            ci.lines()
+                .any(|line| line.trim() == format!("LYCHEE_VERSION: {LYCHEE_VERSION}")),
+            "ci.yml's LYCHEE_VERSION is not {LYCHEE_VERSION}"
+        );
     }
 
     /// Every locked version of the named package, and only of that one: a
@@ -669,14 +664,14 @@ mod tests {
     /// This repository's lock pins one wasm-bindgen, the version CI's
     /// `wasm-check` installs the CLI at.
     fn this_lock_pins_one_wasm_bindgen() {
-        let locked = locked_wasm_bindgen();
+        let locked = locked_wasm_bindgen().expect("Cargo.lock reads");
         assert_eq!(locked.len(), 1, "{locked:?}");
     }
 
     /// The row is usable only for one locked version equal to the installed
     /// one, and each other case names what to do.
     fn the_wasm_bindgen_row_needs_one_locked_version_installed() {
-        let one = ["0.2.1".to_owned()];
+        let one = Ok(vec!["0.2.1".to_owned()]);
         assert_eq!(
             wasm_bindgen_row(&one, Some("0.2.1")),
             Verdict {
@@ -694,10 +689,22 @@ mod tests {
             );
             assert!(row.detail.contains(have.unwrap_or("none")), "{row:?}");
         }
-        let none = wasm_bindgen_row(&[], Some("0.2.1"));
+        let none = wasm_bindgen_row(&Ok(Vec::new()), Some("0.2.1"));
         assert!(!none.ok);
         assert!(none.detail.contains("no wasm-bindgen"), "{none:?}");
-        let two = wasm_bindgen_row(&["0.1.9".to_owned(), "0.2.1".to_owned()], Some("0.2.1"));
+        let unreadable = wasm_bindgen_row(
+            &locked_package_versions("[[package]\n", "wasm-bindgen"),
+            Some("0.2.1"),
+        );
+        assert!(!unreadable.ok);
+        assert!(
+            unreadable.detail.starts_with("parsing Cargo.lock"),
+            "an unreadable lock names why: {unreadable:?}"
+        );
+        let two = wasm_bindgen_row(
+            &Ok(vec!["0.1.9".to_owned(), "0.2.1".to_owned()]),
+            Some("0.2.1"),
+        );
         assert!(!two.ok, "a lock with two versions has none to install");
         assert!(
             two.detail
@@ -728,8 +735,8 @@ mod tests {
             "doctor_contract",
             &[
                 (
-                    "each_pinned_hint_names_the_version_ci_installs",
-                    each_pinned_hint_names_the_version_ci_installs as fn(),
+                    "the_lychee_hint_names_the_version_ci_installs",
+                    the_lychee_hint_names_the_version_ci_installs as fn(),
                 ),
                 (
                     "the_locked_versions_are_the_named_packages",
