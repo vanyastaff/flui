@@ -463,12 +463,16 @@ mod tests {
     }
 
     /// After the focus is back, a release and a new ask each make their
-    /// call: nothing from the unfocused time stands unanswered.
+    /// call: a request of the unfocused time is made at the return, not
+    /// dropped unanswered, so nothing stands in the way of the calls after.
     fn a_release_and_an_ask_after_the_focus_returns_are_made() {
         let mut owner = CaptureOwner::default();
         owner.focus_changed(false);
         owner.request(W1);
-        owner.focus_changed(true);
+        assert_eq!(
+            owner.focus_changed(true).call,
+            Some(CaptureCall::Request(W1))
+        );
         owner.answered(true);
         assert_eq!(owner.release(W1).call, Some(CaptureCall::Release));
         owner.answered(false);
