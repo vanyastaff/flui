@@ -106,7 +106,8 @@ impl MediaQuerySource {
         }
     }
 
-    fn snapshot(&self) -> MediaQueryData {
+    /// The published data now.
+    pub(crate) fn snapshot(&self) -> MediaQueryData {
         self.data.borrow().clone()
     }
 

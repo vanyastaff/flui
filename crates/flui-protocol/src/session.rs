@@ -430,3 +430,41 @@ pub struct Placement {
     /// Whether it has keyboard focus.
     pub focused: bool,
 }
+
+impl Placement {
+    /// `window`'s surface of `size` at `scale`: untitled, its position unknown, neither shown nor
+    /// focused.
+    #[must_use]
+    pub const fn new(window: WindowId, size: LogicalSize, scale: f64) -> Self {
+        Self {
+            window,
+            title: None,
+            size,
+            scale,
+            position: None,
+            visible: false,
+            focused: false,
+        }
+    }
+
+    /// Shown, when `visible`.
+    #[must_use]
+    pub const fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+
+    /// Holding keyboard focus, when `focused`.
+    #[must_use]
+    pub const fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// Its surface's top-left at `position` on screen.
+    #[must_use]
+    pub const fn position(mut self, position: LogicalPoint) -> Self {
+        self.position = Some(position);
+        self
+    }
+}

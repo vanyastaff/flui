@@ -540,8 +540,8 @@ graph LR
   - `InputPolicy::default()` set to `Synthetic`;
   - the OS-input announcement (scenario-declared devices and duration, the CLI grace period);
   - the `ActivityGuard` trait lanes implement;
-  - `IsolationMode` in the session and the report, and the refusal of OS input on a `shared`
-    desktop without a guard;
+  - `Isolation` (`flui-protocol`'s) in the session and the report, and the refusal of OS input on
+    a `shared` desktop without a guard;
   - the scenario window-size rule and splitting moves into single steps.
 
   Update `docs/crates.md` and the layer diagram in `docs/architecture.md`.
@@ -553,7 +553,66 @@ graph LR
   - a wrong window size refuses;
   - the coordinates table passes (scales 0.5–8, negative origins, fractional edges, RTL);
   - the report verdict table passes;
-  - `cargo xtask workspace`, `reach`, `globals` and `deps` are green.
+  - the manifest's tier, order, `allowed-dependents` and `reach-forbid`, the crate's globals and
+    its dependencies are read against "Rules a reader holds" (the `cargo xtask workspace`,
+    `reach`, `globals` and `deps` gates are gone, ADR-0371).
+- **Status (2026-11-19):** built; the pull request is under review.
+- **Evidence (2026-11-19):**
+  - `flui-driver`'s `driver_it`:
+    - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the
+      counter and on a local gallery fixture (`tests/fixtures.rs`, standing in for
+      `interaction_gallery`). The app exits mid-command (its window closes in the frame its
+      handler runs: `gone` of the process, then and for every later call); the driver goes with a
+      contact held (the app sees it cancelled); an accepted tap times out (`may_have_run`, retry
+      `never`, and it runs once); app code panics on the semantic path (`platform`) and in a frame
+      (contained), and the next request is answered; a callback replaces what was tapped (`ran`);
+      a handle outlives its element (`gone`); a second OS-input session on the desktop is `busy`
+      until the first ends; a required path the target lacks is `not_supported` naming
+      `os_input`, and the report is `cannot_verify` listing it; a point outside the window is
+      `outside_target` with nothing sent; a read past its budget is `truncated`; a scripted lane
+      whose guard reports a foreign event stops before its next event, releases, and the report
+      is `cannot_verify` (`uninterrupted_os_input`).
+    - `policy::a_default_session_never_selects_os_input` (a guarded lane attached, a tap, a move
+      and a semantic-preferred move all go synthetic, the lane sends nothing and nothing is
+      announced), `a_certification_scenario_takes_the_os_path_announced_once_before_its_first_event`,
+      `a_scenario_written_for_another_window_size_refuses_to_run` (size and scale, naming both),
+      `os_input_without_a_guard_runs_only_where_it_is_isolated`.
+    - `coordinates::a_point_maps_to_the_device_pixel_it_covers_or_is_refused` (scales 0.5, 1.25,
+      1.5, 2 and 8, negative origins, fractional edges, a secondary monitor, overflow, non-finite
+      input) and `an_element_maps_from_the_centre_of_its_visible_part_whatever_the_text_direction`
+      (RTL).
+    - `report::the_verdict_is_fail_then_cannot_verify_then_pass`,
+      `a_check_asked_for_and_not_run_keeps_the_report_from_passing`,
+      `the_report_names_the_isolation_and_the_announcements`,
+      `an_error_reads_into_its_code_with_the_retry_and_effect_it_carries`.
+    - `steps::every_move_is_a_single_step_followed_by_a_pause`,
+      `a_very_long_move_takes_longer_steps_not_more_of_them`,
+      `input_no_lane_sends_is_refused_before_any_event`.
+    - `socket::an_app_that_closes_mid_call_answers_its_process_gone_then_and_after`,
+      `an_app_that_exits_before_its_agent_answers_reports_its_exit_code` (exit code 3, without
+      waiting out the connect timeout), `an_artifact_without_its_lane_is_named_as_the_capability_missing`,
+      `a_lane_worker_cancels_a_queued_job_and_serves_past_a_panicking_one`.
+  - Taking out, one at a time, the agent's `window.placement`, the headless frame containment, the
+    guard's per-event check, the isolation rule, the host-wide lock, the never-the-OS fallback, the
+    clamp refusal, the empty-report rule, the release frame after the driver goes and the
+    liveness check of a launched app each fails a test above.
+  - As built:
+    - The isolation mode is `flui_protocol::session::Isolation`, which main already carries.
+    - The agent answers `window.placement` now (size and scale from the root media query,
+      visibility and focus), without a position; a lane locates its window
+      (`Lane::locate_window`), and `Placement::new` is new in `flui-protocol`.
+    - The headless target serves the agent's own `Session` in process through
+      `flui_testing::HeadlessAgentService`, since `flui-runtime` admits only the hosts.
+    - No `batch` method exists: `element.tap` sends `element.actionability`, then `input.inject`,
+      and `wait.until` with `Frames(1)` between unstable readings (`wait.frames` is not served).
+    - `Lane` carries the input half (`capabilities`, `guard`, `locate_window`, `send`,
+      `release_all`); capture, the OS tree and launching through a lane join with FD10 and the
+      OS-lane tasks. `Launch::from_env_or_headless` is not built: `Launch::headless`,
+      `executable`, `artifact` and `cargo_example` are; an artifact whose lane is absent is
+      `not_supported` naming the lane.
+    - The kill-mid-call test of FD7 (a FLUI app launched on a Linux CI host and killed) still
+      waits for a CI job that opens a window; the driver's `gone` of the process with its exit
+      code is held by the socket tests above.
 
 ### FD10. Pixels and trace
 

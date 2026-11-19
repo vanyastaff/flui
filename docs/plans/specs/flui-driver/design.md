@@ -230,10 +230,11 @@ Every agent method is an owner-inbox job run at the next frame boundary, as `Sem
 today (`flui-runtime/src/ui_runtime/agent.rs`). The endpoint thread never touches owner state; it
 parses, enqueues, waits a bounded time and answers. Consequences:
 
-- **Consistency.** A locate, an actionability check and an injection planned in one request see
-  one committed tree (`semantics.locate` answers with the tree revision). The driver's composed
-  `element.tap` sends `element.actionability` and `input.inject` as one `batch` job when the path
-  is synthetic, so no frame runs between check and injection.
+- **Consistency.** A locate and an actionability check each read one committed tree
+  (`semantics.locate` answers with the tree revision). The protocol has no `batch` method: the
+  driver's composed `element.tap` sends `element.actionability`, then `input.inject` at the point
+  the facts named, and the stability check needs two frames anyway; an element that moved between
+  the two is what `receives` at the next check catches.
 - **Waits do not poll.** `wait.until` registers the condition with the owner. The owner evaluates
   it after each frame's semantics publish and after each input delivery, and answers when it holds or
   at the deadline. Live targets express the deadline in the runtime's `ClockSource`, so a test's
@@ -416,24 +417,24 @@ use flui_driver::{Driver, Launch, Locator, Role, expect};
 
 #[test]
 fn increments() -> flui_driver::Result<()> {
-    let mut driver = Driver::launch(Launch::from_env_or_headless(app))?; // FLUI_DRIVER_TARGET picks the target
-    let window = driver.main_window()?;
-    let button = window.locate(Locator::role(Role::Button).name("Increment"));
-    button.tap()?;                                            // session InputPolicy decides the path
+    let mut driver = Driver::launch(Launch::headless(app))?;  // or Launch::executable, cargo_example
+    let mut window = driver.main_window()?;
+    window.locate(Locator::role(Role::Button).name("Increment")).tap()?; // the session's policy picks the path
     expect(window.locate(Locator::identifier("counter"))).to_have_value("1")?;
-    window.capture_presented()?.region_of(&button)?.expect_baseline("increment-pressed")?;
     Ok(())
 }
 ```
+
+Captures and baselines (`capture_presented`, `expect_baseline`) join with the pixels task (FD10).
 
 - `Driver` owns one target and its connection. It is `Send` but not `Sync`; front ends wrap it in
   a worker when they need concurrency. Methods are synchronous. Lanes that need a thread affinity
   (UIA's COM apartment, AppKit's main thread) run on a lane worker thread the target owns, as
   desktop-mcp's `worker.rs` does today. A queued job is cancellable by one compare-and-swap.
-- `Window`, `Element` and `ElementLocator` are cheap handles borrowing the `Driver`
-  (`&mut Driver` for acts, `&Driver` for reads). Their methods mirror the method table one to one.
-  Each gesture method has a builder for options (`.via(InputPath::Os)`, `.force()`,
-  `.timeout(..)`).
+- `Window`, `Element` and `ElementLocator` are cheap handles borrowing the `Driver` mutably (a
+  read sends a request too). Their methods mirror the method table one to one. The options of a
+  gesture are set on the handle before it (`.via(InputPath::Os)`, `.require(..)`, `.force()`,
+  `.timeout(..)`, `.snapshot(..)`).
 - `expect(locator)` gives retrying assertions with a 5 s default (`to_have_value`, `to_have_name`,
   `to_be_checked`, `to_be_enabled`, `to_be_focused`, `to_have_count`, `to_be_gone`). Each is one
   `wait.until` with a `Matches` condition, never a client-side poll loop. `expect_soft`
@@ -450,21 +451,26 @@ fn increments() -> flui_driver::Result<()> {
 
 ```rust
 trait Connection: Send {
-    fn call(&mut self, method: &'static str, params: Value, deadline: Instant) -> Result<Reply>;
-    fn events(&mut self) -> &Receiver<Event>;
+    fn hello(&self) -> &HelloReply;
+    fn call(&mut self, call: Call) -> Result<Value>;   // Call: method, effect, params, budget
+    fn take_events(&mut self) -> (Vec<Event>, u64);    // and how many were dropped unread
 }
 ```
 
 Three implementations: `SocketConnection` (NDJSON plus blob frames over `interprocess`, or over
-the `adb`-forwarded TCP loopback), `BidiConnection` (`script.callFunction` and `script.message`)
-and `InProcess` (headless, calling the runtime's agent directly, feature `headless`). The trait is
-private: front ends see `Driver`.
+the `adb`-forwarded TCP loopback), `BidiConnection` (`script.callFunction` and `script.message`,
+with the Chrome lane) and `InProcess` (headless, feature `headless`). `InProcess` speaks the same
+lines: it runs the agent's own conversation (`flui_runtime::agent::Session`, through
+`flui_testing::HeadlessAgentService`, since `flui-runtime` admits only the hosts) on the headless
+app's thread, and counts a call's budget in the host's virtual frames. The trait is private:
+front ends see `Driver`.
 
 ### Coordinates (F9)
 
-The agent answers surface-logical rects plus `window.placement`: the surface origin in screen
-coordinates, the scale factor, and the monitor's device-pixel origin where the OS has one. Lanes
-map them with checked arithmetic in `f64`, refuse non-finite results and refuse a point outside
+The agent answers surface-logical rects plus `window.placement`: the surface's logical size and
+scale, and whether it is shown and focused. Where the surface sits on screen is the lane's to say
+(`Lane::locate_window`, which reads the placement's `position` where an app reports one), with the
+monitor's device-pixel origin where the OS has one. Lanes map them with checked arithmetic in `f64`, refuse non-finite results and refuse a point outside
 the window's visible surface as `outside_target`. Points are never clamped into it. Mapping and
 refusal sit in one pure module with a table test over extreme scales (0.5 to 8), negative monitor
 origins, fractional boundaries and RTL mirroring (an RTL window's rects are already physical-left
@@ -498,7 +504,8 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
    run *cannot verify* with `interrupted_by_user` (F11). A lane with no guard on a shared desktop
    refuses OS input with `not_supported{capability: "user_activity_guard"}` and names the
    isolation mode to use.
-3. **Isolation modes.** `IsolationMode` is part of the session and the report:
+3. **Isolation modes.** `Isolation` (`flui_protocol::session`) is part of the session and the
+   report:
 
 | Platform | Isolation mode | How the driver uses it |
 |---|---|---|
@@ -515,17 +522,21 @@ guard.
 ### Lanes
 
 ```rust
-trait Lane: Send {
-    fn capabilities(&self) -> LaneCapabilities;
-    fn inject(&mut self, seq: &ActionSequence, at: &Placement) -> Result<LaneEffect>;
+pub trait Lane: Send {
+    fn name(&self) -> &str;
+    fn capabilities(&self) -> LaneCapabilities;      // pointers, keys, isolation, guarded, fidelity
+    fn guard(&mut self) -> Option<&mut dyn ActivityGuard>;
+    fn locate_window(&mut self, placement: &Placement) -> Result<WindowGeometry>;
+    fn send(&mut self, event: &OsEvent) -> Result<()>; // one event: a single-step move, a press, a pause
     fn release_all(&mut self) -> Result<()>;
-    fn capture(&mut self, window: &OsWindow, region: Option<DeviceRect>) -> Result<Image>;
-    fn os_tree(&mut self, window: &OsWindow, query: &ReadQuery) -> Result<Tree>;
-    fn launch(&mut self, launch: &Launch, agent: &AgentLaunch) -> Result<OsProcess>;
 }
 ```
 
-A trait object, because the lane is chosen at run time from the target. Each lane is a module
+The driver turns an action sequence into `OsEvent`s (`steps::os_events`) and sends them through
+`lane::send_guarded`, which asks the guard before every event and releases on every exit, so the
+user-activity rule is held once, at the seam. Capture, the OS tree and launching through a lane
+join the trait with the tasks that bring them (FD10 and the OS-lane tasks). A trait object,
+because the lane is chosen at run time from the target. Each lane is a module
 behind `cfg(target_os)` or a cargo feature (`android`, `ios-sim`, `chrome`, `wayland`; the host
 desktop lane is default). An operation the lane lacks is `not_supported` naming it, before any
 event is sent.
@@ -800,7 +811,7 @@ pub enum Verdict { Pass, Fail, CannotVerify }
 ```
 
 The verdict is `Fail` if any check failed, else `CannotVerify` if any requested check could not
-run, else `Pass`. The report lists `checked` and `not_checked` (with reasons) for every check, so
+run or nothing was checked, else `Pass`. The report lists `checked` and `not_checked` (with reasons) for every check, so
 a pass always says what it covered. `Report::exit_code()` maps them to 0, 1 and 2. A report prints the same way everywhere: a
 human block plus one final line `FLUI_DRIVER_VERDICT=<pass|fail|cannot_verify>`, or `--json`. A
 scenario is `fn(&mut Driver, &mut Report) -> Result<()>`. An `Error` that `is_cannot_verify`
