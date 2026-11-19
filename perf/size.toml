@@ -3,11 +3,11 @@
 # `flui create` counter (host and wasm32) and of a `flui create --hot-reload` host.
 
 [size]
-counter_release_bytes = 22188760
-counter_wasm_bytes = 14176646
+counter_release_bytes = 22547760
+counter_wasm_bytes = 14517927
 crates_android = 220
 crates_linux = 272
-crates_macos = 205
+crates_macos = 204
 crates_wasm32 = 177
 crates_windows = 206
-hot_reload_host_release_bytes = 22342872
+hot_reload_host_release_bytes = 22703792
