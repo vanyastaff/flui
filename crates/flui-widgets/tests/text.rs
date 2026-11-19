@@ -405,6 +405,94 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
 // DefaultTextStyle (text.dart:55-136, consumed by Text.build :716-765)
 // ============================================================================
 
+/// A run with no direction of its own reads the ambient `Directionality`: in RTL
+/// its paragraph is right-to-left and start-aligned glyphs sit at the right
+/// edge, and flipping the ambient direction re-lays the same paragraph. An
+/// explicit direction wins over the ambient one.
+pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
+    use crate::common::tight;
+    use flui_foundation::TextDirection;
+    use flui_objects::RenderParagraph;
+    use flui_painting::typography::TextSpan;
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::{Directionality, RichText};
+
+    // The paragraph's direction and the left edge of its glyphs.
+    let read = |laid: &crate::common::LaidOut| {
+        let paragraph = laid.find_by_render_type("RenderParagraph");
+        laid.pipeline_owner().with(|owner| {
+            let render = owner
+                .render_tree()
+                .get(paragraph)
+                .and_then(|node| node.as_box())
+                .and_then(|node| node.render_object().downcast_ref::<RenderParagraph>())
+                .expect("a mounted paragraph");
+            let glyphs = render.painter().get_boxes_for_selection(0, 3);
+            let left = glyphs
+                .iter()
+                .map(|text_box| text_box.rect.left())
+                .fold(f64::INFINITY, f64::min);
+            (render.painter().text_direction(), left)
+        })
+    };
+    let under = |direction, view: BoxedView| Directionality::new(direction, view);
+
+    for (name, view) in [
+        ("Text", Text::new("abc").boxed()),
+        ("RichText", RichText::new(TextSpan::new("abc")).boxed()),
+    ] {
+        let mut laid = lay_out(under(TextDirection::Rtl, view.clone()), tight(400.0, 50.0));
+        let paragraph = laid.find_by_render_type("RenderParagraph");
+        let (direction, left) = read(&laid);
+        assert_eq!(
+            direction,
+            Some(TextDirection::Rtl),
+            "{name}: the ambient direction"
+        );
+        assert!(
+            left > 200.0,
+            "{name}: start-aligned glyphs at the right edge, got {left}"
+        );
+
+        laid.pump_widget(under(TextDirection::Ltr, view));
+        assert_eq!(
+            laid.find_by_render_type("RenderParagraph"),
+            paragraph,
+            "{name}: the paragraph is preserved"
+        );
+        let (direction, left) = read(&laid);
+        assert_eq!(
+            direction,
+            Some(TextDirection::Ltr),
+            "{name}: the flipped direction"
+        );
+        assert!(
+            left < 200.0,
+            "{name}: start-aligned glyphs at the left edge, got {left}"
+        );
+    }
+
+    for (name, view) in [
+        (
+            "Text",
+            Text::new("abc").direction(TextDirection::Ltr).boxed(),
+        ),
+        (
+            "RichText",
+            RichText::new(TextSpan::new("abc"))
+                .direction(TextDirection::Ltr)
+                .boxed(),
+        ),
+    ] {
+        let laid = lay_out(under(TextDirection::Rtl, view), tight(400.0, 50.0));
+        assert_eq!(
+            read(&laid).0,
+            Some(TextDirection::Ltr),
+            "{name}: an explicit direction wins over the ambient one"
+        );
+    }
+}
+
 /// An enclosing `DefaultTextStyle` styles a bare `Text` run: the ambient
 /// `font_size` shapes the glyphs, so the box grows with it (`text.dart:720`).
 ///
