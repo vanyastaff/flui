@@ -1479,10 +1479,14 @@ jobs:
 
       # The runner drives a browser through the driver its environment names;
       # without one it takes whatever driver the runner image has on PATH.
+      # Chrome for Testing at an exact release, bumped deliberately like the
+      # other tools: a stable release of the day could turn main red with no
+      # commit at fault.
       - name: Install Chrome + matching ChromeDriver
         id: chrome
         uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
         with:
+          chrome-version: 158.0.8127.36
           install-chromedriver: true
 
       - name: Write the headless Chrome capabilities
@@ -1517,11 +1521,13 @@ jobs:
           list=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown \
             | jq -r '
               .workspace_members as $members
+              | [.packages[] | select(.name == "wasm-bindgen-test") | .id] as $testing
               | [.resolve.nodes[]
                   | select(.id as $id | $members | index($id))
-                  # by package id, which a renamed dependency keeps
-                  | select(any(.deps[]; (.pkg | test("#wasm-bindgen-test@"))
-                      and any(.dep_kinds[]; .kind == "dev")))
+                  # the package a dependency resolves to, which a renamed
+                  # dependency keeps; its id is opaque, so joined, not parsed
+                  | select(any(.deps[]; .pkg as $dep
+                      | ($testing | index($dep)) and any(.dep_kinds[]; .kind == "dev")))
                   | .id] as $opted
               | .packages[]
               | select(.id as $id | $opted | index($id))
@@ -1562,23 +1568,13 @@ jobs:
       # this job's wasm dependency build, and the suite itself runs in about a
       # second.
       - name: cargo test -p flui-native --test web_browser (headless Chrome)
+        # a failure in the step above does not hide one here
+        if: ${{ !cancelled() }}
         env:
           CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
         run: |
           WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/webdriver.json" \
             cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked
-
-      # The system services' web providers (`flui-system`'s `web::tests`, in
-      # its lib test: they drive the providers' private seams) again with the
-      # crate's `testing` feature, which the step above leaves off: the
-      # feature changes what compiles on wasm32 (its `testing` module and the
-      # code gated on it), so this is the only build of that configuration.
-      - name: cargo test -p flui-system --lib (headless Chrome)
-        env:
-          CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
-        run: |
-          WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/webdriver.json" \
-            cargo test -p flui-system --target wasm32-unknown-unknown --lib --features testing --locked
 
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — source-derived native package selection, including

@@ -1266,7 +1266,7 @@ cargo clippy -p flui-native --all-targets --locked --target wasm32-unknown-unkno
 cargo check -p flui-hot-reload --locked --target wasm32-unknown-unknown --all-features             # same job
 cargo clippy -p flui --test wasm_consumer --locked --target wasm32-unknown-unknown -- -D warnings   # same job: an application on wasm32 (ADR-0086)
 cargo build -p flui-web-demo -p flui-painting-demo --locked --target wasm32-unknown-unknown       # same job: links the demos; an undefined symbol fails it
-cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32         # same job: one crate's line of the step that EXECUTES wasm (with the two browser steps after it)
+cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32         # same job: one crate's line of the step that EXECUTES wasm (flui-native's `web_browser` runs in its own step after it)
 cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
 cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo deny --workspace --locked check bans licenses sources   # deps job: cargo-deny bans / licenses / sources
