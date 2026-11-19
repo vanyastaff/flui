@@ -2483,6 +2483,136 @@ mod tests {
         }
     }
 
+    /// A slot whose frame was withheld, and whose sibling's frame then panicked and dropped the
+    /// painter both slots share, is retried in full over the new painter: the executor counts
+    /// the reset, which the host reads before the retry's frame and answers with a full repaint
+    /// instead of republishing the withheld version (ADR-0304 §7, ADR-0305 §7), and the retry
+    /// draws what a fresh renderer draws.
+    ///
+    /// Red-check: drop the count of the panicked render from the executor's `service` and the
+    /// reset goes unseen.
+    #[test]
+    fn a_withheld_slot_is_retried_in_full_after_its_siblings_panic() {
+        use crate::raster_executor::{SlotChange, SlotVisibility};
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let slots = [(); 2].map(|()| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(32, 16),
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            let SendReceipt::Configured(generation) = receipt else {
+                panic!("an attach of a positive size configures the slot: {receipt:?}");
+            };
+            (slot, address, generation)
+        });
+        let draw = |executor: &mut RasterExecutor<GpuContext>, (slot, address, generation)| {
+            sender
+                .send(frame(slot, address, generation, square_and_glyph()))
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            assert_eq!(settled.len(), 1, "the frame settles once");
+            settled[0].verdict
+        };
+        let show = |executor: &mut RasterExecutor<GpuContext>, slot, visibility| {
+            let _receipt = sender
+                .send(RasterCommand::Configure {
+                    slot,
+                    change: SlotChange::Shown(visibility),
+                })
+                .expect("the change is accepted");
+            let _ = executor.turn();
+        };
+        let [withheld, sibling] = slots;
+        for slot in slots {
+            assert_eq!(draw(&mut executor, slot), RasterVerdict::Presented);
+        }
+
+        show(&mut executor, withheld.0, SlotVisibility::Hidden);
+        assert_eq!(draw(&mut executor, withheld), RasterVerdict::NotShown);
+        let before = sender.painter_resets();
+        executor.backend_mut().panic_in_next_frame();
+        assert_eq!(draw(&mut executor, sibling), RasterVerdict::Retry);
+        drop(sender.take_failure(sibling.0));
+        assert_ne!(
+            sender.painter_resets(),
+            before,
+            "the sibling's panic is counted, so the host repaints the withheld window"
+        );
+
+        show(&mut executor, withheld.0, SlotVisibility::Shown);
+        assert_eq!(draw(&mut executor, withheld), RasterVerdict::Presented);
+        let retried = executor
+            .backend()
+            .read_slot(withheld.0)
+            .expect("the slot reads back");
+
+        // The same frame on an executor over a context of its own.
+        let (mut fresh, fresh_sender) = RasterExecutor::new(
+            context_or_skip().expect("a second context on the same adapter"),
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+            || {},
+        );
+        let slot = fresh_sender.mint_slot().expect("a slot id is left");
+        let receipt = fresh_sender
+            .send(RasterCommand::Attach {
+                slot,
+                address: withheld.1,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(32, 16),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let SendReceipt::Configured(generation) = receipt else {
+            panic!("an attach of a positive size configures the slot: {receipt:?}");
+        };
+        fresh_sender
+            .send(frame(slot, withheld.1, generation, square_and_glyph()))
+            .expect("the frame is accepted");
+        let _ = fresh.turn();
+        let oracle = fresh
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert!(
+            oracle
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| *pixel != [0, 0, 0, 0]),
+            "the frame draws something to compare"
+        );
+        assert_eq!(
+            retried, oracle,
+            "the retry draws what a fresh renderer draws"
+        );
+    }
+
     /// A lost device is rebuilt on the context's own instance: no instance is
     /// made, every slot keeps its target at its size, a frame stamped before
     /// the rebuild is refused on its generation, and the next frame draws

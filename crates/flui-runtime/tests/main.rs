@@ -130,6 +130,8 @@ mod input_tap;
 #[path = "contracts/io_runtime.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod io_runtime;
+#[path = "contracts/not_shown_retry.rs"]
+mod not_shown_retry;
 #[path = "contracts/numeric_text_answers.rs"]
 mod numeric_text_answers;
 #[path = "contracts/occluded_frame.rs"]
