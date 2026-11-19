@@ -781,7 +781,7 @@ impl<'v> Geometry<'v> {
                     let position = content
                         .effect_position(entry)
                         .expect("BUG: an effect entry is among its content's effects");
-                    let end = content.effect_scope(position).end;
+                    let end = content.effect_scope(position).end();
                     let from = all.partition_point(|index| *index < entry);
                     let to = all.partition_point(|index| index.get() < end);
                     (&all[from..to], position, Scope::EMPTY, entry.get())
@@ -803,7 +803,7 @@ impl<'v> Geometry<'v> {
         let scope = content.effect_scope(position);
         let all = content.structural();
         let from = all.partition_point(|index| *index <= entry);
-        let to = all.partition_point(|index| index.get() < scope.end);
+        let to = all.partition_point(|index| index.get() < scope.end());
         self.fold(
             key,
             &all[from..to],
@@ -1467,15 +1467,32 @@ impl<'v> Folded<'v> {
         bounds: Bounds,
         scratch: &mut Links<'v>,
     ) -> Reach {
+        match self.entry_chain(geometry, entry, scratch) {
+            Some(inner) => inner.outward(inner.mapped(bounds)),
+            None => self.outward(self.mapped(bounds)),
+        }
+    }
+
+    /// The chain the entries under `entry`'s parent land through: this one
+    /// with the effects above `entry` inside it, or `None` when no effect
+    /// above it changes this chain. [`Self::content_reach`] of it lands
+    /// bounds in that space. `scratch` is a buffer the caller keeps between
+    /// calls.
+    pub(crate) fn entry_chain(
+        &self,
+        geometry: Geometry<'v>,
+        entry: EntryIndex,
+        scratch: &mut Links<'v>,
+    ) -> Option<Self> {
         scratch.steps.clear();
         scratch.resolved.clear();
         geometry.content_links(self.key, entry, scratch, 0);
         if scratch.steps.is_empty() {
-            return self.outward(self.mapped(bounds));
+            return None;
         }
         let mut inner = self.clone();
         inner.extend(scratch);
-        inner.outward(inner.mapped(bounds))
+        Some(inner)
     }
 
     /// Where `bounds`, in this node's content space with no effect above
