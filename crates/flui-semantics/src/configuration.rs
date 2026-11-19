@@ -1706,9 +1706,10 @@ impl SemanticsConfiguration {
     ///   role on either side, none.
     /// - **Actions** — first wins per action: the receiver keeps its own
     ///   handler, and an action it lacks takes the first contributor's that
-    ///   defines it. Absorbing in tree order therefore routes a merged node's
-    ///   action to the first descendant that handles it, so a later
-    ///   descendant cannot take it over. Eligibility is filtered before
+    ///   defines it. Assembly absorbs in reading order (sort key, then tree
+    ///   order), so a merged node's action goes to the first descendant in
+    ///   that order that handles it, and a later one cannot take it over.
+    ///   Eligibility is filtered before
     ///   precedence: if `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary, and a
     ///   blocked one claims nothing.

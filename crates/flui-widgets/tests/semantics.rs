@@ -2343,39 +2343,72 @@ pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
     );
 }
 
-/// A `MergeSemantics` node's action runs the first handler in tree order: the
-/// merging node's own, else the first descendant's, never a later sibling's.
-pub(crate) fn a_merged_action_runs_the_first_handler_in_tree_order() {
+/// A `MergeSemantics` node's action runs the first handler in reading order
+/// (sort key, then tree order): the merging node's own, else the first
+/// descendant's that may act, never a later one's.
+pub(crate) fn a_merged_action_runs_the_first_handler_in_reading_order() {
+    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsSortKey};
     use flui_widgets::Column;
 
     let merged = |host: Semantics| MergeSemantics::new().child(host);
 
-    let tapper = |ran: &Rc<RefCell<Vec<&'static str>>>, name: &'static str| {
+    /// One tapping descendant: its name, a sort key, and whether it blocks
+    /// user actions.
+    #[derive(Clone, Copy)]
+    struct Tapper(&'static str, Option<f64>, bool);
+    let tapper = |ran: &Rc<RefCell<Vec<&'static str>>>, Tapper(name, order, blocked)| {
         let ran = Rc::clone(ran);
-        Semantics::new()
+        let mut config = SemanticsConfiguration::new();
+        if let Some(order) = order {
+            config.set_sort_key(SemanticsSortKey::new(order));
+        }
+        Semantics::from_configuration(config)
+            .block_user_actions(blocked)
             .on_click(move |_ctx| ran.borrow_mut().push(name))
             .child(SizedBox::new(40.0, 20.0))
     };
 
-    // No handler of its own: the first descendant's wins.
-    let ran = Rc::new(RefCell::new(Vec::new()));
-    let (laid, tree, node_id) = pump_labelled(merged(
-        host().child(Column::new((tapper(&ran, "first"), tapper(&ran, "second")))),
-    ));
-    assert!(
-        tree.find_by_label(LABEL)
-            .expect("node was located a moment ago")
-            .supports_action(Action::Click),
-        "both taps merge into the one node. Tree was:\n{}",
-        tree.describe()
-    );
-    laid.invoke_semantics_action(request(Action::Click, node_id, None))
-        .expect("the merged click resolves");
-    assert_eq!(
-        *ran.borrow(),
-        ["first"],
-        "the first descendant owns the tap"
-    );
+    for (first, second, runs) in [
+        // Unkeyed siblings read in tree order: the first one owns the tap.
+        (
+            Tapper("first", None, false),
+            Tapper("second", None, false),
+            "first",
+        ),
+        // A sort key reads before an unkeyed sibling, wherever it sits.
+        (
+            Tapper("first", None, false),
+            Tapper("keyed", Some(0.0), false),
+            "keyed",
+        ),
+        // A descendant that blocks user actions claims nothing.
+        (
+            Tapper("blocked", None, true),
+            Tapper("second", None, false),
+            "second",
+        ),
+    ] {
+        let ran = Rc::new(RefCell::new(Vec::new()));
+        let (laid, tree, node_id) = pump_labelled(merged(
+            host().child(Column::new((tapper(&ran, first), tapper(&ran, second)))),
+        ));
+        assert!(
+            tree.find_by_label(LABEL)
+                .expect("node was located a moment ago")
+                .supports_action(Action::Click),
+            "the taps merge into the one node. Tree was:\n{}",
+            tree.describe()
+        );
+        laid.invoke_semantics_action(request(Action::Click, node_id, None))
+            .expect("the merged click resolves");
+        assert_eq!(
+            *ran.borrow(),
+            [runs],
+            "{} then {}: the first in reading order that may act owns the tap",
+            first.0,
+            second.0
+        );
+    }
 
     // A handler of its own: it keeps the tap over its descendant's.
     let ran = Rc::new(RefCell::new(Vec::new()));
@@ -2383,7 +2416,7 @@ pub(crate) fn a_merged_action_runs_the_first_handler_in_tree_order() {
     let (laid, _tree, node_id) = pump_labelled(merged(
         host()
             .on_click(move |_ctx| own.borrow_mut().push("host"))
-            .child(tapper(&ran, "descendant")),
+            .child(tapper(&ran, Tapper("descendant", None, false))),
     ));
     laid.invoke_semantics_action(request(Action::Click, node_id, None))
         .expect("the merged click resolves");

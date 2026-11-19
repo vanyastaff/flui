@@ -39,11 +39,11 @@ Rejected drafts release topology buffers and retain opaque configuration
 ownership under ADR-0127 while preserving the primary validation error.
 Raw action ownership is pinned before folding, including blocked/custom actions
 and temporary ancestor descriptions, and survives a graft-to-rebuild fallback.
-This prevents an overwritten receiver or omitted contributor from destroying
+This prevents a skipped or omitted contributor from destroying
 captures before the complete pass verdict. Healthy temporary pins retire after
 publication and phase completion; no second geometry/topology cache is created.
 `harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks`
-checks forced merge, overwritten receiver callbacks, single and competing
+checks forced merge, a receiver's own callback beside skipped contributor callbacks, single and competing
 destructor risks, unchanged publication and retry.
 
 Render-subtree relocation is deliberately narrow: only `PipelineOwner<Idle>` can detach, attach, or release a

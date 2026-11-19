@@ -67,7 +67,7 @@ pipeline source. Hand-built render-boundary trees remain supported.
 A duplicate-key or exhaustion error remains authoritative during rejection.
 The pass pins registered standard and custom action handlers immediately after
 each returned node description or region contribution, including blocked actions
-and ancestor-context descriptions. Folding may overwrite the receiver's callback
+and ancestor-context descriptions. Folding may skip a contributor's callback (the first handler of an action wins)
 or discard a clipped contributor before validation; neither operation may release
 its last executable owner. Pins survive an abandoned graft proposal and its full
 rebuild fallback without retaining another topology or copying configuration data.

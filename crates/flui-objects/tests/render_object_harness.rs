@@ -6717,7 +6717,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callback
         assert_eq!(
             parent_dropped.load(Ordering::Relaxed),
             usize::from(matches!(host, Host::AuthoredMerge)),
-            "overwritten receiver callbacks are destroyed too"
+            "the merging receiver's own callback is destroyed too"
         );
         assert_eq!(semantics_content(&run), original);
         assert!(!run.owner().debug_doing_semantics());
