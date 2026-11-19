@@ -91,6 +91,7 @@ mod base {
         ) -> Result<(), ApplyError>;
         fn gesture_geometry(&self) -> GeometryAnswer;
         fn request_redraw(&self);
+        fn request_frame_at(&self, at: Option<crate::EventTime>);
         fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>>;
         fn surface_target(&self) -> Arc<dyn SurfaceTarget>;
         fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>>;
@@ -175,6 +176,10 @@ impl Base for Standalone {
     }
 
     fn request_redraw(&self) {}
+
+    /// Never asked: a standalone double's state is never occluded, so no
+    /// frame is owed to it while covered (ADR-0389).
+    fn request_frame_at(&self, _: Option<crate::EventTime>) {}
 
     fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {
         None
@@ -268,6 +273,10 @@ impl Base for Over {
 
     fn request_redraw(&self) {
         self.0.request_redraw();
+    }
+
+    fn request_frame_at(&self, at: Option<crate::EventTime>) {
+        self.0.request_frame_at(at);
     }
 
     fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {
@@ -657,6 +666,12 @@ impl<B: Base> PlatformWindow for MockWindow<B> {
     fn request_redraw(&self) {
         record_redraw(&self.redraw_requests, self.redraw_hook.as_deref());
         self.base.request_redraw();
+    }
+
+    /// What its base does: a standalone double is never asked, one over
+    /// another window hands the request to it.
+    fn request_frame_at(&self, at: Option<crate::EventTime>) {
+        self.base.request_frame_at(at);
     }
 
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {

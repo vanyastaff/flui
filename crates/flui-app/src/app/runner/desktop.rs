@@ -635,7 +635,8 @@ impl DesktopFrameDriver {
                 fallback_gate,
             );
             // Frames are off while no window is seen, but a covered window
-            // owing its kept surface a frame runs it (ADR-0357).
+            // whose timed request this wake serves runs the frame it owes its
+            // kept surface (ADR-0389).
             let action = wake_action(
                 ui_runtime.runs_frames(),
                 dirty,

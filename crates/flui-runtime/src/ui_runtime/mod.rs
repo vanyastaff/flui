@@ -33,6 +33,8 @@ mod presentation_lifecycle;
 use presentation_lifecycle::HostLifecycle;
 pub use presentation_lifecycle::SettledCloses;
 
+pub use crate::occluded_frame::OwedFrameRequest;
+
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 #[cfg(test)]

@@ -35,8 +35,9 @@ pub(super) enum WakeAction {
 
 /// Decides what a platform wake should do, given whether the runtime runs
 /// frames ([`UiRuntime::runs_frames`](flui_runtime::ui_runtime::UiRuntime::runs_frames):
-/// the scheduler's frames are enabled, ADR-0035, or a covered window owes its
-/// surface a frame, ADR-0357) alongside the dirty/frame-requested signals.
+/// the scheduler's frames are enabled, ADR-0035, or a frame of a covered
+/// window's own window serves the frame it owes its surface, ADR-0389)
+/// alongside the dirty/frame-requested signals.
 ///
 /// `frames_run == false` takes priority over everything else — even
 /// with visual `dirty` work pending, a backgrounded app services owner commands,
@@ -142,9 +143,11 @@ pub(super) fn frame_is_dirty(
     // none (a link opened, a tap's state change) runs at once. Due work (a
     // timer, a gesture deadline that came, a dropped frame's retry) runs on
     // the wake its deadline brings, as do inbox redraws and an armed recovery
-    // attempt. The due fallback itself is the last term — a deadline source
-    // has to be in the dirty predicate AND self-clearing, or its wake is a
-    // no-op.
+    // attempt. A covered window's owed frame that its own window's timed
+    // request served runs on that wake too, and only then: the attempt takes
+    // the serve, so a held one keeps no wake dirty (ADR-0389). The due
+    // fallback itself is the last term — a deadline source has to be in the
+    // dirty predicate AND self-clearing, or its wake is a no-op.
     let needs_redraw = needs_redraw && !fallback.pending;
     let input = pending.input && !fallback.pending;
     let tree = pending.tree && !(fallback.pending && fallback.holds_work);
@@ -153,6 +156,7 @@ pub(super) fn frame_is_dirty(
         || input
         || tree
         || pending.due
+        || pending.owed_frame
         || next_attempt_at.is_some()
         || fallback.due
 }
@@ -160,15 +164,17 @@ pub(super) fn frame_is_dirty(
 /// A UI runtime's pending work as the frame gate weighs it: its tree work
 /// (`UiRuntime::has_pending_tree_work`), which a frame that showed nothing
 /// and left some paces; its input work (`UiRuntime::has_pending_input_work`),
-/// which every frame continues and none owes before the next period; and its
+/// which every frame continues and none owes before the next period; its
 /// due work (`UiRuntime::has_pending_due_work`), which never waits behind a
-/// pacing deferral.
+/// pacing deferral; and a covered window's owed frame its own window served
+/// (`UiRuntime::owed_frame_served`), which runs on the wake that served it.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct PendingWork {
     pub(super) tree: bool,
     pub(super) input: bool,
     pub(super) due: bool,
+    pub(super) owed_frame: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -181,6 +187,7 @@ impl PendingWork {
             tree: ui_runtime.has_pending_tree_work(),
             input: ui_runtime.has_pending_input_work(),
             due: ui_runtime.has_pending_due_work(),
+            owed_frame: ui_runtime.owed_frame_served(),
         }
     }
 }
@@ -880,7 +887,8 @@ mod desktop_pacing_tests {
     ///
     /// Red-check: count tree work past a pending fallback that holds work and
     /// the leftover work is dirty on every wake; count input work and a held
-    /// press renders on every wake; mask due work and a timer waits.
+    /// press renders on every wake; mask due work and a timer waits; drop the
+    /// served owed frame and the wake its timed request brought is skipped.
     fn leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback() {
         use super::{PendingWork, frame_is_dirty};
         let tree = PendingWork {
@@ -893,6 +901,10 @@ mod desktop_pacing_tests {
         };
         let due_work = PendingWork {
             due: true,
+            ..PendingWork::default()
+        };
+        let owed_frame = PendingWork {
+            owed_frame: true,
             ..PendingWork::default()
         };
         let none = PendingWork::default();
@@ -912,6 +924,10 @@ mod desktop_pacing_tests {
         assert!(
             frame_is_dirty(false, false, due_work, None, holding),
             "due work runs on its own wake"
+        );
+        assert!(
+            frame_is_dirty(false, false, owed_frame, None, holding),
+            "a covered window's owed frame its timed request served runs on that wake"
         );
         assert!(
             frame_is_dirty(true, false, none, None, holding),

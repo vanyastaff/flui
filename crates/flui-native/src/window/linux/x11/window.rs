@@ -1905,6 +1905,11 @@ impl PlatformWindow for X11Window {
         self.mark_redraw();
     }
 
+    /// Never asked: the X server keeps no image of an obscured window
+    /// (`occluded_surface`), so a frame drawn while covered is clipped away
+    /// and none is owed (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         Arc::new(X11Redraw {
             redraw: Arc::clone(&self.redraw),
