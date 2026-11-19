@@ -118,8 +118,6 @@ flui-runtime = { path = "../flui-runtime" }
 # The integration tests build steps for a connection alone (`testing`).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-widgets = { path = ".", features = ["testing"] }
-# Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
-parking_lot = { workspace = true }
 # The async `Image` widget integration tests (`asset-images` feature).
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # `#[derive(Routable)]`: the pass and compile-fail suite (`tests/routable_ui.rs`)

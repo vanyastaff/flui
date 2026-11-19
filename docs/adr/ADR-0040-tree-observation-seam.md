@@ -37,8 +37,9 @@ What the decision builds on:
   `flui::reconcile` events (Mount, Unmount, Reuse, Reorder, Reparent). Whether that stream *is*
   the seam is §1's question.
 - **Ownership.** The element tree and its `BuildOwner` are UI runtime-owned (`WidgetsBinding` inside
-  each `UiRuntime`, ADR-0027); the render pipeline is process-hosted. Hence this ADR commits only to
-  element-tree observation.
+  each `UiRuntime`, ADR-0027). The render pipeline is owned per presentation: each presentation
+  holds its own `PipelineCell` on its one thread (ADR-0043), so its ownership does not match the
+  element tree's one-per-runtime slot. This ADR commits only to element-tree observation.
 - **DAG position.** `flui-view`, `flui-rendering` and `flui-scheduler` all sit above
   `flui-foundation`; a vocabulary all of them must speak can only live there.
 - **The true lifecycle funnels.** Fresh elements are minted in `ElementTree::insert`'s create path
@@ -283,10 +284,13 @@ counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Te
 
 ## Out of scope and follow-ups
 
-- **Render-phase observation** needs its own ADR first: the pipeline is process-hosted, so a slot
-  on `PipelineOwner` would be process-wide observation wearing a UI runtime-shaped API. The vocabulary
-  (defaulted methods carrying `RenderId` + a typed cause) is expected to carry over; placement is
-  the open decision.
+- **Render-phase observation** needs its own ADR first. Each presentation owns its pipeline
+  (`PipelineCell`, `!Send + !Sync`, ADR-0043), so an observer would follow the presentation, not the
+  UI runtime, and copying `BuildOwner`'s slot would not settle what is still open: which owner holds
+  the registration (`PresentationState`, `PipelineCell` or `PipelineOwner`), which phases may emit
+  and with which borrows released, how an event names its presentation, the render and semantics
+  event vocabulary, and whether observation is event-shaped, snapshot-shaped or both. The
+  vocabulary (defaulted methods carrying `RenderId` + a typed cause) is expected to carry over.
 - **Pull/query inspection** (walk the live tree, state versions, dependency edges, memory) is a
   different seam with a different hazard profile (re-entering UI runtime-owned state); it needs its own
   ADR. This event seam serves the structural subset only.
