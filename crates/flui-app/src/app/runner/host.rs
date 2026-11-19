@@ -335,22 +335,30 @@ pub(super) fn drive_native_text_sizing() {
     });
 }
 
+/// The window system this runner was built for: the browser's page on
+/// `wasm32`, the platform's window system elsewhere. The one place a runner
+/// states it; its close vetoes and its session end both read it.
+#[cfg(target_arch = "wasm32")]
+fn window_system() -> flui_runtime::owner_turn::WindowSystem {
+    flui_runtime::owner_turn::WindowSystem::Browser
+}
+
+/// The window system this runner was built for: its platform's.
+#[cfg(not(target_arch = "wasm32"))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the runner's windows are those of the platform it was built for"
+)]
+fn window_system() -> flui_runtime::owner_turn::WindowSystem {
+    flui_runtime::owner_turn::WindowSystem::Platform(flui_platform::TargetPlatform::current())
+}
+
 /// Every close the installed platform lets the application refuse
-/// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)), on the
-/// window system this runner was built for: the browser's page on `wasm32`,
-/// the platform's window system elsewhere.
+/// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)), in the
+/// runner's [`window_system`].
 fn close_vetoes() -> Vec<flui_view::CloseReason> {
-    #[cfg(target_arch = "wasm32")]
-    let windows = flui_runtime::owner_turn::WindowSystem::Browser;
-    #[cfg(not(target_arch = "wasm32"))]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the runner refuses the closes of the platform it was built for"
-    )]
-    let windows =
-        flui_runtime::owner_turn::WindowSystem::Platform(flui_platform::TargetPlatform::current());
     flui_runtime::owner_turn::close_vetoes(
-        windows,
+        window_system(),
         with_owner_platform(flui_native::OwnerPlatform::session_end_support),
     )
 }
@@ -510,6 +518,10 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
         session_end_platform(flui_native::OwnerPlatform::session_end_support)
     }
 
+    fn window_system(&self) -> flui_runtime::owner_turn::WindowSystem {
+        window_system()
+    }
+
     /// The operating system's: the platform ends the session on it.
     fn clock(&self) -> Rc<dyn flui_foundation::MonotonicClock> {
         Rc::new(flui_foundation::SystemClock)
@@ -551,7 +563,7 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
     #[cfg(not(target_arch = "wasm32"))]
     fn flush(
         &mut self,
-        deadline: std::time::Instant,
+        deadline: web_time::Instant,
     ) -> Option<flui_view::__runtime::WritesInFlight> {
         flush_for_session_end(deadline)
     }
@@ -559,7 +571,7 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
     #[cfg(target_arch = "wasm32")]
     fn flush(
         &mut self,
-        _deadline: std::time::Instant,
+        _deadline: web_time::Instant,
     ) -> Option<flui_view::__runtime::WritesInFlight> {
         None
     }
@@ -567,7 +579,7 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
     /// The window placements come after the application's own work and the
     /// documents: they take what the budget has left, never more than their
     /// own small bound, and what is lost is reported by name.
-    fn flush_host_state(&mut self, deadline: std::time::Instant) {
+    fn flush_host_state(&mut self, deadline: web_time::Instant) {
         #[cfg(all(
             not(target_os = "android"),
             not(target_os = "ios"),
@@ -603,7 +615,7 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
     fn hold_background(
         &mut self,
         writes: flui_view::__runtime::WritesInFlight,
-        until: std::time::Instant,
+        until: web_time::Instant,
     ) -> flui_platform::SessionEndAnswer {
         hold_for_background_writes(writes, until)
     }
@@ -612,7 +624,7 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
     fn hold_background(
         &mut self,
         _writes: flui_view::__runtime::WritesInFlight,
-        _until: std::time::Instant,
+        _until: web_time::Instant,
     ) -> flui_platform::SessionEndAnswer {
         flui_platform::SessionEndAnswer::Proceed
     }

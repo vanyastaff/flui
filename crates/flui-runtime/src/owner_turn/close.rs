@@ -183,21 +183,27 @@ impl CloseRequestHandler {
 
     /// The handler's answer to `request`; `None` when it panicked, which is
     /// contained and reported: a panic is no answer, and closing on a wrong
-    /// one destroys data.
+    /// one destroys data. The report's subscriber is user code too, and a
+    /// panic of it is contained here, so no caller of the router sees it.
     fn answer(&self, request: &CloseRequest) -> Option<CloseResponse> {
         let mut caught = FirstPanic::new();
         let answered = caught.contain(|| (self.0)(request));
         if let Some(payload) = caught.into_payload() {
-            tracing::error!(
-                address = ?request.address,
-                reason = ?request.reason,
-                panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
-                "close-request handler panicked; keeping the window open (a panicking handler \
-                 cannot be read as consent to discard unsaved work)"
-            );
+            let mut report = FirstPanic::new();
+            report.contain(|| {
+                tracing::error!(
+                    address = ?request.address,
+                    reason = ?request.reason,
+                    panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
+                    "close-request handler panicked; keeping the window open (a panicking \
+                     handler cannot be read as consent to discard unsaved work)"
+                );
+            });
             // Kept, not dropped: a payload whose destructor panics must not
-            // overturn the refusal on its way out.
+            // overturn the refusal on its way out. The report's panic, if
+            // any, has nowhere left to go.
             discard_payload(payload);
+            drop(report);
         }
         answered
     }
@@ -451,9 +457,9 @@ impl CloseRequestRouter {
     ///   hold for a decision does.
     ///
     /// A handler that panics keeps the window open and records nothing: a
-    /// panic is no answer to wait on. The panic is contained and reported; a
-    /// panic that escapes past it (the report's subscriber, the drop of a
-    /// handler that closed its own window) unwinds to the caller.
+    /// panic is no answer to wait on. The panic is contained and reported,
+    /// its report contained too; a panic past the handler's answer (the drop
+    /// of a handler that closed its own window) unwinds to the caller.
     pub fn consult(&self, address: PresentationAddress, reason: CloseReason) -> CloseResponse {
         let Some((handler, guard)) = self.answerers(address) else {
             return CloseResponse::Close;

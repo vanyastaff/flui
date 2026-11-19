@@ -631,8 +631,8 @@ pub(super) fn drive_program_quit() {
     let Some(consultation) = ingress.begin_quit_consult() else {
         return;
     };
-    // The consultation keeps a panic of the code it runs (a handler's drop,
-    // a subscriber of the router's report) and cancels the quit; the panic
+    // The consultation keeps a panic of the code it runs (the drop of a
+    // handler that closed its own window) and cancels the quit; the panic
     // resumes once the quit is finished and nothing of the host is held.
     let answered = consultation.ask(&router, registered);
     ingress.finish_quit_consult(answered).resume();

@@ -66,7 +66,7 @@ use flui_runtime::frame_failure::{
 };
 use flui_runtime::owner_turn::{
     CloseRequestHandler, CloseRequestRouter, CloseResponse, PreparedCloseRequest, QuitRequest,
-    SessionEnd,
+    SessionEnd, WindowSystem,
 };
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
@@ -110,6 +110,8 @@ pub struct HeadlessWindow {
     text_store_host: bool,
     gesture_preset: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
+    /// Whether the window plays a browser's page ([`HeadlessWindow::in_browser`]).
+    in_browser: bool,
     display: Mutex<Option<DisplayId>>,
     /// Whether the platform lets the window run, as the test last reported it.
     execution: Mutex<flui_platform::WindowExecutionState>,
@@ -308,6 +310,7 @@ impl HeadlessWindow {
             text_store_host: false,
             gesture_preset: flui_interaction::gesture::GestureSettings::default().into(),
             platform: flui_platform::TargetPlatform::Unknown,
+            in_browser: false,
             display: Mutex::new(None),
             execution: Mutex::new(flui_platform::WindowExecutionState::Running),
             occluded: Mutex::new(false),
@@ -396,6 +399,28 @@ impl HeadlessWindow {
     pub fn with_platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = platform;
         self
+    }
+
+    /// Play a browser's page instead of the window system of the platform
+    /// the window names, as a runner built for the web does, on whatever
+    /// target the test runs: no close is put to the window's guard or
+    /// handler (the browser never asks), and the session's end is the
+    /// page's `pagehide`, which delivers the notice alone. The window still
+    /// follows the conventions of its [platform](Self::with_platform), as a
+    /// page follows its host's.
+    #[must_use]
+    pub fn in_browser(mut self) -> Self {
+        self.in_browser = true;
+        self
+    }
+
+    /// The window system the window plays.
+    fn window_system(&self) -> WindowSystem {
+        if self.in_browser {
+            WindowSystem::Browser
+        } else {
+            WindowSystem::Platform(self.platform)
+        }
     }
 
     /// Open the window with `insets` already covering it, as a window a
@@ -1306,8 +1331,8 @@ impl HeadlessHost {
             host = host.with_flush_registry(flush.registry());
         }
         let close_vetoes = flui_runtime::owner_turn::close_vetoes(
-            flui_runtime::owner_turn::WindowSystem::Platform(platform),
-            Some(session_end_support_of(platform)),
+            window.window_system(),
+            Some(session_end_support_of(window.window_system())),
         );
         host = host.with_close_vetoes(&close_vetoes);
         let ui_runtime = UiRuntime::try_new(
@@ -3137,21 +3162,22 @@ fn register_close_requests(
     publication.publish(prepared);
 }
 
-/// How `platform` lets the session end, as its host reports it: `Background`
-/// on Android and iOS, `Delay` on Linux (logind), and `Hold` on Windows, macOS
-/// and the platform-neutral window, as the native headless platform does. A
-/// duration names the session end's budget.
-fn session_end_support_of(
-    platform: flui_platform::TargetPlatform,
-) -> flui_platform::SessionEndSupport {
+/// How `windows` let the session end, as their host reports it: `Background`
+/// on Android and iOS, `Delay` on Linux (logind), `Hold` on Windows, macOS
+/// and the platform-neutral window, as the native headless platform does, and
+/// `NotifyOnly` in a browser. A duration names the session end's budget.
+fn session_end_support_of(windows: WindowSystem) -> flui_platform::SessionEndSupport {
     use flui_platform::{SessionEndSupport, TargetPlatform};
-    match platform {
-        TargetPlatform::Android | TargetPlatform::iOS => SessionEndSupport::Background {
-            window: SESSION_END_BUDGET,
-        },
-        TargetPlatform::Linux => SessionEndSupport::Delay {
+    match windows {
+        WindowSystem::Platform(TargetPlatform::Android | TargetPlatform::iOS) => {
+            SessionEndSupport::Background {
+                window: SESSION_END_BUDGET,
+            }
+        }
+        WindowSystem::Platform(TargetPlatform::Linux) => SessionEndSupport::Delay {
             max: SESSION_END_BUDGET,
         },
+        WindowSystem::Browser => SessionEndSupport::NotifyOnly,
         _ => SessionEndSupport::Hold,
     }
 }

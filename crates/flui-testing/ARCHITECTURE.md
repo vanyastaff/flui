@@ -59,8 +59,11 @@ Its frame driver is `HeadlessHost`, which pumps a
   released inside a turn) owes the host a turn, so `time_to_next_frame` and
   `pump_until_settled` carry out what it lets through. The session end's
   budget runs on the host's manual clock (`SessionEndHost::clock`), so a slow
-  test spends none of it, and the vetoes follow the platform the window
-  names, whatever the build target. What the host supplies is what a step does to
+  test spends none of it; the vetoes and the session end follow the window
+  system the window plays (its platform's, or a browser's page with
+  `HeadlessWindow::in_browser`), whatever the build target
+  (`a_window_playing_the_browser_ends_its_session_as_a_page`). What the host
+  supplies is what a step does to
   its own state (`HeadlessSessionEnd` in `src/host/turn.rs`): the notice
   reaches its one runtime, `Detached` goes through
   `UiRuntime::update_host_lifecycle`, the flush runs the queued writes without

@@ -91,6 +91,7 @@ impl QuitRequest {
     /// and not being asked already. The host asks it with no borrow of its
     /// own state held ([`QuitConsultation::ask`]) and hands the answer back
     /// to [`finish_consult`](Self::finish_consult).
+    #[must_use = "a begun consultation is asked and finished, or the quit stays consulting"]
     pub fn begin_consult(&mut self) -> Option<QuitConsultation> {
         if self.0 != QuitState::Asked {
             return None;
@@ -105,7 +106,9 @@ impl QuitRequest {
     /// its panic is still handed on to resume.
     pub fn finish_consult(&mut self, answered: QuitAnswered) -> QuitFinished {
         let QuitAnswered { answer, panic } = answered;
-        let verdict = if self.0 == QuitState::Consulting {
+        let consulting = self.0 == QuitState::Consulting;
+        let cancelled_by_panic = consulting && answer == QuitAnswer::Panicked;
+        let verdict = if consulting {
             match answer {
                 QuitAnswer::Cancelled | QuitAnswer::Panicked => {
                     self.0 = QuitState::None;
@@ -123,7 +126,11 @@ impl QuitRequest {
         } else {
             QuitVerdict::Unchanged
         };
-        QuitFinished { verdict, panic }
+        QuitFinished {
+            verdict,
+            cancelled_by_panic,
+            panic,
+        }
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its
@@ -189,8 +196,10 @@ impl QuitRequest {
 /// A quit's consultation of its presentations, which only
 /// [`QuitRequest::begin_consult`] hands out: [`ask`](Self::ask) consumes it
 /// into the [`QuitAnswered`] that [`QuitRequest::finish_consult`] alone
-/// takes, so a host cannot ask without finishing or finish without asking.
-/// Nothing runs when one is dropped.
+/// takes, so a host cannot finish without asking. Nothing runs when one is
+/// dropped: a consultation dropped unasked leaves the quit consulting, and
+/// no longer asked, until the application asks for it again
+/// ([`QuitRequest::ask`]).
 #[derive(Debug)]
 #[must_use = "a begun consultation is asked, and its answer finished with QuitRequest::finish_consult"]
 pub struct QuitConsultation(());
@@ -203,11 +212,10 @@ impl QuitConsultation {
     /// A refusal that recorded nothing (a handler that panicked, a
     /// presentation without a guard) cancels the quit.
     ///
-    /// A panic that escapes a presentation's question (the report of its
-    /// handler's panic reaching a log subscriber that fails, the drop of a
-    /// handler that closed its own window) is kept, not unwound: that
+    /// A panic that escapes a presentation's question (the drop of a handler
+    /// that closed its own window, the guard's signal) is kept, not unwound: that
     /// presentation gave no answer, the quit is cancelled as
-    /// [`QuitFinished::panicked`], every later presentation is still asked,
+    /// [`QuitFinished::cancelled_by_panic`], every later presentation is still asked,
     /// and the host resumes the first such panic once it has finished the
     /// consultation ([`QuitFinished::resume`]).
     ///
@@ -269,6 +277,7 @@ impl std::fmt::Debug for QuitAnswered {
 #[must_use = "a finished consultation's verdict is followed and its panic resumed"]
 pub struct QuitFinished {
     verdict: QuitVerdict,
+    cancelled_by_panic: bool,
     panic: FirstPanic,
 }
 
@@ -278,12 +287,12 @@ impl QuitFinished {
         self.verdict
     }
 
-    /// Whether a panic is kept: read before any [`contain`](Self::contain),
-    /// whether the quit was cancelled because code the consultation ran
-    /// panicked, not because a presentation refused it.
+    /// Whether this finish cancelled the quit because code the consultation
+    /// ran panicked, not because a presentation refused it: fixed when the
+    /// consultation finished, whatever [`contain`](Self::contain) keeps since.
     #[must_use]
-    pub fn panicked(&self) -> bool {
-        self.panic.is_held()
+    pub fn cancelled_by_panic(&self) -> bool {
+        self.cancelled_by_panic
     }
 
     /// Run `follow_up`, the host's code after the consultation (following the
@@ -303,7 +312,8 @@ impl std::fmt::Debug for QuitFinished {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuitFinished")
             .field("verdict", &self.verdict)
-            .field("panicked", &self.panic.is_held())
+            .field("cancelled_by_panic", &self.cancelled_by_panic)
+            .field("panic_kept", &self.panic.is_held())
             .finish()
     }
 }

@@ -4,6 +4,9 @@
   test answers a window's close requests with the application's `CloseRequestHandler`, asked
   after the window's close guard for a close or a quit and first at the session's end, as a
   runner asks it.
+- `HeadlessWindow::in_browser` and `TestWindow::in_browser`: a headless window plays a browser's
+  page on any build target, where no close is put to its guard or handler and the session's end
+  delivers its notice alone.
 
 ### Changed
 

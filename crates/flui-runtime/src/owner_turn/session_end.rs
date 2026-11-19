@@ -7,7 +7,6 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use flui_foundation::panic::{FirstPanic, discard_payload, payload_text};
@@ -18,18 +17,16 @@ use flui_platform::{
 };
 use flui_view::CloseReason;
 
-use super::{CloseRequestRouter, CloseResponse};
+use super::{CloseRequestRouter, CloseResponse, WindowSystem};
 
 /// The least of the session end's budget that must be left for a step that
 /// runs application code to start, so the flush keeps time to write
 /// (ADR-0260, "the 1 s threshold").
-#[cfg(not(target_arch = "wasm32"))]
 const SESSION_END_USER_CODE_THRESHOLD: Duration = Duration::from_secs(1);
 
 /// How long the framework's part of a session end may take where the platform
 /// lets it end with `support`: [`SESSION_END_BUDGET`](flui_view::__runtime::SESSION_END_BUDGET),
 /// or less where the platform waits a shorter bounded time.
-#[cfg(not(target_arch = "wasm32"))]
 fn session_end_budget(support: Option<SessionEndSupport>) -> Duration {
     use flui_view::__runtime::SESSION_END_BUDGET;
     match support {
@@ -66,8 +63,8 @@ impl NoticeDelivery {
 #[non_exhaustive]
 pub enum SessionEndStep {
     /// A window asked at the query whether the session may end: what its
-    /// question ran past its close handler's own answer (the handler's drop,
-    /// the report of its panic).
+    /// question ran past its close handler's own answer (the drop of a
+    /// handler that closed its own window).
     Query,
     /// A subscriber of a session-end notice.
     Notice,
@@ -91,6 +88,12 @@ pub trait SessionEndHost {
     /// How the platform lets the session end; `None` while the host has no
     /// platform to ask.
     fn support(&self) -> Option<SessionEndSupport>;
+
+    /// The window system the host's windows are drawn in: a browser's page
+    /// ends its session as `pagehide`, with the notice alone. A host states
+    /// it (a runner built for the web, a headless window playing the
+    /// browser); nothing here reads the build target.
+    fn window_system(&self) -> WindowSystem;
 
     /// The clock the session end's budget runs on: the operating system's on
     /// a runner, the test's manual clock on a headless host, where a slow run
@@ -128,12 +131,12 @@ pub trait SessionEndHost {
     /// application code; the writes still in flight then, if any.
     fn flush(
         &mut self,
-        deadline: std::time::Instant,
+        deadline: web_time::Instant,
     ) -> Option<flui_view::__runtime::WritesInFlight>;
 
     /// Write what the host keeps for itself (a runner's window placements)
     /// by `deadline`, after the application's own work and the documents.
-    fn flush_host_state(&mut self, deadline: std::time::Instant) {
+    fn flush_host_state(&mut self, deadline: web_time::Instant) {
         let _ = deadline;
     }
 
@@ -152,7 +155,7 @@ pub trait SessionEndHost {
     fn hold_background(
         &mut self,
         writes: flui_view::__runtime::WritesInFlight,
-        until: std::time::Instant,
+        until: web_time::Instant,
     ) -> SessionEndAnswer;
 
     /// Drop the hold an earlier trip's session end took: this one answers for
@@ -239,7 +242,8 @@ impl SessionEnd {
     /// while their destructors can start within the budget and none is on
     /// the stack. On a phone ([`Background`](SessionEndSupport::Background))
     /// the windows stay open and the writes still in flight hold the process
-    /// ([`SessionEndHost::hold_background`]). On the web, which grants no
+    /// ([`SessionEndHost::hold_background`]). In a browser's page
+    /// ([`WindowSystem::Browser`], as the host names it), which grants no
     /// synchronous budget, the notice is all.
     pub fn answer(
         &self,
@@ -347,8 +351,8 @@ impl SessionEnd {
     /// a later handler that finishes the work and closes a window that
     /// already refused releases it through that close.
     ///
-    /// A panic that escapes one window's question (its handler's drop, a
-    /// subscriber of the router's report) is no answer, so that window
+    /// A panic that escapes one window's question (the drop of a handler that
+    /// closed its own window) is no answer, so that window
     /// refuses, as a handler's own panic does; every later window is still
     /// asked, and the first such panic goes to [`SessionEndHost::contained`].
     fn refuse(&self, host: &mut dyn SessionEndHost, request: &SessionEndRequest) {
@@ -410,9 +414,12 @@ fn deliver_contained(
     delivery
 }
 
-/// The session's end happens (ADR-0260 §3, §4, §6).
-#[cfg(not(target_arch = "wasm32"))]
+/// The session's end happens (ADR-0260 §3, §4, §6), in the window system the
+/// host names.
 fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
+    if host.window_system() == WindowSystem::Browser {
+        return end_page(host);
+    }
     let support = host.support();
     let clock = host.clock();
     let deadline = clock.now() + session_end_budget(support);
@@ -463,8 +470,7 @@ fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
 /// The web's `pagehide`: the browser grants no synchronous budget and the
 /// page may come back from its cache, so the notice is delivered and the
 /// flush registry keeps writing on its own; nothing waits, closes or quits.
-#[cfg(target_arch = "wasm32")]
-fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
+fn end_page(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
     let _delivery = deliver_contained(host, &HostNotice::SessionEnded, &|| true);
     SessionEndAnswer::Proceed
 }

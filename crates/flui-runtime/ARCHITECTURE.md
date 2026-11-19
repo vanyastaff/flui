@@ -206,9 +206,11 @@ host.
   question at the query and the host's report of a contained panic included.
   A host supplies only what a step does to its own state, through
   `SessionEndHost`, whose methods take no borrow of the book, so application
-  code they run may re-enter it. `close_vetoes` says which closes a host's
+  code they run may re-enter it. The host names its `WindowSystem`
+  (`SessionEndHost::window_system`): in a browser's page the end is
+  `pagehide`, the notice alone. `close_vetoes` says which closes a host's
   `WindowSystem` lets the application refuse, from the window system and the
-  session-end support the host names and never from the build target, and
+  session-end support the host names; neither reads the build target, and
   `BuiltIns::primary_selection` registers the primary selection only on
   Linux.
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer

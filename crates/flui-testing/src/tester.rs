@@ -86,6 +86,8 @@ pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
+    /// Whether the window plays a browser's page ([`TestWindow::in_browser`]).
+    in_browser: bool,
     storage: WindowStorage,
     registrations: AppRegistrations,
     close_request_handler: Option<CloseRequestHandler>,
@@ -98,6 +100,7 @@ impl std::fmt::Debug for TestWindow {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("platform", &self.platform)
+            .field("in_browser", &self.in_browser)
             .field("storage", &self.storage)
             .field("overrides", &overrides)
             .field("plugins", &plugins)
@@ -126,6 +129,7 @@ impl TestWindow {
             width,
             height,
             platform: None,
+            in_browser: false,
             storage: WindowStorage::Fresh,
             registrations: AppRegistrations::new(),
             close_request_handler: None,
@@ -172,6 +176,15 @@ impl TestWindow {
     #[must_use]
     pub fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    /// Play a browser's page, on whatever target the test runs
+    /// ([`HeadlessWindow::in_browser`]): no close is put to the window's
+    /// guard or handler, and the session's end delivers its notice alone.
+    #[must_use]
+    pub fn in_browser(mut self) -> Self {
+        self.in_browser = true;
         self
     }
 
@@ -453,6 +466,9 @@ impl Tester {
         let mut headless = HeadlessWindow::new(config.width, config.height).with_text_input();
         if let Some(platform) = config.platform {
             headless = headless.with_platform(platform);
+        }
+        if config.in_browser {
+            headless = headless.in_browser();
         }
         if let Some(handler) = config.close_request_handler.clone() {
             headless = headless.with_close_request_handler(handler);
@@ -1351,9 +1367,11 @@ impl Tester {
     /// [`Block`](flui_platform::SessionEndAnswer::Block) on a phone while
     /// writes are in flight.
     ///
-    /// On `wasm32` the session's end is the browser's `pagehide`, as a
-    /// runner answers it there: the notice alone reaches the application,
-    /// and the window stays open with nothing written and nothing closed.
+    /// In a window that plays a browser's page
+    /// ([`TestWindow::in_browser`]), on any build target, the session's end
+    /// is its `pagehide`, as a runner built for the web answers it: the
+    /// notice alone reaches the application, and the window stays open with
+    /// nothing written and nothing closed.
     pub fn end_session(&mut self) -> flui_platform::SessionEndAnswer {
         self.host
             .end_session(flui_platform::SessionEndPhase::Ending)

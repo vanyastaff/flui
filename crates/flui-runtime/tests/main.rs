@@ -158,6 +158,8 @@ mod recovered_panic_context;
 mod render_view_lending;
 #[path = "contracts/session_end_report.rs"]
 mod session_end_report;
+#[path = "contracts/session_end_steps.rs"]
+mod session_end_steps;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]

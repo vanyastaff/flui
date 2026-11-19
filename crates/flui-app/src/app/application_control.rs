@@ -618,7 +618,7 @@ impl Ingress {
     pub(crate) fn finish_quit_consult(&self, answered: QuitAnswered) -> QuitFinished {
         let mut state = self.state.lock();
         let mut finished = state.quit.finish_consult(answered);
-        let (verdict, panicked) = (finished.verdict(), finished.panicked());
+        let (verdict, panicked) = (finished.verdict(), finished.cancelled_by_panic());
         // A panic of the follow-up or of a subscriber stays behind the
         // consultation's own, so the first failure is the one resumed.
         finished.contain(|| self.follow_quit(state, verdict));
@@ -787,6 +787,88 @@ mod tests {
         }
     }
 
+    /// Panics as it drops, as a handler's capture whose destructor fails does.
+    struct FailsToDrop;
+
+    impl Drop for FailsToDrop {
+        fn drop(&mut self) {
+            panic!("the handler's capture failed to drop");
+        }
+    }
+
+    /// A reopen held while a quit is asked is shown once that quit's
+    /// consultation panics: the panicked answer cancels the quit, its
+    /// follow-up releases the reopen, the cancel is reported as a panic and
+    /// not as a refusal, and the panic resumes once, with the ingress free.
+    ///
+    /// Fails against a finish that does not follow a panicked answer's
+    /// verdict: the reopen stays held and no window is asked for.
+    fn a_panicked_quit_consultation_releases_the_held_reopen() {
+        use flui_runtime::owner_turn::{
+            CloseRequestHandler, CloseRequestRouter, CloseResponse, PreparedCloseRequest,
+        };
+
+        let (ingress, _owner) = ingress();
+        ingress
+            .handle()
+            .request_quit()
+            .expect("the quit is accepted");
+        assert!(ingress.request_native_show(), "the reopen is taken");
+        assert!(!ingress.is_opening(), "the reopen waits for the quit");
+
+        let router = Rc::new(CloseRequestRouter::new());
+        let window: Rc<dyn flui_platform::PlatformWindow> =
+            Rc::new(flui_runtime::testing::TestWindow::new());
+        let at = PresentationAddress {
+            ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+            presentation_id: flui_foundation::PresentationId::new(1),
+        };
+        let own_router = Rc::downgrade(&router);
+        let capture = FailsToDrop;
+        let prepared = PreparedCloseRequest::new(
+            at,
+            &window,
+            Some(CloseRequestHandler::new(move |_| {
+                let _ = &capture;
+                let router = own_router.upgrade().expect("the router asks");
+                drop(router.take(at));
+                CloseResponse::Close
+            })),
+        );
+        router
+            .publication(&prepared)
+            .expect("a fresh router has room")
+            .publish(prepared);
+
+        let consultation = ingress.begin_quit_consult().expect("the quit is asked");
+        let answered = consultation.ask(&router, [at]);
+        let (finished, log) =
+            flui_testing::log_capture::capture(|| ingress.finish_quit_consult(answered));
+        assert_eq!(finished.verdict(), QuitVerdict::Abandoned);
+        assert!(finished.cancelled_by_panic());
+        assert!(
+            log.records()
+                .iter()
+                .any(|record| record.message.contains("quit panicked")),
+            "the cancel is reported as a panic"
+        );
+        assert!(
+            !log.records()
+                .iter()
+                .any(|record| record.message.contains("refused the quit")),
+            "not as a refusal"
+        );
+        assert!(!ingress.is_quit_pending(), "the quit is cancelled");
+        assert!(ingress.is_opening(), "the held reopen asks for the window");
+        let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finished.resume()))
+            .expect_err("the consultation's panic resumes");
+        assert_eq!(
+            resumed.downcast_ref::<&str>().copied(),
+            Some("the handler's capture failed to drop")
+        );
+        ingress.close();
+    }
+
     #[test]
     fn application_control_admission_matrix() {
         crate::table_test::run_table(
@@ -800,6 +882,10 @@ mod tests {
                     "main_window_worker_admission_races_autoexit_without_lost_accepted_intent",
                     main_window_worker_admission_races_autoexit_without_lost_accepted_intent
                         as fn(),
+                ),
+                (
+                    "a_panicked_quit_consultation_releases_the_held_reopen",
+                    a_panicked_quit_consultation_releases_the_held_reopen as fn(),
                 ),
             ],
         );

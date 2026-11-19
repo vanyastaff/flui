@@ -8044,9 +8044,16 @@ GPU-память простаивающего или невидимого окн
   (`a_session_end_spends_the_budget_on_the_hosts_clock`, на `Instant::now` падает); закрытие
   сеанса из headless спрашивает обработчик первым
   (`a_session_end_close_asks_the_handler_before_the_guard`, с guard первым падает); вопрос окна в
-  запросе конца сеанса сдержан по окну, а отчёт хоста о панике — после её сохранения
-  (`a_session_end_query_contains_each_windows_question`); ответ `close_vetoes` не зависит от цели
-  сборки (`close_vetoes_follow_the_window_system_named`). Нативное окно (`flui::native`)
+  запросе конца сеанса сдержан по окну, а отчёт хоста о панике сдержан на шве
+  (`session_end_steps`), headless сохраняет панику шага до лога
+  (`a_session_end_steps_panic_is_kept_before_the_host_logs_it`), отчёт роутера о панике
+  обработчика сдержан внутри роутера (`the_router_contains_the_report_of_a_handlers_panic`),
+  отказ runner при панике опроса выхода отпускает отложенный reopen
+  (`a_panicked_quit_consultation_releases_the_held_reopen`); ответ `close_vetoes` и конец сеанса
+  не зависят от цели сборки, а следуют `WindowSystem` хоста
+  (`close_vetoes_follow_the_window_system_named`,
+  `a_window_playing_the_browser_ends_its_session_as_a_page`,
+  `a_page_ends_its_session_with_the_notice_alone`). Нативное окно (`flui::native`)
   по-прежнему проверяется на `flui_app::testing`: его тип принадлежит `flui-app`.
 - [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
   `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;

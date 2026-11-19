@@ -95,8 +95,10 @@ impl HeadlessHost {
     /// a runner does when its budget is spent (no `Detached`, and the host
     /// left as it is, not retired).
     ///
-    /// On `wasm32` the session's end is the browser's `pagehide`, as a
-    /// runner answers it there: `Ending` delivers the notice alone, and
+    /// Where the primary window plays a browser's page
+    /// ([`HeadlessWindow::in_browser`](super::HeadlessWindow::in_browser)),
+    /// on any build target, the session's end is its `pagehide`, as a runner
+    /// built for the web answers it: `Ending` delivers the notice alone, and
     /// nothing hears `Detached`, is written or closes.
     ///
     /// # Panics
@@ -116,14 +118,14 @@ impl HeadlessHost {
         answer
     }
 
-    /// How the platform the primary window names lets the session end, as
-    /// its host reports it: `Background` on Android and iOS, `Delay` on
-    /// Linux (logind), and `Hold` on Windows, macOS and the platform-neutral
-    /// window, as the native headless platform does. A duration names the
-    /// session end's budget.
+    /// How the window system the primary window plays lets the session end,
+    /// as its host reports it: `Background` on Android and iOS, `Delay` on
+    /// Linux (logind), `Hold` on Windows, macOS and the platform-neutral
+    /// window, as the native headless platform does, and `NotifyOnly` in a
+    /// browser. A duration names the session end's budget.
     #[must_use]
     pub fn session_end_support(&self) -> SessionEndSupport {
-        session_end_support_of(self.primary.window.platform)
+        session_end_support_of(self.primary.window.window_system())
     }
 
     /// How many times the application let the platform's session end go on:
@@ -253,7 +255,7 @@ impl HeadlessHost {
         let router: Rc<CloseRequestRouter> = Rc::clone(&self.close_requests);
         let answered = consultation.ask(&router, open);
         let mut finished = self.quit.finish_consult(answered);
-        let (verdict, panicked) = (finished.verdict(), finished.panicked());
+        let (verdict, panicked) = (finished.verdict(), finished.cancelled_by_panic());
         self.follow_quit(verdict);
         if verdict == QuitVerdict::Abandoned {
             // A subscriber is user code: its panic stays behind the first.
@@ -311,6 +313,11 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
         Some(self.host.session_end_support())
     }
 
+    /// The one the primary window plays.
+    fn window_system(&self) -> flui_runtime::owner_turn::WindowSystem {
+        self.host.primary.window.window_system()
+    }
+
     /// The test's: only the test spends the budget.
     fn clock(&self) -> Rc<dyn flui_foundation::MonotonicClock> {
         Rc::new(self.host.clock.clone())
@@ -366,7 +373,7 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
     /// The queued writes run, then what every document still owes; a write
     /// the storage holds is not waited for, since nothing on this thread can
     /// finish it, and is handed back as in flight.
-    fn flush(&mut self, _deadline: std::time::Instant) -> Option<WritesInFlight> {
+    fn flush(&mut self, _deadline: flui_scheduler::Instant) -> Option<WritesInFlight> {
         self.host.write_published();
         self.host
             .flush
@@ -389,7 +396,7 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
     fn hold_background(
         &mut self,
         _writes: WritesInFlight,
-        _until: std::time::Instant,
+        _until: flui_scheduler::Instant,
     ) -> SessionEndAnswer {
         self.host.background_hold = true;
         SessionEndAnswer::Block
