@@ -1650,8 +1650,9 @@ jobs:
     timeout-minutes: 30
     env:
       # The cargo-xwin release, which fixes the default MSVC version and so
-      # names the SDK cache.
-      XWIN_VERSION: 0.23.1
+      # names the SDK cache. Not `XWIN_VERSION`: cargo-xwin reads that as its
+      # own `--xwin-version`, the MSVC manifest's version.
+      CARGO_XWIN_VERSION: 0.23.1
     strategy:
       fail-fast: false
       matrix:
@@ -1709,7 +1710,7 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-xwin@${{ env.XWIN_VERSION }}
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
 
       - name: Name the MSVC CRT and Windows SDK directory
         if: matrix.target == 'x86_64-pc-windows-msvc'
@@ -1726,7 +1727,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.XWIN_CACHE_DIR }}
-          key: cargo-xwin-${{ env.XWIN_VERSION }}-${{ runner.os }}
+          key: cargo-xwin-${{ env.CARGO_XWIN_VERSION }}-${{ runner.os }}
 
       - name: cargo clippy for the target
         run: |
