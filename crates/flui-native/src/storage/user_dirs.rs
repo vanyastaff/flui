@@ -8,8 +8,8 @@ use super::DataStore;
 /// The current user's data directories ([`data_dirs`](super::data_dirs)):
 /// where every host but Android keeps an application's data, in the
 /// process's container when it runs in one. Natively the folders are found
-/// on the store's IO thread, at its first call: the owner thread reads no
-/// file for them.
+/// at the store's first call, on the thread the host runs it on: the owner
+/// thread reads no file for them.
 #[derive(Debug)]
 pub struct UserDataDirs;
 

@@ -294,10 +294,34 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_user_database_record_is_read_whole_from_a_buffer_too_small() {
-        assert_eq!(
-            super::user_database_home_from(1),
-            super::user_database_home_from(1024)
-        );
+        let whole = super::user_database_home_from(1024);
+        assert_eq!(super::user_database_home_from(1), whole);
+        match passwd_records_the_test_user() {
+            Some(true) => assert!(whole.is_some(), "a recorded user's home is found"),
+            Some(false) => eprintln!(
+                "is_some skipped: the test's uid has no record in /etc/passwd, so none is found"
+            ),
+            None => eprintln!(
+                "is_some skipped: the user database here is not /etc/passwd, which the test reads"
+            ),
+        }
+    }
+
+    /// Whether `/etc/passwd` records the test's uid; `None` where the user
+    /// database is not that file (macOS) or cannot be read.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn passwd_records_the_test_user() -> Option<bool> {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+        let uid = std::process::Command::new("id").arg("-u").output().ok()?;
+        let uid = String::from_utf8(uid.stdout).ok()?;
+        let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+        Some(
+            passwd
+                .lines()
+                .any(|line| line.split(':').nth(2) == Some(uid.trim())),
+        )
     }
 
     #[test]

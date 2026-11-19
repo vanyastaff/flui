@@ -12,7 +12,10 @@
 //! not started replaces it, and the older request resolves to
 //! [`StorageError::Superseded`]. Accepted work is never dropped silently: if
 //! the IO pool refuses the task, or shuts down before running it, every
-//! value it held resolves to the refusal.
+//! value it held that had not started resolves to the refusal. A call that
+//! started answers its own outcome, its reply carried with it, so a write
+//! the pool's shutdown lets finish on its blocking thread answers that it
+//! landed, never `Cancelled`.
 //!
 //! [`publish`]: Storage::publish
 
@@ -59,51 +62,65 @@ struct Write {
     reply: oneshot::Sender<Result<StoredVersion, StorageError>>,
 }
 
-/// What `$store` (an `Arc<DataStore>`) answers to `$call`: on native targets
-/// the blocking call runs off the IO pool's workers ([`off_io_workers`]) and
-/// this IO task awaits it; on wasm32 the call is a future, awaited here.
-macro_rules! answer {
-    ($io:expr, $store:ident => $call:expr) => {{
+/// Send on `$reply` what `$store` (an `Arc<DataStore>`) answers to `$call`:
+/// on native targets the blocking call runs off the IO pool's workers, its
+/// reply with it ([`answer_off_io_workers`]), and this IO task awaits it; on
+/// wasm32 the call is a future, awaited here.
+macro_rules! reply_with {
+    ($io:expr, $reply:expr, $store:ident => $call:expr) => {{
         #[cfg(not(target_arch = "wasm32"))]
-        let answer = {
+        {
             let $store = Arc::clone(&$store);
-            off_io_workers($io, move || $call).await
-        };
+            answer_off_io_workers($io, $reply, move || $call).await;
+        }
         #[cfg(target_arch = "wasm32")]
-        let answer = {
+        {
             // The page's store answers in a later task: no thread to leave.
             let _ = $io;
-            $call.await
-        };
-        answer
+            let _ = $reply.send($call.await);
+        }
     }};
 }
 
-/// Run the store's blocking `call` off the IO pool's workers: on the IO
-/// runtime's blocking threads, so a call that waits (a store whose first
-/// call waits for another instance's migration, a slow disk) holds none of
-/// the workers HTTP, image loads and background work share. A host's own IO
-/// pool (an embedder's, a test's deterministic one) has no such threads, and
-/// the call runs in the IO task there. A panic in `call` resumes in the IO
-/// task, as it would have run there.
+/// Run the store's blocking `call` off the IO pool's workers and send its
+/// answer on `reply` from where it ran: on the IO runtime's blocking
+/// threads, so a call that waits (a store whose first call waits for
+/// another instance's migration, a slow disk) holds none of the workers
+/// HTTP, image loads and background work share.
+///
+/// The reply travels with the call: a call that started answers what it
+/// did, even when this IO task is cancelled meanwhile (the pool shutting
+/// down), and only a call that never started answers
+/// [`StorageError::Cancelled`]: the pool already shutting down or gone, or
+/// its runtime dropping the call before it ran. A host's own IO pool (an
+/// embedder's, a test's deterministic one) has no blocking threads, and the
+/// call runs in this task there. A panic in `call` drops its reply
+/// (`Cancelled`) and resumes in this task.
 #[cfg(not(target_arch = "wasm32"))]
-async fn off_io_workers<T: Send + 'static>(
+async fn answer_off_io_workers<T: Send + 'static>(
     io: &Weak<ExecutionServices>,
+    reply: oneshot::Sender<Result<T, StorageError>>,
     call: impl FnOnce() -> Result<T, StorageError> + Send + 'static,
-) -> Result<T, StorageError> {
-    let runtime = io
-        .upgrade()
-        .and_then(|services| services.io_runtime().ok().flatten());
-    let Some(runtime) = runtime else {
-        return call();
+) {
+    let runtime = match io.upgrade().map(|services| services.io_runtime()) {
+        Some(Ok(Some(runtime))) => runtime,
+        Some(Ok(None)) => {
+            let _ = reply.send(call());
+            return;
+        }
+        // Shutting down, unavailable or gone: the call never starts.
+        Some(Err(_)) | None => {
+            let _ = reply.send(Err(StorageError::Cancelled));
+            return;
+        }
     };
-    match runtime.spawn_blocking(call).await {
-        Ok(answer) => answer,
-        Err(failed) => match failed.try_into_panic() {
-            Ok(payload) => std::panic::resume_unwind(payload),
-            // The runtime shut down before the call ran.
-            Err(_) => Err(StorageError::Cancelled),
-        },
+    let running = runtime.spawn_blocking(move || {
+        let _ = reply.send(call());
+    });
+    if let Err(failed) = running.await
+        && let Ok(payload) = failed.try_into_panic()
+    {
+        std::panic::resume_unwind(payload);
     }
 }
 
@@ -131,7 +148,7 @@ impl Storage for HostStorage {
         let io = Weak::clone(&self.io);
         let name = *name;
         let task: IoFuture = Box::pin(async move {
-            let _ = reply.send(answer!(&io, store => store.read(&name, limit)));
+            reply_with!(&io, reply, store => store.read(&name, limit));
         });
         match self.spawn(task) {
             Ok(()) => Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }),
@@ -208,7 +225,7 @@ impl Storage for HostStorage {
         let io = Weak::clone(&self.io);
         let name = *name;
         let task: IoFuture = Box::pin(async move {
-            let _ = reply.send(answer!(&io, store => store.copy_aside(&name)));
+            reply_with!(&io, reply, store => store.copy_aside(&name));
         });
         match self.spawn(task) {
             Ok(()) => Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }),
@@ -259,14 +276,15 @@ impl LaneWriter {
         while let Some(Write { bytes, mode, reply }) = self.take_next() {
             // Shutdown can begin while this lane drains: what it accepted
             // before then resolves `Cancelled` rather than writing after it.
-            let result = if admitting(&self.io) {
+            // A write that started answers its own outcome, this task
+            // cancelled or not.
+            if admitting(&self.io) {
                 let store = &self.store;
                 let name = self.name;
-                answer!(&self.io, store => store.write(&name, &bytes, mode))
+                reply_with!(&self.io, reply, store => store.write(&name, &bytes, mode));
             } else {
-                Err(StorageError::Cancelled)
-            };
-            let _ = reply.send(result);
+                let _ = reply.send(Err(StorageError::Cancelled));
+            }
         }
     }
 
@@ -298,7 +316,9 @@ impl Drop for LaneWriter {
             }
         }
         // Cancelled after the handoff, before the lane emptied: release it,
-        // and fail the value it still held rather than leave it waiting.
+        // and fail the value it still held, which never started, rather than
+        // leave it waiting. A write under way when the task was cancelled
+        // carries its own reply, and answers its outcome.
         release_lane(&self.lanes, &self.name, StorageError::Cancelled);
     }
 }
@@ -609,6 +629,14 @@ mod tests {
                     "a_store_call_that_waits_holds_no_io_worker",
                     a_store_call_that_waits_holds_no_io_worker,
                 ),
+                (
+                    "a_write_the_shutdown_lets_finish_answers_what_landed",
+                    a_write_the_shutdown_lets_finish_answers_what_landed,
+                ),
+                (
+                    "a_call_on_a_pool_shutting_down_never_starts",
+                    a_call_on_a_pool_shutting_down_never_starts,
+                ),
             ],
         );
     }
@@ -621,6 +649,8 @@ mod tests {
         release: std::sync::mpsc::Sender<()>,
         started: std::sync::mpsc::Receiver<()>,
         finds: Arc<std::sync::atomic::AtomicUsize>,
+        /// The roaming root the find answers, where `NOTES` lands.
+        roaming: std::path::PathBuf,
         _roots: tempfile::TempDir,
     }
 
@@ -635,6 +665,7 @@ mod tests {
             };
             std::fs::create_dir_all(&dirs.roaming).expect("the found root");
             std::fs::write(dirs.roaming.join("notes"), b"kept").expect("a kept value");
+            let roaming = dirs.roaming.clone();
             let (release, released) = std::sync::mpsc::channel::<()>();
             let released = std::sync::Mutex::new(released);
             let (starting, started) = std::sync::mpsc::channel();
@@ -657,9 +688,75 @@ mod tests {
                 release,
                 started,
                 finds,
+                roaming,
                 _roots: roots,
             }
         }
+    }
+
+    /// A call whose IO task runs once the pool shuts down never starts: it
+    /// answers `Cancelled` and runs nowhere, on the pool's workers least of
+    /// all.
+    fn a_call_on_a_pool_shutting_down_never_starts() {
+        let services = Arc::new(ExecutionServices::with_defaults());
+        services.shutdown(std::time::Instant::now());
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let running = Arc::clone(&ran);
+        let (reply, answer) = tokio::sync::oneshot::channel::<Result<(), StorageError>>();
+        pollster::block_on(super::answer_off_io_workers(
+            &Arc::downgrade(&services),
+            reply,
+            move || {
+                running.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            },
+        ));
+        assert_eq!(
+            pollster::block_on(answer).expect("answered"),
+            Err(StorageError::Cancelled)
+        );
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::Relaxed),
+            "the call never ran"
+        );
+    }
+
+    /// The pool shuts down while a write runs (its store's find stalls until
+    /// the shutdown has cancelled the IO task): the write the shutdown lets
+    /// finish answers that it landed, and the disk holds what it answers.
+    fn a_write_the_shutdown_lets_finish_answers_what_landed() {
+        use std::time::Duration;
+
+        let services = Arc::new(ExecutionServices::with_defaults());
+        let StalledStore {
+            store,
+            release,
+            started,
+            finds: _,
+            roaming,
+            _roots,
+        } = StalledStore::new();
+        let storage = super::host_storage(store, Arc::downgrade(&services));
+        let written = storage.publish(&NOTES, b"new".to_vec(), WriteMode::Replace);
+        started
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the write started");
+        let cancelled = services.cancellation_root().clone();
+        let releaser = std::thread::spawn(move || {
+            // The IO task is cancelled before the write may go on.
+            pollster::block_on(cancelled.cancelled());
+            let _ = release.send(());
+        });
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(10));
+        releaser.join().expect("the write was let go");
+        let answer = pollster::block_on(written);
+        let disk = std::fs::read(roaming.join("notes")).expect("the value file");
+        assert_eq!(
+            answer,
+            Ok(StoredVersion::of_bytes(b"new")),
+            "a started write answers its outcome, never `Cancelled`"
+        );
+        assert_eq!(disk, b"new", "and the disk holds what it answered");
     }
 
     /// Stores whose first calls stall (another instance holds each one's
@@ -678,6 +775,7 @@ mod tests {
             release: release_one,
             started: one_started,
             finds: one_finds,
+            roaming: _,
             _roots: _one_roots,
         } = one;
         let StalledStore {
@@ -685,6 +783,7 @@ mod tests {
             release: release_other,
             started: other_started,
             finds: _,
+            roaming: _,
             _roots: _other_roots,
         } = other;
         let storage = super::host_storage(store, Arc::downgrade(&services));

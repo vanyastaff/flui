@@ -6273,9 +6273,12 @@ and the package identity): a Flatpak's `~/.var/app/<id>/data` even without
 `XDG_DATA_HOME`, the macOS App Sandbox's container even without `HOME`, a
 packaged Windows application's `LocalState` and `RoamingState` instead of the
 `%APPDATA%` copy Windows would redirect it to (ADR-0380 §4). The host's store
-(`DataStore::of_process`) finds them at its first call that can read the
-container, on its IO thread, since a Flatpak's description is a file (one out of
-reach refuses the call and is read again at the next); a packaged application's
+(`DataStore::of_process`, `storage::process_store`) finds them at its first call
+that can read the container, on the thread the host runs that call on (never
+the owner thread; `flui-app`'s storage host uses the IO runtime's blocking
+threads), since a Flatpak's description is a file. One find runs at a time, the
+calls that arrive meanwhile share its outcome, and one refused (a description
+out of reach) answers all of them, the next call reading again; a packaged application's
 store from before it was packaged is copied over then, once, within
 `MAX_MIGRATED_FILES` and `MAX_MIGRATED_BYTES`, into a staging folder made with
 `create_dir` and renamed into place whole, after the staging folders an earlier
@@ -6285,8 +6288,8 @@ lock file in the package's `LocalState` (`migration_lock`) held for the sweep,
 the copy and the rename (its folder made first); an instance that finds it held
 waits for it, however long the holder's copy takes (the system releases a
 crashed holder's lock), then judges the root again and takes the one the holder
-put in place. The wait blocks: one find runs at a time (`ProcessStore`'s
-`finding`), every call that arrives meanwhile waits for its answer, and
+put in place. The wait blocks: one find runs at a time (`process_store`'s
+`FindState`), every call that arrives meanwhile waits for its outcome, and
 `flui-app`'s storage host runs the store's calls on the IO runtime's blocking
 threads, so the wait holds none of the IO workers other work shares; what a
 stalled holder still holds back is that instance's storage answers

@@ -37,6 +37,8 @@ mod file_store;
 mod os_error;
 #[cfg(target_arch = "wasm32")]
 mod page_store;
+#[cfg(not(target_arch = "wasm32"))]
+mod process_store;
 
 mod headless;
 mod memory_store;
@@ -57,6 +59,8 @@ pub(crate) use headless::HeadlessData;
 pub(crate) use memory_store::MemoryStore;
 #[cfg(target_arch = "wasm32")]
 pub use page_store::FileStore;
+#[cfg(not(target_arch = "wasm32"))]
+use process_store::ProcessStore;
 #[cfg(any(
     windows,
     target_os = "macos",
@@ -94,8 +98,8 @@ pub struct DataDirs {
 /// store's keys.
 ///
 /// Reads the file system (a Flatpak's `/.flatpak-info`): off the owner
-/// thread only. A host's store resolves it on its IO thread
-/// ([`DataStore::of_process`]).
+/// thread only. A host's store resolves it at its first call, which the
+/// host runs on a thread of its own ([`DataStore::of_process`]).
 #[must_use]
 pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -120,7 +124,8 @@ pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
 /// write to (headless, unless a test gives it a root).
 ///
 /// Its calls are the [`FileStore`]'s: blocking on native targets, so the
-/// host runs them on an IO thread, and futures on wasm32.
+/// host runs them on threads it shares with nothing else (`flui-app`'s
+/// storage host: the IO runtime's blocking threads), and futures on wasm32.
 #[derive(Debug)]
 pub struct DataStore {
     backing: Backing,
@@ -141,79 +146,6 @@ fn base_dirs() -> container::BaseDirs {
     container::BaseDirs {
         data: dirs::data_dir(),
         local: dirs::data_local_dir(),
-    }
-}
-
-/// A store under the process's own data folders, found at its first call,
-/// on the IO thread that makes it: the container is read then
-/// (`/.flatpak-info`, the package identity), and a packaged application's
-/// store from before it was packaged is copied into the package's folders
-/// once.
-#[cfg(not(target_arch = "wasm32"))]
-struct ProcessStore {
-    app: AppDataDir,
-    /// How the store is found: [`process_store`], or a test's stand-in.
-    find: FindStore,
-    /// Held while `find` runs: calls that arrive meanwhile wait for its
-    /// answer instead of each finding (and migrating) on their own.
-    finding: std::sync::Mutex<()>,
-    store: std::sync::OnceLock<Option<FileStore>>,
-}
-
-/// What finds a [`ProcessStore`]'s store, on the IO thread.
-#[cfg(not(target_arch = "wasm32"))]
-type FindStore = Box<dyn Fn(&AppDataDir) -> std::io::Result<Option<FileStore>> + Send + Sync>;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl std::fmt::Debug for ProcessStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProcessStore")
-            .field("app", &self.app)
-            .field("store", &self.store)
-            .finish_non_exhaustive()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ProcessStore {
-    /// A store of `app` that `find` finds at its first call.
-    fn new(app: AppDataDir, find: FindStore) -> Self {
-        Self {
-            app,
-            find,
-            finding: std::sync::Mutex::new(()),
-            store: std::sync::OnceLock::new(),
-        }
-    }
-
-    /// The store, found at the first call that could read the container,
-    /// one find at a time: a call that arrives while another finds waits
-    /// for that answer. A platform that names no data folder leaves every
-    /// call refused, and a container that could not be read refuses the
-    /// calls that waited for it and is read again at the next.
-    fn store(&self) -> Result<&FileStore, flui_platform::StorageError> {
-        let found = if let Some(found) = self.store.get() {
-            found
-        } else {
-            // A find that panicked left nothing behind: the next one runs.
-            let _finding = self
-                .finding
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(found) = self.store.get() {
-                found
-            } else {
-                let found = (self.find)(&self.app).map_err(|error| {
-                    flui_platform::StorageError::Inaccessible { kind: error.kind() }
-                })?;
-                self.store.get_or_init(|| found)
-            }
-        };
-        found
-            .as_ref()
-            .ok_or(flui_platform::StorageError::Inaccessible {
-                kind: std::io::ErrorKind::NotFound,
-            })
     }
 }
 
@@ -407,9 +339,9 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_platform::{AppDataDir, StorageError, StorageName};
+    use flui_platform::{AppDataDir, StorageName};
 
-    use super::{DataDirs, DataStore, FileStore, ProcessStore, container};
+    use super::{DataDirs, DataStore, FileStore, container};
 
     /// Two calls arrive while another instance holds the migration's lock:
     /// the second waits for the first's find instead of migrating too, and
@@ -471,47 +403,6 @@ mod tests {
         assert!(
             new_roaming.join("notes").exists(),
             "the store was copied over"
-        );
-    }
-
-    #[test]
-    fn a_container_that_could_not_be_read_is_read_again_at_the_next_call() {
-        let scratch = tempfile::tempdir().expect("a scratch folder");
-        let dirs = DataDirs {
-            roaming: scratch.path().join("roaming"),
-            local: scratch.path().join("local"),
-        };
-        let asked = Arc::new(AtomicUsize::new(0));
-        let counting = Arc::clone(&asked);
-        let store = ProcessStore::new(
-            AppDataDir::try_new("app").expect("a name"),
-            Box::new(move |_| {
-                if counting.fetch_add(1, Ordering::Relaxed) == 0 {
-                    Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
-                } else {
-                    Ok(Some(FileStore::new(dirs.clone())))
-                }
-            }),
-        );
-        assert!(
-            matches!(
-                store.store(),
-                Err(StorageError::Inaccessible {
-                    kind: std::io::ErrorKind::PermissionDenied,
-                    ..
-                })
-            ),
-            "the first call is refused with the read's error"
-        );
-        assert!(
-            store.store().is_ok(),
-            "the next call reads the container again"
-        );
-        assert!(store.store().is_ok());
-        assert_eq!(
-            asked.load(Ordering::Relaxed),
-            2,
-            "a container read is kept once it answered"
         );
     }
 }

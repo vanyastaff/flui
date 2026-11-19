@@ -492,7 +492,8 @@ pub trait Platform: sealed::Sealed + 'static {
     /// Every host but Android and headless answers with a store under the
     /// current user's data directories, its container's for a sandboxed
     /// process ([`crate::storage::DataStore::of_process`]): they are found at
-    /// the store's first call, on its IO thread, and a platform that names
+    /// the store's first call, on the thread the host runs it on, never the
+    /// owner thread, and a platform that names
     /// none refuses each call (`StorageError::Inaccessible`), so such a host
     /// never answers `None`. Android answers with its process's own folders,
     /// and `None` only when the Activity reports no internal data path;

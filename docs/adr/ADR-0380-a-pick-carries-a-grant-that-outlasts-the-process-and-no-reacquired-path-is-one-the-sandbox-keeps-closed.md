@@ -153,7 +153,9 @@ download or a fresher grant of another kind (`MalformedAnswer`), whichever backe
 the macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application Support`; a packaged
 Windows application's `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`. A
 host's store (`DataStore::of_process`) finds them at its first call that can read the
-container, on its IO thread, never on the owner thread. A packaged application whose new root
+container, on the thread the host runs the call on, never the owner thread nor a shared IO
+worker; one find runs at a time, and the calls that arrive meanwhile share its outcome, a
+refusal included. A packaged application whose new root
 holds no store and whose redirected `%APPDATA%` location holds one has it copied over once,
 within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the
 root, made with `create_dir` (one already at the name is an error, never a shared folder) and
@@ -237,7 +239,9 @@ manifest does not expose.
   `a_second_instance_waits_for_the_lock_and_takes_the_root_put_in_place`,
   `the_lock_is_taken_where_local_state_is_not_made_yet`,
   `calls_that_arrive_while_the_store_is_found_wait_for_one_find_and_one_migration`,
-  `a_store_call_that_waits_holds_no_io_worker` (`flui-app`'s `host_storage_matrix`),
+  `the_calls_that_waited_for_a_failed_find_share_its_refusal`,
+  `a_store_call_that_waits_holds_no_io_worker` and
+  `a_write_the_shutdown_lets_finish_answers_what_landed` (`flui-app`'s `host_storage_matrix`),
   `a_new_root_that_cannot_be_read_stays_the_store`,
   `a_staging_folder_already_there_is_an_error_not_a_shared_folder`,
   `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made`,
