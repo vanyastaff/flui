@@ -478,3 +478,55 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
         }
     }
 }
+
+/// A direction flip that moves a `FittedBox`'s directional alignment moves the
+/// child's published semantics with its pixels: the fitted transform places
+/// both, so the flip re-places the child's node from the left edge to the
+/// right one.
+pub(crate) fn a_fitted_child_moved_by_a_direction_flip_moves_its_semantics() {
+    use crate::media_query_fields::StaticChild;
+    use flui_painting::BoxFit;
+    use flui_view::ViewExt;
+    use flui_widgets::{FittedBox, Semantics};
+
+    let fitted = || {
+        StaticChild {
+            inner: FittedBox::new()
+                .fit(BoxFit::None)
+                .alignment(AlignmentDirectional::TOP_START)
+                .child(
+                    Semantics::new()
+                        .label("fitted")
+                        .child(SizedBox::new(40.0, 40.0)),
+                )
+                .boxed(),
+        }
+        .boxed()
+    };
+    let mut laid = lay_out(
+        Directionality::new(TextDirection::Ltr, fitted()),
+        tight(200.0, 200.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    let left = |laid: &crate::common::LaidOut| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("fitted")
+            .expect("the fitted child is published");
+        tree.window_bounds(&node).expect("the node has bounds").x0
+    };
+    assert_eq!(
+        left(&laid),
+        0.0,
+        "LTR: the child's node is at the left edge"
+    );
+
+    laid.pump_widget(Directionality::new(TextDirection::Rtl, fitted()));
+    laid.tick();
+    assert_eq!(
+        left(&laid),
+        160.0,
+        "RTL: the child's node moved to the right edge"
+    );
+}
