@@ -587,20 +587,31 @@ changes are mutated and judged by the tests that exercise them:
 
 ```bash
 mkdir -p ../mutants-run
-git diff "$(git merge-base HEAD origin/main)" HEAD -- . ':(exclude,glob)**/tests/**' > ../mutants-run/change.diff
+test -z "$(git status --porcelain)"   # the run reads the committed head, nothing else
+printf '%s %s\n' "$(git rev-parse HEAD)" "$(date +%s)" > ../mutants-run/head
+git diff "$(git merge-base HEAD origin/main)" HEAD -- ':(glob)**/src/**/*.rs' > ../mutants-run/change.diff
 cargo heli exec -- cargo gamma run --workspace --in-diff ../mutants-run/change.diff \
-  --test-package flui-testing --test-package flui-widgets   # each crate whose tests exercise the change
+  --test-package flui-testing --test-package flui-widgets \
+  --exclude-test nested_scroll_ui --exclude-test routable_ui
 cp target/cargo-gamma/gamma-report.json ../mutants-run/
 ```
 
-The diff leaves out test files: they are not mutated, and cargo-gamma refuses a diff that names
-Rust source it does not mutate rather than report a score for part of the change. The directory
-goes to the review workflow as `mutants`, which uses the run only when `change.diff` is that same
-diff of the reviewed head and the report was written after it. Each survivor reaches the review's
-judge, who confirms it as a missing assertion or rejects it as an equivalent mutant from the code.
-A run over a change of a few hundred lines takes minutes to a quarter of an hour on the dev host
-(16 minutes for 30 mutants of a 13-file change); a trybuild target among the test packages makes
-it take hours, so a run leaves it out with `--exclude-test`.
+`--test-package` names each crate whose tests exercise the change. The diff names only files
+under a `src/`: cargo-gamma mutates the sources of library and binary targets and refuses a diff
+that names any other Rust file (a test, a bench, an example, a build script) rather than report a
+score for part of the change. A trybuild target among the test packages runs rustc once per case
+for every mutant and turns minutes into hours; `gamma.toml` skips the trybuild tests it names, and
+cargo-gamma's warning names the targets left (here flui-widgets' `nested_scroll_ui` and
+`routable_ui`), which `--exclude-test` leaves out.
+
+The directory goes to the review workflow as `mutants`, which uses the run only when `head` names
+the reviewed head, the report started after `head` was written, and `change.diff` is that head's
+diff over the same paths. Each mutant that survived, and each that no test reached, goes to the
+review's judge, who confirms it as a missing test or rejects it as an equivalent mutant or code
+built only for another target; a mutant the tests timed out or ran out of memory on is listed
+for the author. On the dev host the 13-file change of PR 2555 gave 30 mutants and took
+16 minutes. The workflow's own branches are checked by
+`node .claude/workflows/review-before-merge.test.mjs`.
 
 ## Fuzzing
 

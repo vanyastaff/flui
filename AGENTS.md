@@ -302,9 +302,9 @@ with an answer you can point to in the code; the reviewers ask the same ones.
    clocks and 0- versus 1-based indexes match.
 10. **The test fails without the change.** Each changed line of Rust is broken on purpose and
     some test must notice: a cargo-gamma run over the change's own lines
-    ([testing](docs/testing.md#a-changes-own-lines)). A mutant that survives is a line no test
-    pins: add the test through the public API, or show from the code that the mutation changes
-    nothing. The run's directory goes to the review as the workflow's `mutants`. A fix of a
+    ([testing](docs/testing.md#a-changes-own-lines)). A mutant that survives, or that no test
+    reaches, is a line no test pins: add the test through the public API, or show from the code
+    that the mutation changes nothing or the line is built only for another target. The run's directory goes to the review as the workflow's `mutants`. A fix of a
     regression is also taken out by hand (a WIP commit, then the fix reverted in the working
     tree) to see its new test fail.
 11. **Repository rules.** A generic-return call names its target type, a new `pub` item has a
@@ -344,9 +344,9 @@ change read it to break it, all at once, and a judge decides what the author mus
 - **One job.** A reader assumes the change has a defect of its kinds and looks for the input,
   the order of events or the state that shows it, in the code around the diff as much as in the
   changed lines. It does not fix, does not build, and does not sum up what is good.
-- **The mutation run is evidence beside them.** Each mutant of item 10 that no test caught goes
-  to the judge as a finding, when the run was made over this exact diff; the readers' tests lens
-  looks for what a one-line mutation cannot show.
+- **The mutation run is evidence beside them.** Each mutant of item 10 that survived or that no
+  test reached goes to the judge as a finding, when the run read the reviewed head; the readers'
+  tests lens looks for what a one-line mutation cannot show.
 - **A finding is a failure scenario**, in the form [`REVIEW.md`](REVIEW.md) asks for: the state,
   the operation, the wrong result, the `file:line`. A reader that finds none names the scenarios
   it tried.

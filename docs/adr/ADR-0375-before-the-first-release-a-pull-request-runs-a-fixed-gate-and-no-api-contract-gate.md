@@ -77,7 +77,7 @@ readers of "Before a merge" check a change against them.
 - Good, because every pull request runs the same five jobs, none on a nightly toolchain.
 - Good, because main loses a gate that kept it red for hours on findings no pull request saw.
 - Bad, because a change to the facade's surface shows only in the code diff: no snapshot lists
-  what it adds or removes, and the reader has to see it.
+  what it adds or removes, and the readers have to see it.
 - Bad, because a public signature can name an upstream type ADR-0089 §2 forbids, or a new
   `Send`/`Sync` position can appear, and nothing fails.
 - Bad, because a trybuild expectation, a size, a miri finding or a perf count a pull request moves
