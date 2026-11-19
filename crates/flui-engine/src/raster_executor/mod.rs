@@ -56,7 +56,7 @@ pub use command::{
 pub use device_health::DeviceHealth;
 pub use device_request::{DeviceAnswered, DeviceTicket};
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
-pub use sender::{DeviceRetries, RasterSender};
+pub use sender::{DeviceRetries, PainterResets, RasterSender};
 pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
 use surface::SurfaceEvent;
@@ -284,7 +284,12 @@ impl<B: RasterBackend> RasterExecutor<B> {
         if self.shared.health() != ExecutorHealth::Running {
             return Ok(PresentDisposition::NotShown);
         }
-        let Self { backend, slots, .. } = self;
+        let Self {
+            backend,
+            slots,
+            shared,
+            ..
+        } = self;
         let Some(held) = slots
             .get_mut(slot.index() as usize)
             .and_then(Option::as_mut)
@@ -299,6 +304,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let mut caught = FirstPanic::new();
         let Some(rendered) = caught.contain(|| backend.render_lent(slot, scene, reset_fonts))
         else {
+            // The draw unwound in the painter, which is dropped (§7).
+            shared.note_painter_reset();
             let mut first = FirstPanic::new();
             hold_panic(&held.inbox, caught, &mut first);
             first.resume();
@@ -741,6 +748,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
     /// device; it is empty when the device came back without that answer (a
     /// rebuild that panicked or failed with its device in place).
     fn after_rebuild(&mut self, refused: Vec<(SlotId, EngineError)>, first: &mut FirstPanic) {
+        // The new device draws with a new painter.
+        self.shared.note_painter_reset();
         for slot in self.slots.iter_mut().flatten() {
             slot.owe_full(RESET);
             let mut state = slot.inbox.lock();
@@ -1059,6 +1068,11 @@ impl<B: RasterBackend> RasterExecutor<B> {
         } else {
             render(backend, slot, &frame)
         };
+        // A render that panicked dropped the painter every slot shares (ADR-0305 §7): counted
+        // before the settlement is written, so an owner that drains it reads the count too.
+        if matches!(render_failure, Some(SlotFailure::Panicked(_))) {
+            shared.note_painter_reset();
+        }
         let discarded_render = join(&mut failure, render_failure);
         // The GPU times this frame's render read back for earlier frames,
         // taken before the lock, since a backend is not called under it. The

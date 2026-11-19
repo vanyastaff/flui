@@ -496,10 +496,10 @@ pub use raster::PresentDisposition;
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
     DETACH_DEADLINE, DeviceAnswered, DeviceHealth, DeviceRetries, DeviceTicket, ExecutorFailure,
-    ExecutorHealth, GpuFrameTime, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement,
-    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget,
-    SlotVisibility, SurfaceHold, TurnOutcome,
+    ExecutorHealth, GpuFrameTime, PainterResets, RasterBackend, RasterCommand, RasterExecutor,
+    RasterPlacement, RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange,
+    SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface,
+    SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
