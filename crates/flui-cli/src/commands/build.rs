@@ -832,6 +832,14 @@ fn build_macos_universal(
         });
     }
 
+    // Each slice staged its assets beside itself in the scratch directory;
+    // the fused binary reads them beside itself (ADR-0384 §3).
+    crate::build::assets::of_project(&workspace_root)
+        .and_then(|assets| crate::build::assets::stage(&assets, &output_dir))
+        .map_err(|error| crate::error::CliError::BuildFailed {
+            platform: "macos".to_string(),
+            details: format!("failed to stage the assets: {error}"),
+        })?;
     let _ = std::fs::remove_dir_all(&scratch);
     let size_bytes = std::fs::metadata(&fused)?.len();
 
