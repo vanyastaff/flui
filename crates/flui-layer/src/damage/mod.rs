@@ -9,15 +9,15 @@
 //! cover the screen (ADR-0061); it comes from which scene nodes a patch
 //! changed.
 //!
-//! The comparison of two consecutive layer trees that came before the
-//! retained scene, `LayerDiffer` over `BoundaryStamp`s, lives on behind the
-//! `testing` feature for the readback suites that still build trees by hand,
-//! until the engine draws versions (`docs/gaps.md`).
+//! The comparison of two layer trees that came before the retained scene,
+//! `LayerDiffer` over `BoundaryStamp`s, stays behind the `testing` feature as
+//! the oracle a patch's footprint must cover (ADR-0304 §11).
 
 mod base;
 pub(crate) mod closure;
 #[cfg(any(test, feature = "testing"))]
 mod differ;
+mod region;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +25,7 @@ pub use base::RasterBase;
 pub use closure::{Closure, Closures, MAX_CLOSURE_ROUNDS, close_over, read_closure};
 #[cfg(any(test, feature = "testing"))]
 pub use differ::LayerDiffer;
+pub use region::{DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason};
 
 /// Whether the raster side draws damage, and when a region is large
 /// enough that a full repaint is cheaper.
@@ -32,8 +33,8 @@ pub use differ::LayerDiffer;
 #[non_exhaustive]
 pub enum DamageMode {
     /// Retain nothing and report every frame as
-    /// [`DamageRegion::Full`](crate::DamageRegion::Full) for
-    /// [`FullReason::DamageOff`](crate::FullReason::DamageOff), without
+    /// [`DamageRegion::Full`] for
+    /// [`FullReason::DamageOff`], without
     /// reading the region: every frame pays for a full render.
     Off,
     /// Draw each frame's damage.

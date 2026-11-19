@@ -1154,6 +1154,9 @@ impl UiRuntime {
         }
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_request.set(Some(request));
+            // A frame of a covered window's own window, its owed instant come, serves the frame
+            // it owes (ADR-0389): the window asked for it through its timed request.
+            presentation.note_owed_frame_served();
         }
         if recording {
             self.record_applied(

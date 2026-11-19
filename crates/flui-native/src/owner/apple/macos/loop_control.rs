@@ -62,7 +62,7 @@ pub(crate) struct LoopControl {
     app: Arc<AppDelivery>,
     /// The loop's wake pump, which looks at the wake deadline after every
     /// owner turn: a turn can leave one no redraw request starts the pump for
-    /// (a covered window's owed frame, ADR-0357).
+    /// (a deadline a task sleeps until).
     wake_pump: Weak<super::wake_pump::WakePump>,
     owner: NativeOwner<OwnerPart>,
 }

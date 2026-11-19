@@ -6920,9 +6920,9 @@ GPU-память простаивающего или невидимого окн
   `MacOSWindow::try_new` берёт `FollowedDelivery`, `AndroidWindow::new` — `CountedDelivery`, иных
   способов их получить нет (`WindowDelivery::new` на месте вызова не компилируется). Крюк конца
   прогона — `OwnerSlot<Rc<dyn Fn()>>`. `RedrawPoll` не несёт срок, `PostPollRedraw` не подделать.
-  Открыто ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit)):
-  должный кадр закрытого окна рядом с показанным окном AppKit доставляется снова после каждого
-  кадра показанного окна — ответ приложения не называет окно. Тесты:
+  Должный кадр закрытого окна в срок приложения не входит: его просят у самого окна
+  (`PlatformWindow::request_frame_at`, ADR-0389), и кадры показанного окна рядом не доставляют
+  его снова. Тесты:
   `a_second_layout_callback_replaces_the_first` (X11,
   Wayland), `a_panicking_exit_policy_is_terminal`,
   `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one`,
@@ -9028,8 +9028,9 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   приостановленного окна) и сеанс показывает окна (блокировка и сон машины — два флага
   `occluded_frame::Session`, так что блокировка, пережившая сон, остаётся). После
   `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше повтора отброшенного кадра, окно
-  рисует один кадр через `FrameClock::grant_hidden_frame`; срок — в `next_wake`, раннеры и
-  headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
+  рисует один кадр через `FrameClock::grant_hidden_frame`; срок просится у самого окна
+  (`PlatformWindow::request_frame_at`, ADR-0389), не в `next_wake`; раннеры и headless-хост
+  спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
   остаётся должным, пока не исполнится, как бы поздно ни пришло пробуждение; удержание (отсрочка,
   подготовка текста) его не снимает, а при полном приёмнике срок не просится (будит
   урегулирование); следующая тишина начинается только с исполненного кадра. Долг пересчитывается

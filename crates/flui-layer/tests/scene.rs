@@ -397,9 +397,9 @@ pub(crate) fn an_exhausted_mint_renews_the_lineage_and_publishes_full() {
     assert_eq!(owner.current().len(), 2);
 }
 
-/// A renewal runs the version sequence on, so a layer tree flattened after it
-/// is numbered apart from every one before: an inspection handle kept from
-/// the old lineage names no layer of the new one.
+/// A renewal runs the version sequence on, so a version the renewed owner
+/// publishes is numbered after every one before it: a sequence number kept
+/// from the old lineage names no version of the new one.
 pub(crate) fn a_renewed_owner_numbers_its_scenes_apart() {
     let mut owner = SceneOwner::new();
     let root = owner.current().root();
@@ -408,7 +408,7 @@ pub(crate) fn a_renewed_owner_numbers_its_scenes_apart() {
     writer.push(publish(child, empty()));
     writer.push(publish(root, slots(&[child])));
     owner.apply(SURFACE).expect("the first patch applies");
-    let before = owner.current().flatten().scene();
+    let before = owner.current().id().seq();
 
     drop(owner.renew(ResyncReason::Rebuilt));
     let root = owner.current().root();
@@ -417,7 +417,7 @@ pub(crate) fn a_renewed_owner_numbers_its_scenes_apart() {
     writer.push(publish(child, empty()));
     writer.push(publish(root, slots(&[child])));
     owner.apply(SURFACE).expect("the renewed lineage applies");
-    assert_ne!(owner.current().flatten().scene(), before);
+    assert!(owner.current().id().seq() > before);
 }
 
 // scene_indexes
@@ -528,7 +528,7 @@ pub(crate) fn a_version_flattens_to_the_tree_it_paints() {
     assert_eq!(owner.current().node(b).map(SceneNode::depth), Some(2));
 
     let tree = owner.current().flatten();
-    let kinds = |id| tree.get_layer(id).expect("in the tree").kind_name();
+    let kinds = |id| tree.layer(id).expect("in the tree").kind_name();
     let [a_offset] = tree.children(tree.root()).expect("root") else {
         panic!("the root names one slot");
     };
@@ -541,7 +541,7 @@ pub(crate) fn a_version_flattens_to_the_tree_it_paints() {
         panic!("the opacity holds the chunk and b's slot");
     };
     assert_eq!(kinds(*chunk), "Picture");
-    match tree.get_layer(*b_offset) {
+    match tree.layer(*b_offset) {
         Some(Layer::Offset(offset)) => assert_eq!(offset.offset(), Offset::new(3.0, 4.0)),
         other => panic!("b's slot is an offset, got {other:?}"),
     }

@@ -737,6 +737,8 @@ impl OwnerCore {
                             let address = initial.address;
                             let work = RuntimeWork::Initialize(initial);
                             let mut first = FirstPanic::new();
+                            // A window installed covered owes its surface from the start.
+                            let mut owed = Vec::new();
                             let outcome = match RuntimeLease::checkout(self, &work) {
                                 Ok(mut lease) => {
                                     // Initial runtime work runs contained so the lease is returned.
@@ -758,6 +760,11 @@ impl OwnerCore {
                                             .report_contained_panic(address, payload);
                                     }
                                     let failed = first.is_held();
+                                    owed = lease
+                                        .runtime
+                                        .as_deref()
+                                        .expect("BUG: initialization retains its runtime lease")
+                                        .owed_frame_requests();
                                     lease.return_to_owner(
                                         &mut first,
                                         RecoveryState::current(&first_failure),
@@ -782,6 +789,10 @@ impl OwnerCore {
                             first.contain(|| {
                                 effects.finish_install(address, outcome, recovery);
                             });
+                            // Its window is asked once installed: a failed one is retired.
+                            if outcome == super::InitializationOutcome::Ready {
+                                deliver_owed_frames(owed, &mut first);
+                            }
                             first
                         }
                     }
@@ -836,11 +847,20 @@ impl OwnerCore {
                     // retires.
                     let demands = (healthy && effects.tracks_frame_rate_demand())
                         .then(|| runtime.frame_rate_demands());
+                    // A contained failure leaves the owed frames to ask for as they
+                    // are: a covered window still gets its frame. A terminal one
+                    // asks nothing more.
+                    let owed = if terminal || self.state.borrow().closed {
+                        Vec::new()
+                    } else {
+                        runtime.owed_frame_requests()
+                    };
                     lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
                     if let Some(demands) = demands {
                         self.deliver_frame_rate_demands(effects, id, &demands, &mut failure);
                     }
+                    deliver_owed_frames(owed, &mut failure);
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);
                         if failure.is_held()
@@ -919,5 +939,18 @@ impl OwnerCore {
             }
         }
         first_failure.absorb(post_failure);
+    }
+}
+
+/// Ask each window for the frame its presentation owes its surface, or withdraw
+/// the instant asked before (ADR-0389), with no runtime checked out: a delivery
+/// runs the host's window code. Each runs contained, so one host's panic costs
+/// no other window its request and leaves its own to be offered again.
+fn deliver_owed_frames(
+    requests: Vec<crate::ui_runtime::OwedFrameRequest>,
+    failure: &mut FirstPanic,
+) {
+    for request in requests {
+        failure.contain(|| request.deliver());
     }
 }

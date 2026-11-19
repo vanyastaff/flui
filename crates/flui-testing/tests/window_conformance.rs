@@ -101,6 +101,9 @@ impl PlatformWindow for Faulty {
     fn request_redraw(&self) {
         self.0.request_redraw();
     }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.0.request_frame_at(at);
+    }
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         self.0.redraw_requester()
     }

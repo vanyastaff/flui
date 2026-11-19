@@ -862,7 +862,7 @@ pub(crate) fn magnifiers(laid: &LaidOut) -> Vec<flui_foundation::geometry::Rect<
         let mut up = tree.parent(id);
         let follower = loop {
             let parent = up.expect("a magnifier sits under a follower");
-            let layer = tree.get_layer(parent).expect("a parent layer");
+            let layer = tree.layer(parent).expect("a parent layer");
             if matches!(layer, Layer::Follower(_)) {
                 break parent;
             }

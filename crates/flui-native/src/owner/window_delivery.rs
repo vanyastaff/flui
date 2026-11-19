@@ -508,7 +508,7 @@ impl WindowDelivery {
     /// a run that unwinds included. A loop that no owner turn follows a
     /// native delivery on asks for its wake deadline again there, since any
     /// run may have served it or left a new one: a frame left due again, a
-    /// window covered that now owes a frame, input that armed a gesture
+    /// state change that armed a deadline, input that armed a gesture
     /// deadline with no frame asked. UIKit's loop (a display-link frame, a
     /// touch batch) and AppKit's wake pump (a display pass, a window
     /// callback) both do. `hook` runs no user code: it may run while a panic

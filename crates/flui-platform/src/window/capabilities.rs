@@ -78,7 +78,9 @@ pub enum OccludedSurface {
     #[default]
     Discarded,
     /// The window system keeps the window's last frame and shows it again on
-    /// uncovering (AppKit).
+    /// uncovering (AppKit). A window its host names so serves
+    /// [`request_frame_at`](crate::PlatformWindow::request_frame_at), which is
+    /// how the frame its surface is owed reaches it (ADR-0389).
     Kept,
 }
 

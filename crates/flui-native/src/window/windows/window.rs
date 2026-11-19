@@ -1520,6 +1520,10 @@ impl PlatformWindow for WindowsWindow {
         flui_platform::RedrawRequester::request_redraw(&self.surface());
     }
 
+    /// Never asked: Win32 tells no covering and keeps no covered window's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         Arc::new(self.surface())
     }

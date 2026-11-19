@@ -139,7 +139,7 @@ impl PreferenceQueryError {
 /// use flui_foundation::geometry::Point;
 /// use flui_platform::input::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmissionError, AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint,
+///     AdmissionError, AdmittedCommand, ApplyError, Cursor, CursorError, EventTime, FrameRateHint,
 ///     GestureGeometry, haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported,
 ///     UnsupportedReason, WindowAt, WindowCapabilities, WindowCommand, WindowExtent,
@@ -187,6 +187,8 @@ impl PreferenceQueryError {
 ///         Ok(None)
 ///     }
 ///     fn request_redraw(&self) {}
+///     // No surface to keep while covered, so no frame is ever owed to it.
+///     fn request_frame_at(&self, _: Option<EventTime>) {}
 ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
 ///         Arc::new(|| {})
 ///     }
@@ -291,10 +293,10 @@ impl PreferenceQueryError {
 /// use flui_foundation::geometry::Point;
 /// use flui_platform::input::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint, GestureGeometry,
-///     haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
-///     PreferenceQueryError, RedrawRequester, SurfaceTarget, Unsupported, UnsupportedReason,
-///     WindowAt, WindowExtent, WindowGeometry, WindowId, WindowState,
+///     AdmittedCommand, ApplyError, Cursor, CursorError, EventTime, FrameRateHint,
+///     GestureGeometry, haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
+///     PlatformWindow, PreferenceQueryError, RedrawRequester, SurfaceTarget, Unsupported,
+///     UnsupportedReason, WindowAt, WindowExtent, WindowGeometry, WindowId, WindowState,
 /// };
 ///
 /// struct Offscreen(WindowId);
@@ -307,6 +309,7 @@ impl PreferenceQueryError {
 ///         Ok(None)
 ///     }
 ///     fn request_redraw(&self) {}
+///     fn request_frame_at(&self, _: Option<EventTime>) {}
 ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
 ///         Arc::new(|| {})
 ///     }
@@ -399,6 +402,20 @@ pub trait PlatformWindow {
     /// than the owner that wants a frame asks through the window's
     /// [`redraw_requester`](Self::redraw_requester).
     fn request_redraw(&self);
+
+    /// Ask this window for a frame at `at` on the event timeline, or withdraw
+    /// the instant asked before (`None`): once `at` has come the host makes
+    /// the request [`request_redraw`](Self::request_redraw) makes, of this
+    /// window alone, once. A later call replaces the instant, and a request
+    /// the window closes before serving reaches nothing (ADR-0389).
+    ///
+    /// The UI runtime asks it for the frame a covered window owes its surface,
+    /// of a window whose host keeps that surface
+    /// ([`OccludedSurface::Kept`](crate::OccludedSurface::Kept)); no
+    /// application deadline carries that frame. A host that discards a
+    /// covered window's surface is never asked and says so in its body,
+    /// returning at once: the absence is the host's to state, not a default's.
+    fn request_frame_at(&self, at: Option<crate::EventTime>);
 
     /// What asks this window for a frame from any thread: the same request as
     /// [`request_redraw`](Self::request_redraw), carried to the owner where
@@ -588,6 +605,7 @@ pub trait PlatformWindow {
     ///         Ok(None)
     ///     }
     ///     fn request_redraw(&self) {}
+    ///     fn request_frame_at(&self, _: Option<EventTime>) {}
     ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
     ///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> { unimplemented!() }
     ///     fn state(&self) -> WindowState {

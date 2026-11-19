@@ -110,6 +110,7 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn request_redraw(&self) {}
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
 
     fn state(&self) -> WindowState {
         WindowState::new(WindowGeometry::EMPTY, flui_platform::WindowExtent::ZERO)

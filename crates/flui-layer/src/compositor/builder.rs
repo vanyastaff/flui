@@ -1,10 +1,9 @@
 //! `SceneBuilder` — stack-based construction of a [`LayerTree`].
 //!
-//! The production frame is built by `flui-rendering`'s fragment composer
-//! straight through [`LayerTree::new`] / [`LayerTree::push_child`];
-//! this builder is the hand-authored path — `flui_app::run_direct`, examples,
-//! and the GPU readback tests: `push` a container, `add` leaves under it,
-//! `pop` back out.
+//! A frame is not built here: `flui-rendering`'s paint writes the retained
+//! scene through a [`SceneWriter`](crate::SceneWriter). This builder is the
+//! hand-authored path, for `flui_app::run_direct` and the GPU readback tests:
+//! `push` a container, `add` leaves under it, `pop` back out.
 
 use flui_foundation::LayerId;
 use flui_foundation::geometry::{Matrix4, Offset, RRect, RSuperellipse, Rect};

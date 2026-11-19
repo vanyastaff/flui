@@ -12,12 +12,13 @@
 //!
 //! [`TextureLayer`]: crate::TextureLayer
 
-use std::{collections::HashMap, fmt, num::NonZeroU64, sync::Arc};
+use std::{fmt, num::NonZeroU64, sync::Arc};
 
 use flui_foundation::IdMint;
 use flui_foundation::panic::PanicRecovery;
 use flui_painting::paint::{Image, TextureId};
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 /// A presentation's external textures. Cloning shares the registry.
 #[derive(Clone)]
@@ -32,9 +33,10 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
-    last_issued: u64,
-    exhausted: bool,
-    live: HashMap<TextureId, Entry>,
+    /// Texture ids, never reissued: a stale layer or draw may still name
+    /// a retired one.
+    ids: IdMint<NonZeroU64>,
+    live: FxHashMap<TextureId, Entry>,
     retired: Vec<TextureId>,
     /// Listener keys, issued under this lock and never reissued: a
     /// reissued key could remove another guard's listener.
@@ -123,15 +125,9 @@ impl TextureRegistry {
     /// permanent.
     pub fn register(&self) -> Result<TextureRegistration, TextureIdsExhausted> {
         let mut state = self.shared.state.lock();
-        if state.exhausted {
-            return Err(TextureIdsExhausted);
-        }
-        let Some(next) = state.last_issued.checked_add(1) else {
-            state.exhausted = true;
-            return Err(TextureIdsExhausted);
-        };
-        state.last_issued = next;
-        let id = TextureId::new(next);
+        // The mint's refusal is sticky, so once exhausted every later
+        // `register` refuses too.
+        let id = TextureId::new(state.ids.next().map_err(|_| TextureIdsExhausted)?.get());
         state.live.insert(id, Entry::default());
         Ok(TextureRegistration {
             registry: self.clone(),
@@ -331,5 +327,19 @@ mod tests {
             1,
             "a refused listener is not installed"
         );
+    }
+
+    /// The last texture id is issued once; after it every `register`
+    /// refuses, so no id a stale draw names is issued again.
+    #[test]
+    fn exhausted_texture_ids_refuse_for_good() {
+        let registry = TextureRegistry::new(Arc::new(|| {}));
+        registry.shared.state.lock().ids = IdMint::starting_after(u64::MAX - 1);
+        let last = registry.register().expect("the last id");
+        assert_eq!(last.id().get(), u64::MAX);
+        for _ in 0..2 {
+            assert_eq!(registry.register().err(), Some(TextureIdsExhausted));
+        }
+        assert_eq!(registry.shared.state.lock().live.len(), 1);
     }
 }
