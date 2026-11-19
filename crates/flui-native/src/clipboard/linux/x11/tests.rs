@@ -57,6 +57,96 @@ fn clipboard() -> X11Clipboard {
     X11Clipboard::start(Box::new(|| {})).expect("the X server answers")
 }
 
+/// [`clipboard`] on the X server `display` names.
+fn clipboard_on(display: &str) -> X11Clipboard {
+    X11Clipboard::start_on(Some(display), Box::new(|| {})).expect("the X server answers")
+}
+
+/// An X server of the case's own, for a case that holds its server with a
+/// grab: on the run's shared display that would freeze every other test's
+/// client, which nextest runs in processes of their own beside it. Xvfb on a
+/// display number no other server holds, ended as it drops (as the
+/// integration harness starts one in `tests/x11_window.rs`); `None` without
+/// Xvfb installed. One at a time in a process: two started at once may try
+/// the same number, and the one that loses it can still be starting as the
+/// other answers its probe.
+struct PrivateServer {
+    server: std::process::Child,
+    display: String,
+    _one_at_a_time: std::sync::MutexGuard<'static, ()>,
+}
+
+impl PrivateServer {
+    fn start() -> Option<Self> {
+        use std::process::{Command, Stdio};
+
+        static STARTED: Mutex<()> = Mutex::new(());
+        let one_at_a_time = STARTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Each process tries numbers from one its id picks; a server that
+        // finds its number taken exits at once, and the next is tried.
+        let first = 100 + std::process::id() % 800;
+        for number in (first..first + 200).map(|number| 100 + number % 900) {
+            let display = format!(":{number}");
+            // `-noreset`: a server resets as its last client leaves, which
+            // the start's probe and each case's row do, and refuses the
+            // connections that arrive meanwhile.
+            let spawned = Command::new("Xvfb")
+                .args([
+                    &display,
+                    "-screen",
+                    "0",
+                    "640x480x24",
+                    "-nolisten",
+                    "tcp",
+                    "-noreset",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            let mut server = match spawned {
+                Ok(server) => server,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("skipped: no Xvfb to start a server of the case's own");
+                    return None;
+                }
+                Err(error) => panic!("Xvfb starts: {error}"),
+            };
+            let deadline = Instant::now() + STEP;
+            loop {
+                if server.try_wait().ok().flatten().is_some() {
+                    break;
+                }
+                // Still running a moment after it answers, the server that
+                // answered is this one.
+                if RustConnection::connect(Some(&display)).is_ok() {
+                    std::thread::sleep(Duration::from_millis(200));
+                    if server.try_wait().ok().flatten().is_none() {
+                        return Some(Self {
+                            server,
+                            display,
+                            _one_at_a_time: one_at_a_time,
+                        });
+                    }
+                    break;
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for Xvfb");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        panic!("no free X display number");
+    }
+}
+
+impl Drop for PrivateServer {
+    fn drop(&mut self) {
+        let _ = self.server.kill();
+        let _ = self.server.wait();
+    }
+}
+
 /// The completions a read answers through, settled by hand as an
 /// application's runtime settles them.
 struct Answers {
@@ -231,7 +321,16 @@ fn a_read_after_a_write_answers_the_write() {
 /// thread takes the selection at the server's next stamp, and a read sent
 /// before reaches whoever owned it then. Whoever owned it is let go first.
 fn offer_primary(owner: &X11Clipboard, text: Rc<dyn Fn() -> Option<String>>) {
-    let (connection, _) = RustConnection::connect(None).expect("the X server answers");
+    offer_primary_on(None, owner, text);
+}
+
+/// [`offer_primary`] on the X server `display` names.
+fn offer_primary_on(
+    display: Option<&str>,
+    owner: &X11Clipboard,
+    text: Rc<dyn Fn() -> Option<String>>,
+) {
+    let (connection, _) = RustConnection::connect(display).expect("the X server answers");
     let primary = xproto::Atom::from(xproto::AtomEnum::PRIMARY);
     connection
         .set_selection_owner(x11rb::NONE, primary, x11rb::CURRENT_TIME)
@@ -614,32 +713,48 @@ fn an_own_read_whose_selection_fails_keeps_the_first_failure() {
     );
 }
 
-/// Another client asking for the primary selection into a window of its
-/// own, as a terminal or an editor pasting it does.
+/// Another client asking for a selection into a window of its own, as a
+/// terminal or an editor pasting it does.
 struct Requestor {
     connection: RustConnection,
     root: xproto::Window,
     window: xproto::Window,
+    selection: xproto::Atom,
     utf8: xproto::Atom,
     incr: xproto::Atom,
     targets: xproto::Atom,
 }
 
 impl Requestor {
+    /// A requestor of the primary selection on the run's X server.
     fn new() -> Self {
-        let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
+        Self::on(None, "PRIMARY")
+    }
+
+    /// A requestor of the selection `selection` names, on the X server
+    /// `display` names (`DISPLAY`'s when `None`).
+    fn on(display: Option<&str>, selection: &str) -> Self {
+        let (connection, screen) = RustConnection::connect(display).expect("the X server answers");
         let root = connection.setup().roots[screen].root;
         let window = connection.generate_id().expect("an id");
+        let [selection, utf8, incr, targets] =
+            [selection, "UTF8_STRING", "INCR", "TARGETS"].map(|name| intern_on(&connection, name));
         let requestor = Self {
             connection,
             root,
             window,
-            utf8: atom("UTF8_STRING"),
-            incr: atom("INCR"),
-            targets: atom("TARGETS"),
+            selection,
+            utf8,
+            incr,
+            targets,
         };
         requestor.make_window();
         requestor
+    }
+
+    /// The atom `name` names on the requestor's server.
+    fn atom(&self, name: &str) -> xproto::Atom {
+        intern_on(&self.connection, name)
     }
 
     /// Make the window under its id.
@@ -716,9 +831,14 @@ impl Requestor {
     /// Wait for the next answer the window hears, turning `owner`'s loop
     /// meanwhile: the property it names, `NONE` for a refusal.
     fn answer(&self, owner: &X11Clipboard) -> xproto::Atom {
+        self.answer_within(owner, STEP)
+    }
+
+    /// [`Self::answer`], waiting at most `patience`.
+    fn answer_within(&self, owner: &X11Clipboard, patience: Duration) -> xproto::Atom {
         use x11rb::protocol::Event;
 
-        let deadline = Instant::now() + STEP;
+        let deadline = Instant::now() + patience;
         loop {
             owner.deliver();
             while let Some(event) = self
@@ -743,13 +863,13 @@ impl Requestor {
         self.convert(self.utf8, property);
     }
 
-    /// Ask for the primary selection as `target` into `property`, waiting
-    /// for nothing.
+    /// Ask for the selection as `target` into `property`, waiting for
+    /// nothing.
     fn convert(&self, target: xproto::Atom, property: xproto::Atom) {
         self.connection
             .convert_selection(
                 self.window,
-                xproto::Atom::from(xproto::AtomEnum::PRIMARY),
+                self.selection,
                 target,
                 property,
                 x11rb::CURRENT_TIME,
@@ -765,7 +885,7 @@ impl Requestor {
     fn heard(&self) -> Vec<xproto::Atom> {
         use x11rb::protocol::Event;
 
-        self.convert(self.targets, atom("FLUI_TARGETS"));
+        self.convert(self.targets, self.atom("FLUI_TARGETS"));
         let mut before = Vec::new();
         let deadline = Instant::now() + STEP;
         loop {
@@ -793,7 +913,7 @@ impl Requestor {
     /// chunk of them: they stay held.
     fn hold_every_writer(&self, owner: &X11Clipboard) {
         for held in 0..super::selection::MAX_WRITERS {
-            let property = atom(&format!("FLUI_HELD_{held}"));
+            let property = self.atom(&format!("FLUI_HELD_{held}"));
             assert_eq!(
                 self.ask(owner, property),
                 property,
@@ -1023,20 +1143,21 @@ fn hold_in_a_command(
 /// then: the thread meets the server before it writes the answers it
 /// decided, and the window's end it reads on the way drops the request,
 /// whole or `INCR`. The requestor holds the server here, so the thread's
-/// requests wait until the window went and another took its id.
+/// requests wait until the window went and another took its id; the server
+/// is the case's own, so no other test's client waits with them.
 #[test]
 fn a_requestor_that_goes_before_its_answer_is_written_hears_nothing() {
-    let Some(_server) = server() else {
+    let Some(private) = PrivateServer::start() else {
         return;
     };
+    let display = Some(private.display.as_str());
     for text in ["selected".to_owned(), "x".repeat(1 << 20)] {
-        let owner = clipboard();
+        let owner = clipboard_on(&private.display);
         let asked = Rc::new(Cell::new(0));
-        offer_primary(&owner, counted(&text, &asked));
-        let requestor = Requestor::new();
-        // Interned before the grab: `atom` connects anew, which a held
-        // server would not serve.
-        let (gone, after) = (atom("FLUI_GONE"), atom("FLUI_AFTER"));
+        offer_primary_on(display, &owner, counted(&text, &asked));
+        let requestor = Requestor::on(display, "PRIMARY");
+        // Interned before the grab, which serves no other connection.
+        let (gone, after) = (requestor.atom("FLUI_GONE"), requestor.atom("FLUI_AFTER"));
         requestor.send_request(gone);
         assert_eq!(
             requestor.heard(),
@@ -1205,38 +1326,72 @@ fn a_panic_in_the_thread_still_answers_what_it_decided() {
 
 /// The clipboard's thread ends in time though another client holds the
 /// server, which then reads none of its requests: dropping the clipboard,
-/// as an application exits, does not wait on the server.
+/// as an application exits, waits on the server no longer than one reply's
+/// bound and the close's, whether the thread was idle or waiting on a reply
+/// (a request heard before the grab, whose requestor it checks). The server
+/// is the case's own, so no other test's client waits on the grab.
 #[test]
 fn the_thread_ends_in_time_while_another_client_holds_the_server() {
-    let Some(_server) = server() else {
+    #[derive(Debug, Clone, Copy)]
+    enum Held {
+        /// The thread waits on nothing as the grab starts.
+        Idle,
+        /// The thread waits on the server's reply as the grab starts.
+        MidReply,
+    }
+
+    let Some(private) = PrivateServer::start() else {
         return;
     };
-    let owner = clipboard();
-    let (holder, _) = RustConnection::connect(None).expect("the X server answers");
-    holder.grab_server().expect("the request is sent");
-    holder
-        .get_input_focus()
-        .expect("the request is sent")
-        .reply()
-        .expect("the server answers");
-    // Lets the server go once the case is done, or after `STEP` if the
-    // clipboard never lets the case go on.
-    let (done, waiting) = std::sync::mpsc::channel::<()>();
-    let holding = std::thread::spawn(move || {
-        let _ = waiting.recv_timeout(STEP);
-        let _ = holder.ungrab_server();
-        let _ = holder.flush();
-    });
+    let display = Some(private.display.as_str());
+    for held in [Held::Idle, Held::MidReply] {
+        let owner = clipboard_on(&private.display);
+        let asked = Rc::new(Cell::new(0));
+        offer_primary_on(display, &owner, counted("selected", &asked));
+        let requestor = Requestor::on(display, "PRIMARY");
+        let property = requestor.atom("FLUI_BEFORE_THE_GRAB");
+        let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+        let hold = || {
+            holder.grab_server().expect("the request is sent");
+            holder
+                .get_input_focus()
+                .expect("the request is sent")
+                .reply()
+                .expect("the server answers");
+        };
+        match held {
+            Held::Idle => hold(),
+            Held::MidReply => {
+                // The request reaches the thread while it is held in a
+                // command, and the server is held before the thread asks
+                // about the request's window.
+                let (release, _read) = hold_in_a_command(&owner);
+                requestor.send_request(property);
+                requestor.round_trip();
+                hold();
+                drop(release);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        // Lets the server go once the case is done, or after `STEP` if the
+        // clipboard never lets the case go on.
+        let (done, waiting) = std::sync::mpsc::channel::<()>();
+        let holding = std::thread::spawn(move || {
+            let _ = waiting.recv_timeout(STEP);
+            let _ = holder.ungrab_server();
+            let _ = holder.flush();
+        });
 
-    let started = Instant::now();
-    drop(owner);
-    let ended = started.elapsed();
-    drop(done);
-    holding.join().expect("the holder lets the server go");
-    assert!(
-        ended < Duration::from_secs(2),
-        "the clipboard ended after {ended:?}, waiting on a held server"
-    );
+        let started = Instant::now();
+        drop(owner);
+        let ended = started.elapsed();
+        drop(done);
+        holding.join().expect("the holder lets the server go");
+        assert!(
+            ended < Duration::from_secs(4),
+            "{held:?}: the clipboard ended after {ended:?}, waiting on a held server"
+        );
+    }
 }
 
 /// Clients that flood the clipboard's thread with requests do not hold up
@@ -1288,12 +1443,16 @@ fn a_flood_of_requests_does_not_hold_up_a_decided_answer() {
             })
         })
         .collect();
-    std::thread::sleep(Duration::from_millis(200));
+    // The flood under way before the owner thread's text reaches the thread.
+    std::thread::sleep(Duration::from_millis(50));
 
     // The flood stops whether or not the answer came, so no later case
     // runs in it.
     let mut failure = flui_foundation::panic::FirstPanic::new();
-    let answered = failure.contain(|| requestor.answer(&owner));
+    // The answer waits for the events ahead of its mark, which a flood piles
+    // up faster than the thread handles them: seconds here, never while the
+    // flood lasts when a step's drain has no bound.
+    let answered = failure.contain(|| requestor.answer_within(&owner, 3 * STEP));
     flooding.store(false, Ordering::Relaxed);
     for flooder in flooders {
         flooder.join().expect("the flooder ends");
@@ -1376,9 +1535,14 @@ fn targets() -> Vec<xproto::Atom> {
         .collect::<Vec<xproto::Atom>>()
 }
 
-/// The atom `name` names on the server.
+/// The atom `name` names on the run's server.
 fn atom(name: &str) -> xproto::Atom {
     let (connection, _) = RustConnection::connect(None).expect("the X server answers");
+    intern_on(&connection, name)
+}
+
+/// The atom `name` names on `connection`'s server.
+fn intern_on(connection: &RustConnection, name: &str) -> xproto::Atom {
     connection
         .intern_atom(false, name.as_bytes())
         .expect("the request is sent")
@@ -1810,4 +1974,125 @@ fn an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it() {
         "the clear waited for the write behind it"
     );
     assert_eq!(answers.read(&second), None);
+}
+
+/// The clipboard owns `text`, and its primary selection is offered, which
+/// [`hold_in_a_command`] needs; it returns once the clipboard owns the text.
+fn own_text_and_offer(owner: &X11Clipboard, text: String) {
+    let asked = Rc::new(Cell::new(0));
+    offer_primary(owner, counted("selected", &asked));
+    write_unobserved(owner, ClipboardWrite::text(text.clone()));
+    // A read after a write answers once the write owns the clipboard.
+    assert_eq!(Answers::new().read(owner).as_deref(), Some(text.as_str()));
+}
+
+/// A requestor whose window went before its `INCR` transfer started holds
+/// no writer: the thread checks that the server lets it hear the window's
+/// property deletions before the transfer is decided, and a window that is
+/// gone is never answered, so every one of [`MAX_WRITERS`] transfers starts
+/// for the next requestor at once.
+///
+/// [`MAX_WRITERS`]: super::selection::MAX_WRITERS
+#[test]
+fn a_requestor_gone_before_its_transfer_starts_holds_no_writer() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    own_text_and_offer(&owner, "x".repeat(1 << 20));
+    let gone = Requestor::on(None, "CLIPBOARD");
+    let property = gone.atom("FLUI_GONE");
+
+    // The request reaches the thread while it is held, from a window
+    // destroyed before the thread hears it.
+    let (release, _read) = hold_in_a_command(&owner);
+    gone.send_request(property);
+    gone.round_trip();
+    gone.connection
+        .destroy_window(gone.window)
+        .expect("the request is sent");
+    gone.round_trip();
+    drop(release);
+
+    let next = Requestor::on(None, "CLIPBOARD");
+    next.hold_every_writer(&owner);
+}
+
+/// A request whose requestor is the clipboard thread's own window is
+/// refused: no client writes the thread's properties, its marks among them,
+/// through a conversion.
+#[test]
+fn a_request_into_the_clipboard_threads_own_window_is_refused() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    own_text_and_offer(&owner, "owned".to_owned());
+    let foreign = Requestor::on(None, "CLIPBOARD");
+    let owners_window = foreign
+        .connection
+        .get_selection_owner(foreign.selection)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .owner;
+    let property = foreign.atom("FLUI_FOREIGN");
+    foreign
+        .connection
+        .convert_selection(
+            owners_window,
+            foreign.selection,
+            foreign.targets,
+            property,
+            x11rb::CURRENT_TIME,
+        )
+        .expect("the request is sent");
+    // The thread hears requests in order: once the requestor's own is
+    // answered, the foreign one was heard.
+    assert_eq!(foreign.heard(), Vec::<xproto::Atom>::new());
+    let written = foreign
+        .connection
+        .get_property(false, owners_window, property, xproto::AtomEnum::ANY, 0, 1)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .type_;
+    assert_eq!(written, x11rb::NONE, "nothing is written into its window");
+}
+
+/// A write in the batch of commands that stops the clipboard's thread owns
+/// no selection: the clipboard is ending, its connection closes a moment
+/// later, and the write answers `Gone` instead of taking the selection for
+/// that moment.
+#[test]
+fn a_write_in_the_batch_that_stops_the_thread_owns_nothing() {
+    use super::selection::Command;
+
+    let Some(_server) = server() else {
+        return;
+    };
+    let mut owner = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    offer_primary(&owner, counted("selected", &asked));
+    let settling = crate::testing::clipboard::SettlingOwner::new();
+
+    let (release, _read) = hold_in_a_command(&owner);
+    let (mut written, answer) = settling.pending::<flui_platform::ClipboardWritten>();
+    NativeClipboard::write(&owner, ClipboardWrite::text("late"), answer);
+    owner.send(Command::Stop);
+    drop(release);
+    owner
+        .thread
+        .take()
+        .expect("the thread runs")
+        .join()
+        .expect("the thread ends without a panic");
+
+    assert_eq!(
+        settling
+            .settle_within(&mut written, STEP)
+            .expect("the write is answered in time")
+            .expect("the write is answered, not abandoned"),
+        Err(ClipboardError::Gone)
+    );
 }
