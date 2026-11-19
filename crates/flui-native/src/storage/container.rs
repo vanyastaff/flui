@@ -184,6 +184,9 @@ pub(crate) enum Migrated {
     /// left where it was, and it stays the store
     /// ([`roots_after_migration`]).
     TooLarge,
+    /// Another instance holds the migration's lock: this one neither swept
+    /// nor copied, and the old store stays the store this session.
+    Busy,
 }
 
 /// Copy the store under `from` to `to` once: only when `to` holds no store
@@ -192,9 +195,13 @@ pub(crate) enum Migrated {
 /// and renamed into place whole, so a copy that fails midway, or a process
 /// killed during it, leaves no root behind and the next first call copies
 /// again; a root another instance renamed into place first is kept, and the
-/// staging copy discarded. Staging folders an earlier copy left (a process
-/// killed during one) are removed first. A link, or anything but a file or
-/// a folder, leaves the store where it was. Blocks on the file system.
+/// staging copy discarded. One instance migrates at a time: the sweep, the
+/// copy and the rename run under an exclusive lock on a file beside the
+/// root, which an instance that finds it held does not wait for
+/// ([`Migrated::Busy`]). Staging folders an earlier copy left (a process
+/// killed during one) are removed first, under that lock, so no folder a
+/// copy still writes into is swept. A link, or anything but a file or a
+/// folder, leaves the store where it was. Blocks on the file system.
 #[cfg(any(windows, test))]
 pub(crate) fn migrate(from: &Path, to: &Path) -> std::io::Result<Migrated> {
     let moment = std::time::SystemTime::now()
@@ -236,10 +243,19 @@ fn migrate_with(
     if holds_store(to)? || !holds_store(from)? {
         return Ok(Migrated::Nothing);
     }
+    let staging = Staging::beside(to)?;
+    // Held to the end of the migration, every return included.
+    let Some(_lock) = staging.lock()? else {
+        return Ok(Migrated::Busy);
+    };
+    // Judged again under the lock: the instance that held it may have put
+    // the root in place.
+    if holds_store(to)? {
+        return Ok(Migrated::Nothing);
+    }
     let Some(entries) = listed(from)? else {
         return Ok(Migrated::TooLarge);
     };
-    let staging = Staging::beside(to)?;
     staging.sweep();
     let folder = staging.create(moment)?;
     let copied = entries.iter().try_for_each(|(relative, is_folder)| {
@@ -272,12 +288,14 @@ fn migrate_with(
 }
 
 /// Where a copy into `to` stages: folders beside it named
-/// `.<name>.migrating-<process id>-<moment>`.
+/// `.<name>.migrating-<process id>-<moment>`, and the lock file
+/// `.<name>.migrating.lock` that one migration at a time holds.
 #[cfg(any(windows, test))]
 struct Staging<'a> {
     parent: &'a Path,
-    /// `.<name>.migrating-`: what every staging folder of `to` begins with.
-    prefix: String,
+    /// `.<name>.migrating`: what the lock file and every staging folder of
+    /// `to` begin with.
+    stem: String,
 }
 
 /// The most staging folders one sweep removes.
@@ -297,8 +315,31 @@ impl<'a> Staging<'a> {
         let name = to.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
         Ok(Self {
             parent,
-            prefix: format!(".{}.migrating-", name.to_string_lossy()),
+            stem: format!(".{}.migrating", name.to_string_lossy()),
         })
+    }
+
+    /// The lock file one migration of this root holds.
+    fn lock_path(&self) -> PathBuf {
+        self.parent.join(format!("{}.lock", self.stem))
+    }
+
+    /// Take the migration's exclusive lock without waiting: the locked file,
+    /// whose drop releases it, or `None` while another instance holds it.
+    /// The file stays after the lock is released, so no instance locks a
+    /// file another has just removed.
+    fn lock(&self) -> std::io::Result<Option<std::fs::File>> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.lock_path())?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
     }
 
     /// Make this process's staging folder at `moment`: made here, never
@@ -307,7 +348,7 @@ impl<'a> Staging<'a> {
     fn create(&self, moment: u128) -> std::io::Result<PathBuf> {
         let folder = self
             .parent
-            .join(format!("{}{}-{moment}", self.prefix, std::process::id()));
+            .join(format!("{}-{}-{moment}", self.stem, std::process::id()));
         std::fs::create_dir(&folder)?;
         Ok(folder)
     }
@@ -340,7 +381,8 @@ impl<'a> Staging<'a> {
     fn names_a_folder(&self, name: &std::ffi::OsStr) -> bool {
         let Some(rest) = name
             .to_str()
-            .and_then(|name| name.strip_prefix(&self.prefix))
+            .and_then(|name| name.strip_prefix(&self.stem))
+            .and_then(|rest| rest.strip_prefix('-'))
         else {
             return false;
         };
@@ -375,6 +417,14 @@ pub(crate) fn roots_after_migration(
 ) -> DataDirs {
     let mut root = |from: PathBuf, to: PathBuf| match migrate(&from, &to) {
         Ok(Migrated::Nothing | Migrated::Copied(_)) => to,
+        Ok(Migrated::Busy) => {
+            tracing::info!(
+                from = %from.display(),
+                "another instance is copying the store kept before the application was \
+                 packaged: it stays the store this session"
+            );
+            from
+        }
         Ok(Migrated::TooLarge) => {
             tracing::warn!(
                 from = %from.display(),
@@ -646,8 +696,8 @@ mod tests {
         (scratch, old, new)
     }
 
-    /// What the scratch folder holds besides the old store and the new root:
-    /// a staging folder left behind.
+    /// What the scratch folder holds besides the old store, the new root and
+    /// the migration's lock file: a staging folder left behind.
     fn leftovers(scratch: &tempfile::TempDir) -> Vec<String> {
         std::fs::read_dir(scratch.path())
             .expect("listed")
@@ -658,7 +708,7 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
             })
-            .filter(|name| name != "old" && name != "new")
+            .filter(|name| !["old", "new", ".new.migrating.lock"].contains(&name.as_str()))
             .collect()
     }
 
@@ -805,6 +855,56 @@ mod tests {
             );
         }
         assert!(left.iter().any(|left| left == ".new.migrating-9-9-file"));
+    }
+
+    #[test]
+    fn a_second_instance_while_the_lock_is_held_neither_sweeps_nor_copies() {
+        let (scratch, old, new) = two_file_store();
+        // The first instance's copy, under way in its staging folder.
+        leftover_staging(scratch.path(), "new", 1);
+        let first = Staging::beside(&new)
+            .expect("its parent")
+            .lock()
+            .expect("opened")
+            .expect("the first instance takes the lock");
+        let mut copied = false;
+        let earlier = DataDirs {
+            roaming: old.clone(),
+            local: scratch.path().join("old-local"),
+        };
+        let dirs = DataDirs {
+            roaming: new.clone(),
+            local: scratch.path().join("new-local"),
+        };
+        let used = roots_after_migration(earlier, dirs, &mut |from, to| {
+            migrate_with(
+                from,
+                to,
+                1,
+                &mut |source, target| {
+                    copied = true;
+                    copy_file(source, target)
+                },
+                &mut rename,
+            )
+        });
+        assert!(!copied, "the second instance copies nothing");
+        assert!(!new.exists(), "and puts no root in place");
+        assert_eq!(
+            leftovers(&scratch),
+            [".new.migrating-0-0"],
+            "the first instance's staging folder is not swept"
+        );
+        assert_eq!(
+            used.roaming, old,
+            "the old store stays the store this session"
+        );
+        drop(first);
+        assert_eq!(
+            migrate_with(&old, &new, 2, &mut copy_file, &mut rename).expect("copied"),
+            Migrated::Copied(2),
+            "once the lock is free, the next start copies"
+        );
     }
 
     /// A link named as a staging folder is not followed: the sweep removes

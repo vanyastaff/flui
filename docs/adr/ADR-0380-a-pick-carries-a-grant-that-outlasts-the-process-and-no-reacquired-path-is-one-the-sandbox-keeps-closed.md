@@ -157,8 +157,11 @@ container, on its IO thread, never on the owner thread. A packaged application w
 holds no store and whose redirected `%APPDATA%` location holds one has it copied over once,
 within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the
 root, made with `create_dir` (one already at the name is an error, never a shared folder) and
-renamed into place whole. Staging folders an earlier copy left are removed first, by their exact
-name, folders only and no link followed, at most `MAX_SWEPT` at a time. A copy or rename that
+renamed into place whole. One instance migrates at a time: the sweep, the copy and the rename run
+under an exclusive lock on `.<name>.migrating.lock` beside the root (`File::try_lock`), and an
+instance that finds it held neither sweeps nor copies and stays on the old store this session.
+Staging folders an earlier copy left are removed first, under that lock, by their exact name,
+folders only and no link followed, at most `MAX_SWEPT` at a time. A copy or rename that
 fails removes its staging folder and reports its own error, and a root another instance put in
 place first is kept. A store that was not copied (the copy failed, or the store is past the
 bound or holds a link) stays where it is and stays the store: the session reads and writes it
@@ -217,6 +220,7 @@ manifest does not expose.
   `a_rename_that_fails_removes_its_staging_and_reports_its_own_error`,
   `staging_folders_an_earlier_copy_left_are_swept_by_exact_name_within_a_bound`,
   `a_sweep_follows_no_link` (Unix),
+  `a_second_instance_while_the_lock_is_held_neither_sweeps_nor_copies`,
   `a_staging_folder_already_there_is_an_error_not_a_shared_folder` and
   `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made` (`flui-native`);
   `a_picks_path_is_its_grant_and_resolves_while_the_file_is_there` against the stand-in portal on
