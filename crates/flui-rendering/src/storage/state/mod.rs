@@ -2,18 +2,16 @@
 //!
 //! This module provides lock-free state storage for render objects:
 //! - Atomic flags for lock-free dirty tracking
-//! - Mutable geometry and constraints (`Option<T>`, mutated each layout
-//!   pass via `&mut self` accessors)
+//! - Geometry and constraints of the last layout, in the protocol's
+//!   [`LayoutRecord`](crate::protocol::Protocol::LayoutRecord), overwritten
+//!   by each layout pass through `&mut self` accessors
 //! - Atomic offset updates for paint positioning
 //! - Boundary accessors (relayout/repaint) for pipeline-owner registration
 //!
-//! Geometry and constraints previously used `OnceCell` for write-once
-//! semantics; the resulting panic-on-second-set crashed any re-layout.
-//! They are stored as `Option<T>` so re-layout overwrites unconditionally,
-//! as a straight assignment. `set_constraints`/`set_geometry`/`set_size`/
-//! `set_sliver_geometry` take `&mut self`; production callers
-//! (`RenderEntry::layout` and the RenderBox/RenderSliver helpers) already
-//! hold a mut state borrow.
+//! A re-layout overwrites geometry and constraints unconditionally.
+//! `set_constraints`/`set_geometry`/`set_size`/`set_sliver_geometry` take
+//! `&mut self`; production callers (`RenderEntry::layout` and the
+//! RenderBox/RenderSliver helpers) already hold a mut state borrow.
 //!
 //! Production dirty marking does **not** live here. Authoritative render-object
 //! setters return `RenderUpdateImpact`; `flui-view` forwards that value to
@@ -36,8 +34,7 @@
 //! ```text
 //! RenderState<P>
 //!  ├── flags: AtomicRenderFlags (lock-free, &self mutation)
-//!  ├── geometry: Option<ProtocolGeometry<P>> (&mut self set/clear)
-//!  ├── constraints: Option<ProtocolConstraints<P>> (&mut self set/clear)
+//!  ├── layout: P::LayoutRecord (geometry and constraints, &mut self set/clear)
 //!  └── offset: OffsetCell (lock-free atomic updates)
 //! ```
 //!
@@ -52,9 +49,9 @@
 //!
 //! ## Mutable Geometry/Constraints
 //!
-//! Plain `Option<T>` fields mutated via `&mut self`:
-//! - Set: Direct field assignment (≈1ns)
-//! - Read: Direct field load (zero-cost via `Copy` types)
+//! `P::LayoutRecord` accessors through `&mut self`:
+//! - Set: a field assignment (a sliver's first set allocates its record)
+//! - Read: a field load, one pointer hop for a sliver
 //! - Re-layout: Idempotent overwrite — no clear-before-set required
 //!
 //! Thread-safety on these fields is enforced by Rust's borrow checker:
@@ -100,9 +97,11 @@ mod constraints;
 mod flag_accessors;
 mod geometry;
 mod layout_cache;
+mod layout_record;
 mod offset;
 
 pub use layout_cache::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
+pub use layout_record::{BoxLayoutRecord, LayoutRecord, SliverLayoutRecord};
 
 use offset::OffsetCell;
 
@@ -126,7 +125,7 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 /// This struct provides efficient storage for render object state with:
 /// - Lock-free dirty flags using atomic operations
 /// - Boundary accessors (relayout/repaint) for pipeline-owner registration
-/// - Mutable geometry and constraints using `Option` (set/cleared via `&mut self`)
+/// - Geometry and constraints of the last layout, in `P::LayoutRecord` (set/cleared via `&mut self`)
 /// - Atomic offset updates for paint positioning
 ///
 /// Boundary-aware dirty propagation is **not** performed here. Production
@@ -135,14 +134,12 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 ///
 /// # Memory Layout
 ///
-/// ```text
-/// [AtomicRenderFlags: 4 bytes]        - Hot path, always accessible
-/// [Option<Geometry>: 0-N bytes]        - Set/cleared each layout pass
-/// [Option<Constraints>: 0-N bytes]     - Set/cleared each layout pass
-/// [OffsetCell: 8 bytes]             - Lock-free f64 pair
-/// ```
-///
-/// Total: ≈44-60 bytes depending on protocol geometry size
+/// Every node occupies a render-slab slot as large as the larger of the
+/// two protocols' entries, so this struct is sized for the box protocol:
+/// the box record (`Size`, `BoxConstraints`) is inline and the sliver
+/// record is one pointer to a record allocated on the sliver's first
+/// layout. `size_of::<RenderNode>()` is pinned by
+/// `render_node_slot_stays_within_its_budget`.
 ///
 /// # Thread Safety
 ///
@@ -165,25 +162,14 @@ pub struct RenderState<P: Protocol> {
     /// Uses single atomic operations for best performance.
     flags: AtomicRenderFlags,
 
-    /// Cached layout result (protocol-specific geometry).
-    ///
-    /// For BoxProtocol: Size
-    /// For SliverProtocol: SliverGeometry
-    ///
-    /// Mutated each layout pass via [`set_geometry`](Self::set_geometry).
-    /// Stored as `Option` rather than `OnceCell` — re-layout must be
-    /// idempotent (a second-write panic would crash frame 2's re-layout).
-    geometry: Option<ProtocolGeometry<P>>,
-
-    /// Last constraints used for layout.
-    ///
-    /// For BoxProtocol: BoxConstraints
-    /// For SliverProtocol: SliverConstraints
-    ///
-    /// Used for cache validation and the relayout-boundary short-circuit.
-    /// Stored as `Option` rather than `OnceCell` for the same idempotent
-    /// re-layout reason as `geometry`; see field doc above for rationale.
-    constraints: Option<ProtocolConstraints<P>>,
+    /// The constraints of the last layout and the geometry it produced
+    /// (`Size` and `BoxConstraints` for a box, `SliverGeometry` and
+    /// `SliverConstraints` for a sliver), each overwritten by the next
+    /// layout. The constraints are what the relayout-boundary short-circuit
+    /// compares against. The protocol chooses where the record lives: a box
+    /// keeps it inline, a sliver behind one allocation made on first write,
+    /// so the slab slot every node occupies is sized by the box record.
+    layout: P::LayoutRecord,
 
     /// Offset relative to parent (atomic for lock-free updates).
     ///
@@ -294,8 +280,7 @@ impl<P: Protocol> RenderState<P> {
     pub fn new() -> Self {
         Self {
             flags: AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
-            geometry: None,
-            constraints: None,
+            layout: P::LayoutRecord::default(),
             offset: OffsetCell::new(flui_foundation::geometry::Offset::ZERO),
             layout_generation: AtomicU64::new(1),
             placed_generation: AtomicU64::new(1),
@@ -321,8 +306,7 @@ impl<P: Protocol> RenderState<P> {
     pub fn with_flags(flags: RenderFlags) -> Self {
         Self {
             flags: AtomicRenderFlags::new(flags),
-            geometry: None,
-            constraints: None,
+            layout: P::LayoutRecord::default(),
             offset: OffsetCell::new(flui_foundation::geometry::Offset::ZERO),
             layout_generation: AtomicU64::new(1),
             placed_generation: AtomicU64::new(1),
@@ -439,8 +423,7 @@ where
     fn clone(&self) -> Self {
         Self {
             flags: AtomicRenderFlags::new(self.flags.load()),
-            geometry: self.geometry.clone(),
-            constraints: self.constraints.clone(),
+            layout: self.layout.clone(),
             offset: OffsetCell::new(self.offset.load()),
             layout_generation: AtomicU64::new(self.layout_generation.load(Ordering::Relaxed)),
             placed_generation: AtomicU64::new(self.placed_generation.load(Ordering::Relaxed)),
