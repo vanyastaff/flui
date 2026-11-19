@@ -183,6 +183,18 @@ impl<'a> ProviderContext<'a> {
         self.locals.get_or_default()
     }
 
+    /// The acquiring UI runtime's cache `T`, as
+    /// [`runtime_local`](Self::runtime_local) keeps it, which that runtime
+    /// also trims under memory pressure before any subscriber hears the notice
+    /// ([`RuntimeLocals::get_or_default_reclaimed`]).
+    #[must_use]
+    pub fn runtime_cache<T>(&self) -> Rc<T>
+    where
+        T: Default + flui_foundation::memory::ReclaimMemory + 'static,
+    {
+        self.locals.get_or_default_reclaimed()
+    }
+
     /// The window the acquiring widget belongs to, if any.
     #[must_use]
     pub fn window(&self) -> Option<WindowRef> {

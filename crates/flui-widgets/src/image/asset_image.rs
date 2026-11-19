@@ -4,39 +4,31 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::{ImageCache, ImageSource};
+use flui_assets::ImageSource;
 use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 
-/// An [`ImageProvider`] that loads and decodes an asset file through a
-/// `flui-assets` [`ImageCache`], off the calling thread.
+/// An [`ImageProvider`] that loads and decodes an asset file through the UI
+/// runtime's `flui-assets` image cache, off the calling thread.
 ///
-/// # The registry is an argument
-///
-/// There is no process-wide registry: the registry is an explicit
-/// constructor argument, so the same registry (and therefore
-/// the same decoded-image cache and lifetime) an
-/// application already manages is the one `AssetImage` loads through. The
-/// registry keeps the decoded images: two `AssetImage`s for one path share a
-/// decode only when they share a registry, and the registry gives them back
-/// under memory pressure once the application registers it
-/// (`AppConfig::memory_reclaim` in `flui-app`).
+/// The cache is the one [`Image`](crate::Image) acquired
+/// (`flui_assets::ImageCacheCapability`, ADR-0387): every `AssetImage` for
+/// one path in one UI runtime shares its decode and its decoded pixels, and
+/// the runtime gives them back under memory pressure.
 ///
 /// Prefer [`Image::asset`](crate::Image::asset) as the ergonomic constructor.
 #[derive(Debug, Clone)]
 pub struct AssetImage {
-    registry: Arc<ImageCache>,
     path: Arc<str>,
 }
 
 impl AssetImage {
-    /// Creates a provider that loads `path` through `registry` on a decoded
-    /// cache miss during asynchronous resolution.
-    pub fn new(registry: Arc<ImageCache>, path: impl Into<String>) -> Self {
+    /// Creates a provider that loads `path` through the UI runtime's image
+    /// cache on a decoded cache miss during asynchronous resolution.
+    pub fn new(path: impl Into<String>) -> Self {
         Self {
-            registry,
             path: Arc::from(path.into()),
         }
     }
@@ -52,47 +44,49 @@ impl AssetImage {
 }
 
 impl ImageProvider for AssetImage {
-    /// Returns the registry's decoded image for this path, if any.
+    /// Always [`ImageProviderError::RequiresAsyncResolve`]: the decoded image
+    /// is kept by the cache [`Image`](crate::Image) acquired, and `resolve`
+    /// has none. [`cached`](ImageProvider::cached) probes with it.
     ///
     /// `AssetImage` never performs blocking I/O here — the whole point of the
-    /// provider is to load off-thread. A cache miss is
-    /// [`ImageProviderError::RequiresAsyncResolve`]: the caller must go
-    /// through [`resolve_async`](ImageProvider::resolve_async) (which
-    /// [`Image`](crate::Image) does automatically via
-    /// [`cache_key`](ImageProvider::cache_key)).
+    /// provider is to load off-thread.
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-        self.registry
-            .get(&self.source())
-            .ok_or(ImageProviderError::RequiresAsyncResolve {
-                provider_name: "AssetImage",
-            })
+        Err(ImageProviderError::RequiresAsyncResolve {
+            provider_name: "AssetImage",
+        })
     }
 
-    /// Reuses the registry's decoded image, or shares an in-flight load for
+    /// Reuses the cache's decoded image, or shares an in-flight load for
     /// the same path. A hit refreshes recency without reading the source.
-    /// The registry reads and decodes on `services`' lanes, or where the
-    /// future is polled without them. Failed loads are not cached and a later
-    /// request can retry. Dropping the future cancels the load once no other
-    /// request waits for it.
+    /// The cache reads and decodes on `services`' lanes, or where the
+    /// future is polled without them. Without a cache it fails with
+    /// [`ImageProviderError::ImageCacheUnavailable`] and reads nothing.
+    /// Failed loads are not cached and a later request can retry. Dropping
+    /// the future cancels the load once no other request waits for it.
     fn resolve_async(
         &self,
         services: &ImageServices,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let load = self
-            .registry
-            .load(&self.source(), &services.load_services());
+        let Some(cache) = services.image_cache() else {
+            let image = self.path.to_string();
+            return Box::pin(
+                async move { Err(ImageProviderError::ImageCacheUnavailable { image }) },
+            );
+        };
+        let load = cache.load(&self.source(), &services.load_services());
         Box::pin(async move {
             load.await
                 .map_err(|error| ImageProviderError::from_load_error(&error))
         })
     }
 
-    fn cached(&self, _services: &ImageServices) -> Option<PixelImage> {
-        self.registry.get(&self.source())
+    /// The cache's decoded image for this path; `None` without a cache.
+    fn cached(&self, services: &ImageServices) -> Option<PixelImage> {
+        services.image_cache()?.get(&self.source())
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {
-        Some(ImageCacheKey::asset(&self.registry, Arc::clone(&self.path)))
+        Some(ImageCacheKey::asset(Arc::clone(&self.path)))
     }
 }

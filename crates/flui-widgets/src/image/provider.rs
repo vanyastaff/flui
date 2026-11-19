@@ -15,8 +15,8 @@
 //! - [`resolve_async`](ImageProvider::resolve_async): a future of the
 //!   provider's own, for a source with its own loader, handed the same
 //!   background lanes. `AssetImage` (behind the `asset-images` feature) and
-//!   `NetworkImage` (behind the same feature) take this way: their registry
-//!   reads and decodes on those lanes.
+//!   `NetworkImage` (behind the same feature) take this way: the UI runtime's
+//!   image cache reads and decodes on those lanes.
 //!
 //! A provider with no key, such as [`DirectImageProvider`], resolves inline
 //! on every build.
@@ -47,22 +47,41 @@ use flui_view::background::Background;
 
 use super::cache_key::ImageCacheKey;
 
-/// What a provider's own loader runs on: the UI runtime's background lanes
-/// and the host's HTTP client, as [`Image`](crate::Image) acquired them in
-/// `init_state`. Either is absent on a host that does not provide it.
+/// What a provider's own loader runs on: the UI runtime's background lanes,
+/// the host's HTTP client and, with the `asset-images` feature, the UI
+/// runtime's image cache, as [`Image`](crate::Image) acquired them in
+/// `init_state`. Each is absent on a host that does not provide it.
 ///
 /// Cheap to clone. A caller outside a widget builds one from what it has.
 #[derive(Clone, Debug, Default)]
 pub struct ImageServices {
     background: Option<Background>,
     http: Option<Http>,
+    #[cfg(feature = "asset-images")]
+    image_cache: Option<Arc<flui_assets::ImageCache>>,
 }
 
 impl ImageServices {
-    /// Neither lanes nor an HTTP client.
+    /// No lanes, no HTTP client and no image cache.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Keep and share decoded images in `cache`.
+    #[cfg(feature = "asset-images")]
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_image_cache(mut self, cache: Arc<flui_assets::ImageCache>) -> Self {
+        self.image_cache = Some(cache);
+        self
+    }
+
+    /// The image cache, if the host keeps one
+    /// (`flui_assets::ImageCacheCapability`).
+    #[cfg(feature = "asset-images")]
+    #[must_use]
+    pub fn image_cache(&self) -> Option<&Arc<flui_assets::ImageCache>> {
+        self.image_cache.as_ref()
     }
 
     /// Run on `background`'s lanes.
@@ -380,6 +399,14 @@ pub enum ImageProviderError {
         url: String,
     },
 
+    /// An asset or network image was requested where the host keeps no image
+    /// cache (`flui_assets::ImageCacheCapability`); nothing was read.
+    #[error("no image cache to load `{image}` through")]
+    ImageCacheUnavailable {
+        /// The asset path or URL that was not loaded.
+        image: String,
+    },
+
     /// A [`DecodeJob`] step ended without an answer: its lane refused it, it
     /// panicked, or the UI runtime ended first.
     #[error("image decode did not finish: {0}")]
@@ -405,6 +432,7 @@ impl ImageProviderError {
             Self::SourceNotFound { .. } => "source-not-found",
             Self::AssetLoadFailed { .. } => "asset-load-failed",
             Self::HttpUnavailable { .. } => "http-unavailable",
+            Self::ImageCacheUnavailable { .. } => "image-cache-unavailable",
             Self::Background(_) => "background",
         }
     }

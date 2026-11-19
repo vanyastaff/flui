@@ -484,7 +484,10 @@ The primary selection's handle and backend take the same types.
   a typed slot per `T`, made with `T::default()` on first ask, which a capability names with a
   private type. The handles' constructors take the context and find their slot there, so no
   provider has to remember to share it. Later capabilities keep their per-runtime state the same
-  way (an HTTP pool, an open store).
+  way (an HTTP pool, an open store). A slot that is a cache is asked for with
+  `ProviderContext::runtime_cache::<T>()` (`T: ReclaimMemory`): the runtime trims it under memory
+  pressure before any subscriber hears the notice, as it does the decoded images of
+  [ADR-0387](ADR-0387-each-ui-runtime-keeps-one-image-cache.md).
 - **Drop order at retirement.** The runtime ends its pending completions first, then drops the
   jobs still queued, then retires its runtime-local slots, each drop contained and the first
   failure kept. A completion's closure dropped in the first step still finds its provider's

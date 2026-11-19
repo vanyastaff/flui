@@ -30,6 +30,12 @@ testing = ["flui-platform/testing", "flui-layer/testing"]
 # hot-reload crate; `flui-app` always turns it on and translates an installed
 # `DevReloadHook`'s event into it (ADR-0311 §1).
 hot-reload = []
+# The image cache each UI runtime keeps for `Image::asset` and `Image::network`
+# (`flui_assets::ImageCacheCapability`, ADR-0387), registered among the
+# built-ins in every window system and trimmed by the runtime under memory
+# pressure. A host forwards its own `images` feature here, so a headless test
+# acquires the cache exactly when a run of the same build would.
+images = ["dep:flui-assets"]
 
 [dependencies]
 # `ActionRequest`, the assistive-technology variant of `HostInput` (ADR-0207 §1).
@@ -58,6 +64,8 @@ flui-platform = { workspace = true }
 # Window sizes and geometry; `FontCollection`/`TextContext`, the text service
 # each UI runtime owns over the app's font collection (ADR-0092 §3).
 flui-painting = { workspace = true }
+# The image cache the built-ins register (`images`).
+flui-assets = { workspace = true, optional = true }
 # The UI runtime core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `flui_view::__runtime` is the seam a
 # UI runtime drives it through), its render pipeline, the UI runtime-owned scheduler,

@@ -19,8 +19,9 @@ use super::{CapabilityConflict, CapabilityRegistry};
 
 /// The providers a host ships for an application in one window system.
 ///
-/// The clipboard, the background lanes, the storage and the application's
-/// assets (ADR-0384) are in every window system; the primary selection only
+/// The clipboard, the background lanes, the storage, the application's
+/// assets (ADR-0384) and, with the `images` feature, each UI runtime's image
+/// cache (ADR-0387) are in every window system; the primary selection only
 /// where the window system has one (X11's and Wayland's, so Linux's, never a
 /// browser's page); HTTP where the host was built with it; and what only one
 /// host can ship (a runner's native window) through
@@ -33,7 +34,8 @@ pub struct BuiltIns {
 
 impl BuiltIns {
     /// The providers every window system has: `clipboard`, `background`,
-    /// `storage` and `assets`, in `windows`.
+    /// `storage` and `assets`, in `windows`, and with the `images` feature
+    /// the image cache each UI runtime keeps.
     #[must_use]
     pub fn new(
         windows: WindowSystem,
@@ -47,6 +49,10 @@ impl BuiltIns {
         registrar.provide::<BackgroundCapability>(background);
         registrar.provide::<StorageCapability>(storage);
         registrar.provide::<AssetBundleCapability>(assets);
+        #[cfg(feature = "images")]
+        registrar.provide::<flui_assets::ImageCacheCapability>(
+            flui_assets::ImageCacheCapability::per_runtime,
+        );
         Self { windows, registrar }
     }
 

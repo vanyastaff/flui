@@ -262,6 +262,9 @@ mod measured {
         SingleActivator as _, WidgetsLocalizations as _, ZoomIntent as _,
     };
     use flui_sdk::widgets::{
+        AnimatedIcon as _, AnimatedIconData as _, IconCommand as _, IconPath as _,
+    };
+    use flui_sdk::widgets::{
         CellPosition as _, SetSize as _, SortDirection as _, TableShape as _, TextSelection as _,
     };
     use flui_sdk::widgets::{
