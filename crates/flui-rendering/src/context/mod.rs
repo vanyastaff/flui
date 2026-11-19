@@ -57,10 +57,6 @@ pub mod proxy_queries;
 
 pub use flui_painting::{Canvas, DisplayList, paint::Paint, paint::PaintStyle};
 pub use hit_test::HitTestContext;
-// Promoted to `testing` feature so flui-objects' cross-crate tests can reach
-// leaf_intrinsics/leaf_dry_layout/leaf_dry_baseline (see flui-objects extraction plan §7).
-#[cfg(any(test, feature = "testing"))]
-pub use intrinsics::test_support as intrinsics_test_support;
 pub use intrinsics::{
     BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, DryBaselineChildRequest,
     DryBaselineChildResponse, DryLayoutChildRequest, DryLayoutChildResponse,

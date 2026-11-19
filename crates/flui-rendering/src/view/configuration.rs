@@ -153,12 +153,4 @@ impl ViewConfiguration {
         );
         self.physical_constraints.constrain(physical_size)
     }
-
-    /// Transforms the provided size in physical pixels to logical pixels.
-    pub fn to_logical_size(&self, physical_size: Size) -> Size {
-        Size::new(
-            physical_size.width / self.device_pixel_ratio,
-            physical_size.height / self.device_pixel_ratio,
-        )
-    }
 }

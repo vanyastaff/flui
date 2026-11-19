@@ -117,12 +117,6 @@ impl RenderNode {
         matches!(self, Self::Box(_))
     }
 
-    /// Returns true if this is a Sliver protocol node.
-    #[inline]
-    pub fn is_sliver(&self) -> bool {
-        matches!(self, Self::Sliver(_))
-    }
-
     /// Returns the protocol name.
     pub fn protocol_name(&self) -> &'static str {
         match self {
@@ -456,17 +450,6 @@ impl RenderNode {
     #[inline]
     pub fn mark_compositing_flag(&self) {
         with_entry!(self, entry => entry.state().flags().mark_needs_compositing());
-    }
-
-    /// Sets the legacy `NEEDS_SEMANTICS` flag on this node's state.
-    ///
-    /// The current semantics pass is queue-driven and does not clear this
-    /// flag, so canonical scheduling uses
-    /// [`PipelineOwner::mark_needs_semantics`](crate::pipeline::PipelineOwner::mark_needs_semantics)
-    /// instead. This accessor remains only for future flag-based work.
-    #[inline]
-    pub fn mark_semantics_flag(&self) {
-        with_entry!(self, entry => entry.state().flags().mark_needs_semantics());
     }
 
     /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
@@ -878,13 +861,6 @@ impl RenderNode {
     /// nodes).
     pub fn geometry_sliver(&self) -> Option<crate::constraints::SliverGeometry> {
         self.as_sliver().and_then(|entry| entry.state().geometry())
-    }
-
-    /// Returns an immutable reference to the Box render object.
-    ///
-    /// Panics if this is not a Box node.
-    pub fn box_render_object(&self) -> &dyn RenderObject<BoxProtocol> {
-        self.as_box_unchecked().render_object()
     }
 
     /// Returns a mutable reference to the Box render object.

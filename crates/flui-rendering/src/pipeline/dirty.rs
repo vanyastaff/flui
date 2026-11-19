@@ -361,7 +361,7 @@ impl PaintQueue {
     /// and derives its dispositions from it, so a per-id accessor would be a
     /// second way to answer a question that already has one.
     #[cfg(test)]
-    pub fn kind_for_test(&self, id: RenderId) -> Option<PaintKind> {
+    pub(crate) fn kind_for_test(&self, id: RenderId) -> Option<PaintKind> {
         self.kind_of(id).cloned()
     }
 

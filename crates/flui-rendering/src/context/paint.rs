@@ -375,14 +375,6 @@ impl FragmentRecorder {
         &mut self.ops
     }
 
-    /// Records under `anchor`: what [`PaintContext::paint_anchor`] reports to
-    /// the node painting into this recorder.
-    #[must_use]
-    pub fn with_paint_anchor(mut self, anchor: Option<PaintAnchor>) -> Self {
-        self.anchor = anchor;
-        self
-    }
-
     /// Device pixel ratio for this paint pass (text shaping and
     /// hairline snapping need it).
     pub fn dpr(&self) -> f64 {
@@ -768,13 +760,6 @@ impl PaintContext<'_, Single> {
 }
 
 impl PaintContext<'_, Optional> {
-    /// Splices the child if one is attached.
-    pub fn paint_child_if_present(&mut self) {
-        if self.child_count > 0 {
-            self.rec.child(0, None);
-        }
-    }
-
     /// `true` when a child is attached.
     pub fn has_child(&self) -> bool {
         self.child_count > 0

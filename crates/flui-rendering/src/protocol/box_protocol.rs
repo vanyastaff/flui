@@ -71,17 +71,6 @@ impl<P: ParentData + Default> ChildState<P> {
             parent_data: P::default(),
         }
     }
-
-    /// Creates a new child state with specific parent data.
-    pub fn with_parent_data(id: RenderId, parent_data: P) -> Self {
-        Self {
-            id,
-            size: Size::ZERO,
-            offset: Offset::ZERO,
-            laid_out_this_pass: false,
-            parent_data,
-        }
-    }
 }
 
 // ============================================================================

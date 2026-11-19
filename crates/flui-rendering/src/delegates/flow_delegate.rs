@@ -314,9 +314,4 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
             });
         }
     }
-
-    /// Returns whether all children have been painted.
-    pub fn all_children_painted(&self) -> bool {
-        self.painted.iter().all(|&p| p)
-    }
 }

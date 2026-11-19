@@ -76,15 +76,6 @@ pub use flui_foundation::geometry::Size as __MacroSize;
 pub mod binding;
 pub mod constraints;
 pub mod context;
-// `sliver_grid_delegate` is part of the default build because
-// `RenderSliverGrid` now ships unconditionally in `flui-objects`.
-// `custom_painter`, `flow_delegate`, `single_child_layout_delegate`, and
-// `multi_child_layout_delegate` are unconditional the same way now that
-// `RenderCustomPaint`, `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
-// and `RenderCustomMultiChildLayoutBox` ship unconditionally too
-//. The remaining companion-less delegate
-// (`custom_clipper`) stays gated inside `delegates/mod.rs` until its
-// render object lands — opt in via `--features experimental-delegates`.
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
@@ -99,12 +90,6 @@ pub use flui_semantics as semantics;
 // crate (the flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
 pub mod storage;
-// Promoted from `cfg(test) pub(crate)` to the `testing` feature so
-// flui-objects' test crate can reach NoopSliver cross-crate when it enables
-// `features = ["testing"]`. Part of the custom-object-authoring test-support
-// contract (the flui-objects extraction).
-#[cfg(any(test, feature = "testing"))]
-pub mod test_support;
 // Protocol-agnostic windowing math (ADR-0003). Its public surface names no
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer
@@ -172,18 +157,17 @@ pub mod prelude {
             debug_dump_render_tree,
         },
         parent_data::{
-            BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,
-            SliverMultiBoxAdaptorParentData, SliverParentData, SliverPhysicalParentData,
-            StackParentData,
+            BoxParentData, FlexFit, FlexParentData, ParentData, SliverMultiBoxAdaptorParentData,
+            SliverParentData, SliverPhysicalParentData, StackParentData,
         },
         pipeline::{Canvas, Paint, PaintStyle, PipelineCell, PipelineOwner},
         protocol::{BoxProtocol, Protocol, SliverProtocol},
         semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner},
         traits::{RenderBox, RenderObject, TextBaseline},
         view::{
-            CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport,
-            RenderView, RevealedOffset, ScrollDirection, ScrollPosition, SliverPaintOrder,
-            ViewConfiguration, ViewportOffset,
+            CacheExtentStyle, FixedViewportOffset, RenderAbstractViewport, RenderView,
+            RevealedOffset, ScrollDirection, ScrollPosition, SliverPaintOrder, ViewConfiguration,
+            ViewportOffset,
         },
     };
     // Grid, custom-paint, flow, and custom-layout delegates — always available
@@ -195,10 +179,6 @@ pub mod prelude {
         SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };
-    // Remaining companion-less delegates still gated until their render
-    // objects land.
-    #[cfg(feature = "experimental-delegates")]
-    pub use crate::delegates::{CustomClipper, RectClipper};
 }
 
 // Re-export key types at crate root
