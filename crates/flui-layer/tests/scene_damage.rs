@@ -1820,7 +1820,7 @@ fn covers(patch: DamageRegion, diff: DamageRegion, closures: &Closures) -> bool 
 
 /// What each backdrop of `tree` reads and writes.
 fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Closures) {
-    let layer = tree.get_layer(id).expect("a node of the tree");
+    let layer = tree.layer(id).expect("a node of the tree");
     let ctm = if let Layer::Transform(transform) = layer {
         parent * *transform.transform()
     } else {

@@ -17,8 +17,8 @@ use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::pending::{Contents, PendingLog};
 use super::table::{Table, TableCost};
 use super::version::{NodeRecord, SceneVersion, VersionInner, VersionSpares};
+use crate::damage::{DamageRegion, FullReason, NonFinite, ResyncReason};
 use crate::layer::Layer;
-use crate::scene_snapshot::{DamageRegion, FullReason, NonFinite, ResyncReason};
 
 /// A node's offset in its parent's slot space; finite by construction.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -2957,7 +2957,7 @@ pub(crate) mod text_store {
             let mut parent = tree.parent(id);
             let mut clipped = false;
             while let Some(id) = parent {
-                if let Some(Layer::ClipRect(clip)) = tree.get_layer(id) {
+                if let Some(Layer::ClipRect(clip)) = tree.layer(id) {
                     clipped |=
                         clip.clip_behavior() == Clip::HardEdge && clip.clip_rect().width() == 60.0;
                 }

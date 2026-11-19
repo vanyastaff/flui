@@ -729,8 +729,10 @@ capture (ADR-0230), pinned by
 ### Annotated regions and external textures
 
 `RenderAnnotatedRegion` annotates its own box through a paint scope that becomes an
-`AnnotatedRegionLayer`; readers use `LayerTree::find_annotations` (ADR-0232), pinned by
-`harness_annotated_region_is_found_in_the_scene_over_its_box`. `RenderTexture` fills
+`AnnotatedRegionLayer`; readers use `SceneVersion::find_annotation` (ADR-0232). The harness
+pins the region over its box (`harness_annotated_region_is_found_in_the_scene_over_its_box`),
+and `flui-layer` pins that a version answers as its flattened tree does
+(`a_version_resolves_links_and_annotations_as_its_flattened_tree_does`). `RenderTexture` fills
 the largest box its constraints allow and draws its texture there; a new frame
 revision repaints it, which is how a frame fed through the presentation's
 `TextureRegistry` reaches the screen without other changes (ADR-0233), pinned by

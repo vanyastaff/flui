@@ -15,7 +15,7 @@ Citations below name symbols, not line numbers.
 | `PictureLayer` | [`src/layer/picture.rs`](src/layer/picture.rs) | `Arc<DisplayList>`; the leaf the paint walk emits. |
 | `TextureLayer`, `PlatformViewLayer`, `PerformanceOverlayLayer` | `texture.rs`, `platform_view.rs`, `performance_overlay.rs` | Present as vocabulary; see [Producers](#producers). |
 | `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
-| `ClipRectLayer`, `ClipRRectLayer`, `ClipRSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
+| `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
 | `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
@@ -46,7 +46,7 @@ and unboxed, so a sealed picture run costs no heap allocation beyond its `Arc`. 
 
 ### 2. Append-only `LayerTree` with a leader index, not a mutable tree plus a side registry
 
-The tree is not retained across frames: a fresh one is built per frame, so it needs exactly one structural
+A tree is built whole and never edited (a frame retains the scene instead, §9), so it needs one structural
 primitive: `LayerTree::push_child(parent, node)`, which mints the child's id in the call that links
 it. A fresh id has no descendants, so a cycle or a doubly-parented node cannot be expressed; there
 is no `remove`, no re-parenting, no node-level link setter, no `&mut` reach into a node, and no
@@ -57,7 +57,7 @@ alias (nothing is ever freed). A parent is always pushed before its child, so it
 allocation. `LayerId` stays a plain 1-based index; a generational id is only
 needed if a holder ever outlives the frame that minted it (none does today).
 
-`LayerLink` is a `Copy` token, so the tree holds `leaders: HashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
+`LayerLink` is a `Copy` token, so the tree holds `leaders: FxHashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
 a `Leader`. The earlier shape — a `LinkRegistry` beside the tree that the composer filled and the
 UI runtime had to commit "as one pair" with the tree — duplicated the leader's offset and size off the
 `LeaderLayer` and kept a reverse follower index nothing read. Two leaders on one link in one frame
@@ -66,8 +66,7 @@ is a widget-tree error; a debug build trips, a release build keeps the later one
 Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
 `tests/follower.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
 branch through the index), `flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`).
-That `push_child` under an unknown parent panics, and that a semantics-failure retry submits the
-retained tree with its leader index intact: **Unasserted:** no test pins this.
+That `push_child` under an unknown parent panics: **Unasserted:** no test pins this.
 
 ### 3. One `Layer::local_translation`, read by the walk and the resolver
 
@@ -179,7 +178,7 @@ misses a change under-reports silently; the differ derives damage from the two w
 answer that shares none of the footprint's bookkeeping (`patch_damage_covers_diff_damage`). It is
 not on the frame path: a walk of every layer each frame is the cost the retained scene removed
 (`damage_diff` bench: about 200 µs for 1,000 boundaries). Tests: `src/damage/tests.rs`,
-`scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
+`damage/region.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
 
 ### 9. The retained scene is a persistent value — [ADR-0304 §1–§3](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
@@ -314,9 +313,10 @@ feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `pre
 
 ## Producers
 
-Five variants have no production producer today: `Canvas`, `Texture`, `PlatformView`,
-`ColorFilter`, `ImageFilter`. The other fourteen are built in production, all but one by
-`flui-rendering`'s paint composer (`crates/flui-rendering/src/pipeline/owner/paint.rs`):
+Six variants have no production producer today: `Picture`, `Canvas`, `Texture`, `PlatformView`,
+`ColorFilter`, `ImageFilter`. The other thirteen are written into the retained scene, all but one
+by `flui-rendering`'s paint composer (`crates/flui-rendering/src/pipeline/owner/paint.rs`), each
+as an effect entry of its boundary's content (`push_layer`, over `ContentBuilder::push_effect`):
 
 - `scope_layer` and `clip_layer` turn a recorded `FragmentScope` or `PaintClip` into `Opacity`,
   `ClipRect`, `ClipRRect`, `ClipSuperellipse`, `ClipPath`, `ShaderMask`, `BackdropFilter`,
@@ -324,10 +324,10 @@ Five variants have no production producer today: `Canvas`, `Texture`, `PlatformV
   `PaintClip::RSuperellipse`, which `RenderClipRSuperellipse` (`flui-objects`, behind the
   `ClipRSuperellipse` widget) records; `AnnotatedRegion` comes from `PaintContext::with_annotated_region`,
   which `RenderAnnotatedRegion` calls;
-- `FragmentComposer` builds `Offset` (the root at a device pixel ratio of 1, and each
-  repaint-boundary child in `place_boundary_impl`), `Transform` (the root's device-pixel-ratio
-  scale, and a node's own paint transform in `own_effect_layers`) and `Picture` (each sealed
-  recording, `seal_picture`);
+- `FragmentComposer` writes `Offset` (the root at a device pixel ratio of 1) and `Transform` (the
+  root's device-pixel-ratio scale, and a node's own paint transform in `own_effect_layers`). A
+  sealed recording is a chunk, not a `Picture` (`seal_picture`), and a repaint-boundary child is a
+  slot (`place_boundary_impl`);
 - `flui-runtime` adds `PerformanceOverlay` (`PerformanceOverlayLayer::record` in
   `crates/flui-runtime/src/presentation.rs`).
 
@@ -335,12 +335,15 @@ Five variants have no production producer today: `Canvas`, `Texture`, `PlatformV
 platform layer. External textures reach the GPU without the layer: `RenderTexture`
 (`flui-objects`) records a `DrawOp::Texture` into its picture, and the host hands each frame's
 `TextureRegistry` updates to the backend before it renders. `Canvas` is a recorder inside the output
-vocabulary that `PictureLayer` already covers, built only by tests and benches. `ColorFilter` and
+vocabulary that `PictureLayer` already covers, built only by tests and benches; `Picture` itself is
+what a hand-built tree and `SceneVersion::flatten` draw a chunk as. `ColorFilter` and
 `ImageFilter` are lowered by `flui-engine` (`layer_render.rs`), but no `FragmentScope` produces
 them: a widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
 `flui-painting`) inside a picture. `AnnotatedRegion` has both halves: the writer above and the
-reader `LayerTree::find_annotations` (`src/tree/annotations.rs`, tested in `tests/annotations.rs`),
-which no production path calls yet. Whether each unproduced variant is "not wired yet" or
+reader `SceneVersion::find_annotation`, which `flui-runtime`'s `overlay_style.rs` asks for the
+system UI overlay style under a probe point; `LayerTree::find_annotations`
+(`src/tree/annotations.rs`, tested in `tests/annotations.rs`) answers the same for a hand-built
+tree. Whether each unproduced variant is "not wired yet" or
 "never" is a roadmap decision, not a crate one — recorded here so it is not re-derived.
 
 ---
@@ -350,9 +353,9 @@ which no production path calls yet. Whether each unproduced variant is "not wire
 | Site | Primitive | Category |
 |---|---|---|
 | `LayerTree::nodes` | `Vec<LayerNode>` | Owned, single mutator; no lock, no atomics |
-| `LayerTree::leaders` | `HashMap<LayerLink, LayerId>` | Owned, filled during the build |
-| `Scene`, `SceneSnapshot` | by value | Moved across the raster boundary; `Send + Sync` plain data, pinned by `static_assertions` in `scene_snapshot.rs` |
-| `LayerLink::new` | `static AtomicU64`, `Relaxed` | Identity only; the RMW is atomic under every ordering and publishes nothing else |
+| `LayerTree::leaders` | `FxHashMap<LayerLink, LayerId>` | Owned, filled during the build |
+| `Scene`, `SceneSnapshot` | by value | Moved across the raster boundary; `Send + Sync` plain data, pinned by a compile-time `Send + Sync` check in `scene_snapshot.rs` |
+| `LayerLink::new` | `static AtomicIdMint<NonZeroU64>` | Identity only; minted from every UI thread, never wraps, panics after 2^64 - 1 links |
 | `Lineage::fresh` | `static AtomicIdMint<NonZeroU64>` (`counter` grant) | Identity only; minted from every UI thread, never wraps, refuses with `IdExhausted` |
 | `SceneVersion` | `Arc` over persistent tables of `Arc` nodes | Immutable once applied; `Send + Sync` by its auto traits (`a_version_is_send_and_sync`), shared by the owner and the raster side |
 | `SceneOwner` | owned ledger and `IdMint` | Single owner (the UI runtime); `Send`, not `Sync` |
