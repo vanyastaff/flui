@@ -2,7 +2,7 @@
 //! holds.
 //!
 //! The scene owner produces it as the footprint of each patch (ADR-0304 §4),
-//! closed over what filters read ([`close_over`]); a [`RasterBase`] decides
+//! closed over what filters read (`SceneVersion::close_damage`); a [`RasterBase`] decides
 //! whether a publication's damage applies to the image the raster side
 //! holds, under the [`DamageMode`] it repaints by. Damage cannot come from
 //! which render objects repainted, because the objects that always repaint
@@ -22,6 +22,7 @@ mod region;
 mod tests;
 
 pub use base::RasterBase;
+#[cfg(any(test, feature = "testing"))]
 pub use closure::{Closure, Closures, MAX_CLOSURE_ROUNDS, close_over, read_closure};
 #[cfg(any(test, feature = "testing"))]
 pub use differ::LayerDiffer;

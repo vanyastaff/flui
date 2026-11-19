@@ -395,8 +395,8 @@ pub mod pipeline {
 ///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
 ///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
 ///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
-///   the [`LayerTree`](hooks::LayerTree) whose size and alignment the ABI token
-///   folds in. They leave with that path (ADR-0311 §7).
+///   the [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from,
+///   which `Scene::new` makes a version. They leave with that path (ADR-0311 §7).
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.

@@ -18,7 +18,6 @@ pub(crate) mod capability;
 pub(crate) mod clipboard_expiry;
 mod config;
 pub(crate) mod dev_agent;
-pub mod direct;
 pub(crate) mod host_memory;
 pub(crate) mod hot_reload;
 #[cfg(feature = "http")]
@@ -48,7 +47,6 @@ pub(crate) use flui_runtime::{presentation, ui_runtime};
 pub(crate) mod window_test_support;
 
 pub use config::{AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling};
-pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
     DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler,
     FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, PanicText, SamplingFailure,

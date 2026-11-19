@@ -952,7 +952,7 @@ impl GpuContext {
     fn note_lineage(
         &mut self,
         slot: SlotId,
-        scene: flui_layer::SceneContent<'_>,
+        scene: &flui_layer::SceneVersion,
         painter: &mut WgpuPainter,
     ) {
         if let Some(dead) = self.lineages.draws(slot, Some(scene)) {
@@ -1092,7 +1092,7 @@ impl GpuContext {
     pub(crate) fn render_slot(
         &mut self,
         slot: SlotId,
-        scene: flui_layer::SceneContent<'_>,
+        scene: &flui_layer::SceneVersion,
         reads: crate::recording_cache::CacheReads,
         epoch: Option<flui_foundation::FrameEpoch>,
     ) -> EngineResult<()> {
@@ -1263,7 +1263,7 @@ impl GpuContext {
             });
             (painter, blit)
         });
-        self.note_lineage(slot, scene.content(), &mut painter);
+        self.note_lineage(slot, scene.version(), &mut painter);
         let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,
@@ -1804,7 +1804,7 @@ impl RasterBackend for GpuContext {
             Some(SurfaceSlot::Offscreen(_)) | None => {
                 self.render_slot(
                     slot,
-                    scene.content(),
+                    scene.version(),
                     crate::recording_cache::CacheReads::for_damage(&damage),
                     Some(frame.epoch),
                 )?;
@@ -3449,7 +3449,7 @@ mod tests {
                 } else {
                     context.render_slot(
                         slot,
-                        scene.content(),
+                        scene.version(),
                         crate::recording_cache::CacheReads::On,
                         None,
                     )

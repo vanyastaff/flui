@@ -108,7 +108,11 @@ struct Boundary<'a> {
 
 /// A root stamped as the paint pass stamps a `RenderView`, over the given
 /// boundaries and, when set, a backdrop filter drawn after them.
-fn scene(root: &ContentToken, boundaries: &[Boundary<'_>], backdrop: Option<Rect<f64>>) -> Scene {
+fn scene(
+    root: &ContentToken,
+    boundaries: &[Boundary<'_>],
+    backdrop: Option<Rect<f64>>,
+) -> Authored {
     let mut tree = LayerTree::new(
         LayerNode::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)))
             .with_boundary(id(1), root.clone()),
@@ -134,7 +138,29 @@ fn scene(root: &ContentToken, boundaries: &[Boundary<'_>], backdrop: Option<Rect
             )),
         );
     }
-    Scene::new(tree)
+    Authored::new(tree)
+}
+
+/// A hand-built scene with the stamped tree it was made from: the differ
+/// reads the tree's boundary stamps, which the scene's version does not keep.
+struct Authored {
+    tree: LayerTree,
+    scene: Scene,
+}
+
+impl Authored {
+    fn new(tree: LayerTree) -> Self {
+        let scene = Scene::new(tree.clone());
+        Self { tree, scene }
+    }
+}
+
+impl std::ops::Deref for Authored {
+    type Target = Scene;
+
+    fn deref(&self) -> &Scene {
+        &self.scene
+    }
 }
 
 /// Hands `region` to the capture the way the raster executor hands it to a
@@ -240,7 +266,7 @@ fn a_moved_box_repaints_its_old_and_new_positions_only() {
     let mut differ = LayerDiffer::default();
 
     let first = build(a);
-    let region = differ.diff(&first, (SIDE, SIDE));
+    let region = differ.diff(&first.tree, (SIDE, SIDE));
     frame(&mut capture, &first, region, |plan| {
         plan == FramePlan::Direct
     });
@@ -250,7 +276,7 @@ fn a_moved_box_repaints_its_old_and_new_positions_only() {
     capture.paint_retained(sentinel, GREEN);
 
     let second = build(a_moved);
-    let region = differ.diff(&second, (SIDE, SIDE));
+    let region = differ.diff(&second.tree, (SIDE, SIDE));
     assert!(matches!(region, DamageRegion::Region(_)), "{region:?}");
     frame(&mut capture, &second, region, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
@@ -303,14 +329,14 @@ fn the_partial_clear_runs_before_content() {
     };
     let mut differ = LayerDiffer::default();
     let first = build(&ContentToken::mint(), &red);
-    let region = differ.diff(&first, (SIDE, SIDE));
+    let region = differ.diff(&first.tree, (SIDE, SIDE));
     frame(&mut capture, &first, region, |plan| {
         plan == FramePlan::Direct
     });
     warm(&mut capture, &first);
 
     let second = build(&ContentToken::mint(), &translucent_blue);
-    let region = differ.diff(&second, (SIDE, SIDE));
+    let region = differ.diff(&second.tree, (SIDE, SIDE));
     frame(&mut capture, &second, region, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
     });
@@ -762,7 +788,7 @@ fn a_frame_outside_the_protocol_is_followed_by_a_full_one() {
         capture.require_intermediate();
         let mut differ = LayerDiffer::default();
         let first = app(Offset::new(8.0, 8.0));
-        let region = differ.diff(&first, (SIDE, SIDE));
+        let region = differ.diff(&first.tree, (SIDE, SIDE));
         frame(&mut capture, &first, region, |plan| {
             plan == FramePlan::RetainedFull
         });
@@ -782,7 +808,7 @@ fn a_frame_outside_the_protocol_is_followed_by_a_full_one() {
         } else {
             app(Offset::new(8.0, 8.0))
         };
-        let region = differ.diff(&resumed, (SIDE, SIDE));
+        let region = differ.diff(&resumed.tree, (SIDE, SIDE));
         assert_eq!(
             matches!(region, DamageRegion::Region(_)),
             resume_with_change,
@@ -962,12 +988,12 @@ fn a_removed_shadow_leaves_no_penumbra() {
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(&before, (SIDE, SIDE));
+    let region = differ.diff(&before.tree, (SIDE, SIDE));
     frame(&mut partial, &before, region, |plan| {
         plan == FramePlan::Direct
     });
     warm(&mut partial, &before);
-    let region = differ.diff(&after, (SIDE, SIDE));
+    let region = differ.diff(&after.tree, (SIDE, SIDE));
     frame(&mut partial, &after, region, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
     });
@@ -1059,12 +1085,12 @@ fn partial_equals_full_inside_damage() {
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(&before, (SIDE, SIDE));
+    let region = differ.diff(&before.tree, (SIDE, SIDE));
     frame(&mut partial, &before, region, |plan| {
         plan == FramePlan::Direct
     });
     warm(&mut partial, &before);
-    let region = differ.diff(&after, (SIDE, SIDE));
+    let region = differ.diff(&after.tree, (SIDE, SIDE));
     let DamageRegion::Region(damage) = region else {
         panic!("the text change is a partial region, got {region:?}");
     };
@@ -1146,7 +1172,7 @@ fn an_updated_texture_repaints_under_an_unchanged_picture() {
     };
     let mut differ = LayerDiffer::default();
     let first = build();
-    let region = differ.diff(&first, (SIDE, SIDE));
+    let region = differ.diff(&first.tree, (SIDE, SIDE));
     frame(&mut capture, &first, region, |plan| {
         plan == FramePlan::Direct
     });
@@ -1158,7 +1184,7 @@ fn an_updated_texture_repaints_under_an_unchanged_picture() {
 
     capture.set_solid_texture(texture, BLUE);
     let second = build();
-    let region = differ.diff(&second, (SIDE, SIDE));
+    let region = differ.diff(&second.tree, (SIDE, SIDE));
     apply(&mut capture, region);
     capture.render_scene(&second).expect("the frame renders");
     let shown = px(&capture.read_rgba().expect("readback"), 56, 56);
@@ -1312,12 +1338,12 @@ fn a_damage_edge_through_an_advanced_blend_matches_a_full_frame() {
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(&before, (SIDE, SIDE));
+    let region = differ.diff(&before.tree, (SIDE, SIDE));
     frame(&mut partial, &before, region, |plan| {
         plan == FramePlan::Direct
     });
     warm(&mut partial, &before);
-    let region = differ.diff(&after, (SIDE, SIDE));
+    let region = differ.diff(&after.tree, (SIDE, SIDE));
     let DamageRegion::Region(damage) = region else {
         panic!("the moved marker is a partial region, got {region:?}");
     };
@@ -1381,7 +1407,7 @@ fn a_removed_shadow_under_a_non_uniform_scale_leaves_no_penumbra() {
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(&before, (SIDE, SIDE));
+    let region = differ.diff(&before.tree, (SIDE, SIDE));
     frame(&mut partial, &before, region, |plan| {
         plan == FramePlan::Direct
     });
@@ -1391,7 +1417,7 @@ fn a_removed_shadow_under_a_non_uniform_scale_leaves_no_penumbra() {
         WHITE,
         "precondition: the penumbra reaches below the shape on the compressed axis"
     );
-    let region = differ.diff(&after, (SIDE, SIDE));
+    let region = differ.diff(&after.tree, (SIDE, SIDE));
     frame(&mut partial, &after, region, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
     });
@@ -1451,12 +1477,12 @@ fn removed_text_under_a_tight_line_height_leaves_no_ink() {
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(&before, (SIDE, SIDE));
+    let region = differ.diff(&before.tree, (SIDE, SIDE));
     frame(&mut partial, &before, region, |plan| {
         plan == FramePlan::Direct
     });
     warm(&mut partial, &before);
-    let region = differ.diff(&after, (SIDE, SIDE));
+    let region = differ.diff(&after.tree, (SIDE, SIDE));
     frame(&mut partial, &after, region, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
     });
@@ -1476,8 +1502,8 @@ fn removed_text_under_a_tight_line_height_leaves_no_ink() {
 /// in full on a fresh capture.
 fn partial_and_full(
     renderer: &crate::headless::HeadlessRenderer,
-    before: &Scene,
-    after: &Scene,
+    before: &Authored,
+    after: &Authored,
 ) -> (Vec<u8>, Vec<u8>) {
     damaged_and_full(renderer, before, after, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
@@ -1487,20 +1513,33 @@ fn partial_and_full(
 /// [`partial_and_full`] for a second frame whose plan `plan` accepts.
 fn damaged_and_full(
     renderer: &crate::headless::HeadlessRenderer,
-    before: &Scene,
-    after: &Scene,
+    before: &Authored,
+    after: &Authored,
     plan: fn(FramePlan) -> bool,
 ) -> (Vec<u8>, Vec<u8>) {
     let mut partial = renderer
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(before, (SIDE, SIDE));
+    let region = differ.diff(&before.tree, (SIDE, SIDE));
     frame(&mut partial, before, region, |plan| {
         plan == FramePlan::Direct
     });
-    warm(&mut partial, before);
-    let region = differ.diff(after, (SIDE, SIDE));
+    // The warm-up seeds the retained target, unless `before` holds a filter
+    // that paints transparent black: its version closes every damage to the
+    // whole surface (`SceneVersion::close_damage`), so the frame renders in
+    // full and direct, as a pipeline's version with that filter does.
+    partial.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    partial.render_scene(before).expect("the warm-up renders");
+    assert!(
+        matches!(
+            partial.last_plan(),
+            Some(FramePlan::RetainedFull | FramePlan::Direct)
+        ),
+        "{:?}",
+        partial.last_plan()
+    );
+    let region = differ.diff(&after.tree, (SIDE, SIDE));
     frame(&mut partial, after, region, plan);
     (
         partial.read_rgba().expect("readback"),
@@ -1541,7 +1580,7 @@ fn overlapping_boundaries_that_swap_order_repaint_the_overlap() {
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
     let mut differ = LayerDiffer::default();
-    let region = differ.diff(&red_on_top, (SIDE, SIDE));
+    let region = differ.diff(&red_on_top.tree, (SIDE, SIDE));
     frame(&mut capture, &red_on_top, region, |plan| {
         plan == FramePlan::Direct
     });
@@ -1551,7 +1590,7 @@ fn overlapping_boundaries_that_swap_order_repaint_the_overlap() {
         RED,
         "precondition: red is on top"
     );
-    let region = differ.diff(&blue_on_top, (SIDE, SIDE));
+    let region = differ.diff(&blue_on_top.tree, (SIDE, SIDE));
     apply(&mut capture, region);
     capture
         .render_scene(&blue_on_top)
@@ -1968,7 +2007,7 @@ fn a_removed_shader_mask_leaves_nothing_behind() {
             );
             tree.push_child(mask, Layer::from(PictureLayer::new(canvas.finish())));
         }
-        Scene::new(tree)
+        Authored::new(tree)
     };
     let before = build(true);
     let after = build(false);
@@ -1992,7 +2031,7 @@ fn backdrop_scene(
     backdrop: &ContentToken,
     paint_backdrop: &dyn Fn(&mut Canvas),
     extra: &dyn Fn(&mut LayerTree, flui_layer::LayerId),
-) -> Scene {
+) -> Authored {
     let mut tree = LayerTree::new(
         LayerNode::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)))
             .with_boundary(id(1), root.clone()),
@@ -2007,7 +2046,7 @@ fn backdrop_scene(
     paint_backdrop(&mut canvas);
     tree.push_child(layer, Layer::from(PictureLayer::new(canvas.finish())));
     extra(&mut tree, root_id);
-    Scene::new(tree)
+    Authored::new(tree)
 }
 
 /// A picture of one `color` rect.
@@ -3300,12 +3339,13 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     }
 }
 
-/// On a hand-built tree, an advanced-blend shape that straddles the second
-/// rect of a rect-by-rect frame was drawn cut by that pass's scissor, so the
-/// next frame repaints in full; one that lies inside its rect leaves the
-/// next frame partial.
+/// On a hand-built scene, an advanced-blend shape across a rect of a
+/// rect-by-rect frame is redrawn whole: the damage is closed over the chunk
+/// that reads the destination (ADR-0304 §6), so the frame matches a full
+/// render and the next one stays partial, whether the shape crosses the
+/// first rect, the second or lies inside one.
 #[test]
-fn a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full() {
+fn a_destination_reading_shape_across_a_region_pass_is_redrawn_whole() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -3314,26 +3354,22 @@ fn a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full() {
         Rect::from_xywh(4.0, 4.0, 20.0, 20.0),
         Rect::from_xywh(100.0, 100.0, 20.0, 20.0),
     ];
-    // (case, the Multiply shape, the next frame stays partial)
+    // (case, the Multiply shape)
     let cases = [
         (
-            // Only the first pass sees it: the second must not clear its verdict.
-            "straddles the first rect",
+            "across the first rect",
             Rect::from_xywh(14.0, 14.0, 20.0, 20.0),
-            false,
         ),
         (
-            "straddles the second rect",
+            "across the second rect",
             Rect::from_xywh(90.0, 90.0, 20.0, 20.0),
-            false,
         ),
         (
             "inside the second rect",
             Rect::from_xywh(104.0, 104.0, 12.0, 12.0),
-            true,
         ),
     ];
-    for (case, shape, stays_partial) in cases {
+    for (case, shape) in cases {
         let build = |color: Color| {
             backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
                 for rect in rects {
@@ -3349,20 +3385,24 @@ fn a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full() {
             })
         };
         let (before, after) = (build(Color::RED), build(Color::BLUE));
+        let full = full_frame_pixels(&renderer, &after);
         let mut capture = region_frame(&renderer, &before, &after, &rects);
-        assert_eq!(
-            capture.counters().region_passes,
-            2,
-            "{case}: one pass per rect"
+        assert!(
+            matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "{case}: the frame is partial: {:?}",
+            capture.last_plan()
         );
+        let pixels = capture.read_rgba().expect("readback");
+        let stale = mismatches(&pixels, &full, 2);
+        assert!(stale.is_empty(), "{case}: stale pixels at {stale:?}");
+
         capture.mark_dirty(Rect::from_xywh(4.0, 4.0, 1.0, 1.0));
         capture
             .render_scene(&after)
             .expect("the next frame renders");
-        assert_eq!(
+        assert!(
             matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
-            stays_partial,
-            "{case}: next plan {:?}",
+            "{case}: the next frame stays partial: {:?}",
             capture.last_plan()
         );
     }

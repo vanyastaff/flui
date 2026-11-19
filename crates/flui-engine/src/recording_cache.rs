@@ -1425,8 +1425,7 @@ fn shrink_to_fit(recording: &mut ChunkRecording) {
 /// that draws another lineage's version (a new scene owner, a renewed one)
 /// or detaches never draws the old one's content again, so once no target
 /// draws a lineage its recordings are dead: [`Self::draws`] names it, and
-/// the painter drops them then instead of when the budget evicts them. A
-/// target that draws a layer tree keeps the lineage it drew before.
+/// the painter drops them then instead of when the budget evicts them.
 #[derive(Debug)]
 pub(crate) struct DrawnLineages<T> {
     drawn: FxHashMap<T, Lineage>,
@@ -1445,12 +1444,11 @@ impl<T: std::hash::Hash + Eq> DrawnLineages<T> {
     pub(crate) fn draws(
         &mut self,
         target: T,
-        scene: Option<flui_layer::SceneContent<'_>>,
+        scene: Option<&flui_layer::SceneVersion>,
     ) -> Option<Lineage> {
         let previous = match scene {
             None => self.drawn.remove(&target)?,
-            Some(flui_layer::SceneContent::Tree(_)) => return None,
-            Some(flui_layer::SceneContent::Version(version)) => {
+            Some(version) => {
                 let lineage = version.id().lineage();
                 let previous = self.drawn.insert(target, lineage)?;
                 if previous == lineage {
@@ -2233,37 +2231,18 @@ mod tests {
 
     /// A lineage no target draws any more is named once: when the last
     /// target that drew it draws another or detaches, not while another
-    /// target still draws it, and not for a layer tree. Dropping it takes
+    /// target still draws it. Dropping it takes
     /// its recordings and leaves another lineage's.
     #[test]
     fn a_lineage_no_target_draws_drops_its_recordings() {
-        use flui_layer::{LayerTree, SceneContent};
-
         let (old, new) = (SceneOwner::new(), SceneOwner::new());
         let (old_version, new_version) = (old.current(), new.current());
         let lineage = old_version.id().lineage();
-        let tree = LayerTree::default();
         let mut drawn = super::DrawnLineages::new();
         for (row, target, scene, dead) in [
-            (
-                "a first draw",
-                1,
-                Some(SceneContent::Version(old_version)),
-                None,
-            ),
-            (
-                "a second target",
-                2,
-                Some(SceneContent::Version(old_version)),
-                None,
-            ),
-            ("a layer tree", 1, Some(SceneContent::Tree(&tree)), None),
-            (
-                "one target moves on",
-                1,
-                Some(SceneContent::Version(new_version)),
-                None,
-            ),
+            ("a first draw", 1, Some(old_version), None),
+            ("a second target", 2, Some(old_version), None),
+            ("one target moves on", 1, Some(new_version), None),
             ("a detach that leaves none", 2, None, Some(lineage)),
             ("a detach of no lineage", 2, None, None),
         ] {
