@@ -40,10 +40,12 @@ const SCOPE_SCHEMA = {
     since_is_ancestor: { type: 'boolean' },
     files: { type: 'array', items: { type: 'string' } },
     stat: { type: 'string', description: 'the last line of git diff --stat' },
+    base_tree: { type: 'string', description: 'full sha of the tree of base' },
+    head_tree: { type: 'string', description: 'full sha of the tree of head' },
     warnings: { type: 'array', items: { type: 'string' }, description: 'failures of the fetch or of since, each with its command' },
     error: { type: 'string', description: 'the failed command for head, base or files, and its error, or empty' },
   },
-  required: ['base', 'head', 'since', 'since_base', 'since_is_ancestor', 'files', 'stat', 'warnings', 'error'],
+  required: ['base', 'head', 'since', 'since_base', 'since_is_ancestor', 'files', 'stat', 'base_tree', 'head_tree', 'warnings', 'error'],
 }
 
 const FINDINGS_SCHEMA = {
@@ -462,6 +464,7 @@ const scoped = await attempt(
     : 'since and since_base: the empty string; since_is_ancestor: true.'}
 5. files: \`git -C ${dir} diff --name-only <base> <head>\`
 6. stat: the last line of \`git -C ${dir} diff --stat <base> <head>\`
+7. base_tree and head_tree: the two lines of \`git -C ${dir} rev-parse <base>^{tree} <head>^{tree}\`
 Return full 40-character shas. When step 2, 3 or 5 fails, put the command and its error in "error"; never return an empty file list in place of a failed command.`,
   { phase: 'Scope', label: 'scope', schema: SCOPE_SCHEMA, model: 'haiku', effort: 'low' },
 )
@@ -486,6 +489,11 @@ if (mode === 'design' && codeFiles.length) {
 }
 if (mode === 'change' && decisionFiles.length) {
   notes.push(`The diff changes a decision (${decisionFiles.join(', ')}); the design read (mode "design") is owed beside this one (AGENTS.md "Before a merge").`)
+}
+// An empty file list is an agent's answer, and an agent can return one for a change it did not
+// list: "no change" holds only when the two trees are the same object.
+if (!scope.files.length && !(SHA.test(scope.base_tree) && scope.base_tree === scope.head_tree)) {
+  return unavailable(`the scope step listed no files, but the trees of the base and the head differ or were not given ("${scope.base_tree}", "${scope.head_tree}")`)
 }
 if (!scope.files.length) {
   log('The merge base and the head have the same tree.')

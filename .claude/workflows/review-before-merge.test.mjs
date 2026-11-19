@@ -16,7 +16,7 @@ async function run(args, agentStub) {
   const result = await load()(agent, parallel, () => {}, () => {}, args)
   return { result, calls }
 }
-const scope = (extra = {}) => ({ base: SHA('a'), head: SHA('b'), since: '', since_base: '', since_is_ancestor: true, files: ['x.rs'], stat: '1 file', warnings: [], error: '', ...extra })
+const scope = (extra = {}) => ({ base: SHA('a'), head: SHA('b'), since: '', since_base: '', since_is_ancestor: true, files: ['x.rs'], stat: '1 file', base_tree: SHA('e'), head_tree: SHA('f'), warnings: [], error: '', ...extra })
 const finding = (title, extra = {}) => ({ title, file: 'x.rs', line: 1, state: 's', operation: 'o', wrong_result: 'w', evidence: 'e', ...extra })
 
 // 1. A ref with a smart quote or a dashed component is refused before any agent runs.
@@ -39,6 +39,20 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
 {
   const { result } = await run({}, (p, o) => (o.label === 'scope' ? null : assert.fail()))
   assert.match(result.markdown, /Independent read unavailable: the scope step failed: no result/)
+}
+
+// 2b. An empty file list is "no change" only when the two trees are the same object; a scope agent
+//     that lists no files for trees that differ, or gives no trees, leaves the read unavailable.
+{
+  for (const [trees, expected] of [
+    [{ base_tree: SHA('e'), head_tree: SHA('f') }, /Independent read unavailable: the scope step listed no files, but the trees of the base and the head differ/],
+    [{ base_tree: '', head_tree: '' }, /Independent read unavailable: the scope step listed no files, but the trees of the base and the head differ or were not given/],
+    [{ base_tree: SHA('e'), head_tree: SHA('e') }, /No change to review: the merge base and the head have the same tree/],
+  ]) {
+    const { result, calls } = await run({}, (p, o) => (o.label === 'scope' ? scope({ files: [], stat: '', ...trees }) : assert.fail(o.label)))
+    assert.match(result.markdown, expected, JSON.stringify(trees))
+    assert.deepEqual(calls.map((o) => o.label ?? o), ['scope'])
+  }
 }
 
 // 3. A mistyped unread is reported; readers get numbers they cannot override; a confirmed entry
