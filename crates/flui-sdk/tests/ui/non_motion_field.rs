@@ -1,6 +1,6 @@
-use flui_sdk::animation::TwoWayConverter;
+use flui_sdk::animation::MotionValue;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, MotionValue)]
 struct Text {
     content: String,
 }

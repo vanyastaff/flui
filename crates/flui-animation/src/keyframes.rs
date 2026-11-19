@@ -7,8 +7,8 @@ use flui_foundation::geometry::Lerp;
 use flui_foundation::panic::drop_contained;
 
 use crate::curve::{Curve, SharedCurve};
+use crate::motion_value::MotionValue;
 use crate::tween_types::Animatable;
-use crate::value_conversion::TwoWayConverter;
 
 /// An immutable track of keyframes timed by [`Duration`].
 ///
@@ -51,14 +51,14 @@ use crate::value_conversion::TwoWayConverter;
 /// assert_eq!(turn.value_at(ms(1000)), 180.0);
 /// assert_eq!(turn.value_at_looped(ms(1500)), 90.0);
 /// ```
-pub struct Keyframes<T: TwoWayConverter> {
+pub struct Keyframes<T: MotionValue> {
     start: T,
     total: Duration,
     segments: Box<[Segment<T>]>,
 }
 
 /// One placed segment: it runs from `start` to `end` and moves `from` → `to`.
-struct Segment<T: TwoWayConverter> {
+struct Segment<T: MotionValue> {
     start: Duration,
     end: Duration,
     from: T,
@@ -102,7 +102,7 @@ enum Pending<T> {
 /// Each method appends one segment after the previous one. Nothing is
 /// validated until [`build`](Self::build), which reports the first problem.
 #[must_use = "a builder does nothing until `build` is called"]
-pub struct KeyframesBuilder<T: TwoWayConverter> {
+pub struct KeyframesBuilder<T: MotionValue> {
     start: T,
     total: Duration,
     segments: Vec<Pending<T>>,
@@ -142,7 +142,7 @@ pub enum KeyframesError {
     },
 }
 
-impl<T: Lerp + TwoWayConverter> Keyframes<T> {
+impl<T: Lerp + MotionValue> Keyframes<T> {
     /// Starts a track at `start` that lasts `total`.
     ///
     /// `total` sets the loop period of
@@ -205,7 +205,7 @@ impl<T: Lerp + TwoWayConverter> Keyframes<T> {
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
-impl<T: Lerp + TwoWayConverter> Segment<T> {
+impl<T: Lerp + MotionValue> Segment<T> {
     /// The value at local progress `s ∈ (0, 1)` of a segment lasting `length`.
     /// A non-finite result is replaced by `from`.
     fn sample(&self, s: f64, length: Duration) -> T {
@@ -306,7 +306,7 @@ fn is_finite_vector<V: AsRef<[f64]>>(vector: &V) -> bool {
         .all(|component| component.is_finite())
 }
 
-impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
+impl<T: Lerp + MotionValue> KeyframesBuilder<T> {
     /// Moves to `value` over `over`, eased by `curve`.
     ///
     /// The curve belongs to this segment — the one arriving at `value` — and
@@ -495,7 +495,7 @@ fn catmull_rom<V: AsRef<[f64]> + AsMut<[f64]> + Copy>(
 /// Keyframe values and curves are user types whose destructors may panic.
 /// Each is dropped on its own under containment, so a panicking destructor
 /// neither replaces the validation error nor meets a second one mid-unwind.
-fn reject<T: TwoWayConverter>(
+fn reject<T: MotionValue>(
     error: KeyframesError,
     values: Vec<T>,
     motion: Option<Motion<T::Vector>>,
@@ -527,7 +527,7 @@ fn reject<T: TwoWayConverter>(
     error
 }
 
-impl<T: Lerp + TwoWayConverter> Animatable for Keyframes<T> {
+impl<T: Lerp + MotionValue> Animatable for Keyframes<T> {
     type Value = T;
     /// Reads the track at progress `t` of [`total`](Keyframes::total):
     /// `t` is clamped into `[0, 1]` and NaN reads as 0.
@@ -544,7 +544,7 @@ impl<T: Lerp + TwoWayConverter> Animatable for Keyframes<T> {
     }
 }
 
-impl<T: TwoWayConverter> Clone for Keyframes<T> {
+impl<T: MotionValue> Clone for Keyframes<T> {
     fn clone(&self) -> Self {
         Self {
             start: self.start.clone(),
@@ -554,7 +554,7 @@ impl<T: TwoWayConverter> Clone for Keyframes<T> {
     }
 }
 
-impl<T: TwoWayConverter> Clone for Segment<T> {
+impl<T: MotionValue> Clone for Segment<T> {
     fn clone(&self) -> Self {
         Self {
             start: self.start,
@@ -577,7 +577,7 @@ impl<T: TwoWayConverter> Clone for Segment<T> {
     }
 }
 
-impl<T: TwoWayConverter + fmt::Debug> fmt::Debug for Keyframes<T> {
+impl<T: MotionValue + fmt::Debug> fmt::Debug for Keyframes<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Keyframes")
             .field("start", &self.start)
@@ -587,7 +587,7 @@ impl<T: TwoWayConverter + fmt::Debug> fmt::Debug for Keyframes<T> {
     }
 }
 
-impl<T: TwoWayConverter + fmt::Debug> fmt::Debug for KeyframesBuilder<T> {
+impl<T: MotionValue + fmt::Debug> fmt::Debug for KeyframesBuilder<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeyframesBuilder")
             .field("start", &self.start)

@@ -20,9 +20,9 @@ use flui_foundation::{Listenable, ListenerCallback};
 use smallvec::SmallVec;
 
 use crate::animation::{Retirement, StatusObserver, Terminal};
+use crate::motion_value::{AnimationVector, MotionValue};
 use crate::retarget::{CurveLength, Reversal, Segment, eased_progress};
 use crate::simulation::Simulation;
-use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
     Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus,
     DrivenController, MotionSpec, SharedCurve, Vsync, VsyncRegistrationError, curves,
@@ -141,13 +141,13 @@ enum Change {
     Snap,
 }
 
-struct Prepared<T: TwoWayConverter> {
+struct Prepared<T: MotionValue> {
     seam: crate::controller::ValueSeam,
     goal: T::Vector,
     run: Option<PreparedRun<T>>,
 }
 
-struct PreparedRun<T: TwoWayConverter> {
+struct PreparedRun<T: MotionValue> {
     source: Terminal<Rc<dyn ValueMotion>>,
     origin: Terminal<Rc<T>>,
     sample: Sample<T::Vector>,
@@ -203,7 +203,7 @@ impl<T> Admission<T> {
 /// assert_eq!((value.value(), value.velocity()), seam);
 /// ```
 #[must_use = "dropping an AnimatedValue cancels its motion"]
-pub struct AnimatedValue<T: TwoWayConverter + 'static> {
+pub struct AnimatedValue<T: MotionValue + 'static> {
     driven: Terminal<DrivenController>,
     motion: Terminal<MotionSpec>,
     target: Terminal<Rc<T>>,
@@ -219,13 +219,13 @@ pub struct AnimatedValue<T: TwoWayConverter + 'static> {
 /// Observers cannot move, register or dispose its controller. After owner
 /// teardown, they keep the last published sample and its exact endpoints,
 /// and report zero velocity.
-pub struct AnimatedValueView<T: TwoWayConverter + 'static> {
+pub struct AnimatedValueView<T: MotionValue + 'static> {
     controller: AnimationController,
     exact_values: Rc<RefCell<Terminal<ExactValues<T>>>>,
     published: Rc<Cell<Sample<T::Vector>>>,
 }
 
-impl<T: TwoWayConverter + 'static> Clone for AnimatedValueView<T> {
+impl<T: MotionValue + 'static> Clone for AnimatedValueView<T> {
     fn clone(&self) -> Self {
         Self {
             controller: self.controller.clone(),
@@ -235,7 +235,7 @@ impl<T: TwoWayConverter + 'static> Clone for AnimatedValueView<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
+impl<T: MotionValue + 'static> AnimatedValue<T> {
     /// Create a resting value, with the given motion and optional frame registry.
     /// An unbound owner settles newly admitted motion synchronously.
     ///
@@ -722,7 +722,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> AnimatedValueView<T> {
+impl<T: MotionValue + 'static> AnimatedValueView<T> {
     /// The velocity of the last published sample, or zero after owner teardown.
     #[must_use]
     pub fn velocity(&self) -> T::Vector {
@@ -735,7 +735,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValueView<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
+impl<T: MotionValue + 'static> Animation<T> for AnimatedValueView<T> {
     fn value(&self) -> T {
         read_value(self.published.get(), &self.exact_values)
     }
@@ -754,7 +754,7 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> Listenable for AnimatedValueView<T> {
+impl<T: MotionValue + 'static> Listenable for AnimatedValueView<T> {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.controller.listen(listener)
     }
@@ -766,7 +766,7 @@ impl<T: TwoWayConverter + 'static> Listenable for AnimatedValueView<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> fmt::Debug for AnimatedValueView<T> {
+impl<T: MotionValue + 'static> fmt::Debug for AnimatedValueView<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnimatedValueView")
             .field("status", &self.status())
@@ -774,7 +774,7 @@ impl<T: TwoWayConverter + 'static> fmt::Debug for AnimatedValueView<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> fmt::Debug for AnimatedValue<T> {
+impl<T: MotionValue + 'static> fmt::Debug for AnimatedValue<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnimatedValue")
             .field("motion", self.motion.get())
@@ -783,7 +783,7 @@ impl<T: TwoWayConverter + 'static> fmt::Debug for AnimatedValue<T> {
     }
 }
 
-impl<T: TwoWayConverter + 'static> Drop for AnimatedValue<T> {
+impl<T: MotionValue + 'static> Drop for AnimatedValue<T> {
     fn drop(&mut self) {
         let controller = self.driven.controller().clone();
         let mut driven = self.driven.withdraw();
@@ -826,7 +826,7 @@ fn validate(
     }
 }
 
-fn read_value<T: TwoWayConverter>(
+fn read_value<T: MotionValue>(
     sample: Sample<T::Vector>,
     values: &RefCell<Terminal<ExactValues<T>>>,
 ) -> T {
@@ -839,7 +839,7 @@ fn read_value<T: TwoWayConverter>(
     }
 }
 
-fn exact_value<T: TwoWayConverter>(
+fn exact_value<T: MotionValue>(
     sample: Sample<T::Vector>,
     values: &RefCell<Terminal<ExactValues<T>>>,
 ) -> Rc<T> {

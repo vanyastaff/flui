@@ -70,7 +70,7 @@ mod easing;
 #[path = "contracts/keyframes.rs"]
 mod keyframes;
 
-mod derive_animatable;
+mod derive_motion_value;
 
 #[path = "contracts/motion_clock.rs"]
 mod motion_clock;

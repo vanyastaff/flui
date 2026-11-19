@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use flui_animation::Curve;
 use flui_animation::{
-    Animatable, AnimatedValue, AnimatedValueView, MotionSpec, SpringDescription, Tween,
-    TwoWayConverter,
+    Animatable, AnimatedValue, AnimatedValueView, MotionSpec, MotionValue, SpringDescription, Tween,
 };
 use flui_foundation::geometry::Matrix4;
 use flui_view::prelude::LifecycleContext;
@@ -71,12 +70,12 @@ pub trait MotionBuilder: Sized {
 /// state. A refused command keeps the published run and is logged under the
 /// widget's `label`.
 #[derive(Debug)]
-pub(crate) struct ImplicitMotion<T: TwoWayConverter + 'static> {
+pub(crate) struct ImplicitMotion<T: MotionValue + 'static> {
     label: &'static str,
     owner: AnimatedValue<T>,
 }
 
-impl<T: TwoWayConverter + 'static> ImplicitMotion<T> {
+impl<T: MotionValue + 'static> ImplicitMotion<T> {
     /// At rest at `initial`, or at `fallback` when a component of `initial`
     /// is not finite: the motion core publishes only finite values.
     pub(crate) fn new(label: &'static str, initial: T, fallback: T, motion: &MotionSpec) -> Self {

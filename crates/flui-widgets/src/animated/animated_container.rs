@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use flui_animation::{Animation, MotionSpec, MotionUpdate, TwoWayConverter, Vsync, VsyncUpdate};
+use flui_animation::{Animation, MotionSpec, MotionUpdate, MotionValue, Vsync, VsyncUpdate};
 use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_painting::Alignment;
@@ -395,6 +395,6 @@ fn non_negative(value: f64) -> f64 {
     if value < 0.0 { 0.0 } else { value }
 }
 
-fn finite<T: TwoWayConverter>(value: &T) -> bool {
+fn finite<T: MotionValue>(value: &T) -> bool {
     value.to_vector().as_ref().iter().all(|v| v.is_finite())
 }

@@ -634,23 +634,23 @@ let animated = Tween::new(0.0, 100.0).animate(curved);
 ## Custom value motion
 
 A custom value can combine geometry, color and nested values into one owned
-motion. Derive `TwoWayConverter` for a nonempty `Clone` struct whose fields
-implement `TwoWayConverter` and `Lerp`. Field vectors are concatenated in
+motion. Derive `MotionValue` for a nonempty `Clone` struct whose fields
+implement `MotionValue` and `Lerp`. Field vectors are concatenated in
 declaration order. Interpolation delegates to each field, so a color keeps its
 premultiplied Oklab behavior rather than becoming four independent channel tweens.
 
 ```rust
-use flui_animation::TwoWayConverter;
+use flui_animation::MotionValue;
 use flui_foundation::geometry::{Lerp, Offset};
 use flui_painting::styling::Color;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct Appearance {
     position: Offset<f64>,
     color: Color,
 }
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct CardMotion(Appearance, f64);
 
 let start = CardMotion(Appearance {
@@ -672,7 +672,7 @@ assert_eq!(midpoint.1, 0.5);
 Pass this value to `AnimatedValue` to share registration, admission, time and
 retargeting across its components. Fields need concrete vector widths; stable
 Rust cannot sum generic-dependent widths into an array length. A manual
-`TwoWayConverter` implementation can choose a concrete representation for a
+`MotionValue` implementation can choose a concrete representation for a
 generic value.
 
 ## Physics Simulations
@@ -879,4 +879,4 @@ Each implemented from the canonical published source:
 |---|---|---|
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `Tween<Color>`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | Emphasized easing and polynomial-style presets | Bézier approximations; elastic and bounce formulas | `curves`, `ThreePointCubic`, `Split` |
-| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
+| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(MotionValue)]` |
