@@ -1,15 +1,17 @@
 //! The closed [`Layer`] vocabulary: every compositor primitive the paint walk
 //! can emit and the GPU backend must lower.
 //!
-//! Leaf layers (`Canvas`, `Picture`, `Texture`, `PlatformView`,
-//! `PerformanceOverlay`) draw; every other variant is a container that
-//! applies a clip, a transform, an effect, or a link to the subtree beneath
-//! it. The per-variant types live in the sibling modules and are re-exported
-//! from the crate root.
+//! Leaf layers (`Picture`, `PerformanceOverlay`) draw; every other variant
+//! is a container that applies a clip, a transform, an effect, or a link to
+//! the subtree beneath it. The per-variant types live in the sibling modules
+//! and are re-exported from the crate root.
+//!
+//! An external texture is a draw in a picture (`DrawOp::Texture`, ADR-0233),
+//! not a layer. A native view inside the UI has no form in the scene yet
+//! (`docs/gaps.md`, "No native views inside the UI").
 
 mod annotated_region;
 mod backdrop_filter;
-mod canvas;
 mod clip_path;
 mod clip_rect;
 mod clip_rrect;
@@ -22,14 +24,11 @@ mod offset;
 mod opacity;
 mod performance_overlay;
 mod picture;
-mod platform_view;
 mod shader_mask;
-mod texture;
 mod transform;
 
 pub use annotated_region::{AnnotatedRegionLayer, AnnotationValue, SemanticLabel};
 pub use backdrop_filter::{BackdropFilterLayer, BackdropGroupKey};
-pub use canvas::CanvasLayer;
 pub use clip_path::ClipPathLayer;
 pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
@@ -45,9 +44,7 @@ pub use performance_overlay::{
     PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample,
 };
 pub use picture::PictureLayer;
-pub use platform_view::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
 pub use shader_mask::ShaderMaskLayer;
-pub use texture::TextureLayer;
 pub use transform::TransformLayer;
 
 /// One compositor primitive.
@@ -80,14 +77,8 @@ pub use transform::TransformLayer;
     reason = "every backend draws every layer kind: a `_` arm would draw nothing for a new one"
 )]
 pub enum Layer {
-    /// A live recorder whose commands draw when the layer is lowered.
-    Canvas(Box<CanvasLayer>),
     /// Sealed drawing commands (the leaf the paint walk emits).
     Picture(PictureLayer),
-    /// An external GPU texture.
-    Texture(TextureLayer),
-    /// A native platform view the embedder composites.
-    PlatformView(PlatformViewLayer),
     /// Frame statistics drawn by the backend.
     PerformanceOverlay(PerformanceOverlayLayer),
     /// Clips the subtree to a rectangle.
@@ -128,10 +119,7 @@ impl Layer {
     /// and a `Follower`'s depend on composite-time resolution.
     pub fn bounds(&self) -> Option<Rect<f64>> {
         match self {
-            Layer::Canvas(layer) => layer.bounds(),
             Layer::Picture(layer) => layer.bounds(),
-            Layer::Texture(layer) => Some(layer.bounds()),
-            Layer::PlatformView(layer) => Some(layer.bounds()),
             Layer::PerformanceOverlay(layer) => Some(layer.bounds()),
             Layer::ClipRect(layer) => Some(layer.bounds()),
             Layer::ClipRRect(layer) => Some(layer.bounds()),
@@ -171,10 +159,7 @@ impl Layer {
             Layer::Opacity(layer) => layer.offset(),
             Layer::ImageFilter(layer) => layer.offset(),
             Layer::Leader(layer) => layer.offset(),
-            Layer::Canvas(_)
-            | Layer::Picture(_)
-            | Layer::Texture(_)
-            | Layer::PlatformView(_)
+            Layer::Picture(_)
             | Layer::PerformanceOverlay(_)
             | Layer::ClipRect(_)
             | Layer::ClipRRect(_)
@@ -193,10 +178,7 @@ impl Layer {
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
         match self {
-            Layer::Canvas(_) => "Canvas",
             Layer::Picture(_) => "Picture",
-            Layer::Texture(_) => "Texture",
-            Layer::PlatformView(_) => "PlatformView",
             Layer::PerformanceOverlay(_) => "PerformanceOverlay",
             Layer::ClipRect(_) => "ClipRect",
             Layer::ClipRRect(_) => "ClipRRect",
@@ -221,8 +203,8 @@ impl Layer {
     /// The question a damage differ asks of the layers above a repaint
     /// boundary: if an ancestor's opacity, clip or filter changed, the pixels
     /// the boundary's content lands on changed even though the content did
-    /// not. Leaves (`Picture`, `Canvas`, `Texture`, `PlatformView`,
-    /// `PerformanceOverlay`) apply no effect to a subtree and answer `false`;
+    /// not. Leaves (`Picture`, `PerformanceOverlay`) apply no effect to a
+    /// subtree and answer `false`;
     /// an `AnnotatedRegion` changes no pixel and answers `true` for any two.
     #[must_use]
     pub(crate) fn same_effect(&self, other: &Layer) -> bool {
@@ -275,8 +257,8 @@ impl Layer {
 
 /// Normalises a caller-supplied alpha into `0.0..=1.0`.
 ///
-/// `f64::clamp` lets `NaN` through, which would leave an `OpacityLayer` or
-/// `TextureLayer` outside the range its type promises. `NaN` becomes 1.0 —
+/// `f64::clamp` lets `NaN` through, which would leave an `OpacityLayer`
+/// outside the range its type promises. `NaN` becomes 1.0 —
 /// the effect disappears rather than the content — and a debug build trips,
 /// since a `NaN` alpha is a caller bug.
 pub(crate) fn unit_alpha(alpha: f64) -> f64 {
@@ -290,14 +272,6 @@ pub(crate) fn unit_alpha(alpha: f64) -> f64 {
 
 macro_rules! layer_from_impls {
     () => {};
-    ( $variant:ident => boxed $ty:ty; $($rest:tt)* ) => {
-        impl From<$ty> for Layer {
-            fn from(layer: $ty) -> Self {
-                Layer::$variant(Box::new(layer))
-            }
-        }
-        layer_from_impls! { $($rest)* }
-    };
     ( $variant:ident => $ty:ty; $($rest:tt)* ) => {
         impl From<$ty> for Layer {
             fn from(layer: $ty) -> Self {
@@ -309,10 +283,7 @@ macro_rules! layer_from_impls {
 }
 
 layer_from_impls! {
-    Canvas => boxed CanvasLayer;
     Picture => PictureLayer;
-    Texture => TextureLayer;
-    PlatformView => PlatformViewLayer;
     PerformanceOverlay => PerformanceOverlayLayer;
     ClipRect => ClipRectLayer;
     ClipRRect => ClipRRectLayer;

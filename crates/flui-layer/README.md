@@ -29,7 +29,7 @@ an example or the engine's GPU readback tests. `Scene::new` converts the tree in
 
 | Kind | Variants |
 |------|----------|
-| Leaf | `PictureLayer` (sealed drawing commands), `CanvasLayer` (a live recorder), `TextureLayer`, `PlatformViewLayer`, `PerformanceOverlayLayer` |
+| Leaf | `PictureLayer` (sealed drawing commands, external textures among them), `PerformanceOverlayLayer` |
 | Clip | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` |
 | Transform | `OffsetLayer`, `TransformLayer` |
 | Effect | `OpacityLayer`, `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` |

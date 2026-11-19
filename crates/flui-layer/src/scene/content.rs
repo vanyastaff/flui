@@ -590,7 +590,6 @@ impl LayerIndexes {
                     self.links
                         .push((follower.link(), LinkRole::Follower, index));
                 }
-                Layer::Texture(texture) => self.textures.push((texture.texture_id(), index)),
                 _ => {}
             }
             if layer_has_closure(layer) {

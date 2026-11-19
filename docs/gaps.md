@@ -338,7 +338,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Apps that embed a map, browser or player · **Parity:** [Windows](platform-parity.md#windows)
 
-- Not in the contract; the design shapes compositing, hit-testing and accessibility.
+- Not in the contract, and the scene has no form for one: the ADR that brings native views decides how one sits in the scene, composites with the GPU surface, takes hit tests and joins the semantics tree. The scene keeps no placeholder layer for it before then.
 - Needs an owner decision.
 
 ### Window looks

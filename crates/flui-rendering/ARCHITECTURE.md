@@ -1018,7 +1018,7 @@ and the reason is worth recording so it is not re-litigated.
 
 **Choice:** nothing to do. The criterion assumes a layer that owns a GPU
 resource, which would need handles, ref-counting and explicit disposal. FLUI's `Layer`
-is a pure value: `TextureLayer` and `PlatformViewLayer` hold plain ids into the
+is a pure value: a texture draw holds a plain id into the
 engine's own registries, and `PictureLayer` holds an `Arc<DisplayList>` whose
 image commands hold `Arc<Vec<u8>>` RGBA bytes. A boundary's `BoundaryContent`
 is therefore CPU data end to end.

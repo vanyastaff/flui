@@ -8,8 +8,7 @@ use super::{DamageMode, LayerDiffer};
 use crate::{
     BackdropFilterLayer, ClipRectLayer, ContentToken, DamageRect, DamageRegion, FollowerLayer,
     FullReason, Layer, LayerId, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
-    OpacityLayer, PerformanceOverlayLayer, PictureLayer, ResyncReason, TextureLayer,
-    TransformLayer,
+    OpacityLayer, PerformanceOverlayLayer, PictureLayer, ResyncReason, TransformLayer,
 };
 
 const SURFACE: (u32, u32) = (400, 400);
@@ -356,17 +355,10 @@ fn size_change_is_full() {
 }
 
 #[test]
-fn textures_and_overlays_are_damaged_every_frame() {
+fn an_overlay_is_damaged_every_frame() {
     let build = |root: &ContentToken| {
         let mut frame = Frame::new(1.0, root);
         let parent = frame.root();
-        frame.push(
-            parent,
-            TextureLayer::new(
-                flui_painting::paint::TextureId::new(7),
-                Rect::from_xywh(100.0, 100.0, 50.0, 50.0),
-            ),
-        );
         frame.push(
             parent,
             PerformanceOverlayLayer::new(
@@ -383,8 +375,8 @@ fn textures_and_overlays_are_damaged_every_frame() {
     for _ in 0..2 {
         assert_eq!(
             partial(differ.diff(&build(&root), SURFACE)),
-            covering(100.0, 0.0, 400.0, 150.0),
-            "no token vouches for a texture's or an overlay's pixels"
+            covering(300.0, 0.0, 400.0, 20.0),
+            "no token vouches for an overlay's pixels"
         );
     }
 }
