@@ -282,7 +282,7 @@ fn painted_cells(laid: &LaidOut) -> Vec<CellSample> {
             let mut opacity = 1.0;
             let mut parent = tree.parent(id);
             while let Some(id) = parent {
-                let layer = tree.get_layer(id).expect("live scene ancestor");
+                let layer = tree.layer(id).expect("live scene ancestor");
                 let transform = match layer {
                     Layer::Offset(offset) => Some(Matrix4::translation(
                         offset.offset().dx,

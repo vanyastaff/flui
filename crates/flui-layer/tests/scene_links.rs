@@ -223,7 +223,7 @@ fn first_disagreement(cases: u64) -> Option<String> {
             let size_from_tree = tree
                 .leaders()
                 .filter(|(led, _)| *led == link)
-                .filter_map(|(_, id)| Some(tree.get_layer(id)?.as_leader()?.size()))
+                .filter_map(|(_, id)| Some(tree.layer(id)?.as_leader()?.size()))
                 .last();
             if size_from_tree != version.leader_size(link) {
                 return Some(format!(

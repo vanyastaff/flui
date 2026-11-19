@@ -2,7 +2,7 @@
 //! content token, placement and own region, and a comparison against the
 //! previous frame's records.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::{LayerId, RenderId};
@@ -126,7 +126,7 @@ struct Frame {
     /// Every effect layer on some stamped layer's ancestor chain, cloned once
     /// per frame; [`Record::effects`] indexes into it.
     effects: Vec<Layer>,
-    boundaries: HashMap<RenderId, Record>,
+    boundaries: FxHashMap<RenderId, Record>,
     /// Content no token vouches for, in surface pixels.
     volatile: Option<Rect<f64>>,
     /// What each filter of the frame reads and writes ([`read_closure`](super::closure::read_closure)).
@@ -199,7 +199,7 @@ impl Frame {
             surface,
             root,
             effects: Vec::new(),
-            boundaries: HashMap::new(),
+            boundaries: FxHashMap::default(),
             volatile: None,
             closures: Closures::new(),
         };

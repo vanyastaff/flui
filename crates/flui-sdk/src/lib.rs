@@ -393,9 +393,10 @@ pub mod pipeline {
 ///   ADR-0088's move 4.
 /// - the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6): the
 ///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
-///   on, the [`Scene`](hooks::Scene) and [`LayerTree`](hooks::LayerTree) it
-///   hands back, and the [`TextContextHandle`](hooks::TextContextHandle) it
-///   measures with. They leave with that path (ADR-0311 §7).
+///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
+///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
+///   the [`LayerTree`](hooks::LayerTree) whose size and alignment the ABI token
+///   folds in. They leave with that path (ADR-0311 §7).
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.

@@ -99,7 +99,7 @@ design.md §7; в таблице стоит рекомендуемый вари�
 | L1 | `ClipRRectLayer`; `clip_rrect()` | `ClipRoundedRectLayer`; `rounded_rect()` | Следует за F1 | `ClipRRectLayer` | 23 | Н |
 | L2 | `ClipSuperellipseLayer` (держит `RSuperellipse`) | `ClipRoundedSuperellipseLayer` | Одно имя геометрии (N6) | — | ~10 | Н |
 | L3 | `PictureLayer` | `DisplayListLayer` | Запись называется `DisplayList` (N6), «picture» — словарь Skia | `PictureLayer` | 102 | С |
-| L4 | `LayerTree::get_layer`; `testing::inspect::clip_rrects` | `layer`; `clip_rounded_rects` | C-GETTER; F1 | — | 10 | Н |
+| L4 | `testing::inspect::clip_rrects` | `clip_rounded_rects` | F1 | — | 3 | Н |
 
 ### flui-rendering
 
