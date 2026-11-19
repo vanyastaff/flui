@@ -44,10 +44,12 @@ __pycache__/
 # Task worktrees, created and pruned by `cargo xtask worktree`.
 /.worktrees/
 # Claude Code, the runtime CLAUDE.md is written for, keeps per-user settings
-# and whole worktree checkouts under .claude/. The shared settings.json that
-# enables the project's plugin is the one file kept in the repository.
+# and whole worktree checkouts under .claude/. Two things there are shared: the
+# settings.json that enables the project's plugin, and the workflows a session
+# runs by name (the independent read of AGENTS.md "Before a merge").
 /.claude/*
 !/.claude/settings.json
+!/.claude/workflows/
 
 # ── Secrets ──────────────────────────────────────────────────────────────────
 # Nothing in the build reads these. The entries keep a stray credential out of
