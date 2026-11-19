@@ -41,6 +41,54 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
   assert.match(result.markdown, /Independent read unavailable: the scope step failed: no result/)
 }
 
+// 2b. An empty file list (an empty string in it counts for nothing) is "no change" only when a second agent,
+//     which never sees the first answer, works the range out again from the refs, names the same
+//     base and head, and reports that `git diff --quiet` exited 0; any other answer leaves the read
+//     unavailable, and no reader runs.
+{
+  const ok = { head: SHA('b'), base: SHA('a'), exit_status: 0, error: '' }
+  for (const [files, check, expected] of [
+    [[], { ...ok, exit_status: 1 }, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(git diff --quiet exited 1\)/],
+    [[], null, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(no result/],
+    [[], { ...ok, error: 'git: not found' }, /did not confirm that the change is empty \(git: not found\)/],
+    [[], { ...ok, base: SHA('b') }, /did not confirm that the change is empty \(it worked out b{40}\.\.b{40} where the scope step gave a{40}\.\.b{40}\)/],
+    [[], { ...ok, head: SHA('c') }, /did not confirm that the change is empty \(it worked out/],
+    [[], ok, /No change to review: the merge base and the head have the same tree/],
+    [[], { ...ok, error: ' "" ' }, /No change to review/],
+    [[], { ...ok, error: '" "' }, /No change to review/],
+    [[''], ok, /No change to review/],
+  ]) {
+    let checkPrompt = ''
+    const { result, calls } = await run({ since: SHA('c') }, (p, o) => {
+      if (o.label === 'scope') return scope({ files, stat: '', since: '', since_base: '' })
+      if (o.label === 'scope:diff') { checkPrompt = p; return check }
+      return assert.fail(o.label)
+    })
+    assert.match(result.markdown, expected, JSON.stringify(check))
+    assert.deepEqual(calls, ['scope', 'scope:diff'])
+    // The check works the range out from the refs, not from the first answer's shas.
+    assert.match(checkPrompt, /rev-parse 'HEAD'/)
+    assert.match(checkPrompt, /merge-base <head> 'origin\/main'/)
+    assert.match(checkPrompt, /diff --quiet <base> <head>/)
+    assert.doesNotMatch(checkPrompt, new RegExp(`${SHA('a')}|${SHA('b')}`))
+    // No reader ran, so no note says the readers read the whole change.
+    assert.doesNotMatch(result.markdown, /the readers read the whole change/)
+  }
+}
+
+/// 2c. A changed path is data: a name made of quotes is kept, so the readers run and a design read
+//     still names the change read it owes for that non-document file.
+{
+  const { result, calls } = await run({ mode: 'design' }, (p, o) => {
+    if (o.label === 'scope') return scope({ files: ['docs/adr/ADR-0400-x.md', "''"] })
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.ok(!calls.includes('scope:diff'))
+  assert.ok(calls.some((l) => l.startsWith('read:')))
+  assert.match(result.markdown, /The diff also changes 1 files that are not documents/)
+}
+
 // 3. A mistyped unread is reported; readers get numbers they cannot override; a confirmed entry
 //    reaches the list without judge prose; an unaccounted finding is listed; a refused fable judge
 //    falls to opus and says so.
@@ -107,10 +155,13 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
 for (const since of ['', null]) {
   const { result } = await run({ since }, (p, o) => {
     if (o.label === 'scope') return scope()
-    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['""'] }
     return { confirmed: [], rejected: [], not_kept: [] }
   })
   assert.equal(result.unavailable, undefined)
+  // Readers write prose and are read as they wrote: blankQuotes reads only the agents that report
+  // command output (the scope step, the diff check, the mutation read).
+  assert.match(result.markdown, /it tried: ""/)
   assert.equal(result.judge, 'fable')
 }
 
@@ -162,6 +213,12 @@ async function withRun(report, readers = () => ({ findings: [], tried: ['t'] }),
   assert.match(result.findings[1].wrong_result, /no test reached it/)
   assert.match(judgePrompt, /No test notices `replace - with \+ \[arith\.sub_to_add\]`/)
   assert.match(judgePrompt, /readers and a mutation run reported/)
+  // The mutation read runs commands and reports their output, so a quoted or blank empty field
+  // (an error, or a list holding only a blank entry) is empty, and the run's findings still count.
+  for (const quoted of [{ error: '""' }, { error: "' '" }, { extra_files: ['""', ' '] }]) {
+    const { result: clean } = await withRun(gamma({ counts: counts({ uncovered: 1 }), uncovered: [mutant(9, 'u')], ...quoted }))
+    assert.deepEqual(clean.findings.map((f) => f.lens), ['mutants', 'mutants'], JSON.stringify(quoted))
+  }
   assert.match(judgePrompt, /built only for another target/)
   assert.match(result.markdown, /Mutation run: 1 killed, 1 survived, 1 uncovered\./)
 }
@@ -170,6 +227,7 @@ for (const [report, label, why] of [
   [null, 'unreadable', /could not be read: no result/],
   [() => { throw new Error('budget spent') }, 'unreadable', /could not be read: budget spent/],
   [gamma({ run_head: SHA('c') }), 'over another head', /checked out at c{40}, not b{40}/],
+  [gamma({ run_head: ' "" ' }), 'over another head', /checked out at no commit, not b{40}/],
   [gamma({ extra_files: [' M crates/a/src/lib.rs'] }), 'over an edited tree', /holds more than change\.diff \( M crates\/a\/src\/lib\.rs\)/],
   [gamma({ report_is_newer: false }), 'older than its diff', /written before its change\.diff/],
   [gamma({ diff_matches: false }), 'over another diff', /took another diff .*left out/],
@@ -309,6 +367,21 @@ for (const mutants of ["D:/it's", 42]) {
   assert.match(judgePrompt, /only when a line or a test shows/)
   assert.match(judgePrompt, /By REVIEW\.md "What Important means here"/)
   assert.match(result.markdown, /changes a decision \(docs\/plans\/specs\/feat\/design\.md\); the design read \(mode "design"\) is owed/)
+}
+{
+  // An agent that writes the quotes of an empty string ("" or '', padded or not) has returned an
+  // empty field, not a failure: the review runs, a since written so cannot be placed, and a blank
+  // warning adds no note.
+  const { result } = await run({ since: SHA('c') }, (p, o) => {
+    if (o.label === 'scope') return scope({ error: " '' ", since: '""', since_base: "''", warnings: ['""', ' ', 'fetch failed'] })
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.equal(result.unavailable, undefined)
+  assert.equal(result.judge, 'fable')
+  assert.match(result.markdown, /The earlier head [0-9a-f]{40} could not be placed/)
+  assert.match(result.markdown, /Scope: fetch failed\./)
+  assert.doesNotMatch(result.markdown, /Scope: (""|\s*)\./)
 }
 for (const mode of ['Design', 'adr', 7]) {
   const { result, calls } = await run({ mode }, () => assert.fail('no agent may run'))
