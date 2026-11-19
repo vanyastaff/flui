@@ -784,15 +784,19 @@ owed frame (`note_owed_frame_served`): then `owed_frame_served` and `runs_frames
 runner's wake gate and the headless host ask it, so a runner whose frames are off runs the frame,
 and a runner's dirty gate counts it), and `FrameClock::grant_hidden_frame` lets the first poll
 that can produce it. The owed frame is no due work otherwise (`has_pending_due_work` leaves it
-out): the frames of another window and the passing of its instant never run it, and the attempt
-takes the serve whatever comes of it. The frame stays owed until it runs, however late the host
+out): the passing of its instant never runs it, and the attempt takes the serve whatever comes of
+it. A grant a held preparation kept stays in the clock, so once the preparation can run the next
+poll of the presentation produces it, a frame another window delivered included in a runtime of
+several presentations. The frame stays owed until it runs, however late the host
 serves its request. A hold leaves it owed: the dropped-frame backoff moves the instant to the
 retry; while the sink holds as many frames as it may the request is withdrawn, the settlement that
 frees a place asking for it again; and a served frame held by its text preparation marks what the
 window was asked as held at the preparation's outcome generation (`hold_owed_frame`,
 `text_preparation::outcome_generation`), so the same instant is asked again only once the
-generation moved on (an answer made the segment resumable, or the segment left), never while it
-waits. Only a frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing
+generation moved on (an answer made the segment resumable, the segment left, or its premises no
+longer accept it: a build, the layout, the text-sizing policy or the scale moved, which
+`outcome_generation` finds once when it weighs the held instant, so the frame asked for withdraws
+the segment in reconciliation), never while it waits. Only a frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing
 follows every
 change of sight (`follow_sight`: each window snapshot, the visibility edge, each session notice):
 a window whose frame would no longer be shown owes nothing, one that owes keeps its quiet period
@@ -808,7 +812,8 @@ leaves open, that a covered window's uncovering shows the frame of before the co
 `a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone`,
 `a_change_between_pumps_is_still_owed_its_frame`,
 `a_held_owed_frame_is_asked_again_once_its_text_is_answered`,
-`a_held_owed_frame_keeps_no_loop_turning` (`flui-testing`, `occluded_window`);
+`a_held_owed_frame_keeps_no_loop_turning`, `a_moved_premise_asks_a_held_owed_frame_again`,
+`a_covered_window_is_delivered_no_frame_it_did_not_ask_for` (`flui-testing`, `occluded_window`);
 `a_hidden_window_raises_no_redraw_flag`, `an_owed_frame_is_refused_by_its_own_settlement_only`,
 `a_hold_leaves_the_owed_frame_due`,
 `the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline`,

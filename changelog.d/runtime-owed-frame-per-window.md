@@ -3,10 +3,10 @@
 - On macOS a covered window that owes its kept surface a frame no longer makes the loop turn at the
   frame rate of a shown window beside it: the frame is asked of the covered window alone, once per
   instant, and the application's wake deadline no longer carries it. Only that window's own served
-  request runs the frame: a frame of another window, or work due elsewhere, never does, and a frame
+  request grants the frame: work due elsewhere or the passing of its instant never does, and a frame
   held by its text preparation keeps no loop turning. A held instant is asked for again once the
-  preparation's outcome moves on (its text sizes answered, or the segment withdrawn), never while
-  it waits.
+  preparation's outcome moves on (its text sizes answered, the segment withdrawn, or a build, the
+  layout, the text-sizing policy or the scale moved since it was saved), never while it waits.
 
 ### Added
 

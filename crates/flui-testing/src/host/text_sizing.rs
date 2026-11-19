@@ -79,7 +79,15 @@ impl ScriptedTextSizingState {
 /// Take what `runtime` asks of `provider` after a turn: answer it at once, or
 /// hold it while the test holds the provider.
 pub(super) fn serve(provider: &RefCell<ScriptedTextSizingState>, runtime: &UiRuntime) {
-    let work = runtime.take_text_sizing_frontiers();
+    let source = provider.borrow().writer.source();
+    // Only the frontiers of the provider's own captured source: another
+    // source's work is no answer of this provider's to give, and dropped it
+    // stalls as a receipt nobody serves, as on a host with no producer for it.
+    let work: Vec<TextSizingWork> = runtime
+        .take_text_sizing_frontiers()
+        .into_iter()
+        .filter(|frontier| *frontier.source() == source)
+        .collect();
     if work.is_empty() {
         return;
     }

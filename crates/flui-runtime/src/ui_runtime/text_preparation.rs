@@ -110,6 +110,9 @@ pub(crate) struct SavedTextSegment {
     wait: Wait,
     serviced: bool,
     service_attempts: u8,
+    /// Whether [`outcome_generation`] found the segment's premises no longer
+    /// accepting it, and moved the generation on for it once.
+    premise_moved: bool,
 }
 
 /// The exact retained attempt that supplied a sampling operation's frozen tick.
@@ -149,18 +152,25 @@ pub(crate) struct TextPreparation {
     /// The last finished segment's attempt allocation, which the next
     /// admitted segment reuses.
     retired_cohort: Option<RetiredTextSizingCohort>,
-    /// Advances each time a frame held by the saved segment may now get past
-    /// it: an answer made it resumable, or the segment left (withdrawn,
-    /// replaced, finished). A covered window's owed frame held here is asked
-    /// for again only once it moved on ([`outcome_generation`], ADR-0389).
-    outcome: u64,
+    /// The outcome generation: a new one each time a frame held by the saved
+    /// segment may now get past it, `None` before the first. A covered
+    /// window's owed frame held here is asked for again only once it moved on
+    /// ([`outcome_generation`], ADR-0389).
+    outcome: Option<NonZeroU64>,
+    /// Mints [`Self::outcome`]. Exhausted, 2^64 changes away, it mints no
+    /// more and the generation stands: a held owed frame then waits for its
+    /// window to be seen, as the AppKit tick mint's exhaustion arms no tick.
+    outcomes: IdMint<NonZeroU64>,
 }
 
 impl TextPreparation {
-    /// A frame held by the saved segment may now get past it. Saturates at
-    /// the end of its range, 2^64 changes away.
+    /// A frame held by the saved segment may now get past it: an answer made
+    /// it resumable, the segment left (withdrawn, replaced, finished), or its
+    /// premises no longer accept it.
     fn outcome_moved(&mut self) {
-        self.outcome = self.outcome.saturating_add(1);
+        if let Ok(next) = self.outcomes.next() {
+            self.outcome = Some(next);
+        }
     }
 
     pub(crate) fn holds_document_barrier(&self) -> bool {
@@ -236,12 +246,26 @@ pub(crate) fn reconcile_with_recovery(
 }
 
 /// The generation of what a frame of `presentation` would meet in its text
-/// preparation: it moves on when an answer makes the saved segment resumable
-/// or the segment leaves, and stands while the segment waits on its answer or
-/// is parked, whatever else is pending. The one reader of "may a held frame
-/// get past the preparation now" (ADR-0389).
+/// preparation, 0 before its first change: it moves on when an answer makes
+/// the saved segment resumable, when the segment leaves, and when the saved
+/// segment's premises no longer accept it (a build, the layout, the text-sizing
+/// policy or the scale moved since it was saved), which no answer and no export
+/// gets past and only a frame's reconciliation withdraws. That last change is
+/// found here, the one reader of "may a held frame get past the preparation
+/// now" (ADR-0389), once per segment: a frame asked for then withdraws it. It
+/// stands while the segment waits on its answer or is parked with its premises
+/// holding, whatever else is pending.
 pub(crate) fn outcome_generation(presentation: &PresentationState) -> u64 {
-    presentation.text_preparation.borrow().outcome
+    let mut state = presentation.text_preparation.borrow_mut();
+    let moved = state.segment.as_mut().is_some_and(|saved| {
+        let moved = !saved.premise_moved && !accepts(presentation, saved);
+        saved.premise_moved |= moved;
+        moved
+    });
+    if moved {
+        state.outcome_moved();
+    }
+    state.outcome.map_or(0, NonZeroU64::get)
 }
 
 pub(crate) fn can_run(presentation: &PresentationState) -> bool {
@@ -334,6 +358,7 @@ pub(crate) fn admit(
         wait: Wait::Running,
         serviced: false,
         service_attempts: 0,
+        premise_moved: false,
     };
     let mut state = presentation.text_preparation.borrow_mut();
     state.segment = Some(saved);

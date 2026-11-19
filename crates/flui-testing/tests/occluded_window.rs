@@ -576,6 +576,124 @@ fn a_held_owed_frame_keeps_no_loop_turning() {
     assert_eq!(host.sink().submits(), before, "with nothing drawn");
 }
 
+/// A covered window's served owed frame held by its text preparation, whose
+/// premises then move (a signal its view reads is written, or the window's
+/// scale changes): the provider's answer to the old segment is refused and no
+/// export serves it, so the move itself asks the window for the frame again,
+/// whose reconciliation withdraws the segment and draws. The rows differ in
+/// what moves. Fails when a moved premise is no change of the preparation's
+/// outcome: the answer is refused, nothing is asked, and the window draws
+/// nothing until it is seen.
+#[test]
+fn a_moved_premise_asks_a_held_owed_frame_again() {
+    type Move = fn(&mut HeadlessHost, flui_testing::HeadlessWindowId, &SharedSignal<u32>);
+    let rows: [(&str, Move); 2] = [
+        ("a signal the view reads is written", |_, _, number| {
+            number.set(3);
+        }),
+        ("the window's scale changes", |host, window, _| {
+            host.set_scale_factor(
+                window,
+                flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
+                    .expect("a ratio in range"),
+            );
+        }),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(name, moved)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                moved_premise_case(name, *moved);
+            }))
+            .is_err()
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "failing cases: {failed:?}");
+}
+
+fn moved_premise_case(
+    name: &str,
+    moved: fn(&mut HeadlessHost, flui_testing::HeadlessWindowId, &SharedSignal<u32>),
+) {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 100).with_occlusion_reports());
+    let window = host.primary_window();
+    let number = SharedSignal::new(1);
+    let (sizing, before) = held_owed_frame(&mut host, window, &number);
+    let asked = host_requests(&host, window).len();
+    moved(&mut host, window, &number);
+    // The provider answers what it holds, and from now on at once.
+    sizing.answer_at_once();
+    let _ = host.answer_text_sizing();
+    let _ = host.time_to_next_frame();
+    assert_eq!(
+        host_requests(&host, window).len(),
+        asked + 1,
+        "{name}: the move asks the window for the held frame again"
+    );
+    host.pump_until_settled(FRAME, 100)
+        .unwrap_or_else(|unsettled| panic!("{name}: {unsettled:?}"));
+    assert!(
+        host.sink().submits() > before,
+        "{name}: the held frame is drawn"
+    );
+}
+
+/// A window that cannot be seen is asked for no frame by the host while a
+/// window beside it draws, as a window system asks none of a covered window:
+/// a recording of the session holds frame rows of the shown window and none
+/// of the covered one, which owes its surface nothing. Fails when every open
+/// window is delivered every frame.
+#[test]
+fn a_covered_window_is_delivered_no_frame_it_did_not_ask_for() {
+    use flui_runtime::{HostInput, InputRecord};
+    use flui_testing::recording::{
+        Privacy, RecordingReader, RecordingWriter, ReplayableRecording, record,
+    };
+
+    let (mut host, shown_number, _) = mounted(HeadlessWindow::new(40, 40));
+    let covered = host.open_window(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    host.attach_to(
+        covered,
+        &Content {
+            number: SharedSignal::new(1),
+            painted: Arc::new(AtomicU32::new(0)),
+        },
+    )
+    .expect("the opened window has no root");
+    let _ = host.pump(FRAME);
+    host.set_window_occluded(covered, true);
+    let _ = host.pump(FRAME);
+    let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(Privacy::Redact))
+        .expect("the header writes");
+    let recording = record(host.input_taps(), writer).expect("first tap registration");
+    for frame in 0..10 {
+        shown_number.set(10 + frame);
+        let _ = host.pump(FRAME);
+    }
+    let bytes = recording.finish().expect("a complete recording");
+    let recorded = ReplayableRecording::read(
+        RecordingReader::try_new(bytes.as_slice()).expect("the recording reads"),
+    )
+    .expect("a whole recording");
+    let frames_of = |window: flui_testing::HeadlessWindowId| {
+        let id = flui_platform::PlatformWindow::id(host.window_of(window));
+        recorded
+            .rows()
+            .iter()
+            .filter(|row| {
+                matches!(row, InputRecord::Input(row)
+                    if row.window == id && matches!(row.input, HostInput::Frame { .. }))
+            })
+            .count()
+    };
+    assert!(
+        frames_of(host.primary_window()) >= 10,
+        "the shown window is delivered its frames"
+    );
+    assert_eq!(frames_of(covered), 0, "the covered window none");
+}
+
 /// Every timed frame request `window` took, oldest first.
 fn host_requests(
     host: &HeadlessHost,

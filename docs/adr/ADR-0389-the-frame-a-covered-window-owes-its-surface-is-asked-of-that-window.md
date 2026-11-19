@@ -81,16 +81,26 @@ blocks) and the runtime does not.
    marks it served, `UiRuntime::owed_frame_served` is true, `runs_frames` counts it and a runner's
    dirty gate renders the wake (`PendingWork::owed_frame`); the attempt that grants it takes the
    serve whatever comes of it. It is never due work otherwise: `has_pending_due_work` does not count
-   it, so neither the frames of another window nor the passing of its instant draw it, and a frame
-   held past its serve keeps no loop turning.
+   it, so the passing of its instant draws nothing and a frame held past its serve keeps no loop
+   turning. The grant itself stays in the presentation's clock until a poll produces it
+   (`FrameClock::grant_hidden_frame`), so once a held preparation can run, the next poll of the
+   presentation draws it: in a runtime of several presentations that may be a frame another window
+   delivered, after the serve its own window's request made.
    **A held frame is asked again once its preparation's outcome moves on.** When the served frame
    is held (its text preparation waits on an answer or is parked), it draws nothing; the
    presentation marks what its window was asked as held at the preparation's outcome generation
    (`AskedFrame::hold`, `text_preparation::outcome_generation`), and the same instant is asked again
-   only once that generation moved on: an answer made the segment resumable, or the segment left
-   (withdrawn by reconciliation on a moved premise, replaced, finished). Nothing else, a pending
-   build included, counts: a preparation that waits with nothing observable changed would otherwise
-   be asked for at the frame rate of its own held frames.
+   only once that generation moved on. It moves on when an answer makes the saved segment
+   resumable, when the segment leaves (withdrawn, replaced, finished), and when the saved segment's
+   premises no longer accept it: a build, the layout, the text-sizing policy or the scale moved
+   since it was saved, which no answer settles (`settle_text_sizing` refuses it) and no export
+   serves. `outcome_generation`, the one reader, finds that last change, once per segment, when a
+   held instant is weighed for its request; the frame then asked for withdraws the segment in its
+   reconciliation and lays the text out again. Nothing else, a pending build whose premise did not
+   move included, counts: a preparation that waits with nothing observable changed would otherwise
+   be asked for at the frame rate of its own held frames. Both generations, the preparation's and
+   the AppKit tick's below, come from an `IdMint`; an exhausted mint mints no more, so a held frame
+   waits for its window to be seen and a request arms no tick.
 3. **Every host delivers at the end of a work item.** `OwnerDelivery` takes the requests under the
    lease of each runtime work item that is not terminal, and after an installation that succeeded,
    and delivers them once the runtime is back, each contained in the work item's `FirstPanic`.
@@ -119,13 +129,14 @@ blocks) and the runtime does not.
 - Good, because the application's wake deadline again holds only work any window's frame serves.
 - Good, because the headless host serves the request through the same runtime seam a runner does,
   so a test drives it through the public API.
-- Good, because the owed frame is served by one path, its window's request: a frame of another
-  window, work due elsewhere or a held frame never runs it.
+- Good, because only its window's served request grants the owed frame: work due elsewhere, the
+  passing of its instant or a held frame never does.
 - Good, because a frame held when its served request came (text preparation in flight) is asked
-  for again once the preparation's outcome moves on, and a hold that lasts asks nothing meanwhile.
-- Bad, because a preparation parked on a capture no provider answers, whose provider changes while
-  the window is covered, is not re-examined until a frame of the window runs: reconciliation, which
-  sees the moved premise, runs only in a frame, so the window draws the change once uncovered.
+  for again once the preparation's outcome moves on, an answer or a moved premise included, and a
+  hold that lasts asks nothing meanwhile.
+- Bad, because a grant held by text preparation stays in the presentation's clock, so in a runtime
+  of several presentations the frame of another window that polls it after the hold ends draws it,
+  without a second serve: one frame, as the grant asked, not one per frame.
 - Bad, because a window whose host serves the request and whose frame then does not run at all
   (AppKit running no display pass for a covered window) is not asked again for that instant: no
   frame of it ran, so nothing marks it held. Its surface keeps the content of before the covering
@@ -145,14 +156,15 @@ blocks) and the runtime does not.
   `occluded_frame`); `a_held_instant_is_asked_again_once_its_outcome_moved_on` (its unit tests).
 - `a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone`,
   `a_change_between_pumps_is_still_owed_its_frame`,
-  `a_held_owed_frame_is_asked_again_once_its_text_is_answered` and
-  `a_held_owed_frame_keeps_no_loop_turning` (`flui-testing`, `occluded_window`), with the other
-  `occluded_window` cases.
+  `a_held_owed_frame_is_asked_again_once_its_text_is_answered`,
+  `a_held_owed_frame_keeps_no_loop_turning`, `a_moved_premise_asks_a_held_owed_frame_again` and
+  `a_covered_window_is_delivered_no_frame_it_did_not_ask_for` (`flui-testing`, `occluded_window`),
+  with the other `occluded_window` cases.
 - `leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback` (`flui-app`: a served
   owed frame renders its wake).
 - `a_timed_request_is_served_once_at_its_instant`,
   `only_the_tick_armed_last_serves_an_instant_asked_again`,
-  `a_served_instant_asked_again_is_served_again` and
+  `a_served_instant_asked_again_is_served_again`, `an_exhausted_generation_mint_arms_no_tick` and
   `a_shown_windows_frames_do_not_serve_a_covered_windows_request_again` (`flui-native`, AppKit's
   `timed_frame`, run on every host).
 

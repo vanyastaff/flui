@@ -20,6 +20,9 @@
 
 use std::time::Duration;
 
+use std::num::NonZeroU64;
+
+use flui_foundation::IdMint;
 use flui_platform::EventTime;
 
 /// A tick armed for a window's timed frame request: the instant it serves and
@@ -27,15 +30,18 @@ use flui_platform::EventTime;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ArmedTick {
     at: EventTime,
-    generation: u64,
+    generation: NonZeroU64,
 }
 
 /// The tick an AppKit window's timed frame request has live, if any, and the
-/// generation the next one is armed at.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// mint of the generations ticks are armed at.
+#[derive(Debug, Default)]
 pub(crate) struct TimedFrame {
     live: Option<ArmedTick>,
-    armed: u64,
+    /// Exhausted, 2^64 ticks away, it mints no more: no tick is armed and the
+    /// request goes unserved, as text preparation's exhausted outcome mint
+    /// leaves a held frame for its window to be seen.
+    generations: IdMint<NonZeroU64>,
 }
 
 /// What a tick does when it runs ([`TimedFrame::tick`]).
@@ -56,12 +62,9 @@ impl TimedFrame {
     /// The window was asked for a frame at `at`, or the instant asked before
     /// withdrawn (`None`), at `now`. Answers the tick to arm and how long
     /// after `now` it is to run: `None` when the live tick already serves
-    /// `at`, or nothing is asked. An instant served before is armed again:
-    /// asking for it again means its frame is still owed.
-    ///
-    /// # Panics
-    ///
-    /// Past 2^64 ticks armed for one window.
+    /// `at`, or nothing is asked, or the generations are exhausted. An instant
+    /// served before is armed again: asking for it again means its frame is
+    /// still owed.
     pub(crate) fn request(
         &mut self,
         at: Option<EventTime>,
@@ -70,18 +73,10 @@ impl TimedFrame {
         if self.live.map(|tick| tick.at) == at {
             return None;
         }
-        let Some(at) = at else {
-            self.live = None;
-            return None;
-        };
-        self.armed = self
-            .armed
-            .checked_add(1)
-            .expect("BUG: a window arms fewer than 2^64 timed frame ticks");
-        let tick = ArmedTick {
-            at,
-            generation: self.armed,
-        };
+        self.live = None;
+        let at = at?;
+        let generation = self.generations.next().ok()?;
+        let tick = ArmedTick { at, generation };
         self.live = Some(tick);
         Some((tick, at.saturating_duration_since(now)))
     }
@@ -200,6 +195,27 @@ mod tests {
             frame.tick(last_a, ms(1000)),
             TimedTick::Serve,
             "the tick armed last serves it"
+        );
+    }
+
+    /// A window whose tick generations are exhausted arms no tick, never one
+    /// that reuses a generation a stale tick still carries. Red-check: wrap
+    /// or saturate the generation, and the tick armed past the end shares its
+    /// generation with one armed before it.
+    #[test]
+    fn an_exhausted_generation_mint_arms_no_tick() {
+        let mut frame = TimedFrame {
+            live: None,
+            generations: flui_foundation::IdMint::starting_after(u64::MAX - 1),
+        };
+        assert!(
+            frame.request(Some(ms(1000)), ms(0)).is_some(),
+            "the last generation arms a tick"
+        );
+        assert_eq!(
+            frame.request(Some(ms(2000)), ms(0)),
+            None,
+            "past it, none is armed"
         );
     }
 

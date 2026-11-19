@@ -194,7 +194,7 @@ pub struct MacOSWindow {
     /// The instant this window was asked for a frame at and has not been
     /// served (`PlatformWindow::request_frame_at`, ADR-0389): what the owner
     /// queue's tick for it compares against.
-    timed_frame: Cell<TimedFrame>,
+    timed_frame: RefCell<TimedFrame>,
 
     /// The platform's display registry, by which this window turns its
     /// screen into a [`DisplayId`], bound once by [`UnshownWindow::show`]
@@ -778,7 +778,7 @@ impl MacOSWindow {
             presentation: windows.presentation,
             facets,
             redraw: OnceCell::new(),
-            timed_frame: Cell::new(TimedFrame::default()),
+            timed_frame: RefCell::new(TimedFrame::default()),
             displays: OnceCell::new(),
             snapshot: Arc::new(WindowStateCell::new(
                 WindowState::new(WindowGeometry::unplaced(content), content)
@@ -1111,9 +1111,10 @@ fn schedule_timed_frame(
         if owned.closed.load(Ordering::SeqCst) {
             return;
         }
-        let mut timed = owned.timed_frame.get();
-        let ran = timed.tick(tick, flui_platform::EventTime::now());
-        owned.timed_frame.set(timed);
+        let ran = owned
+            .timed_frame
+            .borrow_mut()
+            .tick(tick, flui_platform::EventTime::now());
         match ran {
             TimedTick::Serve => PlatformWindow::request_redraw(&*owned),
             TimedTick::Wait(rest) => schedule_timed_frame(owner, window, tick, rest),
@@ -1613,9 +1614,10 @@ impl PlatformWindow for MacOSWindow {
     /// nothing ([`TimedFrame`]). Nothing here reaches the wake pump's
     /// deadline, whose deliveries ask every window.
     fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
-        let mut timed = self.timed_frame.get();
-        let armed = timed.request(at, flui_platform::EventTime::now());
-        self.timed_frame.set(timed);
+        let armed = self
+            .timed_frame
+            .borrow_mut()
+            .request(at, flui_platform::EventTime::now());
         if let Some((tick, delay)) = armed {
             let redraw = self.redraw();
             schedule_timed_frame(redraw.owner, Arc::clone(&redraw.window), tick, delay);
