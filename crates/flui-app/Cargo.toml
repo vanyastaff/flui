@@ -128,6 +128,9 @@ flui-protocol = { workspace = true }
 # only, like that layer.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-util = { workspace = true }
+# The storage host runs the store's blocking calls on the IO runtime's
+# blocking threads (`Handle::spawn_blocking`), never on its workers.
+tokio = { workspace = true, features = ["rt"] }
 
 # The driver agent's endpoint (ADR-0239): a named pipe or a Unix socket.
 # `interprocess` builds for Windows and Unix only; the web transport is
@@ -204,7 +207,8 @@ flui-painting = { workspace = true, features = ["testing"] }
 # The compositor `native_linux` runs an application's Wayland host against
 # (`testing::wayland_compositor`), which misbehaves on demand, and
 # `testing::x11::run_for`, which the `raster_share` bench turns the X11 loop
-# with until its window holds the size the bench measures at.
+# with until its window holds the size the bench measures at; and
+# `DataStore::found_by`, the host storage tests' store whose first call waits.
 flui-native = { workspace = true, features = ["testing"] }
 # The concrete render object and the animation controller the runner's
 # device-recovery, frame-pacing and dispatch tests mount; the UI runtime that

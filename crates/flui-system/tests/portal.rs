@@ -773,6 +773,12 @@ impl<T: 'static> Settles<T> for Dialog<T> {
     }
 }
 
+impl Settles<flui_system::grant::GrantResult> for flui_system::grant::Resolving {
+    fn land(self, f: impl FnMut(Result<flui_system::grant::GrantResult, Abandoned>) + 'static) {
+        self.on_complete(f);
+    }
+}
+
 /// Land `pending`'s outcome, pumping `host` until it settles.
 pub(crate) fn settle<T: 'static>(
     host: &mut HeadlessHost,

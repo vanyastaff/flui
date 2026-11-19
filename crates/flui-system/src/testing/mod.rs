@@ -25,6 +25,8 @@ pub(crate) mod win32;
 #[cfg(test)]
 pub(crate) mod window;
 
+mod grants;
+
 use std::{cell::Cell, cell::RefCell, fmt, rc::Rc};
 
 use flui_platform::Unsupported;
@@ -44,6 +46,7 @@ use crate::dialog::{
     MessageBoxCapability, MessageBoxRequest, MessageBoxResult, MessageBoxes, OpenRequest,
     OpenResult, SaveRequest, SaveResult,
 };
+use crate::grant::{GrantCapability, Grants};
 use crate::jump_list::{
     JumpList, JumpListBackend, JumpListCapability, JumpListResult, JumpListTask,
 };
@@ -55,6 +58,7 @@ use crate::shortcuts::{
 };
 use crate::taskbar::{EntryState, Honoured, TaskbarBackend, TaskbarCapability, TaskbarEntry};
 use crate::user_dirs::{UserDir, UserDirBackend, UserDirCapability, UserDirResult, UserDirs};
+pub use grants::{GrantStore, ScriptedGrants};
 
 /// One dialog a [`ScriptedFileDialogs`] was asked to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -545,6 +549,7 @@ pub struct ScriptedSystem {
     user_dirs: ScriptedUserDirs,
     jump_list: ScriptedJumpList,
     os: ScriptedOs,
+    grants: ScriptedGrants,
 }
 
 impl Default for ScriptedSystem {
@@ -580,6 +585,7 @@ impl ScriptedSystem {
             user_dirs: ScriptedUserDirs::on(scenario),
             jump_list: ScriptedJumpList::on(scenario),
             os: ScriptedOs::default(),
+            grants: ScriptedGrants::default(),
         }
     }
 
@@ -642,6 +648,12 @@ impl ScriptedSystem {
     pub fn os(&self) -> &ScriptedOs {
         &self.os
     }
+
+    /// The grants the plugin provides over.
+    #[must_use]
+    pub fn grants(&self) -> &ScriptedGrants {
+        &self.grants
+    }
 }
 
 impl Plugin for ScriptedSystem {
@@ -685,6 +697,10 @@ impl Plugin for ScriptedSystem {
         let os = self.os.clone();
         registrar.provide::<OsCapability>(move |ctx: &ProviderContext<'_>| {
             Ok::<_, Unsupported>(Os::new(os.clone(), ctx))
+        });
+        let grants = self.grants.clone();
+        registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Grants::new(grants.clone(), ctx))
         });
     }
 }

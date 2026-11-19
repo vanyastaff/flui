@@ -265,7 +265,7 @@ const FLATPAK_DOCUMENTS: &str = "/run/flatpak/doc";
 /// runtime folder (`runtime_dir`, `$XDG_RUNTIME_DIR`) or Flatpak's own
 /// mount of it, where a sandboxed application reaches only the files the
 /// portal granted, each by its name.
-fn in_document_portal(path: &Path, runtime_dir: Option<&Path>) -> bool {
+pub(super) fn in_document_portal(path: &Path, runtime_dir: Option<&Path>) -> bool {
     path.starts_with(FLATPAK_DOCUMENTS)
         || runtime_dir.is_some_and(|runtime_dir| path.starts_with(runtime_dir.join("doc")))
 }
@@ -322,6 +322,7 @@ impl FileDialogBackend for PortalDialogs {
         } else {
             FILE_CHOOSER
         };
+        let keep_access = request.keep_access;
         self.show(
             window,
             interface,
@@ -329,7 +330,13 @@ impl FileDialogBackend for PortalDialogs {
             request.title.as_deref(),
             options,
             answer,
-            |picks, _| std::future::ready(Ok(picks)),
+            move |picks, _| {
+                std::future::ready(Ok(if keep_access {
+                    crate::grant::path::granted(picks)
+                } else {
+                    picks
+                }))
+            },
         )
     }
 

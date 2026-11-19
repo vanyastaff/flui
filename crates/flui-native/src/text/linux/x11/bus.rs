@@ -426,7 +426,7 @@ async fn connect(reach: Reach) -> Option<Link> {
         }
         Reach::Session => {
             let var = |name: &str| std::env::var(name).ok();
-            let sandboxed = std::path::Path::new("/.flatpak-info").exists();
+            let sandboxed = flui_platform::sandbox::is_flatpak();
             for endpoint in endpoints(var, sandboxed) {
                 let names = Names::of(endpoint);
                 let connection = if endpoint.daemon == Daemon::IBus && !endpoint.portal {
