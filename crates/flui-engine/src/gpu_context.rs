@@ -597,30 +597,23 @@ impl GpuContext {
     /// # Errors
     /// The device request failed, or no request under `ticket` is held; the
     /// context keeps its lost device and every slot as it was.
+    #[cfg(not(target_arch = "wasm32"))]
     fn install_requested(
         &mut self,
         ticket: DeviceTicket,
     ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let Some(mut worker) = self.requested.take() else {
-                return Some(Err(EngineError::GpuUnavailable));
-            };
-            if worker.ticket() != ticket {
-                // An answer nobody waits for: its device goes with it.
-                return Some(Err(EngineError::GpuUnavailable));
-            }
-            let Some(answer) = worker.try_answer() else {
-                self.requested = Some(worker);
-                return None;
-            };
-            Some(answer.map(|(adapter, device, queue)| self.install(adapter, device, queue)))
+        let Some(mut worker) = self.requested.take() else {
+            return Some(Err(EngineError::GpuUnavailable));
+        };
+        if worker.ticket() != ticket {
+            // An answer nobody waits for: its device goes with it.
+            return Some(Err(EngineError::GpuUnavailable));
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _unheld = ticket;
-            Some(Err(EngineError::GpuUnavailable))
-        }
+        let Some(answer) = worker.try_answer() else {
+            self.requested = Some(worker);
+            return None;
+        };
+        Some(answer.map(|(adapter, device, queue)| self.install(adapter, device, queue)))
     }
 
     /// Adopt `probed`, a device the owner's probe answered in an instance of
@@ -1784,7 +1777,16 @@ impl RasterBackend for GpuContext {
         &mut self,
         ticket: DeviceTicket,
     ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
-        self.install_requested(ticket)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.install_requested(ticket)
+        }
+        // The web has no worker to ask on, so `request` held none.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ticket;
+            Some(Err(EngineError::GpuUnavailable))
+        }
     }
 
     fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)> {
