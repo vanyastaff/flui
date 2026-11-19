@@ -58,7 +58,7 @@ use crate::{
 mod gradients;
 pub(crate) use gradients::MAX_GRADIENT_STOPS;
 use gradients::ShaderGeometry;
-pub(crate) use text::GlyphInk;
+pub(crate) use text::{GlyphCull, GlyphInk, outside_scissor};
 mod images;
 mod paths;
 mod shapes;

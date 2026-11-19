@@ -113,8 +113,11 @@ jobs:
         run: |
           status=0
           for features in "" --all-features; do
+            echo "::group::cargo nextest run -p flui-native $features"
             cargo nextest run -p flui-native --locked --no-fail-fast ${features:+"$features"} \
-              -E 'not (group(trybuild))' || status=1
+              -E 'not (group(trybuild))' \
+              || { status=1; echo "::error::flui-native's suite failed with features [$features]"; }
+            echo "::endgroup::"
           done
           exit "$status"
 

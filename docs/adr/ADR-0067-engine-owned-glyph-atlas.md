@@ -113,7 +113,9 @@ outside shaping and without that font lock; it does not restore the old ambient 
 - `DrawBatcher::draw_paragraph` records a `GlyphInstance` per inked glyph
   into `DrawSegment::glyph_batch` under the active scissor run, the SDF clip
   (`apply_active_clip`), and the layer opacity — what every other instance
-  gets. Glyphs fully outside the scissor are not recorded.
+  gets. Glyphs fully outside the scissor are left out: at recording, or, for a
+  chunk captured for the recording cache, where its recording is spliced, under
+  the scissor it is entered with there (ADR-0306 §2).
 - `Phase::Glyph` is the last phase, so a label on its background never
   seals; `flush_segment` draws the batch at the end of the instanced pass
   when nothing sits between the arcs and the glyphs, and in its own pass

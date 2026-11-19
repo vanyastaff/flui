@@ -106,6 +106,9 @@ pub struct HeadlessWindow {
     text_store_host: bool,
     gesture_preset: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
+    /// The application's assets its widgets read (ADR-0384 §5): none
+    /// unless the test names them.
+    assets: flui_platform::assets::AssetBundle,
     display: Mutex<Option<DisplayId>>,
     /// Whether the platform lets the window run, as the test last reported it.
     execution: Mutex<flui_platform::WindowExecutionState>,
@@ -307,6 +310,9 @@ impl HeadlessWindow {
             text_store_host: false,
             gesture_preset: flui_interaction::gesture::GestureSettings::default().into(),
             platform: flui_platform::TargetPlatform::Unknown,
+            assets: flui_platform::assets::AssetBundle::new(Arc::new(
+                flui_platform::testing::MemoryAssets::new(),
+            )),
             display: Mutex::new(None),
             execution: Mutex::new(flui_platform::WindowExecutionState::Running),
             occluded: Mutex::new(false),
@@ -382,6 +388,19 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = platform;
+        self
+    }
+
+    /// Serve `assets` as the application's assets: what a widget reads
+    /// through the [`AssetBundleCapability`](flui_platform::assets::AssetBundleCapability).
+    /// Without them the window's application has no assets, and every key is
+    /// `NotFound`: a headless test never reads the checkout by accident
+    /// (ADR-0384 §5). A test's own directory is a
+    /// [`DirectoryAssets`](flui_platform::assets::DirectoryAssets), a map of
+    /// bytes a [`MemoryAssets`](flui_platform::testing::MemoryAssets).
+    #[must_use]
+    pub fn with_assets(mut self, assets: impl flui_platform::assets::AssetSource) -> Self {
+        self.assets = flui_platform::assets::AssetBundle::new(Arc::new(assets));
         self
     }
 
@@ -978,12 +997,18 @@ impl ScriptedBuiltIns {
         }
     }
 
-    /// The providers a runner registers on `platform`.
+    /// The providers a runner registers on `platform`, its widgets reading
+    /// `assets`.
     fn registrar(
         &self,
         platform: flui_platform::TargetPlatform,
+        assets: &flui_platform::assets::AssetBundle,
     ) -> flui_platform::capability::CapabilityRegistrar {
         let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
+        let assets = assets.clone();
+        registrar.provide::<flui_platform::assets::AssetBundleCapability>(
+            move |_: &flui_platform::capability::ProviderContext<'_>| Ok(assets.clone()),
+        );
         self.clipboard.register(&mut registrar);
         if platform == flui_platform::TargetPlatform::Linux {
             self.primary_selection.register(&mut registrar);
@@ -1203,6 +1228,7 @@ impl HeadlessHost {
         let registry = compose_registry(
             &scripted,
             window.platform,
+            &window.assets,
             None,
             &AppRegistrations::new(),
             Some(plugin),
@@ -1252,6 +1278,7 @@ impl HeadlessHost {
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
         let platform = window.platform;
+        let assets = window.assets.clone();
         let window_ids = WindowIdMint::new();
         window.id = window_ids
             .next()
@@ -1296,9 +1323,14 @@ impl HeadlessHost {
         );
         let registry = match registry {
             Registry::Given(registry) => registry,
-            Registry::Composed(application) => {
-                compose_registry(&scripted, platform, storage.as_ref(), &application, None)
-            }
+            Registry::Composed(application) => compose_registry(
+                &scripted,
+                platform,
+                &assets,
+                storage.as_ref(),
+                &application,
+                None,
+            ),
         };
         host = host.with_capabilities(registry);
         if let Some(flush) = &flush {

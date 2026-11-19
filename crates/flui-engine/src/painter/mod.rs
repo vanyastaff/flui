@@ -104,6 +104,17 @@ pub struct WgpuPainter {
     /// and the image cache whose texels they name: a new painter (device
     /// recovery, a torn painter replaced) starts with none.
     recording_cache: crate::recording_cache::RecordingCache,
+    /// Whether the chunk being recorded is to be captured for the cache: its
+    /// glyphs are then recorded whole, unculled by the scissor it is entered
+    /// under, since the recording is spliced under other scissors and culled
+    /// there (ADR-0306 §2). Set by `begin_chunk`, cleared by the next
+    /// `begin_chunk`, `end_chunk` and `finish_frame`.
+    capturing: bool,
+    /// The room a splice counts the glyphs its entry scissor keeps in,
+    /// reused from splice to splice: at most one count per glyph of the
+    /// largest recording a culling splice met, which the cache's budget
+    /// bounds.
+    splice_glyph_counts: Vec<usize>,
 }
 
 /// What [`WgpuPainter::begin_chunk`] did with a chunk.
@@ -175,6 +186,7 @@ impl WgpuPainter {
         self.state.reset();
         self.compositor.reset();
         self.suppressed_layer_depth = 0;
+        self.capturing = false;
         self.replay.update_viewport(self.size.0, self.size.1);
         self.frame_scope = None;
         self.region_pass = 0;
@@ -316,6 +328,8 @@ impl WgpuPainter {
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
             recording_cache: crate::recording_cache::RecordingCache::new(),
+            capturing: false,
+            splice_glyph_counts: Vec::new(),
         }
     }
 
@@ -843,13 +857,25 @@ impl WgpuPainter {
         }
     }
 
+    /// Whether a paragraph recorded now leaves out the glyphs outside the
+    /// active scissor: not while a chunk is captured, whose recording holds
+    /// every glyph and is culled at each splice (ADR-0306 §2).
+    pub(crate) fn glyph_cull(&self) -> crate::batches::GlyphCull {
+        if self.capturing {
+            crate::batches::GlyphCull::None
+        } else {
+            crate::batches::GlyphCull::Scissor
+        }
+    }
+
     /// Opens `chunk` at the current state: splices its kept recording when
     /// one matches and `reads` allows it, and otherwise answers that its
     /// commands are to be recorded, with the entry [`Self::end_chunk`] keeps
     /// the recording under when the chunk can be kept at all: no external
-    /// texture, a finite planar transform in range, a scissor its key can
-    /// hold, a live resource epoch, and a key drawn on enough frames to be
-    /// admitted ([`Admission`]).
+    /// texture, a finite planar transform in range, a live resource epoch,
+    /// and a key drawn on enough frames to be admitted ([`Admission`]). The
+    /// scissor and SDF clip it is entered under are not in the key: a
+    /// recording takes the entry's at the splice (ADR-0306 §2).
     ///
     /// [`Admission`]: crate::recording_cache::Admission
     pub(crate) fn begin_chunk(
@@ -858,6 +884,7 @@ impl WgpuPainter {
         reads: crate::recording_cache::CacheReads,
     ) -> ChunkStart {
         use crate::recording_cache::{Admission, AmbientKey, CacheReads, RasterKey, RecordingKey};
+        self.capturing = false;
         if reads == CacheReads::Off
             || !chunk.textures().is_empty()
             || self.suppressed_layer_depth != 0
@@ -866,24 +893,15 @@ impl WgpuPainter {
         }
         self.sync_resource_epoch();
         let ctm = self.state.current_transform_matrix();
-        let scissor = self.state.current_scissor();
-        let (Some(epoch), Some((raster, origin)), Some(ambient)) = (
-            self.recording_cache.epoch(),
-            RasterKey::of(&ctm),
-            AmbientKey::of(
-                scissor,
-                &ctm,
-                chunk.bounds(),
-                self.compositor.current_opacity(),
-                self.size,
-            ),
-        ) else {
+        let (Some(epoch), Some((raster, origin))) =
+            (self.recording_cache.epoch(), RasterKey::of(&ctm))
+        else {
             return ChunkStart::Record(None);
         };
         let key = RecordingKey {
             content: chunk.version(),
             raster,
-            ambient,
+            ambient: AmbientKey::of(self.compositor.current_opacity(), self.size),
             epoch,
         };
         if let Some(recording) = self.recording_cache.get(&key) {
@@ -894,11 +912,12 @@ impl WgpuPainter {
                 self.current_segment.splice(
                     recording,
                     &crate::recording_cache::SpliceAmbient {
-                        scissor,
+                        scissor: self.state.current_scissor(),
                         clip: self.state.active_clip(),
                         chain: &chain,
                         origin,
                     },
+                    &mut self.splice_glyph_counts,
                 );
                 return ChunkStart::Replayed;
             }
@@ -909,6 +928,7 @@ impl WgpuPainter {
         }
         let _ = self.state.take_clip_opened();
         self.glyph_atlas.log_slots();
+        self.capturing = true;
         ChunkStart::Record(Some(ChunkEntry {
             key,
             mark: self.current_segment.mark(),
@@ -925,6 +945,7 @@ impl WgpuPainter {
     /// glyph it asked for placed, and the resources it names unchanged since
     /// it began.
     pub(crate) fn end_chunk(&mut self, entry: ChunkEntry) {
+        self.capturing = false;
         let glyph_keys = self.glyph_atlas.take_slot_log();
         let clip_opened = self.state.take_clip_opened();
         let Some(glyph_keys) = glyph_keys else {

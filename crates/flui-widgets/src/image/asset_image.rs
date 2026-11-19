@@ -47,7 +47,7 @@ impl AssetImage {
     }
 
     fn source(&self) -> ImageSource {
-        ImageSource::Asset(Arc::clone(&self.path))
+        ImageSource::asset(Arc::clone(&self.path))
     }
 }
 
@@ -62,7 +62,7 @@ impl ImageProvider for AssetImage {
     /// [`cache_key`](ImageProvider::cache_key)).
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
         self.registry
-            .cached_image(&self.source())
+            .get(&self.source())
             .ok_or(ImageProviderError::RequiresAsyncResolve {
                 provider_name: "AssetImage",
             })
@@ -81,16 +81,15 @@ impl ImageProvider for AssetImage {
     {
         let load = self
             .registry
-            .load_image(Arc::clone(&self.path), services.load_services());
-        let path = Arc::clone(&self.path);
+            .load(&self.source(), &services.load_services());
         Box::pin(async move {
             load.await
-                .map_err(|error| ImageProviderError::from_asset_error(path.to_string(), error))
+                .map_err(|error| ImageProviderError::from_load_error(&error))
         })
     }
 
     fn cached(&self, _services: &ImageServices) -> Option<PixelImage> {
-        self.registry.cached_image(&self.source())
+        self.registry.get(&self.source())
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {
