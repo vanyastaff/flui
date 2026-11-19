@@ -273,6 +273,102 @@ pub(crate) struct EffectScope {
     pub(crate) chunks: Reach,
 }
 
+/// How many entries a block of a content's [`ChunkBlocks`] covers at its
+/// first level, and how many blocks of a level a block of the next covers.
+pub(crate) const CHUNK_BLOCK: usize = 16;
+
+/// A run of a content's entries the cull may skip in one test: what its
+/// chunks draw and what its entries are.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ChunkBlock {
+    /// The union of what its chunks draw, in the space that holds them.
+    pub(crate) reach: Reach,
+    /// What the entries it covers are.
+    pub(crate) holds: BlockHolds,
+}
+
+/// What the entries of a [`ChunkBlock`] are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockHolds {
+    /// Chunks alone, every one under this effect, `None` for the boundary
+    /// itself: the run a cull may skip whole.
+    ChunksUnder(Option<EntryIndex>),
+    /// An effect, a slot, or chunks under different parents.
+    Mixed,
+}
+
+impl ChunkBlock {
+    /// `self` and the block after it, as one.
+    fn join(self, next: Self) -> Self {
+        Self {
+            reach: self.reach.union(next.reach),
+            holds: if self.holds == next.holds {
+                self.holds
+            } else {
+                BlockHolds::Mixed
+            },
+        }
+    }
+}
+
+/// A hierarchy of blocks over a content's entries, so a partial frame's walk
+/// skips a run of chunks its damage cannot reach in a test per block rather
+/// than one per chunk (ADR-0304 §9): `levels[k][i]` covers the entries from
+/// `i · CHUNK_BLOCK^(k+1)` on, `CHUNK_BLOCK^(k+1)` of them or as many as
+/// remain. A content of at most [`CHUNK_BLOCK`] entries has none.
+#[derive(Debug, Default)]
+pub(crate) struct ChunkBlocks {
+    levels: Vec<Vec<ChunkBlock>>,
+}
+
+impl ChunkBlocks {
+    fn of(entries: &[Entry]) -> Self {
+        let mut levels: Vec<Vec<ChunkBlock>> = Vec::new();
+        if entries.len() <= CHUNK_BLOCK {
+            return Self { levels };
+        }
+        let first = entries
+            .chunks(CHUNK_BLOCK)
+            .map(|run| {
+                run.iter()
+                    .map(|entry| match entry {
+                        Entry::Chunk { chunk, parent } => ChunkBlock {
+                            reach: Reach::of(chunk.bounds()),
+                            holds: BlockHolds::ChunksUnder(*parent),
+                        },
+                        Entry::Effect { .. } | Entry::Slot { .. } => ChunkBlock {
+                            reach: Reach::Nothing,
+                            holds: BlockHolds::Mixed,
+                        },
+                    })
+                    .reduce(ChunkBlock::join)
+                    .expect("BUG: a run of `chunks` is never empty")
+            })
+            .collect::<Vec<ChunkBlock>>();
+        levels.push(first);
+        while let Some(last) = levels.last()
+            && last.len() > 1
+        {
+            let next = last
+                .chunks(CHUNK_BLOCK)
+                .map(|run| {
+                    run.iter()
+                        .copied()
+                        .reduce(ChunkBlock::join)
+                        .expect("BUG: a run of `chunks` is never empty")
+                })
+                .collect::<Vec<ChunkBlock>>();
+            levels.push(next);
+        }
+        Self { levels }
+    }
+
+    /// The levels, finest first.
+    pub(crate) fn levels(&self) -> &[Vec<ChunkBlock>] {
+        &self.levels
+    }
+}
+
 /// Everything of a content that depends only on its entries, shared by every
 /// content an effect update derives from it.
 #[derive(Debug)]
@@ -293,6 +389,10 @@ struct Stream {
     chunk_textures: Vec<(TextureId, EntryIndex)>,
     /// Each chunk that reads the destination, in paint order.
     chunk_closures: Vec<EntryIndex>,
+    /// The commands of every chunk, summed.
+    commands: u64,
+    /// The blocks a partial frame's walk skips runs of chunks by.
+    blocks: ChunkBlocks,
 }
 
 impl Stream {
@@ -304,6 +404,7 @@ impl Stream {
         let mut slots = Vec::new();
         let mut chunk_textures = Vec::new();
         let mut chunk_closures = Vec::new();
+        let mut commands: u64 = 0;
         // The effects the current entry sits under, innermost last, as
         // positions in `effects`.
         let mut open: SmallVec<[usize; 8]> = SmallVec::new();
@@ -333,6 +434,7 @@ impl Stream {
                     structural.push(index);
                 }
                 Entry::Chunk { chunk, .. } => {
+                    commands = commands.saturating_add(chunk.commands().len() as u64);
                     let reach = Reach::of(chunk.bounds());
                     match held {
                         Some(top) => scopes[top].chunks = scopes[top].chunks.union(reach),
@@ -350,6 +452,7 @@ impl Stream {
             }
         }
         slots.sort_unstable_by_key(|(node, _)| node.key().table_key());
+        let blocks = ChunkBlocks::of(&entries);
         Self {
             entries,
             effects,
@@ -359,6 +462,8 @@ impl Stream {
             slot_entries: slots,
             chunk_textures,
             chunk_closures,
+            blocks,
+            commands,
         }
     }
 }
@@ -460,6 +565,13 @@ impl BoundaryContent {
         self.stream.effects.iter().copied().zip(self.layers.iter())
     }
 
+    /// How many commands its chunks hold in all: what a raster planner
+    /// weighs a redraw by without reading each chunk.
+    #[must_use]
+    pub fn commands(&self) -> u64 {
+        self.stream.commands
+    }
+
     /// The child boundaries the stream names, in paint order.
     pub fn slots(&self) -> impl Iterator<Item = SceneNodeId> + '_ {
         self.stream
@@ -524,6 +636,12 @@ impl BoundaryContent {
     /// What the top-level chunks draw, in the boundary's space.
     pub(crate) fn top_chunks(&self) -> Reach {
         self.stream.top_chunks
+    }
+
+    /// The blocks over the entries a partial frame's walk skips runs of
+    /// chunks by.
+    pub(crate) fn chunk_blocks(&self) -> &ChunkBlocks {
+        &self.stream.blocks
     }
 
     /// Whether `other` holds this very stream, its layers aside.

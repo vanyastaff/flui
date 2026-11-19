@@ -461,6 +461,7 @@ impl SceneVersion {
             rect,
             path: Vec::new(),
             scratch: Links::new(),
+            tests: 0,
         }
     }
 
@@ -504,6 +505,8 @@ pub struct SubtreeCull<'v> {
     /// whose subtree met the rect.
     path: Vec<Folded<'v>>,
     scratch: Links<'v>,
+    /// The reaches tested against the rect.
+    tests: u64,
 }
 
 impl std::fmt::Debug for SubtreeCull<'_> {
@@ -561,7 +564,101 @@ impl<'v> SubtreeCull<'v> {
     /// effect or a slot) meets nothing.
     pub fn meets_chunk(&mut self, at: EntryAddress) -> bool {
         let reach = self.chunk_reach(at);
-        meets(reach, self.rect)
+        self.meets_reach(reach)
+    }
+
+    /// How many entries from `at` on a walk that has entered `at`'s node can
+    /// skip as chunks that cannot land in the rect: a run of chunks under the
+    /// parent of the chunk at `at`, read through the effects above them and
+    /// the node's chain as [`Self::meets_chunk`] reads one. `0` when the
+    /// chunk at `at` can land there, or `at` names no chunk; a chunk of a node
+    /// that is not attached is skipped alone.
+    ///
+    /// A block of the content's chunks whose union cannot land in the rect is
+    /// skipped in one test, and one that can is asked about by the blocks
+    /// under it, so a walk over a content of `n` chunks tests on the order of
+    /// `log n` reaches per chunk it enters, not `n` (ADR-0304 §9).
+    pub fn chunks_missed(&mut self, at: EntryAddress) -> usize {
+        if at.node.lineage() != self.version.lineage() {
+            return 0;
+        }
+        let inner = self.version.inner();
+        let Some(record) = inner.record(at.node.key()) else {
+            return 0;
+        };
+        let content = record.content();
+        let entries = content.entries();
+        let start = at.entry.get();
+        let Some(&Entry::Chunk { parent, .. }) = entries.get(start) else {
+            return 0;
+        };
+        let geometry = Geometry::shown(inner);
+        if !self.stand_in(geometry, at.node.key()) {
+            return 1;
+        }
+        let Self {
+            path,
+            scratch,
+            rect,
+            tests,
+            ..
+        } = self;
+        let top = path
+            .last()
+            .expect("BUG: standing in a node leaves it on the path");
+        let rect = *rect;
+        // Every chunk of the run sits under `parent`, so each lands through
+        // the chain of the chunk at `at`; a union of bounds lands inside the
+        // union of where each lands.
+        let mut misses = |bounds: Bounds| {
+            *tests = tests.saturating_add(1);
+            let reach = match parent {
+                None => top.content_reach(bounds),
+                Some(_) => top.entry_reach(geometry, at.entry, bounds, scratch),
+            };
+            !meets(reach, rect)
+        };
+        let levels = content.chunk_blocks().levels();
+        let mut position = start;
+        'run: while position < entries.len() {
+            // The widest block that starts here and holds only chunks under
+            // `parent`, narrowing while one meets the rect.
+            for (level, blocks) in levels.iter().enumerate().rev() {
+                let span = super::content::CHUNK_BLOCK.pow(
+                    u32::try_from(level + 1).expect("BUG: a content has fewer than 2^32 levels"),
+                );
+                if !position.is_multiple_of(span) {
+                    continue;
+                }
+                let Some(block) = blocks.get(position / span) else {
+                    continue;
+                };
+                if block.holds != super::content::BlockHolds::ChunksUnder(parent) {
+                    continue;
+                }
+                if misses(block.reach.bounds()) {
+                    position = position.saturating_add(span).min(entries.len());
+                    continue 'run;
+                }
+            }
+            match entries.get(position) {
+                Some(Entry::Chunk {
+                    chunk,
+                    parent: under,
+                }) if *under == parent && misses(chunk.bounds()) => position += 1,
+                _ => break,
+            }
+        }
+        position - start
+    }
+
+    /// How many reaches the cull has tested against its rect: one for each
+    /// slot and chunk asked about, and one for each block of chunks
+    /// [`Self::chunks_missed`] tested. What a raster walk counts its cull's
+    /// work by.
+    #[must_use]
+    pub fn reaches_tested(&self) -> u64 {
+        self.tests
     }
 
     /// How many of `rects` the chunk at `at` can land in, through the chain
@@ -571,6 +668,7 @@ impl<'v> SubtreeCull<'v> {
     /// passes a chunk would be drawn in under one pass per rect (ADR-0304 §9).
     pub fn rects_met_by_chunk(&mut self, at: EntryAddress, rects: &[Rect<f64>]) -> usize {
         let reach = self.chunk_reach(at);
+        self.tests = self.tests.saturating_add(1);
         rects.iter().filter(|&&rect| meets(reach, rect)).count()
     }
 
@@ -605,7 +703,8 @@ impl<'v> SubtreeCull<'v> {
     }
 
     /// Whether `reach` meets the rect, edges included.
-    fn meets_reach(&self, reach: Reach) -> bool {
+    fn meets_reach(&mut self, reach: Reach) -> bool {
+        self.tests = self.tests.saturating_add(1);
         meets(reach, self.rect)
     }
 
