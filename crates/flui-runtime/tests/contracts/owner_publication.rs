@@ -29,6 +29,22 @@ pub(super) fn runtime() -> UiRuntime {
 }
 
 pub(super) fn runtime_with_wake(wake: Arc<dyn Fn() + Send + Sync>) -> UiRuntime {
+    runtime_with_wake_on(wake, flui_scheduler::ClockSource::Platform)
+}
+
+/// A runtime on `clock`, which only the test moves: a deadline the runtime arms is read back
+/// exactly, however long the test runs between.
+pub(super) fn runtime_on_manual_clock(clock: &flui_foundation::ManualClock) -> UiRuntime {
+    runtime_with_wake_on(
+        Arc::new(|| {}),
+        flui_scheduler::ClockSource::Manual(clock.clone()),
+    )
+}
+
+pub(super) fn runtime_with_wake_on(
+    wake: Arc<dyn Fn() + Send + Sync>,
+    clock: flui_scheduler::ClockSource,
+) -> UiRuntime {
     UiRuntime::try_new(
         window(),
         1.0,
@@ -36,7 +52,7 @@ pub(super) fn runtime_with_wake(wake: Arc<dyn Fn() + Send + Sync>) -> UiRuntime 
             wake,
             Arc::new(AtomicBool::new(false)),
             &flui_painting::FontCollection::new(),
-            flui_scheduler::ClockSource::Platform,
+            clock,
         ),
     )
     .expect("runtime")

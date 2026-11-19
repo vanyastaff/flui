@@ -6,6 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use flui_foundation::{ManualClock, MonotonicClock};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::UiRuntime;
 
@@ -52,23 +53,21 @@ impl FrameSink for Failing {
     }
 }
 
-fn host_turn(runtime: &mut UiRuntime, sink: &mut Failing) -> bool {
-    runtime
-        .pump(
-            &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
-            sink,
-        )
-        .presented()
+/// One host turn at the clock's reading: the frame timestamp the runtime samples is the instant
+/// the test has moved the clock to.
+fn host_turn(runtime: &mut UiRuntime, sink: &mut Failing, clock: &ManualClock) -> bool {
+    runtime.pump(&mut clock.clone(), sink).presented()
 }
 
-/// Runs the host's loop until the dropped frame's retry deadline: it sleeps until each wake
-/// `next_wake` reports and pumps, and no frame is submitted before the deadline. Returns how long
-/// the wait was from when the frame failed.
+/// Runs the host's loop until the dropped frame's retry deadline: the clock moves to each wake
+/// `next_wake` reports and the host pumps, and no frame is submitted before the deadline. Returns
+/// how long the wait was from the clock's reading on entry, when the frame failed.
 fn wait_out_the_backoff(
     runtime: &mut UiRuntime,
     sink: &mut Failing,
-    failed_at: web_time::Instant,
+    clock: &ManualClock,
 ) -> std::time::Duration {
+    let failed_at = clock.now();
     let deadline = runtime
         .failure_retry_deadline()
         .expect("a failed frame waits out the dropped-frame backoff");
@@ -78,11 +77,11 @@ fn wait_out_the_backoff(
             .next_wake()
             .expect("the host is woken for the retry deadline");
         assert!(wake <= deadline, "the host wakes no later than the retry");
-        std::thread::sleep(wake.saturating_duration_since(web_time::Instant::now()));
+        clock.advance(wake.saturating_duration_since(clock.now()));
         if wake == deadline {
             break;
         }
-        assert!(!host_turn(runtime, sink));
+        assert!(!host_turn(runtime, sink, clock));
         assert_eq!(
             sink.submits, submits,
             "no frame is submitted before the backoff runs out"
@@ -94,19 +93,22 @@ fn wait_out_the_backoff(
 
 #[test]
 fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
-    let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
+    let clock = ManualClock::new();
+    let mut runtime = crate::owner_publication::runtime_on_manual_clock(&clock);
     runtime
         .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
         .expect("mount text");
     let mut sink = Failing::new(SubmitVerdict::Failed, 3);
-    let mut failed_at = web_time::Instant::now();
-    assert!(!host_turn(&mut runtime, &mut sink), "the first frame fails");
+    assert!(
+        !host_turn(&mut runtime, &mut sink, &clock),
+        "the first frame fails"
+    );
     assert_eq!(sink.submits, 1);
     assert!(
         !runtime.has_pending_work(),
         "the repaint waits for the deadline"
     );
-    assert!(!host_turn(&mut runtime, &mut sink));
+    assert!(!host_turn(&mut runtime, &mut sink, &clock));
     assert_eq!(
         sink.submits, 1,
         "no frame is submitted before the backoff runs out"
@@ -114,9 +116,8 @@ fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
 
     let mut waits = Vec::new();
     for attempt in 2..=4 {
-        waits.push(wait_out_the_backoff(&mut runtime, &mut sink, failed_at));
-        failed_at = web_time::Instant::now();
-        let presented = host_turn(&mut runtime, &mut sink);
+        waits.push(wait_out_the_backoff(&mut runtime, &mut sink, &clock));
+        let presented = host_turn(&mut runtime, &mut sink, &clock);
         assert_eq!(
             sink.submits, attempt,
             "the retried frame paints and submits the tree"
@@ -136,19 +137,22 @@ fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
         None,
         "a presented frame ends the wait"
     );
-    assert!(!host_turn(&mut runtime, &mut sink));
+    assert!(!host_turn(&mut runtime, &mut sink, &clock));
     assert_eq!(sink.submits, 4, "a presented tree is not painted again");
 }
 
 /// Mounts a runtime whose platform wake panics while `panics` is set.
-fn runtime_whose_wake_panics(panics: &Arc<AtomicBool>) -> UiRuntime {
+fn runtime_whose_wake_panics(panics: &Arc<AtomicBool>, clock: &ManualClock) -> UiRuntime {
     let armed = Arc::clone(panics);
-    let runtime = crate::owner_publication::runtime_with_wake(Arc::new(move || {
-        assert!(
-            !armed.load(Ordering::SeqCst),
-            "platform wake — intentional test panic"
-        );
-    }));
+    let runtime = crate::owner_publication::runtime_with_wake_on(
+        Arc::new(move || {
+            assert!(
+                !armed.load(Ordering::SeqCst),
+                "platform wake — intentional test panic"
+            );
+        }),
+        flui_scheduler::ClockSource::Manual(clock.clone()),
+    );
     runtime
         .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
         .expect("mount text");
@@ -166,11 +170,14 @@ fn runtime_whose_wake_panics(panics: &Arc<AtomicBool>) -> UiRuntime {
 fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
     for verdict in [SubmitVerdict::Failed, SubmitVerdict::DeviceLost] {
         let panics = Arc::new(AtomicBool::new(false));
-        let mut runtime = runtime_whose_wake_panics(&panics);
+        let clock = ManualClock::new();
+        let mut runtime = runtime_whose_wake_panics(&panics, &clock);
         let mut sink = Failing::new(verdict, 1);
         sink.panic_the_next_wake = Some(Arc::clone(&panics));
         let (turn, log) = flui_testing::log_capture::capture(|| {
-            catch_unwind(AssertUnwindSafe(|| host_turn(&mut runtime, &mut sink)))
+            catch_unwind(AssertUnwindSafe(|| {
+                host_turn(&mut runtime, &mut sink, &clock)
+            }))
         });
         panics.store(false, Ordering::SeqCst);
         assert!(
@@ -190,10 +197,9 @@ fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
             }),
             "{verdict:?}: the dropped frame's telemetry is recorded"
         );
-        let failed_at = web_time::Instant::now();
-        wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
+        wait_out_the_backoff(&mut runtime, &mut sink, &clock);
         assert!(
-            host_turn(&mut runtime, &mut sink),
+            host_turn(&mut runtime, &mut sink, &clock),
             "{verdict:?}: the retried frame presents after the aborted one"
         );
         assert_eq!(sink.submits, 2, "{verdict:?}");
@@ -206,21 +212,25 @@ fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
 /// Fails when a refused frame is retried on the backoff or at once.
 #[test]
 fn a_refused_frame_waits_for_its_windows_next_change() {
-    let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
+    let clock = ManualClock::new();
+    let mut runtime = crate::owner_publication::runtime_on_manual_clock(&clock);
     runtime
         .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
         .expect("mount text");
     let mut sink = Failing::new(SubmitVerdict::Refused, 1);
-    assert!(!host_turn(&mut runtime, &mut sink), "the frame is refused");
+    assert!(
+        !host_turn(&mut runtime, &mut sink, &clock),
+        "the frame is refused"
+    );
     assert_eq!(runtime.failure_retry_deadline(), None, "no retry is armed");
     assert!(!runtime.has_pending_work(), "no frame is asked for");
-    assert!(!host_turn(&mut runtime, &mut sink));
+    assert!(!host_turn(&mut runtime, &mut sink, &clock));
     assert_eq!(sink.submits, 1, "the refused frame is not painted again");
 
     // The window changes: its host asks for the frame again, as a new surface does.
     runtime.mark_primary_needs_full_repaint();
     assert!(
-        host_turn(&mut runtime, &mut sink),
+        host_turn(&mut runtime, &mut sink, &clock),
         "the window's next change presents"
     );
     assert_eq!(sink.submits, 2);
@@ -235,7 +245,8 @@ fn a_refused_frame_waits_for_its_windows_next_change() {
 /// tree once the surface returns).
 #[test]
 fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_press() {
-    let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
+    let clock = ManualClock::new();
+    let mut runtime = crate::owner_publication::runtime_on_manual_clock(&clock);
     let downs = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let seen = std::rc::Rc::clone(&downs);
     runtime
@@ -255,7 +266,10 @@ fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_pres
     while runtime.failure_retry_deadline().is_none() {
         assert!(turns < 1_000, "the withheld retry is bounded");
         turns += 1;
-        assert!(!host_turn(&mut runtime, &mut sink), "the surface withholds");
+        assert!(
+            !host_turn(&mut runtime, &mut sink, &clock),
+            "the surface withholds"
+        );
         assert_eq!(
             sink.submits, turns,
             "each withheld attempt is tried at once"
@@ -267,9 +281,8 @@ fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_pres
     );
 
     // Past the budget, each attempt waits out the backoff, and the surface still withholds.
-    let failed_at = web_time::Instant::now();
-    wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
-    assert!(!host_turn(&mut runtime, &mut sink));
+    wait_out_the_backoff(&mut runtime, &mut sink, &clock);
+    assert!(!host_turn(&mut runtime, &mut sink, &clock));
     assert_eq!(sink.submits, turns + 1, "the attempt after the wait");
     assert!(
         runtime.failure_retry_deadline().is_some(),
@@ -292,7 +305,7 @@ fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_pres
     assert_eq!(downs.get(), 0, "the press waits for a shown tree");
     sink.remaining = 0;
     assert!(
-        host_turn(&mut runtime, &mut sink),
+        host_turn(&mut runtime, &mut sink, &clock),
         "the returned surface shows the tree"
     );
     assert_eq!(
