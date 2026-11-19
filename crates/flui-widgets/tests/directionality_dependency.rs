@@ -309,9 +309,7 @@ pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() 
 pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_direction() {
     use crate::common::{LaidOut, loose};
     use flui_foundation::geometry::{Matrix4, Size};
-    use flui_objects::{
-        RenderConstraintsTransformBox, RenderFittedBox, RenderFractionallySizedBox, RenderTransform,
-    };
+    use flui_objects::{RenderFittedBox, RenderTransform};
     use flui_painting::AlignmentGeometry;
     use flui_view::{BoxedView, ViewExt};
     use flui_widgets::{
