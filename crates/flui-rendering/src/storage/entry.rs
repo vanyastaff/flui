@@ -33,7 +33,7 @@ use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObj
 /// that lets the node's own object mark it dirty lives in the attached
 /// state, so it exists exactly while the node is attached, and the
 /// unattached states fit beside the handle's non-null pointer: the whole
-/// state is three words.
+/// state is the handle's size, 24 bytes on a 64-bit target.
 #[derive(Debug)]
 enum AttachmentState {
     Unattached(Unattached),
