@@ -1257,8 +1257,9 @@ jobs:
   # command list splits into contiguous blocks, so the shards cover every
   # package and feature exactly once with no hand-kept package lists. That
   # holds only while every shard runs the same cargo-hack, hence the exact
-  # version pin. The commands live in `cargo xtask feature-matrix`, so a local
-  # run and CI cannot drift apart. Five, not three or four: the facade and
+  # version pin. A local run over the crates a change touched takes the same
+  # two lines with `-p <crate>` in place of `--workspace --partition`. Five,
+  # not three or four: the facade and
   # the engine sit next to each other in the command list, and with fewer
   # contiguous blocks one shard takes both (three shards took 11, 22 and
   # 18 min on main); with five the slowest should take about 15 min, beside
@@ -1290,15 +1291,54 @@ jobs:
         with:
           tool: cargo-hack@0.6.45
 
-      - name: cargo xtask feature-matrix --slice ${{ matrix.slice }}
-        run: cargo xtask feature-matrix --slice "$SLICE"
+      - name: cargo hack clippy --each-feature --partition ${{ matrix.slice }}
+        if: matrix.slice != 'combinations'
         env:
           SLICE: ${{ matrix.slice }}
+        run: |
+          status=0
+          for targets in "" "--tests --benches --examples"; do
+            # shellcheck disable=SC2086 # `targets` is a list of flags
+            cargo hack clippy --workspace --partition "$SLICE" --locked --each-feature \
+              --keep-going $targets -- -D warnings || status=1
+          done
+          exit "$status"
+
+      # The facade's supported combinations, each a clippy of the `flui`
+      # package alone: a `--workspace` build proves nothing here, since
+      # feature unification would enable `material` from a sibling and turn a
+      # broken combination green. `--all-targets` is deliberate: a missing
+      # `required-features` on an example or test is exactly the wiring these
+      # builds catch. The defaults are empty, so the last entry builds what
+      # `--no-default-features` does; it stays so that a default someone adds
+      # back is built on its own. Each feature on its own (`testing`,
+      # `devtools`, `driver` and the rest) is the per-feature passes' job.
+      # flui-engine's wgpu backend features get no combination: they only
+      # forward to wgpu's, and no FLUI code is behind them.
+      - name: cargo clippy -p flui, each supported feature combination
+        if: matrix.slice == 'combinations'
+        run: |
+          status=0
+          for combo in \
+            "--no-default-features" \
+            "--no-default-features --features material" \
+            "--no-default-features --features cupertino" \
+            "--no-default-features --features material,cupertino" \
+            "--no-default-features --features serde" \
+            "--no-default-features --features animation-diagnostics" \
+            "--no-default-features --features native" \
+            "--no-default-features --features system" \
+            "--no-default-features --features http" \
+            "--all-features" \
+            ""; do
+            # shellcheck disable=SC2086 # `combo` is a list of flags
+            cargo clippy -p flui --locked --all-targets $combo -- -D warnings || status=1
+          done
+          exit "$status"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # wasm-check — the web platform claim, machine-checked, in three xtask
-  # steps (tools/xtask/src/tasks/web.rs holds the commands and why):
-  #   wasm-check — check + lib/bin clippy of every package that builds for
+  # wasm-check — the web platform claim, machine-checked, in three steps:
+  #   check      — check + lib/bin clippy of every package that builds for
   #                wasm32 (a package opts out with `[package.metadata.flui]
   #                wasm = false`, a reason beside it), plus `flui-hot-reload`
   #                with every feature. The clippy pass is the only lint over
@@ -1333,8 +1373,27 @@ jobs:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: cargo xtask wasm-check
-        run: cargo xtask wasm-check
+      # The workspace pass is lib and bin targets only: test targets pull
+      # native-only dev-dependencies such as tokio. flui-native's test targets
+      # (`tests/web_browser.rs`, `tests/wasm32/`) compile only for wasm32, so
+      # they get a clippy of their own. `flui-hot-reload` has no web runner,
+      # but an application that keeps it in a cross-target build must still
+      # build for the web. `wasm_consumer` is an application capturing `Rc`
+      # in owner-local callbacks (ADR-0086).
+      - name: cargo check and clippy for wasm32
+        run: |
+          list=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.metadata.flui.wasm == false) | "--exclude\n" + .name')
+          # an empty list would check packages that cannot build for wasm32
+          [ -n "$list" ] || { echo "no package sets [package.metadata.flui] wasm = false"; exit 1; }
+          mapfile -t excludes <<< "$list"
+          echo "excluded: ${excludes[*]}"
+          target=wasm32-unknown-unknown
+          cargo check --workspace --locked --target "$target" "${excludes[@]}"
+          cargo clippy --workspace --lib --bins --locked --target "$target" "${excludes[@]}" -- -D warnings
+          cargo clippy -p flui-native --all-targets --locked --target "$target" -- -D warnings
+          cargo check -p flui-hot-reload --locked --target "$target" --all-features
+          cargo clippy -p flui --test wasm_consumer --locked --target "$target" -- -D warnings
 
       - name: cargo xtask wasm-link
         run: cargo xtask wasm-link

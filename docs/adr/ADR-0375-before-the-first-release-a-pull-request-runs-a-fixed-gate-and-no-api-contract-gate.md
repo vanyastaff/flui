@@ -60,8 +60,8 @@ A pull request that compiles anything runs `checks`, `plan`, `deps`, `clippy` an
 (`HEAVY_JOBS` is `clippy` and `test`). `plan` decides the lane alone: it has no output that asks
 for a job. `test-trybuild`, `size`, `miri`, `perf-gates` and `test-without-agent` are `FULL_JOBS`,
 run by main, the merge queue and a manual run. `feature-scope` is removed; main's
-`feature-matrix` runs every package's features, and `cargo xtask feature-matrix --packages` runs
-a crate's features locally.
+`feature-matrix` runs every package's features, and its `cargo hack clippy` lines with
+`-p <crate>` run a crate's features locally.
 
 ### §2. No API contract gate
 

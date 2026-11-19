@@ -847,7 +847,7 @@ animation-diagnostics = ["flui-animation/diagnostics"]
 # No catalog, tool or capability is on by default: an application names what it
 # uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
 # minus the Material glob, `flui::run_app`) needs no feature at all;
-# `cargo xtask facade-combos` builds every combination.
+# CI's `feature-matrix` job builds every combination.
 default = []
 
 # === Catalogs and localization ===
@@ -973,7 +973,7 @@ path = "tests/surface.rs"
 name = "thread_boundary_ui"
 path = "tests/thread_boundary_ui.rs"
 
-# An application on wasm32 capturing `Rc` in owner-local callbacks; `cargo xtask wasm-check`
+# An application on wasm32 capturing `Rc` in owner-local callbacks; CI's `wasm-check` job
 # compiles it for wasm32.
 [[test]]
 name = "wasm_consumer"
