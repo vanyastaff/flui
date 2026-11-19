@@ -1,7 +1,7 @@
 //! A bounded set of slots, each freed one handed to the earliest-admitted
 //! waiter.
 //!
-//! A registry keeps two: load slots, which a load reserves at admission
+//! A cache keeps two: load slots, which a load reserves at admission
 //! ([`OrderedSlots::reserve`], [`OrderedSlots::reserve_start`]) and holds
 //! from before its read until its decode returns, and decode slots, which it
 //! holds while it decodes. Loads reach each queue in whatever order their

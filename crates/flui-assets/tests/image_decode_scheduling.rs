@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use flui_assets::{AssetRegistryBuilder, ImageSource};
+use flui_assets::{ImageCache, ImageCacheConfig, ImageSource};
 use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 use lanes::{ThreadLanes, block_on};
 
@@ -104,7 +104,7 @@ fn decodes_leave_the_io_lane_free() {
     });
     let files = SignedFiles::new("worker-probe");
     let path = files.write(SIGNATURE, "probe.img");
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
 
     let image = block_on(registry.load_image(path, lanes.services()))
         .expect("the decode reaches a free IO worker");
@@ -157,10 +157,7 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     register_signed_png(SIGNATURE, "flui-gated", move || hook_gate.pass());
     let files = SignedFiles::new("gated");
     let lanes = ThreadLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
 
     let blocker = registry.load_image(files.write(SIGNATURE, "blocker.img"), lanes.services());
     gate.wait_for_decodes(1);
@@ -220,10 +217,7 @@ fn loads_past_admission_are_bounded_by_count() {
     let requests = || http.requests().len();
     let files = SignedFiles::new("bound");
     let lanes = ThreadLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
 
     let blocker = registry.load_image(files.write(BLOCKER, "blocker.img"), lanes.services());
     gate.wait_for_decodes(1);
@@ -286,10 +280,7 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     }
     let files = SignedFiles::new("order");
     let lanes = ThreadLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
     let http = ScriptedHttp::new();
     let mut response = NETWORK.to_vec();
     response.extend_from_slice(PNG);
