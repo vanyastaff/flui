@@ -28,3 +28,5 @@ pub mod wayland;
 pub mod wayland_compositor;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub mod x11;
+#[cfg(target_os = "linux")]
+pub mod xvfb;

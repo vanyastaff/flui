@@ -66,16 +66,15 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # checks — fast source gate: `cargo xtask checks --strict` (fmt, typos,
-  # Taplo, markdown links, toolchain, unmounted test files, ADR numbers,
-  # changelog
-  # fragments, the generated files against their sources),
-  # xtask's own tests (which include each self-test), and the workflow
-  # linters. It builds only
-  # xtask, never the workspace, so a malformed PR fails before any workspace
-  # build starts. It has no `if:`: a docs-only PR, which skips every compile
-  # job, still runs it, and the link check is what such a PR most needs.
-  # Ubuntu only; clippy lives in its own parallel job.
+  # checks — fast source gate: rustfmt, typos, taplo and lychee called
+  # directly, then `cargo xtask checks` (the toolchain pin, unmounted test
+  # files, ADR numbers, changelog fragments, the generated files against
+  # their sources), xtask's own tests (which include each self-test), and
+  # the workflow linters. It builds only xtask, never the workspace, so a
+  # malformed PR fails before any workspace build starts. It has no `if:`: a
+  # docs-only PR, which skips every compile job, still runs it, and the link
+  # check is what such a PR most needs. Ubuntu only; clippy lives in its own
+  # parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
     name: checks
@@ -89,8 +88,8 @@ jobs:
       # The same for lychee, plus the SHA-256 of that version's
       # x86_64-unknown-linux-gnu tarball. 0.24.2 is also lychee-action
       # v2.9.0's default, which docs.yml runs over the rendered book: bump the
-      # two together. `cargo test -p xtask` pins this line to the version
-      # `cargo xtask doctor` tells a contributor to install.
+      # two together. `cargo test -p xtask` holds `cargo xtask doctor`'s install
+      # hint to this line.
       LYCHEE_VERSION: 0.24.2
       LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
     steps:
@@ -140,7 +139,7 @@ jobs:
           install -m 0755 actionlint ~/.local/bin/actionlint
           rm -f actionlint actionlint.tar.gz
 
-      # lychee (the link check in `cargo xtask checks`) comes the same way:
+      # lychee (the link check below) comes the same way:
       # install-action has no manifest for it, and its cargo-binstall fallback
       # would fetch a binary that no checksum covers. The release tarball is
       # checked against LYCHEE_SHA256 instead, and cached by version like
@@ -195,24 +194,78 @@ jobs:
           path: ~/.local/bin/lychee
           key: ${{ steps.lychee-cache.outputs.cache-primary-key }}
 
+      # Every check below runs even when one before it failed (`!cancelled()`),
+      # so one run reports every problem.
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: typos (spelling)
+        if: ${{ !cancelled() }}
+        run: typos
+
+      # taplo logs every file it formats at INFO; only problems matter here.
+      - name: taplo fmt --check (TOML formatting)
+        if: ${{ !cancelled() }}
+        env:
+          RUST_LOG: warn
+        run: taplo fmt --check
+
+      # Every link from the repository's markdown into the checkout resolves:
+      # lychee, offline, over every markdown file git knows outside the
+      # archival root docs/plans/ (dated records whose rotted links are
+      # history). A relative link names a file or directory that exists, and
+      # an `#anchor` into a markdown file one of its headings (`anchor-only`:
+      # GitHub's `#L10` line anchors into source are not checked). External
+      # URLs are not fetched, so the check cannot flake on the network; links
+      # to this repository's own `main` on GitHub are remapped onto the
+      # checkout, so a doc cited by URL is held to the same rule. A
+      # root-relative link (`/docs/x.md`) resolves against the root, as GitHub
+      # renders it. Linux matches names by case, so a link whose case is wrong
+      # fails here though it passes on Windows. A link that climbs above the
+      # repository root is not caught: from the runner's checkout,
+      # `../flui/<file>` lands in the checkout again.
+      - name: lychee (markdown links into the checkout, offline)
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          # a file still in the index but deleted from the working tree has
+          # nothing to read; grep finding no line is the empty list below
+          files=$(git -c core.quotepath=off ls-files --cached --others --exclude-standard -- '*.md' \
+            | { grep -v '^docs/plans/' || [ "$?" -eq 1 ]; } \
+            | while IFS= read -r file; do if [ -f "$file" ]; then printf '%s\n' "$file"; fi; done)
+          # lychee given no file exits 0, which looks like every link resolving
+          [ -n "$files" ] || { echo "::error::no markdown file listed"; exit 1; }
+          printf '%s\n' "$files" \
+            | lychee --offline --no-progress --include-fragments=anchor-only \
+                --root-dir "$PWD" \
+                --remap "^https://github\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)\$ file://$PWD/\$1" \
+                --files-from -
+
       - name: Rust cache (xtask)
+        if: ${{ !cancelled() }}
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
           shared-key: xtask
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # `--strict`: a missing typos, taplo or lychee is a failure here, not a skip.
+      # The repository's own checks, which no standard tool makes: the
+      # toolchain pin, test files a crate never mounts, ADR numbers, the
+      # changelog fragments, and the generated files against their sources.
       - name: cargo xtask checks
-        run: cargo xtask checks --strict
+        if: ${{ !cancelled() }}
+        run: cargo xtask checks
 
       - name: cargo test -p xtask
+        if: ${{ !cancelled() }}
         run: cargo test -p xtask --locked
 
       - name: actionlint (workflow semantics)
+        if: ${{ !cancelled() }}
         run: actionlint
 
       - name: zizmor (workflow security audit)
+        if: ${{ !cancelled() }}
         run: zizmor .
 
   # ─────────────────────────────────────────────────────────────────────────

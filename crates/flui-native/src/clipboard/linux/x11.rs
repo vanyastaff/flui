@@ -24,6 +24,7 @@
 
 #![forbid(unsafe_code)]
 
+mod connection;
 mod selection;
 
 use std::cell::RefCell;
@@ -39,7 +40,6 @@ use flui_platform::{
     capability::Resolver,
 };
 use rustix::event::{EventfdFlags, eventfd};
-use x11rb::rust_connection::RustConnection;
 
 use self::selection::{Command, Generation, Name, Notice, Owed, OwedClear, Selections};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
@@ -88,8 +88,17 @@ impl X11Clipboard {
     /// [`PlatformError::Init`] when no X server answers, the window or its
     /// atoms cannot be made, or the thread cannot start.
     pub(crate) fn start(wake: Box<dyn Fn() + Send + Sync>) -> Result<Self, PlatformError> {
+        Self::start_on(None, wake)
+    }
+
+    /// [`Self::start`] on the X server `display` names, `DISPLAY`'s when
+    /// `None`.
+    fn start_on(
+        display: Option<&str>,
+        wake: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, PlatformError> {
         let init = |message: String| PlatformError::Init { message };
-        let (connection, screen) = RustConnection::connect(None)
+        let (connection, screen) = connection::connect(display)
             .map_err(|error| init(format!("the clipboard cannot reach the X server: {error}")))?;
         let notice = Arc::new(Notice::new(wake));
         let selections = Selections::try_new(connection, screen, Arc::clone(&notice))
