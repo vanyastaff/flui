@@ -15,8 +15,9 @@ export const meta = {
 //
 // args:
 //   topic     the problem: what hurts, the measured facts with their evidence, the target (required)
-//   paths     optional list of the code areas the problem lives in, as repository paths
-//   drivers   optional list of the forces a design must satisfy, one sentence each
+//   paths     the code areas the problem lives in, as repository paths
+//   drivers   the forces a design must satisfy, one sentence each
+//             (paths and drivers: left out, null, or a non-empty list of non-empty strings)
 //   stances   optional [{ key, focus }], two to six: the schools the proposals come from (default:
 //             four); a key is lower-case words joined by dashes, unique, and not "red-team"
 //   checkout  the checkout to read (default, also for an empty or null value: the session's working
@@ -36,9 +37,9 @@ if (typeof checkout !== 'string' || !QUOTABLE.test(checkout) || !checkout.trim()
 }
 // Paths and drivers a caller names are used as named or refused, like the stances: a default in
 // their place would judge the designs against forces nobody named.
-const listOfText = (value) => value === undefined || (Array.isArray(value) && value.length > 0 && value.every((x) => typeof x === 'string' && x.trim()))
+const listOfText = (value) => value === undefined || value === null || (Array.isArray(value) && value.length > 0 && value.every((x) => typeof x === 'string' && x.trim()))
 if (!listOfText(opts.paths) || !listOfText(opts.drivers)) {
-  return { error: 'paths and drivers must each be left out or a non-empty list of non-empty strings' }
+  return { error: 'paths and drivers must each be left out, null, or a non-empty list of non-empty strings' }
 }
 const paths = opts.paths || []
 const drivers = opts.drivers || []
@@ -95,8 +96,8 @@ ${drivers.length ? drivers.map((d) => `- ${d}`).join('\n') : '- AGENTS.md "Desig
 The repository is FLUI, a declarative UI framework in Rust; read it in the checkout ${dir}. AGENTS.md is the process and its rules bind every design. Do not edit tracked files and do not build: other agents share this host. Another project's source may be read with \`gh\` or cloned shallowly into the gitignored \`.flutter/\` or \`.gpui/\`.`
 
 // An agent asked for an empty string sometimes writes the quotes themselves (`""`); every string an
-// agent returns is read through `blankQuotes`, so an answer whose `how` is `""` is empty, and answers
-// nothing.
+// agent returns is read through `blankQuotes`, so a `how` written as `""` is empty: a fixed or
+// refuted answer that says nothing is not kept (a concession needs no reason).
 function blankQuotes(value) {
   if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
   if (Array.isArray(value)) return value.map(blankQuotes)

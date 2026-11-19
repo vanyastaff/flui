@@ -73,6 +73,17 @@ const noAgent = () => assert.fail('no agent may run')
     assert.match(refused.error, /paths and drivers must/, JSON.stringify(extra))
     assert.equal(none.length, 0)
   }
+  // Null means left out, as for the checkout.
+  {
+    const { result: accepted, prompts } = await run({ topic: 'T', stances, paths: null, drivers: null }, happy())
+    assert.equal(accepted.error, undefined)
+    assert.match(prompts['research:code'], /Code areas: find them\./)
+  }
+  for (const extra of []) {
+    const { result: refused, calls: none } = await run({ topic: 'T', ...extra }, noAgent)
+    assert.match(refused.error, /paths and drivers must/, JSON.stringify(extra))
+    assert.equal(none.length, 0)
+  }
   {
     const { prompts } = await run({ topic: 'T', stances, paths: ['crates/flui-layer'], drivers: ['stay under 2 ms'] }, happy())
     assert.match(prompts['research:code'], /Code areas: crates\/flui-layer\.\nDrivers a design must satisfy:\n- stay under 2 ms\n/)
@@ -189,6 +200,14 @@ const noAgent = () => assert.fail('no agent may run')
   }))
   assert.deepEqual(bare.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', '']])
   assert.ok(bare.open.some((x) => x.stance === 'a' && x.why === 'conceded'))
+  // Without a concession the first answer that says how is kept, not a later one.
+  const { result: firstReason } = await run({ topic: 'T', stances }, happy({
+    'revise:a': (p) => {
+      const first = Number(p.match(/"id": (\d+)/)[1])
+      return { answers: [{ id: first, verdict: 'fixed', how: ' ' }, { id: first, verdict: 'fixed', how: 'first' }, { id: first, verdict: 'refuted', how: 'second' }], design: design('a revised') }
+    },
+  }))
+  assert.deepEqual(firstReason.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['fixed', 'first']])
 
   let conceded = 0
   const { result: owned, prompts } = await run({ topic: 'T', stances }, happy({
