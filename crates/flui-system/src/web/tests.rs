@@ -18,16 +18,12 @@ use flui_platform::capability::{
     OwnerPoster, OwnerScope, PendingCompletions, Plugin as _, ProviderContext, RuntimeLocals,
     WindowCloser, WindowRef,
 };
-use flui_platform::drag::PlatformDragSource;
-use flui_platform::haptics::PlatformHaptics;
 use flui_platform::launch::{
     ExternalUri, LaunchError, Launcher, LauncherBackend as _, LauncherCapability, Scheme,
 };
 use flui_platform::{
-    AdmittedCommand, ApplyError, Cursor, CursorError, GestureGeometry, PlatformSystemChrome,
-    PlatformTextInput, PlatformWindow, PreferenceQueryError, RedrawRequester, SurfaceTarget,
-    SwapChainStatistics, Unsupported, UnsupportedReason, WindowAt, WindowExtent, WindowGeometry,
-    WindowId, WindowIdMint, WindowState,
+    PlatformWindow, SurfaceTarget, SwapChainStatistics, Unsupported, UnsupportedReason, WindowId,
+    WindowIdMint,
 };
 use js_sys::{Array, Promise, Reflect};
 use raw_window_handle::{
@@ -207,53 +203,12 @@ impl SurfaceTarget for CanvasTarget {
 
 /// A host's window over a [`CanvasTarget`]: what a provider reaches through
 /// the `WindowRef` it is handed, and nothing else.
-struct CanvasHostWindow {
-    id: WindowId,
-    target: Arc<CanvasTarget>,
-}
-
-impl PlatformWindow for CanvasHostWindow {
-    flui_platform::window_takes_no_frame_verbs!();
-
-    fn id(&self) -> WindowId {
-        self.id
-    }
-    fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
-        Ok(None)
-    }
-    fn request_redraw(&self) {}
-    fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
-        Arc::new(|| {})
-    }
-    fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
-        Arc::clone(&self.target) as Arc<dyn SurfaceTarget>
-    }
-    fn state(&self) -> WindowState {
-        WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
-    }
-    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        command.against(&self.state().capabilities)?;
-        Ok(())
-    }
-    fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
-    }
-    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        None
-    }
-    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
-        None
-    }
-    fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
-        None
-    }
-    fn window_at(&self, _: flui_sdk::foundation::geometry::Point<f64>) -> WindowAt {
-        WindowAt::Unknown
-    }
-    fn reveal_after_first_frame(&self) {}
+fn canvas_host_window(id: WindowId, target: Arc<CanvasTarget>) -> Rc<dyn PlatformWindow> {
+    Rc::new(
+        flui_platform::testing::MockWindow::new()
+            .with_id(id)
+            .with_surface_target(target),
+    )
 }
 
 /// A window of its own on the test page: a canvas in a `<div>` of the
@@ -291,7 +246,7 @@ impl CanvasWindow {
             .windows
             .next()
             .expect("a test opens far fewer windows than ids");
-        let host: Rc<dyn PlatformWindow> = Rc::new(CanvasHostWindow { id, target });
+        let host: Rc<dyn PlatformWindow> = canvas_host_window(id, target);
         Self {
             root,
             canvas,
@@ -2344,13 +2299,13 @@ fn system_handle<C: Capability>(
 /// headless window's does not, open while the returned host and closer live.
 fn canvasless_window(owner: &TestOwner) -> (WindowRef, Rc<dyn PlatformWindow>, WindowCloser) {
     let (closer, lifetime) = WindowCloser::new();
-    let host: Rc<dyn PlatformWindow> = Rc::new(CanvasHostWindow {
-        id: owner
+    let host = canvas_host_window(
+        owner
             .windows
             .next()
             .expect("a test opens far fewer windows than ids"),
-        target: Arc::new(CanvasTarget(0)),
-    });
+        Arc::new(CanvasTarget(0)),
+    );
     (WindowRef::new(&host, lifetime), host, closer)
 }
 

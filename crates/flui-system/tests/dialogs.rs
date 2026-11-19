@@ -92,6 +92,86 @@ fn an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks() {
     assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(picked)))));
 }
 
+/// A button that opens a file dialog and shows how many files it answered.
+#[derive(Clone, flui_sdk::view::StatefulView)]
+struct Picker;
+
+struct PickerState {
+    dialogs: FileDialogs,
+    shown: Rc<RefCell<String>>,
+    rebuild: flui_sdk::view::RebuildHandle,
+}
+
+impl flui_sdk::view::StatefulView for Picker {
+    type State = PickerState;
+
+    fn create_state(&self, ctx: &dyn flui_sdk::view::LifecycleContext) -> Self::State {
+        use flui_sdk::view::prelude::*;
+
+        PickerState {
+            dialogs: ctx
+                .capability::<FileDialogCapability>()
+                .expect("the scripted system provides dialogs"),
+            shown: Rc::new(RefCell::new("nothing picked".to_owned())),
+            rebuild: ctx.rebuild_handle(),
+        }
+    }
+}
+
+impl flui_sdk::view::ViewState<Picker> for PickerState {
+    fn build(
+        &self,
+        _view: &Picker,
+        _ctx: &dyn flui_sdk::view::BuildContext,
+    ) -> impl flui_sdk::view::IntoView {
+        use flui_sdk::widgets::{Column, RawButton, Text};
+
+        let dialogs = self.dialogs.clone();
+        let shown = Rc::clone(&self.shown);
+        let rebuild = self.rebuild.clone();
+        Column::new((
+            Text::new(self.shown.borrow().clone()),
+            RawButton::new(Text::new("Open")).on_pressed(move |_| {
+                let shown = Rc::clone(&shown);
+                let rebuild = rebuild.clone();
+                dialogs
+                    .open(OpenRequest::files())
+                    .on_complete(move |outcome| {
+                        *shown.borrow_mut() = match outcome {
+                            Ok(Ok(Some(picks))) => format!("picked {}", picks.len()),
+                            Ok(Ok(None)) => "cancelled".to_owned(),
+                            Ok(Err(error)) => format!("{error:?}"),
+                            Err(abandoned) => format!("{abandoned:?}"),
+                        };
+                        rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+                    });
+            }),
+        ))
+    }
+}
+
+/// The tap that opens a widget's dialog reaches it through the window's
+/// agent, the path a driver takes; on the headless host the scripted system
+/// answers in the operating system's place, and the widget shows the answer.
+#[test]
+fn a_dialog_a_tap_through_the_agent_opens_is_answered_by_the_script() {
+    let (dialogs, plugin) = scripted();
+    dialogs.answer_next_open(Ok(Some(picks(&["a.png"]))));
+    let mut t =
+        flui_testing::Tester::mount_in(Picker, flui_testing::TestWindow::default().plugin(plugin));
+    t.expect(flui_testing::find::text("nothing picked"))
+        .to_exist();
+
+    t.tap(&flui_testing::find::button("Open"));
+
+    t.expect(flui_testing::find::text("picked 1")).to_exist();
+    let requests = dialogs.requests();
+    assert!(
+        matches!(requests.as_slice(), [DialogRequest::Open { .. }]),
+        "the tap asked for one open dialog: {requests:?}"
+    );
+}
+
 #[test]
 fn a_cancelled_save_dialog_answers_none() {
     let (dialogs, plugin) = scripted();

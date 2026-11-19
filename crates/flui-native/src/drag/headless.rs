@@ -19,26 +19,33 @@
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
-use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::{
-    DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
-    TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
-    TransferRequest,
+    DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferError,
+    TransferLimits, TransferRequest,
 };
-use flui_platform::drag::{
-    DragError, OsDragEnd, OsDragParts, OsDragProvider, OsDragRequest, OsDragStart,
-    PlatformDragSource,
-};
-use flui_platform::{DragDropEvent, PlatformInput, Unsupported, UnsupportedReason, WindowId};
+use flui_platform::drag::{DragError, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::{Unsupported, UnsupportedReason};
 use parking_lot::Mutex;
 
 use crate::drag::offers::OfferTable;
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::headless::{
-    DragOver, HeadlessLoop, HeadlessState, HeldPresses, OsDragSession, OsDrags, SimulatedOffers,
+    HeadlessLoop, HeadlessState, HeldPresses, OsDragSession, OsDrags, SimulatedOffers,
 };
 use crate::owner::slot::OwnerSlot;
-use crate::platform::HostPlatform;
+// The test's side of the simulated system, built with `scripted`.
+#[cfg(feature = "scripted")]
+use {
+    crate::host::Host,
+    crate::owner::headless::DragOver,
+    crate::platform::HostPlatform,
+    flui_foundation::geometry::Point,
+    flui_platform::data_transfer::{
+        DataTransferOffer, TransferActions, TransferFormat, TransferPayload,
+    },
+    flui_platform::drag::{OsDragEnd, OsDragProvider},
+    flui_platform::{DragDropEvent, PlatformInput, WindowId},
+};
 
 /// The simulated system mints its offers in the table every source does.
 impl SimulatedOffers for OfferTable {
@@ -219,6 +226,7 @@ impl PlatformDragSource for HeadlessDragSource {
 
 /// The headless platform's drag and drop: whether its windows start OS drag
 /// sessions, and the test's side of the simulated system.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Let this backend's windows start OS drag sessions, starting them at
     /// `timing` (desktop: `OnLeavingWindow`; iOS and the web: `AtStart`), and
@@ -246,6 +254,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 }
 
 /// Plays the operating system's side of a drag on a [`HeadlessPlatform`](crate::HeadlessPlatform).
+#[cfg(feature = "scripted")]
 #[derive(Clone)]
 pub struct HeadlessDragAndDrop {
     drags: Arc<Mutex<OsDrags>>,
@@ -253,6 +262,7 @@ pub struct HeadlessDragAndDrop {
     system: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
+#[cfg(feature = "scripted")]
 impl std::fmt::Debug for HeadlessDragAndDrop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadlessDragAndDrop")
@@ -261,6 +271,7 @@ impl std::fmt::Debug for HeadlessDragAndDrop {
     }
 }
 
+#[cfg(feature = "scripted")]
 impl HeadlessDragAndDrop {
     /// The OS side of the simulated system whose state is `system`.
     pub(crate) fn of(system: &std::rc::Rc<std::cell::RefCell<HeadlessState>>) -> Self {

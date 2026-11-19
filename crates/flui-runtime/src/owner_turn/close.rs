@@ -604,7 +604,7 @@ mod tests {
     use flui_foundation::{PresentationId, UiRuntimeId};
 
     use super::*;
-    use crate::testing::TestWindow;
+    use flui_testing::MockWindow;
 
     // What replaced the run-time thread checks: neither the router nor a
     // handler can reach another thread.
@@ -620,7 +620,7 @@ mod tests {
 
     fn window(id: u64) -> Rc<dyn PlatformWindow> {
         Rc::new(
-            TestWindow::new()
+            MockWindow::new()
                 .with_id(flui_platform::WindowId::try_from_raw(id).expect("a nonzero window id")),
         ) as Rc<dyn PlatformWindow>
     }

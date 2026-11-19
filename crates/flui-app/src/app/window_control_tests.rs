@@ -7,16 +7,15 @@
 )]
 
 use crate::app::runner::window_routes::OpenRouted as _;
-use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_native::HeadlessPlatform;
 use flui_platform::WindowId;
-use flui_platform::{Cursor, CursorError};
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_platform::{WindowCapabilities, WindowFrame, WindowMode, WindowOptions};
 use flui_platform::{WindowExtent, WindowPosition};
+use flui_testing::{MockWindow, WindowCall};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
@@ -340,101 +339,59 @@ thread_local! {
     static REENTRANT: RefCell<Option<WindowHandle>> = const { RefCell::new(None) };
 }
 
-/// A window that records what it was asked and can fail or ask for more.
-struct RecordingWindow {
-    applied: Mutex<Vec<WindowCommand>>,
-    fail_titles: bool,
-    during_apply: Option<fn()>,
+/// Code run once from inside the next read of a window's state.
+type OnRead = Box<dyn FnOnce()>;
+
+/// What a window's observer counts and runs on each read of its state.
+struct StateReads {
     /// How many times its state was read.
-    reads: Cell<usize>,
+    count: Rc<Cell<usize>>,
     /// Run once from inside the next read of its state, as a window that
     /// calls its handler from a read does.
-    on_read: RefCell<Option<Box<dyn FnOnce()>>>,
-    /// What it honours, published once when it was made.
-    capabilities: WindowCapabilities,
+    on_read: Rc<RefCell<Option<OnRead>>>,
 }
 
-impl PlatformWindow for RecordingWindow {
-    fn id(&self) -> WindowId {
-        WindowId::try_from_raw(900).expect("a nonzero window id")
-    }
-    fn request_redraw(&self) {}
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        Arc::new(|| {})
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::testing::NoNativeSurface)
-    }
-    flui_platform::window_takes_no_frame_verbs!();
-
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> {
-        Ok(())
-    }
-    fn state(&self) -> WindowState {
-        self.reads.set(self.reads.get() + 1);
-        let on_read = self.on_read.borrow_mut().take();
-        if let Some(on_read) = on_read {
-            on_read();
-        }
-        let extent =
-            flui_platform::WindowExtent::try_new(Size::new(10.0, 10.0)).expect("a finite extent");
-        WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
-            .with_visible(true)
-            .with_focus(flui_platform::WindowFocus::Focused)
-            .with_capabilities(self.capabilities)
-    }
-    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        let command = command.against(&self.state().capabilities)?;
-        if self.fail_titles && matches!(command, WindowCommand::SetTitle(_)) {
-            return Err(ApplyError::failed("the system said no".into()));
-        }
-        self.applied.lock().expect("log").push(command);
-        if let Some(during) = self.during_apply {
-            during();
-        }
-        Ok(())
-    }
-    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
+/// A window that records what it was asked and can fail or ask for more.
+fn recording_with_reads(
+    fail_titles: bool,
+    during_apply: Option<fn()>,
+) -> (Rc<MockWindow>, StateReads) {
+    let reads = StateReads {
+        count: Rc::new(Cell::new(0)),
+        on_read: Rc::new(RefCell::new(None)),
+    };
+    let (count, on_read) = (Rc::clone(&reads.count), Rc::clone(&reads.on_read));
+    let window = MockWindow::new()
+        .with_id(WindowId::try_from_raw(900).expect("a nonzero window id"))
+        .with_size(10.0, 10.0)
+        .focused(true)
+        .with_capabilities(WindowCapabilities::ALL)
+        .with_refusal(move |command| {
+            (fail_titles && matches!(command, WindowCommand::SetTitle(_)))
+                .then(|| ApplyError::failed("the system said no".into()))
+        })
+        .with_observer(move |call| {
+            if matches!(call, WindowCall::State) {
+                count.set(count.get() + 1);
+                let on_read = on_read.borrow_mut().take();
+                if let Some(on_read) = on_read {
+                    on_read();
+                }
+            } else if matches!(call, WindowCall::Apply(_))
+                && let Some(during) = during_apply
+            {
+                during();
+            }
+        });
+    (Rc::new(window), reads)
 }
 
-fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Rc<RecordingWindow> {
-    Rc::new(RecordingWindow {
-        applied: Mutex::new(Vec::new()),
-        fail_titles,
-        during_apply,
-        reads: Cell::new(0),
-        on_read: RefCell::new(None),
-        capabilities: WindowCapabilities::ALL
-            .publish()
-            .expect("the process has publications left"),
-    })
+fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Rc<MockWindow> {
+    recording_with_reads(fail_titles, during_apply).0
 }
 
-fn applied(window: &RecordingWindow) -> Vec<WindowCommand> {
-    window.applied.lock().expect("log").clone()
+fn applied(window: &MockWindow) -> Vec<WindowCommand> {
+    window.applied()
 }
 
 fn a_backend_failure_does_not_stop_the_rest_of_the_queue() {
@@ -559,8 +516,8 @@ fn a_window_closed_between_the_request_and_the_lookup_has_no_handle() {
 /// the queues (a state change that opens a window registers its queue), which
 /// the lookup holds borrowed.
 fn looking_a_window_up_reads_nothing_of_it() {
-    let window = recording(false, None);
-    let as_platform: Rc<dyn PlatformWindow> = window.clone();
+    let (window, reads) = recording_with_reads(false, None);
+    let as_platform: Rc<dyn PlatformWindow> = window;
     let queues = Rc::new(WindowCommandQueues::default());
     let source = window_source(
         &as_platform,
@@ -571,8 +528,8 @@ fn looking_a_window_up_reads_nothing_of_it() {
     );
     let opened_from_a_read = Rc::new(RefCell::new(None));
     let (reentered, kept) = (Rc::clone(&queues), Rc::clone(&opened_from_a_read));
-    let reads_before = window.reads.get();
-    *window.on_read.borrow_mut() = Some(Box::new(move || {
+    let reads_before = reads.count.get();
+    *reads.on_read.borrow_mut() = Some(Box::new(move || {
         let another: Rc<dyn PlatformWindow> = recording(false, None);
         *kept.borrow_mut() = Some(window_source(
             &another,
@@ -588,7 +545,7 @@ fn looking_a_window_up_reads_nothing_of_it() {
         "the open window has a handle"
     );
     assert_eq!(
-        window.reads.get(),
+        reads.count.get(),
         reads_before,
         "the lookup read the window's state"
     );

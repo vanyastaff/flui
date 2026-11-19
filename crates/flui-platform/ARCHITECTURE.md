@@ -60,9 +60,11 @@ this one path (ADR-0151 §9).
   `data_transfer`, `drag`, `text_store` (whose four traits are also at the
   root), `pointer`, `keyboard`, `input_capabilities`, `input_regions`,
   `assets`, `capability`, `executor`, `http` and `launch`. `testing` exists only under
-  the `testing` feature: what a test double's window is written with
-  (`NoNativeSurface` and the `window_takes_no_frame_verbs!` macro) and the
-  doubles of this crate's contracts, none of which production code uses.
+  the `testing` feature and in this crate's own unit tests: the doubles of its contracts, among them the
+  one window double, `MockWindow` (`flui-testing` re-exports it; no crate
+  outside the core host and the kits implements `PlatformWindow`), and
+  `NoNativeSurface`, the surface target of a window with no native surface.
+  Production code uses none of it.
 - **The text store is owner-thread and UTF-16.** `TextStore` is shared as
   `Rc<dyn TextStore>`; `CommitGate` is not `Send`
   (a `static_assertions` test pins it). Every offset on the surface is a
@@ -287,8 +289,9 @@ this one path (ADR-0151 §9).
   (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::honours_input_regions`)
   says none, has no default body, and the window conformance checks
   both. A verb answers its reason itself: nothing admits it against the
-  capabilities, so the capabilities keep no second copy of it. A test double whose window system takes neither writes them with
-  `window_takes_no_frame_verbs!`.
+  capabilities, so the capabilities keep no second copy of it. A standalone `testing::MockWindow`
+  answers both by its own capabilities (input regions: whether it is built
+  `taking_input_regions`); one built over another window hands them to it.
 - **The window stays on its owner thread; other threads get a target and a
   requester (ADR-0254 §5).** `PlatformWindow` is neither `Send` nor `Sync`, so
   no window, nor any `Rc`, `Arc` or borrow of one, crosses a thread

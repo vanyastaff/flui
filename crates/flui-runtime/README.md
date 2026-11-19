@@ -36,7 +36,7 @@ the Stable promise (ADR-0089 §1). Applications depend on `flui`, and hosts on
   and the `SubmitVerdict` the UI runtime classifies.
 - `reload` (`hot-reload` feature): the development reload tier a UI runtime
   applies.
-- `testing` (`testing` feature): a window double and a scripted sink for
+- `testing` (`testing` feature): a scripted sink and scene totals for
   driving a UI runtime headlessly.
 
 ## What is not

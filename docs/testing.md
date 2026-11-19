@@ -36,7 +36,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessHost` | dev-dependency |
-| Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
+| Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::ScriptedSink` and the window double `flui_testing::MockWindow` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the UI runtime's own `UiRuntime::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
@@ -904,7 +904,8 @@ The constitution requires `///` doc comments on every public item and `//!` over
   lists the failing row names. The rows keep their own assertions; the table keeps the
   set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
+- **No mocking frameworks.** Use trait-based test doubles. The headless host is the canonical test surface for platform-dependent code; its type (`HeadlessPlatform`), its window, its doubles (`FakeTextInput`, `FakeAccessibility`) and its `Headless*` controls are named with `flui-native`'s `scripted` feature, which a crate whose tests drive it turns on in its dev-dependency.
+- **One window double.** A test that needs a window and not a host builds `flui_testing::MockWindow` (in a crate below the kit, `flui_platform::testing::MockWindow`, the same type): standalone or over a host's window, with builders for what the test sets, recordings for what it reads back, an observer for code it runs at each call, and values it keeps that drop with the window. No test implements `PlatformWindow` itself; a test that needs something the double lacks adds a builder to it.
 
 ## Test Harnesses (`testing` feature)
 

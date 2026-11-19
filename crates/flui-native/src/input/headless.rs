@@ -11,14 +11,16 @@ use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{DeviceId, PointerDeviceChange, PointerKind};
 use flui_platform::{EventTime, PlatformInput};
 
-use crate::host::{self, Host};
+use crate::host;
 use crate::input::assembly::{DeviceRegistry, NativeDevice};
 
 use crate::owner::headless::{HeadlessLoop, HeadlessState, SimulatedDevices};
-use crate::platform::HostPlatform;
+#[cfg(feature = "scripted")]
+use crate::{host::Host, platform::HostPlatform};
 
 /// The headless platform's input controls: builders and handles taken before
 /// [`Platform::run`](crate::Platform::run) consumes it.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Report `availability` as what this backend implements (its device
     /// presence is ignored: attached devices come from

@@ -314,7 +314,7 @@ crates need it:
 ### 10. Testing, and claimed support
 
 - **A scripting primitive in the contract crate's `scripted` feature** (not `testing`: ADR-0243
-  keeps that name for test support, and `flui-app` uses the primitive under `driver`): an ordered
+  keeps that name for test support, and a driver turns it on where it scripts an answer): an ordered
   script of responses to prompts, service toggles, revocations and injected errors, plus
   virtual-time event streams, all resolved at an owner turn boundary. It sits in the contract
   because a capability crate may not depend on `flui-testing`, and because every call the OS

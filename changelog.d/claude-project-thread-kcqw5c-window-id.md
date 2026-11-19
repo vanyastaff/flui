@@ -12,7 +12,6 @@
 
 - `WindowId` is opaque: its field is a private `NonZeroU64`, read with `get()`. `WindowId::new`,
   `as_u64` and the public tuple field are gone, so no crate builds an id from a number.
-- `flui-runtime`'s `TestWindow::with_id` takes a `WindowId`.
 
 ### Fixed
 
