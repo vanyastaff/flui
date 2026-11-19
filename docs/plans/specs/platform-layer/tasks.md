@@ -2,7 +2,7 @@
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
   Из 134 задач серии 130 закрыты и 4 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `2993f8ab4` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
+  `main` @ `dea790fa9` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
   исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
@@ -6363,65 +6363,65 @@ GPU-память простаивающего или невидимого окн
   `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown`: `-p flui-native --lib` с фичами по умолчанию и без них,
   `-p flui-platform -p flui-system --lib`, `--tests` трёх крейтов под нативные цели и `-p flui-system --lib --tests --features testing` под wasm32 — ни одного предупреждения: каждое `expect(dead_code)` исполнено.
 
-- [x] **LY102** — #2878. **Что сделано.** Исходники `flui-platform` разложены по
-  областям `git mv` (история идёт за файлами): `window/` — словарь окна (`window.rs` стал
-  `window/mod.rs`), `platform_window`, `state`, `capabilities`, `placement`, `geometry`,
-  `frame`, `insets`, `handler`, `surface_target`, `cursor`, `brightness`, `frame_request`,
-  `os_options`; `input/` — `PlatformInput` (`input.rs` стал `input/mod.rs`), `pointer/`,
-  `keyboard/`, `input_capabilities/`, `input_regions`, `event_time`; `text/` — `ime`, `input`
-  (бывший `text_input.rs`), `text_store/`; `transfer/` — `clipboard`, `data_transfer`, `drag`;
-  `preferences` — с `locale` и `regional`; `haptics/` — с `feedback` (бывший
-  `haptic_feedback.rs`); `host_notice.rs` стал `notice.rs`. Модули, у которых имя повторяло
-  родителя, стали короче (`window_state` → `window::state`, `text_input` → `text::input`);
-  публичные модули сохранили имена. `display` остался одним файлом `display.rs` — модуль
-  `display` и есть область, каталог появится со вторым файлом. `menu/` не заведён: по таблице
-  ADR-0151 §2 модель меню приходит вместе с первой реализацией и потребителем; пустой модуль был
-  бы заглушкой. В корне остались модули вне областей строки: `assets`, `backoff`, `environment`,
-  `executor`, `flag_set`, `http`, `launch`, `launch_key`, `opened`, `owner_wait`, `sandbox`,
-  `system_failure`, `testing`. **Публичные пути.** Ни один не изменился: области `window`,
-  `input`, `text`, `transfer` приватны, у каждого имени один публичный путь в корне, а
-  публичные модули внутри областей (`pointer`, `keyboard`, `input_capabilities`,
-  `input_regions`, `text_store`, `data_transfer`, `drag`, `os_options`) реэкспортированы в
-  корне под своими именами. Перенос этих восьми путей внутрь областей — вторая половина
-  ADR-0151 §2 — задел бы около 400 файлов в 15 крейтах; он записан в `docs/gaps.md`
-  («Accepted ADR sections not built yet», ADR-0151 §2). `PreferenceQueryError`, ошибка
-  `PlatformWindow::gesture_geometry`, перенесена к трейту в `window/platform_window.rs`, чтобы
-  область `preferences` не называла область `window` в ответ; корневой путь тот же. Остался
-  один цикл между областями, который даёт сама раскладка ADR-0151 §2: `input` → `transfer`
-  (`DragDropEvent` несёт `DataTransferOffer`) и `transfer` → `input` (`OsDragRequest` называет
-  `PressId`); цикл `window` ↔ `capability` (`portal_parent`, `WindowRef`) был и до переноса.
-  **Как проверено.** Все перенесённые файлы, кроме четырёх, — переименования без единой
-  изменённой строки (`git diff -M100% --name-status`); изменены `window/mod.rs` и
-  `input/mod.rs` (объявления подмодулей и абзац документации), `window/state.rs` (один путь
-  `use`) и `window/platform_window.rs` (перенесённый `PreferenceQueryError`). `cargo
-  public-api -p flui-platform --all-features` до (`origin/main` @ `2993f8ab4`) и после — 4112
-  строк, совпадают после нормализации отображаемого пути трёх типов `text_store::utf16`, у
-  которых и до переноса было два публичных пути, и супертрейта `pointer::sealed::Sealed`.
-  Файлы фасада и `flui-sdk` не тронуты: их 122 строки `flui_platform::` те же. Два trybuild
-  `.stderr` (`window_id_cannot_be_built_from_a_number`, `apply_takes_only_an_admitted_command`)
-  меняют только путь исходника в примечании rustc (`src/window.rs` → `src/window/mod.rs`,
+- [x] **LY102** — #2878. **Что сделано.** `flui-platform` разложен по областям `git mv`
+  (история идёт за файлами): `window` — `options` (бывший `window.rs`: идентичность и опции
+  создания), `platform_window`, `state`, `capabilities`, `placement`, `geometry`, `frame`,
+  `insets`, `handler`, `surface_target`, `cursor`, `brightness`, `frame_request`,
+  `os_options`; `input` — `event` (бывший `input.rs`: `PlatformInput`), `pointer`,
+  `keyboard`, `input_capabilities`, `input_regions`, `event_time`; `text` — `ime`, `input`
+  (бывший `text_input.rs`), `text_store`; `transfer` — `clipboard`, `data_transfer`, `drag`;
+  `preferences` — с `locale` и `regional`; `haptics` — с `feedback` (бывший
+  `haptic_feedback.rs`); `host_notice.rs` стал `notice.rs`. Приватные модули, у которых имя
+  повторяло родителя, стали короче (`window_state` → `window::state`); публичные сохранили
+  имена. **Публичные пути.** Области `input`, `text`, `transfer`, `window` — публичные модули,
+  в их `mod.rs` только объявления; восемь публичных модулей переехали в свои области и
+  реэкспорта в корне не имеют: `flui_platform::input::{pointer, keyboard, input_capabilities,
+  input_regions}`, `flui_platform::text::text_store`, `flui_platform::transfer::{data_transfer,
+  drag}`, `flui_platform::window::os_options`. Имена, реэкспортированные в корне, остались
+  (`flui_platform::WindowOptions`), и у каждого это единственный путь: они реэкспортируются из
+  приватных модулей областей. `Utf16Offset`, `Utf16Range` и `OffsetError` имеют один путь,
+  `text::text_store::utf16`. Пути фасада `flui::platform` и `flui-sdk` не изменились; в их
+  исходниках сменились только пути источника, а в списке `flui-sdk/tests/surface.rs` — те же
+  строки на новом месте сортировки. Все пользователи в 15 крейтах переписаны (ast-grep для
+  групп `use`, sed для прямых путей); фрагменты `changelog.d` прежних изменений оставлены как
+  запись тех изменений, новый — `changelog.d/platform-contract-by-area.md`. **Направление
+  импортов.** `window` → `input`, `text`, `transfer`, `haptics`, `display`, `preferences`;
+  `input` → `text`, `transfer`; `haptics` → `input`. Цикл `input` ↔ `transfer` снят:
+  `transfer::drag` берёт `PressId` из `flui-foundation`, где он определён, а не через
+  `input::pointer`, так что `transfer` не называет других областей. `PreferenceQueryError`,
+  ошибка `PlatformWindow::gesture_geometry`, перенесена к трейту в `window/platform_window.rs`,
+  чтобы `preferences` не называла `window`. Цикл `window` ↔ `capability` (`portal_parent`,
+  `WindowRef`) был до переноса и записан в `docs/gaps.md` («The window and capability areas of
+  flui-platform import each other»). `display` остался одним файлом `display.rs`; `menu/` не
+  заведён: по таблице ADR-0151 §2 модель меню приходит с первой реализацией и потребителем. В
+  корне остались модули вне областей строки: `assets`, `backoff`, `environment`, `executor`,
+  `flag_set`, `http`, `launch`, `launch_key`, `opened`, `owner_wait`, `sandbox`,
+  `system_failure`, `testing`. **Как проверено.** `cargo public-api -p flui-platform
+  --all-features` до (`origin/main` @ `dea790fa9`, 4119 строк) и после (4101 строка): если в
+  списке «до» заменить восемь старых путей модулей и три пути `text_store::{Utf16Offset,
+  Utf16Range, OffsetError}` новыми, наборы строк совпадают, кроме четырёх новых `pub mod
+  flui_platform::{input, text, transfer, window}`. Под старыми путями было 525 строк списка:
+  `pointer` 164,
+  `keyboard` 44, `input_capabilities` 57, `input_regions` 13, `text_store` 130,
+  `data_transfer` 63, `drag` 47, `os_options` 7. Два trybuild `.stderr` меняют только путь
+  исходника в примечании rustc (`src/window.rs` → `src/window/options.rs`,
   `src/platform_window.rs` → `src/window/platform_window.rs`). На Windows `cargo heli clippy
-  --workspace --all-targets -- -D warnings` с `--all-features` и без — чисто; rustdoc
-  `-p flui-platform` с `-D warnings`, с фичами и без, — чисто. В WSL (Ubuntu, cargo без heli)
-  `clippy --workspace --all-targets --features flui-native/native-capture -- -D warnings` —
-  чисто; nightly `check --locked --lib` `-p flui-platform` и `-p flui-native` под
-  `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android` и
-  `wasm32-unknown-unknown` — ни предупреждения. nextest: `flui-platform --features testing`
-  90/90; прямые зависимые (`flui-animation`, `flui-app`, `flui-assets`, `flui-cli`,
-  `flui-engine`, `flui-interaction`, `flui-native`, `flui-rendering`, `flui-runtime`,
-  `flui-sdk`, `flui-system`, `flui-testing`, `flui-view`, `flui-widgets`, `flui-devtools`,
-  `flui-hot-reload`) — 2985 из 3001: три теста `agent::browser` у `flui-cli` (именованные
-  каналы Windows без тайм-аутов) и `the_driver_agent_contains_every_failure` у `flui-app`
-  падают так же на `origin/main` @ `6f59a84c5`; `native_idle_modal_loops` и
-  `owner_code_is_contained_at_every_point` упали под нагрузкой и прошли при повторе; десять
-  вложенных наборов (trybuild, сгенерированный проект `flui-cli`) упёрлись в тайм-аут 1200 с
-  на занятой машине. После перебазирования на `2993f8ab4` clippy рабочего пространства с
-  `--all-features` и nextest `flui-platform` (90/90) прогнаны снова. Набор фасада
-  `thread_boundary_ui` (как в CI) прошёл. trybuild
-  `flui-platform` в WSL: оба изменённых случая проходят, три нетронутых расходятся одинаково
-  на ветке и на `origin/main` (окружение). `cargo heli xtask checks` (`key-vocabulary`,
-  `recording-vocabulary` читают новые пути), `typos` и `lychee` по изменённым документам —
-  чисто.
+  --workspace --all-targets -- -D warnings` с `--all-features` и без — чисто; rustdoc `-p
+  flui-platform` с `-D warnings`, с фичами и без, — чисто; doctests `flui-platform` и
+  `flui-interaction` (`--all-features`) — зелёные. В WSL (Ubuntu, cargo без heli) `clippy
+  --workspace --all-targets --features flui-native/native-capture -- -D warnings` — чисто;
+  `cargo doc --no-deps --document-private-items -D warnings` с фичами `testing` по затронутым
+  крейтам — чисто (по всему рабочему пространству падает на `flui-native` и `flui-engine` на
+  ссылках в нетронутых местах, как и job `doc` на `main` @ `3b69e1860`); nightly `check
+  --locked --lib --tests` `flui-platform`, `flui-native`, `flui-system` под
+  `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android` — ни предупреждения,
+  под `wasm32-unknown-unknown` `--lib` чисто, а `--tests` падает на
+  `flui_platform::assets::DirectoryAssets` в `tests/assets.rs` (не тронут, так же на `main`).
+  trybuild `flui-platform` в WSL: оба изменённых случая проходят, три нетронутых расходятся
+  одинаково на ветке и на `origin/main` (окружение). nextest: `flui-platform --features
+  testing` 91/91, `flui-sdk` 13/13; прямые зависимые (`flui-animation`, `flui-app`, `flui-assets`, `flui-cli`, `flui-engine`, `flui-interaction`, `flui-native`, `flui-rendering`, `flui-runtime`, `flui-sdk`, `flui-system`, `flui-testing`, `flui-view`, `flui-widgets`, `flui-devtools`, `flui-hot-reload`) без вложенных наборов (`trybuild`, `nested-cargo`) — 3085 из 3089: три теста `agent::browser` у `flui-cli` и `the_driver_agent_contains_every_failure` у `flui-app` падают так же на `origin/main`; после слияния `dea790fa9` (#2867) `flui-platform`, `flui-runtime`, `flui-native`, `flui-testing`, `flui-sdk`, `flui-app` — 1610 из 1611 (тот же тест `flui-app`), clippy Windows с `--all-features` и без, clippy Linux и nightly `check` четырёх целей прогнаны снова. Набор фасада `thread_boundary_ui` (как
+  в CI) после слияния прошёл. `cargo heli xtask checks` (`key-vocabulary`, `recording-vocabulary`
+  читают новые пути), `typos` и `lychee` по изменённым документам — чисто.
 - [x] **LY113** — #2639 (строки
   LY104–LY113, граф, счёт в шапке) и #2642. **Что запись говорит.** У каждой строки LY20–LY103,
   у которой на `main` есть работа, есть запись со слитыми PR, тестами и остатком; у LY58, LY60,
