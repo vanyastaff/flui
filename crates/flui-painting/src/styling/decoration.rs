@@ -153,6 +153,15 @@ pub struct BoxDecoration<T: Unit = f64> {
     /// An image to paint above the background color or gradient.
     pub image: Option<DecorationImage>,
 
+    // The image a lerp fades out beneath `image`, kept with the `image` that
+    // lerp faded in: once the public `image` is replaced, the pair no longer
+    // matches and the faded-out image is not painted (see `fading_image`).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub(crate) image_crossfade: Option<Box<(DecorationImage, DecorationImage)>>,
+
     /// A border to draw above the background.
     pub border: Option<Border<T>>,
 
@@ -206,6 +215,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: None,
+            image_crossfade: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -221,6 +231,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: Some(color),
             image: None,
+            image_crossfade: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -236,6 +247,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: None,
+            image_crossfade: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -251,6 +263,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: Some(image),
+            image_crossfade: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -316,8 +329,10 @@ where
     /// geometry cannot be represented at the actual box size.
     /// A field set on only one side fades toward nothing: a lone
     /// color or gradient scales its alpha, a lone border, radius or shadow
-    /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). The
-    /// image and shape are not interpolated and switch at `t = 0.5`.
+    /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). Images
+    /// crossfade: `b`'s is painted at `t` times its opacity over `a`'s at
+    /// `1 - t` times its own. The shape is not interpolated and switches at
+    /// `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
         if t == 0.0 {
@@ -413,19 +428,29 @@ where
             (raw, bounded) => (raw.or(bounded), None),
         };
 
-        // Images are not crossfaded; they switch at the midpoint.
-        let image = if t < 0.5 {
-            a.image.clone()
-        } else {
-            b.image.clone()
+        // Images crossfade: `b`'s fades in at opacity `t` over `a`'s fading out at
+        // `1 - t`, and a lone image fades in or out on its own.
+        let faded = |image: &DecorationImage, factor: f64| DecorationImage {
+            opacity: image.opacity * factor,
+            ..image.clone()
         };
-        // Not interpolatable:
-        // discrete switch at the midpoint, same as the image above.
+        let (image, image_crossfade) = match (&a.image, &b.image) {
+            (None, None) => (None, None),
+            (Some(a), None) => (Some(faded(a, 1.0 - t)), None),
+            (None, Some(b)) => (Some(faded(b, t)), None),
+            (Some(a), Some(b)) => {
+                let incoming = faded(b, t);
+                let outgoing = faded(a, 1.0 - t);
+                (Some(incoming.clone()), Some(Box::new((incoming, outgoing))))
+            }
+        };
+        // Not interpolatable: a discrete switch at the midpoint.
         let shape = if t < 0.5 { a.shape } else { b.shape };
 
         Self {
             color,
             image,
+            image_crossfade,
             border,
             border_radius,
             box_shadow,
@@ -433,6 +458,15 @@ where
             gradient_fallback,
             shape,
         }
+    }
+
+    /// The image a lerp fades out beneath [`image`](Self::image), unless `image`
+    /// was replaced after the lerp.
+    pub(crate) fn fading_image(&self) -> Option<&DecorationImage> {
+        self.image_crossfade
+            .as_deref()
+            .filter(|(incoming, _)| self.image.as_ref() == Some(incoming))
+            .map(|(_, outgoing)| outgoing)
     }
 
     /// Ignore retained state after direct replacement of the public gradient.

@@ -740,6 +740,10 @@ fn decoration_contract() {
                 decoration_unit::paint_order_is_shadow_background_border,
             ),
             (
+                "a_lerped_decoration_crossfades_its_images",
+                decoration_unit::a_lerped_decoration_crossfades_its_images,
+            ),
+            (
                 "hit_test_respects_rounded_corners",
                 decoration_unit::hit_test_respects_rounded_corners,
             ),

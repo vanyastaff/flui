@@ -195,3 +195,62 @@ pub(crate) fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
         other => panic!("expected a stroked DrawCircle border, got {other:?}"),
     }
 }
+
+/// A lerped decoration crossfades its images: at `t = 0.25` it paints `a`'s at
+/// 75% opacity, then `b`'s over it at 25%. A lone image fades on its own, and
+/// replacing the lerped decoration's image drops the image it was fading out.
+pub(crate) fn a_lerped_decoration_crossfades_its_images() {
+    use flui_painting::paint::Image;
+    use flui_painting::styling::DecorationImage;
+
+    let red = Image::solid_color(4, 4, Color::RED);
+    let blue = Image::solid_color(4, 4, Color::BLUE);
+    let with = |image: &Image| BoxDecoration::with_image(DecorationImage::new(image.clone()));
+    // Each image the decoration paints, in order, with its paint's opacity.
+    let painted = |decoration: &BoxDecoration| -> Vec<(Image, f32)> {
+        commands(decoration)
+            .into_iter()
+            .filter_map(|op| match op {
+                DrawOp::Image { image, paint, .. }
+                | DrawOp::ImageRegion { image, paint, .. }
+                | DrawOp::ImageRepeat { image, paint, .. } => {
+                    Some((image, paint.map_or(1.0, |paint| paint.color.opacity())))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let near = |actual: f32, expected: f32| (actual - expected).abs() < 0.01;
+
+    let crossfaded = BoxDecoration::lerp(&with(&red), &with(&blue), 0.25);
+    let images = painted(&crossfaded);
+    assert_eq!(images.len(), 2, "both images are painted: {images:?}");
+    assert!(
+        images[0].0 == red && near(images[0].1, 0.75),
+        "a's image first, at 75%: {:?}",
+        images[0].1
+    );
+    assert!(
+        images[1].0 == blue && near(images[1].1, 0.25),
+        "b's image over it, at 25%: {:?}",
+        images[1].1
+    );
+
+    let fading = painted(&BoxDecoration::lerp(
+        &with(&red),
+        &BoxDecoration::new(),
+        0.25,
+    ));
+    assert!(
+        fading.len() == 1 && fading[0].0 == red && near(fading[0].1, 0.75),
+        "a lone image fades out on its own: {fading:?}"
+    );
+
+    let mut replaced = crossfaded;
+    replaced.image = Some(DecorationImage::new(blue.clone()));
+    let images = painted(&replaced);
+    assert!(
+        images.len() == 1 && images[0].0 == blue && near(images[0].1, 1.0),
+        "a replaced image is painted alone: {images:?}"
+    );
+}

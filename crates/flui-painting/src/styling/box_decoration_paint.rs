@@ -249,7 +249,13 @@ impl BoxDecoration {
         // The clip is a distance field, not tessellated geometry, so the circle
         // is exact — the ~6% diagonal bulge that rules out drrect for a circular
         // *ring* does not apply to a clip.
-        if let Some(image) = &decoration.image {
+        // A lerped decoration paints the image it fades out first, beneath the
+        // one it fades in.
+        for image in decoration
+            .fading_image()
+            .into_iter()
+            .chain(&decoration.image)
+        {
             match &silhouette {
                 Silhouette::Circle(circle) => {
                     let diameter = circle.radius * 2.0;
