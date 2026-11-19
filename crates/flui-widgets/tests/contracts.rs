@@ -133,6 +133,7 @@ fn reactivity_and_dependencies() {
             ("directionality_dependency::a_direction_flip_reconfigures_preserved_render_objects_in_place", crate::directionality_dependency::a_direction_flip_reconfigures_preserved_render_objects_in_place),
             ("directionality_dependency::shifted_boxes_resolve_a_directional_alignment_against_the_ambient_direction", crate::directionality_dependency::shifted_boxes_resolve_a_directional_alignment_against_the_ambient_direction),
             ("directionality_dependency::a_fitted_child_moved_by_a_direction_flip_moves_its_semantics", crate::directionality_dependency::a_fitted_child_moved_by_a_direction_flip_moves_its_semantics),
+            ("directionality_dependency::a_fitted_child_moved_by_a_fit_change_moves_its_semantics", crate::directionality_dependency::a_fitted_child_moved_by_a_fit_change_moves_its_semantics),
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
             ("layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame", crate::layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame),
