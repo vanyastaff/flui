@@ -30,7 +30,7 @@ mod owner;
 mod portal_parent;
 mod registrar;
 mod runtime_local;
-#[cfg(feature = "scripted")]
+#[cfg(any(test, feature = "scripted"))]
 pub mod scripted;
 mod window_lifetime;
 mod window_ref;
@@ -43,6 +43,10 @@ pub use activity_result::{
     ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
+/// How a handle contains the backend code it calls: a capability crate
+/// depends on this contract alone (ADR-0154 §1), and the code a handle does
+/// not own runs under `flui-foundation`'s containment (ADR-0287).
+pub use flui_foundation::panic::FirstPanic;
 pub use main_thread::{MAX_POSTED_WORK, MainThreadRefused, PostedWork};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
 pub use portal_parent::PortalParent;

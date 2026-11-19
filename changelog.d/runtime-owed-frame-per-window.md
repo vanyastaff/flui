@@ -12,8 +12,8 @@
 
 - `PlatformWindow::request_frame_at`, a required method: ask a window for a frame at an instant on
   the event timeline, or withdraw it. The host serves it for that window alone, once; a host that
-  keeps no covered window's surface returns at once, and `window_takes_no_frame_verbs!` gives a
-  double that body.
+  keeps no covered window's surface returns at once, as a standalone `MockWindow` does; one built
+  over another window hands it to that window.
 - `UiRuntime::owed_frame_requests` and `OwedFrameRequest`: what each covered window is to be asked
   for the frame it owes, which the owner delivery hands to the window at the end of each work item.
 - `UiRuntime::owed_frame_served`: whether a frame of a covered window's own window serves the frame

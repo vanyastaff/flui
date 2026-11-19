@@ -83,7 +83,7 @@ fn register(
 /// of `ask`.
 fn a_quit_whose_consultation_panics_is_cancelled_and_resumed_once() {
     let router = Rc::new(CloseRequestRouter::new());
-    let window: Rc<dyn PlatformWindow> = Rc::new(flui_runtime::testing::TestWindow::new());
+    let window: Rc<dyn PlatformWindow> = Rc::new(flui_testing::MockWindow::new());
     let (closes_itself, refuses) = (address(1), address(2));
     let own_router = Rc::downgrade(&router);
     let capture = FailsToDrop;
@@ -174,7 +174,7 @@ fn a_quit_whose_consultation_panics_is_cancelled_and_resumed_once() {
 /// Fails against a router that reports a handler's panic uncontained.
 fn the_router_contains_the_report_of_a_handlers_panic() {
     let router = CloseRequestRouter::new();
-    let window: Rc<dyn PlatformWindow> = Rc::new(flui_runtime::testing::TestWindow::new());
+    let window: Rc<dyn PlatformWindow> = Rc::new(flui_testing::MockWindow::new());
     let at = address(1);
     register(
         &router,

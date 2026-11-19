@@ -70,7 +70,7 @@ struct Fixture {
 fn styled_runtime() -> Fixture {
     let chrome = Arc::new(RecordingChrome::default());
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(
-        crate::testing::TestWindow::new()
+        flui_testing::MockWindow::new()
             .focused(true)
             .with_system_chrome(Arc::clone(&chrome) as Arc<dyn PlatformSystemChrome>),
     );

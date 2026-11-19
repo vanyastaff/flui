@@ -65,9 +65,9 @@ blocks) and the runtime does not.
    timeline: the host then makes the request `request_redraw` makes, of this window alone, once. A
    later call replaces the instant; `None` withdraws it; a window closed before it is served
    reaches nothing. A host whose windows keep no surface while covered is never asked and says so
-   in its body, returning at once; a double that takes no frame verbs gets that body from
-   `flui_platform::window_takes_no_frame_verbs!`. `OccludedSurface::Kept` names a window that
-   serves it.
+   in its body, returning at once; so does a standalone `flui_platform::testing::MockWindow`, and
+   one built over another window hands the request to it. `OccludedSurface::Kept` names a window
+   that serves it.
 2. **The runtime asks, once per instant.** `UiRuntime::owed_frame_requests()` returns, for each
    presentation whose owed instant (`occluded_frame_at`, on the event timeline counted from the
    runtime clock's epoch) differs from what its window was last asked, an `OwedFrameRequest`: the

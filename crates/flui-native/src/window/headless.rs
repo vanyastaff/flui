@@ -26,7 +26,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::host::{self, Host, ScreenBounds, WindowFacets, WindowPositions};
+use crate::host::{self, ScreenBounds, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::OpenWindowError;
@@ -37,9 +37,10 @@ use crate::owner::headless::{
     HeadlessLoop, HeadlessState, HeldPresses, TrackedWindows, consult_exit_policy,
 };
 use crate::owner::window_delivery::{Publication, WindowDelivery};
-use crate::platform::HostPlatform;
 use crate::text::WindowTextInput;
 use crate::window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell};
+#[cfg(feature = "scripted")]
+use crate::{host::Host, platform::HostPlatform};
 
 /// What the headless host imposes on its windows.
 ///
@@ -57,6 +58,7 @@ pub struct HeadlessWindowPolicy {
     pub refuses_maximize: bool,
 }
 
+#[cfg(feature = "scripted")]
 impl HeadlessWindowPolicy {
     /// Cap windows at `size`.
     #[must_use]
@@ -268,6 +270,7 @@ impl TrackedWindows for HeadlessWindows {
 
 /// The headless windows' test controls: builders taken before
 /// [`Platform::run`](crate::Platform::run) consumes the platform.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> {
     /// Place this backend's windows on one desktop, as Win32 and AppKit place
     /// theirs: each window's content starts at the position its published
@@ -318,10 +321,12 @@ impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> 
 /// ([`HeadlessPlatform::open_windows`](crate::HeadlessPlatform::open_windows)).
 /// Empty once the platform is gone.
 #[derive(Clone, Debug)]
+#[cfg(feature = "scripted")]
 pub struct HeadlessOpenWindows {
     windows: Weak<HeadlessWindows>,
 }
 
+#[cfg(feature = "scripted")]
 impl HeadlessOpenWindows {
     /// Every open window, in the order it opened: the last is topmost.
     #[must_use]

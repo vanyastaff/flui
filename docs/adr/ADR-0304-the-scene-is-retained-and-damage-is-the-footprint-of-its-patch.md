@@ -517,9 +517,12 @@ as the captures are dropped today (`paint.rs:116-120`), and changes the root pla
 
 §9. **The raster side retains recordings and redraws a region rect by rect or under its box,
 whichever costs less.** The engine walks the held version and culls nodes by their subtree
-footprint and chunks by their bounds, each through the chain above it. A partial frame redraws its
-`Region` in one pass per rect, at most `Region::MAX`, or in one pass under the region's bounding
-box, counted as `region_passes`: each pass clears its rect under that rect's scissor and redraws
+footprint and chunks by their bounds, each through the chain above it, a run of chunks under one
+parent (the boundary itself or one effect) by the union of their bounds a block at a time; chunks
+that each sit under an effect of their own share no block and are culled one by one. A partial
+frame redraws its `Region` in one pass per rect, at most `Region::MAX`, or in one pass under the
+region's bounding box, counted as `region_passes`: each pass clears its rect under that rect's
+scissor and redraws
 what a walk culled by that rect reaches, and a chunk that meets two rects is drawn in each, from
 its kept recording when it has one. The invariant: no pixel outside the pass rects is written, and
 every chunk that meets a written pixel is drawn there in paint order. One scissor around the region
@@ -538,7 +541,8 @@ box       = Σ commands     + PIXEL_COST · box area    + PASS_COST
 
 The cheaper is taken, the rects on a tie. A chunk meets at most every rect, so the rects cost at
 most `(rects − 1) · C` commands more than the box, `C` being every command of the version, summed
-once per version over every chunk the version holds, with no cull: when `PIXEL_COST · (box area − Σ rect area)
+once per version from each boundary's own count, which its content takes when it is built, with no
+cull: when `PIXEL_COST · (box area − Σ rect area)
 − PASS_COST · (rects − 1)` is at least that, the rects are taken without the walk. An effect costs
 only through the commands under it: what a pass pays for each effect it reaches (a backdrop
 snapshot, a save-layer's offscreen, an opacity group) is not weighed, so the rule prices a region

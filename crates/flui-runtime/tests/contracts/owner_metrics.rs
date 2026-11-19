@@ -1750,10 +1750,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     };
     use flui_platform::{FlingSpeeds, GestureGeometry, PlatformInput, SystemPreferences};
     use std::{
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, AtomicUsize},
-        },
+        sync::{Arc, atomic::AtomicBool},
         time::Duration,
     };
     let profile = |min, max| {
@@ -1790,19 +1787,9 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Rc::new(GeometryWindow {
-        inner: Rc::clone(crate::owner_publication::window().window()),
-        answer: Mutex::new(Ok(profile(50.0, 300.0))),
-        calls: AtomicUsize::new(0),
-        query_time: Mutex::new(None),
-        panic_next: AtomicBool::new(false),
-        display: Mutex::default(),
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+    let window = ScriptedGeometry::new(Ok(profile(50.0, 300.0)), None);
     let runtime = UiRuntime::try_new(
-        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        flui_runtime::presentation::PresentationWindow::new(window.platform(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
@@ -1886,7 +1873,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
                 .expect("measured touch movement");
         }
         if attempt == 0 {
-            *window.answer.lock().expect("script") = Ok(profile(5000.0, 5000.0));
+            window.set_answer(Ok(profile(5000.0, 5000.0)));
             owner
                 .update_preferences(
                     SystemPreferences::default().with_high_contrast(true),
@@ -1906,7 +1893,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         let coast = controller.pixels() - released;
         if attempt == 1 {
             assert_eq!(coast, 0.0, "fresh native minimum refuses terminal inertia");
-            *window.answer.lock().expect("script") = Ok(profile(50.0, 600.0));
+            window.set_answer(Ok(profile(50.0, 600.0)));
             owner
                 .update_preferences(SystemPreferences::default(), &effects)
                 .expect("third profile");
@@ -1934,10 +1921,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         Distance, GestureGeometry, PlatformInput, PreferenceQueryError, SystemPreferences,
     };
     use std::{
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
+        sync::{Arc, atomic::AtomicBool},
         time::Duration,
     };
 
@@ -1945,19 +1929,12 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
     let clock = ManualClock::new();
     let mut recipients = Vec::new();
     for ratio in [1.0, 2.0] {
-        let window = Rc::new(GeometryWindow {
-            inner: Rc::clone(crate::owner_publication::window().window()),
-            answer: Mutex::new(Err(PreferenceQueryError::Unsupported(
+        let window = Rc::new(ScriptedGeometry::new(
+            Err(PreferenceQueryError::Unsupported(
                 flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-            ))),
-            calls: AtomicUsize::new(0),
-            query_time: Mutex::new(None),
-            panic_next: AtomicBool::new(false),
-            display: Mutex::default(),
-            capabilities: flui_platform::WindowCapabilities::NONE
-                .publish()
-                .expect("the process has publications left"),
-        });
+            )),
+            None,
+        ));
         let fonts = flui_painting::FontCollection::new();
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
@@ -1969,7 +1946,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
             services = services.with_preferences(snapshot);
         }
         let runtime = UiRuntime::try_new(
-            flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+            flui_runtime::presentation::PresentationWindow::new(window.platform(), None),
             ratio,
             services,
         )
@@ -2050,13 +2027,13 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
     );
     let before = recipients
         .iter()
-        .map(|(window, _, _, _)| window.calls.load(Ordering::Relaxed))
+        .map(|(window, _, _, _)| window.calls.get())
         .collect::<Vec<_>>();
     for (window, _, _, ratio) in &recipients {
-        *window.answer.lock().expect("script") = Ok(Some(
+        window.set_answer(Ok(Some(
             GestureGeometry::new(DevicePixelRatio::try_new(*ratio).expect("ratio"))
                 .with_touch_slop(Distance::try_new(2.0).expect("slop")),
-        ));
+        )));
     }
     clock.advance(Duration::from_millis(101));
     owner
@@ -2068,11 +2045,11 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         )
         .expect("late recovery");
     assert_eq!(
-        recipients[0].0.calls.load(Ordering::Relaxed),
+        recipients[0].0.calls.get(),
         before[0],
         "another runtime's turn cannot consume the first presentation's debt"
     );
-    assert_eq!(recipients[1].0.calls.load(Ordering::Relaxed), before[1] + 1);
+    assert_eq!(recipients[1].0.calls.get(), before[1] + 1);
     tap(0);
     tap(1);
     assert_eq!(
@@ -2102,26 +2079,78 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
     tap(1);
     assert_eq!(recipients[1].2.get(), 1);
     assert_eq!(
-        recipients[0].0.calls.load(Ordering::Relaxed),
+        recipients[0].0.calls.get(),
         before[0],
         "closed query cannot revive"
     );
     owner.shutdown(&recipients[1].1);
 }
 
-struct GeometryWindow {
-    inner: Rc<dyn flui_platform::PlatformWindow>,
-    answer: std::sync::Mutex<
-        Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError>,
-    >,
-    calls: std::sync::atomic::AtomicUsize,
-    query_time: std::sync::Mutex<Option<(flui_foundation::ManualClock, std::time::Duration)>>,
-    panic_next: std::sync::atomic::AtomicBool,
-    /// The display the window reports being on.
-    display: std::sync::Mutex<Option<flui_platform::DisplayId>>,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    capabilities: flui_platform::WindowCapabilities,
+/// What a gesture-geometry query answers.
+type GeometryAnswer =
+    Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError>;
+
+/// A window over the shared one whose gesture-geometry query the test scripts, counts, slows
+/// and fails.
+struct ScriptedGeometry {
+    window: Rc<flui_testing::MockWindow<flui_testing::mock_window::Over>>,
+    /// How many gesture-geometry queries the window took.
+    calls: Rc<Cell<usize>>,
+    /// A clock the next queries advance, and by how much, while they read.
+    query_time: Rc<RefCell<Option<(flui_foundation::ManualClock, std::time::Duration)>>>,
+    /// The next query panics.
+    panic_next: Rc<Cell<bool>>,
+}
+
+impl ScriptedGeometry {
+    /// Answers `answer` and reports itself on `display`.
+    fn new(answer: GeometryAnswer, display: Option<flui_platform::DisplayId>) -> Self {
+        let calls = Rc::new(Cell::new(0));
+        let query_time = Rc::new(RefCell::new(
+            None::<(flui_foundation::ManualClock, std::time::Duration)>,
+        ));
+        let panic_next = Rc::new(Cell::new(false));
+        let observed = (
+            Rc::clone(&calls),
+            Rc::clone(&query_time),
+            Rc::clone(&panic_next),
+        );
+        let window =
+            flui_testing::MockWindow::over(Rc::clone(crate::owner_publication::window().window()))
+                .with_gesture_geometry(answer)
+                .with_observer(move |call| {
+                    if !matches!(call, flui_testing::WindowCall::GestureGeometry) {
+                        return;
+                    }
+                    let (calls, query_time, panic_next) = &observed;
+                    calls.set(calls.get() + 1);
+                    assert!(
+                        !panic_next.replace(false),
+                        "scripted geometry query failure"
+                    );
+                    let query_time = query_time.borrow().clone();
+                    if let Some((clock, duration)) = query_time {
+                        clock.advance(duration);
+                    }
+                });
+        window.set_display(display);
+        Self {
+            window: Rc::new(window),
+            calls,
+            query_time,
+            panic_next,
+        }
+    }
+
+    /// The window as the presentation holds it.
+    fn platform(&self) -> Rc<dyn flui_platform::PlatformWindow> {
+        Rc::clone(&self.window) as Rc<dyn flui_platform::PlatformWindow>
+    }
+
+    /// Answers `answer` to the queries that begin from now on.
+    fn set_answer(&self, answer: GeometryAnswer) {
+        self.window.set_gesture_geometry(answer);
+    }
 }
 
 /// Geometry belongs to the display a presentation is on: a move to a display
@@ -2139,10 +2168,7 @@ fn gesture_values_follow_the_presentation_display() {
     use flui_platform::{
         DisplayId, DisplayKey, DisplayRegistry, Distance, GestureGeometry, PlatformInput,
     };
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize},
-    };
+    use std::sync::{Arc, atomic::AtomicBool};
     let registry = DisplayRegistry::new();
     let display_id = |key: u64| -> DisplayId {
         registry
@@ -2158,19 +2184,9 @@ fn gesture_values_follow_the_presentation_display() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Rc::new(GeometryWindow {
-        inner: Rc::clone(crate::owner_publication::window().window()),
-        answer: Mutex::new(geometry(1.0, 2.0)),
-        calls: AtomicUsize::new(0),
-        query_time: Mutex::new(None),
-        panic_next: AtomicBool::new(false),
-        display: Mutex::new(Some(display_id(1))),
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+    let window = ScriptedGeometry::new(geometry(1.0, 2.0), Some(display_id(1)));
     let runtime = UiRuntime::try_new(
-        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        flui_runtime::presentation::PresentationWindow::new(window.platform(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
@@ -2236,8 +2252,8 @@ fn gesture_values_follow_the_presentation_display() {
         send(pointer_up(drifted, PointerKind::Touch).expect("up"));
     };
     let move_to = |display: u64, answer| {
-        *window.display.lock().expect("display script") = Some(display_id(display));
-        *window.answer.lock().expect("query script") = answer;
+        window.window.set_display(Some(display_id(display)));
+        window.set_answer(answer);
     };
     tap();
     assert_eq!(taps.get(), 0, "display 1's 2px slop rejects a 5px drift");
@@ -2259,12 +2275,12 @@ fn gesture_values_follow_the_presentation_display() {
     assert_eq!(taps.get(), 1, "a new contact reads display 2's 10px slop");
 
     // A move within one display re-reads nothing.
-    let calls = window.calls.load(std::sync::atomic::Ordering::Relaxed);
+    let calls = window.calls.get();
     target
         .observe(WindowObservation::Moved, &effects)
         .expect("moved within the display");
     assert_eq!(
-        window.calls.load(std::sync::atomic::Ordering::Relaxed),
+        window.calls.get(),
         calls,
         "no query while the display is unchanged"
     );
@@ -2284,187 +2300,6 @@ fn gesture_values_follow_the_presentation_display() {
         "display 3's 2px slop applies at its own scale"
     );
     owner.shutdown(&effects);
-}
-
-impl flui_platform::PlatformWindow for GeometryWindow {
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn id(&self) -> flui_platform::WindowId {
-        self.inner.id()
-    }
-    fn request_redraw(&self) {
-        self.inner.request_redraw();
-    }
-    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
-        self.inner.request_frame_at(at);
-    }
-    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
-        self.inner.redraw_requester()
-    }
-    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
-        self.inner.surface_target()
-    }
-    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        self.inner.set_cursor(cursor)
-    }
-    fn set_frame_rate_hint(
-        &self,
-        hint: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_frame_rate_hint(hint)
-    }
-    fn set_input_regions(
-        &self,
-        regions: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_input_regions(regions)
-    }
-    /// The display the test scripted, with what the wrapped window reports.
-    fn state(&self) -> flui_platform::WindowState {
-        self.inner
-            .state()
-            .with_display(*self.display.lock().expect("display script"))
-            .with_capabilities(self.capabilities)
-    }
-
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.capabilities)?;
-        Ok(())
-    }
-
-    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-
-    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
-
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        self.calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if self
-            .panic_next
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            panic!("scripted geometry query failure");
-        }
-        let query_time = self.query_time.lock().expect("query duration").clone();
-        if let Some((clock, duration)) = query_time {
-            clock.advance(duration);
-        }
-        self.answer.lock().expect("query script").clone()
-    }
-}
-
-/// A window whose input-region backend, or display query, fails once on
-/// request.
-struct RegionWindow {
-    inner: Rc<dyn flui_platform::PlatformWindow>,
-    /// How many regions each call handed the backend.
-    sent: std::sync::Mutex<Vec<usize>>,
-    panic_next: std::sync::atomic::AtomicBool,
-    /// The next display query panics, failing the gesture-geometry refresh.
-    panic_display: std::sync::atomic::AtomicBool,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    capabilities: flui_platform::WindowCapabilities,
-}
-
-impl flui_platform::PlatformWindow for RegionWindow {
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn id(&self) -> flui_platform::WindowId {
-        self.inner.id()
-    }
-    fn request_redraw(&self) {
-        self.inner.request_redraw();
-    }
-    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
-        self.inner.request_frame_at(at);
-    }
-    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
-        self.inner.redraw_requester()
-    }
-    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
-        self.inner.surface_target()
-    }
-    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        self.inner.set_cursor(cursor)
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        if self
-            .panic_display
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            panic!("scripted display query failure");
-        }
-        self.inner.state().with_capabilities(self.capabilities)
-    }
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.capabilities)?;
-        Ok(())
-    }
-    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
-    fn set_input_regions(
-        &self,
-        regions: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.sent.lock().expect("sent regions").push(regions.len());
-        if self
-            .panic_next
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            panic!("scripted input-region failure");
-        }
-        Ok(())
-    }
-    fn set_frame_rate_hint(
-        &self,
-        hint: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_frame_rate_hint(hint)
-    }
 }
 
 /// The window state a host publishes: its content moves with `position`, a
@@ -2521,15 +2356,29 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     use flui_runtime::{HostInput, InputRecord};
     use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
-    let window = Rc::new(RegionWindow {
-        inner: Rc::clone(crate::owner_publication::window().window()),
-        sent: Mutex::new(Vec::new()),
-        panic_next: AtomicBool::new(false),
-        panic_display: AtomicBool::new(false),
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+    // The next input-region hand-off panics once it recorded its regions; the next state query
+    // panics, failing the gesture-geometry refresh.
+    let panic_regions = Rc::new(Cell::new(false));
+    let panic_display = Rc::new(Cell::new(false));
+    let window = Rc::new(
+        flui_testing::MockWindow::over(Rc::clone(crate::owner_publication::window().window()))
+            .taking_input_regions()
+            .with_observer({
+                let (panic_regions, panic_display) =
+                    (Rc::clone(&panic_regions), Rc::clone(&panic_display));
+                move |call| match call {
+                    flui_testing::WindowCall::State => assert!(
+                        !panic_display.replace(false),
+                        "scripted display query failure"
+                    ),
+                    flui_testing::WindowCall::SetInputRegions(_) => assert!(
+                        !panic_regions.replace(false),
+                        "scripted input-region failure"
+                    ),
+                    _ => {}
+                }
+            }),
+    );
     let mut runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
         1.0,
@@ -2587,11 +2436,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         ui_runtime_id: runtime.id(),
         presentation_id: id,
     };
-    let fail_next_regions = || {
-        window
-            .panic_next
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    };
+    let fail_next_regions = || panic_regions.set(true);
     // The frame's own hand-off fails: its regions are committed anyway.
     fail_next_regions();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2600,7 +2445,13 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
             &mut Sink,
         )
     }));
-    let sent = || window.sent.lock().expect("sent regions").clone();
+    let sent = || {
+        window
+            .input_regions()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>()
+    };
     assert_eq!(sent(), [1], "the frame handed off one exclusion region");
     runtime.apply_window_observation(address, WindowObservation::Moved, &|_| {});
     assert_eq!(
@@ -2610,9 +2461,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     );
 
     // The gesture-geometry refresh fails: the regions follow the move anyway.
-    window
-        .panic_display
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    panic_display.set(true);
     let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         runtime.apply_window_observation(address, WindowObservation::Moved, &|_| {});
     }));
@@ -2683,22 +2532,15 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Rc::new(GeometryWindow {
-        inner: Rc::clone(crate::owner_publication::window().window()),
-        answer: std::sync::Mutex::new(Ok(Some(
+    let window = Rc::new(ScriptedGeometry::new(
+        Ok(Some(
             GestureGeometry::new(DevicePixelRatio::try_new(1.0).expect("ratio"))
                 .with_touch_slop(Distance::try_new(2.0).expect("distance")),
-        ))),
-        calls: AtomicUsize::new(0),
-        query_time: std::sync::Mutex::new(None),
-        panic_next: AtomicBool::new(false),
-        display: std::sync::Mutex::default(),
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+        )),
+        None,
+    ));
     let runtime = UiRuntime::try_new(
-        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        flui_runtime::presentation::PresentationWindow::new(window.platform(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
@@ -2776,9 +2618,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     owner
         .update_preferences(SystemPreferences::default(), &effects)
         .expect("preferences");
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+    window.set_answer(Err(PreferenceQueryError::Unsupported(
         flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-    ));
+    )));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2792,15 +2634,15 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "same-context failure retains accepted geometry"
     );
     let deadline = owner.next_wake().expect("deadline").expect("retry debt");
-    let before = window.calls.load(Ordering::Relaxed);
-    *window.answer.lock().expect("script") = Ok(None);
+    let before = window.calls.get();
+    window.set_answer(Ok(None));
     clock.advance(deadline.duration_since(clock.now()) + Duration::from_millis(1));
     owner
         .runtime_dispatcher(address.ui_runtime_id)
         .expect("background authority")
         .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
         .expect("background owner service");
-    assert_eq!(window.calls.load(Ordering::Relaxed), before + 1);
+    assert_eq!(window.calls.get(), before + 1);
     assert_eq!(owner.next_wake().expect("settled deadline"), None);
     tap();
     assert_eq!(
@@ -2820,7 +2662,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
                 .with_touch_slop(Distance::try_new(slop).expect("distance")),
         )
     };
-    *window.answer.lock().expect("script") = Ok(geometry(1.0, 2.0));
+    window.set_answer(Ok(geometry(1.0, 2.0)));
     owner
         .update_preferences(SystemPreferences::default(), &effects)
         .expect("restored native geometry");
@@ -2832,9 +2674,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             &effects,
         )
         .expect("retained contact");
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+    window.set_answer(Err(PreferenceQueryError::Unsupported(
         flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-    ));
+    )));
     target
         .observe(
             WindowObservation::Metrics(crate::window_metrics(800.0, 600.0, 2.0)),
@@ -2868,7 +2710,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             &effects,
         )
         .expect("fallback admission");
-    *window.answer.lock().expect("script") = Ok(geometry(2.0, 1.0));
+    window.set_answer(Ok(geometry(2.0, 1.0)));
     let due = owner.next_wake().expect("wake").expect("query retry");
     clock.advance(due.duration_since(clock.now()) + Duration::from_millis(1));
     owner
@@ -2896,7 +2738,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "next contact adopts exact DPI2 native threshold"
     );
 
-    *window.answer.lock().expect("foreign context script") = Ok(geometry(1.0, 100.0));
+    window.set_answer(Ok(geometry(1.0, 100.0)));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2914,7 +2756,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "wrong-DPI output remains a bounded query obligation"
     );
 
-    *window.answer.lock().expect("script") = Ok(geometry(2.0, f64::MAX));
+    window.set_answer(Ok(geometry(2.0, f64::MAX)));
     owner
         .update_preferences(
             SystemPreferences::default()
@@ -2970,7 +2812,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             &effects,
         )
         .expect("hold terminal");
-    *window.answer.lock().expect("script") = Ok(None);
+    window.set_answer(Ok(None));
     owner
         .update_preferences(SystemPreferences::default(), &effects)
         .expect("healthy following barrier");
@@ -2982,9 +2824,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     );
 
     let submissions_before_retries = effects.sink.borrow().submitted;
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+    window.set_answer(Err(PreferenceQueryError::Unsupported(
         flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-    ));
+    )));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2995,7 +2837,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         .runtime_dispatcher(address.ui_runtime_id)
         .expect("background");
     for delay in [100, 200, 400, 800, 1000, 1000] {
-        let before = window.calls.load(Ordering::Relaxed);
+        let before = window.calls.get();
         let due = owner.next_wake().expect("wake").expect("retry");
         assert_eq!(
             due.duration_since(clock.now()),
@@ -3004,17 +2846,13 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         background
             .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
             .expect("early turn");
-        assert_eq!(
-            window.calls.load(Ordering::Relaxed),
-            before,
-            "early owner turn never spins"
-        );
+        assert_eq!(window.calls.get(), before, "early owner turn never spins");
         clock.advance(Duration::from_millis(delay));
         background
             .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
             .expect("due turn");
         assert_eq!(
-            window.calls.load(Ordering::Relaxed),
+            window.calls.get(),
             before + 1,
             "one due query per presentation per turn"
         );
@@ -3024,21 +2862,20 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         submissions_before_retries,
         "failure recovery produces no synthetic frames"
     );
-    *window.query_time.lock().expect("scripted slow read") =
-        Some((clock.clone(), Duration::from_millis(1200)));
-    let before_slow = window.calls.load(Ordering::Relaxed);
+    *window.query_time.borrow_mut() = Some((clock.clone(), Duration::from_millis(1200)));
+    let before_slow = window.calls.get();
     let due = owner.next_wake().expect("wake").expect("retry");
     clock.advance(due.duration_since(clock.now()));
     background
         .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
         .expect("slow failed query");
     assert_eq!(
-        window.calls.load(Ordering::Relaxed),
+        window.calls.get(),
         before_slow + 1,
         "a slow getter cannot consume two attempts in one owner turn"
     );
-    *window.query_time.lock().expect("restore read duration") = None;
-    let before_gate = window.calls.load(Ordering::Relaxed);
+    *window.query_time.borrow_mut() = None;
+    let before_gate = window.calls.get();
     let due = owner.next_wake().expect("wake").expect("retry");
     clock.advance(due.duration_since(clock.now()));
     *effects.geometry_gate.borrow_mut() = Some(clock.clone());
@@ -3048,11 +2885,11 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         .deliver(crate::VSYNC, &effects)
         .expect("slow native gate then normal pump");
     assert_eq!(
-        window.calls.load(Ordering::Relaxed),
+        window.calls.get(),
         before_gate + 1,
         "native before-gate drain and frame pump share one structural attempt budget even after deadline passes"
     );
-    window.panic_next.store(true, Ordering::Relaxed);
+    window.panic_next.set(true);
     effects.fail_tail.set(true);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner
@@ -3071,8 +2908,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         !effects.fail_tail.get(),
         "the owner completion ran after the contained query failure"
     );
-    *window.answer.lock().expect("recovery") = Ok(geometry(2.0, 2.0));
-    let before_recovery = window.calls.load(Ordering::Relaxed);
+    window.set_answer(Ok(geometry(2.0, 2.0)));
+    let before_recovery = window.calls.get();
     let due = owner
         .next_wake()
         .expect("wake after containment")
@@ -3082,7 +2919,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
         .expect("next operation recovers after panic");
     assert_eq!(
-        window.calls.load(Ordering::Relaxed),
+        window.calls.get(),
         before_recovery + 1,
         "unwinding resets the owner turn budget for recovery"
     );
@@ -3128,10 +2965,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
                 observed.fetch_add(1, Ordering::SeqCst);
             })));
         }
-        *window.answer.lock().expect("failed preparation script") =
-            Err(PreferenceQueryError::Unsupported(
-                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-            ));
+        window.set_answer(Err(PreferenceQueryError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+        )));
         owner
             .update_preferences(
                 SystemPreferences::default().with_high_contrast(!hook_present),
@@ -3140,13 +2976,13 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             .expect("create real geometry retry debt");
         let due = retry_deadline();
         clock.advance(due.duration_since(clock.now()));
-        let calls_before = window.calls.load(Ordering::Relaxed);
+        let calls_before = window.calls.get();
         let polls = Rc::new(Cell::new(0));
         let observed_polls = Rc::clone(&polls);
         let observed_window = Rc::clone(&window);
         let task = driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
             assert_eq!(
-                observed_window.calls.load(Ordering::Relaxed),
+                observed_window.calls.get(),
                 calls_before + 2,
                 "successful runtime geometry preparation precedes the first ready poll"
             );
@@ -3159,7 +2995,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             }
         })));
         let wake_before = wakes.load(Ordering::SeqCst);
-        window.panic_next.store(true, Ordering::Relaxed);
+        window.panic_next.set(true);
         // The native preparation's failure is the operation's, contained
         // by the owner (ADR-0258 §1).
         background
@@ -3209,7 +3045,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             "sibling execution cannot poll this runtime's task"
         );
 
-        *window.answer.lock().expect("successful preparation script") = Ok(geometry(2.0, 2.0));
+        window.set_answer(Ok(geometry(2.0, 2.0)));
         let due = retry_deadline();
         clock.advance(due.duration_since(clock.now()));
         let wake_before = replacement_wakes.load(Ordering::SeqCst);
@@ -3250,16 +3086,16 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             "background progress does not enable visual frames"
         );
     }
-    *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unsupported(
+    window.set_answer(Err(PreferenceQueryError::Unsupported(
         flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-    ));
+    )));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
             &effects,
         )
         .expect("debt before close");
-    let before = window.calls.load(Ordering::Relaxed);
+    let before = window.calls.get();
     target.close(&effects).expect("close with pending retry");
     clock.advance(Duration::from_secs(2));
     sibling_turn
@@ -3272,7 +3108,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         .expect("close surviving sibling");
     assert_eq!(owner.next_wake().expect("closed deadlines"), None);
     assert_eq!(
-        window.calls.load(Ordering::Relaxed),
+        window.calls.get(),
         before,
         "retired address cannot retry its query"
     );

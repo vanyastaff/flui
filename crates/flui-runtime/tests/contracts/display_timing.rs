@@ -11,10 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::PresentationAddress;
 use flui_interaction::pointer::DEFAULT_SAMPLE_PERIOD;
-use flui_platform::{
-    DisplayKey, DisplayRegistry, GestureGeometry, PlatformWindow, PreferenceQueryError,
-    RefreshPeriod, WindowDisplay,
-};
+use flui_platform::{DisplayKey, DisplayRegistry, PlatformWindow, RefreshPeriod, WindowDisplay};
 use flui_runtime::owner::{
     DisplayUpdate, InputOutcome, OwnerEffects, OwnerHost, PresentationDispatcher, WindowObservation,
 };
@@ -83,85 +80,6 @@ impl OwnerEffects for Effects {
     fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {}
     fn request_continuation(&self) -> bool {
         true
-    }
-}
-
-/// A window that counts how often the gesture geometry was re-read.
-struct CountingWindow {
-    inner: Rc<dyn PlatformWindow>,
-    geometry_reads: Arc<std::sync::atomic::AtomicUsize>,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    capabilities: flui_platform::WindowCapabilities,
-}
-
-impl PlatformWindow for CountingWindow {
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn id(&self) -> flui_platform::WindowId {
-        self.inner.id()
-    }
-    fn request_redraw(&self) {
-        self.inner.request_redraw();
-    }
-    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
-        self.inner.request_frame_at(at);
-    }
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        self.inner.redraw_requester()
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        self.inner.surface_target()
-    }
-    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        self.inner.set_cursor(cursor)
-    }
-    fn set_frame_rate_hint(
-        &self,
-        hint: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_frame_rate_hint(hint)
-    }
-    fn set_input_regions(
-        &self,
-        regions: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_input_regions(regions)
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        self.inner.state().with_capabilities(self.capabilities)
-    }
-
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.capabilities)?;
-        Ok(())
-    }
-
-    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-
-    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
-    fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
-        self.geometry_reads
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(None)
     }
 }
 
@@ -442,23 +360,31 @@ fn haptic_frame_deadline_follows_the_display() {
 }
 
 fn display_change_runs_the_dpi_geometry_barrier() {
-    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let window: Rc<dyn PlatformWindow> = Rc::new(CountingWindow {
-        inner: flui_native::headless_platform()
-            .open_window(
-                flui_platform::WindowOptions::default(),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
-            .expect("headless window"),
-        geometry_reads: Arc::clone(&reads),
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    });
+    // A window that counts how often the gesture geometry was re-read.
+    let reads = Rc::new(Cell::new(0_usize));
+    let window: Rc<dyn PlatformWindow> = Rc::new(
+        flui_testing::MockWindow::over(
+            flui_native::headless_platform()
+                .open_window(
+                    flui_platform::WindowOptions::default(),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )
+                .expect("headless window"),
+        )
+        .with_gesture_geometry(Ok(None))
+        .with_observer({
+            let reads = Rc::clone(&reads);
+            move |call| {
+                if matches!(call, flui_testing::WindowCall::GestureGeometry) {
+                    reads.set(reads.get() + 1);
+                }
+            }
+        }),
+    );
     // The presentation holds its window weakly; the platform keeps it alive.
     let _platform_keeps_the_window = Rc::clone(&window);
     let rig = rig_with(PresentationWindow::new(window, None));
-    let count = || reads.load(std::sync::atomic::Ordering::SeqCst);
+    let count = || reads.get();
     let before = count();
 
     rig.deliver(Some(rig.display(1, Some(8_333))));

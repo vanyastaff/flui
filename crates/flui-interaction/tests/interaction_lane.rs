@@ -450,89 +450,6 @@ fn capture_release_refuses_only_its_own_device_tail() {
     });
 }
 
-struct CaptureWakeWindow(
-    std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    flui_platform::WindowCapabilities,
-);
-
-impl flui_platform::PlatformWindow for CaptureWakeWindow {
-    fn id(&self) -> flui_platform::WindowId {
-        flui_platform::WindowId::try_from_raw(21).expect("a nonzero window id")
-    }
-    fn request_redraw(&self) {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        panic!("capture wake failure");
-    }
-    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
-        let requests = std::sync::Arc::clone(&self.0);
-        std::sync::Arc::new(move || {
-            requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            panic!("capture wake failure");
-        })
-    }
-    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
-        std::sync::Arc::new(flui_platform::testing::NoNativeSurface)
-    }
-    flui_platform::window_takes_no_frame_verbs!();
-
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        Ok(())
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        let size = flui_foundation::geometry::Size::new(80.0, 80.0);
-        flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::try_new(None, size).expect("a finite size"),
-            flui_platform::WindowExtent::try_new(size).expect("a finite size"),
-        )
-        .with_focus(flui_platform::WindowFocus::Focused)
-        .with_metrics(
-            flui_foundation::geometry::WindowMetrics::from_logical(
-                size,
-                flui_foundation::geometry::DevicePixelRatio::ONE,
-            )
-            .ok(),
-        )
-        .with_capabilities(self.1)
-    }
-
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.1)?;
-        Ok(())
-    }
-
-    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-
-    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
-}
-
 fn capture_wake_failure_preserves_release_debt() {
     assert_capture_wake_failure(false);
 }
@@ -551,20 +468,17 @@ fn assert_capture_wake_failure(active_unwind: bool) {
         cell::{Cell, RefCell},
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
     };
 
     let lane = InteractionLane::try_new().expect("lane");
     let binding = GestureBinding::new();
-    let window = Rc::new(CaptureWakeWindow(
-        Arc::new(AtomicUsize::new(0)),
-        flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
-    ));
+    // A wake that fails: the window counts the request, then panics.
+    let window = Rc::new(
+        flui_testing::MockWindow::new()
+            .with_size(80.0, 80.0)
+            .focused(true)
+            .with_redraw_hook(|| panic!("capture wake failure")),
+    );
     let capability: Rc<dyn flui_platform::PlatformWindow> = window.clone();
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&capability));
     let held = Rc::new(RefCell::new(None::<PointerCapture>));
@@ -612,7 +526,7 @@ fn assert_capture_wake_failure(active_unwind: bool) {
             })
         );
         assert_eq!(
-            window.0.load(Ordering::Relaxed),
+            window.redraw_requests(),
             1,
             "release attempts the owning presentation wake once"
         );

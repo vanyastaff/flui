@@ -15,8 +15,14 @@
 //! the entries under it, each chunk its recording, each slot the child node
 //! where it stands. A partial frame passes its damage, and a slot whose
 //! subtree or a chunk whose bounds cannot reach it is skipped
-//! ([`SceneVersion::subtree_cull`]): what the walk costs follows what the
-//! damage reaches, not the scene's size.
+//! ([`SceneVersion::subtree_cull`]). A run of chunks under one parent, the
+//! boundary itself or one effect, is skipped a block of them at a time
+//! ([`SubtreeCull::chunks_missed`]), so the walk tests on the order of the
+//! logarithm of such a run per chunk it enters rather than every chunk of
+//! it; chunks that each sit under an effect of their own share no block and
+//! are still tested one by one.
+//!
+//! [`SubtreeCull::chunks_missed`]: flui_layer::SubtreeCull::chunks_missed
 //!
 //! The explicit stack owns traversal order; `record_scene` is the shared
 //! window/capture recorder. Shader masks and backdrops lower into ordered IR;
@@ -107,8 +113,9 @@ pub(crate) trait SceneVisitor {
 
 /// Walks `scene` from its root in paint order. A version's slot whose
 /// subtree or chunk whose bounds cannot reach `cull`, in surface pixels, is
-/// skipped; a tree is walked whole. Answers how many slots and chunks the
-/// walk asked the cull about.
+/// skipped; a tree is walked whole. Answers how many reaches the walk tested
+/// against the cull: one per slot or chunk asked about, one per block of
+/// chunks.
 pub(crate) fn walk_scene<V: SceneVisitor>(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
@@ -195,8 +202,8 @@ enum Visit {
 
 /// Walk `version` from its root, visiting what `flatten` would build in the
 /// same order, without building it. A slot's subtree or a chunk that cannot
-/// reach `cull` is skipped. Answers how many slots and chunks it asked the
-/// cull about.
+/// reach `cull` is skipped, a run of chunks that cannot a block at a time.
+/// Answers how many reaches it tested against the cull.
 ///
 /// Termination: a version's slots form a tree (`SceneOwner::apply` refuses a
 /// cycle and a second parent), so every node is entered at most once.
@@ -206,7 +213,6 @@ fn walk_version<V: SceneVisitor>(
     visitor: &mut V,
 ) -> u64 {
     let mut cull = cull.map(|rect| version.subtree_cull(rect));
-    let mut tested: u64 = 0;
     let mut stack = vec![Visit::Node(version.root())];
     while let Some(visit) = stack.pop() {
         match visit {
@@ -278,11 +284,16 @@ fn walk_version<V: SceneVisitor>(
                             });
                         }
                         Entry::Chunk { chunk, .. } => {
-                            if cull.as_mut().is_some_and(|cull| {
-                                tested = tested.saturating_add(1);
-                                !cull.meets_chunk(at)
-                            }) {
-                                continue;
+                            // A run of chunks the cull cannot land in the
+                            // damage, this one first, is skipped whole: they
+                            // share this one's parent, so no effect opens or
+                            // closes among them.
+                            if let Some(cull) = cull.as_mut() {
+                                let missed = cull.chunks_missed(at);
+                                if missed > 0 {
+                                    position = index.get() + missed;
+                                    continue;
+                                }
                             }
                             let item = Item::Chunk(chunk);
                             if visitor.enter(Site::Entry(version, at), &item) == Step::Descend {
@@ -290,10 +301,7 @@ fn walk_version<V: SceneVisitor>(
                             }
                         }
                         Entry::Slot { node: child, .. } => {
-                            if cull.as_mut().is_some_and(|cull| {
-                                tested = tested.saturating_add(1);
-                                !cull.meets(*child)
-                            }) {
+                            if cull.as_mut().is_some_and(|cull| !cull.meets(*child)) {
                                 continue;
                             }
                             stack.push(Visit::Entries {
@@ -313,7 +321,7 @@ fn walk_version<V: SceneVisitor>(
             }
         }
     }
-    tested
+    cull.map_or(0, |cull| cull.reaches_tested())
 }
 
 /// Exits the open effects of `node` above `parent`, innermost first.
@@ -1118,6 +1126,55 @@ mod tests {
             replayed(0, Rect::from_xywh(412.0, 2.0, 2.0, 2.0)),
             1,
             "beside the blurred square, inside the blur's reach"
+        );
+    }
+
+    /// A partial frame's walk over one boundary of many chunks tests its
+    /// cull a block of chunks at a time: over a grid of a hundred or of ten
+    /// thousand squares painted into one boundary, a damage rect over one
+    /// square replays that square alone, and the reaches the walk tests grow
+    /// with the levels of blocks, not with the squares.
+    #[test]
+    fn a_partial_walk_over_one_boundary_tests_blocks_not_every_chunk() {
+        use flui_layer::{BoundaryContent, SceneOp, SceneOwner};
+        let walked = |side: usize| {
+            let mut owner = SceneOwner::new();
+            let mut writer = owner.writer();
+            let root = writer.current().root();
+            let version = writer.next_content_version().expect("a version");
+            let mut content = BoundaryContent::builder();
+            for index in 0..side * side {
+                let at = (12.0 * (index % side) as f64, 12.0 * (index / side) as f64);
+                content.chunk(square(index + 2, version, at));
+            }
+            writer.push(SceneOp::Publish {
+                node: root,
+                content: std::sync::Arc::new(content.finish()),
+            });
+            owner
+                .apply(flui_layer::SurfaceKey {
+                    size: (1_200, 1_200),
+                    generation: flui_foundation::SurfaceGeneration::ZERO,
+                })
+                .expect("a grid applies");
+            let mut entered = Entered::default();
+            // Over the square in the second row and column, clear of its
+            // neighbours' edges.
+            let damage = Rect::from_xywh(14.0, 14.0, 6.0, 6.0);
+            let tested = walk_scene(
+                SceneContent::Version(owner.current()),
+                Some(damage),
+                &mut entered,
+            );
+            (entered.0.len(), tested)
+        };
+        let (small, small_tested) = walked(10);
+        let (large, large_tested) = walked(100);
+        assert_eq!((small, large), (1, 1), "the damaged square alone");
+        assert!(
+            large_tested <= 2 * small_tested,
+            "a hundred times the squares tests {large_tested} reaches, \
+             against {small_tested} for a hundred"
         );
     }
 }

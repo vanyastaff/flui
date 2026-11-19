@@ -285,7 +285,7 @@ mod tests {
     /// its served request is never asked for.
     #[test]
     fn a_held_instant_is_asked_again_once_its_outcome_moved_on() {
-        let window: Weak<dyn PlatformWindow> = Weak::<crate::testing::TestWindow>::new();
+        let window: Weak<dyn PlatformWindow> = Weak::<flui_platform::testing::MockWindow>::new();
         let asked = Rc::new(Cell::new(AskedFrame::default()));
         let at = Some(EventTime::from_nanos(1_000));
         let reads = Cell::new(0_u32);

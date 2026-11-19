@@ -144,12 +144,13 @@ mod platform_window;
 pub mod pointer;
 mod preferences;
 mod regional;
+pub mod sandbox;
 mod storage;
 mod surface_target;
 mod system_chrome;
 mod system_failure;
 mod target_platform;
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod text_input;
 pub mod text_store;

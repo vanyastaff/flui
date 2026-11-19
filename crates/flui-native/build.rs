@@ -22,6 +22,19 @@ fn main() {
                 ))
             )
         },
+        // A native host with an event loop of its own, which turns at the
+        // application's turn deadline: every host but the headless one.
+        native_loop: {
+            any(
+                windows,
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "android",
+                target_arch = "wasm32",
+                wayland_host,
+                x11_host
+            )
+        },
         // A Linux host whose loop reads the session's own sources: the
         // Settings portal, logind and memory pressure. A Linux host joins it
         // here by its feature.

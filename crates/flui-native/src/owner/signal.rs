@@ -564,6 +564,21 @@ impl OwnerSignal {
     /// One finite turn over `slot`, begun and driven at once: for a loop that
     /// reads nothing of its own first. `true` asks the native owner to perform
     /// its quit path.
+    #[cfg_attr(
+        not(any(
+            feature = "scripted",
+            windows,
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_arch = "wasm32"
+        )),
+        expect(
+            dead_code,
+            reason = "the Win32, AppKit, UIKit, Android and page loops and the headless host's \
+                      test controls drive a turn at once; the Linux loops drive the turn they began"
+        )
+    )]
     pub(crate) fn drive_in(&self, slot: &OwnerTurnSlot) -> bool {
         self.begin_turn().drive_in(slot)
     }

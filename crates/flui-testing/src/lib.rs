@@ -118,7 +118,9 @@ pub use a11y::{
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
-pub use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
+pub use flui_platform::testing::{
+    MockWindow, ScriptedHttp, ScriptedResponse, WindowCall, mock_window,
+};
 pub use flui_protocol::{
     geometry::LogicalPoint, geometry::LogicalRect, inspect::InspectField, inspect::InspectNode,
     inspect::InspectReading, inspect::InspectValue, locator::Locator, locator::Match,
