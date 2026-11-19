@@ -99,8 +99,8 @@ between segments, as `[assets] directories` declares it: `assets/logo.png` for t
 AssetKeyError>`: at most 1024 bytes, at least one segment, no empty segment, no `.` or `..`
 segment, no character a Windows file name may not hold (`\ : * ? " < > |`) and no control
 character anywhere, and no segment Windows would not keep as written (one ending in `.` or a
-space, or a device name such as `NUL` or `COM1.txt`). A key that passes is never absolute, never
-leaves the bundle's root and names one file on every file system, so every reader joins it to its
+space, or a device name such as `NUL`, `CONIN$` or `COM1.txt`). A key that passes is never absolute, never
+leaves the bundle's root and is kept as written on Windows too, so every reader joins it to its
 root without checking it again. The same key names the same asset on every platform.
 
 ### §2 The bundle is a capability of the host

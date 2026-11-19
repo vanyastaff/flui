@@ -115,13 +115,31 @@ pub enum AssetKeyError {
 }
 
 /// Whether Windows takes `segment` for a device rather than a file: its
-/// stem before the first `.` is one of the reserved names, in any case.
+/// stem before the first `.`, trailing spaces trimmed, is a reserved name in
+/// any case (`CON`, `CONIN$`, `CONOUT$`, `PRN`, `AUX`, `NUL`, `COM` or `LPT`
+/// and a digit, superscript `¹²³` included).
 fn is_device_name(segment: &str) -> bool {
-    let stem = segment.split('.').next().unwrap_or(segment);
+    let stem = segment
+        .split('.')
+        .next()
+        .unwrap_or(segment)
+        .trim_end_matches(' ');
     let upper = stem.to_ascii_uppercase();
-    match upper.as_bytes() {
-        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
-        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => digit.is_ascii_digit(),
-        _ => false,
+    if matches!(
+        upper.as_str(),
+        "CON" | "CONIN$" | "CONOUT$" | "PRN" | "AUX" | "NUL"
+    ) {
+        return true;
     }
+    let Some(tail) = upper
+        .strip_prefix("COM")
+        .or_else(|| upper.strip_prefix("LPT"))
+    else {
+        return false;
+    };
+    let mut chars = tail.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('0'..='9' | '¹' | '²' | '³'), None)
+    )
 }

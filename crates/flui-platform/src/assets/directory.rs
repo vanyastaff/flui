@@ -17,7 +17,8 @@ const READ_CHUNK: usize = 64 * 1024;
 /// project root of a development run, or a test's own directory
 /// (ADR-0384 §3–§5).
 ///
-/// A read opens only a regular file, checks its length against the limit
+/// A read reads only a regular file (on Unix the open does not block, so a
+/// FIFO is refused without waiting for a writer), checks its length against the limit
 /// before it allocates, and reads it one chunk per poll, yielding between
 /// chunks, so a dropped read stops at the next one.
 #[derive(Clone)]
@@ -84,8 +85,12 @@ async fn read_in_chunks(
     bytes
         .try_reserve_exact(usize::try_from(length).unwrap_or(usize::MAX))
         .map_err(|_| failed(ErrorKind::OutOfMemory.into()))?;
-    let chunk_len =
-        usize::try_from(length.saturating_add(1)).map_or(READ_CHUNK, |len| len.min(READ_CHUNK));
+    // A length of 0 may be a file whose size the system does not report
+    // (procfs, some FUSE file systems): it is read in whole chunks too.
+    let chunk_len = match usize::try_from(length) {
+        Ok(0) | Err(_) => READ_CHUNK,
+        Ok(len) => len.saturating_add(1).min(READ_CHUNK),
+    };
     let mut chunk = vec![0_u8; chunk_len];
     loop {
         let read = match file.read(&mut chunk) {

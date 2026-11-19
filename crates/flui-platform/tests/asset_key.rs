@@ -10,7 +10,10 @@ use flui_platform::assets::{AssetKey, AssetKeyError, MAX_ASSET_KEY_LEN};
 /// Red-check: drop one arm of `AssetKey::try_new`'s allow-list.
 #[test]
 fn asset_key_refuses_every_key_outside_its_bundle() {
-    let refused: [(&str, AssetKeyError); 24] = [
+    let refused: [(&str, AssetKeyError); 27] = [
+        ("assets/CONIN$", AssetKeyError::ReservedSegment),
+        ("assets/nul .txt", AssetKeyError::ReservedSegment),
+        ("assets/COM¹.png", AssetKeyError::ReservedSegment),
         (
             "assets/logo?.png",
             AssetKeyError::Forbidden { character: '?' },

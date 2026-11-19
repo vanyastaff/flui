@@ -42,7 +42,7 @@ pub trait AssetSource: Send + Sync + 'static {
     /// files reads one chunk per poll on whatever lane polls it, and yields
     /// between chunks, so dropping the future stops the read at the next
     /// one. A source checks the asset's length against `limit` before it
-    /// allocates and again as it reads, opens only a regular file, and
+    /// allocates and again as it reads, reads only a regular file, and
     /// answers [`AssetLoadError::NotFound`] for an asset its package does
     /// not hold.
     fn load(&self, key: &AssetKey, limit: u64) -> AssetFuture<Vec<u8>>;
