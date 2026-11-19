@@ -219,7 +219,7 @@ are owed this, `build_owner.rs` last, since two other lines of work edit it.
   `api-contracts` job, each with its `--self-test`; xtask's
   `send_positions_list_entry_names_one_of_the_kinds_that_cross` refuses a `crosses` value §2 does
   not name.
-- `cargo xtask deps` (cargo-deny over `deny.toml`) holds the crate bans.
+- `cargo deny` (CI's `deps` job, over `deny.toml`) holds the crate bans.
 - For §4's removals, the proof is the change itself, as §4 says, and the entry leaving the list.
 - For §5, clippy's `disallowed-types` for `std::sync::Mutex`, `std::sync::RwLock` and
   `parking_lot`'s in the crates whose state is owner-local, with `#[expect(…, reason)]` at a

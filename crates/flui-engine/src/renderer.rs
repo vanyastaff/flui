@@ -2597,15 +2597,18 @@ mod tests {
         let (first, second) = (one_chunk_version(), one_chunk_version());
         let first = flui_layer::Scene::of_version(first);
         let _ = renderer.render_frame(&first);
-        renderer.painter.begin_frame().expect("a frame opens");
-        let _recorded: crate::frame_protocol::RecordedContent = Renderer::record_frame_content(
-            &mut renderer.painter,
-            &first,
-            None,
-            crate::recording_cache::CacheReads::On,
-        )
-        .expect("the first owner's version records");
-        renderer.painter.finish_frame();
+        // Recorded on the frames that admit its chunk.
+        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+            renderer.painter.begin_frame().expect("a frame opens");
+            let _recorded: crate::frame_protocol::RecordedContent = Renderer::record_frame_content(
+                &mut renderer.painter,
+                &first,
+                None,
+                crate::recording_cache::CacheReads::On,
+            )
+            .expect("the first owner's version records");
+            renderer.painter.finish_frame();
+        }
         assert_eq!(renderer.painter.recording_cache_work().0, 1);
         let _ = renderer.render_frame(&flui_layer::Scene::of_version(second));
         assert_eq!(

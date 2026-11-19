@@ -1,7 +1,7 @@
 ### Added
 
-- `cargo xtask test --no-trybuild` runs the suite without the trybuild compile-fail suites, now
-  their own nextest test group (`trybuild`) beside `nested-cargo`.
+- The trybuild compile-fail suites are their own nextest test group (`trybuild`) beside
+  `nested-cargo`, so a run can leave them out with `-E 'not group(trybuild)'`.
 
 ### Changed
 

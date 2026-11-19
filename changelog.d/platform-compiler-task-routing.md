@@ -1,3 +1,4 @@
 ### Fixed
 
-- Local xtask checks run portable platform compiler guards on every host and keep them out of fast and no-trybuild native test stages.
+- flui-native's portable compiler guards run once, in CI's `test-trybuild` job, and stay out of
+  the native test runs on each host.

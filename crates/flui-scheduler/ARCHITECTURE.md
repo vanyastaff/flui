@@ -810,7 +810,7 @@ covers eager and lazy spawn, repeated-poll identity, cloned-waker coalescing,
 completion, cancellation, the next task, and destruction of a driver whose
 pending future exported its waker.
 
-**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so
+**Allocation gate, not just a bench:** no CI job has a bench step, so
 `tests/async_driver_ready_index_allocation.rs` (a dedicated counting-allocator
 binary) asserts that warm R=0 at N in {0, 100,000} and steady R=64 self-waking
 tasks both allocate nothing. This pins reuse of both task wakers and ready
@@ -824,7 +824,7 @@ test pins this.
 `benches/async_driver_pump.rs` (criterion) is evidence attached to the PR, not
 a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
 so this file is type-checked and lint-checked on every PR, and the `test`
-job's `cargo xtask build-all-targets` links it; what CI never does is run
+job's `cargo build --all-targets` step on main links it; what CI never does is run
 it. Measured under `[profile.release]` on a 13th Gen Intel Core i9-13900K,
 against a full scan of the task map:
 

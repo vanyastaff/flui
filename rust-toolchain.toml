@@ -31,7 +31,7 @@
 #   3. Update the prose that states the number: README.md (outside the badge),
 #      crates/flui-cli/README.md, docs/getting-started.md and
 #      book/src/getting-started/installation.md.
-#   4. Run `cargo xtask toolchain` and `cargo xtask ci`.
+#   4. Run `cargo xtask toolchain` and `cargo xtask checks`.
 
 [toolchain]
 channel = "1.100.0"

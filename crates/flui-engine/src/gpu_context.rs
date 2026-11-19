@@ -1975,11 +1975,13 @@ mod tests {
             let counters = context.slot_counters();
             (counters.chunks_recorded, counters.recording_cache_hits)
         };
-        assert_eq!(
-            draw(FullReason::FirstFrame),
-            (1, 0),
-            "the first frame records"
-        );
+        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+            assert_eq!(
+                draw(FullReason::FirstFrame),
+                (1, 0),
+                "the frames that admit the chunk record it"
+            );
+        }
         assert_eq!(draw(FullReason::FirstFrame), (0, 1), "the next replays");
         assert_eq!(draw(FullReason::DamageOff), (1, 0), "damage off records");
         assert_eq!(draw(FullReason::FirstFrame), (0, 1), "and the next replays");
@@ -2012,9 +2014,12 @@ mod tests {
         attach(&mut context, rgba, wgpu::TextureFormat::Rgba8Unorm);
         attach(&mut context, bgra, wgpu::TextureFormat::Bgra8Unorm);
         attach(&mut fresh, bgra, wgpu::TextureFormat::Bgra8Unorm);
-        context
-            .render(rgba, drawn_frame(), &scene, full())
-            .expect("the first slot draws");
+        // On the frames that admit its chunk.
+        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+            context
+                .render(rgba, drawn_frame(), &scene, full())
+                .expect("the first slot draws");
+        }
         context
             .render(bgra, drawn_frame(), &scene, full())
             .expect("the second slot draws");

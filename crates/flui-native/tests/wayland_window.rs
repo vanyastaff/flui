@@ -822,7 +822,7 @@ fn a_surface_targets_display_equals_the_platforms_connection() {
 /// xdg-shell, a second output, a seat. Each says what it could not run on the
 /// compositor it met, and fails instead where `FLUI_REQUIRE_COMPOSITOR` lists
 /// what it lacked ([`Optional::missing`]). CI's headless Weston 13 lacks most
-/// of them, so `cargo xtask wayland-optional` runs this module again under a
+/// of them, so CI's `test` job runs this module again under a
 /// headless sway, requiring what sway offers.
 mod optional {
     use super::*;

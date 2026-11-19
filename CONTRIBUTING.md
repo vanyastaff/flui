@@ -42,8 +42,8 @@ incomplete.
   when the maintainer explicitly asks.
 - The repository ships no git hook: CI is the gate. For the answer before a push, run
   `cargo fmt --all`, then clippy and nextest on the crates you changed, one at a time (AGENTS.md,
-  "Checking a change"), and
-  `cargo xtask ci` reproduces CI locally when you need it.
+  "Checking a change"). For any other job, its commands are in `.github/workflows/ci.yml`
+  and [`docs/testing.md`](docs/testing.md#ci-jobs-and-their-local-commands).
 - `.gitignore` covers what this repository's own builds and workflows write, plus the most
   common editor and OS files. Your own tools stay on your machine: an agent runtime's state goes
   in `.git/info/exclude` (every worktree of the clone shares it) or your global excludes file,
