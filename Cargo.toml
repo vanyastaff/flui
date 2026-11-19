@@ -868,12 +868,7 @@ http = ["flui-app/http", "flui-testing?/http"]
 # UI runtime keeps (`ImageCacheCapability`, ADR-0387), trimmed by the runtime
 # under memory pressure. A network image also needs `http`. Off, the application
 # links no image decoder and keeps no decoded-image cache.
-images = [
-    "dep:flui-assets",
-    "flui-widgets/asset-images",
-    "flui-app/images",
-    "flui-testing?/images",
-]
+images = ["dep:flui-assets", "flui-widgets/asset-images", "flui-app/images", "flui-testing?/images"]
 
 # === One instance per user session ===
 # `Application::single_instance` (ADR-0254 §4): on Linux and Windows a later
