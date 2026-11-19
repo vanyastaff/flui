@@ -609,23 +609,33 @@ fn a_lock_file_this_user_may_only_read_still_takes_the_lock() {
 
 #[test]
 fn this_users_lock_is_in_a_directory_only_this_user_can_write() {
-    let held = OsInputLock::acquire_default().expect("this user's lock");
-    assert_eq!(held.path(), OsInputLock::default_path());
-    let refused = OsInputLock::acquire_default();
+    // A base every user may write, as `/tmp` is, owned by the test: the user's real lock is never
+    // touched.
+    let base = tempfile::tempdir().expect("a temporary directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(base.path(), std::fs::Permissions::from_mode(0o1777))
+            .expect("the base shared as /tmp is");
+    }
+    let held = OsInputLock::acquire_in_private_dir(base.path()).expect("this user's lock");
+    let refused = OsInputLock::acquire_in_private_dir(base.path());
     assert!(
         matches!(refused, Err(Error::Busy { .. })),
         "this user's second session is busy: {refused:?}"
     );
+    let dir = held.path().parent().expect("the lock's directory");
+    assert!(dir.starts_with(base.path()), "{dir:?}");
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        let dir = held.path().parent().expect("the lock's directory");
-        let dir = std::fs::metadata(dir).expect("the lock's directory");
         let lock = std::fs::metadata(held.path()).expect("the lock file");
+        let dir = std::fs::metadata(dir).expect("the lock's directory");
         assert_eq!(
-            dir.mode() & 0o077,
-            0,
-            "no other user may enter the lock's directory, so none can hold or replace the lock"
+            dir.mode() & 0o777,
+            0o700,
+            "only this user may enter the lock's directory, so no other can hold or replace the \
+             lock"
         );
         assert_eq!(dir.uid(), lock.uid(), "the directory is this user's own");
     }

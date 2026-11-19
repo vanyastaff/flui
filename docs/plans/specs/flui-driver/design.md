@@ -959,8 +959,9 @@ fixture, with an identifier on every interactive widget.
   applies to the element and layer ids that `InspectId` wraps.
 - One owner per window serializes jobs (F7). The endpoint keeps a bounded queue per connection
   (`busy` beyond it) and a connection cap. OS lanes take the desktop's input lock (an OS file lock,
-  one per user's desktop, in a directory only that user can write: `$XDG_RUNTIME_DIR`, or an
-  owner-only `flui-driver-<uid>` in the temporary directory on Unix, the user's own temporary
+  one per user's desktop, in a directory only that user can write: `$XDG_RUNTIME_DIR` where it
+  names an existing directory, or else an owner-only `flui-driver-<uid>` in the temporary
+  directory on Unix, the user's own temporary
   directory on Windows; `busy` only while another handle holds the lock, a lock file this user
   may only read opened for reading, one it cannot open the driver's I/O failure, never retried),
   so two drivers never interleave real input on one desktop.

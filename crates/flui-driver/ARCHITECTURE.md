@@ -25,8 +25,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   nothing. Why the connection broke is recorded in one place (`SocketConnection::take`), the first
   failure kept for every later call. Before why it ended, the thread hands over every complete
   line it read and those the stream has ready, reading at most `MAX_REPLY` bytes past the
-  failure, and why it ended names what it did not hand over (an unfinished last line, a line too
-  long, what the app sent past the bound); a send that finds the thread ended keeps the lines it
+  failure and one more to learn whether anything followed, and why it ended names what it did
+  not hand over (an unfinished last line, a line too long, what the app sent past the bound); a
+  send that finds the thread ended keeps the lines it
   reads to learn why.
 - **A timed-out act is never resent.** A call with no answer in its budget is `timeout`, with
   `may_have_run` for a method that acts; a late answer is passed over by its id.
@@ -35,8 +36,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
   run is announced and again at every `lane::send_guarded`, which asks the guard before every
   event and releases everything on every exit; `OsInputLock` holds one session per user's
-  desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR`, or an
-  owner-only `flui-driver-<uid>` in the temporary directory on Unix), `busy` only while another
+  desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
+  existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
+  of mode 0700 in the temporary directory on Unix), `busy` only while another
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is

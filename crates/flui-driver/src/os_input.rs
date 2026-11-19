@@ -151,12 +151,17 @@ pub struct OsInputLock {
 
 impl OsInputLock {
     /// The lock file of this user's desktop, in a directory only this user can write: on Unix
-    /// `$XDG_RUNTIME_DIR` where it is set, and otherwise `flui-driver-<uid>` in the temporary
-    /// directory, which [`acquire_default`](Self::acquire_default) makes owner-only; elsewhere
-    /// the user's own temporary directory.
+    /// `$XDG_RUNTIME_DIR` where it names an existing directory, and otherwise this user's private
+    /// directory in the temporary directory (see
+    /// [`acquire_in_private_dir`](Self::acquire_in_private_dir)); elsewhere the user's own
+    /// temporary directory.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        lock_dir().path.join(LOCK_NAME)
+        #[cfg(unix)]
+        if let Some(dir) = runtime_dir() {
+            return dir.join(LOCK_NAME);
+        }
+        private_dir(&std::env::temp_dir()).join(LOCK_NAME)
     }
 
     /// Take the lock at [`default_path`](Self::default_path), making its private directory first
@@ -164,15 +169,29 @@ impl OsInputLock {
     ///
     /// # Errors
     ///
+    /// As [`acquire_in_private_dir`](Self::acquire_in_private_dir).
+    pub fn acquire_default() -> Result<Self> {
+        #[cfg(unix)]
+        if let Some(dir) = runtime_dir() {
+            return Self::acquire(&dir.join(LOCK_NAME));
+        }
+        Self::acquire_in_private_dir(&std::env::temp_dir())
+    }
+
+    /// Take the lock in this user's private directory under `base`, a directory other users may
+    /// share as `/tmp` is: on Unix `flui-driver-<uid>`, made owner-only (mode 0700), or checked
+    /// to be a directory this user owns and not a link, its mode set to 0700; elsewhere `base`
+    /// itself, as Windows keeps a temporary directory per user.
+    ///
+    /// # Errors
+    ///
     /// As [`acquire`](Self::acquire); [`Error::Io`] when the private directory cannot be made, or
     /// is not a directory this user owns.
-    pub fn acquire_default() -> Result<Self> {
-        let dir = lock_dir();
+    pub fn acquire_in_private_dir(base: &Path) -> Result<Self> {
+        let dir = private_dir(base);
         #[cfg(unix)]
-        if dir.private {
-            make_private(&dir.path)?;
-        }
-        Self::acquire(&dir.path.join(LOCK_NAME))
+        make_private(&dir)?;
+        Self::acquire(&dir.join(LOCK_NAME))
     }
 
     /// Take the lock at `path`.
@@ -221,38 +240,30 @@ impl Drop for OsInputLock {
     }
 }
 
-/// The directory of this user's lock file.
-struct LockDir {
-    path: PathBuf,
-    /// Whether the driver makes it, owner-only, in a directory other users share.
-    #[cfg(unix)]
-    private: bool,
+/// `$XDG_RUNTIME_DIR` when it is an absolute path to an existing directory; unset, empty or
+/// missing, the lock goes to the private directory in the temporary directory instead. It is
+/// trusted to be this user's and owner-only, as the XDG Base Directory Specification requires of
+/// it.
+#[cfg(unix)]
+fn runtime_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute() && dir.is_dir())
 }
 
+/// This user's private directory under `base`.
 #[cfg(unix)]
-fn lock_dir() -> LockDir {
-    match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
-        // Owned by the user and owner-only, as the XDG base directory specification requires.
-        Some(path) if path.is_absolute() => LockDir {
-            path,
-            private: false,
-        },
-        _ => LockDir {
-            path: std::env::temp_dir().join(format!(
-                "flui-driver-{}",
-                rustix::process::geteuid().as_raw()
-            )),
-            private: true,
-        },
-    }
+fn private_dir(base: &Path) -> PathBuf {
+    base.join(format!(
+        "flui-driver-{}",
+        rustix::process::geteuid().as_raw()
+    ))
 }
 
 /// Windows keeps a temporary directory per user.
 #[cfg(not(unix))]
-fn lock_dir() -> LockDir {
-    LockDir {
-        path: std::env::temp_dir(),
-    }
+fn private_dir(base: &Path) -> PathBuf {
+    base.to_owned()
 }
 
 /// Make `dir` owner-only, or check that the one there is: a directory this user owns, which is
@@ -279,7 +290,8 @@ fn make_private(dir: &Path) -> Result<()> {
             ),
         )));
     }
-    if found.mode() & 0o077 != 0 {
+    // Exactly owner-only, whatever the umask left of the owner's own bits.
+    if found.mode() & 0o777 != 0o700 {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(Error::Io)?;
     }
     Ok(())

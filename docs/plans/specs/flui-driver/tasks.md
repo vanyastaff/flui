@@ -641,8 +641,9 @@ graph LR
       waits for a CI job that opens a window; the driver's `gone` of the process with its exit
       code is held by the socket tests above.
     - `OsInputLock` holds one OS-input session per user's desktop: a file lock in a directory only
-      that user can write (`$XDG_RUNTIME_DIR`, or an owner-only `flui-driver-<uid>` in the
-      temporary directory that `OsInputLock::acquire_default` makes, on Unix; the user's own
+      that user can write (`$XDG_RUNTIME_DIR` where it names an existing directory, or else a
+      `flui-driver-<uid>` of mode 0700 in the temporary directory that
+      `OsInputLock::acquire_in_private_dir` makes, on Unix; the user's own
       temporary directory on Windows), `busy` only while another handle holds it; a lock file this
       user may only read is opened for reading, and one it cannot open is `Error::Io`, never
       retried.

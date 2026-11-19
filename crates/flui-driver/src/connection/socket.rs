@@ -482,8 +482,9 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
 ///
 /// Handed over in order, each as the caller makes room: the line `waiting` for room, the complete
 /// lines `reader` holds, and the complete lines among what the stream has ready, of which at most
-/// [`MAX_REPLY`] bytes are read. Then why it ended, naming what was not handed over: a line too
-/// long and what follows it, an unfinished last line, or what the app sent past the bound. A
+/// [`MAX_REPLY`] bytes are read, and one more to learn whether the app sent anything past them.
+/// Then why it ended, naming what was not handed over: a line too long and what follows it, an
+/// unfinished last line, or what the app sent past the bound when it sent any. A
 /// driver that leaves meanwhile takes what is left in its drop, so no hand-over waits for ever.
 fn finish(
     stream: &Io,
@@ -500,15 +501,17 @@ fn finish(
             Some(line) => line,
             None => match reader.next_line() {
                 Ok(Some(line)) => line,
-                Ok(None) if residue == 0 => {
-                    break Some(format!(
-                        "the driver read {MAX_REPLY} bytes more, and what the app sent after them \
-                         is not handed over"
-                    ));
-                }
                 Ok(None) => {
-                    let room = residue.min(chunk.len());
+                    // Once the bound is spent, one byte more tells whether the app sent anything
+                    // past it.
+                    let room = residue.min(chunk.len()).max(1);
                     match stream.read(&mut chunk[..room]) {
+                        Ok(Received::Bytes(_)) if residue == 0 => {
+                            break Some(format!(
+                                "the driver read {MAX_REPLY} bytes more, and what the app sent \
+                                 after them is not handed over"
+                            ));
+                        }
                         Ok(Received::Bytes(count)) => {
                             reader.push(&chunk[..count]);
                             residue -= count;
