@@ -302,9 +302,10 @@ pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() 
 }
 
 /// Each shifted box takes an `AlignmentGeometry`: a directional alignment
-/// resolves against the ambient direction, `CENTER_START` naming the left edge
-/// in LTR and the right edge in RTL, and only a directional one takes a
-/// `Directionality` dependency.
+/// resolves against the ambient direction, `TOP_START` naming the top-left
+/// corner in LTR and the top-right one in RTL, and only a directional one
+/// takes a `Directionality` dependency. Built with no alignment, each keeps
+/// its default and takes none.
 pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_direction() {
     use crate::common::{LaidOut, loose};
     use flui_foundation::geometry::{Matrix4, Size};
@@ -317,123 +318,132 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
         FittedBox, FractionallySizedBox, OverflowBox, SizedOverflowBox, Transform, UnconstrainedBox,
     };
 
-    // The horizontal component of the alignment a render object of type `T`
-    // was configured with.
-    fn configured_x<T: flui_rendering::RenderObject<flui_rendering::protocol::BoxProtocol>>(
+    // The alignment a render object of type `T` was configured with.
+    fn configured<T: flui_rendering::RenderObject<flui_rendering::protocol::BoxProtocol>>(
         laid: &LaidOut,
         render_type: &str,
-        alignment: impl Fn(&T) -> Alignment,
-    ) -> f64 {
+        alignment: impl Fn(&T) -> Option<Alignment>,
+    ) -> Option<(f64, f64)> {
         let id = laid.find_by_render_type(render_type);
         laid.pipeline_owner().with(|owner| {
-            owner
+            let render = owner
                 .render_tree()
                 .get(id)
                 .and_then(|node| node.as_box())
                 .and_then(|node| node.render_object().downcast_ref::<T>())
-                .map(|render| alignment(render).x)
-                .expect("the shifted box is mounted")
+                .expect("the shifted box is mounted");
+            alignment(render).map(|alignment| (alignment.x, alignment.y))
         })
     }
-    // The x offset of the 40-wide child an overflow box places in its 200-wide
-    // slot.
-    fn child_x(laid: &LaidOut, render_type: &str) -> f64 {
+    // Where an overflow box places its 40×40 child in its 200×200 slot.
+    fn child_offset(laid: &LaidOut, render_type: &str) -> Option<(f64, f64)> {
         let id = laid.find_by_render_type(render_type);
-        laid.offset(laid.only_child(id)).dx
+        let offset = laid.offset(laid.only_child(id));
+        Some((offset.dx, offset.dy))
     }
 
-    type Make = fn(AlignmentGeometry) -> BoxedView;
-    type Read = fn(&LaidOut) -> f64;
-    let cases: [(&str, Make, Read, (f64, f64)); 6] = [
+    // Each row builds the box with `alignment`, or with none at all.
+    type Make = fn(Option<AlignmentGeometry>) -> BoxedView;
+    type Read = fn(&LaidOut) -> Option<(f64, f64)>;
+    type Reading = Option<(f64, f64)>;
+    let cases: [(&str, Make, Read, (Reading, Reading, Reading)); 6] = [
         (
             "FittedBox",
             |alignment| {
-                FittedBox::new()
-                    .alignment(alignment)
-                    .child(SizedBox::new(40.0, 40.0))
+                let fitted = FittedBox::new().child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(fitted.clone(), |alignment| fitted.alignment(alignment))
                     .boxed()
             },
-            |laid| configured_x(laid, "RenderFittedBox", RenderFittedBox::alignment),
-            (-1.0, 1.0),
+            |laid| {
+                configured(laid, "RenderFittedBox", |r: &RenderFittedBox| {
+                    Some(r.alignment())
+                })
+            },
+            (Some((-1.0, -1.0)), Some((1.0, -1.0)), Some((0.0, 0.0))),
         ),
         (
             "FractionallySizedBox",
             |alignment| {
-                FractionallySizedBox::new()
+                let sized = FractionallySizedBox::new()
                     .width_factor(0.5)
-                    .alignment(alignment)
-                    .child(SizedBox::new(40.0, 40.0))
+                    .child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(sized.clone(), |alignment| sized.alignment(alignment))
                     .boxed()
             },
             |laid| {
-                configured_x(
+                configured(
                     laid,
                     "RenderFractionallySizedBox",
-                    RenderFractionallySizedBox::alignment,
+                    |r: &RenderFractionallySizedBox| Some(r.alignment()),
                 )
             },
-            (-1.0, 1.0),
+            (Some((-1.0, -1.0)), Some((1.0, -1.0)), Some((0.0, 0.0))),
         ),
         (
             "UnconstrainedBox",
             |alignment| {
-                UnconstrainedBox::new()
-                    .alignment(alignment)
-                    .child(SizedBox::new(40.0, 40.0))
+                let unconstrained = UnconstrainedBox::new().child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(unconstrained.clone(), |alignment| {
+                        unconstrained.alignment(alignment)
+                    })
                     .boxed()
             },
             |laid| {
-                configured_x(
+                configured(
                     laid,
                     "RenderConstraintsTransformBox",
-                    RenderConstraintsTransformBox::alignment,
+                    |r: &RenderConstraintsTransformBox| Some(r.alignment()),
                 )
             },
-            (-1.0, 1.0),
+            (Some((-1.0, -1.0)), Some((1.0, -1.0)), Some((0.0, 0.0))),
         ),
         (
             "Transform",
             |alignment| {
-                Transform::new(Matrix4::IDENTITY)
-                    .alignment(alignment)
-                    .child(SizedBox::new(40.0, 40.0))
+                let transform = Transform::new(Matrix4::IDENTITY).child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(transform.clone(), |alignment| {
+                        transform.alignment(alignment)
+                    })
                     .boxed()
             },
-            |laid| {
-                configured_x(laid, "RenderTransform", |render: &RenderTransform| {
-                    render.alignment().expect("a pivot alignment")
-                })
-            },
-            (-1.0, 1.0),
+            |laid| configured(laid, "RenderTransform", RenderTransform::alignment),
+            // `Transform::new` has no pivot alignment until one is set.
+            (Some((-1.0, -1.0)), Some((1.0, -1.0)), None),
         ),
         (
             "OverflowBox",
             |alignment| {
-                OverflowBox::new()
-                    .alignment(alignment)
+                let overflow = OverflowBox::new()
                     .min_width(40.0)
                     .max_width(40.0)
-                    .child(SizedBox::new(40.0, 40.0))
+                    .child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(overflow.clone(), |alignment| overflow.alignment(alignment))
                     .boxed()
             },
-            |laid| child_x(laid, "RenderConstrainedOverflowBox"),
-            (0.0, 160.0),
+            |laid| child_offset(laid, "RenderConstrainedOverflowBox"),
+            (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
         ),
         (
             "SizedOverflowBox",
             |alignment| {
-                SizedOverflowBox::new(Size::new(200.0, 200.0))
-                    .alignment(alignment)
-                    .child(SizedBox::new(40.0, 40.0))
+                let overflow =
+                    SizedOverflowBox::new(Size::new(200.0, 200.0)).child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(overflow.clone(), |alignment| overflow.alignment(alignment))
                     .boxed()
             },
-            |laid| child_x(laid, "RenderSizedOverflowBox"),
-            (0.0, 160.0),
+            |laid| child_offset(laid, "RenderSizedOverflowBox"),
+            (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
         ),
     ];
 
-    for (name, make, read, (ltr, rtl)) in cases {
-        let directional = AlignmentGeometry::from(AlignmentDirectional::CENTER_START);
+    for (name, make, read, (ltr, rtl, default)) in cases {
+        let directional = Some(AlignmentGeometry::from(AlignmentDirectional::TOP_START));
         let mut laid = lay_out(
             Directionality::new(TextDirection::Ltr, make(directional)),
             loose(200.0),
@@ -447,19 +457,24 @@ pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_
         laid.pump_widget(Directionality::new(TextDirection::Rtl, make(directional)));
         assert_eq!(read(&laid), rtl, "{name}: start is the right edge in RTL");
 
-        let mut absolute = lay_out(
-            Directionality::new(TextDirection::Rtl, make(Alignment::CENTER_LEFT.into())),
-            loose(200.0),
-        );
-        assert_eq!(
-            read(&absolute),
-            ltr,
-            "{name}: an absolute alignment stays put"
-        );
-        assert_eq!(
-            absolute.inherited_dependent_count::<Directionality>(),
-            0,
-            "{name}: an absolute alignment takes no dependency"
-        );
+        for (alignment, expected, what) in [
+            (
+                Some(Alignment::TOP_LEFT.into()),
+                ltr,
+                "an absolute alignment",
+            ),
+            (None, default, "the default alignment"),
+        ] {
+            let mut laid = lay_out(
+                Directionality::new(TextDirection::Rtl, make(alignment)),
+                loose(200.0),
+            );
+            assert_eq!(read(&laid), expected, "{name}: {what} stays put under RTL");
+            assert_eq!(
+                laid.inherited_dependent_count::<Directionality>(),
+                0,
+                "{name}: {what} takes no dependency"
+            );
+        }
     }
 }
