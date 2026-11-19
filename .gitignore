@@ -46,7 +46,7 @@ __pycache__/
 # Claude Code, the runtime CLAUDE.md is written for, keeps per-user settings
 # and whole worktree checkouts under .claude/. Two things there are shared: the
 # settings.json that enables the project's plugin, and the workflows a session
-# runs by name (the independent read of AGENTS.md "Before a merge").
+# runs by name (the read before a merge, the architecture tournament).
 /.claude/*
 !/.claude/settings.json
 !/.claude/workflows/
