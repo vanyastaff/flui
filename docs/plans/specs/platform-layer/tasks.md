@@ -6229,7 +6229,7 @@ GPU-память простаивающего или невидимого окн
   правило — `crates/flui-widgets/ARCHITECTURE.md`, «An obscured field copies nothing»). Прогоны
   защищённого ввода на macOS, iOS, Android и Windows и скрытой записи на macOS, iOS и Android —
   заметки строк parity «Secure text entry…» и «Concealed clipboard entries…».
-- [x] **LY100** — ветка `platform/scripted-feature-one-window-double`. **Что сделано.**
+- [x] **LY100** — ветка `platform/scripted-feature-one-window-double`, #2869. **Что сделано.**
   (1) `flui-app`: `driver` включает `flui-platform/scripted` (сценарный примитив, ADR-0154 п. 10),
   `testing` — `flui-native/scripted`. (2) Один двойник окна —
   `flui_platform::testing::MockWindow`, двойник трейта своего крейта (ADR-0243 D4), который
