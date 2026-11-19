@@ -31,6 +31,12 @@
 //! `Intrinsic { flex: None }`, and [`DataColumn::column_width`] overrides
 //! either with any [`TableColumnWidth`].
 //!
+//! # Direction
+//!
+//! The ambient [`Directionality`] orders the columns from its start edge, so the
+//! checkbox column leads on the right in RTL, and each cell's padding and
+//! alignment name the start and end edges rather than left and right.
+//!
 //! # Composition: per-cell `InkWell`, not a row-spanning ink responder
 //!
 //! A row-rect-spanning ink responder would walk up to the nearest
@@ -77,14 +83,14 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::{TextDirection, TextStyle};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, SizedBox, Table,
-    TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow, WidgetState,
-    WidgetStateProperty, WidgetStates,
+    Center, Container, DefaultTextStyle, Directionality, Padding, Semantics, SemanticsRole,
+    SizedBox, Table, TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow,
+    WidgetState, WidgetStateProperty, WidgetStates,
 };
 use flui_sdk::{geometry::EdgeInsets, painting::Alignment};
 
@@ -141,9 +147,9 @@ impl DataColumn {
         }
     }
 
-    /// Marks this column's cell contents as numeric: right-aligned instead
-    /// of left-aligned, and excluded from the "only text column gets flex"
-    /// heuristic.
+    /// Marks this column's cell contents as numeric: aligned to the end edge
+    /// of the ambient [`Directionality`] instead of its start edge, and
+    /// excluded from the "only text column gets flex" heuristic.
     #[must_use]
     pub fn numeric(mut self, numeric: bool) -> Self {
         self.numeric = numeric;
@@ -657,8 +663,26 @@ fn checkbox_column_width(margin_start: f64, margin_end: f64) -> f64 {
     margin_start + CHECKBOX_EDGE_SIZE + margin_end
 }
 
+/// Horizontal insets of `start` and `end` on the reading edges of `direction`.
+fn horizontal_insets(start: f64, end: f64, direction: TextDirection) -> EdgeInsets {
+    match direction {
+        TextDirection::Rtl => EdgeInsets::new(0.0, start, 0.0, end),
+        TextDirection::Ltr => EdgeInsets::new(0.0, end, 0.0, start),
+    }
+}
+
+/// A cell's content alignment: vertically centered against the end edge of
+/// `direction` when `numeric`, else against its start edge.
+fn cell_alignment(numeric: bool, direction: TextDirection) -> Alignment {
+    match (numeric, direction) {
+        (true, TextDirection::Ltr) | (false, TextDirection::Rtl) => Alignment::CENTER_RIGHT,
+        (false, TextDirection::Ltr) | (true, TextDirection::Rtl) => Alignment::CENTER_LEFT,
+    }
+}
+
 /// A data column's cell padding at `data_column_index` (0-based, excluding
-/// any leading checkbox column).
+/// any leading checkbox column), with its start inset on the reading start of
+/// `direction`.
 fn cell_padding(
     data_column_index: usize,
     column_count: usize,
@@ -666,6 +690,7 @@ fn cell_padding(
     checkbox_margin_is_set: bool,
     horizontal_margin: f64,
     column_spacing: f64,
+    direction: TextDirection,
 ) -> EdgeInsets {
     let start = if data_column_index == 0 {
         if display_checkbox_column && !checkbox_margin_is_set {
@@ -681,7 +706,7 @@ fn cell_padding(
     } else {
         column_spacing / 2.0
     };
-    EdgeInsets::new(0.0, end, 0.0, start)
+    horizontal_insets(start, end, direction)
 }
 
 /// The row divider's border side, reusing [`crate::divider`]'s own
@@ -761,10 +786,11 @@ fn header_checkbox_cell(
     on_change: impl Fn(&mut flui_sdk::view::EventContext<'_>, Option<bool>) + 'static,
     margin_start: f64,
     margin_end: f64,
+    direction: TextDirection,
 ) -> BoxedView {
     let checkbox = Checkbox::tristate(checked).on_changed(on_change);
     let content = Semantics::new().container(true).child(
-        Padding::new(EdgeInsets::new(0.0, margin_end, 0.0, margin_start))
+        Padding::new(horizontal_insets(margin_start, margin_end, direction))
             .child(Center::new().child(checkbox)),
     );
     TableCell::new(TableCellVerticalAlignment::Fill, content).boxed()
@@ -777,6 +803,7 @@ fn row_checkbox_cell(
     on_select_changed: Option<RowSelectCallback>,
     margin_start: f64,
     margin_end: f64,
+    direction: TextDirection,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
     let mut checkbox = Checkbox::new(selected);
@@ -786,7 +813,7 @@ fn row_checkbox_cell(
     let content: BoxedView = Semantics::new()
         .container(true)
         .child(
-            Padding::new(EdgeInsets::new(0.0, margin_end, 0.0, margin_start))
+            Padding::new(horizontal_insets(margin_start, margin_end, direction))
                 .child(Center::new().child(checkbox)),
         )
         .boxed();
@@ -798,21 +825,18 @@ fn row_checkbox_cell(
     TableCell::new(TableCellVerticalAlignment::Fill, wrapped).boxed()
 }
 
-/// A heading cell: the column's label, right-aligned when
-/// [`DataColumn::numeric`], at the resolved heading text style and row
+/// A heading cell: the column's label, end-aligned when [`DataColumn::numeric`]
+/// and start-aligned otherwise, at the resolved heading text style and row
 /// height (sorting arrow omitted — see the module docs).
 fn header_cell(
     label: BoxedView,
     numeric: bool,
     padding: EdgeInsets,
+    direction: TextDirection,
     text_style: TextStyle,
     height: f64,
 ) -> BoxedView {
-    let alignment = if numeric {
-        Alignment::CENTER_RIGHT
-    } else {
-        Alignment::CENTER_LEFT
-    };
+    let alignment = cell_alignment(numeric, direction);
     Semantics::new()
         .role(SemanticsRole::ColumnHeader)
         .child(
@@ -825,26 +849,23 @@ fn header_cell(
         .boxed()
 }
 
-/// A data cell: the cell's child, right-aligned when [`DataColumn::numeric`],
-/// at the resolved data text style and row height range, wrapped in an
-/// [`InkWell`] when the cell or its row is tappable (edit-icon/placeholder
-/// omitted — see the module docs).
+/// A data cell: the cell's child, end-aligned when [`DataColumn::numeric`] and
+/// start-aligned otherwise, at the resolved data text style and row height
+/// range, wrapped in an [`InkWell`] when the cell or its row is tappable
+/// (edit-icon/placeholder omitted — see the module docs).
 #[expect(clippy::too_many_arguments)] // per-cell parameter list; a patch struct would only relocate this
 fn data_cell(
     cell: &DataCell,
     numeric: bool,
     padding: EdgeInsets,
+    direction: TextDirection,
     text_style: TextStyle,
     min_height: f64,
     max_height: f64,
     row_toggle: Option<CellTapCallback>,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
-    let alignment = if numeric {
-        Alignment::CENTER_RIGHT
-    } else {
-        Alignment::CENTER_LEFT
-    };
+    let alignment = cell_alignment(numeric, direction);
     let constraints = BoxConstraints::new(0.0, f64::INFINITY, min_height, max_height);
     let content: BoxedView = Container::new()
         .padding(padding)
@@ -893,6 +914,9 @@ impl StatelessView for DataTable {
         // `row.cells[col_index]` below cannot be out of range.
         let theme = Theme::of(ctx);
         let style = resolve_style(self, &theme);
+        // Read in build: the cells resolve their start and end edges against it
+        // before `Container` and `Padding`, which take physical geometry.
+        let direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
 
         let any_row_selectable = self.rows.iter().any(|row| row.on_select_changed.is_some());
         let display_checkbox_column = self.show_checkbox_column && any_row_selectable;
@@ -948,6 +972,7 @@ impl StatelessView for DataTable {
                 },
                 style.checkbox_margin_start,
                 style.checkbox_margin_end,
+                direction,
             ));
         }
         for (index, column) in self.columns.iter().enumerate() {
@@ -958,11 +983,13 @@ impl StatelessView for DataTable {
                 style.checkbox_margin_is_set,
                 style.horizontal_margin,
                 style.column_spacing,
+                direction,
             );
             heading_cells.push(header_cell(
                 column.label.clone(),
                 column.numeric,
                 padding,
+                direction,
                 style.heading_text_style.clone(),
                 style.heading_row_height,
             ));
@@ -993,6 +1020,7 @@ impl StatelessView for DataTable {
                     row.on_select_changed.clone(),
                     style.checkbox_margin_start,
                     style.checkbox_margin_end,
+                    direction,
                     overlay.clone(),
                 ));
             }
@@ -1011,11 +1039,13 @@ impl StatelessView for DataTable {
                     style.checkbox_margin_is_set,
                     style.horizontal_margin,
                     style.column_spacing,
+                    direction,
                 );
                 cells.push(data_cell(
                     &row.cells[col_index],
                     column.numeric,
                     padding,
+                    direction,
                     style.data_text_style.clone(),
                     style.data_row_min_height,
                     style.data_row_max_height,

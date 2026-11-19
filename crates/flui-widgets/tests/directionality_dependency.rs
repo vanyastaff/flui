@@ -238,13 +238,13 @@ pub(crate) fn a_render_update_panic_on_a_dependency_rebuild_shows_the_error_view
     assert_eq!(log.borrow().last(), Some(&Some(TextDirection::Rtl)));
 }
 
-/// Flipping the ambient direction above a preserved `Row` and `Align` reaches
+/// Flipping the ambient direction above a preserved `Row`, `Align` and `Table` reaches
 /// their render objects as a dependency rebuild: the same render objects (no
 /// remount) lay their children out from the other edge.
 pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() {
     use crate::media_query_fields::StaticChild;
     use flui_view::ViewExt;
-    use flui_widgets::Row;
+    use flui_widgets::{Row, Table, TableRow};
 
     let row = || StaticChild {
         inner: Row::new((SizedBox::new(50.0, 50.0), SizedBox::new(30.0, 50.0))).boxed(),
@@ -254,10 +254,19 @@ pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() 
             .child(SizedBox::new(40.0, 40.0))
             .boxed(),
     };
+    // Two columns of the default `Flex(1.0)`, so each is 100 wide.
+    let table = || StaticChild {
+        inner: Table::new(vec![TableRow::new(vec![
+            SizedBox::new(50.0, 50.0).boxed(),
+            SizedBox::new(30.0, 50.0).boxed(),
+        ])])
+        .boxed(),
+    };
 
     for (name, view, ltr_x, rtl_x, render_type) in [
         ("Row", row().boxed(), 0.0, 150.0, "RenderFlex"),
         ("Align", align().boxed(), 0.0, 160.0, "RenderAlign"),
+        ("Table", table().boxed(), 0.0, 100.0, "RenderTable"),
     ] {
         let mut laid = lay_out(
             Directionality::new(TextDirection::Ltr, view.clone()),

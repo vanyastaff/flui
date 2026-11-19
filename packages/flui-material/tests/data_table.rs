@@ -111,6 +111,67 @@ pub fn checkbox_margin_override_beats_the_theme_without_changing_default_spacing
     assert_eq!(table_cell_insets(None, None), [12.0, 12.0, 54.0]);
 }
 
+/// The checkbox column leads from the reading start edge, a text label sits
+/// its start padding in from that edge, and a numeric label its end padding
+/// in from the other one: in RTL every inset lands on the mirrored side.
+pub fn a_data_table_lays_out_from_the_reading_start_edge() {
+    use flui_sdk::painting::TextDirection;
+    use flui_sdk::widgets::Directionality;
+
+    // Per direction: whether the checkbox column is left of the text column,
+    // the text label's inset from its cell's start edge, and the numeric
+    // label's inset from its cell's end edge.
+    let measure = |direction: TextDirection| {
+        let table = DataTable::new(
+            vec![
+                text_column("Name").column_width(TableColumnWidth::Fixed(140.0)),
+                text_column("Age")
+                    .numeric(true)
+                    .column_width(TableColumnWidth::Fixed(120.0)),
+            ],
+            vec![
+                DataRow::new(vec![text_cell("Ada"), text_cell("36")]).on_select_changed(|_, _| {}),
+            ],
+        );
+        let laid = common::lay_out(
+            Directionality::new(direction, themed(ThemeData::light(), table)),
+            loose(400.0),
+        );
+        let render_table = laid.find_by_render_type("RenderTable");
+        let checkbox_cell = laid.child(render_table, 0);
+        let name_cell = laid.child(render_table, 1);
+        let age_cell = laid.child(render_table, 2);
+        let name = laid
+            .find_text("Name")
+            .expect("the text heading is laid out");
+        let age = laid
+            .find_text("Age")
+            .expect("the numeric heading is laid out");
+        let left = |id| laid.absolute_offset(id).dx;
+        let right = |id| laid.absolute_offset(id).dx + laid.size(id).width;
+        let (start_inset, end_inset) = match direction {
+            TextDirection::Ltr => (left(name) - left(name_cell), right(age_cell) - right(age)),
+            TextDirection::Rtl => (right(name_cell) - right(name), left(age) - left(age_cell)),
+        };
+        (
+            left(checkbox_cell) < left(name_cell),
+            start_inset,
+            end_inset,
+        )
+    };
+
+    assert_eq!(
+        measure(TextDirection::Ltr),
+        (true, 12.0, 24.0),
+        "LTR: the checkbox column on the left, half the margin after it, the full margin at the end"
+    );
+    assert_eq!(
+        measure(TextDirection::Rtl),
+        (false, 12.0, 24.0),
+        "RTL: the same insets from the mirrored edges, the checkbox column on the right"
+    );
+}
+
 // =============================================================================
 // Selection dispatch
 // =============================================================================
