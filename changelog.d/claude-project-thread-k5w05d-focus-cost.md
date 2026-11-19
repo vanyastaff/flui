@@ -1,7 +1,7 @@
 ### Changed
 
-- A focusable control costs less to mount: a `RawButton` over a `Text` leaves 264 fewer bytes
-  live and makes one allocation fewer. A focus node keeps its key handler with its other rarely
+- A focusable control costs less to mount: a `RawButton` over a `Text` mounts with 30
+  allocations and 3882 bytes, down from 31 and 4146. A focus node keeps its key handler with its other rarely
   set registrations, a focus host keeps its key-handler and traversal registrations behind one
   box, a focus configuration keeps its handlers and traversal links behind one shared pointer,
   and the bindings a focus host records on its node live in the state its listener already
