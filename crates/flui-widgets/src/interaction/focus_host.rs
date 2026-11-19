@@ -57,7 +57,7 @@ struct Shared {
     rebuild: RebuildHandle,
     /// The node the listener reads, which a live replacement moves before
     /// the focus tree announces it.
-    observed_node: RefCell<Weak<FocusNode>>,
+    observed_node: Cell<Weak<FocusNode>>,
     /// Last `has_focus` value for the currently observed node.
     was_focused: Cell<bool>,
     /// Inherited-provider revision advanced by node notifications.
@@ -66,9 +66,9 @@ struct Shared {
     /// the *latest* one, so `update` writes here rather than reinstalling the
     /// listener. A handler captured by value would keep firing the one from
     /// the build that mounted it.
-    on_focus_change: RefCell<Option<FocusChangeHandler>>,
+    on_focus_change: Cell<Option<FocusChangeHandler>>,
     /// The current `on_visible_focus_change` handler, read the same way.
-    on_visible_focus_change: RefCell<Option<FocusChangeHandler>>,
+    on_visible_focus_change: Cell<Option<FocusChangeHandler>>,
     /// Generation-checked ownership of the host's attachment: holding the
     /// token prevents a stale lifecycle callback from detaching a newer
     /// host. Kept here so the assistive focus request can tell whether this
@@ -226,14 +226,24 @@ impl FocusConfig {
     }
 }
 
+/// A copy of what `cell` holds, left in place. The host's cells hold `Rc`s
+/// and `Weak`s, whose clone runs no user code, so no borrow can be open
+/// while a callback read from one runs.
+fn cloned<T: Clone + Default>(cell: &Cell<T>) -> T {
+    let value = cell.take();
+    let copy = value.clone();
+    cell.set(value);
+    copy
+}
+
 /// What a shown focus on a hosted node is revealed through: the nearest
 /// reveal scope above the element and the node's live geometry, both acquired
 /// in lifecycle hooks, and whether the node showed the primary focus at the
 /// last notification.
 #[derive(Default)]
 struct RevealSlot {
-    target: RefCell<Option<SharedRevealTarget>>,
-    rect: RefCell<Option<RectProvider>>,
+    target: Cell<Option<SharedRevealTarget>>,
+    rect: Cell<Option<RectProvider>>,
     shown: Cell<bool>,
 }
 
@@ -242,8 +252,8 @@ impl RevealSlot {
     /// the scope above. Nothing to reveal before the node's first layout.
     /// Neither cell stays borrowed while the scope runs.
     fn reveal(&self) {
-        let target = self.target.borrow().clone();
-        let provider = self.rect.borrow().clone();
+        let target = cloned(&self.target);
+        let provider = cloned(&self.rect);
         let (Some(target), Some(provider)) = (target, provider) else {
             return;
         };
@@ -309,11 +319,11 @@ impl FocusHost {
         let shared = Rc::new(Shared {
             writer: ctx.writer_source(),
             rebuild: ctx.rebuild_handle(),
-            observed_node: RefCell::new(Rc::downgrade(&node)),
+            observed_node: Cell::new(Rc::downgrade(&node)),
             was_focused: Cell::new(false),
             node_revision: Cell::new(0),
-            on_focus_change: RefCell::new(config.on_focus_change.clone()),
-            on_visible_focus_change: RefCell::new(config.on_visible_focus_change.clone()),
+            on_focus_change: Cell::new(config.on_focus_change.clone()),
+            on_visible_focus_change: Cell::new(config.on_visible_focus_change.clone()),
             attachment: RefCell::new(None),
             reveal: RevealSlot::default(),
         });
@@ -358,7 +368,7 @@ impl FocusHost {
 
             // The host holds the node it observes; a notification that
             // arrives after the host let it go has nothing to report.
-            let Some(node) = shared.observed_node.borrow().upgrade() else {
+            let Some(node) = cloned(&shared.observed_node).upgrade() else {
                 return;
             };
             let now_focused = node.has_focus();
@@ -370,10 +380,10 @@ impl FocusHost {
             let mut failure = FirstPanic::new();
             if shared.was_focused.replace(now_focused) != now_focused {
                 // FocusNode clones its listener list before dispatch, so
-                // user code may synchronously move focus. Clone the
-                // callback out of the RefCell before invoking it for the
-                // same re-entrancy reason.
-                let handler = shared.on_focus_change.borrow().clone();
+                // user code may synchronously move focus. The callback is
+                // cloned out of its cell before it runs for the same
+                // re-entrancy reason: an `update` it causes replaces the cell.
+                let handler = cloned(&shared.on_focus_change);
                 if let Some(handler) = handler {
                     failure.contain(|| shared.writer.write(|ctx| handler(ctx, now_focused)));
                 }
@@ -382,7 +392,7 @@ impl FocusHost {
             // compares against this one's value.
             let was_shown = shared.reveal.shown.replace(now_shown);
             if was_shown != now_shown {
-                let handler = shared.on_visible_focus_change.borrow().clone();
+                let handler = cloned(&shared.on_visible_focus_change);
                 if let Some(handler) = handler {
                     failure.contain(|| shared.writer.write(|ctx| handler(ctx, now_shown)));
                 }
@@ -455,8 +465,8 @@ impl FocusHost {
             self.node.register_rect_provider(Rc::clone(&rect_provider));
         // Kept here for the reveal, and for a replacement node to receive
         // the same one without reacquiring lifecycle-only context.
-        *self.shared.reveal.rect.borrow_mut() = Some(rect_provider);
-        *self.shared.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
+        self.shared.reveal.rect.set(Some(rect_provider));
+        self.shared.reveal.target.set(FocusRevealScope::of(ctx));
         self.rect_provider_registration = Some(rect_provider_registration);
         let attachment = parent
             .attach_node(&self.node)
@@ -492,21 +502,24 @@ impl FocusHost {
             self.parent = Some(parent);
         }
         self.record(record);
-        *self.shared.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
+        self.shared.reveal.target.set(FocusRevealScope::of(ctx));
     }
 
     /// The owner's `did_update_view`: follow a new configuration.
     pub(crate) fn update(&mut self, config: &FocusConfig) {
         // Install the current callbacks before any node replacement can emit
         // a focus edge. The node subscription always reads these cells.
-        self.shared
-            .on_focus_change
-            .borrow_mut()
-            .clone_from(&config.on_focus_change);
-        self.shared
-            .on_visible_focus_change
-            .borrow_mut()
-            .clone_from(&config.on_visible_focus_change);
+        // The replaced handlers drop once the cells hold the new ones: a
+        // capture's destructor is user code.
+        let replaced = (
+            self.shared
+                .on_focus_change
+                .replace(config.on_focus_change.clone()),
+            self.shared
+                .on_visible_focus_change
+                .replace(config.on_visible_focus_change.clone()),
+        );
+        drop(replaced);
 
         // Against the hosted node, not the previous configuration: a
         // replacement refused earlier left the node behind the one it was
@@ -528,7 +541,7 @@ impl FocusHost {
                 &self.shared,
             );
             // The provider the reveal reads is the one registered on the node.
-            let provider = self.shared.reveal.rect.borrow().clone();
+            let provider = cloned(&self.shared.reveal.rect);
             let replacement_rect_provider_registration =
                 provider.map(|provider| replacement.register_rect_provider(provider));
             let replacement_context_registration = self
@@ -541,10 +554,10 @@ impl FocusHost {
             // its stable-tree notification. Keep the previous `has_focus`
             // bit: when a focused descendant moves with the subtree, both old
             // and replacement nodes have focus and no synthetic edge fires.
-            let previous = std::mem::replace(
-                &mut *self.shared.observed_node.borrow_mut(),
-                Rc::downgrade(&replacement),
-            );
+            let previous = self
+                .shared
+                .observed_node
+                .replace(Rc::downgrade(&replacement));
             // The attachment stays in its cell while the tree answers, so a
             // refusal leaves it where it was.
             let replaced = self
@@ -567,7 +580,7 @@ impl FocusHost {
                         "Focus kept its node: the replacement was refused during a focus \
                          notification"
                     );
-                    *self.shared.observed_node.borrow_mut() = previous;
+                    self.shared.observed_node.set(previous);
                     drop((
                         replacement_focus_subscription,
                         replacement_key_handler_registration,
@@ -645,8 +658,8 @@ impl FocusHost {
             registration.relinquish();
         }
         drop(self.focus_subscription.take());
-        self.shared.reveal.target.borrow_mut().take();
-        self.shared.reveal.rect.borrow_mut().take();
+        drop(self.shared.reveal.target.take());
+        drop(self.shared.reveal.rect.take());
         // The generation-checked attachment is the sole detach authority:
         // an old host cannot detach a node that a newer host adopted.
         if let Some(attachment) = self.shared.attachment.take() {
