@@ -3,7 +3,7 @@
 - Admit effect-heavy scenes by prepared resources and a separate cumulative frame allowance instead of sharing the prior-work backlog limit.
 - Serialize concurrent captures on one headless renderer through readback, and preserve the spare target when an invalidated partial frame needs a full retry.
 - Merge compatible adjacent tessellated batches while preserving intervening primitive order and clip boundaries.
-- Refresh immutable viewport bindings for resized offscreen-only frames, expose quarantined domains to native recovery, and discard failed GPU-profiler frames before retry.
+- Refresh immutable viewport bindings for resized offscreen-only frames, expose quarantined domains to native recovery.
 - Preserve nested opacity and clipped children, and earlier siblings, inside blur, morphology and composed image-filter layers.
 - Keep image allocation identities alive while cached or recorded, and distinguish filtered images with equal pixels but different dimensions.
 - Preserve low-alpha texture pixels instead of discarding visible contributions below one percent alpha.

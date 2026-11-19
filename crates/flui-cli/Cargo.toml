@@ -160,6 +160,9 @@ flui-hot-reload = { path = "../../packages/flui-hot-reload" }
 # `app_id::executable_class` to its namesake; path-only, so dropped from the published
 # manifest like the line above.
 flui-foundation = { path = "../flui-foundation" }
+# Only for the test holding the packaged asset keys (`build::assets`) to
+# `flui_platform::assets::AssetKey`'s allow-list; path-only like the lines above.
+flui-platform = { path = "../flui-platform" }
 # Goldens of the generated Android manifest and the scaffolded Gradle script.
 insta = { workspace = true }
 
