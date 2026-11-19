@@ -2850,9 +2850,9 @@ mod tests {
     // algorithm) order, which is exactly backwards from the front-to-back order
     // that `OcclusionTracker::add_opaque` requires for sound culling.
     //
-    // Concretely: a full-screen opaque `CanvasLayer` background (child[0]) was
+    // Concretely: a full-screen opaque picture background (child[0]) was
     // registered as opaque AFTER rendering, then a sibling `ImageFilterLayer`
-    // (child[1]) wrapping a sub-region `CanvasLayer` had that inner canvas
+    // (child[1]) wrapping a sub-region picture had that inner picture
     // culled by `is_occluded` — even though it was drawn on top and fully visible.
     //
     // The fix removes the unsound occlusion pass from the layer walk (`layer_walk::record_scene`)
@@ -2921,7 +2921,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_foundation::geometry::{Offset, Rect, Size};
         use flui_layer::{
-            CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer,
+            FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer, PictureLayer,
         };
         use flui_painting::styling::Color;
         use flui_painting::{Canvas, paint::Paint};
@@ -2970,10 +2970,8 @@ mod tests {
             Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
-        let _child_id = tree.push_child(
-            follower_id,
-            Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))),
-        );
+        let _child_id =
+            tree.push_child(follower_id, Layer::from(PictureLayer::new(canvas.finish())));
 
         let render_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Follower GPU Test Texture"),
@@ -3062,7 +3060,7 @@ mod tests {
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
         use flui_foundation::geometry::Rect;
-        use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
+        use flui_layer::{Layer, LayerTree, PictureLayer, ShaderMaskLayer};
         use flui_painting::{Canvas, paint::Paint, paint::Shader};
         use flui_painting::{paint::BlendMode, styling::Color};
 
@@ -3085,10 +3083,7 @@ mod tests {
 
         let mut canvas = Canvas::new();
         canvas.draw_rect(bounds, &Paint::fill(Color::rgba(255, 0, 0, 255)));
-        let _child_id = tree.push_child(
-            mask_id,
-            Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))),
-        );
+        let _child_id = tree.push_child(mask_id, Layer::from(PictureLayer::new(canvas.finish())));
 
         let render_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ShaderMask Root GPU Test Texture"),

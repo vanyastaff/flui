@@ -440,6 +440,13 @@ impl StorageSlot {
     }
 
     /// Release the run's storage at loop exit, leaving none installed.
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "the owner host's clear guard releases the storage, and the web host has none"
+        )
+    )]
     pub(crate) fn take(&self) -> Option<Arc<dyn Storage>> {
         self.storage
             .replace(Err(Unsupported::of::<StorageCapability>(

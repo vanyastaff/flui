@@ -62,21 +62,6 @@ impl Inspect for Layer {
                 out.field("content", &layer.picture().fingerprint())
                     .level(Level::Detail);
             }
-            Layer::Canvas(layer) => {
-                out.field("commands", &layer.display_list().len());
-                out.field("content", &layer.display_list().fingerprint())
-                    .level(Level::Detail);
-            }
-            Layer::Texture(layer) => {
-                out.field("texture_id", &layer.texture_id().get());
-                out.field("opacity", &layer.opacity()).unit(Unit::Fraction);
-                out.field("frozen", &layer.is_frozen());
-                out.field("filter_quality", &layer.filter_quality());
-            }
-            Layer::PlatformView(layer) => {
-                out.field("view_id", &layer.view_id().value());
-                out.field("hit_test_behavior", &layer.hit_test_behavior());
-            }
             Layer::PerformanceOverlay(layer) => {
                 out.field("options", &layer.options().bits());
                 out.field("commands", &layer.readout().len());

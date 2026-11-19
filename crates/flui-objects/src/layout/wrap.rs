@@ -318,6 +318,18 @@ impl RenderWrap {
         self
     }
 
+    /// Updates the vertical direction and reports layout when changed.
+    pub fn set_vertical_direction(
+        &mut self,
+        vertical_direction: VerticalDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.vertical_direction == vertical_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.vertical_direction = vertical_direction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
     /// `(flip_main, flip_cross)` for this wrap's own axes.
     ///
     /// The reading
@@ -676,6 +688,9 @@ impl flui_foundation::inspect::Inspect for RenderWrap {
             .unit(flui_foundation::inspect::Unit::LogicalPx)
             .default(&0.0_f64);
         out.field("cross_axis_alignment", &self.cross_axis_alignment);
+        out.field("text_direction", &self.text_direction);
+        out.field("vertical_direction", &self.vertical_direction)
+            .default(&VerticalDirection::Down);
         out.field("clip_behavior", &self.clip_behavior);
         out.field("has_visual_overflow", &self.has_visual_overflow);
     }

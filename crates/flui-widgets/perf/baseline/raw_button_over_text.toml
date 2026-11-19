@@ -3,10 +3,10 @@
 
 [raw_button_over_text]
 allocations = 31
-bytes = 4269
+bytes = 4146
 elements = 2
 reallocations = 2
 render_nodes = 1
 text_allocations = 50
-text_bytes = 8135
+text_bytes = 8012
 text_reallocations = 2

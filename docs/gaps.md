@@ -338,7 +338,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Apps that embed a map, browser or player · **Parity:** [Windows](platform-parity.md#windows)
 
-- Not in the contract; the design shapes compositing, hit-testing and accessibility.
+- Not in the contract, and the scene has no form for one: the ADR that brings native views decides how one sits in the scene, composites with the GPU surface, takes hit tests and joins the semantics tree. The scene keeps no placeholder layer for it before then.
 - Needs an owner decision.
 
 ### Window looks
@@ -699,6 +699,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - A node's stored subtree bound is kept in its own space, and a clip in its content that cuts content away whole keeps the strip within one device pixel of that content, measured by the transforms and followers inside the content ([ADR-0304](adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) §4). A transform above the node that scales by less than 1 is not known there and is taken at 1, so content up to `1/scale` units short of the clip falls outside the strip. The cull then drops the node, and the damage that reads the stored bound misses the pixel the clip's anti-aliased edge shares with that content: a placement of the node, a slot added for it, a composited update of an effect above it. A partial frame leaves that pixel stale. A repaint inside the node and a change of the clip itself map through the whole chain and take the pixel.
 - `an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares` (`crates/flui-layer/tests/scene_damage.rs`) pins the cull's miss and a placement's.
 - The entry closes when a stored bound carries what the surface map needs to keep the strip under any scale, and that test asserts the cull keeps the node and the placement damages the pixel.
+
+### An overflow clip cuts off paint but not semantics or input regions
+
+> **Environments:** all · **Who it hurts:** Screen-reader users, who reach a child a `Stack`, `Wrap` or `FittedBox` clips out of view, and apps whose clipped-off child reports an input region (a system-gesture exclusion) the OS then honours · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `RenderStack`, `RenderIndexedStack`, `RenderWrap`, `RenderFittedBox`, `RenderAnimatedSize` and `RenderConstraintsTransformBox` clip their children's paint while the last layout overflowed and `clip_behavior` is not `Clip::None`. None of them describes that clip through `describe_approximate_paint_clip`, which is where the semantics and input-region walks read a clip, so the cut-off child keeps its node and its regions. `RenderClip` and the viewports already route their clip there.
+- The overflow flag is cleared at the start of layout, so a semantics pass after a layout that exits early would read a flag that disagrees with the committed geometry. The overflow answer needs one owner, written when layout commits, before semantics may read it.
+- The entry closes when each of these objects gives paint, semantics and the input regions one clip answer, with a row per object for the semantics and region cut-off and one for the early-exit order.
 
 ### Two rest distances for logical pixels
 

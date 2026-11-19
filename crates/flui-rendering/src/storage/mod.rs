@@ -17,8 +17,7 @@
 //!             ├─ render_object: Box<dyn RenderObject<P>>  (owned by value, no lock)
 //!             ├─ state: RenderState<BoxProtocol>
 //!             │    ├─ flags: AtomicRenderFlags
-//!             │    ├─ geometry: Option<ProtocolGeometry<P>>
-//!             │    ├─ constraints: Option<ProtocolConstraints<P>>
+//!             │    ├─ layout: P::LayoutRecord  (last geometry and constraints)
 //!             │    └─ offset: OffsetCell
 //!             └─ links: NodeLinks
 //!                  ├─ parent: Option<RenderId>
@@ -77,6 +76,7 @@ pub use links::NodeLinks;
 pub use node::RenderNode;
 pub use state::RenderState;
 pub use state::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
+pub(crate) use state::{BoxLayoutRecord, LayoutRecord, SliverLayoutRecord};
 // Type aliases for convenience
 pub(crate) use node_slab::TreeLease;
 pub use state::{BoxRenderState, SliverRenderState};

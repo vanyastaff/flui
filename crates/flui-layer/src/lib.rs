@@ -85,12 +85,11 @@ pub use damage::{
 };
 pub use flui_foundation::LayerId;
 pub use layer::{
-    AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, CanvasLayer,
-    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
-    FollowerLayer, ImageFilterLayer, Layer, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer,
+    AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, ClipPathLayer,
+    ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer,
+    ImageFilterLayer, Layer, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer,
     PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample, PictureLayer,
-    PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer,
-    TextureLayer, TransformLayer,
+    SemanticLabel, ShaderMaskLayer, TransformLayer,
 };
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::{

@@ -1218,20 +1218,19 @@ pub(crate) fn damage_under_a_backdrop_takes_what_it_reads() {
 }
 
 /// New images of a texture damage the device footprint of each attached
-/// entry that draws it, a chunk's texture draw and a texture layer alike,
-/// closed over the backdrop that reads one of them, and nothing else: not a
-/// sibling, not an unattached node that draws it, nothing for a texture no
-/// entry draws (ADR-0304 §9).
+/// entry that draws it, closed over the backdrop that reads one of them, and
+/// nothing else: not a sibling, not an unattached node that draws it, nothing
+/// for a texture no entry draws (ADR-0304 §9).
 pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
     let (texture, other) = (
         flui_painting::paint::TextureId::new(7),
         flui_painting::paint::TextureId::new(8),
     );
-    let drawing = |version: ContentVersion| {
+    let drawing = |version: ContentVersion, at: Rect<f64>| {
         let mut canvas = Canvas::new();
         canvas.draw_texture(
             texture,
-            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+            at,
             None,
             flui_painting::paint::FilterQuality::Low,
             1.0,
@@ -1245,6 +1244,7 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         )));
         content.finish()
     };
+    let small = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
     let mut owner = SceneOwner::new();
     let mut writer = owner.writer();
     let root = writer.current().root();
@@ -1255,24 +1255,18 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         writer.mint_node(),
     );
     let version = writer.next_content_version().expect("a version");
-    writer.push(publish(a, drawing(version)));
-    let mut layer = BoundaryContent::builder();
-    layer.push_effect(
-        Layer::from(flui_layer::TextureLayer::new(
-            texture,
-            Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
-        )),
-        RenderId::new(3),
-        0,
-    );
-    layer.pop_effect();
-    writer.push(publish(b, layer.finish()));
+    writer.push(publish(a, drawing(version, small)));
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(
+        b,
+        drawing(version, Rect::from_xywh(0.0, 0.0, 30.0, 30.0)),
+    ));
     let version = writer.next_content_version().expect("a version");
     let mut plain = BoundaryContent::builder();
     plain.chunk(chunk(4, version, Rect::from_xywh(0.0, 0.0, 30.0, 30.0)));
     writer.push(publish(c, plain.finish()));
     let version = writer.next_content_version().expect("a version");
-    writer.push(publish(loose, drawing(version)));
+    writer.push(publish(loose, drawing(version, small)));
     let mut top = BoundaryContent::builder();
     top.slot(a);
     top.slot(b);
@@ -1305,7 +1299,7 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
     );
     assert!(
         covered(&damage, covering(283.0, 283.0, 357.0, 357.0)),
-        "the texture layer and what the backdrop over it reads: {damage:?}"
+        "the user under the backdrop and what the backdrop reads: {damage:?}"
     );
     let sibling = covering(500.0, 100.0, 530.0, 130.0);
     assert!(
