@@ -80,6 +80,54 @@ fn chip_only_point() -> (f64, f64) {
 // (b) Delete-icon vs. chip-body tap separation — nested InkWells.
 // ------------------------------------------------------------------
 
+/// Under a right-to-left `Directionality` the chip's row runs from the right:
+/// the delete icon sits against the left edge, a tap there deletes, and a tap
+/// near the right edge presses the chip.
+pub fn a_right_to_left_chip_puts_its_delete_icon_on_the_left() {
+    use flui_sdk::painting::TextDirection;
+    use flui_sdk::widgets::Directionality;
+
+    let presses = Rc::new(RefCell::new(0_u32));
+    let deletions = Rc::new(RefCell::new(0_u32));
+    let press_counter = Rc::clone(&presses);
+    let delete_counter = Rc::clone(&deletions);
+
+    let laid = lay_out(
+        Directionality::new(
+            TextDirection::Rtl,
+            themed(
+                Chip::new(Text::new("Tag"))
+                    .on_pressed(move |_ctx| {
+                        *press_counter.borrow_mut() += 1;
+                    })
+                    .on_deleted(move |_ctx| {
+                        *delete_counter.borrow_mut() += 1;
+                    }),
+            ),
+        ),
+        loose(300.0),
+    );
+    let size = container_size(&laid);
+    let tap = |x: f64| {
+        laid.dispatch_pointer_down(x, size.height / 2.0);
+        laid.dispatch_pointer_up(x, size.height / 2.0);
+    };
+
+    tap(CONTAINER_PADDING + CHIP_ICON_SIZE / 2.0);
+    assert_eq!(
+        (*deletions.borrow(), *presses.borrow()),
+        (1, 0),
+        "the delete icon is at the left edge, and a tap on it only deletes"
+    );
+
+    tap(size.width - CONTAINER_PADDING - 2.0);
+    assert_eq!(
+        (*deletions.borrow(), *presses.borrow()),
+        (1, 1),
+        "the right edge is the chip's body, and a tap there only presses"
+    );
+}
+
 /// The shared root arena installed by the binding makes the nested delete
 /// target and chip body compete exactly as they do in a production `UiRuntime`.
 pub fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
