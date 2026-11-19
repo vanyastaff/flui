@@ -44,7 +44,7 @@ use flui_rendering::{
         BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
         BoxLayoutContext, PaintContext,
     },
-    hit_testing::CursorRequest,
+    hit_testing::{Cursor, CursorRequest},
     layer::LayerLink,
     parent_data::BoxParentData,
     semantics::{SemanticsAnchor, SemanticsConfiguration, SemanticsRegions, TextContent},
@@ -877,7 +877,7 @@ impl RenderBox for RenderParagraph {
             ctx.set_self_hit_pointer_target(route.pointer_target());
         }
         if let Some(cursor) = run.cursor.or(route.map(|_| CursorIcon::Pointer)) {
-            ctx.set_self_hit_cursor(CursorRequest::Icon(cursor));
+            ctx.set_self_hit_cursor(CursorRequest::Show(Cursor::Icon(cursor)));
         }
         true
     }

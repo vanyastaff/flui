@@ -2309,8 +2309,8 @@ pub(crate) mod ios {
 
     use flui_platform::EventTime;
     use flui_platform::pointer::{
-        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerKind,
-        PointerPosition, PointerRole, PointerSource, ScrollEvent,
+        MotionAcceleration, MotionDelta, PenOrientation, PenTool, PointerButton, PointerEvent,
+        PointerId, PointerKind, PointerPosition, PointerRole, PointerSource, ScrollEvent,
     };
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
@@ -2358,6 +2358,26 @@ pub(crate) mod ios {
             stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
             TouchInputState::trackpad(self, gesture, state, location, stamp)
+        }
+
+        /// GameController reports the mouse's own counts, before the
+        /// system's pointer speed (the lock owner skips a motion of nothing,
+        /// `pointer_lock::locked_delta`).
+        fn locked_motion(&mut self, (dx, dy): (f64, f64)) -> Vec<PlatformInput> {
+            let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+                return Vec::new();
+            };
+            self.contacts
+                .raw_motion(
+                    NativeSurface::default(),
+                    None,
+                    CURSOR,
+                    ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns())),
+                    delta,
+                    MotionAcceleration::None,
+                )
+                .into_iter()
+                .collect()
         }
     }
 

@@ -14,7 +14,7 @@ use flui_interaction::pointer::{
     MouseTracker, PointerMotionKind, PointerRouteHandler, PointerRouter,
 };
 use flui_interaction::{
-    events::CursorIcon,
+    events::{Cursor, CursorIcon},
     ids::PointerId,
     pointer::{HitTestEntry, HitTestResult, RenderId},
 };
@@ -91,10 +91,12 @@ fn bench_cursor_changes(c: &mut Criterion) {
         tracker.set_cursor_change_callback(Rc::new(move |source, cursor| {
             black_box(source);
             calls.set(calls.get() + 1);
-            if cursor == CursorIcon::Text {
-                texts.set(texts.get() + 1);
+            if let Cursor::Icon(icon) = cursor {
+                if *icon == CursorIcon::Text {
+                    texts.set(texts.get() + 1);
+                }
+                last.set(*icon);
             }
-            last.set(cursor);
         }));
         // Admit the physical device once. Each measured pair returns to Arrow.
         tracker.update_with_motion(&events[0], PointerMotionKind::Hover, &arrow);
