@@ -71,7 +71,7 @@ cross-crate контракт оформляется ADR.
   (`crates/flui-platform-api/src/window.rs:193`–`198`) и `CloseRequested` после вето (`window.rs:305`);
   вето регистрируется только через `AppConfig::close_request_handler`
   (`crates/flui-app/src/app/config.rs:419`), web и Android его не спрашивают
-  (`crates/flui-app/src/app/close_request.rs:70`), flush при закрытии отложен (`close_request.rs:52`–`55`).
+  (`crates/flui-runtime/src/owner_turn/close.rs`), flush при закрытии отложен (`crates/flui-runtime/src/owner_turn/close.rs`).
   Widget видит `AppLifecycleState` (`Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached`,
   `crates/flui-scheduler/src/frame.rs:230`) через `lifecycle_handle` (`build_context.rs:537`–`542`).
   Headless-хост (`flui_testing::HeadlessHost`): окно уходит в `Hidden` через `set_window_visible`,

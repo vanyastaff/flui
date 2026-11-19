@@ -45,7 +45,7 @@ pub use flui_app::ExitPolicy;
 #[cfg(not(target_os = "ios"))]
 pub use flui_app::{
     CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
-    request_presentation_close, window_handle,
+    PresentationCloseError, request_presentation_close, window_handle,
 };
 
 // Windows an application opens and controls while it runs.

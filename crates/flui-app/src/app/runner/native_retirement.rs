@@ -2,8 +2,8 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use crate::app::close_request::CloseRequestHandler;
 use flui_foundation::panic::FirstPanic;
+use flui_runtime::owner_turn::CloseRequestHandler;
 
 use super::frame_driver::FrameDriver;
 

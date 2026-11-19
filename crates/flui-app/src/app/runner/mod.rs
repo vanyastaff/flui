@@ -109,6 +109,27 @@ pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
 
+/// The window system this runner was built for: the browser's page on
+/// `wasm32`, the platform's window system elsewhere. The one place a runner
+/// takes it from the compile target; its built-in capabilities, its close
+/// vetoes, its session end and its root platform convention all read it.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn window_system() -> flui_runtime::window_system::WindowSystem {
+    flui_runtime::window_system::WindowSystem::Browser
+}
+
+/// The window system this runner was built for: its platform's. The one
+/// place a runner takes it from the compile target.
+#[cfg(not(target_arch = "wasm32"))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the runner's windows are those of the platform it was built for, and it is the \
+              root default of PlatformConvention"
+)]
+pub(crate) fn window_system() -> flui_runtime::window_system::WindowSystem {
+    flui_runtime::window_system::WindowSystem::Platform(flui_platform::TargetPlatform::current())
+}
+
 /// The presentation window for a freshly opened host window: the window
 /// itself, upcast to the contract the UI runtime drives, the accessibility
 /// bridge its backend fixed when it built it, and its text-store host when
@@ -130,13 +151,11 @@ pub(crate) fn presentation_window(
     let occluded_surface = host.occluded_surface();
     // The runner names the platform it was built for: the tree follows its
     // conventions, and host observations replace the gesture values the OS
-    // publishes (ADR-0212 §4). The one place a platform is taken from the
-    // compile target.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the runner is the root default of PlatformConvention"
-    )]
-    let platform = flui_platform::TargetPlatform::current();
+    // publishes (ADR-0212 §4). A browser's page follows the platform-neutral
+    // ones.
+    let platform = window_system()
+        .platform()
+        .unwrap_or(flui_platform::TargetPlatform::Unknown);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
         .with_text_store_host(text_store_host)
         .with_occluded_surface(occluded_surface)
@@ -289,7 +308,7 @@ pub fn window_handle(
 ///
 /// Owner-thread only, like every other operation on a hosted UI runtime — a
 /// call from a thread that runs no FLUI loop is REFUSED with
-/// [`NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime) rather
+/// [`NoHostedRuntime`](PresentationCloseError::NoHostedRuntime) rather
 /// than silently doing nothing. That matters for the deferral case above:
 /// the work an application finishes before calling this often finishes on a
 /// worker, and the runtime that hosts the presentations is the loop
@@ -315,8 +334,9 @@ pub fn window_handle(
 ///
 /// # Errors
 ///
-/// [`CloseRequestError::NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime)
-/// when the calling thread hosts no FLUI runtime,
+/// [`PresentationCloseError::NoHostedRuntime`] when the calling thread hosts
+/// no FLUI runtime, and otherwise [`PresentationCloseError::Close`] with the
+/// window's refusal:
 /// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
 /// when no presentation is registered at `address` (never installed, or
 /// already closed),
@@ -328,9 +348,7 @@ pub fn window_handle(
 /// window took the close and failed it.
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
-) -> Result<(), crate::app::close_request::CloseRequestError> {
-    use crate::app::close_request::CloseRequestError;
-
+) -> Result<(), PresentationCloseError> {
     // Read whether this thread hosts a loop and its router in ONE visit,
     // then leave the thread-local: `WindowCommand::Close` fires the window's
     // own `on_close`, which re-enters `APP_RUNTIME` through
@@ -343,9 +361,38 @@ pub fn request_presentation_close(
         (state.hosts_loop, state.close_requests())
     });
     if !hosts_loop {
-        return Err(CloseRequestError::NoHostedRuntime);
+        return Err(PresentationCloseError::NoHostedRuntime);
     }
-    router.request_close(address)
+    Ok(router.request_close(address)?)
+}
+
+/// Why [`request_presentation_close`] closed no window.
+#[derive(Debug, thiserror::Error, PartialEq)]
+#[non_exhaustive]
+pub enum PresentationCloseError {
+    /// The calling thread hosts no FLUI runtime at all, so it has no
+    /// presentations to close.
+    ///
+    /// The common cause is calling from a worker thread after finishing
+    /// the work a [`CloseResponse::KeepOpen`](crate::CloseResponse::KeepOpen)
+    /// answer deferred. Marshal back to the thread that ran the handler and
+    /// call from there.
+    ///
+    /// Reported instead of
+    /// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
+    /// because the two are genuinely different failures and a caller can act
+    /// on the difference. It is thread-scoped rather than process-scoped on
+    /// purpose: a process may host several event loops on several threads
+    /// (`AppRuntime` is thread-local by design), so "the owner thread" is not
+    /// a process-wide fact this call could consult.
+    #[error(
+        "this thread hosts no FLUI runtime; request the close from the thread that runs the \
+         presentation's event loop"
+    )]
+    NoHostedRuntime,
+    /// This thread's loop asked the window, which refused the close.
+    #[error(transparent)]
+    Close(#[from] crate::app::CloseRequestError),
 }
 
 /// Run `root` in a main window with the default configuration and the
