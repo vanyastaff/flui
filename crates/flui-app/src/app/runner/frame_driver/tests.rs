@@ -701,8 +701,8 @@ fn native_owners_retire_independently_after_registry_removal() {
 
 fn native_operation_retains_owners_after_the_last_external_handle_is_released() {
     use super::super::native_bindings::{NativeBindings, PreparedNativeWindow};
-    use crate::app::close_request::PreparedCloseRequest;
     use crate::app::window_registry::PreparedWindowRegistration;
+    use flui_runtime::owner_turn::PreparedCloseRequest;
 
     for (resize_failure, driver_failure, handler_failure) in [
         (false, None, None),

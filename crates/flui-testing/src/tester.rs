@@ -46,6 +46,7 @@ use flui_protocol::{
     tree::ElementId, tree::Node, tree::ReadParams, tree::Tree, tree::TreeDiagnostic, tree::outline,
     wire::Checked, wire::Role,
 };
+use flui_runtime::owner_turn::CloseRequestHandler;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
@@ -85,8 +86,11 @@ pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
+    /// Whether the window plays a browser's page ([`TestWindow::in_browser`]).
+    in_browser: bool,
     storage: WindowStorage,
     registrations: AppRegistrations,
+    close_request_handler: Option<CloseRequestHandler>,
 }
 
 impl std::fmt::Debug for TestWindow {
@@ -96,9 +100,11 @@ impl std::fmt::Debug for TestWindow {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("platform", &self.platform)
+            .field("in_browser", &self.in_browser)
             .field("storage", &self.storage)
             .field("overrides", &overrides)
             .field("plugins", &plugins)
+            .field("close_request_handler", &self.close_request_handler)
             .finish()
     }
 }
@@ -123,9 +129,21 @@ impl TestWindow {
             width,
             height,
             platform: None,
+            in_browser: false,
             storage: WindowStorage::Fresh,
             registrations: AppRegistrations::new(),
+            close_request_handler: None,
         }
+    }
+
+    /// Answer the window's close requests with `handler`, as
+    /// `AppConfig::close_request_handler` does: asked after the window's close
+    /// guard for the user's close and a quit, and first at the session's end,
+    /// on the platforms whose window system asks.
+    #[must_use]
+    pub fn close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
+        self.close_request_handler = Some(handler);
+        self
     }
 
     /// Register `plugin`'s providers, as `Application::plugin` does: a widget
@@ -158,6 +176,15 @@ impl TestWindow {
     #[must_use]
     pub fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    /// Play a browser's page, on whatever target the test runs
+    /// ([`HeadlessWindow::in_browser`]): no close is put to the window's
+    /// guard or handler, and the session's end delivers its notice alone.
+    #[must_use]
+    pub fn in_browser(mut self) -> Self {
+        self.in_browser = true;
         self
     }
 
@@ -331,10 +358,12 @@ pub enum TestError {
         /// How many children the inspection left out.
         children: u32,
     },
-    /// A trip to the background or back was asked of a window that names no
-    /// phone: only Android and iOS leave the screen that way.
+    /// A trip to the background or back was asked of a window that plays no
+    /// phone: only Android and iOS leave the screen that way, and not in a
+    /// browser's page.
     #[error(
-        "{platform:?} is no phone: only a window that names Android or iOS goes to the background"
+        "the window ({platform:?}) plays no phone: only a window that names Android or iOS and \
+         does not play the browser goes to the background"
     )]
     NotAPhone {
         /// The platform the window names.
@@ -439,6 +468,12 @@ impl Tester {
         let mut headless = HeadlessWindow::new(config.width, config.height).with_text_input();
         if let Some(platform) = config.platform {
             headless = headless.with_platform(platform);
+        }
+        if config.in_browser {
+            headless = headless.in_browser();
+        }
+        if let Some(handler) = config.close_request_handler.clone() {
+            headless = headless.with_close_request_handler(handler);
         }
         let storage = match &config.storage {
             WindowStorage::Fresh => Some(MemoryStorage::new()),
@@ -1333,6 +1368,12 @@ impl Tester {
     /// the write leave the window open. Returns the application's answer:
     /// [`Block`](flui_platform::SessionEndAnswer::Block) on a phone while
     /// writes are in flight.
+    ///
+    /// In a window that plays a browser's page
+    /// ([`TestWindow::in_browser`]), on any build target, the session's end
+    /// is its `pagehide`, as a runner built for the web answers it: the
+    /// notice alone reaches the application, and the window stays open with
+    /// nothing written and nothing closed.
     pub fn end_session(&mut self) -> flui_platform::SessionEndAnswer {
         self.host
             .end_session(flui_platform::SessionEndPhase::Ending)
@@ -1435,10 +1476,14 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
-    /// `Ok` when the window names a phone.
+    /// `Ok` when the window plays a phone's window system: it names Android
+    /// or iOS and does not play the browser, whose page has no trip to the
+    /// background.
     fn phone(&self) -> Result<(), TestError> {
         match self.config.platform {
-            Some(flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS) => {
+            Some(flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS)
+                if !self.config.in_browser =>
+            {
                 Ok(())
             }
             platform => Err(TestError::NotAPhone {

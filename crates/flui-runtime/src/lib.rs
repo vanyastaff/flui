@@ -20,6 +20,8 @@
 //! - [`ui_runtime`]: `UiRuntime`, the owner-affine UI runtime — the presentations it
 //!   hosts, their frame transaction, input routing, lifecycle and command
 //!   inbox;
+//! - [`owner_turn`]: the close, quit and session-end steps every host's owner
+//!   turn runs, so a runner and the headless host answer them alike;
 //! - [`presentation`]: one presentation's owner-thread state (a UI runtime keeps
 //!   its presentations in a private, mount-ordered forest);
 //! - [`lifecycle_state`]: the per-presentation application lifecycle
@@ -72,6 +74,7 @@ mod media_query_root;
 mod occluded_frame;
 mod overlay_style;
 pub mod owner;
+pub mod owner_turn;
 pub mod presentation;
 mod presentation_forest;
 mod presentation_scene;
@@ -86,6 +89,7 @@ pub mod sink;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod ui_runtime;
+pub mod window_system;
 
 #[cfg(test)]
 mod table_test;

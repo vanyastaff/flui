@@ -599,6 +599,12 @@ struct Notebook {
     /// A write hold each state of the tree takes on this storage and drops
     /// with the state.
     state_hold: Option<flui_testing::storage::MemoryStorage>,
+    /// The storage whose note the state reads as it is disposed, and where it
+    /// records whether the note was stored by then.
+    stored_at_dispose: Option<(
+        flui_testing::storage::MemoryStorage,
+        Rc<std::cell::Cell<Option<bool>>>,
+    )>,
 }
 
 /// The notebook, and the write hold the state keeps for its lifetime.
@@ -677,6 +683,16 @@ impl ViewState<Notebook> for NotebookState {
         };
     }
 
+    fn dispose(&mut self) {
+        if let Some((storage, stored)) = &self.0.stored_at_dispose {
+            stored.set(Some(
+                storage
+                    .contents(&flui_platform::StorageName::from_static("note"))
+                    .is_some(),
+            ));
+        }
+    }
+
     fn build(&self, _view: &Notebook, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(40.0, 40.0)
     }
@@ -698,6 +714,7 @@ fn notebook_saving(
         panic_at_session_end,
         opened: Rc::clone(&opened),
         state_hold: None,
+        stored_at_dispose: None,
     };
     (view, opened)
 }
@@ -786,6 +803,118 @@ fn a_held_close_waits_for_its_hold_and_a_session_end_does_not() {
     assert!(
         t.is_closed(),
         "a session that is ending closes past the hold"
+    );
+}
+
+/// The close handler a test registers answers the user's close as the
+/// application's handler answers a runner's window: kept open, the close is
+/// recorded on the window's guard and the window stays.
+#[test]
+fn a_close_handler_the_test_registers_keeps_the_window_open() {
+    use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
+
+    let asked = Rc::new(std::cell::Cell::new(0));
+    let counted = Rc::clone(&asked);
+    let (view, _opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().close_request_handler(CloseRequestHandler::new(move |request| {
+            assert_eq!(request.reason(), flui_view::CloseReason::User);
+            counted.set(counted.get() + 1);
+            CloseResponse::KeepOpen
+        })),
+    );
+    assert!(!t.request_close(), "the handler keeps the window open");
+    t.pump();
+    assert!(!t.is_closed());
+    assert_eq!(asked.get(), 1);
+}
+
+/// A log subscriber that fails on every event of the owner turn's steps and
+/// of the headless host's turn, as a faulty one does.
+struct FailsOnOwnerTurnEvents;
+
+impl tracing::Subscriber for FailsOnOwnerTurnEvents {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let target = event.metadata().target();
+        if target.starts_with("flui_runtime::owner_turn")
+            || target.starts_with("flui_testing::host::turn")
+        {
+            panic!("log subscriber failed");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A quit whose consultation panics (the host's report of the cancelled
+/// quit reaching a log subscriber that fails, after the close handler saved
+/// a note and panicked) costs the turn none of its later steps: the note is
+/// written in that turn, the window stays open, and the panic reaches the
+/// test once the turn is done. The next quit waits for the note's save,
+/// which holds the window's close, and the turns its release owes carry the
+/// quit out without a hand pump.
+///
+/// Fails against a turn that runs the consultation uncontained (the note
+/// stays unwritten) and against a host that owes no turn for a hold
+/// released inside a turn (the window stays open). That the quit is
+/// cancelled, not left consulting, is `quit_consultation`'s.
+#[test]
+fn a_quit_whose_consultation_panics_still_lets_the_turn_write() {
+    use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
+
+    let panics = Rc::new(std::cell::Cell::new(true));
+    let panicking = Rc::clone(&panics);
+    let storage = flui_testing::storage::MemoryStorage::new();
+    let (view, opened) = notebook(false);
+    let saved = Rc::clone(&opened);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default()
+            .storage(storage.clone())
+            .close_request_handler(CloseRequestHandler::new(move |_| {
+                if panicking.get() {
+                    note(&saved)
+                        .set(Note("draft".to_owned()))
+                        .expect("a loaded note takes a value");
+                    panic!("deliberate handler panic under test");
+                }
+                CloseResponse::Close
+            })),
+    );
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+
+    let turn = tracing::subscriber::with_default(FailsOnOwnerTurnEvents, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.request_quit()))
+    });
+    assert!(turn.is_err(), "the subscriber's panic reaches the test");
+    assert!(
+        storage
+            .contents(&flui_platform::StorageName::from_static("note"))
+            .is_some(),
+        "the turn wrote the note past the panic"
+    );
+    assert!(!t.is_closed(), "the window stays open");
+
+    panics.set(false);
+    t.request_quit();
+    assert!(
+        t.is_closed(),
+        "the next quit was asked again and went ahead"
     );
 }
 
@@ -936,7 +1065,8 @@ fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
     assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
 }
 
-/// Only a phone leaves the screen this way: a window that names no phone is
+/// Only a phone leaves the screen this way: a window that plays no phone (it
+/// names none, or it plays a browser's page) is
 /// refused, and nothing is reported to it.
 #[test]
 fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
@@ -962,6 +1092,27 @@ fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
         );
         assert!(opened.borrow().lifecycle.is_empty(), "{platform:?}");
     }
+
+    // A page that follows a phone's conventions is still a browser's page.
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default()
+            .platform(TargetPlatform::Android)
+            .in_browser(),
+    );
+    opened.borrow_mut().lifecycle.clear();
+    assert_eq!(
+        t.try_background(),
+        Err(TestError::NotAPhone {
+            platform: TargetPlatform::Android
+        }),
+        "a browser's page has no trip to the background"
+    );
+    assert!(
+        opened.borrow().lifecycle.is_empty(),
+        "nothing is reported to a page"
+    );
 }
 
 /// A phone's trip to the background with a write still in flight answers
@@ -1401,6 +1552,84 @@ fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
     let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("draft".to_owned()));
+}
+
+/// A window that plays the browser's page ends its session as `pagehide`,
+/// on whatever target the test is built for: the notice reaches the
+/// application and nothing else happens, no write within the end and no
+/// close, while the same window on its platform's window system writes the
+/// note and closes. The page's registry writes the note at its next turn.
+///
+/// Fails against a session end that keys on the build target: on a native
+/// build the page writes and closes as a desktop does.
+#[test]
+fn a_page_ends_its_session_with_the_notice_alone() {
+    for in_browser in [false, true] {
+        let storage = flui_testing::storage::MemoryStorage::new();
+        let (view, opened) = notebook(false);
+        let mut window = TestWindow::default().storage(storage.clone());
+        if in_browser {
+            window = window.in_browser();
+        }
+        let mut t = Tester::mount_in(view, window);
+        let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+        note(&opened)
+            .set(Note("draft".to_owned()))
+            .expect("a loaded note takes a value");
+
+        assert_eq!(
+            t.end_session(),
+            flui_platform::SessionEndAnswer::Proceed,
+            "in_browser={in_browser}"
+        );
+        assert_eq!(
+            opened.borrow().session_ended,
+            1,
+            "in_browser={in_browser}: the notice reached the application"
+        );
+        let stored = || {
+            storage
+                .contents(&flui_platform::StorageName::from_static("note"))
+                .is_some()
+        };
+        assert_eq!(
+            stored(),
+            !in_browser,
+            "in_browser={in_browser}: only a desktop writes within its end"
+        );
+        assert_eq!(
+            t.is_closed(),
+            !in_browser,
+            "in_browser={in_browser}: only a desktop closes"
+        );
+        if in_browser {
+            t.pump();
+            assert!(stored(), "the page's registry writes at its next turn");
+        }
+    }
+}
+
+/// At a session's end the documents are written before the runtime is torn
+/// down, as a runner orders it (ADR-0260 §4, §5): the state being disposed
+/// already finds the note stored, so a destructor the system may never let
+/// run costs nothing.
+///
+/// Fails against a host that tears the windows down first and writes after:
+/// the state is disposed before the note is stored.
+#[test]
+fn a_session_end_writes_before_the_runtime_is_torn_down() {
+    let storage = flui_testing::storage::MemoryStorage::new();
+    let stored = Rc::new(std::cell::Cell::new(None));
+    let (mut view, opened) = notebook_saving(false, Some("draft"), false);
+    view.stored_at_dispose = Some((storage.clone(), Rc::clone(&stored)));
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    t.end_session();
+    assert_eq!(
+        stored.get(),
+        Some(true),
+        "the note was stored before the state was disposed"
+    );
 }
 
 /// A subscriber and an observer that panic at the session's end do not cost the session

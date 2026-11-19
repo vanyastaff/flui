@@ -54,7 +54,7 @@
 //! - [`ServiceLifetime::KeepsAppAlive`] defers the process exit after the
 //!   last window closes. Whether a window may close is a different
 //!   question, asked strictly earlier, by the close-request router
-//!   ([`CloseRequestRouter::consult`](super::close_request::CloseRequestRouter::consult)).
+//!   ([`CloseRequestRouter::consult`](flui_runtime::owner_turn::CloseRequestRouter::consult)).
 //! - The module is native-only: `wasm32` does not build it, and an
 //!   application there starts no services.
 
