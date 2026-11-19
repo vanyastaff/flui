@@ -17,6 +17,8 @@ mod android_elf;
 mod android_package;
 /// What an Apple bundle's `Info.plist` states about what the application opens.
 mod apple_opening;
+/// The application's assets in each package (ADR-0384 §3).
+pub(crate) mod assets;
 /// Type-state builder for `BuilderContext`
 pub(crate) mod context_builder;
 /// Desktop platform build support (Windows, macOS, Linux)

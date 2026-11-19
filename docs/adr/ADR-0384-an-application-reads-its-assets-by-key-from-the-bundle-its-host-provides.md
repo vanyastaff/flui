@@ -135,7 +135,9 @@ from without holding the bundle.
 ### §3 Every package keeps asset `k` at `flui_assets/k`
 
 `flui build` copies every regular file under each directory `[assets] directories` lists, at any
-depth, to `flui_assets/<key>` inside the package's root, and the host's reader reads it there:
+depth, to `flui_assets/<key>` inside the package's root, and the host's reader reads it there. A
+hidden file or directory (a name starting with `.`, such as `.gitkeep`) is not an asset: Android's
+packagers drop it from an APK, so no package carries it.
 
 | Package | Root of `flui_assets/` | Reader |
 |---------|------------------------|--------|
@@ -146,9 +148,10 @@ depth, to `flui_assets/<key>` inside the package's root, and the host's reader r
 | Android APK | the APK's `assets/` | `AAssetManager_open` with `AASSET_MODE_STREAMING` |
 | Web | the directory of the page | the document-relative URL `flui_assets/<key>`, each segment percent-encoded, fetched through the host's `Http` |
 
-A listed directory that does not exist, a file whose key §1 refuses, two files that map to one
-key and a symbolic link are build errors that name the file. A project with no `[assets]`
-section ships no assets, and its bundle answers `NotFound`.
+A listed directory that does not exist or that a symbolic link takes outside the project, a file
+whose key §1 refuses, two files whose keys differ only in case (one file where the file system
+ignores case) and a symbolic link under a listed directory are build errors that name the file.
+A project with no `[assets]` section ships no assets, and its bundle answers `NotFound`.
 
 ### §4 A development run reads the project
 
@@ -202,7 +205,11 @@ record's.
   `TooLarge`, a directory is `NotAFile`; `a_directory_read_checks_before_it_reads` refuses an
   oversized file at its first poll, before a chunk, reads a large one a chunk per poll, and
   refuses a FIFO without waiting for a writer.
-- `flui-cli`'s build tests state §3 for each package: the declared files land at
-  `flui_assets/<key>`, and a refused key, a collision and a symbolic link fail the build.
+- `a_build_stages_every_declared_file_under_flui_assets` (`flui-cli`) states §3: the declared
+  files land at `flui_assets/<key>` and a hidden one does not; `a_build_refuses_what_no_package_can_carry`
+  fails the build on a refused key, a case collision and a symbolic link; `asset_keys_agree_with_the_runtime`
+  holds the CLI's keys to `AssetKey::try_new`; `gradle_packages_the_assets_the_project_declares`
+  hands Gradle the staged directory; `every_template_makes_the_asset_directories_it_declares`
+  keeps a new project buildable; `a_desktop_run_reads_assets_from_the_project` states §4.
 - The platform readers of §3 other than Linux's are confirmed by a run on each platform, rows of
   `crates/flui-native/platform-parity.toml`.

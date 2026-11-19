@@ -395,6 +395,20 @@ fn with_registration(cmd: &mut Command, register_associations: bool) {
     }
 }
 
+/// Point the application `cmd` starts at the project's own files for its
+/// assets (ADR-0384 §4): the project's root, which the keys `[assets]
+/// directories` declares are relative to, as an absolute path, so an edited
+/// asset is read on its next load without a copy. Outside a project nothing
+/// is set, and the application reads its package.
+fn with_asset_root(cmd: &mut Command, root: &Path) {
+    let Ok(root) = std::path::absolute(root) else {
+        return;
+    };
+    if let Some(project) = crate::config::nearest_project_dir(&root) {
+        cmd.env(env::ASSET_ROOT, project);
+    }
+}
+
 // ============================================================================
 // Target device resolution
 // ============================================================================
@@ -651,6 +665,7 @@ fn run_once(
     }
     with_build(&mut cmd, selection, agent);
     with_registration(&mut cmd, register_associations);
+    with_asset_root(&mut cmd, &root);
 
     ui::step("Building and running...")?;
     let interrupted = install_interrupt_flag();
@@ -707,6 +722,10 @@ mod env {
     /// reads it in `flui-app` (`runner::associations::REGISTER_ENV`), which
     /// the CLI does not link.
     pub(crate) const REGISTER_ASSOCIATIONS: &str = "FLUI_REGISTER_ASSOCIATIONS";
+    /// The project root a desktop run reads its assets from (ADR-0384 §4).
+    /// The desktop host reads it in `flui-native` (`assets::DEVELOPMENT_ROOT_VAR`),
+    /// which the CLI does not link.
+    pub(crate) const ASSET_ROOT: &str = "FLUI_ASSET_ROOT";
 }
 
 // ============================================================================
@@ -2066,6 +2085,7 @@ fn spawn_app(
 
     with_build(&mut cmd, selection, agent);
     with_registration(&mut cmd, register_associations);
+    with_asset_root(&mut cmd, &root);
 
     cmd.env(env::HOT_RELOAD, "1");
     spawn_child(cmd, "Failed to spawn application")
@@ -2445,6 +2465,10 @@ fn spawn_host_package(
     cmd.args(feature_args);
     cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
     with_registration(&mut cmd, register_associations);
+    with_asset_root(
+        &mut cmd,
+        &std::env::current_dir().context("failed to resolve application directory")?,
+    );
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -3092,6 +3116,33 @@ mod tests {
         assert_eq!(variable(false), None);
     }
 
+    /// A desktop run names the project's root, absolute, as the directory the
+    /// application reads its assets from (ADR-0384 §4), from the project's
+    /// root or a directory under it, and outside a project names none.
+    fn a_desktop_run_reads_assets_from_the_project() {
+        let variable = |root: &std::path::Path| {
+            let mut cmd = std::process::Command::new("cargo");
+            super::with_asset_root(&mut cmd, root);
+            // The name `flui-native` reads (`assets::DEVELOPMENT_ROOT_VAR`).
+            cmd.get_envs()
+                .find(|(name, _)| *name == "FLUI_ASSET_ROOT")
+                .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+        };
+        let project = tempfile::tempdir().expect("a temporary directory");
+        std::fs::write(project.path().join("flui.toml"), "").expect("flui.toml");
+        let nested = project.path().join("src/screens");
+        std::fs::create_dir_all(&nested).expect("a nested directory");
+        let expected = std::path::absolute(project.path()).expect("an absolute path");
+        assert_eq!(
+            variable(project.path()),
+            Some(expected.clone().into_os_string())
+        );
+        assert_eq!(variable(&nested), Some(expected.into_os_string()));
+
+        let outside = tempfile::tempdir().expect("a temporary directory");
+        assert_eq!(variable(outside.path()), None);
+    }
+
     fn device_selection_prefers_exact_id_then_name_then_unique_prefix() {
         use crate::DevicePlatform;
         use crate::commands::devices::{Device, Kind, Status};
@@ -3308,6 +3359,10 @@ mod tests {
             (
                 "register associations sets the application variable",
                 register_associations_sets_the_application_variable,
+            ),
+            (
+                "a desktop run reads assets from the project",
+                a_desktop_run_reads_assets_from_the_project,
             ),
             (
                 "device selection prefers exact id then name then unique prefix",
