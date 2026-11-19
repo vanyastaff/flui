@@ -25,7 +25,11 @@ const gaps = []
 if (typeof opts.topic !== 'string' || !opts.topic.trim()) {
   return { error: 'a topic is required: the problem, its measured facts and the target' }
 }
-const checkout = opts.checkout || '.'
+const checkout = opts.checkout === undefined ? '.' : opts.checkout
+// Every agent's brief quotes the checkout in single quotes.
+if (typeof checkout !== 'string' || !checkout || /['\n\r]/.test(checkout)) {
+  return { error: 'checkout must be a path with no single quote or line break' }
+}
 const paths = Array.isArray(opts.paths) ? opts.paths : []
 const drivers = Array.isArray(opts.drivers) ? opts.drivers : []
 
@@ -64,9 +68,11 @@ if (opts.stances !== undefined) {
 }
 const stanceKeys = stances.map((s) => s.key)
 
-// Every list an agent returns is re-embedded in later prompts, so each is bounded and the rest counted.
+// Every list an agent returns is re-embedded in later prompts, so each is bounded and what is left
+// out is a gap: facts, a design's debt, each round's attacks, and answers (one per attack).
 const MAX_FACTS = 30
 const MAX_ATTACKS = 12
+const MAX_DEBT = 12
 
 const dir = `'${checkout}'`
 const brief = `The problem, with its measured facts and target:
@@ -79,7 +85,8 @@ ${drivers.length ? drivers.map((d) => `- ${d}`).join('\n') : '- AGENTS.md "Desig
 The repository is FLUI, a declarative UI framework in Rust; read it in the checkout ${dir}. AGENTS.md is the process and its rules bind every design. Do not edit tracked files and do not build: other agents share this host. Another project's source may be read with \`gh\` or cloned shallowly into the gitignored \`.flutter/\` or \`.gpui/\`.`
 
 // An agent asked for an empty string sometimes writes the quotes themselves (`""`); every string an
-// agent returns is read through `blankQuotes`, so such a field is empty wherever the script tests it.
+// agent returns is read through `blankQuotes`, so an answer whose `how` is `""` is empty, and answers
+// nothing.
 function blankQuotes(value) {
   if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
   if (Array.isArray(value)) return value.map(blankQuotes)
@@ -160,15 +167,21 @@ const DESIGN_SCHEMA = {
   required: ['title', 'thesis', 'shapes', 'flow', 'prediction', 'migration', 'risks', 'debt_removed'],
 }
 
+// A design's debt list is re-embedded in every later prompt.
+function boundDesign(who, design) {
+  if (design.debt_removed.length > MAX_DEBT) gaps.push(`${who}: ${design.debt_removed.length - MAX_DEBT} debt items past the bound of ${MAX_DEBT} were left out`)
+  return { ...design, debt_removed: design.debt_removed.slice(0, MAX_DEBT) }
+}
+
 phase('Propose')
 const proposals = (await parallel(stances.map((s) => async () => {
   const got = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou design from one school: ${s.focus}\n\nPropose the best architecture you can for this problem from that school, aiming higher than the stated target where the numbers allow. Be concrete: Rust shapes, the hot path, the owner of each piece of state, the predicted numbers with their arithmetic, the migration and what it deletes. Other designers will try to tear your design apart; leave them nothing easy.`, {
     phase: 'Propose', label: `propose:${s.key}`, schema: DESIGN_SCHEMA, model: 'opus', effort: 'high',
   })
   if (got.error) gaps.push(`proposal ${s.key}: ${got.error}`)
-  return got.error ? null : { stance: s.key, design: got.value }
+  return got.error ? null : { stance: s.key, design: boundDesign(`proposal ${s.key}`, got.value) }
 }))).filter(Boolean)
-if (proposals.length < 2) return { error: `fewer than two proposals returned (${gaps.join('; ')})`, gaps, research: found }
+if (proposals.length < 2) return { error: `fewer than two proposals returned (${gaps.join('; ')})`, gaps, research: found, proposals }
 const proposed = proposals.map((p) => p.stance)
 const show = (p) => `### ${p.stance}: ${p.design.title}\nThesis: ${p.design.thesis}\nShapes:\n${p.design.shapes}\nFlow:\n${p.design.flow}\nPrediction: ${p.design.prediction}\nMigration:\n${p.design.migration}\nRisks: ${p.design.risks}\nDebt removed: ${p.design.debt_removed.join('; ')}`
 
@@ -195,6 +208,15 @@ const attackSchema = (targets) => ({
   required: ['attacks'],
 })
 
+// Both rounds keep an attack only on a design on the table and only up to the bound, and name each
+// drop as a gap.
+function takeAttacks(who, attacks, targets) {
+  const kept = attacks.filter((x) => targets.includes(x.target))
+  if (kept.length < attacks.length) gaps.push(`${who}: ${attacks.length - kept.length} named no design on the table and were left out`)
+  if (kept.length > MAX_ATTACKS) gaps.push(`${who}: ${kept.length - MAX_ATTACKS} past the bound of ${MAX_ATTACKS} were left out`)
+  return kept.slice(0, MAX_ATTACKS)
+}
+
 phase('Tear apart')
 const attackers = [
   ...proposals.map((p) => ({ key: p.stance, own: p })),
@@ -212,10 +234,7 @@ const attackRuns = (await parallel(attackers.map((a) => async () => {
     gaps.push(`attacks by ${a.key}: ${got.error}`)
     return null
   }
-  const kept = got.value.attacks.filter((x) => targets.some((p) => p.stance === x.target))
-  if (kept.length < got.value.attacks.length) gaps.push(`attacks by ${a.key}: ${got.value.attacks.length - kept.length} named no design on the table and were left out`)
-  if (kept.length > MAX_ATTACKS) gaps.push(`attacks by ${a.key}: ${kept.length - MAX_ATTACKS} past the bound of ${MAX_ATTACKS} were left out`)
-  return { by: a.key, attacks: kept.slice(0, MAX_ATTACKS) }
+  return { by: a.key, attacks: takeAttacks(`attacks by ${a.key}`, got.value.attacks, targets.map((p) => p.stance)) }
 }))).filter(Boolean)
 // Each attack gets a number its author answers by, so an answer cannot miss its attack by a wording.
 const numbered = attackRuns.flatMap((r) => r.attacks.map((x) => ({ ...x, by: r.by }))).map((x, i) => ({ ...x, id: i + 1 }))
@@ -252,19 +271,28 @@ const revised = await parallel(proposals.map((p) => async () => {
     gaps.push(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
     return { stance: p.stance, design: p.design, answers: [], unanswered: against }
   }
-  const mine = new Set(against.map((x) => x.id))
-  const answers = got.value.answers.filter((x) => mine.has(x.id))
-  const answered = new Set(answers.map((x) => x.id))
-  return { stance: p.stance, design: got.value.design, answers, unanswered: against.filter((x) => !answered.has(x.id)) }
+  // An attack is answered once, by the first answer that names it and says how; an answer to another
+  // design's attack, a repeat, or an empty `how` answers nothing.
+  const answers = []
+  let refused = 0
+  for (const x of got.value.answers) {
+    const attack = against.find((y) => y.id === x.id)
+    if (attack && x.how.trim() && !answers.some((y) => y.id === x.id)) answers.push({ ...x, attack })
+    else refused += 1
+  }
+  if (refused) gaps.push(`revision of ${p.stance}: ${refused} answers named another design's attack, repeated one, or said nothing, and answer nothing`)
+  return { stance: p.stance, design: boundDesign(`revision of ${p.stance}`, got.value.design), answers, unanswered: against.filter((x) => !answers.some((y) => y.id === x.id)) }
 }))
 const unanswered = revised.flatMap((r) => r.unanswered.map((x) => ({ ...x, stance: r.stance })))
+// Each answer travels with the attack it answers, so a reader can check it.
+const showRevised = (r) => `${show(r)}\nAnswers, each with the attack it answers (JSON):\n${JSON.stringify(r.answers, null, 1)}`
 
 // A second round on the revisions: a fix is where the next defect usually is.
-const second = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.\n\n${revised.map((r) => `${show(r)}\nAnswers: ${JSON.stringify(r.answers)}`).join('\n\n')}`, {
-  phase: 'Revise', label: 'attack:second-round', schema: attackSchema(proposed), model: 'opus', effort: 'high',
+const second = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" or "refuted" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.\n\n${revised.map(showRevised).join('\n\n')}`, {
+  phase: 'Revise', label: 'second-round', schema: attackSchema(proposed), model: 'opus', effort: 'high',
 })
 if (second.error) gaps.push(`second round: ${second.error}`)
-const secondAttacks = second.error ? [] : second.value.attacks.slice(0, MAX_ATTACKS)
+const secondAttacks = second.error ? [] : takeAttacks('second round', second.value.attacks, proposed)
 
 const verdictSchema = {
   type: 'object',
@@ -303,7 +331,7 @@ const verdictSchema = {
 }
 
 phase('Judge')
-const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map((r) => `${show(r)}\nAnswers: ${JSON.stringify(r.answers)}`).join('\n\n')}\n\nAttacks their authors left unanswered, which count as conceded (JSON):\n${JSON.stringify(unanswered, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every unanswered attack above and every second-round attack the synthesis does not answer.`
+const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map(showRevised).join('\n\n')}\n\nAttacks their authors left unanswered, which count as conceded (JSON):\n${JSON.stringify(unanswered, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every unanswered attack above and every second-round attack the synthesis does not answer.`
 // The judge runs on the strongest model the account can start; a note is written once the outcome
 // it reports is known.
 const judgeOptions = { phase: 'Judge', label: 'judge', schema: verdictSchema, effort: 'high' }
@@ -321,7 +349,14 @@ if (verdict.error) {
 }
 
 const v = verdict.value
-const scores = v.scores.filter((x) => proposed.includes(x.stance)).map((x) => ({ ...x, score: Math.max(0, Math.min(100, x.score)) }))
+// One score per design: the first the judge gave it, in 0..100; a design scored twice or not at all
+// is a gap.
+const scores = []
+for (const stance of proposed) {
+  const given = v.scores.filter((x) => x.stance === stance)
+  if (given.length !== 1) gaps.push(`judge: ${stance} scored ${given.length} times`)
+  if (given.length) scores.push({ ...given[0], score: Math.max(0, Math.min(100, given[0].score)) })
+}
 const synthesis = v.synthesis
 const markdown = `# ${synthesis.title}
 
