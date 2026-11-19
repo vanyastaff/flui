@@ -214,7 +214,7 @@ impl HeadlessRenderer {
                 context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
                 *slot.insert(id)
             };
-            context.render_slot(slot, content, crate::recording_cache::CacheReads::On)?;
+            context.render_slot(slot, content, crate::recording_cache::CacheReads::On, None)?;
             context.read_slot(slot)
         })();
         // A capture is synchronous, so it returns once its work has retired,
@@ -272,6 +272,7 @@ impl HeadlessRenderer {
         let device = Arc::clone(domain.device());
         let surface = create_capture_texture(&device, width, height);
         let surface_view = surface.create_view(&wgpu::TextureViewDescriptor::default());
+        let timer = crate::gpu_timer::FrameGpuTimer::try_new(domain.device(), domain.queue());
         Ok(RetainedCapture {
             domain: Arc::clone(&domain),
             queue: Arc::clone(domain.queue()),
@@ -290,6 +291,8 @@ impl HeadlessRenderer {
             last_ir: None,
             keep_ir: false,
             lineage: crate::recording_cache::DrawnLineages::new(),
+            timer,
+            epoch: flui_foundation::FrameEpoch::ZERO,
         })
     }
 }
@@ -483,6 +486,10 @@ pub(crate) struct RetainedCapture {
     /// The lineage of the version the capture last drew, as a `Renderer`
     /// keeps it.
     lineage: crate::recording_cache::DrawnLineages<()>,
+    /// Times each frame on the GPU, as a window slot's timer does, where the
+    /// device writes timestamps; each frame takes the next epoch.
+    timer: Option<crate::gpu_timer::FrameGpuTimer>,
+    epoch: flui_foundation::FrameEpoch,
 }
 
 #[cfg(test)]
@@ -555,6 +562,17 @@ impl RetainedCapture {
     /// it is submitted.
     pub(crate) fn fail_next_frame_after_record(&mut self) {
         self.fail_after_record = true;
+    }
+
+    /// The oldest GPU frame time read back and not taken yet (ADR-0388).
+    pub(crate) fn take_gpu_time(&mut self) -> Option<crate::raster_executor::GpuFrameTime> {
+        self.timer.as_mut()?.take()
+    }
+
+    /// Whether the capture's device writes timestamps, so its frames are
+    /// timed.
+    pub(crate) fn times_frames(&self) -> bool {
+        self.timer.is_some()
     }
 
     /// Registers a one-texel external texture of `rgba` under `id`, or, when
@@ -853,14 +871,24 @@ impl RetainedCapture {
             fail_recorded: &mut self.fail_after_record,
             ir: self.keep_ir.then_some(&mut self.last_ir),
         };
-        self.frame.run(
+        self.epoch = self.epoch.next();
+        let epoch = self.epoch;
+        let ran = self.frame.run(
             plan,
             &self.domain,
-            self.size,
-            CAPTURE_FORMAT,
-            (&self.surface_view, &self.surface),
+            crate::frame_protocol::FrameTarget {
+                view: &self.surface_view,
+                texture: &self.surface,
+                size: self.size,
+                format: CAPTURE_FORMAT,
+            },
             &mut steps,
-        )?;
+            self.timer.as_mut().map(|timer| (timer, epoch)),
+        );
+        if let Some(timer) = self.timer.as_mut() {
+            timer.collect();
+        }
+        ran?;
         self.frame.presented();
         Ok(PresentDisposition::Presented)
     }

@@ -11,9 +11,10 @@ use std::{
 };
 
 use flui_engine::{
-    DeviceHealth, EngineError, ExecutorHealth, PresentDisposition, RasterCommand, RasterExecutor,
-    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility, SurfaceHold,
+    DeviceHealth, EngineError, ExecutorHealth, GpuFrameTime, PresentDisposition, RasterCommand,
+    RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange,
+    SlotConfig, SlotFailure, SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility,
+    SurfaceHold,
     raster_executor::LIFECYCLE_CAPACITY,
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
@@ -1661,6 +1662,10 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
     fn requests_devices(&self) -> bool {
         true
     }
+
+    fn take_gpu_time(&mut self, _slot: SlotId) -> Option<GpuFrameTime> {
+        None
+    }
 }
 
 /// A panic payload the owner never took is dropped when its detached slot's
@@ -2660,4 +2665,127 @@ fn a_device_request_unanswered_past_its_deadline_fails_its_attempt() {
     assert!(rig.backend.answer_device_request());
     let _ = rig.executor.turn();
     assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+}
+
+/// The GPU times a backend read back reach the owner through the slot's
+/// record after the frame whose render read them, oldest first, under the
+/// epochs they name; a slot whose owner never drains holds the last eight
+/// and drops the older ones (ADR-0388).
+///
+/// Red-check: take no time from the backend after a render and nothing
+/// drains; keep the first eight a turn takes instead of the newest and the
+/// drain holds epochs 1 to 8; let the record hold past its bound and the
+/// second drain holds ten.
+#[test]
+fn a_backends_gpu_times_reach_the_owner_after_the_frame_that_read_them() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let mut times = Vec::new();
+    assert_eq!(rig.sender.drain_gpu_times(at.slot, &mut times), 0);
+
+    for epoch in 1..=10 {
+        rig.backend.time_frame(
+            at.slot,
+            FrameEpoch::from_raw(epoch),
+            Duration::from_micros(epoch * 100),
+        );
+    }
+    assert_eq!(
+        rig.sender.drain_gpu_times(at.slot, &mut times),
+        0,
+        "a time reaches the record with a frame of its slot"
+    );
+    let _ = rig.sender.send(frame(at, 11)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(11, RasterVerdict::Presented)]
+    );
+    assert_eq!(rig.sender.drain_gpu_times(at.slot, &mut times), 8);
+    assert_eq!(
+        times
+            .iter()
+            .map(|time: &GpuFrameTime| (time.epoch.get(), time.gpu))
+            .collect::<Vec<_>>(),
+        (3..=10)
+            .map(|epoch| (epoch, Duration::from_micros(epoch * 100)))
+            .collect::<Vec<_>>(),
+        "the eight newest, oldest first"
+    );
+    assert_eq!(
+        rig.sender.drain_gpu_times(at.slot, &mut times),
+        0,
+        "drained once"
+    );
+
+    // Across turns the record keeps the eight newest too.
+    for (frame_epoch, timed) in [(12, 21..=25), (13, 26..=30)] {
+        for epoch in timed {
+            rig.backend.time_frame(
+                at.slot,
+                FrameEpoch::from_raw(epoch),
+                Duration::from_micros(epoch),
+            );
+        }
+        let _ = rig.sender.send(frame(at, frame_epoch)).expect("accepted");
+        let _ = rig.executor.turn();
+        let _ = verdicts(&rig.sender, at.slot);
+    }
+    times.clear();
+    assert_eq!(rig.sender.drain_gpu_times(at.slot, &mut times), 8);
+    assert_eq!(
+        times
+            .iter()
+            .map(|time| time.epoch.get())
+            .collect::<Vec<_>>(),
+        (23..=30).collect::<Vec<_>>(),
+        "a record nobody drained drops its oldest"
+    );
+}
+
+/// A backend that panics while the executor takes its GPU times has its
+/// panic held in the slot's record; the frame whose render read the times
+/// still settles, and the slot's next frame renders and hands its times on
+/// (ADR-0388).
+///
+/// Red-check: take the times outside a containment and the panic unwinds
+/// out of the turn with the frame unsettled.
+#[test]
+fn a_backend_that_panics_handing_out_a_gpu_time_leaves_its_frame_settled() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend
+        .time_frame(at.slot, FrameEpoch::from_raw(1), Duration::from_micros(5));
+    rig.backend.panic_taking_gpu_time(at.slot);
+    let _ = rig.sender.send(frame(at, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)]
+    );
+    assert!(
+        matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Panicked(_))
+        ),
+        "the panic is held in the slot's record"
+    );
+    let mut times = Vec::new();
+    assert_eq!(
+        rig.sender.drain_gpu_times(at.slot, &mut times),
+        1,
+        "the time taken before the panic is kept"
+    );
+
+    rig.backend
+        .time_frame(at.slot, FrameEpoch::from_raw(2), Duration::from_micros(6));
+    let _ = rig.sender.send(frame(at, 3)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(3, RasterVerdict::Presented)]
+    );
+    times.clear();
+    assert_eq!(rig.sender.drain_gpu_times(at.slot, &mut times), 1);
+    assert_eq!(times[0].epoch.get(), 2);
 }
