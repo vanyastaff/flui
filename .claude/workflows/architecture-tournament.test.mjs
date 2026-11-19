@@ -156,8 +156,8 @@ const noAgent = () => assert.fail('no agent may run')
 }
 
 // 3. Each attack keeps one answer: its first concession, which needs no reason, else its first
-//    answer that says how; an answer naming no attack on this design, or a blank `how` (spaces, or
-//    a quoted empty string) is not kept. A conceded attack stays open and reaches the judge.
+//    answer whose `how` holds a letter or a digit; an answer naming no attack on this design, or
+//    one whose `how` holds neither, is not kept. A conceded attack stays open and reaches the judge.
 {
   let own = []
   const { result, prompts: misnumbered } = await run({ topic: 'T', stances }, happy({
@@ -207,6 +207,10 @@ const noAgent = () => assert.fail('no agent may run')
     'revise:a': (p) => ({ answers: [{ id: Number(p.match(/"id": (\d+)/)[1]), verdict: 'refuted', how: 'см. второй шаг' }], design: design('a revised') }),
   }))
   assert.equal(worded.proposals.find((p) => p.stance === 'a').answers.length, 1)
+  const { result: numbered } = await run({ topic: 'T', stances }, happy({
+    'revise:a': (p) => ({ answers: [{ id: Number(p.match(/"id": (\d+)/)[1]), verdict: 'refuted', how: '42' }], design: design('a revised') }),
+  }))
+  assert.equal(numbered.proposals.find((p) => p.stance === 'a').answers.length, 1)
   // A concession that gives no reason still holds against a fixed answer.
   const { result: bare } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -215,7 +219,8 @@ const noAgent = () => assert.fail('no agent may run')
     },
   }))
   assert.deepEqual(bare.proposals.find((p) => p.stance === 'a').answers.map((x) => [x.verdict, x.how]), [['conceded', '""']])
-  assert.ok(bare.open.some((x) => x.stance === 'a' && x.why === 'conceded'))
+  // A concession's reason that holds no text reaches the judge empty, not as quote marks.
+  assert.deepEqual(bare.open.filter((x) => x.stance === 'a' && x.why === 'conceded').map((x) => x.how), [''])
   // Without a concession the first answer that says how is kept, not a later one.
   const { result: firstReason } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -277,7 +282,7 @@ const noAgent = () => assert.fail('no agent may run')
   assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); on sonnet: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
   assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries); on sonnet: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('research failures: no result (refused by a usage limit, skipped, or failed after retries)'))
-  assert.ok(result.gaps.includes('judged on opus after the fable judge returned no result (refused by a usage limit, skipped, or failed after retries)'))
+  assert.ok(result.gaps.includes('judge ran on opus after fable returned no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.equal(calls.find((o) => o.label === 'judge:opus').model, 'opus')
   assert.equal(result.judge, 'opus')
   assert.match(result.markdown, /Gaps in this run/)
@@ -301,8 +306,8 @@ const noAgent = () => assert.fail('no agent may run')
     const { result: odd } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw thrown } }))
     assert.ok(odd.gaps.includes(`research prior-art: ${text}`), text)
   }
-  assert.ok(none.gaps.some((g) => g.startsWith('no judge: fable returned no result')))
-  assert.ok(!none.gaps.some((g) => g.startsWith('judged on opus')))
+  assert.ok(none.gaps.some((g) => g === 'no judge: no result (refused by a usage limit, skipped, or failed after retries); on opus: budget spent'))
+  assert.ok(!none.gaps.some((g) => g.startsWith('judge ran on opus')))
   assert.equal(none.proposals.length, 3)
   assert.deepEqual(none.open.map((x) => [x.claim, x.why]).sort(), [['c on b', 'unanswered'], ['red-team on b', 'unanswered']])
   assert.equal(none.attacks.length, 9)
@@ -431,6 +436,9 @@ const noAgent = () => assert.fail('no agent may run')
   }))
   for (const label of ['propose:a', 'attack:b', 'revise:c', 'second-round']) {
     assert.equal(calls.find((o) => o.label === `${label}:sonnet`).model, 'sonnet', label)
+    // The rerun is the same work: the same prompt and the same effort.
+    assert.equal(prompts[`${label}:sonnet`], prompts[label], label)
+    assert.equal(calls.find((o) => o.label === `${label}:sonnet`).effort, 'high', label)
     assert.ok(result.gaps.includes(`${label} ran on sonnet after opus returned no result (refused by a usage limit, skipped, or failed after retries)`), label)
   }
   assert.equal(result.proposals.length, 3)

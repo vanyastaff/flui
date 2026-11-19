@@ -99,10 +99,11 @@ ${drivers.length ? drivers.map((d) => `- ${d}`).join('\n') : '- AGENTS.md "Desig
 
 The repository is FLUI, a declarative UI framework in Rust; read it in the checkout ${dir}. AGENTS.md is the process and its rules bind every design. Do not edit tracked files and do not build: other agents share this host. Another project's source may be read with \`gh\` or cloned shallowly into the gitignored \`.flutter/\` or \`.gpui/\`.`
 
-// A reason says something when it holds a letter or a digit: whitespace, quotes of any kind and
-// punctuation alone (`""`, `“”`, `" "`, `-`) say nothing, so a fixed or refuted answer with such a
-// `how` is not kept. A concession needs no reason.
-const saysSomething = (text) => /[\p{L}\p{N}]/u.test(text)
+// A floor against blank output: a reason with no letter or digit (whitespace, quotes of any kind,
+// punctuation: `""`, `“”`, `" "`, `-`) is no reason, so a fixed or refuted answer with such a `how` is
+// not kept, and a concession's `how` of that kind is passed on empty. A placeholder with letters
+// (`n/a`) passes the floor; the second round and the judge read each answer with its attack.
+const holdsText = (text) => /[\p{L}\p{N}]/u.test(text)
 
 // The runtime validates an agent's value against its `schema` at the tool-call layer, and the model
 // retries on a mismatch, so `agent()` returns a value of its schema's shape or null (the Workflow
@@ -118,15 +119,16 @@ async function attempt(prompt, options) {
 }
 
 // Work its model refuses runs on the next model down that does the work (CLAUDE.md "Delegating"):
-// an opus design, attack or revision reruns on sonnet, and the result says so. Only when both
-// return nothing usable is it an agent failure.
+// an opus design, attack or revision reruns on sonnet and the fable judge on opus, with the same
+// prompt and effort, and the result says so. Only when both return nothing usable has it failed;
+// `last` is the second run's error. A value carries the model that produced it.
 async function attemptDown(prompt, options, down) {
   const first = await attempt(prompt, options)
-  if (!first.error) return first
+  if (!first.error) return { ...first, model: options.model }
   const second = await attempt(prompt, { ...options, label: `${options.label}:${down}`, model: down })
-  if (second.error) return { error: `${first.error}; on ${down}: ${second.error}` }
+  if (second.error) return { error: `${first.error}; on ${down}: ${second.error}`, last: second.error }
   gaps.push(`${options.label} ran on ${down} after ${options.model} returned ${first.error}`)
-  return second
+  return { ...second, model: down }
 }
 
 // An error's text reaches later prompts as one entry of a list, so it is cut to a line: a cheap cut
@@ -315,7 +317,7 @@ const revised = await parallel(proposals.map((p) => async () => {
   const answers = []
   for (const attack of against) {
     const named = got.value.answers.filter((x) => x.id === attack.id)
-    const kept = named.find((x) => x.verdict === 'conceded') || named.find((x) => saysSomething(x.how))
+    const kept = named.find((x) => x.verdict === 'conceded') || named.find((x) => holdsText(x.how))
     if (kept) answers.push({ ...kept, attack })
   }
   const unmatched = got.value.answers.filter((x) => !against.some((y) => y.id === x.id)).length
@@ -328,7 +330,7 @@ const revised = await parallel(proposals.map((p) => async () => {
 // revision failed to run, named as such so the failure is not held against the design: the script
 // carries all three to the judge and to the result, whatever the judge lists.
 const unanswered = revised.flatMap((r) => r.unanswered.map((x) => ({ ...x, stance: r.stance, why: r.failed ? 'revision failed' : 'unanswered' })))
-const conceded = revised.flatMap((r) => r.answers.filter((x) => x.verdict === 'conceded').map((x) => ({ ...x.attack, stance: r.stance, how: x.how })))
+const conceded = revised.flatMap((r) => r.answers.filter((x) => x.verdict === 'conceded').map((x) => ({ ...x.attack, stance: r.stance, how: holdsText(x.how) ? x.how : '' })))
 const open = [...unanswered, ...conceded.map((x) => ({ ...x, why: 'conceded' }))]
 // Each answer travels with the attack it answers, so a reader can check it.
 const showRevised = (r) => r.failed
@@ -383,21 +385,13 @@ const verdictSchema = {
 
 phase('Judge')
 const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map(showRevised).join('\n\n')}\n\nAttacks left open (JSON; \`why\` says whether the author left it unanswered or conceded it, or its revision returned nothing usable; a conceded one carries what conceding costs in \`how\`):\n${JSON.stringify(open, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}${failures()}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every open attack above and every second-round attack the synthesis does not answer.`
-// The judge runs on the strongest model the account can start; a note is written once the outcome
-// it reports is known.
-const judgeOptions = { phase: 'Judge', label: 'judge', schema: verdictSchema, effort: 'high' }
-let judge = 'fable'
-let verdict = await attempt(judgePrompt, { ...judgeOptions, model: 'fable' })
+// The judge runs on the strongest model the account can start, and on opus when fable refuses.
+const verdict = await attemptDown(judgePrompt, { phase: 'Judge', label: 'judge', schema: verdictSchema, model: 'fable', effort: 'high' }, 'opus')
 if (verdict.error) {
-  const fableError = verdict.error
-  verdict = await attempt(judgePrompt, { ...judgeOptions, label: 'judge:opus', model: 'opus' })
-  if (verdict.error) {
-    gaps.push(`no judge: fable returned ${fableError}; opus returned ${verdict.error}`)
-    return { error: `no judge (${verdict.error})`, gaps, research: found, proposals: revised, attacks: numbered, open, second: secondAttacks }
-  }
-  judge = 'opus'
-  gaps.push(`judged on opus after the fable judge returned ${fableError}`)
+  gaps.push(`no judge: ${verdict.error}`)
+  return { error: `no judge (${verdict.last})`, gaps, research: found, proposals: revised, attacks: numbered, open, second: secondAttacks }
 }
+const judge = verdict.model
 
 const v = verdict.value
 // One score per design: the first the judge gave it (the schema holds it to a design on the table, in
