@@ -26,7 +26,7 @@
 //! allocates — a `Vec` built on the *consumer's* call, never on the frame
 //! path.
 
-use flui_foundation::PresentationAddress;
+use flui_foundation::{FrameEpoch, PresentationAddress};
 use web_time::{Duration, Instant};
 
 use crate::frame::{FrameId, FramePhase};
@@ -253,6 +253,10 @@ pub struct FrameSnapshot {
     /// doc for why it is derived from `produced_count()` rather than a
     /// second, redundant counter).
     pub frame_id: FrameId,
+    /// The stamp the frame was handed to its sink under, unique within its UI
+    /// runtime: what an answer that arrives after the frame was recorded names
+    /// it by, as its GPU time does.
+    pub epoch: FrameEpoch,
     /// The physical instant [`FrameClock::poll`](crate::frame_clock::FrameClock::poll)
     /// used to decide this frame should produce.
     pub clock_timestamp: Instant,
@@ -278,6 +282,12 @@ pub struct FrameSnapshot {
     pub input_epochs: InputEpochs,
     /// How long the segment's build, layout and paint took.
     pub phases: FramePhaseDurations,
+    /// How long the frame ran on the GPU (ADR-0388). Filled once the GPU's
+    /// answer arrives, a frame or more after the snapshot was recorded, by
+    /// [`FrameClock::record_gpu_time`](crate::frame_clock::FrameClock::record_gpu_time);
+    /// `None` until then, and for good where the device has no timestamp
+    /// queries or the frame was not timed.
+    pub gpu_time: Option<Duration>,
 }
 
 /// How long one presentation's segment spent building, laying out and
@@ -399,6 +409,25 @@ impl FrameHistory {
         let capacity = self.slots.len();
         self.slots[self.next] = Some(*snapshot);
         self.next = (self.next + 1) % capacity;
+    }
+
+    /// Set the GPU time of the retained snapshot stamped `epoch`, unless it
+    /// has one, and return the snapshot as it now stands.
+    pub(crate) fn record_gpu_time(
+        &mut self,
+        epoch: FrameEpoch,
+        gpu: Duration,
+    ) -> Option<FrameSnapshot> {
+        if epoch == FrameEpoch::ZERO {
+            return None;
+        }
+        let snapshot = self
+            .slots
+            .iter_mut()
+            .flatten()
+            .find(|snapshot| snapshot.epoch == epoch && snapshot.gpu_time.is_none())?;
+        snapshot.gpu_time = Some(gpu);
+        Some(*snapshot)
     }
 
     /// Every retained snapshot recorded after the one `since` names (or every retained

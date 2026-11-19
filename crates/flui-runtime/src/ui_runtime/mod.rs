@@ -262,6 +262,9 @@ pub struct UiRuntime {
     /// sink: each submit takes the next one, so a settlement names the frame
     /// it settles (ADR-0305 §4).
     frame_epoch: Cell<flui_foundation::FrameEpoch>,
+    /// Room for the GPU times a sink hands back after a submit, kept between frames so taking
+    /// them allocates nothing once it has held a frame's worth (ADR-0388).
+    gpu_times: Cell<Vec<flui_foundation::GpuFrameTime>>,
     /// Whether a redraw has been requested since the last
     /// [`Self::mark_rendered`] — a clone of `AppRuntime`'s own
     /// `needs_redraw` flag (production; a fresh, unshared flag for the

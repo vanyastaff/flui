@@ -103,7 +103,7 @@ use crate::frame_telemetry::{
     FrameHistory, FramePhaseDurations, FrameSnapshot, FrameTelemetryCut, InputEpochId, InputEpochs,
     PendingInputEpochs, PresentOutcome,
 };
-use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress};
+use flui_foundation::{FrameEpoch, ManualClock, MonotonicClock, PresentationAddress};
 use web_time::{Duration, Instant};
 
 bitflags::bitflags! {
@@ -892,6 +892,9 @@ impl FrameClock {
     /// must name whose clock this is, not default to "whichever
     /// presentation I happened to have a reference to."
     ///
+    /// `epoch` is the stamp the frame was handed to its sink under, which a
+    /// later answer about the frame names it by ([`Self::record_gpu_time`]).
+    ///
     /// `frame_id` is deliberately derived from [`Self::produced_count`] at the cut
     /// (`FrameId::from_count(produced_count())`, valid because `poll` has already
     /// incremented it by the time a caller reaches its own submit point) —
@@ -917,11 +920,12 @@ impl FrameClock {
         &self,
         cut: FrameTelemetryCut,
         address: PresentationAddress,
+        epoch: FrameEpoch,
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
         let input_epochs = self.pending_input_epochs.borrow_mut().drain(cut);
-        self.record_frame_with_epochs(cut, address, times, present_outcome, input_epochs)
+        self.record_frame_with_epochs(cut, address, epoch, times, present_outcome, input_epochs)
     }
 
     /// Like [`Self::record_frame`], but for a submit attempt that FAILED on
@@ -947,11 +951,12 @@ impl FrameClock {
         &self,
         cut: FrameTelemetryCut,
         address: PresentationAddress,
+        epoch: FrameEpoch,
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
         let input_epochs = self.pending_input_epochs.borrow().peek(cut);
-        self.record_frame_with_epochs(cut, address, times, present_outcome, input_epochs)
+        self.record_frame_with_epochs(cut, address, epoch, times, present_outcome, input_epochs)
     }
 
     /// Shared core of [`Self::record_frame`]/[`Self::record_frame_retaining_epochs`]:
@@ -969,6 +974,7 @@ impl FrameClock {
         &self,
         cut: FrameTelemetryCut,
         address: PresentationAddress,
+        epoch: FrameEpoch,
         times: FrameTimes,
         present_outcome: PresentOutcome,
         input_epochs: InputEpochs,
@@ -981,6 +987,7 @@ impl FrameClock {
         let snapshot = FrameSnapshot {
             address,
             frame_id,
+            epoch,
             clock_timestamp: times.clock_timestamp,
             segment_start: times.segment_start,
             segment_end: times.segment_end,
@@ -988,6 +995,7 @@ impl FrameClock {
             present_outcome,
             input_epochs,
             phases: times.phases,
+            gpu_time: None,
         };
         self.history.borrow_mut().record(&snapshot);
         snapshot
@@ -1010,6 +1018,17 @@ impl FrameClock {
     #[must_use]
     pub fn frames_since(&self, since: Option<FrameId>) -> Vec<FrameSnapshot> {
         self.history.borrow().since(since)
+    }
+
+    /// Record `gpu`, how long the frame stamped `epoch` ran on the GPU, on its
+    /// [`FrameSnapshot`] in the history ring, and return the snapshot as it
+    /// now stands. The answer arrives a frame or more after the snapshot was
+    /// recorded (ADR-0388), so a consumer that already pulled the snapshot
+    /// sees the time only through this return or a later pull. `None` when
+    /// the ring no longer holds that frame, or holds it with a time already.
+    /// An index-and-assign over the ring: no allocation.
+    pub fn record_gpu_time(&self, epoch: FrameEpoch, gpu: Duration) -> Option<FrameSnapshot> {
+        self.history.borrow_mut().record_gpu_time(epoch, gpu)
     }
 }
 

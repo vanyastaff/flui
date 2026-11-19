@@ -2375,6 +2375,21 @@ impl RasterHost {
         placed.settlements = settlements;
     }
 
+    /// Move the GPU times the executor holds for `address`'s slot into
+    /// `into` (ADR-0388); a window with no slot has none.
+    fn drain_gpu_times(
+        &self,
+        address: PresentationAddress,
+        into: &mut Vec<flui_foundation::GpuFrameTime>,
+    ) {
+        let Some(placed) = self.placed.as_ref() else {
+            return;
+        };
+        if let Some(slot) = placed.slots.get(&address) {
+            let _drained = placed.sender.drain_gpu_times(slot.slot, into);
+        }
+    }
+
     /// How many frames of `address`'s window its sink may hold unsettled
     /// ([`in_flight_limit`]); one for a window with no slot, whose frames
     /// are refused.
@@ -2603,6 +2618,15 @@ impl FrameSink for SlotFrame {
         self.host
             .try_with(|host| host.submit(self.address, self.surface, epoch, publication))
             .unwrap_or(SubmitVerdict::Retry)
+    }
+
+    fn take_gpu_times(&mut self, into: &mut Vec<flui_foundation::GpuFrameTime>) {
+        // A host that is turning keeps them: the executor holds the times
+        // until a later frame of the window takes them.
+        let address = self.address;
+        let _taken = self
+            .host
+            .try_read(|host| host.drain_gpu_times(address, into));
     }
 }
 

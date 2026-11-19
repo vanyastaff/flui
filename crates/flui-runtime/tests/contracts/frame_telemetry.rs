@@ -101,3 +101,91 @@ fn frames_of_two_ui_runtimes_name_their_runtime() {
         Some(second.presentation_id().to_string().as_str())
     );
 }
+
+/// A sink that presents each frame and, like a GPU slot, hands back a frame's
+/// GPU time once a later frame was submitted, plus one time for a frame this
+/// runtime never made.
+#[derive(Default)]
+struct TimedSink {
+    submitted: Vec<flui_foundation::FrameEpoch>,
+    answered: usize,
+}
+
+impl FrameSink for TimedSink {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (800, 600)
+    }
+
+    fn submit(
+        &mut self,
+        epoch: flui_foundation::FrameEpoch,
+        _: flui_layer::ScenePublication,
+    ) -> SubmitVerdict {
+        self.submitted.push(epoch);
+        SubmitVerdict::Presented
+    }
+
+    fn take_gpu_times(&mut self, into: &mut Vec<flui_foundation::GpuFrameTime>) {
+        let finished = self.submitted.len().saturating_sub(1);
+        for &epoch in &self.submitted[self.answered..finished] {
+            into.push(flui_foundation::GpuFrameTime::new(
+                epoch,
+                std::time::Duration::from_micros(250),
+            ));
+        }
+        if finished > self.answered {
+            into.push(flui_foundation::GpuFrameTime::new(
+                flui_foundation::FrameEpoch::from_raw(9_999),
+                std::time::Duration::from_micros(1),
+            ));
+        }
+        self.answered = self.answered.max(finished);
+    }
+}
+
+/// A frame's GPU time reaches the runtime after the frame's own telemetry was
+/// sent, so it is traced as an event of its own that names the frame; a time
+/// for a frame the runtime never made is dropped (ADR-0388).
+///
+/// Red-check: skip `record_gpu_times` after a submit and no event is traced.
+#[test]
+fn a_frames_gpu_time_is_traced_once_it_arrives() {
+    let mut clock = ManualClock::new();
+    let fonts = flui_painting::FontCollection::new();
+    let mut runtime = runtime(&clock, &fonts);
+    let mut sink = TimedSink::default();
+
+    let ((), log) = capture(|| {
+        assert!(runtime.pump(&mut clock, &mut sink).presented());
+        runtime.mark_primary_needs_full_repaint();
+        clock.advance(std::time::Duration::from_millis(16));
+        assert!(runtime.pump(&mut clock, &mut sink).presented());
+    });
+    let frames = frame_events(log.records());
+    let timed: Vec<_> = log
+        .records()
+        .iter()
+        .filter(|record| {
+            record.target == "flui.frame" && record.field("event") == Some("frame_gpu_time")
+        })
+        .collect();
+    assert_eq!(
+        timed.len(),
+        1,
+        "one time, for the first frame; the stranger's is dropped: {timed:?}"
+    );
+    assert_eq!(timed[0].field("gpu_us"), Some("250"));
+    assert_eq!(
+        timed[0].field("frame_id"),
+        frames[0].field("frame_id"),
+        "the time names the frame it was measured for"
+    );
+    assert_eq!(
+        timed[0].field("epoch"),
+        Some(sink.submitted[0].get().to_string().as_str())
+    );
+    assert_eq!(
+        timed[0].field("ui_runtime_id"),
+        Some(runtime.id().as_u64().to_string().as_str())
+    );
+}

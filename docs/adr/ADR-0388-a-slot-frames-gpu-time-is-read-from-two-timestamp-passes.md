@@ -50,13 +50,14 @@ pass the painter opens. Option 4 measures queue latency and the driver's wake-up
 work.
 
 ```rust
-// flui_engine
+// flui_foundation
 #[non_exhaustive]
 pub struct GpuFrameTime {
     pub epoch: FrameEpoch,
     pub gpu: Duration,
 }
 
+// flui_engine
 pub trait RasterBackend {
     // …
     /// The oldest GPU time of `slot`'s frames read back and not taken yet.
@@ -66,6 +67,25 @@ pub trait RasterBackend {
 impl RasterSender {
     /// Moves the GPU times the executor holds for `slot` into `out`, oldest first.
     pub fn drain_gpu_times(&self, slot: SlotId, out: &mut Vec<GpuFrameTime>) -> usize;
+}
+
+// flui_runtime
+pub trait FrameSink {
+    // …
+    /// Moves the GPU times of this presentation's frames that arrived since the last call.
+    fn take_gpu_times(&mut self, into: &mut Vec<GpuFrameTime>) {}
+}
+
+// flui_scheduler
+pub struct FrameSnapshot {
+    // …
+    pub epoch: FrameEpoch,
+    pub gpu_time: Option<Duration>,
+}
+
+impl FrameClock {
+    /// Fills the GPU time of the retained frame stamped `epoch`, once.
+    pub fn record_gpu_time(&self, epoch: FrameEpoch, gpu: Duration) -> Option<FrameSnapshot>;
 }
 ```
 
@@ -106,6 +126,19 @@ impl RasterSender {
    used as a gate.
 9. **The profiler is gone.** The `gpu-profiler` feature, the `wgpu-profiler` dependency,
    `Renderer::latest_gpu_frame_profile`, `GpuFrameProfile` and `PassTiming` are removed.
+10. **The time joins its frame's record.** Every frame a presentation submits is stamped with
+    its epoch, inline or queued, and its `FrameSnapshot` carries that epoch and a `gpu_time`
+    of `None`. After each frame it sends, the UI runtime takes the sink's times
+    (`FrameSink::take_gpu_times`, which a window's sink answers from its slots'
+    `drain_gpu_times`, into a buffer the runtime keeps) and hands each to the presentation
+    clock's `record_gpu_time`, which fills the snapshot whose epoch matches, once. A time
+    whose frame left the ring, a second time for one frame, and a zero time are dropped. The
+    time arrives after the frame's `frame_telemetry` event, so a filled snapshot emits its own
+    `flui.frame` event, `frame_gpu_time`, with `frame_id`, `epoch` and `gpu_us`, and a reader
+    joins the two by `frame_id`. `GpuFrameTime` lives in `flui-foundation`, below both the
+    engine and the runtime, so the runtime names it without an engine edge (ADR-0083). The
+    devtools Timeline puts `gpu_us` in a timed frame's arguments. The agent protocol carries
+    no `FrameSnapshot`, so its version is unchanged.
 
 ### Confirmation
 
@@ -123,6 +156,16 @@ impl RasterSender {
   backend's panic while its times are taken is held and its frame still settles.
 - `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full` draws timed frames
   across a rebuild, which fails if the old device's timers outlive it.
+- `a_gpu_time_lands_on_the_snapshot_of_the_frame_its_stamp_names` (`flui-scheduler`) checks
+  that a time fills its own frame's snapshot once, and that a zero time or one for an evicted
+  frame is dropped.
+- `a_frames_gpu_time_is_traced_once_it_arrives` (`flui-runtime`) checks that a sink's time
+  reaches one `frame_gpu_time` event whose `frame_id` is its frame's, and that a time under an
+  epoch no frame had is dropped.
+- `a_windows_sink_hands_back_the_gpu_times_of_its_frames` (`flui-app`) checks that a window's
+  sink drains its slots' times.
+- `a_timed_frame_carries_its_gpu_time_into_the_trace` (`flui-devtools`) checks `gpu_us` on a
+  timed frame and its absence on an untimed one.
 - An idle frame's plan is a skip, which returns before the timer's `begin`;
   `perf_an_idle_frame_leaves_the_retained_scene_alone` keeps asserting zero allocations on the
   retained scene's idle frame.
