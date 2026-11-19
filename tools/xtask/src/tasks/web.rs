@@ -1,7 +1,6 @@
-//! The wasm32 tasks: `wasm-check`, `wasm-link` and `wasm-test`, CI's
-//! `wasm-check` job in three steps.
+//! The wasm32 tasks: `wasm-link` and `wasm-test`, two steps of CI's
+//! `wasm-check` job.
 
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,9 +9,9 @@ use std::sync::LazyLock;
 use anyhow::{Context, bail, ensure};
 use regex::Regex;
 
-use super::exec::{Cmd, Runner, Step, parsed, target_dir};
-use super::{WASM_TARGET, deny_warnings, wasm_hot_reload_check};
-use crate::util::{metadata, repo_root};
+use super::WASM_TARGET;
+use super::exec::{Cmd, Runner, parsed, target_dir};
+use crate::util::repo_root;
 use crate::wasm;
 
 /// The two web demos, as cdylibs: `(package, artifact name)`.
@@ -23,90 +22,6 @@ const LINKED: [(&str, &str); 2] = [
 
 static TEST_RESULT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^test result: ok\. ([0-9]+) passed").expect("BUG: static regex"));
-
-/// Check and clippy of the wasm-capable workspace, then `flui-hot-reload` with
-/// every feature. `no_wasm` are the packages that cannot target wasm32.
-/// The workspace clippy pass is lib/bin targets only (test targets pull
-/// native-only dev-dependencies such as tokio), and it is the only lint pass
-/// over flui-native's wasm32-only web backend. flui-native's test targets
-/// (`tests/web_browser.rs`, `tests/wasm32/`) compile only here, so they get a
-/// pass of their own.
-fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
-    let excludes: Vec<String> = no_wasm
-        .iter()
-        .flat_map(|name| ["--exclude".to_owned(), name.clone()])
-        .collect();
-    vec![
-        Cmd::cargo(["check", "--workspace", "--locked", "--target", WASM_TARGET])
-            .args(excludes.iter().cloned())
-            .into(),
-        deny_warnings(
-            Cmd::cargo([
-                "clippy",
-                "--workspace",
-                "--lib",
-                "--bins",
-                "--locked",
-                "--target",
-                WASM_TARGET,
-            ])
-            .args(excludes),
-        )
-        .into(),
-        deny_warnings(Cmd::cargo([
-            "clippy",
-            "-p",
-            "flui-native",
-            "--all-targets",
-            "--locked",
-            "--target",
-            WASM_TARGET,
-        ]))
-        .into(),
-        wasm_hot_reload_check().into(),
-        // an application capturing `Rc` in owner-local callbacks (ADR-0086)
-        deny_warnings(Cmd::cargo([
-            "clippy",
-            "-p",
-            "flui",
-            "--test",
-            "wasm_consumer",
-            "--locked",
-            "--target",
-            WASM_TARGET,
-        ]))
-        .into(),
-    ]
-}
-
-/// The workspace packages that do not build for wasm32 (`[package.metadata.flui] wasm =
-/// false`), which the wasm steps exclude.
-fn no_wasm_packages() -> anyhow::Result<BTreeSet<String>> {
-    let workspace = metadata(&repo_root())?;
-    Ok(workspace
-        .workspace_packages()
-        .into_iter()
-        .filter(|package| {
-            package
-                .metadata
-                .pointer("/flui/wasm")
-                .and_then(serde_json::Value::as_bool)
-                == Some(false)
-        })
-        .map(|package| package.name.to_string())
-        .collect())
-}
-
-/// `cargo xtask wasm-check`.
-pub(super) fn check(runner: Runner) -> anyhow::Result<()> {
-    let no_wasm = no_wasm_packages()?;
-    // an empty set would silently check packages that cannot build for wasm32
-    ensure!(
-        !no_wasm.is_empty(),
-        "no package sets `[package.metadata.flui] wasm = false`; flui-cli and xtask cannot build for wasm32"
-    );
-    runner.steps(&check_plan(&no_wasm))
-}
 
 /// Where cargo puts `artifact`'s linked module for wasm32.
 fn wasm_module(target_dir: &Path, artifact: &str) -> PathBuf {
@@ -309,13 +224,5 @@ mod tests {
         assert_eq!(passed("test result: FAILED. 1 passed; 2 failed\n"), None);
         assert_eq!(passed("no tests to run\n"), None);
         assert_eq!(passed("  test result: ok. 4 passed\n"), None);
-    }
-
-    /// The wasm steps exclude a package its manifest marks, and only that one.
-    #[test]
-    fn a_package_without_wasm32_is_read_from_its_manifest() {
-        let no_wasm = no_wasm_packages().expect("cargo metadata");
-        assert!(no_wasm.contains("flui-cli"), "{no_wasm:?}");
-        assert!(!no_wasm.contains("flui-native"), "{no_wasm:?}");
     }
 }

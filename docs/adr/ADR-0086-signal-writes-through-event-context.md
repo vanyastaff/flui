@@ -515,7 +515,7 @@ Marked **(exists)** where the item is in the repository.
   nests one `EventContext` in another (`nested_writer_source_inside_an_event_ctx`,
   `nested_write_panics_inside_an_event_ctx`); `listener_panic_reaches_the_realm_report` in
   `crates/flui-runtime/tests/contracts/owner_delivery.rs`; `tests/wasm_consumer.rs`, compiled
-  for wasm32 by `cargo xtask wasm-check`, captures `Rc` in both callback kinds;
+  for wasm32 by CI's `wasm-check` job, captures `Rc` in both callback kinds;
   `event_setters_infer_cx_through_the_facade` keeps every setter family inferring `ctx`.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter

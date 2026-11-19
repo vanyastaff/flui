@@ -119,6 +119,11 @@ fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     registrar.provide::<flui_platform::http::HttpCapability>(super::http_host::HostHttp::new(
         Rc::clone(&slots.execution),
     ));
+    registrar.provide::<flui_platform::assets::AssetBundleCapability>(
+        super::asset_host::HostAssets {
+            slot: slots.assets.clone(),
+        },
+    );
     registrar.provide::<StorageCapability>(HostStorageProvider {
         slot: slots.storage.clone(),
     });
@@ -210,6 +215,7 @@ impl NativePrimary {
 #[derive(Clone, Default)]
 pub(crate) struct CapabilitySlots {
     pub(crate) storage: StorageSlot,
+    pub(crate) assets: super::asset_host::AssetSlot,
     pub(crate) execution: ExecutionSlot,
     pub(crate) clipboard: ClipboardSlot,
     #[cfg_attr(

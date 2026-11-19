@@ -125,8 +125,36 @@ reaches a list only through a transform: the recorder's translation of a fresh c
 (`paint.rs:300-308`), which interns it as the run's one entry, or a placement its consumer
 composes at replay. Neither changes `Canvas`'s public API, which stays `f64` logical. A list holds
 no state from outside its recording: the clip, transform and opacity above it belong to whoever
-replays it; what the engine bakes from them into its own IR is the engine's (ADR-0006), not this
-record's.
+replays it.
+
+The engine's kept recording of a chunk (ADR-0304 §9) holds none of that clip either, as Flutter's
+raster cache keys an entry on its matrix and picture alone and the parent clip layer applies when
+the entry is drawn. A chunk is recorded in its own pixel frame: no scissor and no SDF clip from
+outside it, and no culling by them. Where the recording is spliced, each region's scissor is
+intersected with the entry scissor, the entry SDF clip fills the instances that set none, the
+chunk's own clip links are re-appended over the entry clip chain with their affines moved by the
+whole-pixel difference between the two origins (exact in `f64`), and the glyphs wholly outside
+the scissor that results are left out, by the rule recording culls them with. What the IR bakes
+from outside the chunk is then its device transform, the opacity it is entered at and the size of
+the target, and nothing of the clip: a chunk scrolled by whole pixels under a fixed clip, and a
+chunk drawn under two clips, replay one recording.
+
+```rust
+struct AmbientKey { opacity: u32, viewport: (u32, u32) }
+
+struct SpliceAmbient<'a> {
+    scissor: ScissorRect,
+    clip: ResolvedClip,
+    chain: &'a ClipChain,
+    origin: PixelOrigin,
+}
+```
+
+A chunk that draws an external texture (its allocation is leased at recording) or adds a
+`draw_order` item or a layer is not kept. A chunk that opens a clip of its own is not kept yet
+either: re-appending its links is the step [docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)
+lists as not built, so every region of a kept chunk holds the entry scissor alone, which the
+splice replaces.
 
 `Paragraph` keeps `offset: Offset<f64>`. Glyph positions stay `f32` relative to the paragraph's
 origin, the shaper's widening point (ADR-0098 §2, ADR-0092 §4), and the engine composes that
@@ -237,6 +265,8 @@ code, after the list is complete.
   object moves keeps its ops, and only the transform composed with them changes.
 - Good, because the placement stays `f64` until the engine composes it, so a recording cache keys
   on the device subpixel phase of the composed translation (ADR-0304).
+- Good, because a kept recording holds nothing of the clip it is drawn under, so a list scrolled
+  under a fixed clip replays its edge rows instead of recording them on every frame.
 - Good, because one painter's NaN, which an interpolation can produce (ADR-0149 §1), costs that op
   and not the frame.
 - Good, because the budget cannot drift again: the assertions fail the build.
@@ -274,6 +304,15 @@ code, after the list is complete.
   `commands_under_one_entry_reuse_the_installed_transform_by_address`
   (`crates/flui-engine/src/painter/tests/command_transform.rs`) dispatches three draws under one
   entry and one under another and counts one comparison by value.
+- The clip applied at the splice, in `crates/flui-engine/src/version_readback_tests.rs`:
+  `scroll_one_row_under_fixed_clip` scrolls a list of boxed labels by one row and by one pixel a
+  frame under a clip whose edges cut a row and its glyphs: once admitted, every row the clip shows
+  replays, the cut ones included, none records again, and each frame equals one drawn with the
+  cache unread (it fails with the scissor in the key, and with the glyphs a captured chunk's
+  scissor hides culled from its recording); `a_chunk_under_two_clips_draws_each_from_one_recording`
+  keeps one recording for a chunk under two clips that cut its text on two sides and splices it
+  under each, with the IR and the pixels of a frame that records it twice (it fails with the
+  scissor in the key, with the cull at recording and with no cull at the splice).
 - The paint snapshot suites (`crates/flui-rendering/tests/paint_fragment_snapshot.rs` among them)
   pass without a regenerated snapshot.
 - `cargo xtask panic-messages`: the one new `expect` names its invariant.

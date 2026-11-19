@@ -196,7 +196,7 @@ root (as `flui-app`'s `hot-reload` feature was, while it existed). The `--all-fe
 still lists every edge any root can activate, and a test pins the resolver to `cargo tree -e normal,build
 --target all` for five roots.
 
-The roots are the facade under every combination `cargo xtask facade-combos` builds, the facade
+The roots are the facade under every combination CI's `feature-matrix` job builds, the facade
 with each of its features alone (which adds `testing`), and every crate
 with a tier, alone, at its defaults and with `--all-features` (which reaches what the facade never
 selects, such as `flui-widgets/network-images`). These are what "every facade feature

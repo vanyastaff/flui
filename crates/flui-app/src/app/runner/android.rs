@@ -44,6 +44,11 @@ where
     // Before the platform, whose registries report only to a capture already installed.
     #[cfg(native_journal)]
     super::native_journal::begin(flui_native::journal::codec::Backend::Android);
+    // The APK's assets (ADR-0384 §3), installed before any widget can ask.
+    let apk_assets = flui_platform::assets::AssetBundle::new(Arc::new(
+        flui_native::assets::ApkAssets::new(app.asset_manager()),
+    ));
+    APP_RUNTIME.with(|slot| slot.borrow().assets.install(apk_assets));
     let started =
         flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
     let platform: Box<dyn Platform> = started.platform;

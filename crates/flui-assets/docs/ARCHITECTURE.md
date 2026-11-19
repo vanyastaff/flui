@@ -8,51 +8,63 @@ is the crate root:
 
 | Item | What it is |
 |------|------------|
-| `ImageCache` | The decoded images one owner keeps, and the loads that fill them; `ReclaimMemory` gives them back under pressure. |
+| `ImageCache` | The decoded images one owner keeps, and the loads that fill them: `load` and the synchronous probe `get`; `ReclaimMemory` gives them back under pressure. |
 | `ImageCacheConfig` | The byte budget and the number of decodes at once. |
-| `ImageSource` | What a load reads: a file path, or a URL with the authority of the client that fetches it. |
-| `LoadServices` | The lanes and the HTTP client a load runs on, both the caller's. |
+| `ImageSource` | What a load reads: a file path, or a URL with the HTTP client that fetches it (ADR-0386). |
+| `LoadServices` | The caller's lanes a load runs on. |
 | `ImageLoad` | The future one request awaits; dropping the last one cancels the load. |
-| `AssetError` | Why a load failed. |
+| `ImageLoadError`, `ImageLoadErrorKind` | The source a load failed for, and why. |
 
 The crate has three private modules: `error`, `image_cache` (the public types) and
 `image_cache::loads` (the LRU, the pending map, the load and decode slots and the load's run),
 with `image_cache::ordered_slots` beneath it.
 
+## Failures
+
+A failed load answers `ImageLoadError`: its source and a kind. A file answers `NotFound`,
+`NotAFile` (never opened), `TooLarge` (refused before it is read whole) or `Io`; a request
+`Http` or `HttpStatus`; bytes that do not decode `Decode`; lanes shutting down `LanesRefused`;
+a panic in the read, the request or the decode `Panicked`; and a load the lanes kept dropping
+unfinished `Abandoned`. Every waiter of one load gets the same kind with its own source, and no
+failure is kept, so a later request loads again.
+
+Each poll of the read or the request runs inside `FirstPanic::contain`, and so does the decode,
+so a panicking client or decoder fails only its load: it unwinds through neither the lane nor
+the request that polls it, and no waiter takes the load over to run it again. The ended future
+is dropped under containment too. `a_client_that_panics` (in
+`network_loads_fetch_with_the_callers_client_and_recover_after_errors`) calls a client that
+panics once for two waiters.
+
 ## Network images
 
-A network image is fetched with the HTTP client its caller passes in
-`LoadServices` (the host's `HttpCapability`, ADR-0280); this crate links no
-HTTP stack and keeps no connection pool. The client drives the request, so the
-lane a load runs on needs no async runtime, and a load with no lanes fetches
-where it is polled. A load without a client answers `AssetError::HttpUnavailable`,
-a failed request `AssetError::Http` and a status other than 2xx
-`AssetError::HttpStatus`; none is kept, so a later request retries. Each request
-limits its body to 256 MiB. `network_loads_fetch_with_the_callers_client_and_recover_after_errors`
-covers recovery after invalid image bytes, no lanes, an error status, a failed
-request, no client and a load handed over to the next request's client.
+A network source is built with the HTTP client that fetches it
+(`ImageSource::network(url, &http)`, the host's `HttpCapability` for the `Image` widget,
+ADR-0280); this crate links no HTTP stack and keeps no connection pool. A caller without a client
+cannot build one: `NetworkImage` answers that case itself. The client drives the request, so the
+lane a load runs on needs no async runtime, and a load with no lanes fetches where it is polled.
+Each request limits its body to 256 MiB.
+`network_loads_fetch_with_the_callers_client_and_recover_after_errors` covers recovery after
+invalid image bytes, no lanes, an error status, a failed request, a panicking client and a load
+handed over to the next request.
 
 ## Decoded images are kept, shared and cancelled by their cache
 
-Each cache keeps the decoded images of its loads (`load_image`,
-`load_network_image`) in its own LRU, bounded by pixel bytes
+Each cache keeps the decoded images of its loads in its own LRU, bounded by pixel bytes
 (`ImageCacheConfig::budget`; 256 MiB, 64 MiB on Android, iOS and the web); an
 image larger than the budget is handed to its waiters and not kept.
-`cached_image` is the synchronous probe a frame makes before it starts a load.
+`get` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two caches are two
-images (ADR-0250). A network source is its URL with the `HttpAuthority` of the
-client that fetches it, so two clients answered different images at one URL
-never share a decoded image or a load (ADR-0280 §6); a load without a client
-shares nothing with one that has one.
+images (ADR-0250). Images and loads are kept under the path, or the URL with the
+`HttpAuthority` of the source's client, so two clients answered different images at one URL
+never share a decoded image or a load (ADR-0280 §6); the key holds no client, so a kept image
+keeps none alive.
 
 A load runs on the `LoadServices` its first request hands it: lanes (an
 `Arc<dyn flui_platform::executor::Executor>`, the UI runtime's for the `Image`
-widget) and an HTTP client (`flui_platform::http::Http`, the host's for that
-widget, ADR-0280): read or fetched on the IO lane, decoded on the compute lane.
+widget): read or fetched on the IO lane, decoded on the compute lane.
 The cache starts no runtime or thread (ADR-0279). With no lanes, or lanes
 refusing it for want of room, the load runs inside the requesting `ImageLoad`,
-on the thread that polls it; lanes shutting down answer
-`AssetError::LanesRefused`.
+on the thread that polls it; lanes shutting down answer `LanesRefused`.
 
 A request for a source already loading joins that load. The load is the
 cache's: every `ImageLoad` waiting on it is a subscriber, and only when the
@@ -66,8 +78,8 @@ abandoned or replaced compares tickets and leaves the newer entry alone.
 
 A load that ends without an outcome, because the request it ran in left or its
 lanes shut down and dropped it, closes its waiters, and each admits itself again:
-the first becomes the new lead, on its own lanes. A load that panics answers its
-waiters with the failure instead, from a drop guard that sees the unwind.
+the first becomes the new lead, on its own lanes, at most four times before it answers
+`Abandoned`. A panic is answered where it happens (see "Failures"), not taken over.
 
 Decodes run at most `ImageCacheConfig::decode_threads` at once (half the cores, at most four),
 never on the IO lane. A compute lane with no room is waited for through
@@ -86,10 +98,10 @@ on the thread that freed the slot, so loads waiting for a slot spend none of
 the IO lane's admission window and other IO work is never refused for them. If
 the lanes have no room by then, the run is parked and every subscriber told; the
 first one polled claims it and drives it where it is polled; if they are shutting down, the lead
-answers `AssetError::LanesRefused` and the rest take the load over. A load
+answers `LanesRefused` and the rest take the load over. A load
 waits for its slot before it reads and holds it until its decode
 returns, so the reads in flight and the encoded bytes waiting to decode are
-bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a file
+bounded by count, and each by size: a response body by `MAX_ENCODED_IMAGE_BYTES`, a file
 by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`), refused
 before more than that is buffered. Only a regular file is opened, so a FIFO or a
 device cannot block the shared IO lane in `open`. Once its bytes are read it asks for a decode

@@ -1157,3 +1157,56 @@ pub(crate) fn a_provider_sees_the_activity_the_host_offers() {
     assert!(host_bridge.install_activity(None).is_some());
     assert!(!seen(&registry), "none once the host takes it back");
 }
+
+/// A headless window's application reads the assets its test names, and
+/// none without them: the checkout is never a bundle (ADR-0384 §5).
+///
+/// Red-check: register the host's bundle over `DirectoryAssets::new(".")`,
+/// or drop `with_assets`'s source on the way to the registry.
+pub(crate) fn a_headless_window_serves_only_the_assets_its_test_names() {
+    use flui_platform::assets::{AssetBundleCapability, AssetKey, AssetLoadError};
+    use flui_platform::testing::MemoryAssets;
+
+    fn read(
+        bundle: &flui_platform::assets::AssetBundle,
+        key: &AssetKey,
+    ) -> Result<Vec<u8>, AssetLoadError> {
+        let mut load = bundle.load(key, 1024);
+        let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
+        match load.as_mut().poll(&mut ctx) {
+            std::task::Poll::Ready(answer) => answer,
+            std::task::Poll::Pending => panic!("a memory bundle answers at once"),
+        }
+    }
+
+    let logo = AssetKey::try_new("assets/logo.png").expect("a valid key");
+    // `Cargo.toml` is in the directory the test runs in: an empty bundle
+    // still does not read it.
+    let manifest = AssetKey::try_new("Cargo.toml").expect("a valid key");
+
+    let mut host = HeadlessHost::new(
+        window().with_assets(MemoryAssets::new().asset(logo.clone(), b"logo".as_slice())),
+    );
+    let bundle = acquire_capability::<AssetBundleCapability>(&mut host)
+        .expect("a headless host provides the asset bundle");
+    assert_eq!(
+        read(&bundle, &logo).expect("the named asset reads"),
+        b"logo"
+    );
+    assert!(matches!(
+        read(&bundle, &manifest),
+        Err(AssetLoadError::NotFound { .. })
+    ));
+
+    let mut bare = HeadlessHost::new(window());
+    let bundle = acquire_capability::<AssetBundleCapability>(&mut bare)
+        .expect("a headless host provides the asset bundle");
+    assert!(matches!(
+        read(&bundle, &logo),
+        Err(AssetLoadError::NotFound { .. })
+    ));
+    assert!(matches!(
+        read(&bundle, &manifest),
+        Err(AssetLoadError::NotFound { .. })
+    ));
+}
