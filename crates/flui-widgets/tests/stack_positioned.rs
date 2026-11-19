@@ -62,6 +62,99 @@ pub(crate) fn positioned_start_resolves_against_directionality() {
 // never directly exercised.
 // ============================================================================
 
+/// `Stack` and `IndexedStack` clip the paint of a positioned child that
+/// overflows them to their own box, with the behavior asked for (`HardEdge`
+/// by default), and let it paint outside with `Clip::None`, at creation and on
+/// every rebuild. A child inside the box is not clipped, and the child keeps
+/// its layout either way. A pointer outside the stack reaches nothing, even
+/// with `Clip::None`.
+pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
+    use crate::common::LaidOut;
+    use flui_foundation::geometry::{Offset, Point, Rect};
+    use flui_interaction::events::PointerKind;
+    use flui_painting::paint::Clip;
+    use flui_rendering::layer::Layer;
+    use flui_view::ViewExt;
+    use flui_widgets::IndexedStack;
+
+    /// The clip layers that clip: each one's behavior and rect.
+    fn clips(laid: &LaidOut) -> Vec<(Clip, Rect<f64>)> {
+        laid.layer_tree().map_or_else(Vec::new, |tree| {
+            tree.iter()
+                .filter_map(|(_, node)| match node.layer() {
+                    Layer::ClipRect(clip) if clip.clip_behavior() != Clip::None => {
+                        Some((clip.clip_behavior(), clip.clip_rect()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+    let own_box = Rect::from_origin_size(Point::ZERO, size(200.0, 200.0));
+    // A 40×40 positioned child of a 200×200 stack at `(left, top)`.
+    let at = |left: f64, top: f64| {
+        Positioned::new(SizedBox::new(40.0, 40.0))
+            .left(left)
+            .top(top)
+    };
+    // (child position, overflows). `None` as a clip builds the widget with
+    // its default, `Clip::HardEdge`.
+    let positions = [
+        ((220.0, 0.0), true),  // wholly past the right edge
+        ((180.0, 10.0), true), // straddling the right edge
+        ((-10.0, 10.0), true), // a negative offset past the left edge
+        ((80.0, 80.0), false), // inside the box
+    ];
+    let sequence = [
+        Some(Clip::None),
+        None,
+        Some(Clip::None),
+        Some(Clip::AntiAlias),
+    ];
+    let expected = |clip: Option<Clip>, overflows: bool| match clip {
+        Some(Clip::None) => vec![],
+        _ if !overflows => vec![],
+        clip => vec![(clip.unwrap_or(Clip::HardEdge), own_box)],
+    };
+
+    for ((left, top), overflows) in positions {
+        let stack = |clip: Option<Clip>| {
+            let stack = Stack::new((at(left, top),));
+            match clip {
+                Some(clip) => stack.clip_behavior(clip),
+                None => stack,
+            }
+        };
+        let indexed = |clip: Option<Clip>| {
+            let stack = IndexedStack::new(vec![at(left, top).boxed()]);
+            match clip {
+                Some(clip) => stack.clip_behavior(clip),
+                None => stack,
+            }
+        };
+        let mut stacked = lay_out(stack(sequence[0]), tight(200.0, 200.0));
+        let mut shown = lay_out(indexed(sequence[0]), tight(200.0, 200.0));
+        for (index, &clip) in sequence.iter().enumerate() {
+            if index > 0 {
+                stacked.pump_widget(stack(clip));
+                shown.pump_widget(indexed(clip));
+            }
+            for (name, laid) in [("Stack", &stacked), ("IndexedStack", &shown)] {
+                let case = format!("{name} with {clip:?}, child at ({left}, {top})");
+                assert_eq!(clips(laid), expected(clip, overflows), "{case}");
+                let child = laid.only_child(laid.root());
+                assert_eq!(laid.offset(child), offset(left, top), "{case}");
+                assert!(
+                    laid.hit_test_pointer(Offset::new(230.0, 20.0), PointerKind::Mouse)
+                        .path()
+                        .is_empty(),
+                    "{case}: a pointer outside the stack reaches nothing"
+                );
+            }
+        }
+    }
+}
+
 /// An indexed stack is heard only through the child it shows, and switching the index
 /// switches what is heard.
 pub(crate) fn an_indexed_stack_is_heard_only_through_its_shown_child() {

@@ -198,6 +198,17 @@ pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'
 /// Close a window whose close request, held until its presentation could be
 /// asked, the presentation granted: the window system's request was answered
 /// already, so the close is the application's command.
+#[cfg_attr(
+    not(all(
+        not(target_os = "android"),
+        not(target_arch = "wasm32"),
+        any(test, not(target_os = "ios"))
+    )),
+    expect(
+        dead_code,
+        reason = "only the desktop window installation routes a close request"
+    )
+)]
 pub(crate) fn close_granted_request(window: &dyn flui_platform::PlatformWindow) {
     if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
         tracing::warn!(%error, "a granted close request did not close its window");

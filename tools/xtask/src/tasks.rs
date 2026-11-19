@@ -1,6 +1,5 @@
 //! The tasks that choose packages, targets or tools from the workspace and
-//! the host: `checks`, `cross-typecheck`, `wasm-link`, `wasm-test`, `fuzz`
-//! and `clean-nested`.
+//! the host: `checks`, `cross-typecheck`, `fuzz` and `clean-nested`.
 //!
 //! Each task prints every command before it runs it and stops at the first
 //! failure, except `checks` and `fuzz`, which run every step and then report
@@ -10,7 +9,6 @@ mod checks;
 mod exec;
 mod fuzz;
 mod native;
-mod web;
 
 use std::process::ExitCode;
 
@@ -25,7 +23,6 @@ const ANDROID_TARGET: &str = "aarch64-linux-android";
 /// The device triple, not `-sim`: the two differ in the slice, not in the API
 /// surface a lint sees.
 const IOS_TARGET: &str = "aarch64-apple-ios";
-const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
 /// flui-native's backends as they ship: MSVC, not
 /// the GNU ABI, and aarch64 for macOS, Android and iOS.
@@ -110,32 +107,6 @@ pub(crate) fn cross_typecheck(args: &CrossTypecheckArgs) -> anyhow::Result<ExitC
             native::FeatureSet::RequiredTargets
         },
     )?))
-}
-
-/// Arguments for `cargo xtask wasm-link`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct WasmLinkArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask wasm-link`: link the wasm demos and check their imports.
-pub(crate) fn wasm_link(args: &WasmLinkArgs) -> anyhow::Result<ExitCode> {
-    done(web::link(args.run.runner()))
-}
-
-/// Arguments for `cargo xtask wasm-test`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct WasmTestArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask wasm-test`: run the wasm32 tests under wasm-bindgen-test-runner.
-///
-/// Installs the wasm-bindgen-cli matching Cargo.lock when it is missing.
-pub(crate) fn wasm_test(args: &WasmTestArgs) -> anyhow::Result<ExitCode> {
-    done(web::test(args.run.runner()))
 }
 
 /// Arguments for `cargo xtask clean-nested`.

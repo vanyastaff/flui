@@ -1,7 +1,7 @@
 //! Geometry storage and protocol-specific convenience methods.
 //!
 //! This file contains:
-//! - Generic `Option<ProtocolGeometry<P>>`-backed accessors (`geometry`,
+//! - Generic accessors over the protocol's layout record (`geometry`,
 //!   `set_geometry`, `clear_geometry`) on `RenderState<P>`
 //! - Box protocol convenience methods (`compute_relayout_boundary`, `size`,
 //!   `set_size`, `has_size`) on `RenderState<BoxProtocol>`
@@ -9,13 +9,12 @@
 //!   `layout_extent`, `max_paint_extent`, `set_sliver_geometry`) on
 //!   `RenderState<SliverProtocol>`
 //!
-//! The prior `OnceCell`-backed `set_geometry` panicked on second invocation,
-//! which made frame-2 re-layout a crash. Each layout pass
-//! now straight-assigns the size via `Option<T>`. `set_geometry`, `set_size`, `set_sliver_geometry` take
-//! `&mut self`; production callers (`RenderEntry::layout`, RenderBox/RenderSliver
-//! impls) already hold a mut state borrow.
+//! Each layout pass overwrites the geometry. `set_geometry`, `set_size` and
+//! `set_sliver_geometry` take `&mut self`; production callers
+//! (`RenderEntry::layout`, RenderBox/RenderSliver impls) already hold a mut
+//! state borrow.
 
-use super::RenderState;
+use super::{LayoutRecord as _, RenderState};
 use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, ProtocolGeometry, SliverProtocol};
 
@@ -49,7 +48,7 @@ impl<P: Protocol> RenderState<P> {
     where
         ProtocolGeometry<P>: Copy,
     {
-        self.geometry
+        self.layout.geometry().copied()
     }
 
     /// Sets (or replaces) the computed geometry after layout.
@@ -69,7 +68,7 @@ impl<P: Protocol> RenderState<P> {
     /// ```
     #[inline]
     pub fn set_geometry(&mut self, geometry: ProtocolGeometry<P>) {
-        self.geometry = Some(geometry);
+        self.layout.set_geometry(geometry);
     }
 
     /// Clears the geometry, signalling no prior layout has run.
@@ -86,7 +85,7 @@ impl<P: Protocol> RenderState<P> {
     /// ```
     #[inline]
     pub fn clear_geometry(&mut self) {
-        self.geometry = None;
+        self.layout.clear_geometry();
     }
 }
 

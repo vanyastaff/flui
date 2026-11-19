@@ -5,6 +5,7 @@ use std::fmt;
 use flui_objects::{RenderIndexedStack, RenderStack, StackFit};
 use flui_painting::Alignment;
 use flui_painting::AlignmentGeometry;
+use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
@@ -15,9 +16,10 @@ use crate::support::generic_render_view_element;
 /// Overlaps its children, sizing itself to the largest non-positioned child and
 /// aligning each by `alignment`.
 ///
-/// Defaults are `alignment = Alignment::TOP_LEFT` and `fit = StackFit::Loose`.
-/// Wrap a child in [`Positioned`](crate::Positioned) to place it at explicit
-/// edges instead of being aligned.
+/// Defaults are `alignment = Alignment::TOP_LEFT`, `fit = StackFit::Loose` and
+/// `clip_behavior = Clip::HardEdge`. Wrap a child in
+/// [`Positioned`](crate::Positioned) to place it at explicit edges instead of
+/// being aligned.
 ///
 /// Generic over `C: ViewSeq`: a tuple `(a, b)`, an array of one type,
 /// or a dynamic `Vec<BoxedView>`.
@@ -25,17 +27,30 @@ use crate::support::generic_render_view_element;
 pub struct Stack<C = Vec<BoxedView>> {
     alignment: AlignmentGeometry,
     fit: StackFit,
+    clip_behavior: Clip,
     children: C,
 }
 
 impl<C> Stack<C> {
-    /// A stack of the given children with the default alignment and fit.
+    /// A stack of the given children with the default alignment, fit and clip.
     pub fn new(children: C) -> Self {
         Self {
             alignment: Alignment::TOP_LEFT.into(),
             fit: StackFit::Loose,
+            clip_behavior: Clip::HardEdge,
             children,
         }
+    }
+
+    /// How a positioned child that reaches outside the stack is painted.
+    /// `Clip::HardEdge` (the default) clips its paint to the stack's box;
+    /// `Clip::None` lets it paint outside. The clip governs paint only: a
+    /// pointer outside the stack never reaches a child whatever the clip, and
+    /// the cut-off part still reaches semantics and the input regions.
+    #[must_use]
+    pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
     }
 
     /// How non-positioned children are aligned within the stack — an
@@ -62,6 +77,7 @@ impl<C: ViewSeq> fmt::Debug for Stack<C> {
         f.debug_struct("Stack")
             .field("alignment", &self.alignment)
             .field("fit", &self.fit)
+            .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
             .finish()
     }
@@ -82,6 +98,7 @@ where
             .with_alignment(resolve_alignment(self.alignment, || text_direction))
             .with_text_direction(text_direction)
             .with_fit(self.fit)
+            .with_clip_behavior(self.clip_behavior)
     }
 
     fn update_render_object(
@@ -96,6 +113,7 @@ where
         impact |= render_object.set_alignment(resolve_alignment(self.alignment, || text_direction));
         impact |= render_object.set_text_direction(text_direction);
         impact |= render_object.set_fit(self.fit);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
         impact
     }
 
@@ -120,19 +138,32 @@ generic_render_view_element!(Stack);
 pub struct IndexedStack<C = Vec<BoxedView>> {
     alignment: AlignmentGeometry,
     fit: StackFit,
+    clip_behavior: Clip,
     index: Option<usize>,
     children: C,
 }
 
 impl<C> IndexedStack<C> {
-    /// An indexed stack with the default alignment and fit, and `index = 0`.
+    /// An indexed stack with the default alignment, fit and clip, and
+    /// `index = 0`.
     pub fn new(children: C) -> Self {
         Self {
             alignment: Alignment::TOP_LEFT.into(),
             fit: StackFit::Loose,
+            clip_behavior: Clip::HardEdge,
             index: Some(0),
             children,
         }
+    }
+
+    /// How the shown child's paint is clipped, as [`Stack::clip_behavior`]:
+    /// `Clip::HardEdge` by default, `Clip::None` to let it paint outside. The
+    /// clip applies when any positioned child overflowed the last layout, the
+    /// hidden ones included, since every child is laid out.
+    #[must_use]
+    pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
     }
 
     /// How non-positioned children are aligned within the stack — an
@@ -166,6 +197,7 @@ impl<C: ViewSeq> fmt::Debug for IndexedStack<C> {
         f.debug_struct("IndexedStack")
             .field("alignment", &self.alignment)
             .field("fit", &self.fit)
+            .field("clip_behavior", &self.clip_behavior)
             .field("index", &self.index)
             .field("children", &self.children.len())
             .finish()
@@ -187,6 +219,7 @@ where
             .with_alignment(resolve_alignment(self.alignment, || text_direction))
             .with_text_direction(text_direction)
             .with_fit(self.fit)
+            .with_clip_behavior(self.clip_behavior)
             .with_index(self.index)
     }
 
@@ -202,6 +235,7 @@ where
         impact |= render_object.set_alignment(resolve_alignment(self.alignment, || text_direction));
         impact |= render_object.set_text_direction(text_direction);
         impact |= render_object.set_fit(self.fit);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
         impact |= render_object.set_index(self.index);
         impact
     }
