@@ -497,8 +497,9 @@ pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
         );
     }
 
-    // A plain run's paragraph is the only reader of the ambient direction, so
-    // the count of its dependents tells whether the run took the dependency.
+    // The run's `RichText` element, which reads it in `build`, is the only reader
+    // of the ambient direction here, so the count of its dependents tells
+    // whether the run took the dependency.
     for (name, view, dependents) in [
         ("Text", Text::new("abc").boxed(), 1),
         (
