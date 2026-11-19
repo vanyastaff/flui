@@ -66,10 +66,11 @@ use flui_runtime::frame_failure::{
 };
 use flui_runtime::owner_turn::{
     CloseRequestHandler, CloseRequestRouter, CloseResponse, PreparedCloseRequest, QuitRequest,
-    SessionEnd, WindowSystem,
+    SessionEnd,
 };
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
+use flui_runtime::window_system::WindowSystem;
 
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, PostFrameHandle};
@@ -427,6 +428,10 @@ impl HeadlessWindow {
     /// page's `pagehide`, which delivers the notice alone. The window still
     /// follows the conventions of its [platform](Self::with_platform), as a
     /// page follows its host's.
+    ///
+    /// The window system is the host's: the primary window sets it, and a
+    /// window [opened](HeadlessHost::open_window) beside it that plays
+    /// another is refused ([`WindowSystemMismatch`]).
     #[must_use]
     pub fn in_browser(mut self) -> Self {
         self.in_browser = true;
@@ -999,7 +1004,7 @@ impl ScriptedBuiltIns {
     /// reading `assets`, with `storage` as the host's storage.
     fn built_ins(
         &self,
-        platform: flui_platform::TargetPlatform,
+        windows: WindowSystem,
         assets: &flui_platform::assets::AssetBundle,
         storage: impl flui_platform::capability::CapabilityProvider<
             flui_view::persist::StorageCapability,
@@ -1007,7 +1012,7 @@ impl ScriptedBuiltIns {
     ) -> flui_runtime::capability::BuiltIns {
         let assets = assets.clone();
         let built_ins = flui_runtime::capability::BuiltIns::new(
-            platform,
+            windows,
             self.clipboard.clone(),
             self.background.provider(),
             storage,
@@ -1249,7 +1254,7 @@ impl HeadlessHost {
         let scripted = ScriptedBuiltIns::on(scenario.drive()?);
         let registry = compose_registry(
             &scripted,
-            window.platform,
+            window.window_system(),
             &window.assets,
             None,
             &AppRegistrations::new(),
@@ -1300,6 +1305,7 @@ impl HeadlessHost {
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
         let platform = window.platform;
+        let window_system = window.window_system();
         let close_handler = window.close_request_handler.take();
         let assets = window.assets.clone();
         let window_ids = WindowIdMint::new();
@@ -1348,7 +1354,7 @@ impl HeadlessHost {
             Registry::Given(registry) => registry,
             Registry::Composed(application) => compose_registry(
                 &scripted,
-                platform,
+                window_system,
                 &assets,
                 storage.as_ref(),
                 &application,
@@ -1360,8 +1366,8 @@ impl HeadlessHost {
             host = host.with_flush_registry(flush.registry());
         }
         let close_vetoes = flui_runtime::owner_turn::close_vetoes(
-            window.window_system(),
-            Some(session_end_support_of(window.window_system())),
+            window_system,
+            Some(session_end_support_of(window_system)),
         );
         host = host.with_close_vetoes(&close_vetoes);
         let ui_runtime = UiRuntime::try_new(
@@ -2070,11 +2076,48 @@ impl HeadlessHost {
     /// other windows, which forget their held keys, and the application's
     /// lifecycle moves with it.
     ///
+    /// The window system is the host's, set by its primary window
+    /// ([`HeadlessWindow::in_browser`]): a window that plays another is
+    /// refused ([`try_open_window`](Self::try_open_window)). A window's
+    /// [platform](HeadlessWindow::with_platform) names only its conventions.
+    ///
+    /// # Panics
+    ///
+    /// When `window` plays another window system than the host's; and resumes
+    /// the panic of an observer that report reaches, with the window open.
+    pub fn open_window(&mut self, window: HeadlessWindow) -> HeadlessWindowId {
+        self.try_open_window(window)
+            .unwrap_or_else(|refused| panic!("open_window: {refused}"))
+    }
+
+    /// [`open_window`](Self::open_window), refusing instead of panicking when
+    /// `window` plays another window system than the host's.
+    ///
+    /// # Errors
+    ///
+    /// [`WindowSystemMismatch`] when `window` plays the browser and the host
+    /// does not, or the other way round.
+    ///
     /// # Panics
     ///
     /// Resumes the panic of an observer that report reaches, with the window
     /// open.
-    pub fn open_window(&mut self, mut window: HeadlessWindow) -> HeadlessWindowId {
+    pub fn try_open_window(
+        &mut self,
+        window: HeadlessWindow,
+    ) -> Result<HeadlessWindowId, WindowSystemMismatch> {
+        let host = self.primary.window.window_system();
+        if window.in_browser != self.primary.window.in_browser {
+            return Err(WindowSystemMismatch {
+                host,
+                window: window.window_system(),
+            });
+        }
+        Ok(self.install_window(window))
+    }
+
+    /// Install `window` beside the open ones.
+    fn install_window(&mut self, mut window: HeadlessWindow) -> HeadlessWindowId {
         window.id = self
             .window_ids
             .next()
@@ -3087,6 +3130,22 @@ impl HeadlessHost {
 pub struct NotSettled {
     /// The frames pumped.
     pub frames: usize,
+}
+
+/// A window was opened that plays another window system than its host's:
+/// the browser where the host's primary window plays a platform's, or the
+/// other way round. A host has one window system, as a runner does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "a window playing {window:?} cannot open beside windows playing {host:?}: the window system \
+     is the host's, set by its primary window"
+)]
+#[non_exhaustive]
+pub struct WindowSystemMismatch {
+    /// The window system the host's windows play.
+    pub host: WindowSystem,
+    /// The one the refused window plays.
+    pub window: WindowSystem,
 }
 
 /// A window of a [`HeadlessHost`]: its primary one or one it

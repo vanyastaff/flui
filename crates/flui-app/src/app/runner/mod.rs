@@ -109,6 +109,27 @@ pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
 
+/// The window system this runner was built for: the browser's page on
+/// `wasm32`, the platform's window system elsewhere. The one place a runner
+/// takes it from the compile target; its built-in capabilities, its close
+/// vetoes, its session end and its root platform convention all read it.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn window_system() -> flui_runtime::window_system::WindowSystem {
+    flui_runtime::window_system::WindowSystem::Browser
+}
+
+/// The window system this runner was built for: its platform's. The one
+/// place a runner takes it from the compile target.
+#[cfg(not(target_arch = "wasm32"))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the runner's windows are those of the platform it was built for, and it is the \
+              root default of PlatformConvention"
+)]
+pub(crate) fn window_system() -> flui_runtime::window_system::WindowSystem {
+    flui_runtime::window_system::WindowSystem::Platform(flui_platform::TargetPlatform::current())
+}
+
 /// The presentation window for a freshly opened host window: the window
 /// itself, upcast to the contract the UI runtime drives, the accessibility
 /// bridge its backend fixed when it built it, and its text-store host when
@@ -130,13 +151,11 @@ pub(crate) fn presentation_window(
     let occluded_surface = host.occluded_surface();
     // The runner names the platform it was built for: the tree follows its
     // conventions, and host observations replace the gesture values the OS
-    // publishes (ADR-0212 §4). The one place a platform is taken from the
-    // compile target.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the runner is the root default of PlatformConvention"
-    )]
-    let platform = flui_platform::TargetPlatform::current();
+    // publishes (ADR-0212 §4). A browser's page follows the platform-neutral
+    // ones.
+    let platform = window_system()
+        .platform()
+        .unwrap_or(flui_platform::TargetPlatform::Unknown);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
         .with_text_store_host(text_store_host)
         .with_occluded_surface(occluded_surface)

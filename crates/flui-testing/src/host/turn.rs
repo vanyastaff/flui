@@ -314,7 +314,7 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
     }
 
     /// The one the primary window plays.
-    fn window_system(&self) -> flui_runtime::owner_turn::WindowSystem {
+    fn window_system(&self) -> flui_runtime::window_system::WindowSystem {
         self.host.primary.window.window_system()
     }
 
@@ -373,7 +373,7 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
     /// The queued writes run, then what every document still owes; a write
     /// the storage holds is not waited for, since nothing on this thread can
     /// finish it, and is handed back as in flight.
-    fn flush(&mut self, _deadline: flui_scheduler::Instant) -> Option<WritesInFlight> {
+    fn flush(&mut self, _deadline: web_time::Instant) -> Option<WritesInFlight> {
         self.host.write_published();
         self.host
             .flush
@@ -396,7 +396,7 @@ impl SessionEndHost for HeadlessSessionEnd<'_> {
     fn hold_background(
         &mut self,
         _writes: WritesInFlight,
-        _until: flui_scheduler::Instant,
+        _until: web_time::Instant,
     ) -> SessionEndAnswer {
         self.host.background_hold = true;
         SessionEndAnswer::Block

@@ -572,6 +572,35 @@ pub(crate) fn a_window_playing_the_browser_ends_its_session_as_a_page() {
     assert_eq!(seen.detached.get(), 0, "nothing hears Detached");
 }
 
+/// The window system is the host's: a window that plays the browser cannot
+/// open beside a platform's windows, nor a platform's window beside a page,
+/// and the refusal names both; a window that plays the host's opens.
+///
+/// Fails against a host that opens any window: the secondary window's
+/// browser flag would be ignored, its host playing the primary's system.
+pub(crate) fn a_window_of_another_window_system_is_refused() {
+    use flui_platform::TargetPlatform;
+    use flui_runtime::window_system::WindowSystem;
+
+    let mut host =
+        HeadlessHost::new(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::Linux));
+    let refused = host
+        .try_open_window(HeadlessWindow::new(10, 10).in_browser())
+        .expect_err("a page cannot open beside a platform's windows");
+    assert_eq!(refused.host, WindowSystem::Platform(TargetPlatform::Linux));
+    assert_eq!(refused.window, WindowSystem::Browser);
+    host.try_open_window(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::Windows))
+        .expect("a window's platform names only its conventions");
+
+    let mut page = HeadlessHost::new(HeadlessWindow::new(10, 10).in_browser());
+    let refused = page
+        .try_open_window(HeadlessWindow::new(10, 10))
+        .expect_err("a platform's window cannot open beside a page");
+    assert_eq!(refused.host, WindowSystem::Browser);
+    page.try_open_window(HeadlessWindow::new(10, 10).in_browser())
+        .expect("a page opens beside a page");
+}
+
 /// A close handler that records the reason of every close it is asked and
 /// keeps the window open.
 fn keeping_open(asked: &Rc<RefCell<Vec<CloseReason>>>) -> CloseRequestHandler {
@@ -1024,6 +1053,10 @@ fn close_guard_hosting() {
     crate::run_table(
         "close_guard_hosting",
         &[
+            (
+                "a_window_of_another_window_system_is_refused",
+                a_window_of_another_window_system_is_refused,
+            ),
             (
                 "a_window_playing_the_browser_ends_its_session_as_a_page",
                 a_window_playing_the_browser_ends_its_session_as_a_page,

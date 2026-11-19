@@ -17,8 +17,9 @@ use flui_platform::{
 };
 use flui_runtime::owner_turn::{
     CloseRequestHandler, CloseRequestRouter, CloseResponse, NoticeDelivery, PreparedCloseRequest,
-    SessionEnd, SessionEndHost, SessionEndStep, WindowSystem,
+    SessionEnd, SessionEndHost, SessionEndStep,
 };
+use flui_runtime::window_system::WindowSystem;
 use flui_view::__runtime::WritesInFlight;
 use flui_view::CloseReason;
 

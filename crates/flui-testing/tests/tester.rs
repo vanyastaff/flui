@@ -1065,7 +1065,8 @@ fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
     assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
 }
 
-/// Only a phone leaves the screen this way: a window that names no phone is
+/// Only a phone leaves the screen this way: a window that plays no phone (it
+/// names none, or it plays a browser's page) is
 /// refused, and nothing is reported to it.
 #[test]
 fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
@@ -1091,6 +1092,27 @@ fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
         );
         assert!(opened.borrow().lifecycle.is_empty(), "{platform:?}");
     }
+
+    // A page that follows a phone's conventions is still a browser's page.
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default()
+            .platform(TargetPlatform::Android)
+            .in_browser(),
+    );
+    opened.borrow_mut().lifecycle.clear();
+    assert_eq!(
+        t.try_background(),
+        Err(TestError::NotAPhone {
+            platform: TargetPlatform::Android
+        }),
+        "a browser's page has no trip to the background"
+    );
+    assert!(
+        opened.borrow().lifecycle.is_empty(),
+        "nothing is reported to a page"
+    );
 }
 
 /// A phone's trip to the background with a write still in flight answers

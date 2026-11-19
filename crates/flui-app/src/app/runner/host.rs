@@ -335,30 +335,12 @@ pub(super) fn drive_native_text_sizing() {
     });
 }
 
-/// The window system this runner was built for: the browser's page on
-/// `wasm32`, the platform's window system elsewhere. The one place a runner
-/// states it; its close vetoes and its session end both read it.
-#[cfg(target_arch = "wasm32")]
-fn window_system() -> flui_runtime::owner_turn::WindowSystem {
-    flui_runtime::owner_turn::WindowSystem::Browser
-}
-
-/// The window system this runner was built for: its platform's.
-#[cfg(not(target_arch = "wasm32"))]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the runner's windows are those of the platform it was built for"
-)]
-fn window_system() -> flui_runtime::owner_turn::WindowSystem {
-    flui_runtime::owner_turn::WindowSystem::Platform(flui_platform::TargetPlatform::current())
-}
-
 /// Every close the installed platform lets the application refuse
 /// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)), in the
-/// runner's [`window_system`].
+/// runner's [`window_system`](super::window_system).
 fn close_vetoes() -> Vec<flui_view::CloseReason> {
     flui_runtime::owner_turn::close_vetoes(
-        window_system(),
+        super::window_system(),
         with_owner_platform(flui_native::OwnerPlatform::session_end_support),
     )
 }
@@ -518,8 +500,8 @@ impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
         session_end_platform(flui_native::OwnerPlatform::session_end_support)
     }
 
-    fn window_system(&self) -> flui_runtime::owner_turn::WindowSystem {
-        window_system()
+    fn window_system(&self) -> flui_runtime::window_system::WindowSystem {
+        super::window_system()
     }
 
     /// The operating system's: the platform ends the session on it.

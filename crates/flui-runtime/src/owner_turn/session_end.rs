@@ -17,7 +17,8 @@ use flui_platform::{
 };
 use flui_view::CloseReason;
 
-use super::{CloseRequestRouter, CloseResponse, WindowSystem};
+use super::{CloseRequestRouter, CloseResponse};
+use crate::window_system::WindowSystem;
 
 /// The least of the session end's budget that must be left for a step that
 /// runs application code to start, so the flush keeps time to write
@@ -356,7 +357,8 @@ impl SessionEnd {
     /// refuses, as a handler's own panic does; every later window is still
     /// asked, and the first such panic goes to [`SessionEndHost::contained`].
     fn refuse(&self, host: &mut dyn SessionEndHost, request: &SessionEndRequest) {
-        if host.support() != Some(SessionEndSupport::Hold) {
+        if host.window_system().session_end_support(host.support()) != Some(SessionEndSupport::Hold)
+        {
             return;
         }
         let Some(router) = host.router() else {
@@ -420,7 +422,7 @@ fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
     if host.window_system() == WindowSystem::Browser {
         return end_page(host);
     }
-    let support = host.support();
+    let support = host.window_system().session_end_support(host.support());
     let clock = host.clock();
     let deadline = clock.now() + session_end_budget(support);
     // A platform that only tells, or a phone leaving the screen, reports that

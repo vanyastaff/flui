@@ -89,6 +89,7 @@ pub mod sink;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod ui_runtime;
+pub mod window_system;
 
 #[cfg(test)]
 mod table_test;

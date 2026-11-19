@@ -358,10 +358,12 @@ pub enum TestError {
         /// How many children the inspection left out.
         children: u32,
     },
-    /// A trip to the background or back was asked of a window that names no
-    /// phone: only Android and iOS leave the screen that way.
+    /// A trip to the background or back was asked of a window that plays no
+    /// phone: only Android and iOS leave the screen that way, and not in a
+    /// browser's page.
     #[error(
-        "{platform:?} is no phone: only a window that names Android or iOS goes to the background"
+        "the window ({platform:?}) plays no phone: only a window that names Android or iOS and \
+         does not play the browser goes to the background"
     )]
     NotAPhone {
         /// The platform the window names.
@@ -1474,10 +1476,14 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
-    /// `Ok` when the window names a phone.
+    /// `Ok` when the window plays a phone's window system: it names Android
+    /// or iOS and does not play the browser, whose page has no trip to the
+    /// background.
     fn phone(&self) -> Result<(), TestError> {
         match self.config.platform {
-            Some(flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS) => {
+            Some(flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS)
+                if !self.config.in_browser =>
+            {
                 Ok(())
             }
             platform => Err(TestError::NotAPhone {

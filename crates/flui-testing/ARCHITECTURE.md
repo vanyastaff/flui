@@ -80,10 +80,12 @@ Its frame driver is `HeadlessHost`, which pumps a
   handle answers `Closed`.
 - **The built-ins are a runner's built-ins.** Without a registry of the test's
   own, the host composes its registry as a runner does
-  (`flui_runtime::capability::BuiltIns::compose`), with scripted providers on
-  the primary window's platform and the test build's features: the clipboard
-  and background lanes, the storage (refused as not registered without one),
-  the primary selection only on Linux, scripted HTTP only with this crate's
+  (`flui_runtime::capability::BuiltIns::compose`), with scripted providers in
+  the window system the primary window plays and the test build's features:
+  the clipboard and background lanes, the storage (refused as not registered
+  without one), the primary selection only on Linux and never in a page
+  (`HeadlessWindow::in_browser`, which a secondary window may not contradict:
+  `WindowSystemMismatch`), scripted HTTP only with this crate's
   `http` feature (the facade's `http` forwards it), and the application's
   overrides and plugins a `TestWindow` carries, in the runner's tiers
   (`a_runtime_without_a_primary_selection_answers_not_registered`,

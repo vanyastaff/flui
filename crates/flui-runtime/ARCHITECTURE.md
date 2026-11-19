@@ -206,13 +206,14 @@ host.
   question at the query and the host's report of a contained panic included.
   A host supplies only what a step does to its own state, through
   `SessionEndHost`, whose methods take no borrow of the book, so application
-  code they run may re-enter it. The host names its `WindowSystem`
-  (`SessionEndHost::window_system`): in a browser's page the end is
-  `pagehide`, the notice alone. `close_vetoes` says which closes a host's
-  `WindowSystem` lets the application refuse, from the window system and the
-  session-end support the host names; neither reads the build target, and
-  `BuiltIns::primary_selection` registers the primary selection only on
-  Linux.
+  code they run may re-enter it. A host states its `WindowSystem`
+  (`window_system`, a platform's or a browser's page) once, and every policy
+  that differs between them reads it, none the build target: the built-ins
+  (`BuiltIns::new`; the primary selection only in Linux's window system,
+  never a page's), `close_vetoes`, and the session end
+  (`SessionEndHost::window_system`; a page's end is `pagehide`, the notice
+  alone, and its support is `NotifyOnly` whatever the host reports,
+  `WindowSystem::session_end_support`).
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a

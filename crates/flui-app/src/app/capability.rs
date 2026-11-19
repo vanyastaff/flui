@@ -104,15 +104,11 @@ pub(crate) fn built_in_registry(slots: &CapabilitySlots) -> CapabilityRegistry {
         .expect("BUG: the built-in providers name each capability once")
 }
 
-/// The providers this crate ships, on the platform it was built for.
+/// The providers this crate ships, in the runner's
+/// [window system](super::runner::window_system).
 fn built_ins(slots: &CapabilitySlots) -> BuiltIns {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the runner ships the built-ins of the platform it was built for"
-    )]
-    let platform = flui_platform::TargetPlatform::current();
     let built_ins = BuiltIns::new(
-        platform,
+        super::runner::window_system(),
         PlatformClipboard {
             slot: Rc::clone(&slots.clipboard),
         },

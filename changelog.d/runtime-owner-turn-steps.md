@@ -4,9 +4,11 @@
   test answers a window's close requests with the application's `CloseRequestHandler`, asked
   after the window's close guard for a close or a quit and first at the session's end, as a
   runner asks it.
-- `HeadlessWindow::in_browser` and `TestWindow::in_browser`: a headless window plays a browser's
-  page on any build target, where no close is put to its guard or handler and the session's end
-  delivers its notice alone.
+- `HeadlessWindow::in_browser` and `TestWindow::in_browser`: a headless host plays a browser's
+  page on any build target, with the web runner's built-ins (no primary selection), no close put
+  to a window's guard or handler, and a session end that delivers its notice alone. The window
+  system is the host's: `HeadlessHost::try_open_window` refuses a window that plays another with
+  `WindowSystemMismatch`, and `open_window` panics with it.
 
 ### Changed
 
@@ -27,9 +29,12 @@
 
 ### Fixed
 
-- A quit whose consultation panics (a close handler's drop, a log subscriber that fails) is
-  cancelled, with nothing of the host run while the panic unwinds, and the panic resumes once the
-  quit is finished; the next quit is asked again and a Dock reopen is no longer held. The headless
-  turn runs its later steps, the documents' write included, past that panic.
+- A quit whose consultation panics (a close handler that closes its own window and whose capture
+  panics as it drops) is cancelled, with nothing of the host run while the panic unwinds, and the
+  panic resumes once the quit is finished; the next quit is asked again and a Dock reopen is no
+  longer held. The headless turn runs its later steps, the documents' write included, past that
+  panic.
+- A log subscriber that fails on the router's report of a close handler's panic no longer reaches
+  whoever asked the router: the report is contained where it is made.
 - A close-guard hold released inside a headless turn owes the host a turn, so
   `pump_until_settled` and the tester carry out a quit that waited for it.

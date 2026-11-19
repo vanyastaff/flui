@@ -3,7 +3,8 @@
 //! target the code was built for.
 
 use flui_platform::{SessionEndSupport, TargetPlatform};
-use flui_runtime::owner_turn::{WindowSystem, close_vetoes};
+use flui_runtime::owner_turn::close_vetoes;
+use flui_runtime::window_system::WindowSystem;
 use flui_view::CloseReason::{Program, SessionEnd, User};
 
 /// The same answers on every build target: a desktop's window system and
@@ -12,7 +13,8 @@ use flui_view::CloseReason::{Program, SessionEnd, User};
 /// that holds the session makes its end refusable.
 ///
 /// Fails against a `close_vetoes` that reads the build target (on `wasm32`,
-/// the platform-neutral window would ask nothing).
+/// the platform-neutral window would ask nothing) and against one that takes
+/// a page's reported support at its word (a page's end would be refusable).
 #[test]
 fn close_vetoes_follow_the_window_system_named() {
     let hold = Some(SessionEndSupport::Hold);
@@ -53,6 +55,9 @@ fn close_vetoes_follow_the_window_system_named() {
             Some(SessionEndSupport::NotifyOnly),
             vec![],
         ),
+        // A page only tells, whatever its host reports: `Browser` with
+        // `Hold` cannot make its session end refusable.
+        (WindowSystem::Browser, hold, vec![]),
         (
             WindowSystem::Platform(TargetPlatform::MacOS),
             None,
