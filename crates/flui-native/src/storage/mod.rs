@@ -154,6 +154,9 @@ struct ProcessStore {
     app: AppDataDir,
     /// How the store is found: [`process_store`], or a test's stand-in.
     find: FindStore,
+    /// Held while `find` runs: calls that arrive meanwhile wait for its
+    /// answer instead of each finding (and migrating) on their own.
+    finding: std::sync::Mutex<()>,
     store: std::sync::OnceLock<Option<FileStore>>,
 }
 
@@ -178,22 +181,33 @@ impl ProcessStore {
         Self {
             app,
             find,
+            finding: std::sync::Mutex::new(()),
             store: std::sync::OnceLock::new(),
         }
     }
 
-    /// The store, found at the first call that could read the container;
-    /// a platform that names no data folder leaves every call refused, and
-    /// a container that could not be read refuses this call and is read
-    /// again at the next.
+    /// The store, found at the first call that could read the container,
+    /// one find at a time: a call that arrives while another finds waits
+    /// for that answer. A platform that names no data folder leaves every
+    /// call refused, and a container that could not be read refuses the
+    /// calls that waited for it and is read again at the next.
     fn store(&self) -> Result<&FileStore, flui_platform::StorageError> {
         let found = if let Some(found) = self.store.get() {
             found
         } else {
-            let found = (self.find)(&self.app).map_err(|error| {
-                flui_platform::StorageError::Inaccessible { kind: error.kind() }
-            })?;
-            self.store.get_or_init(|| found)
+            // A find that panicked left nothing behind: the next one runs.
+            let _finding = self
+                .finding
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(found) = self.store.get() {
+                found
+            } else {
+                let found = (self.find)(&self.app).map_err(|error| {
+                    flui_platform::StorageError::Inaccessible { kind: error.kind() }
+                })?;
+                self.store.get_or_init(|| found)
+            }
         };
         found
             .as_ref()
@@ -238,11 +252,13 @@ impl DataStore {
 
     /// The values of `app` under the process's own data folders
     /// ([`data_dirs`]), found at the store's first call, on the thread that
-    /// makes it: the owner thread never reads the file system for them. A
-    /// packaged Windows application's store kept under `%APPDATA%` before
-    /// it was packaged is copied into the package's folders then, once:
-    /// only into a root that holds no store, within a bound, nothing
-    /// overwritten, one instance at a time (another waits for it). A store
+    /// makes it: the owner thread never reads the file system for them, and
+    /// calls that arrive while one finds wait for its answer. A packaged
+    /// Windows application's store kept under `%APPDATA%` before it was
+    /// packaged is copied into the package's folders then, once: only into a
+    /// root that holds no store, within a bound, nothing overwritten, one
+    /// instance at a time (another waits for it, as long as it takes: the
+    /// calls block, so a host runs them off any thread it shares). A store
     /// that was not copied stays where it is and stays the store, the calls
     /// reading and writing it there: one whose copy failed is copied again
     /// at a later start, one past the bound never. A package folder that
@@ -255,6 +271,20 @@ impl DataStore {
     pub fn of_process(app: AppDataDir) -> Self {
         Self {
             backing: Backing::OfProcess(ProcessStore::new(app, Box::new(process_store))),
+        }
+    }
+
+    /// [`of_process`](Self::of_process) whose store `find` finds, one find
+    /// at a time, in place of the process's container: a test's stand-in
+    /// for a first call that waits (another instance migrating) or fails.
+    #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "testing")))]
+    #[must_use]
+    pub fn found_by(
+        app: AppDataDir,
+        find: impl Fn(&AppDataDir) -> std::io::Result<Option<FileStore>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            backing: Backing::OfProcess(ProcessStore::new(app, Box::new(find))),
         }
     }
 
@@ -377,9 +407,72 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_platform::{AppDataDir, StorageError};
+    use flui_platform::{AppDataDir, StorageError, StorageName};
 
-    use super::{DataDirs, FileStore, ProcessStore};
+    use super::{DataDirs, DataStore, FileStore, ProcessStore, container};
+
+    /// Two calls arrive while another instance holds the migration's lock:
+    /// the second waits for the first's find instead of migrating too, and
+    /// both answer from the new root once the lock is let go of.
+    #[test]
+    fn calls_that_arrive_while_the_store_is_found_wait_for_one_find_and_one_migration() {
+        let scratch = tempfile::tempdir().expect("a scratch folder");
+        let earlier = DataDirs {
+            roaming: scratch.path().join("old"),
+            local: scratch.path().join("old-local"),
+        };
+        std::fs::create_dir_all(&earlier.roaming).expect("the old store");
+        std::fs::write(earlier.roaming.join("notes"), b"kept").expect("a kept value");
+        let dirs = DataDirs {
+            roaming: scratch.path().join("new"),
+            local: scratch.path().join("new-local"),
+        };
+        let held = container::lock_migration(&container::migration_lock(&dirs.local))
+            .expect("another instance holds the lock");
+        let finds = Arc::new(AtomicUsize::new(0));
+        let (finding, found_started) = std::sync::mpsc::channel();
+        let counting = Arc::clone(&finds);
+        let new_roaming = dirs.roaming.clone();
+        let store = Arc::new(DataStore::found_by(
+            AppDataDir::try_new("app").expect("a name"),
+            move |_| {
+                counting.fetch_add(1, Ordering::Relaxed);
+                let _ = finding.send(());
+                let used = container::roots_after_migration(
+                    earlier.clone(),
+                    dirs.clone(),
+                    &mut container::migrate,
+                );
+                Ok(Some(FileStore::new(used)))
+            },
+        ));
+        let name = StorageName::from_static("notes");
+        let read = |store: Arc<DataStore>| {
+            std::thread::spawn(move || store.read(&name, 64).map(|stored| stored.bytes))
+        };
+        let first = read(Arc::clone(&store));
+        found_started.recv().expect("the first call finds");
+        let second = read(Arc::clone(&store));
+        assert!(
+            found_started
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "the second call does not find on its own"
+        );
+        drop(held);
+        for call in [first, second] {
+            assert_eq!(
+                call.join().expect("the call returned"),
+                Ok(Some(b"kept".to_vec())),
+                "answered from the new root"
+            );
+        }
+        assert_eq!(finds.load(Ordering::Relaxed), 1, "one find, one migration");
+        assert!(
+            new_roaming.join("notes").exists(),
+            "the store was copied over"
+        );
+    }
 
     #[test]
     fn a_container_that_could_not_be_read_is_read_again_at_the_next_call() {

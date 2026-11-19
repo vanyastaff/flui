@@ -6282,10 +6282,15 @@ store from before it was packaged is copied over then, once, within
 copy left are swept by their exact name (folders only, no link followed, at most
 `MAX_SWEPT`). One instance migrates at a time, under an exclusive lock on one
 lock file in the package's `LocalState` (`migration_lock`) held for the sweep,
-the copy and the rename; an instance that finds it held waits for it, however
-long the holder's copy takes (only the store's first call waits, on its IO
-thread; the system releases a crashed holder's lock), then judges the root
-again and takes the one the holder put in place. A failed copy or rename
+the copy and the rename (its folder made first); an instance that finds it held
+waits for it, however long the holder's copy takes (the system releases a
+crashed holder's lock), then judges the root again and takes the one the holder
+put in place. The wait blocks: one find runs at a time (`ProcessStore`'s
+`finding`), every call that arrives meanwhile waits for its answer, and
+`flui-app`'s storage host runs the store's calls on the IO runtime's blocking
+threads, so the wait holds none of the IO workers other work shares; what a
+stalled holder still holds back is that instance's storage answers
+(`docs/gaps.md`). A failed copy or rename
 removes its staging folder and reports its own error, and a root another
 instance placed first is kept. The old store stays the store only where the new
 root was shown to hold none (`roots_after_migration`): after a failed copy,

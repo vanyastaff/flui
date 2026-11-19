@@ -1,7 +1,9 @@
 //! The byte storage the host hands every UI runtime it builds: the
-//! platform's [`DataStore`] for the configured data directory, its calls run
-//! on the host's IO pool: blocking on native targets, awaited on wasm32,
-//! where the page's IndexedDB answers in a later task.
+//! platform's [`DataStore`] for the configured data directory, its calls
+//! driven by tasks on the host's IO pool. On native targets a call blocks,
+//! so the task runs it on the IO runtime's blocking threads and awaits it,
+//! keeping the pool's workers free; on wasm32 the page's IndexedDB answers
+//! in a later task.
 //!
 //! A read and a copy aside are one IO task each. Writes go through one lane
 //! per name: [`publish`] accepts the bytes at once, and the lane's single IO
@@ -57,16 +59,52 @@ struct Write {
     reply: oneshot::Sender<Result<StoredVersion, StorageError>>,
 }
 
-/// What the store answers to `$call`: at once on native targets, where the
-/// call blocks this IO task's thread, and awaited on wasm32.
+/// What `$store` (an `Arc<DataStore>`) answers to `$call`: on native targets
+/// the blocking call runs off the IO pool's workers ([`off_io_workers`]) and
+/// this IO task awaits it; on wasm32 the call is a future, awaited here.
 macro_rules! answer {
-    ($call:expr) => {{
+    ($io:expr, $store:ident => $call:expr) => {{
         #[cfg(not(target_arch = "wasm32"))]
-        let answer = $call;
+        let answer = {
+            let $store = Arc::clone(&$store);
+            off_io_workers($io, move || $call).await
+        };
         #[cfg(target_arch = "wasm32")]
-        let answer = $call.await;
+        let answer = {
+            // The page's store answers in a later task: no thread to leave.
+            let _ = $io;
+            $call.await
+        };
         answer
     }};
+}
+
+/// Run the store's blocking `call` off the IO pool's workers: on the IO
+/// runtime's blocking threads, so a call that waits (a store whose first
+/// call waits for another instance's migration, a slow disk) holds none of
+/// the workers HTTP, image loads and background work share. A host's own IO
+/// pool (an embedder's, a test's deterministic one) has no such threads, and
+/// the call runs in the IO task there. A panic in `call` resumes in the IO
+/// task, as it would have run there.
+#[cfg(not(target_arch = "wasm32"))]
+async fn off_io_workers<T: Send + 'static>(
+    io: &Weak<ExecutionServices>,
+    call: impl FnOnce() -> Result<T, StorageError> + Send + 'static,
+) -> Result<T, StorageError> {
+    let runtime = io
+        .upgrade()
+        .and_then(|services| services.io_runtime().ok().flatten());
+    let Some(runtime) = runtime else {
+        return call();
+    };
+    match runtime.spawn_blocking(call).await {
+        Ok(answer) => answer,
+        Err(failed) => match failed.try_into_panic() {
+            Ok(payload) => std::panic::resume_unwind(payload),
+            // The runtime shut down before the call ran.
+            Err(_) => Err(StorageError::Cancelled),
+        },
+    }
 }
 
 /// Whether the host's IO pool still admits work: alive and not shutting down.
@@ -90,9 +128,10 @@ impl Storage for HostStorage {
     fn read(&self, name: &StorageName, limit: u64) -> StorageFuture<Stored> {
         let (reply, answer) = oneshot::channel();
         let store = Arc::clone(&self.store);
+        let io = Weak::clone(&self.io);
         let name = *name;
         let task: IoFuture = Box::pin(async move {
-            let _ = reply.send(answer!(store.read(&name, limit)));
+            let _ = reply.send(answer!(&io, store => store.read(&name, limit)));
         });
         match self.spawn(task) {
             Ok(()) => Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }),
@@ -166,9 +205,10 @@ impl Storage for HostStorage {
     fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside> {
         let (reply, answer) = oneshot::channel();
         let store = Arc::clone(&self.store);
+        let io = Weak::clone(&self.io);
         let name = *name;
         let task: IoFuture = Box::pin(async move {
-            let _ = reply.send(answer!(store.copy_aside(&name)));
+            let _ = reply.send(answer!(&io, store => store.copy_aside(&name)));
         });
         match self.spawn(task) {
             Ok(()) => Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }),
@@ -215,23 +255,18 @@ struct LaneWriter {
 }
 
 impl LaneWriter {
-    #[cfg_attr(
-        not(target_arch = "wasm32"),
-        expect(
-            clippy::unused_async,
-            reason = "the wasm32 store's writes are awaited; native ones block"
-        )
-    )]
     async fn run(mut self) {
-        while let Some(write) = self.take_next() {
+        while let Some(Write { bytes, mode, reply }) = self.take_next() {
             // Shutdown can begin while this lane drains: what it accepted
             // before then resolves `Cancelled` rather than writing after it.
             let result = if admitting(&self.io) {
-                answer!(self.store.write(&self.name, &write.bytes, write.mode))
+                let store = &self.store;
+                let name = self.name;
+                answer!(&self.io, store => store.write(&name, &bytes, mode))
             } else {
                 Err(StorageError::Cancelled)
             };
-            let _ = write.reply.send(result);
+            let _ = reply.send(result);
         }
     }
 
@@ -570,7 +605,124 @@ mod tests {
                     "a_storage_outliving_its_host_refuses_requests",
                     a_storage_outliving_its_host_refuses_requests,
                 ),
+                (
+                    "a_store_call_that_waits_holds_no_io_worker",
+                    a_store_call_that_waits_holds_no_io_worker,
+                ),
             ],
         );
+    }
+
+    /// A store whose find stalls (another instance holding the migration's
+    /// lock) until the test sends on the returned `release`; `started`
+    /// hears each find begin, and `finds` counts them.
+    struct StalledStore {
+        store: DataStore,
+        release: std::sync::mpsc::Sender<()>,
+        started: std::sync::mpsc::Receiver<()>,
+        finds: Arc<std::sync::atomic::AtomicUsize>,
+        _roots: tempfile::TempDir,
+    }
+
+    impl StalledStore {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let roots = tempfile::tempdir().expect("temporary data root");
+            let dirs = DataDirs {
+                roaming: roots.path().join("roaming"),
+                local: roots.path().join("local"),
+            };
+            std::fs::create_dir_all(&dirs.roaming).expect("the found root");
+            std::fs::write(dirs.roaming.join("notes"), b"kept").expect("a kept value");
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let released = std::sync::Mutex::new(released);
+            let (starting, started) = std::sync::mpsc::channel();
+            let finds = Arc::new(AtomicUsize::new(0));
+            let counting = Arc::clone(&finds);
+            let store = DataStore::found_by(
+                flui_platform::AppDataDir::try_new("app").expect("a name"),
+                move |_| {
+                    counting.fetch_add(1, Ordering::Relaxed);
+                    let _ = starting.send(());
+                    let _ = released
+                        .lock()
+                        .expect("one find at a time")
+                        .recv_timeout(std::time::Duration::from_secs(30));
+                    Ok(Some(flui_native::storage::FileStore::new(dirs.clone())))
+                },
+            );
+            Self {
+                store,
+                release,
+                started,
+                finds,
+                _roots: roots,
+            }
+        }
+    }
+
+    /// Stores whose first calls stall (another instance holds each one's
+    /// migration lock) on FLUI's default pools, as many finds stalled as the
+    /// IO lane has workers: IO work that does not touch a store still runs.
+    /// Once the stalls end every call answers from the store found, the two
+    /// calls of one store from its one find.
+    fn a_store_call_that_waits_holds_no_io_worker() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        let services = Arc::new(ExecutionServices::with_defaults());
+        let (one, other) = (StalledStore::new(), StalledStore::new());
+        let StalledStore {
+            store,
+            release: release_one,
+            started: one_started,
+            finds: one_finds,
+            _roots: _one_roots,
+        } = one;
+        let StalledStore {
+            store: other_store,
+            release: release_other,
+            started: other_started,
+            finds: _,
+            _roots: _other_roots,
+        } = other;
+        let storage = super::host_storage(store, Arc::downgrade(&services));
+        let other_storage = super::host_storage(other_store, Arc::downgrade(&services));
+        let reads = [
+            storage.read(&NOTES, 1024),
+            storage.read(&NOTES, 1024),
+            other_storage.read(&NOTES, 1024),
+        ];
+        // Both finds have begun: on the lane's two workers, were the calls
+        // run there.
+        for started in [&one_started, &other_started] {
+            started
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the find begins");
+        }
+        let (ran, unrelated) = std::sync::mpsc::channel();
+        services
+            .spawn_io(Box::pin(async move {
+                let _ = ran.send(());
+            }))
+            .expect("the IO lane takes the task");
+        let ran = unrelated.recv_timeout(Duration::from_secs(10));
+        release_one.send(()).expect("the find waits");
+        release_other.send(()).expect("the find waits");
+        assert!(
+            ran.is_ok(),
+            "unrelated IO work runs while the stores' calls wait"
+        );
+        for read in reads {
+            let stored = pollster::block_on(read).expect("answered once the stall ended");
+            assert_eq!(stored.bytes.as_deref(), Some(&b"kept"[..]));
+        }
+        assert_eq!(
+            one_finds.load(Ordering::Relaxed),
+            1,
+            "one find for both calls of a store"
+        );
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
     }
 }

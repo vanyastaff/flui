@@ -159,10 +159,15 @@ within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging fold
 root, made with `create_dir` (one already at the name is an error, never a shared folder) and
 renamed into place whole. One instance migrates at a time: the sweep, the copy and the rename run
 under an exclusive lock (`File::lock`) on one lock file in the package's `LocalState`, which the
-system never roams. An instance that finds it held waits for it with no deadline: only the
-store's first call waits, on its IO thread, never the owner thread, and the system releases the
-lock of a holder that crashed. It then judges the root again and takes the one the holder put in
-place, so no session is left writing to an old store a copy has replaced. Staging folders an
+system never roams; its folder is made before it is opened. An instance that finds it held waits
+for it with no deadline, and the system releases the lock of a holder that crashed. It then
+judges the root again and takes the one the holder put in place, so no session is left writing
+to an old store a copy has replaced. The wait blocks the thread that finds the store: one find
+runs at a time and every storage call that arrives meanwhile waits for its answer, and the
+storage host runs the store's calls on the IO runtime's blocking threads (`spawn_blocking`), so
+the wait never holds the IO workers HTTP, image loads and background work share, nor the owner
+thread. What a stalled holder still holds back is that instance's storage answers, the limit
+[gaps](../gaps.md#sandbox-aware-file-access-is-partial) names. Staging folders an
 earlier copy left are removed first, under that lock, by their exact name, folders only and no
 link followed, at most `MAX_SWEPT` at a time. A copy or rename that fails removes its staging
 folder and reports its own error, and a root another instance put in place first is kept. The
@@ -230,6 +235,9 @@ manifest does not expose.
   `staging_folders_an_earlier_copy_left_are_swept_by_exact_name_within_a_bound`,
   `a_sweep_follows_no_link` (Unix),
   `a_second_instance_waits_for_the_lock_and_takes_the_root_put_in_place`,
+  `the_lock_is_taken_where_local_state_is_not_made_yet`,
+  `calls_that_arrive_while_the_store_is_found_wait_for_one_find_and_one_migration`,
+  `a_store_call_that_waits_holds_no_io_worker` (`flui-app`'s `host_storage_matrix`),
   `a_new_root_that_cannot_be_read_stays_the_store`,
   `a_staging_folder_already_there_is_an_error_not_a_shared_folder`,
   `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made`,
