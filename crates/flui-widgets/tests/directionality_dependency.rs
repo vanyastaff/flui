@@ -300,3 +300,166 @@ pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() 
         assert_eq!(first_child_x(&laid), ltr_x, "{name}: back to Ltr");
     }
 }
+
+/// Each shifted box takes an `AlignmentGeometry`: a directional alignment
+/// resolves against the ambient direction, `CENTER_START` naming the left edge
+/// in LTR and the right edge in RTL, and only a directional one takes a
+/// `Directionality` dependency.
+pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_direction() {
+    use crate::common::{LaidOut, loose};
+    use flui_foundation::geometry::{Matrix4, Size};
+    use flui_objects::{
+        RenderConstraintsTransformBox, RenderFittedBox, RenderFractionallySizedBox, RenderTransform,
+    };
+    use flui_painting::AlignmentGeometry;
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::{
+        FittedBox, FractionallySizedBox, OverflowBox, SizedOverflowBox, Transform, UnconstrainedBox,
+    };
+
+    // The horizontal component of the alignment a render object of type `T`
+    // was configured with.
+    fn configured_x<T: flui_rendering::RenderObject<flui_rendering::protocol::BoxProtocol>>(
+        laid: &LaidOut,
+        render_type: &str,
+        alignment: impl Fn(&T) -> Alignment,
+    ) -> f64 {
+        let id = laid.find_by_render_type(render_type);
+        laid.pipeline_owner().with(|owner| {
+            owner
+                .render_tree()
+                .get(id)
+                .and_then(|node| node.as_box())
+                .and_then(|node| node.render_object().downcast_ref::<T>())
+                .map(|render| alignment(render).x)
+                .expect("the shifted box is mounted")
+        })
+    }
+    // The x offset of the 40-wide child an overflow box places in its 200-wide
+    // slot.
+    fn child_x(laid: &LaidOut, render_type: &str) -> f64 {
+        let id = laid.find_by_render_type(render_type);
+        laid.offset(laid.only_child(id)).dx
+    }
+
+    type Make = fn(AlignmentGeometry) -> BoxedView;
+    type Read = fn(&LaidOut) -> f64;
+    let cases: [(&str, Make, Read, (f64, f64)); 6] = [
+        (
+            "FittedBox",
+            |alignment| {
+                FittedBox::new()
+                    .alignment(alignment)
+                    .child(SizedBox::new(40.0, 40.0))
+                    .boxed()
+            },
+            |laid| configured_x(laid, "RenderFittedBox", RenderFittedBox::alignment),
+            (-1.0, 1.0),
+        ),
+        (
+            "FractionallySizedBox",
+            |alignment| {
+                FractionallySizedBox::new()
+                    .width_factor(0.5)
+                    .alignment(alignment)
+                    .child(SizedBox::new(40.0, 40.0))
+                    .boxed()
+            },
+            |laid| {
+                configured_x(
+                    laid,
+                    "RenderFractionallySizedBox",
+                    RenderFractionallySizedBox::alignment,
+                )
+            },
+            (-1.0, 1.0),
+        ),
+        (
+            "UnconstrainedBox",
+            |alignment| {
+                UnconstrainedBox::new()
+                    .alignment(alignment)
+                    .child(SizedBox::new(40.0, 40.0))
+                    .boxed()
+            },
+            |laid| {
+                configured_x(
+                    laid,
+                    "RenderConstraintsTransformBox",
+                    RenderConstraintsTransformBox::alignment,
+                )
+            },
+            (-1.0, 1.0),
+        ),
+        (
+            "Transform",
+            |alignment| {
+                Transform::new(Matrix4::IDENTITY)
+                    .alignment(alignment)
+                    .child(SizedBox::new(40.0, 40.0))
+                    .boxed()
+            },
+            |laid| {
+                configured_x(laid, "RenderTransform", |render: &RenderTransform| {
+                    render.alignment().expect("a pivot alignment")
+                })
+            },
+            (-1.0, 1.0),
+        ),
+        (
+            "OverflowBox",
+            |alignment| {
+                OverflowBox::new()
+                    .alignment(alignment)
+                    .min_width(40.0)
+                    .max_width(40.0)
+                    .child(SizedBox::new(40.0, 40.0))
+                    .boxed()
+            },
+            |laid| child_x(laid, "RenderConstrainedOverflowBox"),
+            (0.0, 160.0),
+        ),
+        (
+            "SizedOverflowBox",
+            |alignment| {
+                SizedOverflowBox::new(Size::new(200.0, 200.0))
+                    .alignment(alignment)
+                    .child(SizedBox::new(40.0, 40.0))
+                    .boxed()
+            },
+            |laid| child_x(laid, "RenderSizedOverflowBox"),
+            (0.0, 160.0),
+        ),
+    ];
+
+    for (name, make, read, (ltr, rtl)) in cases {
+        let directional = AlignmentGeometry::from(AlignmentDirectional::CENTER_START);
+        let mut laid = lay_out(
+            Directionality::new(TextDirection::Ltr, make(directional)),
+            loose(200.0),
+        );
+        assert_eq!(read(&laid), ltr, "{name}: start is the left edge in LTR");
+        assert_eq!(
+            laid.inherited_dependent_count::<Directionality>(),
+            1,
+            "{name}: a directional alignment depends on the direction"
+        );
+        laid.pump_widget(Directionality::new(TextDirection::Rtl, make(directional)));
+        assert_eq!(read(&laid), rtl, "{name}: start is the right edge in RTL");
+
+        let mut absolute = lay_out(
+            Directionality::new(TextDirection::Rtl, make(Alignment::CENTER_LEFT.into())),
+            loose(200.0),
+        );
+        assert_eq!(
+            read(&absolute),
+            ltr,
+            "{name}: an absolute alignment stays put"
+        );
+        assert_eq!(
+            absolute.inherited_dependent_count::<Directionality>(),
+            0,
+            "{name}: an absolute alignment takes no dependency"
+        );
+    }
+}

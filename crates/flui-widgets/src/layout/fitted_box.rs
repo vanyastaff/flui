@@ -1,11 +1,13 @@
 //! [`FittedBox`] — scales and positions its child within itself per a [`BoxFit`].
 
 use flui_objects::RenderFittedBox;
-use flui_painting::Alignment;
 use flui_painting::BoxFit;
 use flui_painting::paint::Clip;
+use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+
+use crate::localization::{Directionality, resolve_alignment};
 
 /// Scales and positions its child within itself according to a [`BoxFit`].
 ///
@@ -14,7 +16,7 @@ use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct FittedBox {
     fit: BoxFit,
-    alignment: Alignment,
+    alignment: AlignmentGeometry,
     clip: Clip,
     child: Child,
     site: CreationSite,
@@ -37,7 +39,7 @@ impl FittedBox {
     fn at(site: CreationSite) -> Self {
         Self {
             fit: BoxFit::Contain,
-            alignment: Alignment::CENTER,
+            alignment: Alignment::CENTER.into(),
             clip: Clip::None,
             child: Child::empty(),
             site,
@@ -51,10 +53,12 @@ impl FittedBox {
         self
     }
 
-    /// Set how the scaled child is aligned within the box.
+    /// Set how the scaled child is aligned within the box: an [`Alignment`] is
+    /// absolute, an [`AlignmentDirectional`](flui_painting::AlignmentDirectional)
+    /// resolves against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = alignment.into();
         self
     }
 
@@ -71,26 +75,29 @@ impl FittedBox {
         self.child = Child::some(child.into_view());
         self
     }
+
+    /// The alignment resolved against the ambient [`Directionality`], read only
+    /// for a directional one.
+    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
+        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
+    }
 }
 
 impl RenderView for FittedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFittedBox;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        RenderFittedBox::new(self.fit, self.alignment, self.clip)
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        RenderFittedBox::new(self.fit, self.resolved_alignment(ctx), self.clip)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         render_object.set_fit(self.fit)
-            | render_object.set_alignment(self.alignment)
+            | render_object.set_alignment(self.resolved_alignment(ctx))
             | render_object.set_clip_behavior(self.clip)
     }
 

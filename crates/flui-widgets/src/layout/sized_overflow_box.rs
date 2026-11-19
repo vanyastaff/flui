@@ -2,9 +2,11 @@
 
 use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedOverflowBox;
-use flui_painting::Alignment;
+use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+
+use crate::localization::{Directionality, resolve_alignment};
 
 /// Claims a specific size for itself while laying its child out under the
 /// incoming (parent) constraints, which may allow the child to be a different
@@ -16,7 +18,7 @@ use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 /// Backed by [`RenderSizedOverflowBox`].
 #[derive(Clone, Debug)]
 pub struct SizedOverflowBox {
-    alignment: Alignment,
+    alignment: AlignmentGeometry,
     requested_size: Size,
     child: Child,
     site: CreationSite,
@@ -27,7 +29,7 @@ impl SizedOverflowBox {
     #[track_caller]
     pub fn new(requested_size: Size) -> Self {
         Self {
-            alignment: Alignment::CENTER,
+            alignment: Alignment::CENTER.into(),
             requested_size,
             child: Child::empty(),
             site: CreationSite::here(),
@@ -35,9 +37,13 @@ impl SizedOverflowBox {
     }
 
     /// Sets the alignment of the child within the claimed slot.
+    ///
+    /// An [`Alignment`] is absolute, an
+    /// [`AlignmentDirectional`](flui_painting::AlignmentDirectional) resolves
+    /// against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = alignment.into();
         self
     }
 
@@ -49,24 +55,29 @@ impl SizedOverflowBox {
     }
 }
 
+impl SizedOverflowBox {
+    /// The alignment resolved against the ambient [`Directionality`], read only
+    /// for a directional one.
+    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
+        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
+    }
+}
+
 impl RenderView for SizedOverflowBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedOverflowBox;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        RenderSizedOverflowBox::new(self.alignment, self.requested_size)
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        RenderSizedOverflowBox::new(self.resolved_alignment(ctx), self.requested_size)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_alignment(self.resolved_alignment(ctx));
         impact |= render_object.set_requested_size(self.requested_size);
         impact
     }
