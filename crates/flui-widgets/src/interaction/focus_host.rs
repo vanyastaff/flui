@@ -182,16 +182,20 @@ impl FocusConfig {
     fn sync_traversal_overrides(
         &self,
         node: &Rc<FocusNode>,
-        registration: &mut Option<FocusNodeRegistration>,
+        registrations: &mut RareHostRegistrations,
     ) {
         if matches!(self.node_ownership, FocusNodeOwnership::ExternalSource(_)) {
-            if let Some(previous) = registration.take() {
+            if let Some(previous) = registrations.take_traversal() {
                 previous.relinquish();
             }
         } else {
-            *registration = self
-                .traversal_overrides()
-                .map(|overrides| node.register_traversal_overrides(overrides.clone()));
+            match self.traversal_overrides() {
+                Some(overrides) => {
+                    registrations
+                        .put_traversal(node.register_traversal_overrides(overrides.clone()));
+                }
+                None => drop(registrations.take_traversal()),
+            }
         }
     }
 
@@ -225,7 +229,7 @@ impl FocusConfig {
     fn configure(
         &self,
         node: &Rc<FocusNode>,
-        key_handler_registration: &mut Option<FocusNodeRegistration>,
+        registrations: &mut RareHostRegistrations,
         shared: &Rc<Shared>,
     ) {
         match &self.node_ownership {
@@ -234,10 +238,10 @@ impl FocusConfig {
                 node.set_skip_traversal(self.skip_traversal.unwrap_or(false));
                 node.set_descendants_are_focusable(self.descendants_are_focusable.unwrap_or(true));
                 if let Some(handler) = self.on_key_event() {
-                    *key_handler_registration =
-                        Some(node.register_on_key_event(key_handler(handler, shared)));
+                    registrations
+                        .put_key_handler(node.register_on_key_event(key_handler(handler, shared)));
                 } else {
-                    key_handler_registration.take();
+                    drop(registrations.take_key_handler());
                     node.clear_on_key_event();
                 }
             }
@@ -252,16 +256,60 @@ impl FocusConfig {
                     node.set_descendants_are_focusable(descendants_are_focusable);
                 }
                 if let Some(handler) = self.on_key_event() {
-                    *key_handler_registration =
-                        Some(node.register_on_key_event(key_handler(handler, shared)));
+                    registrations
+                        .put_key_handler(node.register_on_key_event(key_handler(handler, shared)));
                 }
             }
             FocusNodeOwnership::ExternalSource(_) => {
-                if let Some(registration) = key_handler_registration.take() {
+                if let Some(registration) = registrations.take_key_handler() {
                     registration.relinquish();
                 }
             }
         }
+    }
+}
+
+/// The host's ownership of what it installs on its node for the rare parts
+/// of its configuration: the key handler and the traversal links. A
+/// control sets neither, so the two live behind one box, made on the first
+/// registration of either and kept.
+#[derive(Default)]
+struct RareHostRegistrations(Option<Box<RareHostSlots>>);
+
+#[derive(Default)]
+struct RareHostSlots {
+    /// Generation-checked ownership of the key handler this host installed.
+    ///
+    /// External source-of-truth nodes keep caller-owned handlers intact.
+    /// Managed external nodes may retain an explicitly installed handler when
+    /// a later configuration omits the override, so ownership is stateful
+    /// rather than inferred from only the latest configuration.
+    key_handler: Option<FocusNodeRegistration>,
+    /// Generation-checked ownership of the traversal links.
+    traversal: Option<FocusNodeRegistration>,
+}
+
+impl RareHostRegistrations {
+    fn slots(&mut self) -> &mut RareHostSlots {
+        self.0.get_or_insert_with(Box::default)
+    }
+
+    /// Hold `registration`; the one it replaces drops after it is held.
+    fn put_key_handler(&mut self, registration: FocusNodeRegistration) {
+        drop(self.slots().key_handler.replace(registration));
+    }
+
+    fn take_key_handler(&mut self) -> Option<FocusNodeRegistration> {
+        self.0.as_mut()?.key_handler.take()
+    }
+
+    /// Hold `registration`; the one it replaces drops after it is held.
+    fn put_traversal(&mut self, registration: FocusNodeRegistration) {
+        drop(self.slots().traversal.replace(registration));
+    }
+
+    fn take_traversal(&mut self) -> Option<FocusNodeRegistration> {
+        self.0.as_mut()?.traversal.take()
     }
 }
 
@@ -305,7 +353,8 @@ impl RevealSlot {
 /// One focus node and its place in the presentation's focus tree, for the
 /// lifetime of the element that owns this host.
 pub(crate) struct FocusHost {
-    traversal_registration: Option<FocusNodeRegistration>,
+    /// What the host installed for its key handler and traversal links.
+    rare: RareHostRegistrations,
     /// What the callbacks installed on the node read.
     shared: Rc<Shared>,
     node: Rc<FocusNode>,
@@ -314,13 +363,6 @@ pub(crate) struct FocusHost {
     /// update compares the configuration with this, not with the previous
     /// one.
     owns_node: bool,
-    /// Generation-checked ownership of the key handler this host installed.
-    ///
-    /// External source-of-truth nodes keep caller-owned handlers intact.
-    /// Managed external nodes may retain an explicitly installed handler when
-    /// a later configuration omits the override, so ownership is stateful
-    /// rather than inferred from only the latest configuration.
-    key_handler_registration: Option<FocusNodeRegistration>,
     /// The exact presentation-local manager acquired from the mounting build
     /// owner. Listener removal must go back to this same instance.
     focus_manager: Rc<FocusManager>,
@@ -367,16 +409,14 @@ impl FocusHost {
             attachment: RefCell::new(None),
             reveal: RevealSlot::default(),
         });
-        let mut key_handler_registration = None;
-        config.configure(&node, &mut key_handler_registration, &shared);
-        let mut traversal_registration = None;
-        config.sync_traversal_overrides(&node, &mut traversal_registration);
+        let mut rare = RareHostRegistrations::default();
+        config.configure(&node, &mut rare, &shared);
+        config.sync_traversal_overrides(&node, &mut rare);
         Self {
             shared,
             node,
             owns_node: matches!(config.node_ownership, FocusNodeOwnership::Internal),
-            key_handler_registration,
-            traversal_registration,
+            rare,
             focus_manager: ctx.focus_manager(),
             parent: None,
             rect_provider_registration: None,
@@ -571,14 +611,9 @@ impl FocusHost {
 
         if node_changed {
             let replacement = config.make_node();
-            let mut replacement_key_handler_registration = None;
-            let mut replacement_traversal_registration = None;
-            config.sync_traversal_overrides(&replacement, &mut replacement_traversal_registration);
-            config.configure(
-                &replacement,
-                &mut replacement_key_handler_registration,
-                &self.shared,
-            );
+            let mut replacement_rare = RareHostRegistrations::default();
+            config.sync_traversal_overrides(&replacement, &mut replacement_rare);
+            config.configure(&replacement, &mut replacement_rare, &self.shared);
             // The provider the reveal reads is the one registered on the node.
             let provider = cloned(&self.shared.reveal.rect);
             let replacement_rect_provider_registration =
@@ -622,8 +657,7 @@ impl FocusHost {
                     self.shared.observed_node.set(previous);
                     drop((
                         replacement_focus_subscription,
-                        replacement_key_handler_registration,
-                        replacement_traversal_registration,
+                        replacement_rare,
                         replacement_rect_provider_registration,
                         replacement_context_registration,
                     ));
@@ -636,8 +670,7 @@ impl FocusHost {
             // The completed transaction made the old token stale and retired
             // the old node, so ancillary state can now be removed without
             // touching a newer host.
-            self.key_handler_registration.take();
-            self.traversal_registration.take();
+            drop(std::mem::take(&mut self.rare));
             self.rect_provider_registration.take();
             self.context_registration.take();
             let previous_subscription = self
@@ -645,16 +678,15 @@ impl FocusHost {
                 .replace(replacement_focus_subscription);
             self.node = replacement;
             self.owns_node = matches!(config.node_ownership, FocusNodeOwnership::Internal);
-            self.key_handler_registration = replacement_key_handler_registration;
-            self.traversal_registration = replacement_traversal_registration;
+            self.rare = replacement_rare;
             self.rect_provider_registration = replacement_rect_provider_registration;
             self.context_registration = replacement_context_registration;
             drop(self.shared.attachment.replace(Some(replacement_attachment)));
             drop(previous_subscription);
         } else {
             // Re-sync flags and handlers from the latest configuration.
-            config.sync_traversal_overrides(&self.node, &mut self.traversal_registration);
-            config.configure(&self.node, &mut self.key_handler_registration, &self.shared);
+            config.sync_traversal_overrides(&self.node, &mut self.rare);
+            config.configure(&self.node, &mut self.rare, &self.shared);
         }
 
         self.autofocus = config.autofocus;
@@ -679,18 +711,17 @@ impl FocusHost {
             .as_ref()
             .is_some_and(FocusAttachment::is_attached);
         if owns_attachment {
-            self.key_handler_registration.take();
-            self.traversal_registration.take();
+            drop(std::mem::take(&mut self.rare));
             self.rect_provider_registration.take();
             self.context_registration.take();
-        } else if let Some(registration) = self.key_handler_registration.take() {
+        } else if let Some(registration) = self.rare.take_key_handler() {
             // A superseded attachment has no authority to mutate this node.
             registration.relinquish();
         }
         if !owns_attachment && let Some(registration) = self.rect_provider_registration.take() {
             registration.relinquish();
         }
-        if !owns_attachment && let Some(registration) = self.traversal_registration.take() {
+        if !owns_attachment && let Some(registration) = self.rare.take_traversal() {
             registration.relinquish();
         }
         if !owns_attachment && let Some(registration) = self.context_registration.take() {
