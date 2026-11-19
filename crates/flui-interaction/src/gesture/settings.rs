@@ -8,7 +8,7 @@
 //!
 //! ```rust
 //! use flui_interaction::gesture::GestureSettings;
-//! use flui_platform::{TargetPlatform, pointer::PointerKind};
+//! use flui_platform::{TargetPlatform, input::pointer::PointerKind};
 //!
 //! // AOSP `ViewConfiguration.TOUCH_SLOP`.
 //! let touch = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch);
@@ -36,7 +36,7 @@ use crate::gesture::{OneEuroTuning, VelocityEstimator};
 ///
 /// ```rust
 /// use flui_interaction::gesture::{GestureProfiles, GestureSettings};
-/// use flui_platform::{TargetPlatform, pointer::PointerKind};
+/// use flui_platform::{TargetPlatform, input::pointer::PointerKind};
 ///
 /// let profiles = GestureProfiles::preset(TargetPlatform::Android);
 /// assert_eq!(

@@ -96,7 +96,7 @@
 //! ```rust
 //! use flui_interaction::{binding::GestureBinding, pointer::HitTestResult};
 //! use flui_foundation::geometry::Point;
-//! use flui_platform::{EventTime, pointer::{PointerButton, PointerButtons,
+//! use flui_platform::{EventTime, input::pointer::{PointerButton, PointerButtons,
 //!     PointerEvent, PointerId, PointerSource, PointerKind, PointerPosition,
 //!     PointerPress, PointerSample}};
 //!

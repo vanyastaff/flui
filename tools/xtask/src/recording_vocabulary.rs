@@ -88,12 +88,12 @@ const RECORDED: &[Recorded] = &[
     ),
     repo(
         "PlatformInput",
-        "crates/flui-platform/src/input/mod.rs",
+        "crates/flui-platform/src/input/event.rs",
         "PlatformInput",
     ),
     repo(
         "DragDropEvent",
-        "crates/flui-platform/src/input/mod.rs",
+        "crates/flui-platform/src/input/event.rs",
         "DragDropEvent",
     ),
     repo(
@@ -208,7 +208,7 @@ const RECORDED: &[Recorded] = &[
     ),
     repo(
         "WindowExecutionState",
-        "crates/flui-platform/src/window/mod.rs",
+        "crates/flui-platform/src/window/options.rs",
         "WindowExecutionState",
     ),
     repo(

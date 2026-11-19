@@ -1443,7 +1443,7 @@ use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolTy
 #[cfg(target_os = "android")]
 use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState};
 #[cfg(target_os = "android")]
-use flui_platform::{EventTime, keyboard::Modifiers as OwnedModifiers};
+use flui_platform::{EventTime, input::keyboard::Modifiers as OwnedModifiers};
 #[cfg(target_os = "android")]
 use keyboard_types::{Modifiers, NamedKey as UpstreamNamedKey};
 #[cfg(target_os = "android")]

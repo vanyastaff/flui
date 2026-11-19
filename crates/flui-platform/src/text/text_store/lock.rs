@@ -8,7 +8,8 @@
 //! inside a read lock does not compile.
 //!
 //! ```compile_fail
-//! use flui_platform::text::text_store::{LockGrant, Utf16Offset, Utf16Range};
+//! use flui_platform::text::text_store::LockGrant;
+//! use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
 //!
 //! let _ = LockGrant::read(|session| {
 //!     let _ = session.replace(Utf16Range::collapsed(Utf16Offset::ZERO), "x");
@@ -18,7 +19,8 @@
 //! The same edit under a read-write grant compiles:
 //!
 //! ```
-//! use flui_platform::text::text_store::{LockGrant, Utf16Offset, Utf16Range};
+//! use flui_platform::text::text_store::LockGrant;
+//! use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
 //!
 //! let _ = LockGrant::read_write(|session| {
 //!     let _ = session.replace(Utf16Range::collapsed(Utf16Offset::ZERO), "x");
