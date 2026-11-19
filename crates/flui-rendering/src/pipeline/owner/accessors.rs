@@ -69,12 +69,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             && self.scheduler.layout_stamp().compatible(saved.stamp)
     }
 
-    /// Returns the unique identifier for this pipeline owner.
-    #[inline]
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
     /// Returns this presentation's current numeric text-sizing authority.
     #[inline]
     pub fn text_sizing(&self) -> &flui_painting::TextSizing {
@@ -1979,7 +1973,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     #[inline]
     pub fn semantics_enabled(&self) -> bool {
         self.semantics_enabled
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Sets whether semantics are enabled.
@@ -2013,9 +2006,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// assembles a tree, inspectable via [`Self::semantics_owner`] or the render
     /// harness, but publishes nowhere.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
-        let was_enabled = self
-            .semantics_enabled
-            .swap(enabled, std::sync::atomic::Ordering::Relaxed);
+        let was_enabled = std::mem::replace(&mut self.semantics_enabled, enabled);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         let (event, wake) = if enabled && !was_enabled {
             if self.semantics_owner.is_none() {

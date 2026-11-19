@@ -381,7 +381,7 @@ pub(super) struct SubtreeArena<'tree> {
     /// a node's context creation and its query moved inside that node's
     /// subtree, at any depth. A parent that must not act on a stand-in — a
     /// viewport about to publish scroll dimensions — asks before it commits.
-    degradation_events: std::sync::atomic::AtomicU64,
+    degradation_events: std::cell::Cell<u64>,
     _lifetime: PhantomData<&'tree mut ()>,
 }
 
@@ -415,7 +415,7 @@ impl<'tree> SubtreeArena<'tree> {
             poison_retries: RefCell::new(FxHashSet::default()),
             layout_failures: RefCell::new(Vec::new()),
             layout_successes: RefCell::new(Vec::new()),
-            degradation_events: std::sync::atomic::AtomicU64::new(0),
+            degradation_events: std::cell::Cell::new(0),
             _lifetime: PhantomData,
         }
     }
@@ -526,14 +526,13 @@ impl<'tree> SubtreeArena<'tree> {
     /// after the walk to feed the poison counters.
     /// The walk's degradation count so far (see [`Self::degradation_events`]).
     fn degradation_count(&self) -> u64 {
-        self.degradation_events
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.degradation_events.get()
     }
 
     /// Count one degradation event (see [`Self::degradation_events`]).
     fn note_degradation(&self) {
         self.degradation_events
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .set(self.degradation_events.get().saturating_add(1));
     }
 
     fn note_layout_failure(
@@ -555,8 +554,7 @@ impl<'tree> SubtreeArena<'tree> {
         // Every failure recorded here handed its caller a stand-in size,
         // geometry or intrinsic — the walk continues on a value this pass
         // did not compute.
-        self.degradation_events
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.note_degradation();
     }
 
     /// Records a descendant layout success, but only for a node the
@@ -1098,9 +1096,7 @@ unsafe fn layout_subtree_borrowed_impl(
         let stand_in = || {
             // Serving a stand-in is a degradation: the caller acts on
             // geometry this pass did not compute.
-            arena
-                .degradation_events
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            arena.note_degradation();
             // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
             // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &RenderNode = unsafe { &*node_ptr };
@@ -2006,9 +2002,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     if arena.layout_poison.is_poisoned(id) {
         let stand_in = || {
             // Serving a stand-in is a degradation (see the box twin).
-            arena
-                .degradation_events
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            arena.note_degradation();
             // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
             // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &crate::storage::RenderNode = unsafe { &*node_ptr };
