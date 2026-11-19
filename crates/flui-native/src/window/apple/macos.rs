@@ -91,7 +91,7 @@ use crate::owner::apple::macos::{
 };
 use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 use crate::owner::apple::pump_delivery::FollowedDelivery;
-use crate::owner::apple::timed_frame::{TimedFrame, TimedTick};
+use crate::owner::apple::timed_frame::{ArmedTick, TimedFrame, TimedTick};
 
 use crate::{
     owner::OpenWindowError,
@@ -1093,14 +1093,15 @@ fn defer_redraw(
     });
 }
 
-/// Run `window`'s tick for the timed frame it was asked for at `at`, on its
-/// owner lane after `delay`: served, it asks the window for a frame; early, it
-/// runs again for the rest; stale, it does nothing ([`TimedFrame::tick`]). A
-/// window closed or gone by then has nothing to draw.
+/// Run `window`'s armed `tick` for the timed frame it was asked for, on its
+/// owner lane after `delay`: the live tick, served, asks the window for a
+/// frame, and early, runs again for the rest; a superseded one does nothing
+/// ([`TimedFrame::tick`]). A window closed or gone by then has nothing to
+/// draw.
 fn schedule_timed_frame(
     owner: &'static dispatch2::DispatchQueue,
     window: Arc<OwnerWeak<MacOSWindow>>,
-    at: flui_platform::EventTime,
+    tick: ArmedTick,
     delay: std::time::Duration,
 ) {
     crate::owner::apple::macos::exec_after_on_owner(owner, delay, move || {
@@ -1111,11 +1112,11 @@ fn schedule_timed_frame(
             return;
         }
         let mut timed = owned.timed_frame.get();
-        let tick = timed.tick(at, flui_platform::EventTime::now());
+        let ran = timed.tick(tick, flui_platform::EventTime::now());
         owned.timed_frame.set(timed);
-        match tick {
+        match ran {
             TimedTick::Serve => PlatformWindow::request_redraw(&*owned),
-            TimedTick::Wait(rest) => schedule_timed_frame(owner, window, at, rest),
+            TimedTick::Wait(rest) => schedule_timed_frame(owner, window, tick, rest),
             TimedTick::Stale => {}
         }
     });
@@ -1613,11 +1614,11 @@ impl PlatformWindow for MacOSWindow {
     /// deadline, whose deliveries ask every window.
     fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
         let mut timed = self.timed_frame.get();
-        let delay = timed.request(at, flui_platform::EventTime::now());
+        let armed = timed.request(at, flui_platform::EventTime::now());
         self.timed_frame.set(timed);
-        if let (Some(at), Some(delay)) = (at, delay) {
+        if let Some((tick, delay)) = armed {
             let redraw = self.redraw();
-            schedule_timed_frame(redraw.owner, Arc::clone(&redraw.window), at, delay);
+            schedule_timed_frame(redraw.owner, Arc::clone(&redraw.window), tick, delay);
         }
     }
 

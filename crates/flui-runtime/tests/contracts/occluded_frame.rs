@@ -160,8 +160,27 @@ impl Covering {
             .settle_frame(FrameSettlement::new(address, epoch, verdict));
     }
 
+    /// A pump `dt` later with no frame of the covered window's own: as a
+    /// sibling's frame, or work due elsewhere, runs the runtime.
     fn pump_after(&mut self, dt: Duration, sink: &mut Queues) {
         self.clock.advance(dt);
+        let _ = self.runtime.pump(&mut self.clock.clone(), sink);
+    }
+
+    /// The window delivers a frame now, as its host does when it serves the
+    /// window's timed request.
+    fn serve(&self) {
+        let vsync = self.event_now();
+        self.runtime.note_frame_request(
+            self.runtime.presentation_id(),
+            flui_platform::FrameRequest::new(vsync),
+        );
+    }
+
+    /// A pump `dt` later of the frame the window delivered then ([`Self::serve`]).
+    fn serve_after(&mut self, dt: Duration, sink: &mut Queues) {
+        self.clock.advance(dt);
+        self.serve();
         let _ = self.runtime.pump(&mut self.clock.clone(), sink);
     }
 }
@@ -206,7 +225,7 @@ fn an_owed_frame_is_refused_by_its_own_settlement_only() {
     covering.cover();
     covering.settle(seen_frame, SubmitVerdict::NotShown);
     covering.change();
-    covering.pump_after(Duration::from_millis(1100), &mut sink);
+    covering.serve_after(Duration::from_millis(1100), &mut sink);
     assert_eq!(
         sink.epochs.len(),
         2,
@@ -214,7 +233,7 @@ fn an_owed_frame_is_refused_by_its_own_settlement_only() {
     );
     covering.settle(sink.last(), SubmitVerdict::NotShown);
     covering.change();
-    covering.pump_after(Duration::from_secs(2), &mut sink);
+    covering.serve_after(Duration::from_secs(2), &mut sink);
     assert_eq!(
         sink.epochs.len(),
         2,
@@ -235,7 +254,7 @@ fn a_hold_leaves_the_owed_frame_due() {
     covering.cover();
     covering.change();
     covering.ask_owed_frames();
-    covering.pump_after(Duration::from_millis(1100), &mut sink);
+    covering.serve_after(Duration::from_millis(1100), &mut sink);
     covering.ask_owed_frames();
     assert_eq!(sink.epochs.len(), 1, "the full sink holds the owed frame");
     assert!(
@@ -250,9 +269,49 @@ fn a_hold_leaves_the_owed_frame_due() {
         asked.last().copied().flatten().is_some_and(|at| at <= now),
         "the hold ended: the window is asked for the owed frame now, got {asked:?}"
     );
-    assert!(covering.runtime.runs_frames(), "and its frame runs it");
+    covering.serve();
+    assert!(
+        covering.runtime.runs_frames(),
+        "the window's served frame runs it"
+    );
     covering.pump_after(Duration::ZERO, &mut sink);
     assert_eq!(sink.epochs.len(), 2, "the owed frame is drawn");
+}
+
+/// The owed frame is drawn only by a frame its own window delivered once its
+/// instant came, the frame that serves the window's timed request: a pump past
+/// the instant with no frame of its window (a sibling's frame, work due
+/// elsewhere) neither draws it nor counts it as due work or a frame to run,
+/// so no loop turns for it. Fails when a due owed frame is counted as due
+/// work: the pump draws it without the window's frame, and a runner's dirty
+/// gate keeps pumping it.
+#[test]
+fn the_owed_frame_is_drawn_only_by_its_windows_served_frame() {
+    let mut sink = Queues::holding(2);
+    let mut covering = Covering::open(OccludedSurface::Kept, &mut sink);
+    covering.settle(sink.last(), SubmitVerdict::Presented);
+    covering.cover();
+    covering.change();
+    covering.pump_after(Duration::from_millis(1100), &mut sink);
+    assert_eq!(
+        sink.epochs.len(),
+        1,
+        "no frame of its window: nothing drawn"
+    );
+    assert!(
+        !covering.runtime.has_pending_due_work(),
+        "an owed frame no frame of its window served is no due work"
+    );
+    assert!(
+        !covering.runtime.runs_frames() && !covering.runtime.owed_frame_served(),
+        "nor a frame to run"
+    );
+    covering.serve_after(Duration::ZERO, &mut sink);
+    assert_eq!(sink.epochs.len(), 2, "its window's served frame draws it");
+    assert!(
+        !covering.runtime.owed_frame_served(),
+        "the attempt takes the serve"
+    );
 }
 
 /// The owed frame is asked of the covered window itself, at the end of its
@@ -291,12 +350,12 @@ fn the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline() {
         "turns before its instant ask nothing more"
     );
 
-    covering.pump_after(Duration::from_millis(600), &mut sink);
+    covering.serve_after(Duration::from_millis(600), &mut sink);
     covering.ask_owed_frames();
     assert_eq!(
         sink.epochs.len(),
         2,
-        "the owed frame is drawn at its instant"
+        "the owed frame is drawn by the frame that serves its request"
     );
     assert_eq!(
         covering.timed_frame_requests(),

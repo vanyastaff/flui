@@ -778,17 +778,22 @@ last asked, so a window hears an instant once whatever other windows draw, and w
 nothing is owed; `OwedFrameRequest::deliver` records it as asked after the host's call returns.
 `OwnerDelivery` delivers them at the end of every runtime work item that is not terminal and
 after an installation, with the runtime back; the headless host after each pump, observation and
-notice, and before it computes its wait or decides it has settled, and it serves the owed frame
-only through the request. Once the instant has come `runs_frames` is true (every runner's wake
-gate and the headless host ask it, so a runner whose frames are off runs the frame), it counts as
-due work, and `FrameClock::grant_hidden_frame` lets the first poll that can produce it. The frame
-stays due until it runs, however late the host serves its request. A hold leaves it due: the
-dropped-frame backoff moves the instant to the retry; while the sink holds as many frames as it
-may the request is withdrawn, the settlement that frees a place asking for it again; and a frame
-held by its text preparation marks what the window was asked as held (`hold_owed_frame`), so the
-same instant is asked again once the preparation may proceed (`text_preparation::may_proceed`)
-and not while it waits. Only a frame that runs starts the next quiet period
-(`occluded_frame_drawn`). The owing follows every
+notice, and before it computes its wait or decides it has settled. Only a frame of the
+presentation's own window, delivered once its instant has come (`note_frame_request`), serves the
+owed frame (`note_owed_frame_served`): then `owed_frame_served` and `runs_frames` are true (every
+runner's wake gate and the headless host ask it, so a runner whose frames are off runs the frame,
+and a runner's dirty gate counts it), and `FrameClock::grant_hidden_frame` lets the first poll
+that can produce it. The owed frame is no due work otherwise (`has_pending_due_work` leaves it
+out): the frames of another window and the passing of its instant never run it, and the attempt
+takes the serve whatever comes of it. The frame stays owed until it runs, however late the host
+serves its request. A hold leaves it owed: the dropped-frame backoff moves the instant to the
+retry; while the sink holds as many frames as it may the request is withdrawn, the settlement that
+frees a place asking for it again; and a served frame held by its text preparation marks what the
+window was asked as held at the preparation's outcome generation (`hold_owed_frame`,
+`text_preparation::outcome_generation`), so the same instant is asked again only once the
+generation moved on (an answer made the segment resumable, or the segment left), never while it
+waits. Only a frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing
+follows every
 change of sight (`follow_sight`: each window snapshot, the visibility edge, each session notice):
 a window whose frame would no longer be shown owes nothing, one that owes keeps its quiet period
 through any snapshot, and one that owed nothing starts one. A frame drawn while the window is
@@ -801,13 +806,16 @@ leaves open, that a covered window's uncovering shows the frame of before the co
 `an_owed_frame_the_surface_refuses_is_not_drawn_again`,
 `a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep`,
 `a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone`,
-`a_change_between_pumps_is_still_owed_its_frame` (`flui-testing`, `occluded_window`);
+`a_change_between_pumps_is_still_owed_its_frame`,
+`a_held_owed_frame_is_asked_again_once_its_text_is_answered`,
+`a_held_owed_frame_keeps_no_loop_turning` (`flui-testing`, `occluded_window`);
 `a_hidden_window_raises_no_redraw_flag`, `an_owed_frame_is_refused_by_its_own_settlement_only`,
 `a_hold_leaves_the_owed_frame_due`,
 `the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline`,
+`the_owed_frame_is_drawn_only_by_its_windows_served_frame`,
 `an_owner_work_item_asks_the_covered_window_for_its_owed_frame`,
 `a_window_installed_covered_is_asked_for_its_owed_frame_by_the_install` (`flui-runtime`,
-`occluded_frame`); `a_held_instant_is_asked_again_once_its_hold_may_have_ended` (`flui-runtime`,
+`occluded_frame`); `a_held_instant_is_asked_again_once_its_outcome_moved_on` (`flui-runtime`,
 `occluded_frame` unit tests).
 
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or

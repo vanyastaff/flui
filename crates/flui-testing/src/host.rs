@@ -88,11 +88,13 @@ use crate::text_store_host::RecordingTextStoreHost;
 
 mod registrations;
 mod sink;
+mod text_sizing;
 mod turn;
 
 pub(crate) use registrations::AppRegistrations;
 use registrations::{Registry, compose_registry};
 pub use sink::{HeadlessSink, UnshownFrame};
+pub use text_sizing::ScriptedTextSizing;
 
 /// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1 (a
 /// window [opened](HeadlessHost::open_window) beside it takes the next
@@ -317,12 +319,10 @@ impl HeadlessWindow {
     }
 
     /// Serve the window's timed frame request if its instant is not later
-    /// than `now`: it is asked once.
-    fn serve_timed_frame(&self, now: flui_platform::EventTime) {
+    /// than `now`: it is asked once. Whether it was served.
+    fn serve_timed_frame(&self, now: flui_platform::EventTime) -> bool {
         let mut chrome = self.chrome.lock();
-        if chrome.timed_frame.is_some_and(|at| at <= now) {
-            chrome.timed_frame = None;
-        }
+        chrome.timed_frame.take_if(|at| *at <= now).is_some()
     }
 
     /// Whether the host closed the window.
@@ -1231,6 +1231,10 @@ pub struct HeadlessHost {
     /// a phone's background hold whose writes ended, or the last block a
     /// query's request held.
     session_end_releases: Rc<std::cell::Cell<usize>>,
+    /// The scripted text-sizing provider a test installed
+    /// ([`Self::script_text_sizing`]), which takes the runtime's frontiers
+    /// after each pump.
+    text_sizing: Option<Rc<std::cell::RefCell<text_sizing::ScriptedTextSizingState>>>,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -1526,6 +1530,7 @@ impl HeadlessHost {
             session_end: Rc::default(),
             background_hold: false,
             session_end_releases: Rc::default(),
+            text_sizing: None,
         }
     }
 
@@ -1697,18 +1702,19 @@ impl HeadlessHost {
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
         let vsync = self.event_now();
-        // A timed frame request whose instant has come is served by this frame,
-        // once: the runtime grants the owed frame of a window whose instant has
-        // come at its first poll.
-        for window in &self.open {
-            window.window.serve_timed_frame(vsync);
-        }
         let mut request = flui_platform::FrameRequest::new(vsync);
         if let Some(presented) = self.presented.take() {
             request = request.presented(presented);
         }
+        // As a window system does, a window that cannot be seen is asked for no
+        // frame, unless its timed frame request came due: this frame serves that
+        // request, once, and only that frame of its own window serves the frame
+        // a covered window owes its surface (ADR-0389).
         for window in &self.open {
-            self.ui_runtime().note_frame_request(window.id, request);
+            let served = window.window.serve_timed_frame(vsync);
+            if served || window.window.state().is_seen() {
+                self.ui_runtime().note_frame_request(window.id, request);
+            }
         }
         let mut frame_clock = self.clock.clone();
         let Self {
@@ -1740,7 +1746,10 @@ impl HeadlessHost {
             failures.clear();
             first
         };
-        // As a runner's owner delivery does at the end of each work item.
+        // As a runner's owner delivery does at the end of each work item: the
+        // text-sizing frontiers the frame asked for go to the provider, then
+        // each covered window is asked for the frame it owes.
+        self.serve_text_sizing();
         self.ask_owed_frames();
         // Taken on every outcome: a failed frame's findings are its own, and
         // the failure that is raised already fails the test.
@@ -2886,6 +2895,12 @@ impl HeadlessHost {
     /// for a frame at (the frame a covered window owes its surface), or the
     /// next change the host's scenario scheduled. `None` when the loop would
     /// wait for input alone.
+    ///
+    /// Not a pure read: it first asks each covered window for the frame it
+    /// owes, as a runner's owner delivery does after the work item that left
+    /// it owed, which runs the windows' `request_frame_at` and records the
+    /// request ([`HeadlessWindow::timed_frame_requests`]). Asking again with
+    /// nothing changed asks nothing.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
         let Some(runtime) = &self.ui_runtime else {
@@ -3022,9 +3037,11 @@ impl HeadlessHost {
 
     /// Pump frames of `frame` until nothing is left to do — no redraw or
     /// frame asked for (a running animation asks for each next one), no
-    /// pending work, no armed deadline, no change the scenario scheduled — at
-    /// most `max_frames` of
-    /// them. Returns how many frames it took.
+    /// pending work, no armed deadline, no unserved timed frame request of a
+    /// window, no change the scenario scheduled — at most `max_frames` of
+    /// them. Returns how many frames it took. Before each check it asks each
+    /// covered window for the frame it owes, as
+    /// [`time_to_next_frame`](Self::time_to_next_frame) does.
     ///
     /// # Errors
     ///
@@ -3090,6 +3107,57 @@ impl HeadlessHost {
             ui_runtime.apply_window_observation(address, observation, &|_| {});
         });
         self.ask_owed_frames();
+    }
+
+    /// Install a scripted text-sizing provider on `window`: a captured source
+    /// whose frontiers the host takes after each pump, as a runner hands them
+    /// to the platform's text measurement, answered at once with each
+    /// request's authored size until the test [holds](ScriptedTextSizing::hold)
+    /// it. While held, the window's text preparation waits as it does for a
+    /// measurement service that has not answered, until
+    /// [`answer_text_sizing`](Self::answer_text_sizing).
+    ///
+    /// # Panics
+    ///
+    /// When the host is retired, already has a provider, or `window` is not
+    /// open.
+    pub fn script_text_sizing(&mut self, window: HeadlessWindowId) -> ScriptedTextSizing {
+        assert!(
+            self.text_sizing.is_none(),
+            "a headless host takes one scripted text-sizing provider"
+        );
+        let (_policy, writer) = flui_painting::TextSizing::captured();
+        let source = writer.source();
+        assert!(
+            self.ui_runtime()
+                .install_captured_text_sizing_for(window.0, source),
+            "the text-sizing provider is installed on an open window"
+        );
+        let (state, handle) = text_sizing::ScriptedTextSizingState::handle(writer);
+        self.text_sizing = Some(state);
+        handle
+    }
+
+    /// Answer every frontier the scripted text-sizing provider holds, as a
+    /// measurement service's answer arriving, then ask each covered window for
+    /// the frame it owes, as a runner's owner delivery does after the work
+    /// item that settled them. How many frontiers the runtime accepted; none
+    /// without a provider or a runtime.
+    pub fn answer_text_sizing(&mut self) -> usize {
+        let (Some(provider), Some(runtime)) = (&self.text_sizing, self.try_ui_runtime()) else {
+            return 0;
+        };
+        let accepted = text_sizing::answer_held(provider, runtime);
+        self.ask_owed_frames();
+        accepted
+    }
+
+    /// Hand the frontiers the runtime asked for to the scripted text-sizing
+    /// provider, if a test installed one.
+    fn serve_text_sizing(&self) {
+        if let (Some(provider), Some(runtime)) = (&self.text_sizing, self.try_ui_runtime()) {
+            text_sizing::serve(provider, runtime);
+        }
     }
 
     /// Ask each window for the frame its presentation owes its surface, or

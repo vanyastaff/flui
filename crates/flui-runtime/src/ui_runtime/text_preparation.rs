@@ -149,9 +149,20 @@ pub(crate) struct TextPreparation {
     /// The last finished segment's attempt allocation, which the next
     /// admitted segment reuses.
     retired_cohort: Option<RetiredTextSizingCohort>,
+    /// Advances each time a frame held by the saved segment may now get past
+    /// it: an answer made it resumable, or the segment left (withdrawn,
+    /// replaced, finished). A covered window's owed frame held here is asked
+    /// for again only once it moved on ([`outcome_generation`], ADR-0389).
+    outcome: u64,
 }
 
 impl TextPreparation {
+    /// A frame held by the saved segment may now get past it. Saturates at
+    /// the end of its range, 2^64 changes away.
+    fn outcome_moved(&mut self) {
+        self.outcome = self.outcome.saturating_add(1);
+    }
+
     pub(crate) fn holds_document_barrier(&self) -> bool {
         self.replacement_barrier
             || self
@@ -224,24 +235,13 @@ pub(crate) fn reconcile_with_recovery(
     !compatible
 }
 
-/// Whether the next frame of `presentation` may get past its saved segment:
-/// none is saved, its answer came ([`can_run`]), or what it was sampled from
-/// changed (a build is pending, the pipeline has invalidations, or its
-/// premises no longer hold), which the next frame's reconciliation withdraws
-/// it for. A segment parked or waiting on its answer with nothing changed may
-/// not, so a frame asked for it would draw nothing.
-pub(crate) fn may_proceed(presentation: &PresentationState) -> bool {
-    can_run(presentation)
-        || presentation.widgets().has_pending_builds()
-        || presentation
-            .pipeline()
-            .with(PipelineOwner::has_pending_invalidations)
-        || presentation
-            .text_preparation
-            .borrow()
-            .segment
-            .as_ref()
-            .is_some_and(|saved| !accepts(presentation, saved))
+/// The generation of what a frame of `presentation` would meet in its text
+/// preparation: it moves on when an answer makes the saved segment resumable
+/// or the segment leaves, and stands while the segment waits on its answer or
+/// is parked, whatever else is pending. The one reader of "may a held frame
+/// get past the preparation now" (ADR-0389).
+pub(crate) fn outcome_generation(presentation: &PresentationState) -> u64 {
+    presentation.text_preparation.borrow().outcome
 }
 
 pub(crate) fn can_run(presentation: &PresentationState) -> bool {
@@ -262,6 +262,7 @@ pub(crate) fn withdraw_for_retry(
     let retired = {
         let mut state = presentation.text_preparation.borrow_mut();
         state.replacement_barrier = true;
+        state.outcome_moved();
         state.segment.take()
     };
     presentation.pipeline().withdraw_layout();
@@ -365,7 +366,14 @@ pub(crate) fn pending(presentation: &PresentationState, frontier: TextPreparatio
 }
 
 pub(crate) fn finish(presentation: &PresentationState) {
-    let Some(finished) = presentation.text_preparation.borrow_mut().segment.take() else {
+    let Some(finished) = ({
+        let mut state = presentation.text_preparation.borrow_mut();
+        let finished = state.segment.take();
+        if finished.is_some() {
+            state.outcome_moved();
+        }
+        finished
+    }) else {
         return;
     };
     // Retiring releases the segment's numeric pins as dropping it would, with
@@ -395,6 +403,7 @@ impl UiRuntime {
             }
             state.installed = Some(source.clone());
             state.replacement_barrier = true;
+            state.outcome_moved();
             state.segment.take()
         };
         presentation.pipeline().withdraw_layout();
@@ -433,6 +442,7 @@ impl UiRuntime {
             }
             state.installed = None;
             state.replacement_barrier = true;
+            state.outcome_moved();
             state.segment.take()
         };
         presentation.pipeline().withdraw_layout();
@@ -578,6 +588,9 @@ impl UiRuntime {
                 TextSizingSettlement::Waiting => Wait::Waiting,
                 TextSizingSettlement::Unavailable | TextSizingSettlement::Parked => Wait::Parked,
             };
+            if matches!(outcome, TextSizingSettlement::Ready) {
+                state.outcome_moved();
+            }
             true
         };
         if accepted {
