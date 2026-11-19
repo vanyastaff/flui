@@ -20,6 +20,7 @@ use flui_painting::{Canvas, paint::Paint};
 
 use crate::damage::{FramePlan, RegionPlan};
 use crate::headless::RetainedCapture;
+use crate::recording_cache::admission::DRAWS_TO_ADMIT;
 
 const SIDE: u32 = 128;
 const SURFACE: SurfaceKey = SurfaceKey {
@@ -1482,10 +1483,6 @@ fn a_frame_counts_the_chunks_it_records() {
         .render_scene(&Scene::of_version(row.version()))
         .expect("the first frame renders");
     let counters = capture.counters();
-    assert!(
-        counters.recording_cache_bytes > 0,
-        "the row's recordings are kept"
-    );
     assert_eq!(
         counters,
         RasterCounters {
@@ -1495,9 +1492,9 @@ fn a_frame_counts_the_chunks_it_records() {
             region_passes: 0,
             recording_cache_hits: 0,
             recording_cache_evictions: 0,
-            recording_cache_bytes: counters.recording_cache_bytes,
+            recording_cache_bytes: 0,
         },
-        "a full frame walks the whole row"
+        "a full frame walks the whole row, and keeps no chunk it drew once"
     );
     capture.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
     capture
@@ -1758,11 +1755,48 @@ fn pixels_differing(a: &[u8], b: &[u8]) -> usize {
     a.iter().zip(b).filter(|(a, b)| a != b).count()
 }
 
+/// Draws `version` in full on each frame before the one that admits its
+/// chunks to the recording cache, so the next full frame captures them.
+fn draw_until_admitted(capture: &mut RetainedCapture, version: &SceneVersion) {
+    for _ in 1..DRAWS_TO_ADMIT {
+        full_frame(capture, version, flui_layer::FullReason::FirstFrame);
+    }
+}
+
+/// A chunk drawn on fewer consecutive frames than admission asks is
+/// recorded on each and never captured (ADR-0304 §9): a first frame keeps
+/// no recording and charges the cache nothing.
+#[test]
+fn a_chunk_drawn_once_is_not_captured() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let version = mixed_scene();
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    for frame in 1..DRAWS_TO_ADMIT {
+        let drawn = full_frame(&mut capture, &version, FullReason::FirstFrame);
+        assert_eq!(
+            (
+                drawn.counters.chunks_recorded,
+                drawn.counters.recording_cache_hits,
+                drawn.counters.recording_cache_bytes,
+            ),
+            (MIXED_CHUNKS, 0, 0),
+            "frame {frame} records every chunk and keeps none"
+        );
+        assert_eq!(capture.recording_cache_work().0, 0, "frame {frame}");
+    }
+}
+
 /// A chunk whose content, transform and surroundings are unchanged replays
-/// what it recorded (ADR-0304 §9, ADR-0006 §6): a second full frame of a
-/// version of text, rects, a gradient, a path and an image records no chunk,
-/// splices every one from the cache, and builds the IR the first frame
-/// recorded, byte for byte, which draws the same pixels.
+/// what it recorded (ADR-0304 §9, ADR-0006 §6) once it is admitted: the
+/// frames before the admitting one keep nothing, the admitting full frame of
+/// a version of text, rects, a gradient, a path and an image records every
+/// chunk and keeps each, and the next one records none, splices every one
+/// from the cache and builds the IR the admitting frame recorded, byte for
+/// byte, which draws the same pixels.
 #[test]
 fn a_cached_chunk_replays_the_command_stream_it_recorded() {
     use flui_layer::FullReason;
@@ -1772,6 +1806,14 @@ fn a_cached_chunk_replays_the_command_stream_it_recorded() {
     let version = mixed_scene();
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
+    for frame in 1..DRAWS_TO_ADMIT {
+        full_frame(&mut capture, &version, FullReason::FirstFrame);
+        assert_eq!(
+            capture.recording_cache_work().0,
+            0,
+            "frame {frame} keeps none"
+        );
+    }
     let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
     assert_eq!(
         (
@@ -1779,7 +1821,12 @@ fn a_cached_chunk_replays_the_command_stream_it_recorded() {
             first.counters.recording_cache_hits
         ),
         (MIXED_CHUNKS, 0),
-        "the first frame records every chunk"
+        "the admitting frame records every chunk"
+    );
+    assert_eq!(
+        capture.recording_cache_work().0,
+        usize::try_from(MIXED_CHUNKS).expect("a handful of chunks"),
+        "and keeps each"
     );
     assert!(
         first
@@ -1798,7 +1845,7 @@ fn a_cached_chunk_replays_the_command_stream_it_recorded() {
             second.counters.recording_cache_hits
         ),
         (0, MIXED_CHUNKS),
-        "the second frame replays every chunk"
+        "the next frame replays every chunk"
     );
     assert!(
         second.ir == first.ir,
@@ -1858,6 +1905,7 @@ fn a_repainted_boundary_replays_the_chunks_that_did_not_change() {
     let mut pipeline = frame(&mut scene, pipeline);
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
+    draw_until_admitted(&mut capture, scene.version());
     full_frame(&mut capture, scene.version(), FullReason::FirstFrame);
 
     update_render_object::<RenderColoredBox, _>(&mut pipeline, changing, |square| {
@@ -1978,6 +2026,7 @@ fn an_atlas_reset_misses_every_cached_recording() {
     for (row, between, plugin, hits) in rows {
         let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         capture.keep_recorded_ir();
+        draw_until_admitted(&mut capture, &version);
         let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
         assert_eq!(
             first.counters.chunks_recorded, MIXED_CHUNKS,
@@ -2034,6 +2083,7 @@ fn a_frame_not_shown_is_retried_without_recording() {
     // A frame shown, then one that fails after it began.
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
+    draw_until_admitted(&mut capture, &version);
     full_frame(&mut capture, &version, FullReason::FirstFrame);
     apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
     capture.fail_next_frame_after_begin();
@@ -2057,12 +2107,23 @@ fn a_frame_not_shown_is_retried_without_recording() {
         "after a failed frame: the retry draws what a fresh renderer draws"
     );
 
-    // A frame shown, a reclaim that drops its recordings, then a frame that
-    // records them again and panics before it is submitted.
+    // A frame that keeps every recording, a reclaim that drops them, frames
+    // that record them again and fail before they are submitted, then the
+    // frame that admits them, which keeps them and panics before it is
+    // submitted: no frame between reports what the reclaim dropped.
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
+    draw_until_admitted(&mut capture, &version);
     full_frame(&mut capture, &version, FullReason::FirstFrame);
     capture.reclaim(MemoryPressureLevel::Critical);
+    for _ in 1..DRAWS_TO_ADMIT {
+        apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+        capture.fail_next_frame_after_record();
+        assert!(
+            capture.render_scene(&scene).is_err(),
+            "the injected failure fails the frame"
+        );
+    }
     apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
     capture.panic_after_next_record();
     #[expect(
@@ -2257,6 +2318,7 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
         cached.keep_recorded_ir();
         let mut recorded = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         recorded.keep_recorded_ir();
+        draw_until_admitted(&mut cached, &one);
         let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
         let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
         assert!(
@@ -2689,6 +2751,7 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         cached.keep_recorded_ir();
         let mut recorded = renderer.retained_capture(target).expect("capture");
         recorded.keep_recorded_ir();
+        draw_until_admitted(&mut cached, &one);
         let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
         let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
         assert!(
@@ -2757,7 +2820,8 @@ fn a_target_fill_drawn_at_a_new_size_fills_the_new_size() {
     assert_eq!(pixels_differing(&large, &fresh), 0);
 }
 
-/// A chunk drawn while the glyph atlas was too full to place a glyph it
+/// A chunk drawn on the frame that admits it while the glyph atlas was too
+/// full to place a glyph it
 /// asked for is not kept: the next frame records it again, with its glyphs,
 /// replays the other chunks, and draws what a fresh renderer draws.
 #[test]
@@ -2772,6 +2836,7 @@ fn a_chunk_drawn_without_a_glyph_is_recorded_again() {
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
     capture.hold_glyph_atlas_full(true);
+    draw_until_admitted(&mut capture, &version);
     let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
     assert_eq!(first.counters.chunks_recorded, MIXED_CHUNKS);
     capture.hold_glyph_atlas_full(false);
@@ -2797,7 +2862,8 @@ fn a_chunk_drawn_without_a_glyph_is_recorded_again() {
 
 /// A cache over its budget evicts, in each frame, what that frame's
 /// recordings push out and touches nothing else: with 1 000 and with 10 000
-/// recordings kept, each frame that recolours one box evicts and touches as
+/// recordings kept, the frames that recolour one box and admit its new
+/// version evict and touch as
 /// many entries of the cache at both sizes, counted by the cache's index and
 /// recency list themselves, so no walk of what it keeps goes uncounted.
 #[test]
@@ -2807,7 +2873,8 @@ fn a_cache_over_its_budget_looks_only_at_what_each_frame_evicts() {
         return;
     };
     const UPDATES: usize = 4;
-    // Per size, each update frame's (entries looked at, evictions).
+    // Per size, each update's (entries looked at, evictions of its last
+    // frame).
     let mut work = Vec::new();
     for kept in [1_000, 10_000] {
         let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
@@ -2836,13 +2903,20 @@ fn a_cache_over_its_budget_looks_only_at_what_each_frame_evicts() {
         });
         owner.apply(SURFACE).expect("the scene applies");
 
-        apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
-        capture
-            .render_scene(&Scene::of_version(owner.current().clone()))
-            .expect("the first frame renders");
-        let first = capture.counters();
-        assert_eq!(first.chunks_recorded, kept as u64 + 1);
-        assert_eq!(capture.recording_cache_work().0, kept + 1);
+        // Full frames until every chunk is kept: a frame tracks at most
+        // `CANDIDATES` keys, so the larger scene takes more of them.
+        let mut first = None;
+        for _ in 0..8 {
+            apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+            capture
+                .render_scene(&Scene::of_version(owner.current().clone()))
+                .expect("the first frames render");
+            if capture.recording_cache_work().0 == kept + 1 {
+                first = Some(capture.counters());
+                break;
+            }
+        }
+        let first = first.expect("every chunk is kept within a few frames");
         // Full from here on: each recording the cell adds pushes one out.
         capture.set_recording_cache_budget(
             usize::try_from(first.recording_cache_bytes).expect("bytes fit"),
@@ -2859,16 +2933,22 @@ fn a_cache_over_its_budget_looks_only_at_what_each_frame_evicts() {
                 let color = [Color::BLUE, Color::RED][update % 2];
                 publish(&mut writer, cell, kept, color);
                 owner.apply(SURFACE).expect("a recolour applies");
-                apply(&mut capture, owner.patch_damage());
-                capture
-                    .render_scene(&Scene::of_version(owner.current().clone()))
-                    .expect("the update renders");
-                let counters = capture.counters();
-                assert_eq!(counters.chunks_recorded, 1, "only the cell records");
-                (
-                    capture.recording_cache_work().1,
-                    counters.recording_cache_evictions,
-                )
+                // The cell is drawn on the frames that admit its new
+                // version, the last of which keeps it and evicts.
+                let damage = owner.patch_damage();
+                let mut visits = 0;
+                let mut evictions = 0;
+                for _ in 0..DRAWS_TO_ADMIT {
+                    apply(&mut capture, damage);
+                    capture
+                        .render_scene(&Scene::of_version(owner.current().clone()))
+                        .expect("the update renders");
+                    let counters = capture.counters();
+                    assert_eq!(counters.chunks_recorded, 1, "only the cell records");
+                    visits += capture.recording_cache_work().1;
+                    evictions = counters.recording_cache_evictions;
+                }
+                (visits, evictions)
             })
             .collect();
         for &(visits, evictions) in &frames {
@@ -2892,10 +2972,13 @@ fn a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings() 
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+    // Each version is drawn on the frames that admit its chunks.
     let draw = |version: SceneVersion| {
-        renderer
-            .render_scene(&Scene::of_version(version), (SIDE, SIDE))
-            .expect("the frame renders");
+        for _ in 0..DRAWS_TO_ADMIT {
+            renderer
+                .render_scene(&Scene::of_version(version.clone()), (SIDE, SIDE))
+                .expect("the frame renders");
+        }
         renderer.context().kept_recordings()
     };
     let first = Row::new([Color::RED; 4]);
@@ -2933,10 +3016,12 @@ fn a_renderer_frame_of_another_owners_version_drops_the_first_owners_recordings(
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     for (row, colors) in [("the first owner", Color::RED), ("the second", Color::BLUE)] {
         let owner = Row::new([colors; 4]);
-        apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
-        capture
-            .render_scene(&Scene::of_version(owner.version()))
-            .expect("the frame renders");
+        for _ in 0..DRAWS_TO_ADMIT {
+            apply(&mut capture, DamageRegion::Full(FullReason::FirstFrame));
+            capture
+                .render_scene(&Scene::of_version(owner.version()))
+                .expect("the frame renders");
+        }
         assert_eq!(capture.recording_cache_work().0, 4, "{row}'s boxes alone");
     }
 }

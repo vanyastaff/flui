@@ -58,6 +58,11 @@ impl<K: Hash + Eq, V> TalliedMap<K, V> {
         self.map.entry(key).or_default()
     }
 
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.visit(1);
+        self.map.insert(key, value)
+    }
+
     pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
         self.visit(1);
         self.map.remove(key)
