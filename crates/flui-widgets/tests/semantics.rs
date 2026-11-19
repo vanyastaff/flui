@@ -1221,6 +1221,79 @@ pub(crate) fn a_merged_node_inside_its_clip_ignores_its_clipped_content() {
         ),
         "the merged node's own rect is inside the clip, so it is not hidden"
     );
+
+    // An ordinary merge: an annotated child past the clip merges into the
+    // labelled container in view, as it does in view, and leaves the
+    // container visible.
+    let holder = || {
+        Semantics::new()
+            .container(true)
+            .label("holder")
+            .child(Column::new((
+                SizedBox::new(40.0, 20.0).boxed(),
+                Transform::translate(0.0, 150.0)
+                    .child(Semantics::new().label("x").child(SizedBox::new(40.0, 20.0)))
+                    .boxed(),
+                SizedBox::new(10.0, 300.0).boxed(),
+            )))
+    };
+    assert!(
+        !hidden(clipped(holder().boxed()), "holder x"),
+        "the container takes the label of content past the clip and stays visible"
+    );
+
+    // An unannotated wrapper past the clip still forms a node of its own, the
+    // node the clip's flag hides; the label inside is moved back into view.
+    let wrapper = || {
+        Column::new((
+            Transform::translate(0.0, 150.0)
+                .child(
+                    SizedBox::new(40.0, 20.0)
+                        .child(Transform::translate(0.0, -150.0).child(labelled("cached"))),
+                )
+                .boxed(),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    let hidden_nodes = {
+        let mut laid = lay_out(clipped(wrapper().boxed()), loose(200.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        tree.raw()
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.is_hidden())
+            .count()
+    };
+    assert_eq!(
+        hidden_nodes, 1,
+        "the wrapper past the clip forms one hidden node"
+    );
+    assert!(
+        !hidden(clipped(wrapper().boxed()), "cached"),
+        "the label in view is not hidden"
+    );
+
+    // A text region: a link span past the clip forms a node of its own, which
+    // the clip hides.
+    let linked = || {
+        use flui_painting::typography::TextSpan;
+        use flui_widgets::RichText;
+        Column::new((
+            Transform::translate(0.0, 150.0)
+                .child(
+                    RichText::new(TextSpan::new("go").with_link("app://go"))
+                        .on_link(|_ctx, _link| {}),
+                )
+                .boxed(),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    assert!(
+        hidden(clipped(linked().boxed()), "go"),
+        "a link region past the clip forms a hidden node"
+    );
 }
 
 // ===========================================================================
@@ -3285,10 +3358,10 @@ fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
     );
 }
 
-/// The reverse, under a labelled container: the wrapper the move takes out of
-/// the cache extent merges into the container, which the wrapper's hidden
-/// flag never reaches, in view or out of it.
-fn a_wrapper_moved_out_of_the_cache_extent_merges_into_its_container() {
+/// The reverse, under a labelled container: a wrapper the move takes out of
+/// the cache extent and back merges into the container, and the container is
+/// published as a rebuild publishes it.
+fn a_wrapper_moved_out_of_the_cache_extent_under_a_container() {
     use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
     let position = ScrollPosition::fixed(0.0);
     publishes_as_built_afresh(
@@ -3459,7 +3532,7 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             ),
             (
                 "a wrapper moved out of the cache extent",
-                a_wrapper_moved_out_of_the_cache_extent_merges_into_its_container,
+                a_wrapper_moved_out_of_the_cache_extent_under_a_container,
             ),
             (
                 "reading order in a document",
