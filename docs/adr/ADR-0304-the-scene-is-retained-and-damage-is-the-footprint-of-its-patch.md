@@ -613,9 +613,9 @@ entries go when its slot detaches. Counters: `recording_cache_bytes`, `recording
 so a version's frame skips the renderer's straddle self-heal (`record_passes` in
 `crates/flui-engine/src/renderer.rs`), which only a hand-built tree keeps.
 
-A texture frame drained with a publication (`raster_lane.rs:350-358`) damages the device
-footprints of that texture's users in the held version, closed under §6; a texture no chunk draws
-damages nothing. A platform view is damaged on every frame it is drawn, because the platform gives
+A texture frame or retirement drained with a publication (`RasterHost::submit`) damages the device
+footprints of that texture's users in the version it draws, closed under §6 (`SceneVersion::texture_damage`,
+which reads the texture-user index); a texture no entry draws damages nothing. A platform view is damaged on every frame it is drawn, because the platform gives
 no signal when its content changes; a per-view frame signal that damages it the way a texture
 frame does is a follow-up, not part of this decision. A canvas layer's display
 list and the performance overlay are versioned content, and no longer damaged every frame.
@@ -696,12 +696,17 @@ consecutive versions. The patch damage must cover the diff damage.
   (`crates/flui-rendering/tests/nested_boundary_capture.rs:549`) compares flattened versions, and
   `pipeline_frames_diff_to_the_changed_boundary_rect`
   (`crates/flui-rendering/tests/boundary_contents.rs:251`) asserts the patch damage.
+- Texture damage: `flui-layer`'s `a_texture_frame_damages_the_footprint_of_its_users` (the
+  `scene_patch_damage` table: a texture draw and a texture layer under a backdrop, closed over
+  what the backdrop reads, a sibling and an unattached user left out), and `flui-app`'s
+  `a_texture_frame_damages_only_its_users` (the `raster_host_damage_matrix` table: a texture
+  frame drained with an empty patch reaches the backend as its user's rect alone).
 - `flui-engine` (to be added): `a_chunk_drawn_once_is_not_captured`,
   `the_candidate_table_stays_bounded`, `stable_keys_are_admitted_under_churn`,
   `a_cached_chunk_replays_the_command_stream_it_recorded`
   (ADR-0006 §6), `a_chunk_moved_by_whole_pixels_hits_the_recording_cache`,
   `an_atlas_reset_misses_every_cached_recording`, `the_renderer_kernel_stays_inside_read_closure`,
-  `a_texture_frame_damages_only_its_users`, `a_base_mismatch_renders_full`,
+  `a_base_mismatch_renders_full`,
   `a_raster_panic_renders_the_next_frame_in_full`, and the readback row
   `region_frames_match_a_full_frame`, whose two damaged rects sit in opposite corners with
   translucent content between them, so a plan that clears the gap without redrawing it, or blends

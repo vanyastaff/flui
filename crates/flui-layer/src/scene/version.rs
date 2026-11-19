@@ -485,6 +485,21 @@ impl SceneVersion {
             &mut closures,
         )
     }
+
+    /// What new images of `textures` damage on a surface of `surface`
+    /// pixels: the device footprint of every attached entry of this version
+    /// that draws one of them, closed over what its filters and
+    /// destination-reading chunks read (ADR-0304 §9). `Unchanged` when no
+    /// attached entry draws one. It costs the users of `textures`, read off
+    /// the texture index, never the version's other entries.
+    #[must_use]
+    pub fn texture_damage(
+        &self,
+        textures: impl IntoIterator<Item = TextureId>,
+        surface: (u32, u32),
+    ) -> DamageRegion {
+        super::footprint::texture_damage(&self.0, textures, surface)
+    }
 }
 
 /// Answers, for each slot and chunk a walk of one version meets, whether

@@ -210,6 +210,37 @@ pub(crate) fn patch_damage(
     (damage, cost)
 }
 
+/// The damage new images of `textures` make in `version`, on a surface of
+/// `surface` device pixels: the footprint of every attached entry that draws
+/// one, closed over what filters read (ADR-0304 §9). It reads the texture
+/// index alone, so it costs the users of `textures`, never the version's
+/// other entries.
+pub(crate) fn texture_damage(
+    version: &VersionInner,
+    textures: impl IntoIterator<Item = flui_painting::paint::TextureId>,
+    surface: (u32, u32),
+) -> DamageRegion {
+    let geometry = Geometry::new(version);
+    let mut rects = Vec::new();
+    let mut footprints = Footprints::new(&mut rects);
+    for texture in textures {
+        for user in version.textures.get(texture.get()).into_iter().flatten() {
+            footprints.add(geometry.entry_reach(user.node, user.entry));
+        }
+    }
+    let region = footprints.region(surface);
+    if region == DamageRegion::Unchanged {
+        return region;
+    }
+    close_filtered(
+        region,
+        &[(geometry, version)],
+        surface,
+        &mut FootprintCost::default(),
+        &mut Closures::new(),
+    )
+}
+
 /// The followers of `next` whose transform differs from their pair's in
 /// `base`, as `(before, after)` addresses, into `moved`. A follower is paired
 /// with the one of the same rank on the same link in the same node.

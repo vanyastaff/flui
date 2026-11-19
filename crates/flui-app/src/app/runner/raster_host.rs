@@ -35,7 +35,9 @@ use flui_engine::{
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress, SurfaceGeneration};
-use flui_layer::{DamageMode, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey};
+use flui_layer::{
+    DamageMode, DamageRegion, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey,
+};
 use flui_platform::{DisplayColor, FramePacing, PlatformWindow, RedrawRequester, SurfaceTarget};
 use flui_runtime::pump::SampledClock;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
@@ -2083,16 +2085,26 @@ impl RasterHost {
             generation,
         };
         let stamp = FrameStamp::new(address, epoch, generation);
-        let damage = slot.base.damage_for(&publication, key);
-        let shown = publication.scene.id();
-        let mut snapshot =
-            SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
         // The images a replaced context kept go first, so the registry's
         // newer frames replace them.
         let mut updates = std::mem::take(&mut slot.carried);
         if let Some(textures) = &slot.textures {
             updates.merge(textures.take_updates());
         }
+        let mut damage = slot.base.damage_for(&publication, key);
+        // A new image or a retirement changes the pixels of the texture's
+        // users and of nothing else, whatever the patch damaged (ADR-0304 §9).
+        if !matches!(damage, DamageRegion::Full(_)) && !updates.is_empty() {
+            let textures = updates.frames.iter().map(|(id, _)| *id);
+            damage = damage.union(
+                publication
+                    .scene
+                    .texture_damage(textures.chain(updates.retired.iter().copied()), key.size),
+            );
+        }
+        let shown = publication.scene.id();
+        let mut snapshot =
+            SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
         if !updates.is_empty() {
             snapshot = snapshot.textures(updates);
         }
