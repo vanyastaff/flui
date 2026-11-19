@@ -41,6 +41,7 @@ pub(super) fn runtime_on_manual_clock(clock: &flui_foundation::ManualClock) -> U
     )
 }
 
+/// A runtime whose host wake is `wake`, on the frame `clock` a test chooses.
 pub(super) fn runtime_with_wake_on(
     wake: Arc<dyn Fn() + Send + Sync>,
     clock: flui_scheduler::ClockSource,

@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::{ManualClock, MonotonicClock};
 use flui_runtime::frame_failure::{
     DeviceRecovery, FailureDisposition, FrameFailureHandler, FrameFailureKind,
 };
@@ -41,7 +42,7 @@ struct Lost {
     wakes: Arc<AtomicUsize>,
     reports: Arc<parking_lot::Mutex<Vec<(DeviceRecovery, FailureDisposition)>>>,
     device: Device,
-    clock: flui_foundation::ManualClock,
+    clock: ManualClock,
 }
 
 impl Lost {
@@ -49,7 +50,7 @@ impl Lost {
     fn new() -> Self {
         let wakes = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&wakes);
-        let clock = flui_foundation::ManualClock::new();
+        let clock = ManualClock::new();
         let runtime = crate::owner_publication::runtime_with_wake_on(
             Arc::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -83,9 +84,8 @@ impl Lost {
     }
 
     fn run_frame(&mut self) -> bool {
-        self.clock.advance(std::time::Duration::from_millis(16));
         self.runtime
-            .pump(&mut self.clock.clone(), &mut self.device)
+            .pump(&mut self.clock, &mut self.device)
             .presented()
     }
 
@@ -95,9 +95,8 @@ impl Lost {
             .runtime
             .failure_retry_deadline()
             .expect("a dropped frame waits out its backoff");
-        self.clock.advance(
-            deadline.saturating_duration_since(flui_foundation::MonotonicClock::now(&self.clock)),
-        );
+        self.clock
+            .advance(deadline.saturating_duration_since(self.clock.now()));
         assert!(self.runtime.has_pending_work(), "the frame is due again");
     }
 

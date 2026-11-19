@@ -59,6 +59,10 @@ fn host_turn(runtime: &mut UiRuntime, sink: &mut Failing, clock: &ManualClock) -
     runtime.pump(&mut clock.clone(), sink).presented()
 }
 
+/// How many wakes before a retry deadline a host turn may leave standing before the wait is
+/// taken as stuck.
+const MOST_WAKES_BEFORE_THE_DEADLINE: usize = 16;
+
 /// Runs the host's loop until the dropped frame's retry deadline: the clock moves to each wake
 /// `next_wake` reports and the host pumps, and no frame is submitted before the deadline. Returns
 /// how long the wait was from the clock's reading on entry, when the frame failed.
@@ -72,13 +76,15 @@ fn wait_out_the_backoff(
         .failure_retry_deadline()
         .expect("a failed frame waits out the dropped-frame backoff");
     let submits = sink.submits;
-    loop {
+    let mut reached_the_deadline = false;
+    for _ in 0..MOST_WAKES_BEFORE_THE_DEADLINE {
         let wake = runtime
             .next_wake()
             .expect("the host is woken for the retry deadline");
         assert!(wake <= deadline, "the host wakes no later than the retry");
         clock.advance(wake.saturating_duration_since(clock.now()));
         if wake == deadline {
+            reached_the_deadline = true;
             break;
         }
         assert!(!host_turn(runtime, sink, clock));
@@ -87,6 +93,10 @@ fn wait_out_the_backoff(
             "no frame is submitted before the backoff runs out"
         );
     }
+    assert!(
+        reached_the_deadline,
+        "the wakes before the retry deadline end: a turn clears each one"
+    );
     assert!(runtime.has_pending_work(), "the frame is due again");
     deadline.saturating_duration_since(failed_at)
 }
@@ -280,13 +290,26 @@ fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_pres
         "a short withdrawal is ridden out at the display rate"
     );
 
-    // Past the budget, each attempt waits out the backoff, and the surface still withholds.
-    wait_out_the_backoff(&mut runtime, &mut sink, &clock);
+    // Past the budget, a turn before the deadline submits nothing; each attempt waits out the
+    // backoff, and the surface still withholds.
+    assert!(!host_turn(&mut runtime, &mut sink, &clock));
+    assert_eq!(
+        sink.submits, turns,
+        "no frame is submitted before the backoff runs out"
+    );
+    let first_wait = wait_out_the_backoff(&mut runtime, &mut sink, &clock);
+    assert!(
+        first_wait > std::time::Duration::ZERO,
+        "the budget's end arms a wait"
+    );
     assert!(!host_turn(&mut runtime, &mut sink, &clock));
     assert_eq!(sink.submits, turns + 1, "the attempt after the wait");
+    let second_deadline = runtime
+        .failure_retry_deadline()
+        .expect("the next attempt waits out the backoff too");
     assert!(
-        runtime.failure_retry_deadline().is_some(),
-        "the next attempt waits out the backoff too"
+        second_deadline.saturating_duration_since(clock.now()) > first_wait,
+        "the backoff grows while the surface keeps withholding"
     );
 
     // A press while the surface is withdrawn waits for a frame that shows the tree. The press
