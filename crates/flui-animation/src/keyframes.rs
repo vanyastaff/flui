@@ -194,16 +194,10 @@ impl<T: Lerp + MotionValue> Keyframes<T> {
     #[must_use]
     pub fn value_at_looped(&self, elapsed: Duration) -> T {
         let phase = elapsed.as_nanos() % self.total.as_nanos();
-        // `phase < total`, so both parts fit their types.
-        let seconds = u64::try_from(phase / NANOS_PER_SECOND)
-            .expect("BUG: a phase inside the track's total fits Duration");
-        let nanos =
-            u32::try_from(phase % NANOS_PER_SECOND).expect("BUG: a remainder of 1e9 fits in u32");
-        self.value_at(Duration::new(seconds, nanos))
+        // A built track has a non-zero total, and `phase < total` is a Duration.
+        self.value_at(Duration::from_nanos_u128(phase))
     }
 }
-
-const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
 impl<T: Lerp + MotionValue> Segment<T> {
     /// The value at local progress `s ∈ (0, 1)` of a segment lasting `length`.
