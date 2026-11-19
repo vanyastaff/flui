@@ -7,7 +7,9 @@ use smallvec::SmallVec;
 
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
-use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
+use super::content::{
+    BlockHolds, BoundaryContent, Bounds, ChunkBlock, Entry, EntryIndex, LinkRole,
+};
 use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
@@ -462,6 +464,7 @@ impl SceneVersion {
             path: Vec::new(),
             scratch: Links::new(),
             tests: 0,
+            met: None,
         }
     }
 
@@ -507,6 +510,9 @@ pub struct SubtreeCull<'v> {
     scratch: Links<'v>,
     /// The reaches tested against the rect.
     tests: u64,
+    /// The chunk a run of [`Self::chunks_missed`] stopped at, found to meet
+    /// the rect: asked about next, it is answered without a test.
+    met: Option<EntryAddress>,
 }
 
 impl std::fmt::Debug for SubtreeCull<'_> {
@@ -556,29 +562,25 @@ impl<'v> SubtreeCull<'v> {
         meets
     }
 
-    /// Whether the chunk at `at` can land in the rect, through the effects
-    /// above it in its node and the node's chain: a walk that has entered the
-    /// node skips a chunk that cannot, as it skips a slot whose subtree
-    /// cannot. An address that names no chunk of this version (another
-    /// lineage, an unattached node, an entry past the content's end, an
-    /// effect or a slot) meets nothing.
-    pub fn meets_chunk(&mut self, at: EntryAddress) -> bool {
-        let reach = self.chunk_reach(at);
-        self.meets_reach(reach)
-    }
-
     /// How many entries from `at` on a walk that has entered `at`'s node can
     /// skip as chunks that cannot land in the rect: a run of chunks under the
-    /// parent of the chunk at `at`, read through the effects above them and
-    /// the node's chain as [`Self::meets_chunk`] reads one. `0` when the
-    /// chunk at `at` can land there, or `at` names no chunk; a chunk of a node
-    /// that is not attached is skipped alone.
+    /// parent of the chunk at `at`, each read through the effects above it in
+    /// its node and the node's chain, as [`Self::rects_met_by_chunk`] reads
+    /// one. `0` when the chunk at `at` can land there, or `at` names no chunk;
+    /// a chunk of a node that is not attached is skipped alone.
     ///
-    /// A block of the content's chunks whose union cannot land in the rect is
+    /// A block of the run's chunks whose union cannot land in the rect is
     /// skipped in one test, and one that can is asked about by the blocks
-    /// under it, so a walk over a content of `n` chunks tests on the order of
-    /// `log n` reaches per chunk it enters, not `n` (ADR-0304 §9).
+    /// under it: over a run of `n` chunks under one parent, the boundary
+    /// itself or one effect, a walk tests on the order of `log n` reaches per
+    /// chunk it enters, not `n` (ADR-0304 §9). Chunks under different effects
+    /// share no block and are tested one by one. The chunk a run stops at,
+    /// found to meet the rect, is not tested again when the walk asks about
+    /// it next.
     pub fn chunks_missed(&mut self, at: EntryAddress) -> usize {
+        if self.met.take() == Some(at) {
+            return 0;
+        }
         if at.node.lineage() != self.version.lineage() {
             return 0;
         }
@@ -606,34 +608,33 @@ impl<'v> SubtreeCull<'v> {
         let top = path
             .last()
             .expect("BUG: standing in a node leaves it on the path");
-        let rect = *rect;
         // Every chunk of the run sits under `parent`, so each lands through
-        // the chain of the chunk at `at`; a union of bounds lands inside the
-        // union of where each lands.
+        // the chain of the chunk at `at`, built once here; a union of bounds
+        // lands inside the union of where each lands.
+        let under = match parent {
+            None => None,
+            Some(_) => top.entry_chain(geometry, at.entry, scratch),
+        };
+        let chain = under.as_ref().unwrap_or(top);
+        let rect = *rect;
         let mut misses = |bounds: Bounds| {
             *tests = tests.saturating_add(1);
-            let reach = match parent {
-                None => top.content_reach(bounds),
-                Some(_) => top.entry_reach(geometry, at.entry, bounds, scratch),
-            };
-            !meets(reach, rect)
+            !meets(chain.content_reach(bounds), rect)
         };
-        let levels = content.chunk_blocks().levels();
         let mut position = start;
+        let levels: SmallVec<[(usize, &[ChunkBlock]); 8]> = content.chunk_levels().collect();
+        let mut stopped_meeting = false;
         'run: while position < entries.len() {
             // The widest block that starts here and holds only chunks under
             // `parent`, narrowing while one meets the rect.
-            for (level, blocks) in levels.iter().enumerate().rev() {
-                let span = super::content::CHUNK_BLOCK.pow(
-                    u32::try_from(level + 1).expect("BUG: a content has fewer than 2^32 levels"),
-                );
+            for &(span, blocks) in levels.iter().rev() {
                 if !position.is_multiple_of(span) {
                     continue;
                 }
                 let Some(block) = blocks.get(position / span) else {
                     continue;
                 };
-                if block.holds != super::content::BlockHolds::ChunksUnder(parent) {
+                if block.holds != BlockHolds::ChunksUnder(parent) {
                     continue;
                 }
                 if misses(block.reach.bounds()) {
@@ -644,28 +645,44 @@ impl<'v> SubtreeCull<'v> {
             match entries.get(position) {
                 Some(Entry::Chunk {
                     chunk,
-                    parent: under,
-                }) if *under == parent && misses(chunk.bounds()) => position += 1,
+                    parent: held,
+                }) if *held == parent => {
+                    if misses(chunk.bounds()) {
+                        position += 1;
+                    } else {
+                        stopped_meeting = true;
+                        break;
+                    }
+                }
                 _ => break,
             }
+        }
+        if stopped_meeting && position > start {
+            self.met = Some(EntryAddress {
+                node: at.node,
+                entry: EntryIndex::at(position),
+            });
         }
         position - start
     }
 
-    /// How many reaches the cull has tested against its rect: one for each
-    /// slot and chunk asked about, and one for each block of chunks
-    /// [`Self::chunks_missed`] tested. What a raster walk counts its cull's
-    /// work by.
+    /// How many reaches the cull has tested: one for each slot
+    /// [`Self::meets`] asked about whose node is attached, one for each block
+    /// and each chunk [`Self::chunks_missed`] tested, none for the chunk it
+    /// answers from the run before, and one for each address
+    /// [`Self::rects_met_by_chunk`] asked about, however many rects. What a
+    /// raster walk counts its cull's work by.
     #[must_use]
     pub fn reaches_tested(&self) -> u64 {
         self.tests
     }
 
-    /// How many of `rects` the chunk at `at` can land in, through the chain
-    /// [`Self::meets_chunk`] reads, edges included: a reach that is unbounded
-    /// or not finite meets every rect, and an address that names no chunk of
-    /// this version meets none. What a raster planner asks to count the
-    /// passes a chunk would be drawn in under one pass per rect (ADR-0304 §9).
+    /// How many of `rects` the chunk at `at` can land in, through the effects
+    /// above it in its node and the node's chain, edges included: a reach
+    /// that is unbounded or not finite meets every rect, and an address that
+    /// names no chunk of this version meets none. What a raster planner asks
+    /// to count the passes a chunk would be drawn in under one pass per rect
+    /// (ADR-0304 §9).
     pub fn rects_met_by_chunk(&mut self, at: EntryAddress, rects: &[Rect<f64>]) -> usize {
         let reach = self.chunk_reach(at);
         self.tests = self.tests.saturating_add(1);

@@ -1765,6 +1765,12 @@ pub(crate) fn patch_damage_covers_diff_damage() {
     );
 }
 
+/// Whether the chunk at `at` can land in `rect`, asked of a cull of its own;
+/// `false` for an address that names no chunk.
+fn chunk_meets(version: &SceneVersion, rect: Rect<f64>, at: EntryAddress) -> bool {
+    version.subtree_cull(rect).rects_met_by_chunk(at, &[rect]) == 1
+}
+
 /// Asks `cull` about each slot and chunk under `node` in paint order,
 /// descending where a slot meets, and checks each answer against a cull
 /// asked fresh, which builds the chain from the root. Counts the slots and
@@ -1798,8 +1804,8 @@ fn walk_cull(
                     node,
                     entry: EntryIndex::try_from(position).expect("a small content"),
                 };
-                let walked = cull.meets_chunk(at);
-                let fresh = version.subtree_cull(rect).meets_chunk(at);
+                let walked = cull.chunks_missed(at) == 0;
+                let fresh = version.subtree_cull(rect).chunks_missed(at) == 0;
                 if walked != fresh {
                     return Err(format!("{at:?}: walked {walked}, fresh {fresh}"));
                 }
@@ -1814,7 +1820,7 @@ fn walk_cull(
                 let counted = cull.rects_met_by_chunk(at, &rects);
                 let fresh = rects
                     .iter()
-                    .filter(|&&each| version.subtree_cull(each).meets_chunk(at))
+                    .filter(|&&each| chunk_meets(version, each, at))
                     .count();
                 if counted != fresh {
                     return Err(format!("{at:?}: counted {counted}, fresh {fresh}"));
@@ -1889,23 +1895,31 @@ pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
     let moved = Rect::from_xywh(102.0, 2.0, 4.0, 4.0);
     let drawn = Rect::from_xywh(2.0, 2.0, 4.0, 4.0);
     assert!(
-        version.subtree_cull(moved).meets_chunk(at(child, 0)),
+        chunk_meets(version, moved, at(child, 0)),
         "the child's square where its placement moves it"
     );
     assert!(
-        !version.subtree_cull(drawn).meets_chunk(at(child, 0)),
+        !chunk_meets(version, drawn, at(child, 0)),
         "not where the child's square is drawn before its placement"
     );
-    assert!(version.subtree_cull(drawn).meets_chunk(at(root, 0)));
-    assert!(!version.subtree_cull(moved).meets_chunk(at(root, 0)));
+    assert!(chunk_meets(version, drawn, at(root, 0)));
+    assert!(!chunk_meets(version, moved, at(root, 0)));
     let everywhere = Rect::from_xywh(0.0, 0.0, 200.0, 20.0);
     let mut cull = version.subtree_cull(everywhere);
-    assert!(!cull.meets_chunk(at(root, 1)), "a slot is no chunk");
-    assert!(!cull.meets_chunk(at(root, 2)), "past the content's end");
+    assert_eq!(
+        cull.rects_met_by_chunk(at(root, 1), &[everywhere]),
+        0,
+        "a slot is no chunk"
+    );
+    assert_eq!(
+        cull.rects_met_by_chunk(at(root, 2), &[everywhere]),
+        0,
+        "past the content's end"
+    );
     let mut other = SceneOwner::new();
     let stranger = other.writer().current().root();
     assert!(
-        !cull.meets_chunk(at(stranger, 0)),
+        cull.rects_met_by_chunk(at(stranger, 0), &[everywhere]) == 0,
         "a node of another lineage"
     );
 }
@@ -2528,8 +2542,9 @@ fn long_content(rng: &mut Rng) -> SceneOwner {
 /// A cull skips a run of chunks, a block of them at a time, only where it
 /// would skip each chunk of the run alone, and only chunks under the parent
 /// of the first, so a walk that steps over the run opens and closes no
-/// effect it would have met (ADR-0304 §9). A content's command count is the
-/// sum of its chunks'.
+/// effect it would have met (ADR-0304 §9); a long run, under the boundary
+/// itself or under one effect, takes a test per block rather than per chunk.
+/// A content's command count is the sum of its chunks'.
 pub(crate) fn a_cull_skips_a_run_of_chunks_only_where_it_skips_each() {
     let (mut runs, mut blocks) = (0_usize, 0_usize);
     for case in 0..300_u64 {
@@ -2562,7 +2577,7 @@ pub(crate) fn a_cull_skips_a_run_of_chunks_only_where_it_skips_each() {
                 continue;
             };
             let missed = cull.chunks_missed(at(position));
-            let meets = version.subtree_cull(rect).meets_chunk(at(position));
+            let meets = chunk_meets(version, rect, at(position));
             assert_eq!(
                 missed == 0,
                 meets,
@@ -2575,7 +2590,7 @@ pub(crate) fn a_cull_skips_a_run_of_chunks_only_where_it_skips_each() {
                      no chunk under its parent"
                 );
                 assert!(
-                    !version.subtree_cull(rect).meets_chunk(at(skipped)),
+                    !chunk_meets(version, rect, at(skipped)),
                     "case {case} (seed {seed:#x}): the run from {position} skips {skipped}, \
                      which meets {rect:?}"
                 );
@@ -2589,4 +2604,77 @@ pub(crate) fn a_cull_skips_a_run_of_chunks_only_where_it_skips_each() {
         runs > 0 && blocks > 0,
         "no cull skipped a run, or none a block: {runs} runs, {blocks} blocks"
     );
+
+    // A long run under the boundary itself, and one under an effect, is
+    // skipped a block at a time: the cull tests far fewer reaches than the
+    // chunks it skips, and the chunk the run stops at, found to meet, is
+    // answered again without a test.
+    for under_effect in [false, true] {
+        let side = 64_usize;
+        let offset = if under_effect { 10.0 } else { 0.0 };
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        if under_effect {
+            content.push_effect(
+                Layer::from(TransformLayer::new(Matrix4::translation(
+                    offset, offset, 0.0,
+                ))),
+                RenderId::new(1),
+                0,
+            );
+        }
+        for index in 0..side * side {
+            let (column, row) = ((index % side) as f64, (index / side) as f64);
+            let owner_id = u32::try_from(index).expect("a small index") + 2;
+            content.chunk(chunk(
+                owner_id,
+                version,
+                Rect::from_xywh(4.0 * column, 4.0 * row, 2.0, 2.0),
+            ));
+        }
+        if under_effect {
+            content.pop_effect();
+        }
+        writer.push(publish(root, content.finish()));
+        owner.apply(SURFACE).expect("a grid applies");
+        let version = owner.current();
+        let first = usize::from(under_effect);
+        let last = first + side * side - 1;
+        let at = |position: usize| EntryAddress {
+            node: version.root(),
+            entry: EntryIndex::try_from(position).expect("a small content"),
+        };
+        // Over the last square alone, where the effect moves it.
+        let corner = 4.0 * (side - 1) as f64 + offset;
+        let rect = Rect::from_xywh(corner + 0.5, corner + 0.5, 1.0, 1.0);
+        assert!(
+            chunk_meets(version, rect, at(last)),
+            "under {under_effect}: the last square"
+        );
+        let mut cull = version.subtree_cull(rect);
+        let missed = cull.chunks_missed(at(first));
+        let tested = cull.reaches_tested();
+        assert_eq!(
+            missed,
+            last - first,
+            "under {under_effect}: every square but the last"
+        );
+        assert!(
+            tested * 8 < u64::try_from(missed).expect("a small run"),
+            "under {under_effect}: skipping {missed} squares tested {tested} reaches"
+        );
+        assert_eq!(
+            cull.chunks_missed(at(last)),
+            0,
+            "under {under_effect}: the last meets"
+        );
+        assert_eq!(
+            cull.reaches_tested(),
+            tested,
+            "under {under_effect}: the chunk the run stopped at is not tested again"
+        );
+    }
 }

@@ -263,14 +263,32 @@ pub(crate) enum LinkRole {
     Follower,
 }
 
-/// What one effect's scope holds that its layers never change.
+/// One effect of a content and what its scope holds that its layers never
+/// change.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EffectScope {
-    /// The position after its scope.
-    pub(crate) end: usize,
+    /// The effect's entry.
+    pub(crate) entry: EntryIndex,
+    /// The position after its scope, read by [`Self::end`]; `u32`, as
+    /// entries are indexed ([`EntryIndex`]).
+    end: u32,
     /// The union of what its direct chunk children draw, in its children's
     /// space.
     pub(crate) chunks: Reach,
+}
+
+impl EffectScope {
+    /// The position after its scope.
+    pub(crate) fn end(&self) -> usize {
+        // u32 to usize widens on every target FLUI builds for.
+        self.end as usize
+    }
+}
+
+/// `position`, an effect scope's end, as [`EffectScope`] keeps it.
+fn scope_end(position: usize) -> u32 {
+    u32::try_from(position)
+        .expect("BUG: a boundary's entries are indexed by u32; 2^32 entries never fit in memory")
 }
 
 /// How many entries a block of a content's [`ChunkBlocks`] covers at its
@@ -313,59 +331,111 @@ impl ChunkBlock {
 
 /// A hierarchy of blocks over a content's entries, so a partial frame's walk
 /// skips a run of chunks its damage cannot reach in a test per block rather
-/// than one per chunk (ADR-0304 §9): `levels[k][i]` covers the entries from
-/// `i · CHUNK_BLOCK^(k+1)` on, `CHUNK_BLOCK^(k+1)` of them or as many as
-/// remain. A content of at most [`CHUNK_BLOCK`] entries has none.
+/// than one per chunk (ADR-0304 §9): the block `i` of level `k` covers the
+/// entries from `i · CHUNK_BLOCK^(k+1)` on, `CHUNK_BLOCK^(k+1)` of them or as
+/// many as remain, and the last level is one block over every entry. A
+/// content of at most [`CHUNK_BLOCK`] entries has none.
+///
+/// Every level lives in one allocation, finest first; where each ends
+/// follows from the entry count alone ([`level_ends`]), so the content keeps
+/// only the blocks.
 #[derive(Debug, Default)]
 pub(crate) struct ChunkBlocks {
-    levels: Vec<Vec<ChunkBlock>>,
+    blocks: Box<[ChunkBlock]>,
 }
 
 impl ChunkBlocks {
-    fn of(entries: &[Entry]) -> Self {
-        let mut levels: Vec<Vec<ChunkBlock>> = Vec::new();
-        if entries.len() <= CHUNK_BLOCK {
-            return Self { levels };
+    /// The levels over the `entries` they were built over, finest first:
+    /// each with the entries one of its blocks covers, and its blocks.
+    fn levels(
+        &self,
+        entries: usize,
+    ) -> impl DoubleEndedIterator<Item = (usize, &[ChunkBlock])> + ExactSizeIterator {
+        let ends = level_ends(entries);
+        debug_assert_eq!(
+            ends.last().copied().unwrap_or(0),
+            self.blocks.len(),
+            "BUG: the blocks were built over these entries"
+        );
+        // Each level from its own index, so the levels read in either order.
+        (0..ends.len()).map(move |level| {
+            let start = level.checked_sub(1).map_or(0, |below| ends[below]);
+            let span =
+                CHUNK_BLOCK.pow(u32::try_from(level + 1).expect("BUG: at most eight levels"));
+            (span, &self.blocks[start..ends[level]])
+        })
+    }
+}
+
+/// Where each level of the [`ChunkBlocks`] over `entries` entries ends among
+/// its blocks, finest first; none for at most [`CHUNK_BLOCK`] entries.
+/// Entries are indexed by `u32`, so there are at most eight levels.
+fn level_ends(entries: usize) -> SmallVec<[usize; 8]> {
+    let mut ends = SmallVec::new();
+    if entries <= CHUNK_BLOCK {
+        return ends;
+    }
+    let mut total = 0_usize;
+    let mut count = entries;
+    while count > 1 {
+        count = count.div_ceil(CHUNK_BLOCK);
+        total += count;
+        ends.push(total);
+    }
+    ends
+}
+
+/// The [`ChunkBlocks`] of a content as its entries are read, in one
+/// allocation sized from their count: [`Self::push`] each entry's own block
+/// in order, then [`Self::finish`].
+struct ChunkBlocksBuilder {
+    blocks: Vec<ChunkBlock>,
+    ends: SmallVec<[usize; 8]>,
+}
+
+impl ChunkBlocksBuilder {
+    fn with_entries(entries: usize) -> Self {
+        let ends = level_ends(entries);
+        Self {
+            blocks: Vec::with_capacity(ends.last().copied().unwrap_or(0)),
+            ends,
         }
-        let first = entries
-            .chunks(CHUNK_BLOCK)
-            .map(|run| {
-                run.iter()
-                    .map(|entry| match entry {
-                        Entry::Chunk { chunk, parent } => ChunkBlock {
-                            reach: Reach::of(chunk.bounds()),
-                            holds: BlockHolds::ChunksUnder(*parent),
-                        },
-                        Entry::Effect { .. } | Entry::Slot { .. } => ChunkBlock {
-                            reach: Reach::Nothing,
-                            holds: BlockHolds::Mixed,
-                        },
-                    })
-                    .reduce(ChunkBlock::join)
-                    .expect("BUG: a run of `chunks` is never empty")
-            })
-            .collect::<Vec<ChunkBlock>>();
-        levels.push(first);
-        while let Some(last) = levels.last()
-            && last.len() > 1
-        {
-            let next = last
-                .chunks(CHUNK_BLOCK)
-                .map(|run| {
-                    run.iter()
-                        .copied()
-                        .reduce(ChunkBlock::join)
-                        .expect("BUG: a run of `chunks` is never empty")
-                })
-                .collect::<Vec<ChunkBlock>>();
-            levels.push(next);
-        }
-        Self { levels }
     }
 
-    /// The levels, finest first.
-    pub(crate) fn levels(&self) -> &[Vec<ChunkBlock>] {
-        &self.levels
+    /// Folds the block of the entry at `position` into the first level.
+    /// Entries are pushed in order, from `0`.
+    fn push(&mut self, position: usize, block: ChunkBlock) {
+        if self.ends.is_empty() {
+            return;
+        }
+        if position.is_multiple_of(CHUNK_BLOCK) {
+            self.blocks.push(block);
+        } else if let Some(last) = self.blocks.last_mut() {
+            *last = last.join(block);
+        }
+    }
+
+    /// Builds every level above the first from the one under it.
+    fn finish(mut self) -> ChunkBlocks {
+        let mut start = 0;
+        for pair in self.ends.windows(2) {
+            let (end, next) = (pair[0], pair[1]);
+            debug_assert_eq!(self.blocks.len(), end, "BUG: a level's size");
+            for run in (start..end).step_by(CHUNK_BLOCK) {
+                let block = self.blocks[run..(run + CHUNK_BLOCK).min(end)]
+                    .iter()
+                    .copied()
+                    .reduce(ChunkBlock::join)
+                    .expect("BUG: a run of a level is never empty");
+                self.blocks.push(block);
+            }
+            debug_assert_eq!(self.blocks.len(), next, "BUG: a level's size");
+            start = end;
+        }
+        // Sized to every level, so nothing is copied.
+        ChunkBlocks {
+            blocks: self.blocks.into_boxed_slice(),
+        }
     }
 }
 
@@ -374,11 +444,9 @@ impl ChunkBlocks {
 #[derive(Debug)]
 struct Stream {
     entries: Vec<Entry>,
-    /// The entry of each effect, ascending: the effect at `effects[i]` has
-    /// the layer `layers[i]` of the content.
-    effects: Vec<EntryIndex>,
-    /// Each effect's scope, as `effects` orders them.
-    scopes: Vec<EffectScope>,
+    /// Each effect with its scope, ascending by entry: the effect at
+    /// `effects[i]` has the layer `layers[i]` of the content.
+    effects: Vec<EffectScope>,
     /// Each effect and slot entry, ascending.
     structural: Vec<EntryIndex>,
     /// The union of what the top-level chunks draw, in the boundary's space.
@@ -397,14 +465,19 @@ struct Stream {
 
 impl Stream {
     fn of(entries: Vec<Entry>) -> Self {
-        let mut effects = Vec::new();
-        let mut scopes: Vec<EffectScope> = Vec::new();
+        let mut effects: Vec<EffectScope> = Vec::new();
         let mut structural = Vec::new();
         let mut top_chunks = Reach::Nothing;
         let mut slots = Vec::new();
         let mut chunk_textures = Vec::new();
         let mut chunk_closures = Vec::new();
         let mut commands: u64 = 0;
+        let mut blocks = ChunkBlocksBuilder::with_entries(entries.len());
+        // An effect or a slot is no chunk a cull may skip.
+        let structural_block = ChunkBlock {
+            reach: Reach::Nothing,
+            holds: BlockHolds::Mixed,
+        };
         // The effects the current entry sits under, innermost last, as
         // positions in `effects`.
         let mut open: SmallVec<[usize; 8]> = SmallVec::new();
@@ -412,51 +485,58 @@ impl Stream {
             let index = EntryIndex::at(position);
             let parent = entry.parent();
             while let Some(&top) = open.last()
-                && Some(effects[top]) != parent
+                && Some(effects[top].entry) != parent
             {
-                scopes[top].end = position;
+                effects[top].end = scope_end(position);
                 open.pop();
             }
             let held = open.last().copied();
             debug_assert_eq!(
-                held.map(|top| effects[top]),
+                held.map(|top| effects[top].entry),
                 parent,
                 "BUG: an entry's parent is an open effect"
             );
-            match entry {
+            let block = match entry {
                 Entry::Effect { .. } => {
                     open.push(effects.len());
-                    effects.push(index);
-                    scopes.push(EffectScope {
-                        end: entries.len(),
+                    effects.push(EffectScope {
+                        entry: index,
+                        end: scope_end(entries.len()),
                         chunks: Reach::Nothing,
                     });
                     structural.push(index);
+                    structural_block
                 }
                 Entry::Chunk { chunk, .. } => {
                     commands = commands.saturating_add(chunk.commands().len() as u64);
                     let reach = Reach::of(chunk.bounds());
                     match held {
-                        Some(top) => scopes[top].chunks = scopes[top].chunks.union(reach),
+                        Some(top) => effects[top].chunks = effects[top].chunks.union(reach),
                         None => top_chunks = top_chunks.union(reach),
                     }
                     chunk_textures.extend(chunk.textures().iter().map(|texture| (*texture, index)));
                     if chunk.reads_destination() {
                         chunk_closures.push(index);
                     }
+                    ChunkBlock {
+                        reach,
+                        holds: BlockHolds::ChunksUnder(parent),
+                    }
                 }
                 Entry::Slot { node, .. } => {
                     slots.push((*node, index));
                     structural.push(index);
+                    structural_block
                 }
-            }
+            };
+            blocks.push(position, block);
         }
         slots.sort_unstable_by_key(|(node, _)| node.key().table_key());
-        let blocks = ChunkBlocks::of(&entries);
+        let blocks = blocks.finish();
         Self {
             entries,
             effects,
-            scopes,
+
             structural,
             top_chunks,
             slot_entries: slots,
@@ -481,16 +561,16 @@ struct LayerIndexes {
 }
 
 impl LayerIndexes {
-    fn of(effects: &[EntryIndex], layers: &[Layer]) -> Self {
+    fn of(effects: &[EffectScope], layers: &[Layer]) -> Self {
         let mut indexes = Self::default();
         indexes.refill(effects, layers);
         indexes
     }
 
     /// Rebuilds the indexes for `layers` in the vectors already held.
-    fn refill(&mut self, effects: &[EntryIndex], layers: &[Layer]) {
+    fn refill(&mut self, effects: &[EffectScope], layers: &[Layer]) {
         self.clear();
-        for (&index, layer) in effects.iter().zip(layers) {
+        for (index, layer) in effects.iter().map(|effect| effect.entry).zip(layers) {
             match layer {
                 Layer::Leader(leader) => {
                     self.links.push((leader.link(), LinkRole::Leader, index));
@@ -562,7 +642,11 @@ impl BoundaryContent {
 
     /// Each effect's entry and layer, in paint order.
     pub fn effect_layers(&self) -> impl ExactSizeIterator<Item = (EntryIndex, &Layer)> + '_ {
-        self.stream.effects.iter().copied().zip(self.layers.iter())
+        self.stream
+            .effects
+            .iter()
+            .map(|effect| effect.entry)
+            .zip(self.layers.iter())
     }
 
     /// How many commands its chunks hold in all: what a raster planner
@@ -585,11 +669,14 @@ impl BoundaryContent {
 
     /// Where the effect at `entry` stands among the content's effects.
     pub(crate) fn effect_position(&self, entry: EntryIndex) -> Option<usize> {
-        self.stream.effects.binary_search(&entry).ok()
+        self.stream
+            .effects
+            .binary_search_by_key(&entry, |effect| effect.entry)
+            .ok()
     }
 
-    /// The entry of each effect, ascending.
-    pub(crate) fn effects(&self) -> &[EntryIndex] {
+    /// Each effect with its scope, ascending by entry.
+    pub(crate) fn effects(&self) -> &[EffectScope] {
         &self.stream.effects
     }
 
@@ -600,7 +687,7 @@ impl BoundaryContent {
 
     /// The scope of the effect at `position` among the effects.
     pub(crate) fn effect_scope(&self, position: usize) -> EffectScope {
-        self.stream.scopes[position]
+        self.stream.effects[position]
     }
 
     /// The positions of the entries directly under `parent`, or of the
@@ -613,7 +700,7 @@ impl BoundaryContent {
     ) -> impl Iterator<Item = usize> + '_ {
         let (start, end) = match parent.and_then(|entry| {
             self.effect_position(entry)
-                .map(|at| (entry.get() + 1, self.stream.scopes[at].end))
+                .map(|at| (entry.get() + 1, self.stream.effects[at].end()))
         }) {
             Some(range) => range,
             // An index that names no effect holds nothing.
@@ -623,7 +710,7 @@ impl BoundaryContent {
         std::iter::successors((start < end).then_some(start), move |&position| {
             let next = self
                 .effect_position(EntryIndex::at(position))
-                .map_or(position + 1, |at| self.stream.scopes[at].end);
+                .map_or(position + 1, |at| self.stream.effects[at].end());
             (next < end).then_some(next)
         })
     }
@@ -638,10 +725,13 @@ impl BoundaryContent {
         self.stream.top_chunks
     }
 
-    /// The blocks over the entries a partial frame's walk skips runs of
-    /// chunks by.
-    pub(crate) fn chunk_blocks(&self) -> &ChunkBlocks {
-        &self.stream.blocks
+    /// The levels of blocks over the entries a partial frame's walk skips
+    /// runs of chunks by, finest first: each with the entries one of its
+    /// blocks covers, and its blocks ([`ChunkBlocks`]).
+    pub(crate) fn chunk_levels(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (usize, &[ChunkBlock])> + ExactSizeIterator {
+        self.stream.blocks.levels(self.stream.entries.len())
     }
 
     /// Whether `other` holds this very stream, its layers aside.

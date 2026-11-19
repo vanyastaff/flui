@@ -518,9 +518,11 @@ as the captures are dropped today (`paint.rs:116-120`), and changes the root pla
 §9. **The raster side retains recordings and redraws a region rect by rect or under its box,
 whichever costs less.** The engine walks the held version and culls nodes by their subtree
 footprint and chunks by their bounds, each through the chain above it, a run of chunks under one
-effect by the union of their bounds a block at a time. A partial frame redraws its
-`Region` in one pass per rect, at most `Region::MAX`, or in one pass under the region's bounding
-box, counted as `region_passes`: each pass clears its rect under that rect's scissor and redraws
+parent (the boundary itself or one effect) by the union of their bounds a block at a time; chunks
+that each sit under an effect of their own share no block and are culled one by one. A partial
+frame redraws its `Region` in one pass per rect, at most `Region::MAX`, or in one pass under the
+region's bounding box, counted as `region_passes`: each pass clears its rect under that rect's
+scissor and redraws
 what a walk culled by that rect reaches, and a chunk that meets two rects is drawn in each, from
 its kept recording when it has one. The invariant: no pixel outside the pass rects is written, and
 every chunk that meets a written pixel is drawn there in paint order. One scissor around the region

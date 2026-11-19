@@ -41,10 +41,11 @@ pub(crate) struct RasterCounters {
     /// effect the walk skipped is never reached), or every layer of a tree it
     /// reached, a layer that then draws nothing included.
     pub(crate) nodes_entered: u64,
-    /// The reaches the walk tested against its cull: one per slot or chunk
-    /// asked about, one per block of chunks skipped or opened
-    /// ([`flui_layer::SubtreeCull::chunks_missed`]); `0` for a full frame
-    /// and for a tree, which are walked whole.
+    /// The reaches the walk's cull tested
+    /// ([`flui_layer::SubtreeCull::reaches_tested`]): one per attached slot
+    /// asked about, and one per block of chunks and per chunk a run of
+    /// chunks was tested by, the chunk a run stopped at counted once; `0`
+    /// for a full frame and for a tree, which are walked whole.
     pub(crate) cull_tests: u64,
     /// The chunks of a version whose commands the frame recorded into the
     /// painter's IR; `0` for a tree, whose pictures are layers, not chunks.

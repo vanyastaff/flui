@@ -15,10 +15,12 @@
 //! the entries under it, each chunk its recording, each slot the child node
 //! where it stands. A partial frame passes its damage, and a slot whose
 //! subtree or a chunk whose bounds cannot reach it is skipped
-//! ([`SceneVersion::subtree_cull`]), a run of chunks under one parent a block
-//! of them at a time ([`SubtreeCull::chunks_missed`]): what the walk costs
-//! follows what the damage reaches and the logarithm of a boundary's chunks,
-//! not the scene's size.
+//! ([`SceneVersion::subtree_cull`]). A run of chunks under one parent, the
+//! boundary itself or one effect, is skipped a block of them at a time
+//! ([`SubtreeCull::chunks_missed`]), so the walk tests on the order of the
+//! logarithm of such a run per chunk it enters rather than every chunk of
+//! it; chunks that each sit under an effect of their own share no block and
+//! are still tested one by one.
 //!
 //! [`SubtreeCull::chunks_missed`]: flui_layer::SubtreeCull::chunks_missed
 //!
