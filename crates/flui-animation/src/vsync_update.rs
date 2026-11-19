@@ -3,7 +3,7 @@
 use crate::animated_value::AnimatedValue;
 use crate::animation::Terminal;
 use crate::driven::DrivenRetirement;
-use crate::{DrivenController, TwoWayConverter, Vsync, VsyncRegistrationError};
+use crate::{DrivenController, MotionValue, Vsync, VsyncRegistrationError};
 use flui_foundation::panic::PanicRecovery;
 
 struct Binding<'owners> {
@@ -151,7 +151,7 @@ impl<'owners> VsyncUpdate<'owners> {
 
     /// Stage migration, including `None` to release a clock and settle unbound.
     /// Staging does not call hooks or change the owner's registration.
-    pub fn rebind<T: TwoWayConverter + 'static>(
+    pub fn rebind<T: MotionValue + 'static>(
         &mut self,
         owner: &'owners mut AnimatedValue<T>,
         registry: Option<&Vsync>,

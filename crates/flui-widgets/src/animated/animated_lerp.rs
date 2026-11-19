@@ -21,7 +21,7 @@ type ValueBuilder<T> = Rc<dyn Fn(&T) -> BoxedView>;
 /// A change re-anchors: the run goes from the value shown to the new target,
 /// so nothing jumps, but unlike [`Animated`](crate::Animated) the value's own
 /// velocity does not carry over. Use [`Animated`](crate::Animated) for a
-/// [`TwoWayConverter`](flui_animation::TwoWayConverter) value.
+/// [`MotionValue`](flui_animation::MotionValue) value.
 ///
 /// ```
 /// use flui_painting::styling::Color;

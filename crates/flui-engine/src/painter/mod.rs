@@ -848,13 +848,16 @@ impl WgpuPainter {
     /// commands are to be recorded, with the entry [`Self::end_chunk`] keeps
     /// the recording under when the chunk can be kept at all: no external
     /// texture, a finite planar transform in range, a scissor its key can
-    /// hold, and a live resource epoch.
+    /// hold, a live resource epoch, and a key drawn on enough frames to be
+    /// admitted ([`Admission`]).
+    ///
+    /// [`Admission`]: crate::recording_cache::Admission
     pub(crate) fn begin_chunk(
         &mut self,
         chunk: &flui_layer::Chunk,
         reads: crate::recording_cache::CacheReads,
     ) -> ChunkStart {
-        use crate::recording_cache::{AmbientKey, CacheReads, RasterKey, RecordingKey};
+        use crate::recording_cache::{Admission, AmbientKey, CacheReads, RasterKey, RecordingKey};
         if reads == CacheReads::Off
             || !chunk.textures().is_empty()
             || self.suppressed_layer_depth != 0
@@ -900,6 +903,9 @@ impl WgpuPainter {
                 return ChunkStart::Replayed;
             }
             self.recording_cache.remove(&key);
+        }
+        if self.recording_cache.admission(key) == Admission::RecordOnly {
+            return ChunkStart::Record(None);
         }
         let _ = self.state.take_clip_opened();
         self.glyph_atlas.log_slots();

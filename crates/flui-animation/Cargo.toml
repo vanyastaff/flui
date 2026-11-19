@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Animation system for FLUI framework - persistent animation objects"
+description = "Animation primitives for FLUI: controllers, curves, tweens, springs, keyframes and the vsync registry"
 keywords = ["ui", "animation", "flutter", "rust"]
 categories = ["gui"]
 # The integration suites compile as modules of ONE test binary (tests/main.rs);
@@ -15,13 +15,9 @@ categories = ["gui"]
 # Targets that write process-global state stay separate.
 autotests = false
 
-# Dev-only files a `cargo package --list` sweep found leaking into the
-# published archive (internal architecture docs, criterion benches, etc.):
-# `/docs/GUIDE.md` and `/docs/PERFORMANCE.md` stay IN the archive — src/lib.rs
-# pulls them in via `#[doc = include_str!(...)]` under `cfg(doctest)`, so
-# excluding the whole directory broke `cargo test --doc` on the packaged
-# crate. Only the two docs/ files nothing in src/ references are excluded.
-exclude = ["/benches/", "/docs/ARCHITECTURE.md", "/docs/PATTERNS.md"]
+# `src/lib.rs` includes `docs/GUIDE.md` and `docs/PERFORMANCE.md` for doctests, so they
+# stay in the package; the rest of `docs/` and `benches/` are excluded.
+exclude = ["/benches/", "/docs/ARCHITECTURE.md"]
 
 [lints]
 workspace = true
@@ -31,7 +27,7 @@ workspace = true
 flui-painting = { workspace = true }
 flui-foundation = { workspace = true }
 flui-platform.workspace = true
-# `#[derive(TwoWayConverter)]` — re-exported for user-defined animatable types.
+# `#[derive(MotionValue)]`, re-exported beside the trait it implements.
 flui-macros = { workspace = true }
 
 # Utility

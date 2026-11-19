@@ -92,6 +92,23 @@ pub use corner::Corner;
 pub use corners::{Corners, corners};
 pub use edges::{Edges, edges};
 pub use error::GeometryError;
+/// `#[derive(Lerp)]`: a struct interpolates field by field, each field by its
+/// own [`Lerp`], and `t` of exactly 0 or 1 returns a clone of that endpoint.
+///
+/// ```
+/// use flui_foundation::geometry::{Lerp, Offset};
+///
+/// #[derive(Clone, Debug, PartialEq, Lerp)]
+/// struct Shadow {
+///     offset: Offset<f64>,
+///     blur: f64,
+/// }
+///
+/// let from = Shadow { offset: Offset::new(0.0, 0.0), blur: 0.0 };
+/// let to = Shadow { offset: Offset::new(4.0, 8.0), blur: 2.0 };
+/// assert_eq!(from.lerp_to(&to, 0.5), Shadow { offset: Offset::new(2.0, 4.0), blur: 1.0 });
+/// ```
+pub use flui_macros::Lerp;
 pub use keys::{canonical_bits, canonical_bits_f64};
 pub use lerp::{Lerp, MaybeLerp};
 pub use matrix4::Matrix4;

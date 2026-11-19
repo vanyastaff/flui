@@ -830,7 +830,7 @@ impl Vsync {
                 .as_ref()
                 .is_none_or(|previous| !Weak::ptr_eq(previous, authority))
             {
-                inner.frame_authority = Some(authority.clone());
+                inner.frame_authority = Some(Weak::clone(authority));
             }
             inner.last_tick = Some(tick.hold_after(inner.last_tick.unwrap_or(tick)));
             inner.frame = inner.frame.saturating_add(1);
@@ -1110,16 +1110,16 @@ mod tests {
                 "removal cannot reset exhaustion"
             );
 
-            struct RejectedCapture(Rc<std::sync::atomic::AtomicUsize>);
+            struct RejectedCapture(Rc<Cell<usize>>);
             impl Drop for RejectedCapture {
                 fn drop(&mut self) {
-                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    self.0.set(self.0.get() + 1);
                     panic!("rejected controller capture");
                 }
             }
-            let drops = Rc::new(std::sync::atomic::AtomicUsize::new(0));
+            let drops = Rc::new(Cell::new(0));
             let mut rejected = AnimationController::builder(Duration::from_secs(1)).build_on(None);
-            let probe = RejectedCapture(drops.clone());
+            let probe = RejectedCapture(Rc::clone(&drops));
             rejected
                 .controller()
                 .listen_status(Rc::new(move |_| {
@@ -1132,7 +1132,7 @@ mod tests {
             );
             assert!(!rejected.is_bound());
             assert_eq!(
-                drops.load(std::sync::atomic::Ordering::SeqCst),
+                drops.get(),
                 0,
                 "refusal preserves the owning handle's captures"
             );
@@ -1144,7 +1144,7 @@ mod tests {
                 Some("rejected controller capture")
             );
             flui_foundation::panic::discard_payload(failure);
-            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(drops.get(), 1);
             rejected.dispose();
             assert_eq!(
                 registry.try_register_resuming(&refused, Duration::ZERO),

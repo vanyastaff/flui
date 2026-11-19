@@ -17,7 +17,7 @@ thresholds repeats knowledge already owned by its converter.
 
 ## Decision
 
-`TwoWayConverter::rest_thresholds()` returns positive finite distances in the
+`MotionValue::rest_thresholds()` returns positive finite distances in the
 converter's fixed-width vector representation. Its return type has the same
 component count as the motion vector. Manual implementations explicitly choose
 their distances. The derive concatenates each field's thresholds in declaration
@@ -68,7 +68,7 @@ is an intentional pre-1.0 migration instead of guessing units for custom values.
 `owning_animated_value_contract` observes geometry reaching exact rest before
 scalar motion under the same spring. It checks zero, negative, NaN and infinite
 threshold refusal, old-run progression and coordinated admission refusal.
-`two_way_converter_derive_contract` observes geometry retaining its threshold
+`motion_value_derive_contract` observes geometry retaining its threshold
 inside a nested registered value. The color fade case in
 `tolerance_constructors_validate_and_scale_with_dpr` observes visible hue through
 the rest interval. Built-in implicit geometry consumers use the same

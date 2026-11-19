@@ -1,42 +1,42 @@
-//! `#[derive(TwoWayConverter)]` as a downstream crate uses it.
+//! `#[derive(MotionValue)]` as a downstream crate uses it.
 //!
 //! This lives in `tests/` (a separate crate that depends on flui-animation) so
-//! the derive's `::flui_animation::TwoWayConverter` path resolves the same way
+//! the derive's `::flui_animation::MotionValue` path resolves the same way
 //! it does for a real downstream user.
 
 // Scalar round-trip assertions use exactly representable f64 values.
 // Color conversion has its own representation and precision contract.
 
 use flui_animation::__runtime::VsyncDriver;
-use flui_animation::{Keyframes, Linear, TwoWayConverter};
+use flui_animation::{Keyframes, Linear, MotionValue};
 use flui_foundation::geometry::Lerp;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct Translation {
     x: f64,
     y: f64,
     z: f64,
 }
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct Pair(f64, f64);
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct Appearance {
     position: Offset<f64>,
     color: Color,
 }
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, Lerp, MotionValue)]
 struct NestedAppearance(Appearance, f64);
 
 // The derive is written in a `macro_rules!` body and the fields and their types
 // come from its caller: two hygiene contexts, which the generated `self` bridges.
 macro_rules! converter {
     ($name:ident { $($field:ident : $ty:ident),* }) => {
-        #[derive(Clone, TwoWayConverter)]
+        #[derive(Clone, Lerp, MotionValue)]
         struct $name {
             $($field: $ty),*
         }
@@ -247,8 +247,54 @@ fn derived_type_is_a_keyframe_value() {
     assert_eq!((half.0, half.1), (5.0, -5.0));
 }
 
+/// A step value: it interpolates by holding its start until the end, its own
+/// rule, and still derives its motion vector.
+#[derive(Clone, Debug, PartialEq, MotionValue)]
+struct Step(f64);
+
+impl Lerp for Step {
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        if t < 1.0 { self.clone() } else { other.clone() }
+    }
+}
+
+/// A generic struct interpolates whenever its fields do.
+#[derive(Clone, Debug, PartialEq, Lerp)]
+struct Span<T> {
+    start: T,
+    end: T,
+}
+
+fn a_value_with_its_own_interpolation_derives_only_its_vector() {
+    assert_eq!(Step(1.0).to_vector(), [1.0]);
+    assert_eq!(Step::from_vector([3.0]), Step(3.0));
+    assert_eq!(
+        Step(1.0).lerp_to(&Step(3.0), 0.5),
+        Step(1.0),
+        "its own rule"
+    );
+    assert_eq!(Step(1.0).lerp_to(&Step(3.0), 1.0), Step(3.0));
+}
+
+fn a_generic_struct_derives_lerp_over_its_fields() {
+    let from = Span {
+        start: Offset::new(0.0, 0.0),
+        end: Offset::new(0.0, 2.0),
+    };
+    let to = Span {
+        start: Offset::new(4.0, 0.0),
+        end: Offset::new(2.0, 6.0),
+    };
+    assert_eq!(
+        from.lerp_to(&to, 0.5),
+        Span {
+            start: Offset::new(2.0, 0.0),
+            end: Offset::new(1.0, 4.0)
+        }
+    );
+}
 #[test]
-fn two_way_converter_derive_contract() {
+fn motion_value_derive_contract() {
     crate::run_table(&[
         (
             "nested spring rest units",
@@ -258,6 +304,14 @@ fn two_way_converter_derive_contract() {
         ("vector round trip", named_struct_round_trips_through_vector),
         ("componentwise lerp", derived_lerp_is_componentwise),
         ("keyframe value", derived_type_is_a_keyframe_value),
+        (
+            "its own interpolation",
+            a_value_with_its_own_interpolation_derives_only_its_vector,
+        ),
+        (
+            "generic lerp",
+            a_generic_struct_derives_lerp_over_its_fields,
+        ),
         (
             "a type from a macro",
             a_type_from_a_macro_round_trips_and_lerps,
