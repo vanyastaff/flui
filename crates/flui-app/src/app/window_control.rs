@@ -26,7 +26,8 @@ use flui_platform::{
 use flui_view::__runtime::WindowSource;
 use flui_view::WindowHandle;
 
-use super::close_request::{CloseReason, CloseRequestError, CloseRequestRouter, CloseResponse};
+use flui_runtime::owner_turn::{CloseRequestError, CloseRequestRouter, CloseResponse};
+use flui_view::CloseReason;
 
 /// One unit of queued work for a window, applied in the order it was queued.
 enum Queued {

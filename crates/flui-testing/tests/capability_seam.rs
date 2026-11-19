@@ -985,20 +985,35 @@ pub(crate) fn a_runtime_without_a_primary_selection_answers_not_registered() {
     assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
     assert_eq!(refusal.capability(), Some(PrimarySelectionCapability::NAME));
 
-    for (platform, provided) in [
-        (Linux, true),
-        (Windows, false),
-        (MacOS, false),
-        (Android, false),
-        (iOS, false),
-        (Unknown, false),
+    // A browser's page has no primary selection, whatever platform's
+    // conventions it follows: the built-ins key on the window system.
+    for (platform, in_browser, provided) in [
+        (Linux, false, true),
+        (Linux, true, false),
+        (Windows, false, false),
+        (MacOS, false, false),
+        (Android, false, false),
+        (iOS, false, false),
+        (Unknown, false, false),
+        (Unknown, true, false),
     ] {
-        let mut host = HeadlessHost::new(window().with_platform(platform));
+        let mut window = window().with_platform(platform);
+        if in_browser {
+            window = window.in_browser();
+        }
+        let mut host = HeadlessHost::new(window);
         let acquired = acquire_capability::<PrimarySelectionCapability>(&mut host);
         match acquired {
-            Ok(_) => assert!(provided, "{platform:?} has no primary selection"),
+            Ok(_) => assert!(
+                provided,
+                "{platform:?} (in_browser={in_browser}) has no primary selection, yet provides one"
+            ),
             Err(refusal) => {
-                assert!(!provided, "{platform:?} provides a primary selection");
+                assert!(
+                    !provided,
+                    "{platform:?} (in_browser={in_browser}) provides a primary selection, yet \
+                     refuses one"
+                );
                 assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
             }
         }

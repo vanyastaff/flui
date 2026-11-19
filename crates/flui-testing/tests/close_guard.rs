@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
 use flui_testing::widgets::{lay_out, tight};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
@@ -482,11 +483,608 @@ pub(crate) fn a_session_end_follows_the_platform_the_window_names() {
     }
 }
 
+/// A window that plays the browser's page, on whatever target the test is
+/// built for, ends its session as a page: the query asks nobody and holds
+/// nothing, the end delivers its notice alone, nothing hears `Detached` and
+/// the host does not retire, while the same window playing Windows ends the
+/// application. Neither its handler nor its guard is asked a close.
+///
+/// Fails against a host that plays the window's platform whatever the window
+/// is told: the browser's query is refused by the handler and its user close
+/// by the hold. That the page writes nothing within its end is
+/// `a_page_ends_its_session_with_the_notice_alone`'s.
+pub(crate) fn a_window_playing_the_browser_ends_its_session_as_a_page() {
+    use flui_platform::{SessionEndAnswer, SessionEndPhase, SessionEndSupport, TargetPlatform};
+
+    for in_browser in [false, true] {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let mut window = HeadlessWindow::new(10, 10)
+            .with_platform(TargetPlatform::Windows)
+            .with_close_request_handler(keeping_open(&asked));
+        if in_browser {
+            window = window.in_browser();
+        }
+        let mut host = HeadlessHost::new(window);
+        let seen = Seen::default();
+        host.attach(&Guarded {
+            hold: true,
+            seen: seen.clone(),
+        })
+        .expect("root");
+        let _ = host.pump(Duration::ZERO);
+
+        assert_eq!(
+            host.session_end_support() == SessionEndSupport::NotifyOnly,
+            in_browser,
+            "in_browser={in_browser}: a browser only tells"
+        );
+        assert_eq!(
+            host.end_session(SessionEndPhase::Query),
+            if in_browser {
+                SessionEndAnswer::Proceed
+            } else {
+                SessionEndAnswer::Block
+            },
+            "in_browser={in_browser}: only a desktop's query can be refused"
+        );
+        let _ = host.end_session(SessionEndPhase::Cancelled);
+        assert_eq!(
+            host.request_close(host.primary_window(), CloseReason::User),
+            in_browser,
+            "in_browser={in_browser}: the browser asks no guard; the desktop's hold refuses"
+        );
+        if !in_browser {
+            assert_eq!(
+                host.end_session(SessionEndPhase::Ending),
+                SessionEndAnswer::Proceed
+            );
+            assert!(
+                host.is_retired(),
+                "the desktop's session end retires the host"
+            );
+            assert_eq!(seen.detached.get(), 1);
+        }
+        assert_eq!(
+            *asked.borrow(),
+            if in_browser {
+                Vec::new()
+            } else {
+                vec![CloseReason::SessionEnd]
+            },
+            "in_browser={in_browser}: the browser asks no handler"
+        );
+    }
+
+    // The browser's end on its own: an open window, not closed by a close.
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10).in_browser());
+    let seen = Seen::default();
+    host.attach(&Guarded {
+        hold: true,
+        seen: seen.clone(),
+    })
+    .expect("root");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        host.end_session(SessionEndPhase::Ending),
+        SessionEndAnswer::Proceed
+    );
+    assert!(!host.is_retired(), "a page's end tears nothing down");
+    assert_eq!(seen.detached.get(), 0, "nothing hears Detached");
+}
+
+/// The window system is the host's: a window that plays the browser cannot
+/// open beside a platform's windows, nor a platform's window beside a page,
+/// and the refusal names both; a window that plays the host's opens.
+///
+/// Fails against a host that opens any window: the secondary window's
+/// browser flag would be ignored, its host playing the primary's system.
+pub(crate) fn a_window_of_another_window_system_is_refused() {
+    use flui_platform::TargetPlatform;
+    use flui_runtime::window_system::WindowSystem;
+
+    let mut host =
+        HeadlessHost::new(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::Linux));
+    let refused = host
+        .try_open_window(HeadlessWindow::new(10, 10).in_browser())
+        .expect_err("a page cannot open beside a platform's windows");
+    assert_eq!(refused.host, WindowSystem::Platform(TargetPlatform::Linux));
+    assert_eq!(refused.window, WindowSystem::Browser);
+    host.try_open_window(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::Windows))
+        .expect("a window's platform names only its conventions");
+
+    let mut page = HeadlessHost::new(HeadlessWindow::new(10, 10).in_browser());
+    let refused = page
+        .try_open_window(HeadlessWindow::new(10, 10))
+        .expect_err("a platform's window cannot open beside a page");
+    assert_eq!(refused.host, WindowSystem::Browser);
+    page.try_open_window(HeadlessWindow::new(10, 10).in_browser())
+        .expect("a page opens beside a page");
+}
+
+/// A close handler that records the reason of every close it is asked and
+/// keeps the window open.
+fn keeping_open(asked: &Rc<RefCell<Vec<CloseReason>>>) -> CloseRequestHandler {
+    let asked = Rc::clone(asked);
+    CloseRequestHandler::new(move |request| {
+        asked.borrow_mut().push(request.reason());
+        CloseResponse::KeepOpen
+    })
+}
+
+/// The application's close handler is asked as a runner asks it: after the
+/// window's guard for the user's close, so a hold answers without it; first
+/// at the session's end, so its refusal holds the session though the guard
+/// holds only work; and the window that refused releases the platform once
+/// it carries its close out.
+///
+/// Fails against a host that asks only the guard: the handler is never asked
+/// and the session end proceeds past it.
+pub(crate) fn a_close_handler_is_asked_after_the_guard_and_first_at_a_session_end() {
+    use flui_platform::{SessionEndAnswer, SessionEndPhase, TargetPlatform};
+
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let mut host = HeadlessHost::new(
+        HeadlessWindow::new(10, 10)
+            .with_platform(TargetPlatform::Windows)
+            .with_close_request_handler(keeping_open(&asked)),
+    );
+    let seen = Seen::default();
+    host.attach(&Guarded {
+        hold: true,
+        seen: seen.clone(),
+    })
+    .expect("root");
+    let _ = host.pump(Duration::ZERO);
+    let window = host.primary_window();
+
+    assert!(!host.request_close(window, CloseReason::User));
+    assert!(
+        asked.borrow().is_empty(),
+        "the guard's hold answers the user's close before the handler"
+    );
+    assert_eq!(
+        host.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "the handler refuses the session end a hold for work does not"
+    );
+    assert_eq!(*asked.borrow(), [CloseReason::SessionEnd]);
+    assert_eq!(
+        host.session_end_releases(),
+        0,
+        "the refusal holds the session"
+    );
+
+    seen.holds.borrow_mut().clear();
+    let _ = host.pump(Duration::ZERO);
+    assert!(host.is_closed(window), "the released close is carried out");
+    assert_eq!(
+        host.session_end_releases(),
+        1,
+        "the window that refused carried its close out and released the platform"
+    );
+}
+
+/// A close handler that records the reason of every close it is asked and
+/// lets the window close.
+fn letting_close(asked: &Rc<RefCell<Vec<CloseReason>>>) -> CloseRequestHandler {
+    let asked = Rc::clone(asked);
+    CloseRequestHandler::new(move |request| {
+        asked.borrow_mut().push(request.reason());
+        CloseResponse::Close
+    })
+}
+
+/// A session-end close the test asks for is put to the window as a runner's
+/// session-end query puts it, the handler before the guard, while the user's
+/// close still asks the guard first: with a decision open, the handler hears
+/// the session end, and the decision then refuses it.
+///
+/// Fails against a host that asks the guard first for every reason: the
+/// decision refuses the session end and the handler is never asked.
+pub(crate) fn a_session_end_close_asks_the_handler_before_the_guard() {
+    use flui_platform::TargetPlatform;
+
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let mut host = HeadlessHost::new(
+        HeadlessWindow::new(10, 10)
+            .with_platform(TargetPlatform::Windows)
+            .with_close_request_handler(letting_close(&asked)),
+    );
+    let seen = Seen::default();
+    host.attach(&Guarded {
+        hold: false,
+        seen: seen.clone(),
+    })
+    .expect("root");
+    let _ = host.pump(Duration::ZERO);
+    let window = host.primary_window();
+    let guard = seen.guard.borrow().clone().expect("guard acquired");
+    let decision = guard.require_decision();
+
+    assert!(!host.request_close(window, CloseReason::User));
+    assert!(
+        asked.borrow().is_empty(),
+        "the decision answers the user's close before the handler"
+    );
+    assert!(
+        !host.request_close(window, CloseReason::SessionEnd),
+        "the decision refuses the session end"
+    );
+    assert_eq!(
+        *asked.borrow(),
+        [CloseReason::SessionEnd],
+        "the handler heard the session end before the guard refused it"
+    );
+    drop(decision);
+}
+
+/// Advances its host's clock by `spent` as the session-ended notice reaches
+/// it, as a subscriber whose work takes that long does.
+#[derive(Clone)]
+struct SpendsAtSessionEnd {
+    clock: flui_testing::HostClock,
+    spent: Duration,
+}
+
+struct SpendsAtSessionEndState {
+    _notices: flui_view::HostNoticeSubscription,
+}
+
+impl StatefulView for SpendsAtSessionEnd {
+    type State = SpendsAtSessionEndState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let (clock, spent) = (self.clock.clone(), self.spent);
+        let notices = ctx
+            .lifecycle_handle()
+            .expect("a hosted presentation has a lifecycle")
+            .subscribe_notices(move |notice| {
+                if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                    clock.advance(spent);
+                }
+            })
+            .expect("the presentation is open");
+        SpendsAtSessionEndState { _notices: notices }
+    }
+}
+
+impl View for SpendsAtSessionEnd {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<SpendsAtSessionEnd> for SpendsAtSessionEndState {
+    fn build(&self, _view: &SpendsAtSessionEnd, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// The session end's budget runs on the host's clock, which only the test
+/// moves: however slowly the test runs, a session end on a desktop tells
+/// every window it is detached and retires the host; a subscriber that
+/// spends the budget down to less than the second application code needs
+/// leaves the host as a runner leaves it then, its windows not detached and
+/// not torn down.
+///
+/// Fails against a budget on the wall clock: the subscriber's advance spends
+/// none of it, and the host retires.
+pub(crate) fn a_session_end_spends_the_budget_on_the_hosts_clock() {
+    use flui_platform::{SessionEndAnswer, SessionEndPhase, TargetPlatform};
+
+    for (spent, ends) in [
+        (Duration::ZERO, true),
+        (Duration::from_millis(2_500), false),
+    ] {
+        let mut host =
+            HeadlessHost::new(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::Windows));
+        let seen = Seen::default();
+        let clock = host.clock().clone();
+        host.attach(&flui_widgets::Column::new((
+            Guarded {
+                hold: true,
+                seen: seen.clone(),
+            },
+            SpendsAtSessionEnd { clock, spent },
+        )))
+        .expect("root");
+        let _ = host.pump(Duration::ZERO);
+
+        assert_eq!(
+            host.end_session(SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed,
+            "{spent:?}: nothing is in flight"
+        );
+        assert_eq!(
+            host.is_retired(),
+            ends,
+            "{spent:?}: the host retires: {ends}"
+        );
+        assert_eq!(
+            seen.detached.get(),
+            usize::from(ends),
+            "{spent:?}: the window heard it is detached: {ends}"
+        );
+    }
+}
+
+/// Records the notices its window hears and keeps a block on every session
+/// end it is told of.
+#[derive(Clone, Default)]
+struct HoldsSessionEnds {
+    heard: Rc<RefCell<Vec<&'static str>>>,
+    blocks: Rc<RefCell<Vec<flui_platform::SessionEndBlock>>>,
+}
+
+struct HoldsSessionEndsState {
+    _notices: flui_view::HostNoticeSubscription,
+}
+
+impl StatefulView for HoldsSessionEnds {
+    type State = HoldsSessionEndsState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let view = self.clone();
+        let notices = ctx
+            .lifecycle_handle()
+            .expect("a hosted presentation has a lifecycle")
+            .subscribe_notices(move |notice| match notice {
+                flui_platform::HostNotice::SessionEnding(request) => {
+                    view.heard.borrow_mut().push("ending");
+                    view.blocks.borrow_mut().push(
+                        request
+                            .block("a draft is being saved")
+                            .expect("the query is not answered yet"),
+                    );
+                }
+                flui_platform::HostNotice::SessionEndCancelled => {
+                    view.heard.borrow_mut().push("cancelled");
+                }
+                _ => {}
+            })
+            .expect("the presentation is open");
+        HoldsSessionEndsState { _notices: notices }
+    }
+}
+
+impl View for HoldsSessionEnds {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<HoldsSessionEnds> for HoldsSessionEndsState {
+    fn build(&self, _view: &HoldsSessionEnds, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A session-end query reaches the window's subscribers as a runner's does,
+/// a block one of them takes holds the session until it is released, which
+/// lets the platform go on, and a cancel is heard too.
+///
+/// Fails against a host that asks only the windows' guards: no subscriber
+/// hears the query, and the session end proceeds.
+pub(crate) fn a_session_end_query_reaches_the_subscribers_and_their_block_holds_it() {
+    use flui_platform::{SessionEndAnswer, SessionEndPhase, TargetPlatform};
+
+    let mut host =
+        HeadlessHost::new(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::MacOS));
+    let view = HoldsSessionEnds::default();
+    host.attach(&view).expect("root");
+    let _ = host.pump(Duration::ZERO);
+
+    assert_eq!(
+        host.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    assert_eq!(host.session_end_releases(), 0);
+    view.blocks.borrow_mut().clear();
+    assert_eq!(
+        host.session_end_releases(),
+        1,
+        "the last block's release lets the platform go on"
+    );
+    let _ = host.end_session(SessionEndPhase::Cancelled);
+    assert_eq!(*view.heard.borrow(), ["ending", "cancelled"]);
+}
+
+/// A log subscriber that fails on every event of the owner turn's steps and
+/// of the headless host, as a faulty one does; the panic names the event's
+/// target.
+struct FailsOnTurnEvents;
+
+impl tracing::Subscriber for FailsOnTurnEvents {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let target = event.metadata().target();
+        if target.starts_with("flui_runtime::owner_turn")
+            || target.starts_with("flui_testing::host")
+        {
+            panic!("log subscriber failed on {target}");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Fails as the session-end query's notice reaches it.
+#[derive(Clone)]
+struct FailsAtSessionEnding;
+
+struct FailsAtSessionEndingState {
+    _notices: flui_view::HostNoticeSubscription,
+}
+
+impl StatefulView for FailsAtSessionEnding {
+    type State = FailsAtSessionEndingState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let notices = ctx
+            .lifecycle_handle()
+            .expect("a hosted presentation has a lifecycle")
+            .subscribe_notices(|notice| {
+                assert!(
+                    !matches!(notice, flui_platform::HostNotice::SessionEnding(_)),
+                    "a subscriber fails at the session-end query"
+                );
+            })
+            .expect("the presentation is open");
+        FailsAtSessionEndingState { _notices: notices }
+    }
+}
+
+impl View for FailsAtSessionEnding {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<FailsAtSessionEnding> for FailsAtSessionEndingState {
+    fn build(&self, _view: &FailsAtSessionEnding, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A session-end step's panic (a notice subscriber that fails) is kept by
+/// the host before it logs that panic to a subscriber that fails too: the
+/// panic raised once the query returns is the step's, not the log's.
+///
+/// Fails against a host that logs before it keeps the step's panic: the log
+/// fails first, the step's panic is lost, and the query returns as if
+/// nothing failed.
+pub(crate) fn a_session_end_steps_panic_is_kept_before_the_host_logs_it() {
+    use flui_platform::{SessionEndPhase, TargetPlatform};
+
+    let mut host =
+        HeadlessHost::new(HeadlessWindow::new(10, 10).with_platform(TargetPlatform::Windows));
+    host.attach(&FailsAtSessionEnding).expect("root");
+    let _ = host.pump(Duration::ZERO);
+
+    let query = tracing::subscriber::with_default(FailsOnTurnEvents, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            host.end_session(SessionEndPhase::Query)
+        }))
+    });
+    let raised = query.expect_err("the step's panic is raised after the query");
+    let message = raised
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| raised.downcast_ref::<&str>().copied())
+        .expect("the panics carry a message");
+    assert!(
+        message.contains("a subscriber fails at the session-end query"),
+        "the step's panic is the one raised, not the log's: {message}"
+    );
+}
+
+/// A quit asks every window's handler, not only up to the first refusal; it
+/// waits for each window whose refusal recorded its close, and goes ahead
+/// once both records are carried out.
+///
+/// Fails against a host that asks only the windows' guards: no handler is
+/// asked, and the quit closes both windows at once.
+pub(crate) fn a_quit_asks_every_windows_handler_and_waits_for_each_record() {
+    let (first_asked, second_asked) = (
+        Rc::new(RefCell::new(Vec::new())),
+        Rc::new(RefCell::new(Vec::new())),
+    );
+    let mut host = HeadlessHost::new(
+        HeadlessWindow::new(10, 10).with_close_request_handler(keeping_open(&first_asked)),
+    );
+    let second = host.open_window(
+        HeadlessWindow::new(10, 10).with_close_request_handler(keeping_open(&second_asked)),
+    );
+    let (first_seen, second_seen) = (Seen::default(), Seen::default());
+    host.attach(&Guarded {
+        hold: false,
+        seen: first_seen.clone(),
+    })
+    .expect("first root");
+    host.attach_to(
+        second,
+        &Guarded {
+            hold: false,
+            seen: second_seen.clone(),
+        },
+    )
+    .expect("second root");
+    let _ = host.pump(Duration::ZERO);
+
+    host.request_quit();
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*first_asked.borrow(), [CloseReason::Program]);
+    assert_eq!(*second_asked.borrow(), [CloseReason::Program]);
+    assert!(!host.is_retired(), "both windows refused");
+
+    for seen in [&first_seen, &second_seen] {
+        assert!(!host.is_retired(), "a record is still waited on");
+        seen.guard
+            .borrow()
+            .clone()
+            .expect("guard acquired")
+            .pending()
+            .expect("the refusal recorded the quit's close")
+            .discard_and_close()
+            .expect("the recording is current");
+        let _ = host.pump(Duration::ZERO);
+    }
+    assert!(
+        host.is_retired(),
+        "both records carried out: the quit went ahead"
+    );
+}
+
 #[test]
 fn close_guard_hosting() {
     crate::run_table(
         "close_guard_hosting",
         &[
+            (
+                "a_window_of_another_window_system_is_refused",
+                a_window_of_another_window_system_is_refused,
+            ),
+            (
+                "a_window_playing_the_browser_ends_its_session_as_a_page",
+                a_window_playing_the_browser_ends_its_session_as_a_page,
+            ),
+            (
+                "a_session_end_steps_panic_is_kept_before_the_host_logs_it",
+                a_session_end_steps_panic_is_kept_before_the_host_logs_it,
+            ),
+            (
+                "a_session_end_close_asks_the_handler_before_the_guard",
+                a_session_end_close_asks_the_handler_before_the_guard,
+            ),
+            (
+                "a_session_end_spends_the_budget_on_the_hosts_clock",
+                a_session_end_spends_the_budget_on_the_hosts_clock,
+            ),
+            (
+                "a_close_handler_is_asked_after_the_guard_and_first_at_a_session_end",
+                a_close_handler_is_asked_after_the_guard_and_first_at_a_session_end,
+            ),
+            (
+                "a_session_end_query_reaches_the_subscribers_and_their_block_holds_it",
+                a_session_end_query_reaches_the_subscribers_and_their_block_holds_it,
+            ),
+            (
+                "a_quit_asks_every_windows_handler_and_waits_for_each_record",
+                a_quit_asks_every_windows_handler_and_waits_for_each_record,
+            ),
             (
                 "every_due_close_is_carried_out_past_one_that_panics",
                 every_due_close_is_carried_out_past_one_that_panics,
