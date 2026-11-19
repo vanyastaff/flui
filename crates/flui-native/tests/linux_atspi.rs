@@ -432,39 +432,17 @@ mod cases {
             .is_ok()
     }
 
-    /// Start Xvfb on a display number no other server holds (see
-    /// `x11_window.rs`).
+    /// Start Xvfb on a display number no other server holds
+    /// (`flui_native::testing::xvfb`, whose `-noreset` keeps the server up
+    /// once the launcher holds no X connection), leading a process group of
+    /// its own as the session's other programs do.
     fn x_server() -> (Child, String) {
-        let first = 100 + std::process::id() % 800;
-        for number in (first..first + 200).map(|number| 100 + number % 900) {
-            let display = format!(":{number}");
-            let mut server = Command::new("Xvfb")
-                // `-noreset`: a server whose last client leaves resets, and refuses
-                // the next case's connection meanwhile; the launcher holds no
-                // X connection once `WAYLAND_DISPLAY` names the session's Weston.
-                .args([&display, "-screen", "0", "1024x768x24", "-nolisten", "tcp", "-noreset"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()
-                .expect("Xvfb starts");
-            let deadline = Instant::now() + PATIENCE;
-            loop {
-                if server.try_wait().ok().flatten().is_some() {
-                    break;
-                }
-                if RustConnection::connect(Some(&display)).is_ok() {
-                    std::thread::sleep(Duration::from_millis(200));
-                    if server.try_wait().ok().flatten().is_none() {
-                        return (server, display);
-                    }
-                    break;
-                }
-                assert!(Instant::now() < deadline, "timed out waiting for Xvfb");
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-        panic!("no free X display number");
+        flui_native::testing::xvfb::start(|command| {
+            command
+                .args(["-screen", "0", "1024x768x24"])
+                .process_group(0);
+        })
+        .expect("Xvfb starts")
     }
 
     /// The host a fixture's window is on.

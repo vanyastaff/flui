@@ -1,93 +1,30 @@
-//! `cargo xtask checks`: the source checks that compile nothing.
+//! `cargo xtask checks`: the repository's own source checks, the ones no
+//! standard tool makes. rustfmt, typos, taplo and lychee run as steps of CI's
+//! `checks` job beside it.
 //!
 //! Every check runs even when an earlier one failed, so one run reports every
-//! problem; the checks this crate implements run in this process.
+//! problem; each runs in this process.
 
 use std::process::ExitCode;
 
 use anyhow::bail;
 
-use super::exec::{Cmd, Runner, installed, parsed};
+use super::exec::{Runner, parsed};
 use crate::{
-    adr_numbers, android_dex, changelog, docs_links, fonts, icon_import, key_vocabulary,
-    platform_floor, recording_vocabulary, toolchain, unmounted_tests,
+    adr_numbers, android_dex, changelog, fonts, icon_import, key_vocabulary, platform_floor,
+    recording_vocabulary, toolchain, unmounted_tests,
 };
 
-/// A formatter or linter that is a binary of its own, not a cargo step.
-#[derive(Debug, Clone, Copy)]
-struct Tool {
-    /// The program.
-    program: &'static str,
-    /// Its arguments for the check.
-    args: &'static [&'static str],
-    /// The crate that installs it.
-    install: &'static str,
-    /// Environment for the run.
-    env: &'static [(&'static str, &'static str)],
-}
-
-/// Spelling (typos) and TOML formatting (taplo). A contributor without them
-/// can still run the gate: the check is skipped with a message unless
-/// `--strict` (CI installs both, so a skip is a slower loop, never a hole).
-const TOOLS: [Tool; 2] = [
-    Tool {
-        program: "typos",
-        args: &[],
-        install: "typos-cli",
-        env: &[],
-    },
-    Tool {
-        program: "taplo",
-        args: &["fmt", "--check"],
-        install: "taplo-cli",
-        // taplo logs every file it formats at INFO; only problems matter here.
-        env: &[("RUST_LOG", "warn")],
-    },
-];
-
 /// Runs every check; an error lists the ones that failed.
-pub(super) fn run(runner: Runner, strict: bool) -> anyhow::Result<()> {
-    let mut failed: Vec<String> = Vec::new();
-    let mut record = |name: &str, result: anyhow::Result<()>| {
-        if let Err(error) = result {
-            eprintln!("checks: {name}: {error:#}");
-            failed.push(name.to_owned());
-        }
-    };
-
-    record(
-        "fmt",
-        runner.run(&Cmd::cargo(["fmt", "--all", "--", "--check"])),
-    );
-    for tool in TOOLS {
-        if runner.dry_run || installed(tool.program, &["--version"]) {
-            record(
-                tool.program,
-                runner.run(&tool.env.iter().fold(
-                    Cmd::new(tool.program).args(tool.args),
-                    |cmd, (key, value)| cmd.env(*key, *value),
-                )),
-            );
-        } else if strict {
-            record(
-                tool.program,
-                Err(anyhow::anyhow!(
-                    "not installed (cargo install {}), and --strict makes that a failure",
-                    tool.install
-                )),
-            );
-        } else {
-            println!(
-                "{}: not installed, skipped (cargo install {}; CI runs it)",
-                tool.program, tool.install
-            );
-        }
-    }
-    for (command, check) in in_process(strict) {
+pub(super) fn run(runner: Runner) -> anyhow::Result<()> {
+    let mut failed: Vec<&str> = Vec::new();
+    for (command, check) in IN_PROCESS {
         let args: Vec<&str> = command.split(' ').skip(1).collect();
-        record(command, runner.in_process(command, || check(&args)));
+        if let Err(error) = runner.in_process(command, || check(&args)) {
+            eprintln!("checks: {command}: {error:#}");
+            failed.push(command);
+        }
     }
-
     if failed.is_empty() {
         return Ok(());
     }
@@ -98,54 +35,43 @@ pub(super) fn run(runner: Runner, strict: bool) -> anyhow::Result<()> {
 type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 
 /// This crate's own checks, in the order they run: each `cargo xtask`
-/// command line and the command it names. lychee is skippable like
-/// [`TOOLS`], so `--strict` reaches `docs-links` too. A gate's
-/// `--self-test` is not here: it is a test of this crate
+/// command line and the command it names. A gate's `--self-test` is not
+/// here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 11] {
-    [
-        (
-            if strict {
-                "docs-links --strict"
-            } else {
-                "docs-links"
-            },
-            |args| docs_links::docs_links(&parsed(args)?),
-        ),
-        ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
-        ("unmounted-tests", |args| {
-            unmounted_tests::unmounted_tests(&parsed(args)?)
-        }),
-        ("adr-numbers", |args| {
-            adr_numbers::adr_numbers(&parsed(args)?)
-        }),
-        // `--package-list`: Cargo's file selection for flui-painting, listed
-        // offline, no archive built
-        ("font-assets --package-list", |args| {
-            fonts::font_assets(&parsed(args)?)
-        }),
-        // the Material animated icon constants against their committed key frames
-        ("icon-import material", |args| {
-            icon_import::icon_import(&parsed(args)?)
-        }),
-        ("key-vocabulary", |args| {
-            key_vocabulary::key_vocabulary(&parsed(args)?)
-        }),
-        ("recording-vocabulary", |args| {
-            recording_vocabulary::recording_vocabulary(&parsed(args)?)
-        }),
-        ("android-dex", |args| {
-            android_dex::android_dex(&parsed(args)?)
-        }),
-        ("platform-floor", |args| {
-            platform_floor::platform_floor(&parsed(args)?)
-        }),
-        ("changelog --check", |args| {
-            changelog::changelog(&parsed(args)?)
-        }),
-    ]
-}
+const IN_PROCESS: [(&str, InProcess); 10] = [
+    ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
+    ("unmounted-tests", |args| {
+        unmounted_tests::unmounted_tests(&parsed(args)?)
+    }),
+    ("adr-numbers", |args| {
+        adr_numbers::adr_numbers(&parsed(args)?)
+    }),
+    // `--package-list`: Cargo's file selection for flui-painting, listed
+    // offline, no archive built
+    ("font-assets --package-list", |args| {
+        fonts::font_assets(&parsed(args)?)
+    }),
+    // the Material animated icon constants against their committed key frames
+    ("icon-import material", |args| {
+        icon_import::icon_import(&parsed(args)?)
+    }),
+    ("key-vocabulary", |args| {
+        key_vocabulary::key_vocabulary(&parsed(args)?)
+    }),
+    ("recording-vocabulary", |args| {
+        recording_vocabulary::recording_vocabulary(&parsed(args)?)
+    }),
+    ("android-dex", |args| {
+        android_dex::android_dex(&parsed(args)?)
+    }),
+    ("platform-floor", |args| {
+        platform_floor::platform_floor(&parsed(args)?)
+    }),
+    ("changelog --check", |args| {
+        changelog::changelog(&parsed(args)?)
+    }),
+];
 
 #[cfg(test)]
 mod tests {
@@ -208,12 +134,13 @@ mod tests {
         assert!(error.to_string().contains("--no-such-flag"), "{error}");
     }
 
-    fn the_in_process_checks_include_the_link_check_under_strict() {
-        let lines = |strict| in_process(strict).map(|(line, _)| line);
+    /// The checks `cargo xtask checks` runs, each printed as the command line
+    /// that runs it, and none a `--self-test` (that is a test of this crate).
+    fn every_in_process_check_is_its_command_line() {
+        let lines = IN_PROCESS.map(|(line, _)| line);
         assert_eq!(
-            lines(false),
+            lines,
             [
-                "docs-links",
                 "toolchain",
                 "unmounted-tests",
                 "adr-numbers",
@@ -226,10 +153,8 @@ mod tests {
                 "changelog --check",
             ]
         );
-        assert_eq!(lines(true)[0], "docs-links --strict");
-        assert_eq!(lines(true)[1..], lines(false)[1..]);
-        // each is the command line it is printed as
-        for line in lines(false).into_iter().chain(lines(true)) {
+        assert!(!lines.iter().any(|line| line.contains("--self-test")));
+        for line in lines {
             let argv = std::iter::once("cargo xtask").chain(line.split(' '));
             if let Err(error) = crate::Cli::try_parse_from(argv) {
                 panic!("`cargo xtask {line}`: {error}");
@@ -255,8 +180,8 @@ mod tests {
                     in_process_arguments_parse_like_the_command_line as fn(),
                 ),
                 (
-                    "the_in_process_checks_include_the_link_check_under_strict",
-                    the_in_process_checks_include_the_link_check_under_strict as fn(),
+                    "every_in_process_check_is_its_command_line",
+                    every_in_process_check_is_its_command_line as fn(),
                 ),
             ],
         );

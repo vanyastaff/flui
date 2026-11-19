@@ -808,6 +808,9 @@ wayland-protocols-misc = { version = "0.3", features = ["client"] }
 # The toplevel list `wayland_window` reads a window's app id from on sway, as a
 # dock or a task bar does: `zwlr_foreign_toplevel_manager_v1`.
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# `net`: the X11 clipboard's stream tests shrink a socket's send buffer, so a
+# peer that drains it slowly makes it writable often.
+rustix = { workspace = true, features = ["net"] }
 
 # The native X11 host on the harness's X server plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.

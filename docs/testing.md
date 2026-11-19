@@ -128,7 +128,9 @@ authority ([CI jobs and their local commands](#ci-jobs-and-their-local-commands)
 The one repository task among them:
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), toolchain, unmounted-tests (every test file of an `autotests = false` crate is compiled), adr-numbers, changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
+cargo fmt --all --check; typos; taplo fmt --check   # formatting, spelling, TOML: the first steps of CI's checks job
+                                          # then the job's lychee line: markdown links into the checkout, offline
+cargo xtask checks                        # toolchain, unmounted-tests (every test file of an `autotests = false` crate is compiled), adr-numbers, changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
 ```
 
 The reload-lifecycle fixture is a real plugin image. The `test` job
@@ -144,9 +146,11 @@ module declarations with `syn`; a commented declaration or an example inside
 a string cannot mount a test file. This checks direct mounts, not arbitrary
 macro expansion or conditional module graphs.
 
-Locally, `checks`
-skips typos, taplo or lychee with a message when they are not installed; CI
-passes `--strict`, which makes a missing one a failure. The flui-native step
+typos, taplo and lychee are binaries of their own (`cargo xtask doctor` says
+how to install each); CI's `checks` job installs them. The job's lychee line
+is written for a Linux shell: on Windows its remap needs the checkout as
+`file:///D:/…` (`pwd -W` in Git Bash), or a correct link to this repository's
+`main` on GitHub fails. The flui-native step
 of the `test` job needs `xvfb-run` on Linux (`apt install xvfb`). On Windows
 flui-native's suite runs without it, on the run's own desktop
 ([The Windows test desktop](#the-windows-test-desktop)), and on macOS with
@@ -492,7 +496,8 @@ them together to the machine and holds slots back while memory runs low. Each wo
 ("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by the pool,
 never by sharing a target directory, and disk by the
 [agent-worktree rules](#bounding-disk-use-of-agent-worktrees). A docs-only change never needs a
-workspace build: `cargo xtask checks`, which builds only xtask, is the full local gate for it,
+workspace build: typos, the `checks` job's lychee line and `cargo xtask checks`, which builds
+only xtask, are the full local gate for it,
 so a docs worktree stays green without a multi-GB `target/` or a wait for the workspace builds.
 
 ## Test Commands
@@ -1239,7 +1244,11 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, toolchain, unmounted-tests, adr-numbers, changelog fragments, the generated files against their sources; a missing tool fails
+cargo fmt --all --check                                       # checks job, each step running even after one fails:
+typos                                                         # spelling
+RUST_LOG=warn taplo fmt --check                               # TOML formatting
+                                                              # lychee over the markdown, offline: the job's command line
+cargo xtask checks                                            # toolchain, unmounted-tests, adr-numbers, changelog fragments, the generated files against their sources
 cargo test -p xtask --locked                                  # xtask's own tests
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
@@ -1338,7 +1347,7 @@ heavier ones need installed. One row per job:
 
 | CI job | Local command | Difference, or why CI-only |
 |---|---|---|
-| `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
+| `checks` | `cargo fmt --all --check`, `typos`, `taplo fmt --check`, the lychee line, `cargo xtask checks`, `cargo test -p xtask`, `actionlint`, `zizmor .` | each step runs even when one before it failed; CI installs every tool, so none is skipped |
 | `plan` | — | CI only: a shell step over the pull request's changed files decides the lane |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings`, then, on main only, `cargo clippy -p flui-native --locked --no-default-features [--features x11\|wayland\|testing] [--all-targets] -- -D warnings` | the last lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`; from a Windows or macOS checkout add `--target x86_64-unknown-linux-gnu` |
 | `test` | after `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`: the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |
