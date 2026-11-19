@@ -271,7 +271,7 @@ render-proof), получают эту инструкцию в своих `tasks
 
 ### 5.5 Проверка
 
-`cargo xtask names`; `cargo xtask ci` локально, плюс `cargo xtask cross-typecheck` (IOS/MacOS и
+`cargo xtask names`; `cargo xtask ci` локально, плюс job `cross-typecheck` на ветке (IOS/MacOS и
 Win32 только компилируются), `cargo xtask wasm-check`, `cargo xtask facade-combos`,
 `cargo test --doc`, `cargo xtask doc-strict`. Отдельно — `flui-sdk/tests/surface.rs` (R12) и
 `cargo test -p flui-objects --test render_object_harness` (строки реестра `RenderClipRRect`,

@@ -3,8 +3,9 @@
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18
 - **Supersedes:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
-  §1 only for the command lines it lists as xtask's orchestration (`test`, `clippy`, `miri`,
-  `feature-matrix`, the `wasm-check` step, `wasm-link`, `wasm-test`) and for those of the same
+  §1 only for the command lines it lists as xtask's orchestration (`test`, `clippy`,
+  `cross-typecheck`, `miri`, `feature-matrix`, the `wasm-check` step, `wasm-link`, `wasm-test`)
+  and for those of the same
   kind it does not list (`deps`, `doc-strict`, `gpu-test`, `platform-test`, `wayland-optional`,
   `native-features`, `build-all-targets`, `facade-combos`, `wasm-imports`, `wasm-test-crates`,
   `locked-version`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a workflow step calls
@@ -14,7 +15,7 @@
   `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
 - **Revised:** 2026-11-19 — §5 and the wasm names in Supersedes: `wasm-check` links the web demos,
   runs wasm-bindgen over them and reads their import modules with node, and runs the wasm32 tests
-  itself.
+  itself; §6 and `cross-typecheck` in Supersedes: each native leg lints the whole workspace.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -52,8 +53,8 @@ a task runner would be a second tool to install for what a step already says.
 
 ### §1. A workflow step calls the tool
 
-CI's `clippy`, `test`, `test-nested`, `test-trybuild`, `doc`, `deps`, `feature-matrix` and
-`wasm-check` jobs, `advisories.yml` and the `desktop` legs of `nightly-platforms.yml` call
+CI's `clippy`, `test`, `test-nested`, `test-trybuild`, `doc`, `deps`, `feature-matrix`,
+`wasm-check` and `cross-typecheck` jobs, `advisories.yml` and the `desktop` legs of `nightly-platforms.yml` call
 `cargo nextest`, `cargo test`, `cargo build`, `cargo clippy`, `cargo hack`, `cargo doc` and
 `cargo deny` with their arguments in the step. A value two steps share (the test features) is a
 job-level `env`; a list the workspace already states (the packages with a `testing` feature, those
@@ -66,7 +67,7 @@ and macOS) is a shell loop that runs every iteration before it fails.
 `lint`, `gate`, `test`, `platform-test`, `cli-test`, `wayland-optional`, `build-all-targets`, `ci`,
 `ci-full`, `deps`, `native-features`, `gpu-test`, `miri`, `doc-strict`, `feature-matrix`,
 `facade-combos`, `wasm-check`, `docs-links`, `wasm-link`, `wasm-test`, `wasm-imports`,
-`wasm-test-crates` and `locked-version` leave `tools/xtask`.
+`wasm-test-crates`, `locked-version` and `cross-typecheck` leave `tools/xtask`.
 There is no local command that mirrors CI: `docs/testing.md` names, for each job, the commands a
 contributor runs, and the job holds them.
 
@@ -125,6 +126,29 @@ target beside a `wasm32` target, which may hold none; an empty list fails it too
 `wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
 more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
 
+### §6. `cross-typecheck` lints the whole workspace for each native triple
+
+Each leg of the job (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-linux-android`,
+`aarch64-apple-ios`) runs `cargo clippy --workspace --all-targets --locked --target <triple> --
+-D warnings`, the `clippy` job's command, and then the same with `--all-features`, which reaches
+the `testing` code and the targets behind `required-features` that plain `--all-targets` skips.
+The Windows leg runs on Linux through `cargo xwin clippy`, which the matrix names as the leg's
+subcommand. Three options were weighed for which packages a leg lints:
+
+- *Discover them from the sources* (what `cross-typecheck` did): xtask parsed every crate's module
+  tree with `syn` and kept a package whose code or manifest names a native `cfg`. About 900 lines
+  and their tests for a list cargo can make itself, and a `cfg` it did not parse (a macro's
+  output, an `include!`) dropped its package silently.
+- *Name the packages in the matrix*: a crate that gains a native `cfg` is unchecked until someone
+  adds it, and nothing says it is missing.
+- *Lint the whole workspace* (chosen): nothing to keep, and a crate whose code has no native `cfg`
+  is still checked against its dependencies' native APIs. Each leg compiles the dozen packages
+  the discovery left out (the design-system packages, the demos, the protocol and layer crates).
+
+The required-features run the discovery built, with each package's `testing` feature and its
+targets' required features on and every other optional feature off, is not run: the default run
+and the all-features run bracket it.
+
 ### Consequences
 
 - Good, because what a job runs is in the job, and `tools/xtask` loses the subcommands and their
@@ -146,14 +170,19 @@ more than one fails the step, and `cargo xtask doctor full` fails its row on the
   module, and the two allowed names live in the step, which a wasm-bindgen that renames them fails.
 - Bad, because the Chrome release is one more version to bump by hand, and the browser tests run
   against it, not against the release users have, until someone does.
+- Bad, because each `cross-typecheck` leg compiles the packages §6 adds, on runners an owner's
+  quota pays for, macOS among them.
+- Bad, because a native branch behind `testing` that only builds with some other optional
+  feature off fails no leg, where the required-features run caught it (§6).
 
 ### Confirmation
 
 - `actionlint` (in `checks`) parses the workflows and runs shellcheck over their steps.
 - Each job runs its commands on every run of its lane;
-  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version)\b'`
+  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck)\b'`
   finds none in `.github/`.
-- A pull request that changes the steps of a job only main runs (`wasm-check` among them) runs
+- A pull request that changes the steps of a job only main runs (`wasm-check` and
+  `cross-typecheck` among them) runs
   that job on its branch at the head that merges: `gh workflow run CI --ref <branch>` takes the
   full lane, and the pull request's body links the run. AGENTS.md "Before each push" item 14 asks
   the author for it; the readers of "Before a merge" read git, not the body, so the author holds

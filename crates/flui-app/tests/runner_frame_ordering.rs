@@ -6,7 +6,7 @@
 //! `android.rs`, `ios.rs`, `web.rs`) are `cfg`-gated: the desktop site
 //! compiles on this host, the `wasm32` site under
 //! `cargo check -p flui-app --target wasm32-unknown-unknown`, and the android
-//! and iOS sites only under `cargo xtask cross-typecheck`. The pump's own
+//! and iOS sites only in CI's `cross-typecheck` job. The pump's own
 //! phase order is proven by `flui-runtime`'s `pump_transaction` tests; the
 //! sites themselves only type-check off the host.
 //!

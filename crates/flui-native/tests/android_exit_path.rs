@@ -6,7 +6,7 @@
 //! `AndroidLoop::run` cannot execute on any host this suite runs on: it
 //! needs a live `AndroidApp`, constructible only by the real Android
 //! runtime, and the Android target is type-checked (the NDK-free `flui-app`
-//! check, and `cargo xtask cross-typecheck`) rather than run. So the site is pinned
+//! check, and CI's `cross-typecheck` job) rather than run. So the site is pinned
 //! textually, and this scan proves exactly one thing: **the release, geometry
 //! revocation and clear are present in the exit region of `run`, in that order, in the
 //! unfused shape.** Present in the region, never "reached" — nothing here
