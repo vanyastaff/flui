@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 
 use crate::dialog::PickedFile;
 use crate::grant::{
-    Access, AccessScope, Grant, GrantBackend, GrantError, GrantResult, ResolveHold,
+    Access, AccessScope, Grant, GrantBackend, GrantError, GrantKind, GrantResult, ResolveHold,
 };
 use crate::sandbox::Sandbox;
 
@@ -87,7 +87,8 @@ impl GrantStore {
                 },
             },
         );
-        Grant::scripted(id.to_le_bytes()).expect("BUG: an id is a payload a grant holds")
+        Grant::scripted(host_kind(), id.to_le_bytes())
+            .expect("BUG: an id is a payload a grant holds")
     }
 
     /// Withdraw `grant`, as a user who revokes it or a system that prunes
@@ -144,6 +145,21 @@ impl GrantStore {
     }
 }
 
+/// The kind of grant the system the test runs on makes, which a store's
+/// grants stand in for: of the kind this host's backend takes, which still
+/// refuses them as the double's.
+fn host_kind() -> GrantKind {
+    if cfg!(windows) {
+        GrantKind::WindowsPath
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+        GrantKind::AppleBookmark
+    } else if cfg!(target_os = "android") {
+        GrantKind::ContentUri
+    } else {
+        GrantKind::UnixPath
+    }
+}
+
 /// The id a store's grant names: a scripted grant, which no system's backend
 /// takes.
 fn id_of(grant: &Grant) -> Option<u64> {
@@ -162,6 +178,8 @@ enum SandboxAnswers {
     Dropped,
     /// When the test releases them, in order.
     Held(Vec<Resolver<Sandbox>>),
+    /// The next question panics, and the ones after it are answered at once.
+    PanicOnce,
 }
 
 /// Grants whose system is simulated: each resolve answers what the
@@ -226,12 +244,18 @@ impl ScriptedGrants {
         *self.answers.borrow_mut() = SandboxAnswers::Held(Vec::new());
     }
 
+    /// Panic at the next question for the sandbox, as a backend with a bug
+    /// does, and answer every one after it at once.
+    pub fn panic_at_next_sandbox_question(&self) {
+        *self.answers.borrow_mut() = SandboxAnswers::PanicOnce;
+    }
+
     /// How many times a handle asked for the sandbox while held.
     #[must_use]
     pub fn sandbox_questions_held(&self) -> usize {
         match &*self.answers.borrow() {
             SandboxAnswers::Held(waiting) => waiting.len(),
-            SandboxAnswers::Answered | SandboxAnswers::Dropped => 0,
+            SandboxAnswers::Answered | SandboxAnswers::Dropped | SandboxAnswers::PanicOnce => 0,
         }
     }
 }
@@ -256,6 +280,11 @@ impl GrantBackend for ScriptedGrants {
                 drop(answer);
             }
             SandboxAnswers::Held(waiting) => waiting.push(answer),
+            SandboxAnswers::PanicOnce => {
+                *answers = SandboxAnswers::Answered;
+                drop(answers);
+                panic!("the scripted backend panics asking for the sandbox");
+            }
         }
     }
 

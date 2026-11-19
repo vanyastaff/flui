@@ -133,6 +133,60 @@ pub(crate) fn of_confinement(confinement: &Confinement) -> Sandbox {
     }
 }
 
+/// The user's home as the system's user database records it
+/// (`getpwuid_r`), whatever `HOME` says: what a container rebuilt under the
+/// user's home is rebuilt under. `None` when the database has no record of
+/// the user, or one that is not an absolute path.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[expect(
+    unsafe_code,
+    reason = "getpwuid_r writes the user's record into buffers it was given"
+)]
+pub(crate) fn user_database_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt as _;
+
+    /// The largest buffer a record is read into: names and a shell path.
+    const MAX_RECORD: usize = 64 * 1024;
+    // SAFETY: `getuid` takes nothing and always succeeds.
+    let uid = unsafe { libc::getuid() };
+    let mut buffer = vec![0_u8; 1024];
+    loop {
+        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: `record`, `buffer` and `found` outlive the call, which
+        // writes the record into `record`, its strings into `buffer` within
+        // the length it is given, and `record`'s address, or null, into
+        // `found`.
+        let status = unsafe {
+            libc::getpwuid_r(
+                uid,
+                record.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &raw mut found,
+            )
+        };
+        if status == libc::ERANGE && buffer.len() < MAX_RECORD {
+            buffer.resize(buffer.len() * 2, 0);
+            continue;
+        }
+        if status != 0 || found.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null `found` is `record`, which the call wrote whole.
+        let directory = unsafe { (*found).pw_dir };
+        if directory.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null `pw_dir` is a NUL-terminated string the call
+        // wrote inside `buffer`, which is alive and unchanged here.
+        let directory = unsafe { CStr::from_ptr(directory) };
+        let home = PathBuf::from(OsStr::from_bytes(directory.to_bytes()));
+        return is_plain(&home).then_some(home);
+    }
+}
+
 /// An iOS application's container: every iOS application is sandboxed, its
 /// `HOME` its container and a `TMPDIR` inside it its temporary folder.
 #[cfg(any(target_os = "ios", test))]

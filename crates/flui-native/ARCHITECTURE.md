@@ -6273,12 +6273,20 @@ and the package identity): a Flatpak's `~/.var/app/<id>/data` even without
 `XDG_DATA_HOME`, the macOS App Sandbox's container even without `HOME`, a
 packaged Windows application's `LocalState` and `RoamingState` instead of the
 `%APPDATA%` copy Windows would redirect it to (ADR-0380 §4). The host's store
-(`DataStore::of_process`) finds them at its first call, on its IO thread, since
-a Flatpak's description is a file; a packaged application's store from before it
-was packaged is copied over then, once, within `MAX_MIGRATED_FILES` and
-`MAX_MIGRATED_BYTES`, into a staging folder renamed into place whole, so a failed
-copy leaves no root and a root another instance placed first is kept. The
-Flatpak description is read on Linux alone. Android overrides it, because `dirs`
+(`DataStore::of_process`) finds them at its first call that can read the
+container, on its IO thread, since a Flatpak's description is a file (one out of
+reach refuses the call and is read again at the next); a packaged application's
+store from before it was packaged is copied over then, once, within
+`MAX_MIGRATED_FILES` and `MAX_MIGRATED_BYTES`, into a staging folder made with
+`create_dir` and renamed into place whole, after the staging folders an earlier
+copy left are swept by their exact name (folders only, no link followed, at most
+`MAX_SWEPT`). A failed copy or rename removes its staging folder and reports its
+own error, and a root another instance placed first is kept. A store that was not
+copied (a failure, or past the bound) stays the store: the session reads and
+writes it where it is (`roots_after_migration`), so no new root orphans it, and
+the next start copies again. The container under the user's home is under the
+home the user database records (`getpwuid_r`), never `HOME`. The Flatpak
+description is read on Linux alone. Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
 backs up. Headless never touches the user's directories: it answers with a

@@ -395,6 +395,11 @@ live apart from their implementations, so a crate that names a capability links 
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
 
+A capability crate depends on this contract alone (ADR-0154 §1), so the containment its handles
+run backend code under reaches it from here: `capability::FirstPanic` is `flui-foundation`'s,
+re-exported, and a handle that calls a backend with its own state committed keeps the first panic
+and resumes it once the state is whole (ADR-0287).
+
 What only the host owns reaches a provider through its `ProviderContext`
 (ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
 `window()`, and `activity()`, the running Android Activity, read from the
@@ -700,7 +705,11 @@ and `flui-system`'s grants read one answer (ADR-0380 §3, §4). A contract crate
 here, and only this one: `flui-system` and `flui-native` both need the answer, this is the lowest
 crate both depend on, and two readers of one description disagreed before. The read
 (`read_flatpak_info`) is bounded, runs off the owner thread, and happens on Linux alone: no other
-system has a Flatpak, and on Windows the name is a drive's root.
+system has a Flatpak, and on Windows the name is a drive's root. Only the file's absence says the
+process is no Flatpak: a description that could not be read is an error, which a caller does not
+keep (the grants ask again at the next resolve, the data store at its next call), and
+`is_flatpak` (the portal's and the X11 input bus's question) counts it as present. The other
+crates ask through these functions and never open the file themselves.
 
 A Flatpak is a process with `/.flatpak-info`: `FLATPAK_ID` alone is inherited by a host process a
 Flatpak's terminal starts. The file's `[Context] filesystems=` is modelled as Flatpak writes it,
@@ -712,11 +721,15 @@ a tmpfs the file does not show, and is reached here. The macOS App Sandbox is
 `APP_SANDBOX_CONTAINER_ID`; its container is `HOME` only when `HOME` is that container's path,
 else the container under the user's home; a `TMPDIR` counts only inside the container
 (`usable_temporary`). `Confinement::detect` is a pure function of what it is given;
-`Confinement::of_process` reads the process's environment and home. What both callers need is
-public (the variants, their accessors, `FLATPAK_INFO`, `is_plain`, `usable_temporary`); the
-description's fields and its bound are not.
+`Confinement::of_process` adds the process's environment, and takes the user's home from a
+lookup its caller passes, which reads the system's user database: never `HOME`, since this crate
+has no `unsafe` and the standard library's `home_dir` prefers `HOME`. What both callers need is
+public (the variants, their accessors, `is_flatpak`, `is_plain`, `usable_temporary`); the
+description's path, fields and bound are not.
 **Tests:** `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
 `the_description_is_read_on_linux_alone_and_within_its_bound`,
+`a_description_out_of_reach_is_no_answer_and_still_a_sign_of_flatpak`,
+`the_process_sandbox_takes_the_users_home_from_the_user_database_not_home`,
 `a_key_file_list_is_split_where_its_writer_did_not_escape`,
 `a_manifests_filesystems_name_what_the_flatpak_reaches`,
 `an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`.

@@ -150,7 +150,7 @@ fn not_run(reason: NotRun) -> GrantResult {
 
 impl<R: DocumentReach> GrantBackend for AndroidGrants<R> {
     fn takes(&self, grant: &Grant) -> bool {
-        grant.kind() == Some(GrantKind::ContentUri)
+        grant.made_by(GrantKind::ContentUri)
     }
 
     /// An Android application reaches no path: what it reacquires is

@@ -80,10 +80,14 @@ can hold the URI), `UnixPath` and `WindowsPath` (where the process opens what th
 a Flatpak's document portal path). `Grant::to_bytes` writes a versioned header and the payload;
 `Grant::try_from_bytes` reads it back, judging the payload's length before it copies a byte, or
 answers a typed `MalformedGrant`. A pick its system could not grant lasting access to is handed
-over without one. A save carries none: its location is reopened by an open dialog. The scripted
-double's grants carry a tag outside every `GrantKind` (`Grant::kind` answers `None` for one), so
-every system's backend answers one `Foreign`; a backend says which grants it resolves through
-`GrantBackend::takes`.
+over without one. A save carries none: its location is reopened by an open dialog.
+`Grant::kind` always names a system. The scripted double's grants exist only in a build with the
+double (`test` or the `testing` feature): each stands in for the host's kind of grant and is
+written with a tag outside every `GrantKind` followed by that kind, which a build without the
+double refuses as `MalformedGrant::Kind`. No system's backend takes one (`Grant::made_by` is
+false for it), so every one answers it `Foreign`; a backend says which grants it resolves
+through `GrantBackend::takes`. The public surface is the same with and without the feature, so
+enabling it in a test build changes no caller's types.
 
 ### §2. A separate service resolves a grant
 
@@ -115,7 +119,10 @@ stale bookmark is not an error: it resolves and hands a fresher grant over.
 `flui_platform::sandbox` detects the sandbox once for every crate that needs it
 (`Confinement::detect`, `Confinement::of_process`). A Flatpak is a Linux process with
 `/.flatpak-info`, read off the owner thread, size-checked before it is read and bounded, and
-never read on another system (where that name is a drive's root). Its `[Context] filesystems=`
+never read on another system (where that name is a drive's root); only the file's absence says
+the process is no Flatpak, and a description that could not be read is no answer, which no
+caller keeps. Every crate asks through that module (`read_flatpak_info`, `is_flatpak`) and none
+opens the file itself. Its `[Context] filesystems=`
 entries are modelled as Flatpak writes them, flattened: the key file's escapes undone
 (`\;` stays inside its entry), the access mode dropped, `home`, `host`, `host-os` (`/run/host`),
 `host-etc` (`/run/host/etc`), absolute and `~/` paths, `xdg-run`, the `xdg-config`-style home
@@ -125,13 +132,16 @@ Flatpak reaches its private `/tmp`. A path a manifest hides with `--nofilesystem
 folder is a tmpfs the file does not show: it is reached here, and a grant to it resolves
 `Missing` rather than `Revoked`, the one limit the description leaves. The macOS App Sandbox is
 `APP_SANDBOX_CONTAINER_ID`; its container is `HOME` only when `HOME` is that container's path
-(`…/Library/Containers/<id>/Data`), else the container under the user's home. A `TMPDIR` counts
+(`…/Library/Containers/<id>/Data`), else the container under the user's home as the system's
+user database records it (`getpwuid_r`, never `HOME`). A `TMPDIR` counts
 only when it lies inside the container (App Sandbox, iOS). `flui_system::sandbox::Sandbox`
 states, from that, what the process may open without a grant: everything, or the folders of its
 sandbox (`SandboxKind::AppSandbox`, `IosApp`, `Flatpak`, `AndroidApp`). A backend reads it
 through `GrantBackend::sandbox`, off the owner thread where it reads a file, one read at a time;
 each resolve waits for it, at most `Grants::MAX_WAITING` at once (one more is refused
-`Unavailable`), and a read the backend did not answer is asked again at the next resolve. The
+`Unavailable`), and a read the backend did not answer, or panicked asking for, is asked again at
+the next resolve: a panic leaves the slot unread, every resolve waiting for it is refused
+`Unavailable`, and the panic is resumed after that (ADR-0287). The
 handle refuses a reacquired path the sandbox does not reach and no scope holds open
 (`Revoked`), contents past `max_bytes` (`TooLarge`), and a folder handed over by its files, a
 download or a fresher grant of another kind (`MalformedAnswer`), whichever backend gave it.
@@ -142,13 +152,18 @@ download or a fresher grant of another kind (`MalformedAnswer`), whichever backe
 `flui_platform::sandbox` detection: a Flatpak's `$XDG_DATA_HOME`, else `~/.var/app/<id>/data`;
 the macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application Support`; a packaged
 Windows application's `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`. A
-host's store (`DataStore::of_process`) finds them at its first call, on its IO thread, never on
-the owner thread. A packaged application whose new root holds no store and whose redirected
-`%APPDATA%` location holds one has it copied over once, within a bound
-(`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the root that is
-renamed into place whole: a copy that fails leaves no root, so the next first call copies again,
-and a root another instance put in place first is kept and the staging copy discarded; a store
-past the bound, or holding a link, stays where it was. The Linux user folders answer none
+host's store (`DataStore::of_process`) finds them at its first call that can read the
+container, on its IO thread, never on the owner thread. A packaged application whose new root
+holds no store and whose redirected `%APPDATA%` location holds one has it copied over once,
+within a bound (`MAX_MIGRATED_FILES`, `MAX_MIGRATED_BYTES`), into a staging folder beside the
+root, made with `create_dir` (one already at the name is an error, never a shared folder) and
+renamed into place whole. Staging folders an earlier copy left are removed first, by their exact
+name, folders only and no link followed, at most `MAX_SWEPT` at a time. A copy or rename that
+fails removes its staging folder and reports its own error, and a root another instance put in
+place first is kept. A store that was not copied (the copy failed, or the store is past the
+bound or holds a link) stays where it is and stays the store: the session reads and writes it
+there, so nothing is written to a new root the next start would take for the store, and the
+next start copies again. The Linux user folders answer none
 for a folder that is not there for the process, which is how a Flatpak shows a folder its
 manifest does not expose.
 
@@ -183,17 +198,27 @@ manifest does not expose.
   `each_sandbox_reaches_its_own_folders_and_what_its_system_exposes` (`flui-system`) and
   `a_flatpak_is_a_process_with_its_description_whatever_its_environment_says`,
   `the_description_is_read_on_linux_alone_and_within_its_bound`,
+  `a_description_out_of_reach_is_no_answer_and_still_a_sign_of_flatpak`,
   `a_key_file_list_is_split_where_its_writer_did_not_escape`,
   `a_manifests_filesystems_name_what_the_flatpak_reaches`,
-  `an_app_sandbox_keeps_to_its_container_whatever_its_environment_names` (`flui-platform`);
+  `an_app_sandbox_keeps_to_its_container_whatever_its_environment_names`,
+  `the_process_sandbox_takes_the_users_home_from_the_user_database_not_home` (`flui-platform`);
   `a_sandbox_read_that_answered_nothing_is_asked_again`,
-  `a_dropped_resolve_leaves_the_queue_and_the_queue_is_bounded` and
+  `a_sandbox_read_that_panicked_is_asked_again`,
+  `a_dropped_resolve_leaves_the_queue_and_the_queue_is_bounded`,
+  `a_scripted_grant_reads_back_as_the_doubles_and_no_system_takes_it` and the row
   `a_scripted_grant_is_foreign_to_every_system` (`flui-system`);
   `a_dropped_resolve_cancels_its_calls_and_stops_its_read` (Android, on every host);
-  `a_resolve_let_go_of_starts_no_scope` (Apple, on every host);
+  `a_resolve_let_go_of_starts_no_scope` (Apple, on every host, through the wiring
+  `AppleGrants::resolve` calls);
   `a_packaged_applications_store_is_copied_over_once_and_nothing_is_overwritten`,
-  `a_copy_that_fails_midway_leaves_no_root_and_the_next_start_copies_again` and
-  `a_root_another_instance_put_in_place_first_is_kept` (`flui-native`);
+  `a_copy_that_fails_midway_leaves_no_root_and_the_next_start_copies_again`,
+  `a_root_another_instance_put_in_place_first_is_kept`,
+  `a_rename_that_fails_removes_its_staging_and_reports_its_own_error`,
+  `staging_folders_an_earlier_copy_left_are_swept_by_exact_name_within_a_bound`,
+  `a_sweep_follows_no_link` (Unix),
+  `a_staging_folder_already_there_is_an_error_not_a_shared_folder` and
+  `a_store_that_was_not_copied_stays_the_store_and_no_new_root_is_made` (`flui-native`);
   `a_picks_path_is_its_grant_and_resolves_while_the_file_is_there` against the stand-in portal on
   Linux; `a_kept_pick_carries_its_uri_once_every_pick_was_read` and
   `a_document_is_reacquired_only_while_its_permission_is_held_and_within_the_bound` (Android, on

@@ -675,14 +675,20 @@ what is not built is in [`docs/gaps.md`](../../docs/gaps.md#sandbox-aware-file-a
   for the sandbox leaves the queue; one the backend runs drops its `ResolveHold`: on Android the
   read's let-go is set and its signal cancelled, so the worker stops before its next chunk and
   its place comes back (a read that finished cancels nothing); on macOS and iOS the resolution
-  finishes but starts no scope; a path's `metadata` call cannot be called back, and its answer
+  finishes but starts no scope (`Waited::hold`, the resolve's whole wiring, tested on every
+  host); a path's `metadata` call cannot be called back, and its answer
   is dropped.
 - The sandbox is `flui_platform::sandbox`'s detection, the one the data folders use: a handle
   asks its backend (`GrantBackend::sandbox`) one read at a time, resolves wait for the answer (at
   most `Grants::MAX_WAITING`, one more refused `Unavailable`), and a read answered with nothing
-  is asked again at the next resolve. The portal reads `/.flatpak-info` on its pool (a
-  manifest's `xdg-*` entries through `user-dirs.dirs`), and a portal that cannot start answers
-  nothing, so the next resolve asks again; macOS reads the App Sandbox from the environment;
+  is asked again at the next resolve. A backend that panics asking leaves the slot unread: the
+  read runs under `FirstPanic` (re-exported by `flui_platform::capability`, since a capability
+  crate depends on the contract alone), every resolve waiting is refused `Unavailable`, and the
+  panic is resumed after (ADR-0287). The portal reads `/.flatpak-info` on its pool (a
+  manifest's `xdg-*` entries through `user-dirs.dirs`, the user's home from the user database),
+  and a portal that cannot start, or a description it could not read, answers nothing, so the
+  next resolve asks again; macOS reads the App Sandbox from the environment and the user
+  database;
   iOS's container is `HOME` with a `TMPDIR` inside it; Android's reaches no path, since every
   pick and reacquired document there is its contents; Windows has none.
 - A path grant is judged before any file system call: a relative path is `MalformedAnswer`, a
@@ -699,8 +705,11 @@ what is not built is in [`docs/gaps.md`](../../docs/gaps.md#sandbox-aware-file-a
   web refuses the capability (`NotYetOnThisHost`).
 - The scripted double (`testing::ScriptedGrants`) resolves from a `GrantStore` that outlives the
   providers, as a system's permission store outlives the process, in the `Sandbox` the test set:
-  a restart is a new host over the same store. Its grants carry a tag outside every `GrantKind`,
-  which no system's backend takes; it can answer, drop or hold the question for the sandbox.
+  a restart is a new host over the same store. Its grants stand in for the host's kind of grant
+  and carry a tag outside every `GrantKind`, which only a build with the double reads and no
+  system's backend takes (`Grant::made_by`); `Grant::kind` always names a system, with the
+  feature or without it. The double can answer, drop, hold or panic at the question for the
+  sandbox.
 
 ## The web providers (`web`)
 

@@ -437,8 +437,7 @@ impl Bus {
 /// Whether the process runs in a sandbox that names it to the portal
 /// itself: Flatpak (`/.flatpak-info`) or Snap (`SNAP` set by `snap run`).
 fn is_sandboxed() -> bool {
-    std::path::Path::new(flui_platform::sandbox::FLATPAK_INFO).exists()
-        || std::env::var_os("SNAP").is_some()
+    flui_platform::sandbox::is_flatpak() || std::env::var_os("SNAP").is_some()
 }
 
 /// `mutex`'s guard: a panic while one is held leaves only a value that is

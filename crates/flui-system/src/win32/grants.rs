@@ -36,7 +36,7 @@ impl WindowsGrants {
 
 impl GrantBackend for WindowsGrants {
     fn takes(&self, grant: &Grant) -> bool {
-        grant.kind() == Some(GrantKind::WindowsPath)
+        grant.made_by(GrantKind::WindowsPath)
     }
 
     /// A desktop process has no sandbox.

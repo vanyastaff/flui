@@ -89,8 +89,9 @@ pub struct DataDirs {
 /// macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application
 /// Support`, and a packaged Windows application's
 /// `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`.
-/// `None` when the platform reports none. On wasm32 both roots are `app`,
-/// the prefix of the page store's keys.
+/// `None` when the platform reports none, or when a Flatpak's description
+/// could not be read. On wasm32 both roots are `app`, the prefix of the page
+/// store's keys.
 ///
 /// Reads the file system (a Flatpak's `/.flatpak-info`): off the owner
 /// thread only. A host's store resolves it on its IO thread
@@ -100,7 +101,7 @@ pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         container::data_dirs_in(
-            &container::Container::of_process(),
+            &container::Container::of_process().ok()?,
             app.as_str(),
             &base_dirs(),
         )
@@ -157,11 +158,20 @@ struct ProcessStore {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ProcessStore {
-    /// The store, found at the first call; a platform that names no data
-    /// folder leaves every call refused.
+    /// The store, found at the first call that could read the container;
+    /// a platform that names no data folder leaves every call refused, and
+    /// a container that could not be read refuses this call and is read
+    /// again at the next.
     fn store(&self) -> Result<&FileStore, flui_platform::StorageError> {
-        self.store
-            .get_or_init(|| process_store(&self.app))
+        let found = if let Some(found) = self.store.get() {
+            found
+        } else {
+            let found = process_store(&self.app).map_err(|error| {
+                flui_platform::StorageError::Inaccessible { kind: error.kind() }
+            })?;
+            self.store.get_or_init(|| found)
+        };
+        found
             .as_ref()
             .ok_or(flui_platform::StorageError::Inaccessible {
                 kind: std::io::ErrorKind::NotFound,
@@ -169,37 +179,28 @@ impl ProcessStore {
     }
 }
 
-/// The store of `app` in the process's container. Blocks on the file system.
+/// The store of `app` in the process's container; `None` when the platform
+/// names no data folder. Blocks on the file system.
+///
+/// # Errors
+///
+/// The container could not be read (a Flatpak's description out of reach).
 #[cfg(not(target_arch = "wasm32"))]
-fn process_store(app: &AppDataDir) -> Option<FileStore> {
-    let found = container::Container::of_process();
+fn process_store(app: &AppDataDir) -> std::io::Result<Option<FileStore>> {
+    let found = container::Container::of_process()?;
     let base = base_dirs();
-    let dirs = container::data_dirs_in(&found, app.as_str(), &base)?;
+    let Some(dirs) = container::data_dirs_in(&found, app.as_str(), &base) else {
+        return Ok(None);
+    };
     #[cfg(windows)]
     if matches!(found, container::Container::Package { .. }) {
         let before = container::Container::Sandbox(flui_platform::sandbox::Confinement::Unconfined);
         if let Some(earlier) = container::data_dirs_in(&before, app.as_str(), &base) {
-            for (from, to) in [
-                (&earlier.roaming, &dirs.roaming),
-                (&earlier.local, &dirs.local),
-            ] {
-                match container::migrate(from, to) {
-                    Ok(container::Migrated::Nothing | container::Migrated::Copied(_)) => {}
-                    Ok(container::Migrated::TooLarge) => tracing::warn!(
-                        from = %from.display(),
-                        "the store kept before the application was packaged is past the bound \
-                         a copy takes: left where it was"
-                    ),
-                    Err(error) => tracing::warn!(
-                        from = %from.display(),
-                        %error,
-                        "the store kept before the application was packaged was not copied"
-                    ),
-                }
-            }
+            let dirs = container::roots_after_migration(earlier, dirs, &mut container::migrate);
+            return Ok(Some(FileStore::new(dirs)));
         }
     }
-    Some(FileStore::new(dirs))
+    Ok(Some(FileStore::new(dirs)))
 }
 
 impl DataStore {
@@ -217,8 +218,12 @@ impl DataStore {
     /// packaged Windows application's store kept under `%APPDATA%` before
     /// it was packaged is copied into the package's folders then, once:
     /// only into a root that holds no store, within a bound, nothing
-    /// overwritten. A platform that names no data folder refuses every call
-    /// (`StorageError::Inaccessible`).
+    /// overwritten. A store that was not copied (the copy failed, or the
+    /// store is past the bound) stays where it is and stays the store: the
+    /// calls read and write it there, and a later start copies again. A
+    /// platform that names no data folder refuses every call, and a
+    /// container that could not be read refuses the call and is read again
+    /// at the next (`StorageError::Inaccessible`).
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn of_process(app: AppDataDir) -> Self {

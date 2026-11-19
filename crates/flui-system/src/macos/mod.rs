@@ -157,6 +157,7 @@ mod appkit {
             // the environment its system sets, with no file system call.
             let confinement = flui_platform::sandbox::Confinement::of_process(
                 &flui_platform::sandbox::FlatpakInfo::Absent,
+                &crate::sandbox::user_database_home,
                 &|_| None,
             );
             Ok::<_, Unsupported>(Grants::new(

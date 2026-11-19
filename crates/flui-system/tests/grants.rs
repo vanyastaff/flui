@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use flui_platform::capability::Abandoned;
+use flui_platform::capability::{Abandoned, FirstPanic};
 use flui_system::dialog::{
     Dialog, FileDialogCapability, OpenRequest, PickedFile, PickedForm, Picks,
 };
@@ -268,6 +268,27 @@ fn a_sandbox_read_that_answered_nothing_is_asked_again() {
     system.grants().answer_sandbox();
     let access = settled(&mut host, grants.resolve(&grant, 1024))
         .expect("the next resolve asks for the sandbox again, and is answered");
+    assert_eq!(access.file().path(), Some(outside("notes.txt").as_path()));
+}
+
+#[test]
+fn a_sandbox_read_that_panicked_is_asked_again() {
+    let store = GrantStore::new();
+    let grant = store.grant(outside("notes.txt"));
+    let (mut host, system, grants) =
+        run_with(&store, |system| system.grants().drop_sandbox_questions());
+    // The dropped read settles at a turn, which leaves the sandbox unread.
+    turn(&mut host);
+    system.grants().panic_at_next_sandbox_question();
+    let mut caught = FirstPanic::new();
+    let panicked = caught.contain(|| grants.resolve(&grant, 1024));
+    assert!(
+        panicked.is_none() && caught.is_held(),
+        "the backend's panic reaches the resolve that asked"
+    );
+    drop(caught);
+    let access = settled(&mut host, grants.resolve(&grant, 1024))
+        .expect("no read is left in flight: the next resolve asks again, and is answered");
     assert_eq!(access.file().path(), Some(outside("notes.txt").as_path()));
 }
 

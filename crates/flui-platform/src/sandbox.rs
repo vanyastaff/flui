@@ -12,8 +12,9 @@
 //!   `APP_SANDBOX_CONTAINER_ID`, whose container
 //!   (`~/Library/Containers/<id>/Data`) the system makes its `HOME`.
 //!
-//! [`read_flatpak_info`] touches the file system and runs off the owner
-//! thread; [`Confinement::detect`] is a pure function of what it is given.
+//! [`read_flatpak_info`] and [`is_flatpak`] touch the file system and run off
+//! the owner thread; [`Confinement::detect`] is a pure function of what it is
+//! given, and [`Confinement::of_process`] adds the process's environment.
 
 use std::ffi::OsString;
 use std::io::Read as _;
@@ -23,53 +24,84 @@ use std::path::{Component, Path, PathBuf};
 pub(crate) type Environment<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// Where Flatpak mounts its description of the sandbox.
-pub const FLATPAK_INFO: &str = "/.flatpak-info";
+const FLATPAK_INFO: &str = "/.flatpak-info";
 
 /// The longest `/.flatpak-info` read, in bytes: it names an application, its
 /// runtime and its permissions; one larger is not that file.
 const MAX_FLATPAK_INFO_LEN: u64 = 64 * 1024;
 
-/// What the process found at [`FLATPAK_INFO`].
+/// What the process found at `/.flatpak-info`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FlatpakInfo {
     /// No such file, or a system with no Flatpak: the process is no
     /// Flatpak, whatever its environment says.
     Absent,
-    /// The file is there, and holds this text: empty when it was larger than
-    /// a description is or could not be read, which leaves the sandbox its
-    /// own folders alone.
+    /// The file is there, and holds this text: empty when it is no file or
+    /// larger than a description is, which leaves the sandbox its own
+    /// folders alone.
     Present(String),
 }
 
-/// Read [`FLATPAK_INFO`] on Linux, its size checked before a byte is read
+/// Read `/.flatpak-info` on Linux, its size checked before a byte is read
 /// and the read bounded again; every other system has no Flatpak, so a file
 /// at that name (the root of a Windows drive) means nothing there and is not
 /// read. Blocks on the file system: off the owner thread only.
-#[must_use]
-pub fn read_flatpak_info() -> FlatpakInfo {
+///
+/// # Errors
+///
+/// The file system's error when the file could not be opened for a reason
+/// other than its absence, or not read: the process may be a Flatpak whose
+/// description is out of reach this time, so the answer is no answer, and a
+/// caller that keeps what it detects reads again later.
+pub fn read_flatpak_info() -> std::io::Result<FlatpakInfo> {
     read_description(Path::new(FLATPAK_INFO), cfg!(target_os = "linux"))
 }
 
+/// Whether the process is a Flatpak as [`Confinement::detect`] judges one: a
+/// Linux process with `/.flatpak-info`, one that could not be opened
+/// included, since its absence is the only sign of none. Blocks on the file
+/// system, without reading the file.
+#[must_use]
+pub fn is_flatpak() -> bool {
+    has_description(Path::new(FLATPAK_INFO), cfg!(target_os = "linux"))
+}
+
+/// Whether `path` is there, on a system that has Flatpak (`linux`): found,
+/// or out of reach for a reason other than its absence.
+fn has_description(path: &Path, linux: bool) -> bool {
+    linux
+        && !matches!(
+            std::fs::metadata(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+}
+
 /// The description at `path`, on a system that has Flatpak (`linux`).
-fn read_description(path: &Path, linux: bool) -> FlatpakInfo {
+fn read_description(path: &Path, linux: bool) -> std::io::Result<FlatpakInfo> {
     if !linux {
-        return FlatpakInfo::Absent;
+        return Ok(FlatpakInfo::Absent);
     }
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return FlatpakInfo::Absent;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(FlatpakInfo::Absent);
+        }
+        Err(error) => return Err(error),
     };
+    let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > MAX_FLATPAK_INFO_LEN {
-        return FlatpakInfo::Present(String::new());
+        return Ok(FlatpakInfo::Present(String::new()));
     }
     let mut bytes = Vec::new();
-    let read = std::fs::File::open(path)
-        .and_then(|file| file.take(MAX_FLATPAK_INFO_LEN + 1).read_to_end(&mut bytes));
+    file.take(MAX_FLATPAK_INFO_LEN + 1)
+        .read_to_end(&mut bytes)?;
     let fits = u64::try_from(bytes.len()).is_ok_and(|len| len <= MAX_FLATPAK_INFO_LEN);
-    match (read, fits) {
-        (Ok(_), true) => FlatpakInfo::Present(String::from_utf8_lossy(&bytes).into_owned()),
-        _ => FlatpakInfo::Present(String::new()),
-    }
+    Ok(FlatpakInfo::Present(if fits {
+        String::from_utf8_lossy(&bytes).into_owned()
+    } else {
+        String::new()
+    }))
 }
 
 /// A user folder a Flatpak manifest names as `xdg-<name>`, which the user's
@@ -224,19 +256,32 @@ pub fn usable_temporary(
 
 impl Confinement {
     /// The process's sandbox: its environment, `flatpak_info` as
-    /// [`read_flatpak_info`] read it, and the user's home as the standard
-    /// library finds it (`HOME`, else the system's user database).
+    /// [`read_flatpak_info`] read it, the user's home as `user_home` reads it
+    /// from the system's user database (never from `HOME`, which a container
+    /// rebuilt under it would follow wherever the environment points), and
+    /// `user_dir` as [`detect`](Self::detect) takes it.
     pub fn of_process(
         flatpak_info: &FlatpakInfo,
+        user_home: &dyn Fn() -> Option<PathBuf>,
         user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
     ) -> Self {
-        let home = std::env::home_dir();
-        Self::detect(
+        Self::of_environment(
             &|name| std::env::var_os(name),
             flatpak_info,
-            home.as_deref(),
+            user_home,
             user_dir,
         )
+    }
+
+    /// [`of_process`](Self::of_process) over the environment `env`.
+    fn of_environment(
+        env: Environment<'_>,
+        flatpak_info: &FlatpakInfo,
+        user_home: &dyn Fn() -> Option<PathBuf>,
+        user_dir: &dyn Fn(UserFolder) -> Option<PathBuf>,
+    ) -> Self {
+        let home = user_home();
+        Self::detect(env, flatpak_info, home.as_deref(), user_dir)
     }
 
     /// The sandbox `env` and `flatpak_info` describe; `user_home` is the
@@ -431,7 +476,9 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{Confinement, FlatpakInfo, UserFolder, key_file_list, read_description};
+    use super::{
+        Confinement, FlatpakInfo, UserFolder, has_description, key_file_list, read_description,
+    };
 
     fn environment(vars: Vec<(&'static str, OsString)>) -> impl Fn(&str) -> Option<OsString> {
         move |name| {
@@ -493,24 +540,66 @@ mod tests {
     fn the_description_is_read_on_linux_alone_and_within_its_bound() {
         let info = std::env::temp_dir().join(format!("flui-flatpak-info-{}", std::process::id()));
         let _ = std::fs::remove_file(&info);
-        assert_eq!(read_description(&info, true), FlatpakInfo::Absent);
+        assert_eq!(
+            read_description(&info, true).ok(),
+            Some(FlatpakInfo::Absent)
+        );
+        assert!(!has_description(&info, true));
         std::fs::write(&info, "[Application]\nname=a.b\n").expect("written");
         assert_eq!(
-            read_description(&info, true),
-            FlatpakInfo::Present("[Application]\nname=a.b\n".to_owned())
+            read_description(&info, true).ok(),
+            Some(FlatpakInfo::Present("[Application]\nname=a.b\n".to_owned()))
         );
+        assert!(has_description(&info, true));
         assert_eq!(
-            read_description(&info, false),
-            FlatpakInfo::Absent,
+            read_description(&info, false).ok(),
+            Some(FlatpakInfo::Absent),
             "a system with no Flatpak reads no description, a file at its name included"
         );
+        assert!(!has_description(&info, false));
         std::fs::write(&info, vec![b'x'; 64 * 1024 + 1]).expect("written");
         assert_eq!(
-            read_description(&info, true),
-            FlatpakInfo::Present(String::new()),
+            read_description(&info, true).ok(),
+            Some(FlatpakInfo::Present(String::new())),
             "one past the bound is refused by its size, a Flatpak with its own folders alone"
         );
         let _ = std::fs::remove_file(&info);
+    }
+
+    #[test]
+    fn a_description_out_of_reach_is_no_answer_and_still_a_sign_of_flatpak() {
+        // A name no file system opens: an error other than the file's absence.
+        let unreachable = std::path::Path::new("flatpak\0info");
+        assert!(
+            read_description(unreachable, true).is_err(),
+            "neither absent nor an empty description: the caller reads again later"
+        );
+        assert!(
+            has_description(unreachable, true),
+            "only the file's absence says the process is no Flatpak"
+        );
+    }
+
+    #[test]
+    fn the_process_sandbox_takes_the_users_home_from_the_user_database_not_home() {
+        let user = absolute("user");
+        let env = environment(vec![
+            ("APP_SANDBOX_CONTAINER_ID", "com.example.app".into()),
+            ("HOME", absolute("elsewhere").into_os_string()),
+        ]);
+        let lookup = || Some(user.clone());
+        let sandbox = app_sandbox(Confinement::of_environment(
+            &env,
+            &FlatpakInfo::Absent,
+            &lookup,
+            &no_user_dirs,
+        ));
+        assert_eq!(
+            sandbox.home(),
+            user.join("Library/Containers/com.example.app/Data")
+                .as_path(),
+            "a HOME that is not the container leaves the container under the user's home"
+        );
     }
 
     #[test]

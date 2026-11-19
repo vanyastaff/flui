@@ -17,7 +17,7 @@
 //! [`Access`]: crate::grant::Access
 
 use super::{ErrorCode, errno, failure};
-use crate::grant::GrantError;
+use crate::grant::{GrantError, ResolveHold};
 
 /// `NSFileNoSuchFileError`.
 const NO_SUCH_FILE: isize = 4;
@@ -45,12 +45,19 @@ pub(crate) fn resolution_error(code: ErrorCode) -> GrantError {
 pub(crate) struct Waited(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl Waited {
-    /// A resolve someone waits for, and the hold whose drop lets it go.
-    pub(crate) fn new() -> (Self, WaitedHold) {
+    /// A resolve's wiring: hand `work` to `run`, which runs it on a work
+    /// item, telling it whether anybody still waits; the hold returned is
+    /// what tells it, so the resolve let go of starts no scope.
+    pub(crate) fn hold<T: 'static>(
+        run: impl FnOnce(Box<dyn FnOnce() -> T + Send>),
+        work: impl FnOnce(&Self) -> T + Send + 'static,
+    ) -> ResolveHold {
         let waited = Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             true,
         )));
-        (waited.clone(), WaitedHold(waited))
+        let hold = WaitedHold(waited.clone());
+        run(Box::new(move || work(&waited)));
+        ResolveHold::new(hold)
     }
 
     /// Start a scope with `start` when someone still waits, answering
@@ -62,7 +69,7 @@ impl Waited {
 
 /// A resolve's hold: its drop tells the work item nobody waits any more.
 #[derive(Debug)]
-pub(crate) struct WaitedHold(Waited);
+struct WaitedHold(Waited);
 
 impl Drop for WaitedHold {
     fn drop(&mut self) {
@@ -203,7 +210,7 @@ mod foundation {
 
     impl GrantBackend for AppleGrants {
         fn takes(&self, grant: &Grant) -> bool {
-            grant.kind() == Some(GrantKind::AppleBookmark)
+            grant.made_by(GrantKind::AppleBookmark)
         }
 
         /// Read from the environment when the provider was made: no file
@@ -222,12 +229,12 @@ mod foundation {
             let busy = Err(GrantError::Unsupported(Unsupported::of::<GrantCapability>(
                 UnsupportedReason::Unavailable,
             )));
-            let (waited, hold) = Waited::new();
-            self.queue
-                .run(answer, busy, move || resolve(grant.payload(), &waited));
             // A resolution under way finishes; dropped before its scope, the
             // hold keeps the scope from being started for nobody.
-            ResolveHold::new(hold)
+            Waited::hold(
+                |work| self.queue.run(answer, busy, work),
+                move |waited| resolve(grant.payload(), waited),
+            )
         }
     }
 }
@@ -240,23 +247,41 @@ mod tests {
     use crate::apple::ErrorCode;
     use crate::grant::GrantError;
 
+    /// What a resolve wired as `AppleGrants::resolve` wires it starts, run
+    /// on its work item after its hold is kept or let go of.
+    fn started_after(let_go: bool) -> (bool, bool) {
+        let queued = std::cell::RefCell::new(None);
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asking = std::sync::Arc::clone(&asked);
+        let hold = Waited::hold(
+            |work| *queued.borrow_mut() = Some(work),
+            move |waited: &Waited| {
+                waited.start_scope(|| {
+                    asking.store(true, std::sync::atomic::Ordering::Relaxed);
+                    true
+                })
+            },
+        );
+        if let_go {
+            drop(hold);
+        }
+        let work = queued.into_inner().expect("the resolve was queued");
+        let started = work();
+        (started, asked.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     #[test]
     fn a_resolve_let_go_of_starts_no_scope() {
-        let (waited, hold) = Waited::new();
-        assert!(
-            waited.start_scope(|| true),
+        assert_eq!(
+            started_after(false),
+            (true, true),
             "someone waits: the scope starts"
         );
-        drop(hold);
-        let mut asked = false;
-        assert!(
-            !waited.start_scope(|| {
-                asked = true;
-                true
-            }),
-            "nobody waits: no scope"
+        assert_eq!(
+            started_after(true),
+            (false, false),
+            "nobody waits: no scope, and the system is not asked to start one"
         );
-        assert!(!asked, "the system is not asked to start one");
     }
 
     #[test]

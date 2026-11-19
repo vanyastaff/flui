@@ -453,8 +453,9 @@ fn a_path_the_seam_refuses_is_refused_before_the_file_system(subject: Subject) {
     bench.verify();
 }
 
-/// The scripted double's grants carry a tag no system's backend reads: each
-/// platform's provider answers one `Foreign`, without asking its system.
+/// The scripted double's grants stand in for this host's kind of grant, the
+/// one its provider takes, and carry the double's tag: each platform's
+/// provider still answers one `Foreign`, without asking its system.
 fn a_scripted_grant_is_foreign_to_every_system(subject: Subject) {
     if matches!(subject, Subject::Scripted) {
         return;
@@ -465,7 +466,6 @@ fn a_scripted_grant_is_foreign_to_every_system(subject: Subject) {
     };
     let scripted =
         flui_system::testing::GrantStore::new().grant(std::env::temp_dir().join("scripted.txt"));
-    assert_eq!(scripted.kind(), None, "no kind of system made it");
     let resolved = land_resolving(grants.resolve(&scripted, 1024));
     turn(&mut bench.host);
     let refusal = resolved

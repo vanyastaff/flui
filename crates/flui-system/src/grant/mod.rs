@@ -198,7 +198,9 @@ pub trait GrantBackend: 'static {
 
     /// Read the sandbox the process runs in: off the owner thread where the
     /// file system describes it (a Flatpak's `/.flatpak-info`). Asked again
-    /// at a later resolve when it answered nothing (the resolver dropped).
+    /// at a later resolve when it answered nothing (the resolver dropped) or
+    /// panicked; a panic here reaches the resolve that asked, once every
+    /// resolve waiting for the read was refused `Unavailable`.
     fn sandbox(&self, answer: Resolver<Sandbox>);
 
     /// Reacquire what `grant` reaches; a system that hands the file over as

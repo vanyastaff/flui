@@ -26,7 +26,7 @@ use crate::grant::path::{Granter, file_of, reacquired};
 use crate::grant::{
     Grant, GrantBackend, GrantCapability, GrantError, GrantKind, GrantResult, ResolveHold,
 };
-use crate::sandbox::{Sandbox, of_confinement};
+use crate::sandbox::{Sandbox, of_confinement, user_database_home};
 
 /// [`GrantBackend`] over the file system, on the portal's runtime.
 pub(crate) struct PortalGrants {
@@ -41,25 +41,30 @@ impl PortalGrants {
 
 impl GrantBackend for PortalGrants {
     fn takes(&self, grant: &Grant) -> bool {
-        grant.kind() == Some(GrantKind::UnixPath)
+        grant.made_by(GrantKind::UnixPath)
     }
 
     /// The sandbox `/.flatpak-info` describes, read off the owner thread; a
-    /// portal that cannot start answers none, as its resolves would.
+    /// portal that cannot start answers none, as its resolves would, and so
+    /// does a description that could not be read this time.
     fn sandbox(&self, answer: Resolver<Sandbox>) {
         if self.portal.start().is_err() {
             return;
         }
         self.portal.spawn(move |_| async move {
             let sandbox = zruntime::unblock(|| {
-                of_confinement(&Confinement::of_process(
-                    &read_flatpak_info(),
+                let info = read_flatpak_info().ok()?;
+                Some(of_confinement(&Confinement::of_process(
+                    &info,
+                    &user_database_home,
                     &named_folder,
-                ))
+                )))
             })
             .await;
-            // The owner retiring first leaves nothing waiting.
-            let _ = answer.resolve(sandbox);
+            if let Some(sandbox) = sandbox {
+                // The owner retiring first leaves nothing waiting.
+                let _ = answer.resolve(sandbox);
+            }
         });
     }
 

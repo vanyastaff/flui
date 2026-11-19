@@ -7,7 +7,7 @@ use std::fmt;
 use std::future::Future;
 use std::rc::Rc;
 
-use flui_platform::capability::{Abandoned, Completion};
+use flui_platform::capability::{Abandoned, Completion, FirstPanic};
 
 use super::GrantResult;
 use crate::sandbox::Sandbox;
@@ -95,10 +95,35 @@ impl SandboxSlot {
             };
             // The slot is committed before any resolve starts: one that asks
             // the handle again finds the sandbox read, or asks again.
-            for (_, start) in waiting {
-                start(sandbox.clone());
-            }
+            let mut failure = FirstPanic::new();
+            start_each(waiting, sandbox.as_ref(), &mut failure);
+            failure.resume();
         });
+    }
+
+    /// Ask `read` for the sandbox; the slot already holds the resolves that
+    /// wait for it.
+    ///
+    /// A backend that panics asking leaves no read in flight: the slot goes
+    /// back to unread, every resolve waiting is started with no sandbox (a
+    /// typed refusal), and the panic resumes once that is done (ADR-0287),
+    /// so the next resolve asks again.
+    fn ask(self: &Rc<Self>, read: impl FnOnce() -> Completion<Sandbox>) {
+        let mut failure = FirstPanic::new();
+        if let Some(read) = failure.contain(read) {
+            Self::fill_on(self, read);
+            return;
+        }
+        let waiting = match self.state.take() {
+            SlotState::Reading(waiting) => waiting,
+            // A read the backend answered before it panicked stays.
+            other => {
+                self.state.set(other);
+                Vec::new()
+            }
+        };
+        start_each(waiting, None, &mut failure);
+        failure.resume();
     }
 
     /// Run `start` with the sandbox now when it is read; else queue it under
@@ -134,7 +159,7 @@ impl SandboxSlot {
                 self.state
                     .set(SlotState::Reading(vec![(ticket, Box::new(start))]));
                 // The state is committed before the backend is asked.
-                Self::fill_on(self, read());
+                self.ask(read);
                 Ok(Some(ticket))
             }
         }
@@ -168,6 +193,19 @@ impl SandboxSlot {
                 .expect("BUG: a handle asks fewer than u64::MAX resolves"),
         );
         ticket
+    }
+}
+
+/// Start each of `waiting` with `sandbox`, every one even when an earlier
+/// one panics; `failure` keeps the first panic for its caller to resume.
+fn start_each(
+    waiting: Vec<(u64, WhenRead)>,
+    sandbox: Option<&Rc<Sandbox>>,
+    failure: &mut FirstPanic,
+) {
+    for (_, start) in waiting {
+        let sandbox = sandbox.cloned();
+        failure.contain(move || start(sandbox));
     }
 }
 
