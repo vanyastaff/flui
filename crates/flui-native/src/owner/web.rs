@@ -33,7 +33,7 @@ use crate::{
     owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
     platform::Platform,
 };
-use flui_platform::transfer::data_transfer::DragTransport;
+use flui_platform::transfer::data::DragTransport;
 use flui_platform::transfer::drag::PlatformDragSource;
 use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowIdMint};
 
@@ -100,7 +100,7 @@ pub(crate) trait HostDrag: DragTransport {
 pub(crate) trait HostInput {
     /// What the page's input path delivers (ADR-0213), with no device present
     /// yet: the window's first input capabilities.
-    fn availability(&self) -> flui_platform::input::input_capabilities::InputCapabilities;
+    fn availability(&self) -> flui_platform::input::capabilities::InputCapabilities;
 
     /// Listen, in `registration`, for the input of `canvas`, dispatching to
     /// the window's `callbacks`; `latency` picks the event a pointer's

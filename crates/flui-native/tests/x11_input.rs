@@ -1353,7 +1353,7 @@ fn an_xtest_drag_from_the_window_drops_on_another_client() {
     use std::num::NonZeroU64;
 
     use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
     use flui_platform::transfer::drag::{
@@ -1464,7 +1464,7 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
     use std::num::NonZeroU64;
 
     use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
     use flui_platform::transfer::drag::{
@@ -1537,7 +1537,7 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
 /// on its content does (ADR-0286 §10).
 fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager() {
     use flui_foundation::geometry::{Rect, Size};
-    use flui_platform::input::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, WindowFrame, WindowMode, WindowOptions};
 
     park_pointer();
@@ -1639,7 +1639,7 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
 /// the drag widens the window as far as the pointer went.
 fn openbox_paces_an_interactive_resize_by_the_windows_counter() {
     use flui_foundation::geometry::{Rect, Size};
-    use flui_platform::input::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{InputRegion, InputRegionKind};
     use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
 
     use crate::cases::{counter_reader, counter_value, resize_counters};

@@ -35,7 +35,7 @@ use std::rc::Rc;
     test,
     feature = "testing"
 ))]
-use flui_platform::text::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 
 #[cfg(test)]
 mod tests;

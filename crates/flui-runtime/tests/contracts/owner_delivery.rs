@@ -1190,9 +1190,9 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     );
     assert_eq!(effects.scenes.get(), 0);
     if case == TextServiceCase::Unavailable {
-        use flui_platform::text::text_store::{
-            LockGrant, LockOutcome, LockTiming, TextStoreError, utf16::Utf16Offset,
-            utf16::Utf16Range,
+        use flui_platform::text::store::{
+            LockGrant, LockOutcome, LockTiming, TextStoreError,
+            utf16::{Utf16Offset, Utf16Range},
         };
         for _ in 0..3 {
             dispatcher

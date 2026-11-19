@@ -30,7 +30,7 @@ use std::time::Duration;
 use cursor_icon::CursorIcon;
 use flui_foundation::IdMint;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::input::keyboard::{KeyEvent, KeyPress, KeyState};
 use flui_platform::input::pointer::{PenTool, PointerEvent, PointerKind};
 use flui_platform::{

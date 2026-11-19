@@ -10,7 +10,7 @@ mod kind_set;
 pub use kind_set::PointerKindSet;
 
 use crate::Availability;
-use crate::input::input_regions::InputRegionKind;
+use crate::input::regions::InputRegionKind;
 
 /// The input capabilities of one surface's backend that no handle answers for: pen input,
 /// precise (phased) scrolling, trackpad pinch and rotate, touchpad holds and swipes, each kind of input region and outgoing drags,
@@ -30,8 +30,8 @@ use crate::input::input_regions::InputRegionKind;
 ///
 /// ```compile_fail,E0451
 /// use flui_platform::Availability;
-/// use flui_platform::input::input_capabilities::InputCapabilities;
-/// use flui_platform::input::input_capabilities::PointerKindSet;
+/// use flui_platform::input::capabilities::InputCapabilities;
+/// use flui_platform::input::capabilities::PointerKindSet;
 ///
 /// let forged = InputCapabilities {
 ///     pen: Availability::Native,
@@ -52,8 +52,8 @@ use crate::input::input_regions::InputRegionKind;
 ///
 /// ```
 /// use flui_platform::Availability;
-/// use flui_platform::input::input_capabilities::InputCapabilities;
-/// use flui_platform::input::input_capabilities::PointerKindSet;
+/// use flui_platform::input::capabilities::InputCapabilities;
+/// use flui_platform::input::capabilities::PointerKindSet;
 ///
 /// let wayland = InputCapabilities::builder()
 ///     .pen(Availability::Native)

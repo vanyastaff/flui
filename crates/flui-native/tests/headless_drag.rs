@@ -15,7 +15,7 @@ use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as
 use flui_platform::DragDropEvent;
 use flui_platform::WindowOptions;
 use flui_platform::input::pointer::PressId;
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };

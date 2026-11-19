@@ -17,9 +17,9 @@
 //!   model of discrete events.
 //!
 //! This is the vocabulary of push-model sources only. The IME contract is a
-//! pull text store (ADR-0090, `flui_platform::text::text_store`): a field is a
+//! pull text store (ADR-0090, `flui_platform::text::store`): a field is a
 //! `TextStore` the platform locks, reads and edits, and
-//! `flui_platform::text::text_store::project_ime_event` turns each of these
+//! `flui_platform::text::store::project_ime_event` turns each of these
 //! events into edits on that store. A pull-model platform (Windows TSF,
 //! AppKit, Android's `InputConnection`) talks to the store directly and does
 //! not adapt into this enum, which does not grow variants for them.

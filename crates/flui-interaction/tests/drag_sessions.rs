@@ -32,7 +32,7 @@ use flui_interaction::{
 };
 use flui_platform::input::pointer::PressId;
 use flui_platform::input::pointer::{PenTool, PointerSource};
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
     TransferCompleter, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
@@ -416,7 +416,7 @@ impl Fixture {
     /// An OS offer of plain text, as another application would make it.
     fn text_offer(&self) -> DataTransferOffer {
         let representations: Arc<[_]> = Arc::from(vec![
-            flui_platform::transfer::data_transfer::RepresentationDescriptor {
+            flui_platform::transfer::data::RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             },

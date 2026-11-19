@@ -17,7 +17,7 @@ use std::{
 };
 
 use flui_foundation::{geometry::Offset, panic::FailureClass};
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 
 use super::{
     ArenaMembership, CancelOutcome, ContactEnd, ContactId, ContactSnapshot, GestureRecognizer,

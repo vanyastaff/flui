@@ -7,11 +7,11 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::ImeEvent;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect, Selection,
     TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, commit_composition_in_place, project_ime_event, utf16::Utf16Offset,
-    utf16::Utf16Range,
+    TextStoreStatus, commit_composition_in_place, project_ime_event,
+    utf16::{Utf16Offset, Utf16Range},
 };
 
 /// A field that takes no edits: it holds a composition over its whole text and
@@ -59,7 +59,7 @@ impl TextStore for ReadOnlyField {
     fn press_target_at(
         &self,
         _: Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         Err(TextStoreError::NoLayout)
     }
 }

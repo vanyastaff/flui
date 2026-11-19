@@ -1307,7 +1307,7 @@ impl crate::host_window::HostWindow for WebWindow {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.text_input_of().and_then(WindowTextInput::store_host)
     }
 }
@@ -1603,7 +1603,7 @@ impl PlatformWindow for WebWindow {
     /// `pointer-events` decides which element takes input, which is not that.
     fn set_input_regions(
         &self,
-        _regions: &[flui_platform::input::input_regions::InputRegion],
+        _regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), Unsupported> {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }

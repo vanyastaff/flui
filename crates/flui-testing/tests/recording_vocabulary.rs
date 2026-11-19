@@ -13,7 +13,7 @@ use flui_foundation::geometry::{
 use flui_interaction::gesture::GestureDisposition;
 use flui_platform::Availability;
 use flui_platform::PointerFrame;
-use flui_platform::input::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::input::capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::input::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
@@ -27,7 +27,7 @@ use flui_platform::input::pointer::{
     TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
     TouchpadSwipePhase, Twist,
 };
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
 use flui_platform::{

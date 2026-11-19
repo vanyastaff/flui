@@ -1,7 +1,7 @@
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerKind, ScrollPrecision, ScrollUnit,
 };

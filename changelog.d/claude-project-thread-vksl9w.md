@@ -138,7 +138,7 @@
 - **`AgentWindow::input_lease` and `InputLease`** (`flui-view`'s development-agent seam): input
   is injected and released through a lease, `Send` and not `Clone`, whose drop releases what it
   holds.
-- **`flui_platform::pointer::DeviceId::AGENT`**: the device of the driver agent's pointers,
+- **`flui_platform::input::pointer::DeviceId::AGENT`**: the device of the driver agent's pointers,
   reserved, with contacts.
 - **`ActionSequence::ticks` and `ActionSequence::span`** (`flui-protocol`): how many ticks a
   sequence plays and how long it takes; `InputParams::holds_for` is its span, so a server's

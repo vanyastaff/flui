@@ -16,7 +16,7 @@ use std::sync::{
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
-use flui_platform::input::input_regions::{InputRegion, InputRegionKind};
+use flui_platform::input::regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmittedCommand, ApplyError, Brightness, FrameRateHint, Unsupported, UnsupportedReason,
     WindowCapabilities, WindowGeometry, WindowOptions, WindowState,
@@ -494,7 +494,7 @@ impl ActivityWindow for AndroidWindow {
 fn input_capabilities(
     api: AndroidApi,
     java_view: bool,
-) -> flui_platform::input::input_capabilities::InputCapabilities {
+) -> flui_platform::input::capabilities::InputCapabilities {
     crate::input::availability::android(AndroidInputApis {
         gesture_exclusion: api.since::<GestureExclusion>().is_some(),
         touchpad_gestures: api.since::<TouchpadGestures>().is_some(),
@@ -665,7 +665,7 @@ impl crate::host_window::HostWindow for AndroidWindow {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()

@@ -9,7 +9,7 @@
 //! runs every backend's table.
 
 use flui_platform::Availability;
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 
 use Availability::{Emulated, Native};
 

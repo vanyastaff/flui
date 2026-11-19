@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_foundation::{DragSessionId, UiRuntimeId};
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest,

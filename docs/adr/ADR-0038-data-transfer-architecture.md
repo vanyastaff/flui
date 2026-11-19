@@ -97,7 +97,7 @@ Offer lifecycle:
 
 ### 3. Vocabulary
 
-Plain data in `flui_platform::transfer::data_transfer`; no lock guard in any public
+Plain data in `flui_platform::transfer::data`; no lock guard in any public
 signature:
 
 - `Mime` — type/subtype and parameter names lowercased, parameter values kept

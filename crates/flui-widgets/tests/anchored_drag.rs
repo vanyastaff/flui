@@ -814,7 +814,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     use flui_platform::DragDropEvent;
     use flui_platform::EventTime;
     use flui_platform::input::pointer::PointerKind;
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
     };
 
@@ -824,7 +824,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     let owner = DragOwner::new(
         ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
         UiRuntimeId::new(7),
-        Arc::new(flui_platform::transfer::data_transfer::NullDragTransport),
+        Arc::new(flui_platform::transfer::data::NullDragTransport),
         Arc::new(|| {}),
     );
     let representations: Arc<[RepresentationDescriptor]> =

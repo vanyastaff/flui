@@ -107,7 +107,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
-use flui_platform::input::input_regions::ResizeEdge;
+use flui_platform::input::regions::ResizeEdge;
 use flui_platform::{
     AdmittedCommand, ApplyError, AspectRatio, Brightness, CloseDecision, Cursor, CursorError,
     CursorGrab, DisplaySnapshot, PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported,
@@ -2062,7 +2062,7 @@ impl PlatformWindow for X11Window {
     /// edge gestures, so those regions are kept and never read.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input::input_regions::InputRegion],
+        regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), Unsupported> {
         if self.closed.get() {
             return Err(Unsupported::new(UnsupportedReason::NoWindow));
@@ -2126,7 +2126,7 @@ impl HostWindow for X11Window {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()

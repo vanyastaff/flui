@@ -47,10 +47,10 @@ use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario, ScenarioDriver};
-use flui_platform::input::input_regions::{DeviceInputRegion, InputRegion};
-use flui_platform::text::text_store::TextStoreHost;
-use flui_platform::text::text_store::{SelectionUi, TextStoreStatus};
-use flui_platform::transfer::data_transfer::{RepresentationDescriptor, TransferActions};
+use flui_platform::input::regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text::store::TextStoreHost;
+use flui_platform::text::store::{SelectionUi, TextStoreStatus};
+use flui_platform::transfer::data::{RepresentationDescriptor, TransferActions};
 use flui_platform::transfer::drag::{
     DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };

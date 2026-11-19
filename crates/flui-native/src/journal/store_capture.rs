@@ -21,11 +21,12 @@ use std::rc::Rc;
 use flui_foundation::IdMint;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, LockKind, LockOutcome,
     LockTiming, OwnerCalls, PointMode, PressTarget, RangeRect, Selection, SelectionUi, TextChange,
     TextStore, TextStoreChange, TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError,
-    TextStoreObserver, TextStoreRead, TextStoreStatus, utf16::Utf16Offset, utf16::Utf16Range,
+    TextStoreObserver, TextStoreRead, TextStoreStatus,
+    utf16::{Utf16Offset, Utf16Range},
 };
 
 use super::capture::{Captured, Journal};

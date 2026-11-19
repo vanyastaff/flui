@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::DataTransferId;
 use flui_platform::DragDropEvent;
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DropFeedback, RepresentationIndex, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };

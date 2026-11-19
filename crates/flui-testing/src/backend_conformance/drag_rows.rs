@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use flui_platform::Availability;
-use flui_platform::transfer::data_transfer::TransferActions;
+use flui_platform::transfer::data::TransferActions;
 use flui_platform::transfer::drag::{
     AllowedActions, DragError, DragMoment, DragReach, OsDragStart, OsOffer, OsSessionPlan,
     PlatformDragSource, plan_os_session,

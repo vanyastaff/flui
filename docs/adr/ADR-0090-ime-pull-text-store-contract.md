@@ -69,7 +69,7 @@ UTF-8 bytes (`controller.rs:34`), while macOS already converts UTF-16 `NSRange`s
 (`crates/flui-native/src/text/apple/macos.rs:142-145`). The session owner is
 `flui_interaction::text_input::TextInputOwner`, which imports the platform trait directly
 (`crates/flui-interaction/src/text_input/mod.rs:27`) and routes events through
-`ImeEventCallback = Rc<dyn Fn(&ImeEvent)>` (`text_input.rs:39`).
+`ImeEventCallback = Rc<dyn Fn(&ImeEvent)>` (`flui_interaction::text_input::ImeEventCallback` at `c2ba3ae51`).
 
 The panel first proposed a read-only store. Verification found that TSF needs edits and a lock
 that can be granted later, and that a kit testing only reads would certify a contract Windows
@@ -104,7 +104,7 @@ thread, in `flui-platform` ([ADR-0082](ADR-0082-platform-api-contract-crate.md))
   `Arc<Mutex<…>>` does not survive into this surface. Until then the built-in field implements
   it over today's state ("Interim implementation" below).
 
-The surface is `flui_platform::text::text_store`:
+The surface is `flui_platform::text::store`:
 
 - `TextStore` (owner thread, shared as `Rc<dyn TextStore>`, not `Send`): `status`,
   `request_lock`, `run_deferred_grants`, `set_commit_gate`, `set_observer`. `TextStoreObserver`
@@ -142,7 +142,7 @@ The surface is `flui_platform::text::text_store`:
 ### 2. The push vocabulary becomes a projection
 
 `ImeEvent` stays as the adapter for push-model sources (winit today).
-`flui_platform::text::text_store::project_ime_event` translates `Preedit`/`Commit`/`Disabled` into
+`flui_platform::text::store::project_ime_event` translates `Preedit`/`Commit`/`Disabled` into
 store edits under a read-write lock, and `TextInputOwner::dispatch` calls it for the active
 client, so there is one editing path. The lock is **asynchronous**, not synchronous as first
 written: a push event that arrives while the store cannot grant a lock (inside a frame
@@ -182,7 +182,7 @@ reset, an app-side edit, a commit anchor, its own change count, a hook run insid
 notification, and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
 through a `CommitGate` it installs with `set_commit_gate`, so no fixture can stand in for a
 store that ignores its gate. Each `Case` names the
-version that added it, so a pinned version never grows. `flui_platform::text::text_store::
+version that added it, so a pinned version never grows. `flui_platform::text::store::
 InMemoryTextStore` is the test-only minimal field, with `text_store_kit::InMemoryFixture` as the
 worked example; the kit's own tests wrap it with one fault each and assert the kit catches every
 one.

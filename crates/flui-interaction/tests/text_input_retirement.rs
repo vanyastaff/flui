@@ -12,7 +12,7 @@ use flui_interaction::text_input::{
     ClientToken, TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
 };
 use flui_platform::PlatformTextInput;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError, TextStoreObserver,
     TextStoreStatus,
 };
@@ -28,7 +28,7 @@ impl PlatformTextInput for Platform {
     }
 
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -170,7 +170,7 @@ impl<P> TextStore for DroppingStore<P> {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -369,7 +369,7 @@ impl TextStore for CountingStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -494,7 +494,7 @@ struct UnwindProbePlatform(Arc<parking_lot::Mutex<Option<bool>>>);
 impl PlatformTextInput for UnwindProbePlatform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 
     fn discard_composition(&self) {}
 }
@@ -519,7 +519,7 @@ impl TextStore for ClosingStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -587,7 +587,7 @@ impl TextStore for CloseOnDropStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -661,7 +661,7 @@ fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
 #[derive(Default)]
 struct PullHost(RefCell<Vec<bool>>);
 
-impl flui_platform::text::text_store::TextStoreHost for PullHost {
+impl flui_platform::text::store::TextStoreHost for PullHost {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         self.0.borrow_mut().push(store.is_some());
     }
@@ -670,10 +670,10 @@ impl flui_platform::text::text_store::TextStoreHost for PullHost {
         &self,
         _: &Rc<dyn TextStore>,
     ) -> Result<
-        flui_platform::text::text_store::CompositionEnd,
-        flui_platform::text::text_store::TextStoreHostError,
+        flui_platform::text::store::CompositionEnd,
+        flui_platform::text::store::TextStoreHostError,
     > {
-        Ok(flui_platform::text::text_store::CompositionEnd::Committed)
+        Ok(flui_platform::text::store::CompositionEnd::Committed)
     }
 
     fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
@@ -747,7 +747,7 @@ impl TextStore for ReentrantCommitStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(
@@ -782,7 +782,7 @@ impl TextStore for FailingGateStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.0.press_target_at(point)
     }
 
@@ -857,8 +857,8 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
                 LockGrant::read(move |session| {
                     *read.borrow_mut() = session
                         .text(
-                            flui_platform::text::text_store::utf16::Utf16Range::try_new(
-                                flui_platform::text::text_store::utf16::Utf16Offset::ZERO,
+                            flui_platform::text::store::utf16::Utf16Range::try_new(
+                                flui_platform::text::store::utf16::Utf16Offset::ZERO,
                                 session.document_len(),
                             )
                             .expect("document range"),
@@ -908,8 +908,8 @@ fn commit_reentry_preserves_the_newer_attachment() {
             LockGrant::read(move |session| {
                 *read.borrow_mut() = session
                     .text(
-                        flui_platform::text::text_store::utf16::Utf16Range::try_new(
-                            flui_platform::text::text_store::utf16::Utf16Offset::ZERO,
+                        flui_platform::text::store::utf16::Utf16Range::try_new(
+                            flui_platform::text::store::utf16::Utf16Offset::ZERO,
                             session.document_len(),
                         )
                         .expect("ordered range"),
@@ -1089,7 +1089,7 @@ impl TextStore for ProbedClosingStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn request_lock(

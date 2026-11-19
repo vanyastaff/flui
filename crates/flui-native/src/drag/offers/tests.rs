@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     Mime, RepresentationDescriptor, TransferFormat, TransferPayload,
 };
 

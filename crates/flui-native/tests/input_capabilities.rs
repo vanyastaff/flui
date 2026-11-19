@@ -14,7 +14,7 @@ use flui_native::{
 };
 use flui_platform::Availability;
 use flui_platform::WindowOptions;
-use flui_platform::input::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::input::capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::input::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
     PointerPress, PointerSample, PointerSource,

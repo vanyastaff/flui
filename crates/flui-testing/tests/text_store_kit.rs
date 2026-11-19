@@ -8,10 +8,11 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_interaction::testing::InMemoryTextStore;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect, Selection,
     TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, utf16, utf16::Utf16Offset, utf16::Utf16Range,
+    TextStoreStatus, utf16,
+    utf16::{Utf16Offset, Utf16Range},
 };
 use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
@@ -97,7 +98,7 @@ impl TextStore for Faulty {
     fn press_target_at(
         &self,
         point: Point<f64>,
-    ) -> Result<flui_platform::text::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
 

@@ -20,7 +20,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,

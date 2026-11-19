@@ -36,7 +36,7 @@ use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription
 use flui_interaction::haptics::HapticsHandle;
 use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;

@@ -2,9 +2,9 @@
 
 use flui_interaction::testing::InMemoryTextStore;
 use flui_platform::ImeEvent;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, LockGrant, LockOutcome, LockTiming, Selection, TextStore, project_ime_event,
-    utf16::Utf16Offset, utf16::Utf16Range,
+    utf16::{Utf16Offset, Utf16Range},
 };
 
 /// Install a shut gate into `store`, as a frame transaction would.

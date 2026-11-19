@@ -20,7 +20,7 @@ use crate::{
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_platform::EventTime;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use smallvec::SmallVec;
 use std::{
     cell::{Cell, RefCell},

@@ -39,7 +39,7 @@
 //! ```
 
 use crate::containment::keep_first;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},

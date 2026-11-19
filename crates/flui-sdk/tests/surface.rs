@@ -457,12 +457,12 @@ mod measured_unstable {
 #[test]
 fn the_unstable_input_re_exports_are_the_owning_crates_types() {
     let _: fn(
-        flui_platform::input::input_capabilities::InputCapabilities,
+        flui_platform::input::capabilities::InputCapabilities,
     ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
     let _: fn(flui_platform::Availability) -> flui_sdk::platform::input_capabilities::Availability =
         |x| x;
     let _: fn(
-        flui_platform::input::input_capabilities::PointerKindSet,
+        flui_platform::input::capabilities::PointerKindSet,
     ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
     let _: fn(flui_platform::haptics::HapticPattern) -> flui_sdk::platform::haptics::HapticPattern =
         |x| x;
@@ -716,18 +716,18 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::haptics::PatternPlayback;",
         "pub use flui_platform::haptics::Sharpness;",
         "pub use flui_platform::haptics::UnitRangeError;",
-        "pub use flui_platform::input::input_capabilities::InputCapabilities;",
-        "pub use flui_platform::input::input_capabilities::PointerKindSet;",
-        "pub use flui_platform::input::input_capabilities::PointerKindSet;",
+        "pub use flui_platform::input::capabilities::InputCapabilities;",
+        "pub use flui_platform::input::capabilities::PointerKindSet;",
+        "pub use flui_platform::input::capabilities::PointerKindSet;",
         "pub use flui_platform::input::pointer::PointerKind;",
-        "pub use flui_platform::text::text_store::Autofill;",
-        "pub use flui_platform::text::text_store::Capitalization;",
-        "pub use flui_platform::text::text_store::Correction;",
-        "pub use flui_platform::text::text_store::EnterAction;",
-        "pub use flui_platform::text::text_store::NumberFormat;",
-        "pub use flui_platform::text::text_store::TextInputOptions;",
-        "pub use flui_platform::text::text_store::TextInputPurpose;",
-        "pub use flui_platform::transfer::data_transfer::TransferActions;",
+        "pub use flui_platform::text::store::Autofill;",
+        "pub use flui_platform::text::store::Capitalization;",
+        "pub use flui_platform::text::store::Correction;",
+        "pub use flui_platform::text::store::EnterAction;",
+        "pub use flui_platform::text::store::NumberFormat;",
+        "pub use flui_platform::text::store::TextInputOptions;",
+        "pub use flui_platform::text::store::TextInputPurpose;",
+        "pub use flui_platform::transfer::data::TransferActions;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::pipeline::TextContextHandle;",

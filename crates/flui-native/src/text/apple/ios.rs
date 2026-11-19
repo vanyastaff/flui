@@ -20,7 +20,7 @@ use crate::TextSizingCaptureError as Error;
 use crate::owner::apple::ios::{NativeOwner, ViewRef};
 use crate::owner::signal::OwnerSignal;
 use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
-use flui_platform::text::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_ui_kit::{

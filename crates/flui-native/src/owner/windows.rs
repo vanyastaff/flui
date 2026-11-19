@@ -62,8 +62,8 @@ use std::{
 };
 
 use flui_platform::CursorError;
-use flui_platform::text::text_store::TextStoreHost;
-use flui_platform::transfer::data_transfer::DragTransport;
+use flui_platform::text::store::TextStoreHost;
+use flui_platform::transfer::data::DragTransport;
 use flui_platform::transfer::drag::PlatformDragSource;
 use windows::{
     Win32::{

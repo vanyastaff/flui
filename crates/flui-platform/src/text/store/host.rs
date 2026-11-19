@@ -2,9 +2,9 @@
 
 use std::rc::Rc;
 
+use super::contract::TextStore;
 use super::lock::{LockOutcome, TextStoreError};
 use super::projection::edit_async;
-use super::store::TextStore;
 use crate::Unsupported;
 
 /// A pull-model platform's side of one window's text input: the object a

@@ -490,7 +490,7 @@ pub(crate) mod events {
     impl HostInput for WebInput {
         /// Trackpad pinch is native where the browser has WebKit gesture
         /// events, else emulated from Control-held wheel events.
-        fn availability(&self) -> flui_platform::input::input_capabilities::InputCapabilities {
+        fn availability(&self) -> flui_platform::input::capabilities::InputCapabilities {
             crate::input::availability::web(has_gesture_events())
         }
 

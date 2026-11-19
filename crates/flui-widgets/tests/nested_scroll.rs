@@ -3669,14 +3669,14 @@ impl HoveringDrag {
         use flui_foundation::{PresentationId, UiRuntimeId};
         use flui_interaction::drag::{DragOwner, ProcessNonce};
         use flui_platform::DragDropEvent;
-        use flui_platform::transfer::data_transfer::{
+        use flui_platform::transfer::data::{
             DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
         };
 
         let owner = DragOwner::new(
             ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
             UiRuntimeId::new(7),
-            Arc::new(flui_platform::transfer::data_transfer::NullDragTransport),
+            Arc::new(flui_platform::transfer::data::NullDragTransport),
             Arc::new(|| {}),
         );
         let representations: Arc<[RepresentationDescriptor]> =
@@ -3723,7 +3723,7 @@ impl HoveringDrag {
     fn move_to(&self, laid: &LaidOut, y: f64) {
         use flui_foundation::geometry::Point;
         use flui_platform::DragDropEvent;
-        use flui_platform::transfer::data_transfer::TransferActions;
+        use flui_platform::transfer::data::TransferActions;
 
         let path = Self::path_at(laid, y);
         laid.enter_owner_scope(|| {

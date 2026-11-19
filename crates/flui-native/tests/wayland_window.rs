@@ -221,7 +221,7 @@ impl WindowFixture for WaylandFixture {
 
     /// What a native Wayland window answers on any compositor: the input
     /// regions it honours do not depend on the globals beside `wl_seat`.
-    fn input_capabilities(&self) -> flui_platform::input::input_capabilities::InputCapabilities {
+    fn input_capabilities(&self) -> flui_platform::input::capabilities::InputCapabilities {
         flui_native::input::availability::wayland(
             flui_native::input::availability::WaylandInputGlobals::default(),
         )

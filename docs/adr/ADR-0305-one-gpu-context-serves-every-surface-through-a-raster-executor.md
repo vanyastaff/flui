@@ -66,7 +66,7 @@ has neither. Evidence is at `e5ba8fe8f`.
 |---|---|
 | Each window builds a private instance, adapter, device and queue, its own pipeline set and its own glyph atlas | `crates/flui-engine/src/renderer.rs:836-890`, `:995-1009`; `crates/flui-engine/src/painter/mod.rs:213`, `:221` |
 | The instance takes its display from the first window's target; wgpu keeps it "for keepalive and validation", queries it with `expect` at every `create_surface`, and refuses a surface from another display | `renderer.rs:1550-1558`; `crates/flui-engine/src/window_target.rs:50-55`; `wgpu-core/src/instance.rs:56-62`, `:205-215` |
-| A retired window's target answers `Unavailable` from then on, so an instance holding it panics at the next surface it creates | `crates/flui-platform/src/window/surface_target.rs:28-56`; `crates/flui-native/src/window/linux/wayland.rs:2547-2575`; `crates/flui-native/src/window/linux/x11/window.rs:1180-1230` |
+| A retired window's target answers `Unavailable` from then on, so an instance holding it panics at the next surface it creates | `crates/flui-platform/src/surface_target.rs:28-56`; `crates/flui-native/src/window/linux/wayland.rs:2547-2575`; `crates/flui-native/src/window/linux/x11/window.rs:1180-1230` |
 | A surface is made only on the main thread (Apple) or the looper thread (Android) | `surface_target.rs:18-25` |
 | The lane sits behind `Arc<Mutex<_>>`, justified by callbacks that "require `Send` closures"; the registrations take none, and the frame driver beside it already holds a `std::rc::Weak` | `desktop.rs:245-252`, `:419-425`; the former `raster_lane.rs:72-81`; `crates/flui-app/src/app/runner/window_routes.rs:185-237`; `crates/flui-app/src/app/runner/window_install.rs:269` |
 | Eight production calls reach past the raster protocol into the backend | the former `raster_owner.rs:1258` and the table in §12 |
@@ -386,7 +386,7 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's
-  visible, minimised and occluded state (`crates/flui-platform/src/window/state.rs:150-166`). A
+  visible, minimised and occluded state (`WindowState::visible`, `mode` and `occluded`). A
   frame for a slot that is not shown applies its scene state and settles `NotShown`; the slot
   redraws in full when it is shown again. On one raster thread an acquire on a hidden window can
   wait out wgpu's second for every other window, and Metal ignores that timeout

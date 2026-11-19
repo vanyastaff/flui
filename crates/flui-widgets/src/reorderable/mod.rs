@@ -50,7 +50,7 @@ use flui_interaction::gesture::MultiDragAxis;
 use flui_interaction::gesture::PanClaim;
 use flui_objects::{Placement, PlacementSlot, SubtreeAnchor};
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::constraints::SliverConstraints;
 use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
 use flui_rendering::pipeline::WeakPipelineCell;
@@ -63,7 +63,7 @@ use crate::{
 };
 use flui_foundation::TextDirection;
 use flui_platform::input::keyboard::NamedKey;
-use flui_platform::transfer::data_transfer::TransferActions;
+use flui_platform::transfer::data::TransferActions;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;

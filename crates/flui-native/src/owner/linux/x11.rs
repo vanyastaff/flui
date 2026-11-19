@@ -78,13 +78,13 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::{Cursor, CursorError, CursorGrab, PlatformFailure};
 use std::sync::{Arc, Weak};
 
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::transfer::data_transfer::DragTransport;
+use flui_platform::transfer::data::DragTransport;
 use flui_platform::{
     Brightness, DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowId,
@@ -548,7 +548,7 @@ pub(crate) trait LoopDrag: DragTransport {
     /// its requests [`TransferError::SourceGone`], and the `INCR` answers
     /// the session wrote to it are let go of.
     ///
-    /// [`TransferError::SourceGone`]: flui_platform::transfer::data_transfer::TransferError::SourceGone
+    /// [`TransferError::SourceGone`]: flui_platform::transfer::data::TransferError::SourceGone
     fn window_destroyed(&self, window: xproto::Window);
 
     /// The windows whose press a session took since the last call, which

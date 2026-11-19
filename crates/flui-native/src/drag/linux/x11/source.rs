@@ -44,7 +44,7 @@
 
 use std::time::Duration;
 
-use flui_platform::transfer::data_transfer::{RepresentationIndex, TransferActions};
+use flui_platform::transfer::data::{RepresentationIndex, TransferActions};
 use flui_platform::transfer::drag::{
     DragError, OsDragEnd, OsDragEndHook, OsDragParts, OsDragProvider, OsDragRequest, OsDragStart,
     PlatformDragSource,

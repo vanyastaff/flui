@@ -176,11 +176,11 @@ pub enum PlatformInput {
     /// semantics of the pointer pipeline (capture, velocity) do not apply.
     DragDrop(DragDropEvent),
 
-    /// The surface's input capabilities ([`InputCapabilities`](crate::input::input_capabilities::InputCapabilities),
+    /// The surface's input capabilities ([`InputCapabilities`](crate::input::capabilities::InputCapabilities),
     /// ADR-0213). The first is delivered before any other input once the input callback is
     /// installed; each later one is a change (a device attached or removed, a session change),
     /// in order with the input around it.
-    Capabilities(crate::input::input_capabilities::InputCapabilities),
+    Capabilities(crate::input::capabilities::InputCapabilities),
 }
 
 impl PlatformInput {
@@ -227,7 +227,7 @@ impl PlatformInput {
 /// The push half of the data-transfer transport (ADR-0312): stage-1 arrival
 /// and stage-2/6 progress for a drag session over one window. The target's
 /// reply half flows the other way, through
-/// [`crate::transfer::data_transfer::DragTransport::update_drop_feedback`].
+/// [`crate::transfer::data::DragTransport::update_drop_feedback`].
 #[derive(Debug, Clone)]
 #[expect(
     clippy::exhaustive_enums,
@@ -238,9 +238,9 @@ pub enum DragDropEvent {
     /// actions the source currently permits.
     Entered {
         /// The stage-1 offer minted for this drag session.
-        offer: crate::transfer::data_transfer::DataTransferOffer,
+        offer: crate::transfer::data::DataTransferOffer,
         /// Actions the source currently permits.
-        allowed: crate::transfer::data_transfer::TransferActions,
+        allowed: crate::transfer::data::TransferActions,
         /// Logical-pixel position when the backend knows it.
         position: Option<Point<f64>>,
     },
@@ -251,7 +251,7 @@ pub enum DragDropEvent {
         /// The live session's offer id.
         id: DataTransferId,
         /// Actions the source permits as of this event.
-        allowed: crate::transfer::data_transfer::TransferActions,
+        allowed: crate::transfer::data::TransferActions,
         /// Logical-pixel hover position.
         position: Point<f64>,
     },
@@ -263,7 +263,7 @@ pub enum DragDropEvent {
         /// The dropped session's offer id, redeemable for the payload.
         id: DataTransferId,
         /// The drop effect resolved and reported to the OS.
-        action: crate::transfer::data_transfer::TransferActions,
+        action: crate::transfer::data::TransferActions,
         /// Logical-pixel drop position when the backend knows it.
         position: Option<Point<f64>>,
     },

@@ -6,10 +6,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Point;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockKind, LockOutcome, LockTiming, PointMode,
-    TextStore, TextStoreEdit, TextStoreError, TextStoreRead, utf16::OffsetError,
-    utf16::Utf16Offset,
+    TextStore, TextStoreEdit, TextStoreError, TextStoreRead,
+    utf16::{OffsetError, Utf16Offset},
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 

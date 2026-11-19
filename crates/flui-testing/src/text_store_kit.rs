@@ -35,7 +35,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 pub use flui_interaction::testing::InMemoryTextStore;
-use flui_platform::text::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 
 /// The newest kit version.
 ///
@@ -291,9 +291,9 @@ impl TextStoreFixture for InMemoryFixture {
     }
 
     fn app_replace_all(&mut self, text: &str) {
-        let whole = flui_platform::text::text_store::utf16::Utf16Range::try_new(
-            flui_platform::text::text_store::utf16::Utf16Offset::ZERO,
-            flui_platform::text::text_store::utf16::utf16_len(&self.store.text()),
+        let whole = flui_platform::text::store::utf16::Utf16Range::try_new(
+            flui_platform::text::store::utf16::Utf16Offset::ZERO,
+            flui_platform::text::store::utf16::utf16_len(&self.store.text()),
         )
         .expect("BUG: zero precedes every length");
         self.store.app_replace(whole, text);
@@ -302,9 +302,9 @@ impl TextStoreFixture for InMemoryFixture {
     fn application_editor(&self) -> Rc<dyn Fn(&str)> {
         let store = Rc::clone(&self.store);
         Rc::new(move |text| {
-            let whole = flui_platform::text::text_store::utf16::Utf16Range::try_new(
-                flui_platform::text::text_store::utf16::Utf16Offset::ZERO,
-                flui_platform::text::text_store::utf16::utf16_len(&store.text()),
+            let whole = flui_platform::text::store::utf16::Utf16Range::try_new(
+                flui_platform::text::store::utf16::Utf16Offset::ZERO,
+                flui_platform::text::store::utf16::utf16_len(&store.text()),
             )
             .expect("BUG: zero precedes every document length");
             store.app_replace(whole, text);

@@ -36,9 +36,9 @@ use flui_interaction::{
     pointer::HitTestHandle,
 };
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::pointer::{PointerSource, PressId};
-use flui_platform::transfer::data_transfer::TransferActions;
+use flui_platform::transfer::data::TransferActions;
 use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
 use flui_view::environment::GesturePolicy;

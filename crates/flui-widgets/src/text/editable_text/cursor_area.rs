@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Bounds;
 use flui_interaction::text_input::TextInputHandle;
-use flui_platform::text::text_store::OwnerCalls;
+use flui_platform::text::store::OwnerCalls;
 use flui_rendering::pipeline::PipelineCell;
 
 use super::bounds_from_rect;

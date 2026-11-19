@@ -35,15 +35,16 @@
 //! and the reference store is `flui_interaction::testing::InMemoryTextStore`
 //! (ADR-0151 §6, ADR-0264).
 
+mod contract;
 mod host;
 mod input_options;
 mod lock;
 mod owner_calls;
 mod projection;
 mod session;
-mod store;
 pub mod utf16;
 
+pub use contract::{EditCommand, TextStore, TextStoreChange, TextStoreObserver};
 pub use host::{
     CompositionEnd, SelectionUi, TextStoreHost, TextStoreHostError, commit_composition_in_place,
 };
@@ -61,4 +62,3 @@ pub use session::{
     Composition, PointMode, PressTarget, RangeRect, Selection, TextChange, TextStoreEdit,
     TextStoreRead, TextStoreStatus,
 };
-pub use store::{EditCommand, TextStore, TextStoreChange, TextStoreObserver};

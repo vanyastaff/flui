@@ -534,7 +534,7 @@ impl WindowsWindow {
             // devices attached before the handler hears its snapshot.
             let delivery = Arc::new(WindowDelivery::counting_frames(
                 handler,
-                flui_platform::input::input_capabilities::InputCapabilities::UNAVAILABLE,
+                flui_platform::input::capabilities::InputCapabilities::UNAVAILABLE,
                 frames.counter(),
             ));
             // What the window posts to itself goes to the owner thread's
@@ -1399,11 +1399,11 @@ impl crate::host_window::HostWindow for WindowsWindow {
     /// destroyed; a host read before that answers
     /// [`TextStoreHostError::Unsupported`] from then on.
     ///
-    /// [`TextStoreHostError::Unsupported`]: flui_platform::text::text_store::TextStoreHostError::Unsupported
+    /// [`TextStoreHostError::Unsupported`]: flui_platform::text::store::TextStoreHostError::Unsupported
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()
@@ -1697,7 +1697,7 @@ impl PlatformWindow for WindowsWindow {
     /// another window by then.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input::input_regions::InputRegion],
+        regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), Unsupported> {
         let gone = Unsupported::new(UnsupportedReason::NoWindow);
         if !self.handle_is_its_window() {

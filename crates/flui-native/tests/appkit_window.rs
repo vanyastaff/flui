@@ -294,9 +294,7 @@ mod cases {
 
         /// The AppKit input table: an AppKit window hands the system no input
         /// region.
-        fn input_capabilities(
-            &self,
-        ) -> flui_platform::input::input_capabilities::InputCapabilities {
+        fn input_capabilities(&self) -> flui_platform::input::capabilities::InputCapabilities {
             flui_native::input::availability::macos()
         }
 

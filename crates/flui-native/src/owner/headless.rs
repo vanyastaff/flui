@@ -16,9 +16,7 @@ use std::{
 use crate::host::MemoryClipboard;
 use flui_foundation::geometry::Point;
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
-use flui_platform::transfer::data_transfer::{
-    DropFeedback, RepresentationDescriptor, TransferActions,
-};
+use flui_platform::transfer::data::{DropFeedback, RepresentationDescriptor, TransferActions};
 use flui_platform::transfer::drag::{
     OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource,
 };
@@ -48,7 +46,7 @@ type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 /// Shared with every window, so `Send + Sync`; what it builds is owner-thread
 /// state.
 pub(crate) type TextStoreHostFactory =
-    Arc<dyn Fn() -> std::rc::Rc<dyn flui_platform::text::text_store::TextStoreHost> + Send + Sync>;
+    Arc<dyn Fn() -> std::rc::Rc<dyn flui_platform::text::store::TextStoreHost> + Send + Sync>;
 
 /// What the headless host's table names for its loop (ADR-0151 §10): the
 /// displays a platform has before a test lays out its own, the channel its
@@ -139,7 +137,7 @@ pub(crate) trait SimulatedDevices: Send {
     ) -> Option<flui_platform::input::pointer::PointerDeviceChange>;
 
     /// The kinds of the devices attached now.
-    fn present(&self) -> flui_platform::input::input_capabilities::PointerKindSet;
+    fn present(&self) -> flui_platform::input::capabilities::PointerKindSet;
 }
 
 /// The table the simulated system mints its drag offers in, which the drag
@@ -339,7 +337,7 @@ pub(crate) struct HeadlessState {
     /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)); `None`: push-model.
     pub(crate) text_store_host: Option<TextStoreHostFactory>,
     /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
-    pub(crate) input_availability: flui_platform::input::input_capabilities::InputCapabilities,
+    pub(crate) input_availability: flui_platform::input::capabilities::InputCapabilities,
     /// The attached input devices, as the table made them
     /// ([`HeadlessHost::devices`]).
     pub(crate) devices: Box<dyn SimulatedDevices>,
@@ -717,10 +715,9 @@ impl host::Launch for HeadlessLoop {
 }
 
 /// What the headless backend implements unless a test says otherwise.
-const fn default_input_availability() -> flui_platform::input::input_capabilities::InputCapabilities
-{
+const fn default_input_availability() -> flui_platform::input::capabilities::InputCapabilities {
     use flui_platform::Availability::Native;
-    flui_platform::input::input_capabilities::InputCapabilities::builder()
+    flui_platform::input::capabilities::InputCapabilities::builder()
         .pen(Native)
         .precise_scroll(Native)
         .trackpad_gestures(Native)
@@ -1148,8 +1145,8 @@ mod tests {
             None
         }
 
-        fn present(&self) -> flui_platform::input::input_capabilities::PointerKindSet {
-            flui_platform::input::input_capabilities::PointerKindSet::empty()
+        fn present(&self) -> flui_platform::input::capabilities::PointerKindSet {
+            flui_platform::input::capabilities::PointerKindSet::empty()
         }
     }
 

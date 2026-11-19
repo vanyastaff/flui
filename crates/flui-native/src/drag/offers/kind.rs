@@ -3,7 +3,7 @@
 //! types, beside the X text forms (`UTF8_STRING`, `STRING`, `TEXT`) that
 //! toolkits offer on both. The X11 and Wayland drags share it.
 
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     Mime, TransferError, TransferFormat, TransferLimits, TransferPayload,
 };
 

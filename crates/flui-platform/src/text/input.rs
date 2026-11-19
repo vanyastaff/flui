@@ -25,7 +25,7 @@ use flui_foundation::geometry::Bounds;
 ///
 /// This trait only carries the platform *composition* controls
 /// (enable/disable IME, place the candidate window). The document the input
-/// method reads and edits is the field's [`TextStore`](crate::text::text_store::TextStore)
+/// method reads and edits is the field's [`TextStore`](crate::text::store::TextStore)
 /// (ADR-0090), attached through `flui-interaction`'s presentation-owned
 /// text-input owner, which projects incoming [`ImeEvent`](crate::ImeEvent)s onto
 /// it. A backend cannot hold that store through this trait yet: the trait is
@@ -58,5 +58,5 @@ pub trait PlatformTextInput: Send + Sync {
     /// Required, with no default: a backend that ignored it would let a
     /// password reach input-method learning without a trace. One with
     /// nothing to apply it to says why in an empty body.
-    fn set_field_status(&self, status: crate::text::text_store::TextStoreStatus);
+    fn set_field_status(&self, status: crate::text::store::TextStoreStatus);
 }

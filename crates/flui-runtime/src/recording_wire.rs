@@ -30,8 +30,7 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_platform::Availability;
-use flui_platform::input::input_capabilities::{InputCapabilities, PointerKindSet};
-use flui_platform::input::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
+use flui_platform::input::capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::input::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
@@ -44,7 +43,8 @@ use flui_platform::input::pointer::{
     ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TangentialPressure,
     TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
-use flui_platform::transfer::data_transfer::{
+use flui_platform::input::regions::{CaptionButton, InputRegionKind, ResizeEdge};
+use flui_platform::transfer::data::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
 use flui_platform::{

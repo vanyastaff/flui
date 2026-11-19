@@ -40,7 +40,7 @@ mod cases {
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::input::keyboard::{Code, Key, KeyPress, KeyState};
     use flui_platform::input::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
     use flui_platform::transfer::drag::{

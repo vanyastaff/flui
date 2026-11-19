@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, TransferActions,
     TransferFormat,
 };
@@ -40,7 +40,7 @@ fn plan(
 }
 
 fn offer_of(
-    representations: Vec<flui_platform::transfer::data_transfer::RepresentationDescriptor>,
+    representations: Vec<flui_platform::transfer::data::RepresentationDescriptor>,
 ) -> DataTransferOffer {
     DataTransferOffer::new(
         DataTransferId::new_gen(0, flui_foundation::generation::Generation::FIRST),

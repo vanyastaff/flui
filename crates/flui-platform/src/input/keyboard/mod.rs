@@ -7,7 +7,7 @@
 //! and [`Code`] are generated from the W3C value lists by `cargo xtask key-vocabulary`, so a key
 //! the specification adds after the last regeneration arrives as `Unidentified`, a documented
 //! loss rather than a silent one. Text input does not travel here: an input method edits the
-//! focused field's [`TextStore`](crate::text::text_store::TextStore) (ADR-0090).
+//! focused field's [`TextStore`](crate::text::store::TextStore) (ADR-0090).
 
 #[rustfmt::skip]
 mod code;

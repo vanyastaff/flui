@@ -55,7 +55,7 @@ mod tests;
 /// and out of global memory. When that loop asks for frames is the
 /// owner's (`owner::modal_pace`).
 ///
-/// [`TransferActions`]: flui_platform::transfer::data_transfer::TransferActions
+/// [`TransferActions`]: flui_platform::transfer::data::TransferActions
 #[forbid(unsafe_code)]
 mod crossing {
     use std::path::PathBuf;
@@ -63,7 +63,7 @@ mod crossing {
 
     use flui_platform::UnsupportedReason;
     use flui_platform::input::pointer::PointerKind;
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
         TransferPayload,
     };
@@ -526,7 +526,7 @@ use flui_foundation::DataTransferId;
 use flui_platform::{
     Unsupported, UnsupportedReason,
     input::pointer::PointerKind,
-    transfer::data_transfer::{
+    transfer::data::{
         DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor,
         RepresentationIndex, TransferError, TransferLimits, TransferRequest,
     },

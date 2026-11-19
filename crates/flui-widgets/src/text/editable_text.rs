@@ -31,7 +31,7 @@ use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::{
     ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey,
 };
-use flui_platform::text::text_store::{EnterAction, OwnerCalls, TextInputOptions};
+use flui_platform::text::store::{EnterAction, OwnerCalls, TextInputOptions};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
@@ -285,7 +285,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// # IME composition
 ///
 /// The field is a text store the platform's input method pulls from
-/// ([`flui_platform::text::text_store::TextStore`], ADR-0090). On focus gain,
+/// ([`flui_platform::text::store::TextStore`], ADR-0090). On focus gain,
 /// `EditableTextState` attaches it as a [`TextInputClient`] through
 /// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states). The input method reads
@@ -1861,8 +1861,7 @@ impl ViewState<EditableText> for EditableTextState {
                     .replace(Rc::clone(&alive));
 
                 let last_sent_for_session = Rc::clone(&last_sent);
-                let store: Rc<dyn flui_platform::text::text_store::TextStore> =
-                    store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
+                let store: Rc<dyn flui_platform::text::store::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
                 // The backend may have restarted the IME session (`Enabled`
                 // re-fires on that restart) — clearing `last_sent`
                 // guarantees the new session gets a fresh rect instead of

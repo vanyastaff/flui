@@ -12,7 +12,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
 use flui_platform::input::pointer::{PointerSource, PressId};
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferPayload,
 };
@@ -1568,7 +1568,7 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
 
 /// A no-op view source: a window-scope view never asks the platform.
 fn no_source() -> Arc<dyn DragTransport> {
-    Arc::new(flui_platform::transfer::data_transfer::NullDragTransport)
+    Arc::new(flui_platform::transfer::data::NullDragTransport)
 }
 
 fn move_session(

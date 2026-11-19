@@ -11,7 +11,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::{
     Availability, CloseDecision, DispatchEventResult, EventTime, FrameRequest, ImeEvent,

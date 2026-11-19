@@ -12,7 +12,7 @@
 
 use std::num::NonZeroU8;
 
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::keyboard::Modifiers;
 use flui_platform::input::pointer::{
     MotionAcceleration, MotionDelta, PointerButton, PointerButtons, PointerEvent, PointerKind,

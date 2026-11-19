@@ -14,7 +14,7 @@
 //! - ends below that count; combined mode ends on the final contact.
 
 use crate::containment::keep_first;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     f64::consts::{PI, TAU},

@@ -12,7 +12,7 @@ use super::{
     encode_file_drop, encode_html, encode_text, identity_descriptor, native_format,
     offer_representations, os_loop_buttons, transfer_format,
 };
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     Mime, TransferActions, TransferError, TransferFormat, TransferPayload,
 };
 use flui_platform::transfer::drag::IDENTITY_ESSENCE;

@@ -5,7 +5,7 @@
 //! runs on every host; the iOS responder answers UIKit's trait getters from
 //! it.
 
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputPurpose,
     TextStoreStatus,
 };
@@ -163,7 +163,7 @@ pub(crate) const fn keyboard_traits(status: TextStoreStatus) -> KeyboardTraits {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::text::text_store::{
+    use flui_platform::text::store::{
         Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions,
         TextInputPurpose, TextStoreStatus,
     };

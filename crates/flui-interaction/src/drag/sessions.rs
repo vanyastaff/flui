@@ -12,7 +12,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
-use flui_platform::transfer::data_transfer::{DataTransferOffer, TransferActions};
+use flui_platform::transfer::data::{DataTransferOffer, TransferActions};
 use flui_platform::transfer::drag::{
     AllowedActions, DragReach, DragSessionKey, OsDragRequest, OsDragStart, ProcessNonce,
 };

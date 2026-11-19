@@ -15,7 +15,7 @@ use flui_objects::RenderEditable;
 use flui_painting::Alignment;
 use flui_painting::typography::TextStyle;
 use flui_platform::TargetPlatform;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     EditCommand, LockGrant, LockTiming, PressTarget, SelectionUi, TextStore, TextStoreRead,
 };
 use flui_testing::replay::PointerScript;
@@ -493,7 +493,7 @@ pub(crate) fn a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved() {
         .expect("the focused field's store is served");
     let notices = Rc::new(CountedNotices::default());
     store.set_observer(Some(
-        Rc::clone(&notices) as Rc<dyn flui_platform::text::text_store::TextStoreObserver>
+        Rc::clone(&notices) as Rc<dyn flui_platform::text::store::TextStoreObserver>
     ));
     harness.tick();
     let shown = || {
@@ -583,8 +583,8 @@ struct CountedNotices {
     moves: Cell<usize>,
 }
 
-impl flui_platform::text::text_store::TextStoreObserver for CountedNotices {
-    fn text_changed(&self, _change: flui_platform::text::text_store::TextChange) {}
+impl flui_platform::text::store::TextStoreObserver for CountedNotices {
+    fn text_changed(&self, _change: flui_platform::text::store::TextChange) {}
     fn selection_changed(&self) {}
     fn layout_changed(&self) {
         self.layouts.set(self.layouts.get() + 1);
@@ -618,7 +618,7 @@ pub(crate) fn typing_moves_the_caret_and_only_a_moved_field_says_it_moved() {
         .expect("the focused field's store is served");
     let notices = Rc::new(CountedNotices::default());
     store.set_observer(Some(
-        Rc::clone(&notices) as Rc<dyn flui_platform::text::text_store::TextStoreObserver>
+        Rc::clone(&notices) as Rc<dyn flui_platform::text::store::TextStoreObserver>
     ));
 
     for text in ["a", "ab", "abc"] {

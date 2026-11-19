@@ -150,7 +150,7 @@ pub use flui_interaction::{
     },
     ids::PointerId,
 };
-pub use flui_platform::input::input_capabilities::PointerKindSet;
+pub use flui_platform::input::capabilities::PointerKindSet;
 // A drag's rail and a transform's locked components (ADR-0208 §4), which
 // `widgets::DragSlot` and `widgets::TransformSlot` take, and the swipe.
 pub use flui_interaction::gesture::{AxisLock, TransformLock};
@@ -168,7 +168,7 @@ pub mod drag {
         DragSession, DragStart, DragTrigger, DragView, DropReceiver, DropReceiverSlot, LazyPayload,
         MoveOutcome, SpringLoading,
     };
-    pub use flui_platform::transfer::data_transfer::TransferActions;
+    pub use flui_platform::transfer::data::TransferActions;
 }
 /// A widget's haptics capability, from `LifecycleContext::haptics`
 /// (ADR-0210); unstable, under the `unstable-input` feature.

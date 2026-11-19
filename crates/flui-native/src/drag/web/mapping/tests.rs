@@ -14,7 +14,7 @@ use super::{
 };
 use crate::drag::offers::{format_of, payload_of_bytes};
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferPayload,
 };

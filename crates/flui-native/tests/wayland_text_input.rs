@@ -40,8 +40,8 @@ mod cases {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
-    use flui_platform::text::text_store::{Composition, Selection, TextStore};
+    use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
+    use flui_platform::text::store::{Composition, Selection, TextStore};
     use flui_testing::text_store_kit::InMemoryTextStore;
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
     use wayland_client::protocol::wl_seat::WlSeat;

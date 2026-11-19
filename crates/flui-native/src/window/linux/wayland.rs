@@ -105,7 +105,7 @@ mod toplevel {
 
     use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::capability::{PortalParent, Resolver};
-    use flui_platform::input::input_capabilities::InputCapabilities;
+    use flui_platform::input::capabilities::InputCapabilities;
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, Cursor, CursorError, CursorGrab,
         PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
@@ -1986,7 +1986,7 @@ mod toplevel {
         /// keeps out are none a Wayland compositor lets a window exclude.
         fn set_input_regions(
             &self,
-            regions: &[flui_platform::input::input_regions::InputRegion],
+            regions: &[flui_platform::input::regions::InputRegion],
         ) -> Result<(), Unsupported> {
             if self.closed.get() {
                 return Err(Unsupported::new(UnsupportedReason::NoWindow));
@@ -2134,7 +2134,7 @@ mod toplevel {
         fn text_store_host(
             &self,
             _owner: OwnerThreadToken,
-        ) -> Option<Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
+        ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
             self.facets
                 .text
                 .window_text_input()

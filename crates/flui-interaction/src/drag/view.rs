@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };

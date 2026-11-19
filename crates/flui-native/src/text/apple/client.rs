@@ -32,14 +32,14 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
-use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text::text_store::{
+use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::store::{
     Composition, CompositionEnd, LockGrant, LockTiming, OwnerCalls, PointMode, Selection,
     SelectionUi, TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreError,
     TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
 };
 #[cfg(any(target_os = "ios", test))]
-use flui_platform::text::text_store::{EditCommand, PressTarget};
+use flui_platform::text::store::{EditCommand, PressTarget};
 
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::text::host_queue::{HostQueue, MirrorHostOp};
@@ -199,7 +199,7 @@ fn scalar_range(
     at: Utf16Offset,
     backward: bool,
 ) -> Option<Utf16Range> {
-    use flui_platform::text::text_store::utf16::OffsetError;
+    use flui_platform::text::store::utf16::OffsetError;
 
     let valid = |range: Utf16Range| -> Result<(), TextStoreError> {
         match session.text(range) {

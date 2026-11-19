@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::text_input::LockArbiter;
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore, TextStoreError,
 };
 

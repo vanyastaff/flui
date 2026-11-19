@@ -18,7 +18,7 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::pointer::DeviceId;
 use std::{
     cell::RefCell,

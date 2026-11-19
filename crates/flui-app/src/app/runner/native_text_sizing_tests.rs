@@ -317,7 +317,7 @@ fn acquisition_without_progress_releases_document_edits(
         PresentationDispatcher, RuntimeTask, dispatch_platform_ui_runtime,
     };
     use flui_interaction::testing::InMemoryTextStore;
-    use flui_platform::text::text_store::{LockGrant, LockOutcome, LockTiming, TextStore};
+    use flui_platform::text::store::{LockGrant, LockOutcome, LockTiming, TextStore};
     installed_capture(move |record, _, _, binding| {
         let store = InMemoryTextStore::new("pending");
         let attached = Rc::clone(&store);

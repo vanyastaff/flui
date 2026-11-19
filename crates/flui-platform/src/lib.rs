@@ -5,7 +5,7 @@
 //!
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`](haptics::PlatformHaptics) and
 //!   the data-transfer transport
-//!   ([`transfer::data_transfer::DragTransport`], ADR-0312);
+//!   ([`transfer::data::DragTransport`], ADR-0312);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayDescription`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
@@ -13,11 +13,11 @@
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
 //!   the directory an application's values live in ([`AppDataDir`]);
-//! - the text store an input method pulls from ([`TextStore`](text::text_store::TextStore) and the rest of
-//!   [`text::text_store`], ADR-0090);
+//! - the text store an input method pulls from ([`TextStore`](text::store::TextStore) and the rest of
+//!   [`text::store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
-//!   ([`input::input_capabilities`], ADR-0213);
+//!   ([`input::capabilities`], ADR-0213);
 //! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`],
@@ -73,7 +73,7 @@
 //!
 //!     fn discard_composition(&self) {}
 //!
-//!     fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
+//!     fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {
@@ -117,7 +117,12 @@
 // not an area of their own. Each item has one public path: the everyday names
 // are re-exported at the root from an area's private modules, and the rest
 // keep the path of the area's public module (`input::pointer`,
-// `text::text_store`, `transfer::drag`, `window::os_options`). The areas
+// `text::store`, `transfer::drag`, `window::os_options`). The exceptions are
+// items another crate defines and this contract's signatures name, re-exported
+// so a reader of the contract finds them beside it: `flui-foundation`'s
+// `PressId` (`input::pointer::PressId`), `FirstPanic` (`capability::FirstPanic`)
+// and `MemoryPressureLevel` (at the root), and `cursor-icon`'s `CursorIcon` (at
+// the root, ADR-0089). The areas
 // import in one direction: `window` names `input`, `text`, `transfer`,
 // `haptics`, `display` and `preferences`; `input` names `text` and
 // `transfer`; `haptics` names `input`. `window` and `capability` still name

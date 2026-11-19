@@ -35,9 +35,7 @@
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 use smallvec::SmallVec;
 
-pub use flui_platform::input::input_regions::{
-    CaptionButton, InputRegion, InputRegionKind, ResizeEdge,
-};
+pub use flui_platform::input::regions::{CaptionButton, InputRegion, InputRegionKind, ResizeEdge};
 
 /// Where a render object writes its input regions for one frame, in its own local
 /// coordinates. Only the pipeline creates one.

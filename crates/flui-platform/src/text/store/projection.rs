@@ -11,9 +11,9 @@ use std::rc::Rc;
 
 use crate::ImeEvent;
 
+use super::contract::TextStore;
 use super::lock::{LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{Composition, Selection, TextStoreEdit};
-use super::store::TextStore;
 use super::utf16::{self, Utf16Offset, Utf16Range};
 
 /// The edits one event makes, run inside the grant.

@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CompositionEnd, LockGrant, LockOutcome, LockTiming, SelectionUi, TextStore, TextStoreHost,
     TextStoreHostError,
 };

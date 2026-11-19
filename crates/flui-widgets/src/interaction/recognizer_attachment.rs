@@ -63,9 +63,9 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
             .map_or(CancelOutcome::Idle, |owner| owner.cancel())
     }
 
-    fn allowed_devices(&self) -> flui_platform::input::input_capabilities::PointerKindSet {
+    fn allowed_devices(&self) -> flui_platform::input::capabilities::PointerKindSet {
         self.owner().map_or(
-            flui_platform::input::input_capabilities::PointerKindSet::all(),
+            flui_platform::input::capabilities::PointerKindSet::all(),
             |owner| owner.allowed_devices(),
         )
     }

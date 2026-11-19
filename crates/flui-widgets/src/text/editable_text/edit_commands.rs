@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use flui_interaction::focus::FocusNode;
 use flui_painting::text_boundaries::{WordSegment, word_segments_from};
-use flui_platform::text::text_store::EditCommand;
+use flui_platform::text::store::EditCommand;
 use flui_view::EventContext;
 
 use super::clipboard::ClipboardTextAction;

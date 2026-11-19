@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Axis;
 use flui_platform::TargetPlatform;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, View};

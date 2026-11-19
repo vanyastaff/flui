@@ -108,11 +108,11 @@ pub fn mount_with_ime_on(root: impl View, platform: flui_platform::TargetPlatfor
 
 /// [`mount_with_ime_on`], with a host that answers `ui` for who draws the
 /// focused field's selection UI, as iOS's host answers
-/// [`SelectionUi::Platform`](flui_platform::text::text_store::SelectionUi::Platform).
+/// [`SelectionUi::Platform`](flui_platform::text::store::SelectionUi::Platform).
 pub fn mount_with_selection_ui_on(
     root: impl View,
     platform: flui_platform::TargetPlatform,
-    ui: flui_platform::text::text_store::SelectionUi,
+    ui: flui_platform::text::store::SelectionUi,
 ) -> Harness {
     mount_in(
         root,
@@ -337,7 +337,7 @@ impl Harness {
     /// # Panics
     ///
     /// As [`Self::cursor_area_calls`].
-    pub fn field_status_calls(&self) -> Vec<flui_platform::text::text_store::TextStoreStatus> {
+    pub fn field_status_calls(&self) -> Vec<flui_platform::text::store::TextStoreStatus> {
         self.host
             .ui_runtime()
             .window()
@@ -368,7 +368,7 @@ impl Harness {
     /// # Panics
     ///
     /// As [`Self::store_host_calls`].
-    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::text::text_store::TextStore>> {
+    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::text::store::TextStore>> {
         self.store_host().focused_store()
     }
 

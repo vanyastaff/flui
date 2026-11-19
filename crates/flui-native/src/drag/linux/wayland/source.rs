@@ -33,7 +33,7 @@ use std::collections::VecDeque;
 use std::os::fd::OwnedFd;
 use std::sync::Weak;
 
-use flui_platform::transfer::data_transfer::{RepresentationIndex, TransferActions};
+use flui_platform::transfer::data::{RepresentationIndex, TransferActions};
 use flui_platform::transfer::drag::{
     DragError, OsDragEnd, OsDragEndHook, OsDragParts, OsDragProvider, OsDragRequest, OsDragStart,
     PlatformDragSource,

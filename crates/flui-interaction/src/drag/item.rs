@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     RepresentationDescriptor, TransferError, TransferFormat, TransferPayload,
 };
 

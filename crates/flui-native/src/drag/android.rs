@@ -48,7 +48,7 @@
 mod clip {
     use std::sync::Arc;
 
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
         TransferLimits, TransferPayload,
     };
@@ -387,7 +387,7 @@ mod drops {
 
     use flui_foundation::{DataTransferId, IdMint, geometry::Point, panic::FirstPanic};
     use flui_platform::DragDropEvent;
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         DataTransferOffer, DropFeedback, RepresentationDescriptor, RepresentationIndex,
         TransferActions, TransferCompleter, TransferError, TransferLimits, TransferRequest,
     };
@@ -1158,7 +1158,7 @@ use flui_foundation::{DataTransferId, panic::FirstPanic};
 #[cfg(target_os = "android")]
 use flui_platform::{
     Unsupported, UnsupportedReason,
-    transfer::data_transfer::{
+    transfer::data::{
         DragTransport, DropFeedback, RepresentationIndex, TransferActions, TransferError,
         TransferLimits, TransferPayload, TransferRequest,
     },
@@ -1749,7 +1749,7 @@ impl PlatformDragSource for AndroidDragSource {
         }
         self.view.transfer().set_own(Some(allowed));
         let session = match key.representation().format {
-            flui_platform::transfer::data_transfer::TransferFormat::Custom { mime } => {
+            flui_platform::transfer::data::TransferFormat::Custom { mime } => {
                 mime.as_str().to_owned()
             }
             _ => String::new(),

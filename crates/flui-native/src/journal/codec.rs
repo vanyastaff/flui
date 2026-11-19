@@ -33,7 +33,7 @@ use flui_platform::input::keyboard::Modifiers;
 use flui_platform::input::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, TouchpadHoldPhase,
 };
-use flui_platform::text::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 use flui_platform::{
     AppTitleBar, Brightness, CapabilityAbsence, CloseDecision, ColorGamut, ControlsOffset,
     CursorGrab, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId,

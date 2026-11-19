@@ -25,7 +25,7 @@ use flui_interaction::drag::{
 };
 use flui_interaction::pointer::LocalPayloadTarget;
 use flui_objects::RenderMetaData;
-use flui_platform::transfer::data_transfer::{DropFeedback, TransferActions};
+use flui_platform::transfer::data::{DropFeedback, TransferActions};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::element::ElementKind;

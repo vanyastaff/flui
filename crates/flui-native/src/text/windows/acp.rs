@@ -24,10 +24,10 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     Composition, LockGrant, LockKind, LockOutcome, LockTiming, PointMode, Selection, TextChange,
-    TextStore, TextStoreEdit, TextStoreError, TextStoreRead, utf16::OffsetError,
-    utf16::Utf16Offset, utf16::Utf16Range,
+    TextStore, TextStoreEdit, TextStoreError, TextStoreRead,
+    utf16::{OffsetError, Utf16Offset, Utf16Range},
 };
 
 /// An HRESULT, as the number TSF reads.

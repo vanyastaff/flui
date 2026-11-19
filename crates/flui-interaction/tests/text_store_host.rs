@@ -12,7 +12,7 @@ use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::text_input::{
     TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
 };
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreHost,
     TextStoreHostError, project_ime_event,
 };
@@ -143,7 +143,7 @@ fn client(store: &Rc<InMemoryTextStore>) -> TextInputClient {
 /// Type "かな" after "ab" through the push projection, leaving it composing.
 fn composing_store() -> Rc<InMemoryTextStore> {
     let store = InMemoryTextStore::new("ab");
-    store.set_commit_gate(flui_platform::text::text_store::CommitGate::new());
+    store.set_commit_gate(flui_platform::text::store::CommitGate::new());
     let applied = project_ime_event(
         &*store,
         &ImeEvent::Preedit {
@@ -324,7 +324,7 @@ impl PlatformTextInput for Push {
             .push(if allowed { "enable" } else { "disable" });
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
-    fn set_field_status(&self, _status: flui_platform::text::text_store::TextStoreStatus) {}
+    fn set_field_status(&self, _status: flui_platform::text::store::TextStoreStatus) {}
 
     fn discard_composition(&self) {
         self.0.lock().push("discard");

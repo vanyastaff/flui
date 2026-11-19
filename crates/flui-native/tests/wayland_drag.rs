@@ -51,7 +51,7 @@ mod cases {
 
     use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
     use flui_native::Platform as _;
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
         TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
     };

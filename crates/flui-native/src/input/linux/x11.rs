@@ -58,7 +58,7 @@ pub mod decode {
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::EventTime;
     use flui_platform::PlatformInput;
-    use flui_platform::input::input_capabilities::PointerKindSet;
+    use flui_platform::input::capabilities::PointerKindSet;
     use flui_platform::input::keyboard::Modifiers;
     use flui_platform::input::pointer::{
         MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerEvent, PointerKind,
@@ -1570,7 +1570,7 @@ mod live {
     use std::time::Duration;
 
     use cursor_icon::CursorIcon;
-    use flui_platform::input::input_capabilities::InputCapabilities;
+    use flui_platform::input::capabilities::InputCapabilities;
     use flui_platform::input::keyboard::{KeyPress, KeyState};
     use flui_platform::input::pointer::MotionDelta;
     use flui_platform::{

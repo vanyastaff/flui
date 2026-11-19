@@ -19,7 +19,10 @@
 //! This module is always built, so Cargo's feature unification cannot change
 //! it; the user-facing gate is the additive `unstable-input` feature on the
 //! `flui-sdk` and facade re-exports (ADR-0210 §9). [`PlatformHaptics`] and
-//! [`HapticFeedback`] are Stable and live at the crate root.
+//! [`HapticFeedback`] are Stable: the trait's path is
+//! `flui_platform::haptics::PlatformHaptics`, and the tier-1 kind, defined in
+//! this module's private `feedback`, has its one path at the crate root,
+//! `flui_platform::HapticFeedback`.
 //!
 //! # One method per tier, not one per kind
 //!

@@ -22,11 +22,12 @@ use flui_native::{HostWindow, Platform, WebPlatform};
 use flui_platform::Availability;
 use flui_platform::input::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::input::pointer::{PanZoomPhase, PointerEvent, PointerKind};
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
-    TextStoreHost, TextStoreObserver, TextStoreStatus, utf16::Utf16Offset, utf16::Utf16Range,
+    TextStoreHost, TextStoreObserver, TextStoreStatus,
+    utf16::{Utf16Offset, Utf16Range},
 };
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
 };
@@ -1832,8 +1833,8 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     assert_eq!(editor_hints(), r#"["none","off",null]"#);
     assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
     let plain = InMemoryTextStore::new("ab");
-    plain.set_text_input(flui_platform::text::text_store::TextInputOptions::new(
-        flui_platform::text::text_store::TextInputPurpose::Search,
+    plain.set_text_input(flui_platform::text::store::TextInputOptions::new(
+        flui_platform::text::store::TextInputPurpose::Search,
     ));
     canvas.host.focus_store(Some(as_store(&plain)));
     assert_eq!(editor_hints(), r#"["search","off","search"]"#);
@@ -1903,7 +1904,7 @@ fn completing_a_composition_in_the_hidden_editor_moves_no_focus() {
     assert_eq!(page_focus(), "editor");
     // The application commits the store's composition in place, as
     // `Abandoned` asks.
-    let committed = flui_platform::text::text_store::commit_composition_in_place(&*served, |_| {})
+    let committed = flui_platform::text::store::commit_composition_in_place(&*served, |_| {})
         .expect("the store commits");
     assert_eq!(committed, LockOutcome::Granted, "committed now");
     assert_eq!(store.composition(), None);
@@ -1934,10 +1935,8 @@ impl TextStore for RefusingStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<
-        flui_platform::text::text_store::PressTarget,
-        flui_platform::text::text_store::TextStoreError,
-    > {
+    ) -> Result<flui_platform::text::store::PressTarget, flui_platform::text::store::TextStoreError>
+    {
         self.inner.press_target_at(point)
     }
 
@@ -2040,8 +2039,8 @@ fn a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone() {
 /// browser) and how to capitalize and correct.
 #[wasm_bindgen_test]
 fn the_hidden_editor_states_each_purpose_and_enter_action() {
-    use flui_platform::text::text_store::TextInputPurpose::{Email, Phone, Search, Text, Url};
-    use flui_platform::text::text_store::{
+    use flui_platform::text::store::TextInputPurpose::{Email, Phone, Search, Text, Url};
+    use flui_platform::text::store::{
         Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions, TextInputPurpose,
     };
 
@@ -2113,7 +2112,7 @@ fn the_hidden_editor_states_each_purpose_and_enter_action() {
 /// attribute with none.
 #[wasm_bindgen_test]
 fn a_page_canvas_gets_back_the_inputmode_and_the_style_it_had() {
-    use flui_platform::text::text_store::{EnterAction, TextInputOptions, TextInputPurpose};
+    use flui_platform::text::store::{EnterAction, TextInputOptions, TextInputPurpose};
 
     let canvas = HostedCanvas::open_on(bare_canvas);
     let store = InMemoryTextStore::new("ab");

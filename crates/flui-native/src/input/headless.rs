@@ -7,7 +7,7 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use flui_foundation::IdMint;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::pointer::{DeviceId, PointerDeviceChange, PointerKind};
 use flui_platform::{EventTime, PlatformInput};
 
@@ -32,7 +32,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn with_input_availability(
         self,
-        availability: flui_platform::input::input_capabilities::InputCapabilities,
+        availability: flui_platform::input::capabilities::InputCapabilities,
     ) -> Self {
         self.owner()
             .with_state(|state| state.input_availability = availability);

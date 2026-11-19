@@ -6,7 +6,7 @@ use std::error::Error;
 
 use flui_platform::haptics::HapticOutcome;
 use flui_platform::launch::LaunchError;
-use flui_platform::text::text_store::TextStoreHostError;
+use flui_platform::text::store::TextStoreHostError;
 use flui_platform::transfer::drag::DragError;
 use flui_platform::{
     AdmissionError, CursorError, InvalidPreference, PreferenceQueryError, StorageError,

@@ -981,9 +981,9 @@ type NestedLocks = Rc<RefCell<Vec<String>>>;
 /// run when the dispatch returns.
 fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
     use flui_interaction::testing::InMemoryTextStore;
-    use flui_platform::text::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, TextStore, utf16::Utf16Offset,
-        utf16::Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let owner = OwnerHost::new();

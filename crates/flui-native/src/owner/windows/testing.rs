@@ -11,7 +11,7 @@ use std::sync::Arc;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 
 use flui_foundation::DataTransferId;
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DragTransport, DropFeedback, NullDragTransport, RepresentationIndex, TransferLimits,
     TransferRequest,
 };
@@ -33,7 +33,7 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::sources::SystemPreferenceSource;
-use flui_platform::text::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 
 /// The hooks of a test host's window class, in the order the class's
 /// procedure offers them a message.
@@ -314,7 +314,7 @@ pub(crate) fn created_window() -> CreatedWindow {
         scale: super::WindowScale::unscaled(),
         delivery: Arc::new(crate::owner::window_delivery::WindowDelivery::new(
             flui_testing::window_handler::RecordingWindowHandler::new(),
-            flui_platform::input::input_capabilities::InputCapabilities::UNAVAILABLE,
+            flui_platform::input::capabilities::InputCapabilities::UNAVAILABLE,
         )),
         app_hooks: Rc::new(std::cell::RefCell::new(super::AppHooks::new(
             Arc::new(AppDelivery::new()),

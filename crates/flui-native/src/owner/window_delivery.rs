@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::{
     CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
     WindowHandler,
@@ -475,8 +475,8 @@ impl WindowDelivery {
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     pub(crate) fn journaled_store_host(
         &self,
-        host: Rc<dyn flui_platform::text::text_store::TextStoreHost>,
-    ) -> Rc<dyn flui_platform::text::text_store::TextStoreHost> {
+        host: Rc<dyn flui_platform::text::store::TextStoreHost>,
+    ) -> Rc<dyn flui_platform::text::store::TextStoreHost> {
         if !self.journal.is_reporting() || !self.store_journal.is_owner_thread() {
             return host;
         }

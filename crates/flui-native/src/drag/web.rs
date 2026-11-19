@@ -45,7 +45,7 @@
 /// while the data itself is still out of reach.
 #[forbid(unsafe_code)]
 mod mapping {
-    use flui_platform::transfer::data_transfer::{
+    use flui_platform::transfer::data::{
         DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
         TransferPayload,
     };
@@ -286,7 +286,7 @@ use flui_foundation::{DataTransferId, geometry::Point};
 #[cfg(target_arch = "wasm32")]
 use flui_platform::{
     DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
-    transfer::data_transfer::{
+    transfer::data::{
         DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
         RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
         TransferPayload, TransferRequest,

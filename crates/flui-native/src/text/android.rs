@@ -65,10 +65,10 @@ pub(crate) mod ime {
 
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::text::text_store::{
+    use flui_platform::text::store::{
         Capitalization, Composition, Correction, EnterAction, Selection, TextInputPurpose,
-        TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus, utf16::Utf16Offset,
-        utf16::Utf16Range,
+        TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     use crate::text::ime::{diff, document_text};
@@ -865,7 +865,7 @@ mod input {
     use std::sync::Arc;
 
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::text::text_store::{
+    use flui_platform::text::store::{
         CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
     };

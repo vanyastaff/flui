@@ -266,7 +266,7 @@ fn presented_host_window(
 
 fn text_store_host_of(
     window: &Rc<dyn flui_native::HostWindow>,
-) -> Option<std::rc::Rc<dyn flui_platform::text::text_store::TextStoreHost>> {
+) -> Option<std::rc::Rc<dyn flui_platform::text::store::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
@@ -793,25 +793,25 @@ mod tests {
     /// headless platform's factory built it.
     struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
 
-    impl flui_platform::text::text_store::TextStoreHost for FocusLog {
+    impl flui_platform::text::store::TextStoreHost for FocusLog {
         fn focus_store(
             &self,
-            store: Option<std::rc::Rc<dyn flui_platform::text::text_store::TextStore>>,
+            store: Option<std::rc::Rc<dyn flui_platform::text::store::TextStore>>,
         ) {
             self.0.lock().push(store.is_some());
         }
 
         fn complete_composition(
             &self,
-            _: &std::rc::Rc<dyn flui_platform::text::text_store::TextStore>,
+            _: &std::rc::Rc<dyn flui_platform::text::store::TextStore>,
         ) -> Result<
-            flui_platform::text::text_store::CompositionEnd,
-            flui_platform::text::text_store::TextStoreHostError,
+            flui_platform::text::store::CompositionEnd,
+            flui_platform::text::store::TextStoreHostError,
         > {
-            Ok(flui_platform::text::text_store::CompositionEnd::Committed)
+            Ok(flui_platform::text::store::CompositionEnd::Committed)
         }
 
-        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::text::text_store::TextStore>) {}
+        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::text::store::TextStore>) {}
     }
 
     /// A pull-model window's host reaches the presentation the runner builds

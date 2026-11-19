@@ -13,7 +13,7 @@ use flui_native::{
     AppHandler, HostWindow, NativeClipboard, NativePrimarySelection, OpenWindowError,
     Platform, PlatformError,
 };
-use flui_platform::transfer::data_transfer::DragTransport;
+use flui_platform::transfer::data::DragTransport;
 use flui_platform::{
     Cursor, CursorError, DisplaySnapshot, PlatformWindow,
     AppDataDir, LaunchKey, SystemPreferences,
@@ -126,7 +126,7 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn set_frame_rate_hint(&self, _: flui_platform::FrameRateHint) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
-    fn set_input_regions(&self, _: &[flui_platform::input::input_regions::InputRegion]) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
+    fn set_input_regions(&self, _: &[flui_platform::input::regions::InputRegion]) -> Result<(), flui_platform::Unsupported> { Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)) }
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {

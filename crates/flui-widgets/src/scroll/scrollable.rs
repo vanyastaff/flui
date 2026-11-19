@@ -105,7 +105,7 @@ use flui_interaction::{
     gesture::{HoldEnd, HoldGestureRecognizer},
     pointer::{PointerDispatch, WheelPreferencesProvider},
 };
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey,
 };

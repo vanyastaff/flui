@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferError,
     TransferLimits, TransferRequest,
 };
@@ -42,7 +42,7 @@ use {
     crate::owner::headless::DragOver,
     crate::platform::HostPlatform,
     flui_foundation::geometry::Point,
-    flui_platform::transfer::data_transfer::{
+    flui_platform::transfer::data::{
         DataTransferOffer, TransferActions, TransferFormat, TransferPayload,
     },
     flui_platform::transfer::drag::{OsDragEnd, OsDragProvider},

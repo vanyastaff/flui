@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::{
     Availability, CloseDecision, DispatchEventResult, EventTime, FrameOutcome, FrameRequest,
     ImeEvent, PlatformInput, SurfaceChange, WindowHandler,

@@ -181,7 +181,7 @@ pub(crate) use tsf::TextServices;
 use std::rc::Rc;
 
 #[cfg(windows)]
-use flui_platform::text::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 #[cfg(windows)]
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(windows)]

@@ -7,7 +7,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.

@@ -32,8 +32,8 @@ use std::rc::Rc;
 use std::sync::Weak;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::text::text_store::TextStoreHost;
-use flui_platform::text::text_store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::store::TextStoreHost;
+use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::{Brightness, PlatformInput};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -84,7 +84,7 @@ pub(crate) trait ViewInput {
     /// what a press on a title bar the application draws is answered from.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input::input_regions::InputRegion],
+        regions: &[flui_platform::input::regions::InputRegion],
         scale: flui_foundation::geometry::DevicePixelRatio,
     );
 
@@ -927,7 +927,7 @@ pub(crate) unsafe fn with_content_view<R>(
 /// coordinates, at the window's `scale`.
 pub(crate) fn set_input_regions(
     view: &FluiContentView,
-    regions: &[flui_platform::input::input_regions::InputRegion],
+    regions: &[flui_platform::input::regions::InputRegion],
     scale: flui_foundation::geometry::DevicePixelRatio,
 ) {
     view.ivars().input.set_input_regions(regions, scale);

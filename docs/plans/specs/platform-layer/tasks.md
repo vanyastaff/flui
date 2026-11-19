@@ -2,7 +2,7 @@
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
   Из 134 задач серии 130 закрыты и 4 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `dea790fa9` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
+  `main` @ `bc2f0ec33` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
   исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
@@ -6368,27 +6368,32 @@ GPU-память простаивающего или невидимого окн
   создания), `platform_window`, `state`, `capabilities`, `placement`, `geometry`, `frame`,
   `insets`, `handler`, `surface_target`, `cursor`, `brightness`, `frame_request`,
   `os_options`; `input` — `event` (бывший `input.rs`: `PlatformInput`), `pointer`,
-  `keyboard`, `input_capabilities`, `input_regions`, `event_time`; `text` — `ime`, `input`
-  (бывший `text_input.rs`), `text_store`; `transfer` — `clipboard`, `data_transfer`, `drag`;
+  `keyboard`, `capabilities` (бывший `input_capabilities/`), `regions` (бывший
+  `input_regions.rs`), `event_time`; `text` — `ime`, `input` (бывший `text_input.rs`), `store`
+  (бывший `text_store/`, его `store.rs` стал `contract.rs`, чтобы модуль не звался как
+  родитель); `transfer` — `clipboard`, `data` (бывший `data_transfer.rs`), `drag`;
   `preferences` — с `locale` и `regional`; `haptics` — с `feedback` (бывший
-  `haptic_feedback.rs`); `host_notice.rs` стал `notice.rs`. Приватные модули, у которых имя
-  повторяло родителя, стали короче (`window_state` → `window::state`); публичные сохранили
-  имена. **Публичные пути.** Области `input`, `text`, `transfer`, `window` — публичные модули,
-  в их `mod.rs` только объявления; восемь публичных модулей переехали в свои области и
-  реэкспорта в корне не имеют: `flui_platform::input::{pointer, keyboard, input_capabilities,
-  input_regions}`, `flui_platform::text::text_store`, `flui_platform::transfer::{data_transfer,
+  `haptic_feedback.rs`); `host_notice.rs` стал `notice.rs`. Модуль, имя которого повторяло
+  путь области, стал короче (`window_state` → `window::state`, `input_capabilities` →
+  `input::capabilities`). **Публичные пути.** Области `input`, `text`, `transfer`, `window` —
+  публичные модули, в их `mod.rs` только объявления; восемь публичных модулей переехали в свои
+  области и реэкспорта в корне не имеют: `flui_platform::input::{pointer, keyboard,
+  capabilities, regions}`, `flui_platform::text::store`, `flui_platform::transfer::{data,
   drag}`, `flui_platform::window::os_options`. Имена, реэкспортированные в корне, остались
   (`flui_platform::WindowOptions`), и у каждого это единственный путь: они реэкспортируются из
-  приватных модулей областей. `Utf16Offset`, `Utf16Range` и `OffsetError` имеют один путь,
-  `text::text_store::utf16`. Пути фасада `flui::platform` и `flui-sdk` не изменились; в их
-  исходниках сменились только пути источника, а в списке `flui-sdk/tests/surface.rs` — те же
-  строки на новом месте сортировки. Все пользователи в 15 крейтах переписаны (ast-grep для
-  групп `use`, sed для прямых путей); фрагменты `changelog.d` прежних изменений оставлены как
-  запись тех изменений, новый — `changelog.d/platform-contract-by-area.md`. **Направление
-  импортов.** `window` → `input`, `text`, `transfer`, `haptics`, `display`, `preferences`;
-  `input` → `text`, `transfer`; `haptics` → `input`. Цикл `input` ↔ `transfer` снят:
-  `transfer::drag` берёт `PressId` из `flui-foundation`, где он определён, а не через
-  `input::pointer`, так что `transfer` не называет других областей. `PreferenceQueryError`,
+  приватных модулей областей. Исключения названы в `lib.rs` и `ARCHITECTURE.md`: предметы
+  других крейтов, которые называют подписи контракта, — `PressId`
+  (`input::pointer::PressId`), `FirstPanic` (`capability::FirstPanic`), `MemoryPressureLevel`
+  (в корне) из `flui-foundation` и `CursorIcon` из `cursor-icon` (в корне, ADR-0089).
+  `Utf16Offset`, `Utf16Range` и `OffsetError` имеют один путь, `text::store::utf16`. Пути фасада
+  `flui::platform` и `flui-sdk` не изменились; в их исходниках сменились только пути источника,
+  а в списке `flui-sdk/tests/surface.rs` — те же строки на новом месте сортировки. Все
+  пользователи в 15 крейтах переписаны (ast-grep для групп `use`, sed для прямых путей),
+  ожидающие выпуска фрагменты `changelog.d` называют новые пути, новый фрагмент —
+  `changelog.d/platform-contract-by-area.md`. **Направление импортов.** `window` → `input`,
+  `text`, `transfer`, `haptics`, `display`, `preferences`; `input` → `text`, `transfer`;
+  `haptics` → `input`. Цикл `input` ↔ `transfer` снят: `transfer::drag` берёт `PressId` из
+  `flui-foundation`, где он определён, а не через `input::pointer`. `PreferenceQueryError`,
   ошибка `PlatformWindow::gesture_geometry`, перенесена к трейту в `window/platform_window.rs`,
   чтобы `preferences` не называла `window`. Цикл `window` ↔ `capability` (`portal_parent`,
   `WindowRef`) был до переноса и записан в `docs/gaps.md` («The window and capability areas of
@@ -6396,32 +6401,12 @@ GPU-память простаивающего или невидимого окн
   заведён: по таблице ADR-0151 §2 модель меню приходит с первой реализацией и потребителем. В
   корне остались модули вне областей строки: `assets`, `backoff`, `environment`, `executor`,
   `flag_set`, `http`, `launch`, `launch_key`, `opened`, `owner_wait`, `sandbox`,
-  `system_failure`, `testing`. **Как проверено.** `cargo public-api -p flui-platform
-  --all-features` до (`origin/main` @ `dea790fa9`, 4119 строк) и после (4101 строка): если в
-  списке «до» заменить восемь старых путей модулей и три пути `text_store::{Utf16Offset,
-  Utf16Range, OffsetError}` новыми, наборы строк совпадают, кроме четырёх новых `pub mod
-  flui_platform::{input, text, transfer, window}`. Под старыми путями было 525 строк списка:
-  `pointer` 164,
-  `keyboard` 44, `input_capabilities` 57, `input_regions` 13, `text_store` 130,
-  `data_transfer` 63, `drag` 47, `os_options` 7. Два trybuild `.stderr` меняют только путь
-  исходника в примечании rustc (`src/window.rs` → `src/window/options.rs`,
-  `src/platform_window.rs` → `src/window/platform_window.rs`). На Windows `cargo heli clippy
-  --workspace --all-targets -- -D warnings` с `--all-features` и без — чисто; rustdoc `-p
-  flui-platform` с `-D warnings`, с фичами и без, — чисто; doctests `flui-platform` и
-  `flui-interaction` (`--all-features`) — зелёные. В WSL (Ubuntu, cargo без heli) `clippy
-  --workspace --all-targets --features flui-native/native-capture -- -D warnings` — чисто;
-  `cargo doc --no-deps --document-private-items -D warnings` с фичами `testing` по затронутым
-  крейтам — чисто (по всему рабочему пространству падает на `flui-native` и `flui-engine` на
-  ссылках в нетронутых местах, как и job `doc` на `main` @ `3b69e1860`); nightly `check
-  --locked --lib --tests` `flui-platform`, `flui-native`, `flui-system` под
-  `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android` — ни предупреждения,
-  под `wasm32-unknown-unknown` `--lib` чисто, а `--tests` падает на
-  `flui_platform::assets::DirectoryAssets` в `tests/assets.rs` (не тронут, так же на `main`).
-  trybuild `flui-platform` в WSL: оба изменённых случая проходят, три нетронутых расходятся
-  одинаково на ветке и на `origin/main` (окружение). nextest: `flui-platform --features
-  testing` 91/91, `flui-sdk` 13/13; прямые зависимые (`flui-animation`, `flui-app`, `flui-assets`, `flui-cli`, `flui-engine`, `flui-interaction`, `flui-native`, `flui-rendering`, `flui-runtime`, `flui-sdk`, `flui-system`, `flui-testing`, `flui-view`, `flui-widgets`, `flui-devtools`, `flui-hot-reload`) без вложенных наборов (`trybuild`, `nested-cargo`) — 3085 из 3089: три теста `agent::browser` у `flui-cli` и `the_driver_agent_contains_every_failure` у `flui-app` падают так же на `origin/main`; после слияния `dea790fa9` (#2867) `flui-platform`, `flui-runtime`, `flui-native`, `flui-testing`, `flui-sdk`, `flui-app` — 1610 из 1611 (тот же тест `flui-app`), clippy Windows с `--all-features` и без, clippy Linux и nightly `check` четырёх целей прогнаны снова. Набор фасада `thread_boundary_ui` (как
-  в CI) после слияния прошёл. `cargo heli xtask checks` (`key-vocabulary`, `recording-vocabulary`
-  читают новые пути), `typos` и `lychee` по изменённым документам — чисто.
+  `system_failure`, `testing`. Ссылки ADR на файлы с номерами строк, которые описывают код на
+  момент решения, названы по предмету и коммиту (ADR-0254, ADR-0151, ADR-0090, ADR-0305), а
+  таблицы улик, привязанные к коммиту (ADR-0305, ADR-0312), сохраняют пути того коммита.
+  **Как проверено.** `cargo public-api -p flui-platform --all-features` до (`origin/main` @ `bc2f0ec33`, 4119 строк) и после (4101 строка): если в списке «до» заменить восемь старых путей модулей новыми и три пути `text_store::{Utf16Offset, Utf16Range, OffsetError}` путями `text::store::utf16`, наборы строк совпадают, кроме четырёх новых `pub mod flui_platform::{input, text, transfer, window}`; под старыми путями было 525 строк списка: `pointer` 164, `keyboard` 44, `input_capabilities` 57, `input_regions` 13, `text_store` 130, `data_transfer` 63, `drag` 47, `os_options` 7. Два trybuild `.stderr` меняют только путь исходника в
+  примечании rustc (`src/window.rs` → `src/window/options.rs`, `src/platform_window.rs` →
+  `src/window/platform_window.rs`). На Windows `cargo heli clippy --workspace --all-targets -- -D warnings` с `--all-features` и без — чисто; rustdoc `-p flui-platform` с `-D warnings`, с фичами и без, — чисто; doctests `flui-platform` (`--all-features`) — зелёные; nextest `flui-platform --features testing` 91/91, `flui-sdk` 14/14 (с `the_public_surface_is_the_measured_list` и `compiler_guards`). В WSL (Ubuntu, cargo без heli) `clippy --workspace --all-targets --features flui-native/native-capture -- -D warnings` — чисто; nightly `check --locked --lib` `flui-platform` и `flui-native` под `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown` и `--lib --tests` с `flui-system` под Android — ни предупреждения; trybuild `flui-platform`: оба изменённых случая проходят, три нетронутых расходятся одинаково на ветке и на `origin/main` (окружение). До переименования четырёх модулей (тот же перенос с путями `input::input_capabilities`, `text::text_store`, …) прогнаны прямые зависимые (`flui-animation`, `flui-app`, `flui-assets`, `flui-cli`, `flui-engine`, `flui-interaction`, `flui-native`, `flui-rendering`, `flui-runtime`, `flui-sdk`, `flui-system`, `flui-testing`, `flui-view`, `flui-widgets`, `flui-devtools`, `flui-hot-reload`) без вложенных наборов — 3085 из 3089 (три `agent::browser` у `flui-cli` и `the_driver_agent_contains_every_failure` у `flui-app` падают так же на `origin/main`), набор фасада `thread_boundary_ui` и doctests `flui-interaction`; переименование меняет только пути, и clippy со всеми целями компилирует каждый их тест. `cargo heli xtask checks` (`key-vocabulary`, `recording-vocabulary` читают новые пути), `typos` и `lychee` по изменённым документам — чисто.
 - [x] **LY113** — #2639 (строки
   LY104–LY113, граф, счёт в шапке) и #2642. **Что запись говорит.** У каждой строки LY20–LY103,
   у которой на `main` есть работа, есть запись со слитыми PR, тестами и остатком; у LY58, LY60,

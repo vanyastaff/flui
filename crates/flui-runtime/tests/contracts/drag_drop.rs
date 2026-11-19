@@ -22,7 +22,7 @@ use flui_native::{
 };
 use flui_objects::RenderMetaData;
 use flui_platform::WindowOptions;
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
 use flui_platform::transfer::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};

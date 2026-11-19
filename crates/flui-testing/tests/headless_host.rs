@@ -580,7 +580,7 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
 fn the_headless_window_drops_input_regions_no_host_could_send() {
     use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
     use flui_platform::PlatformWindow as _;
-    use flui_platform::input::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{DeviceInputRegion, InputRegion, InputRegionKind};
 
     const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;
     let window = HeadlessWindow::new(40, 24);

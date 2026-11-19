@@ -805,7 +805,7 @@ fn a_title_is_shaped_and_rasterized() {
 fn a_press_on_the_applications_bar_is_the_windows() {
     use std::time::{Duration, Instant};
 
-    use flui_platform::input::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{InputRegion, InputRegionKind};
 
     use ContentAnswer::{App, Taken};
 

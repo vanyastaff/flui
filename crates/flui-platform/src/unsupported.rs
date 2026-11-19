@@ -11,7 +11,7 @@
 //! [`LaunchError`](crate::launch::LaunchError),
 //! [`StorageError`](crate::StorageError),
 //! [`PreferenceQueryError`](crate::PreferenceQueryError),
-//! [`TextStoreHostError`](crate::text::text_store::TextStoreHostError) and
+//! [`TextStoreHostError`](crate::text::store::TextStoreHostError) and
 //! `flui_system::dialog::DialogError` (its own test, in that crate). Each converts
 //! from it and answers [`unsupported`](crate::AdmissionError::unsupported)
 //! with it, so a caller asks any of them the same question.
@@ -302,7 +302,7 @@ impl Unsupported {
 ///
 /// Delivered is not present: [`Native`](Self::Native) with no matching device
 /// attached is a normal state, and
-/// [`InputCapabilities::present`](crate::input::input_capabilities::InputCapabilities::present)
+/// [`InputCapabilities::present`](crate::input::capabilities::InputCapabilities::present)
 /// says which devices are attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[expect(

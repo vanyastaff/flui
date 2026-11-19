@@ -63,9 +63,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::input::pointer::PointerKind;
-use flui_platform::text::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 /// The input a backend delivers, re-exported for implementors.
 pub use flui_runtime::HostInput;
 

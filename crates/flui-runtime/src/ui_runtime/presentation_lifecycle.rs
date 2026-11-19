@@ -1149,9 +1149,9 @@ mod tests {
     /// store is still composing.
     fn an_accepted_close_commits_the_preedit_before_the_guard() {
         use flui_interaction::testing::InMemoryTextStore;
-        use flui_platform::text::text_store::{
-            Composition, LockGrant, LockOutcome, LockTiming, TextStore, utf16::Utf16Offset,
-            utf16::Utf16Range,
+        use flui_platform::text::store::{
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore,
+            utf16::{Utf16Offset, Utf16Range},
         };
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
@@ -1205,9 +1205,9 @@ mod tests {
     /// observer hears Detached.
     fn a_failed_close_commit_withholds_the_detached_notice() {
         use flui_interaction::testing::InMemoryTextStore;
-        use flui_platform::text::text_store::{
-            Composition, LockGrant, LockOutcome, LockTiming, TextStore, utf16::Utf16Offset,
-            utf16::Utf16Range,
+        use flui_platform::text::store::{
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore,
+            utf16::{Utf16Offset, Utf16Range},
         };
 
         #[derive(Default)]

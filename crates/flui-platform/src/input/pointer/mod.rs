@@ -525,7 +525,7 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
 
     /// Whether this is a press that brought its window forward: it landed while the window
     /// was not the active one, and the host delivered it because it lies in an
-    /// [`InputRegionKind::FirstClick`](crate::input::input_regions::InputRegionKind::FirstClick)
+    /// [`InputRegionKind::FirstClick`](crate::input::regions::InputRegionKind::FirstClick)
     /// region. The framework hands such a press to the widgets only when its hit path runs
     /// through the box that reported the region. Only the macOS host marks presses; on
     /// Windows, X11 and Wayland FLUI delivers the activating click unmarked. Always `false`

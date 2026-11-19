@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::Size;
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::input::pointer::PointerEvent;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetUpdateRect, ValidateRect};

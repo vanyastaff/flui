@@ -446,7 +446,7 @@ impl TransferRequest {
     ///
     /// ```compile_fail
     /// let (_slot, handle) = flui_foundation::claim_slot(std::sync::Arc::new(|| {}));
-    /// let _ = flui_platform::transfer::data_transfer::TransferRequest::pending(handle);
+    /// let _ = flui_platform::transfer::data::TransferRequest::pending(handle);
     /// ```
     #[must_use = "dropping the pair immediately resolves it as cancelled"]
     pub fn pending() -> (Self, TransferCompleter) {
@@ -549,7 +549,7 @@ impl TransferCompleter {
 /// `ClipboardHandle`, with no offer to poll (ADR-0312 §6).
 ///
 /// ```compile_fail,E0599
-/// fn poll(transport: &dyn flui_platform::transfer::data_transfer::DragTransport) {
+/// fn poll(transport: &dyn flui_platform::transfer::data::DragTransport) {
 ///     let _ = transport.clipboard_offer();
 /// }
 /// ```

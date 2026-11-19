@@ -198,7 +198,7 @@ const RECORDED: &[Recorded] = &[
     ),
     repo(
         "TransferFormat",
-        "crates/flui-platform/src/transfer/data_transfer.rs",
+        "crates/flui-platform/src/transfer/data.rs",
         "TransferFormat",
     ),
     repo(

@@ -68,7 +68,7 @@ use std::time::Duration;
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
     TransferRequest,
@@ -120,7 +120,7 @@ const MAX_ACTIONS: u32 = 16;
 pub(crate) mod model {
     use std::rc::Rc;
 
-    use flui_platform::transfer::data_transfer::TransferActions;
+    use flui_platform::transfer::data::TransferActions;
     use web_time::Instant;
     use x11rb::NONE;
     use x11rb::protocol::xproto::{Atom, Timestamp, Window};

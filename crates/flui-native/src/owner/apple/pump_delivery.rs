@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use flui_platform::WindowHandler;
-use flui_platform::input::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 
 use crate::owner::window_delivery::WindowDelivery;
 
@@ -56,7 +56,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use flui_platform::input::input_capabilities::InputCapabilities;
+    use flui_platform::input::capabilities::InputCapabilities;
     use flui_platform::{DispatchEventResult, EventTime, FrameRequest, ImeEvent, PlatformInput};
     use flui_testing::window_handler::RecordingWindowHandler;
 

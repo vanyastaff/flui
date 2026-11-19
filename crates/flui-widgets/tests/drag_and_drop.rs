@@ -21,7 +21,7 @@ use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::transfer::data_transfer::{TransferActions, TransferFormat};
+use flui_platform::transfer::data::{TransferActions, TransferFormat};
 use flui_platform::transfer::drag::OsDragEnd;
 use flui_platform::{Cursor, CursorIcon, EventTime, HapticFeedback, TargetPlatform};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};

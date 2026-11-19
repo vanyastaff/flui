@@ -43,7 +43,7 @@ pub enum InputRegionKind {
     /// region, so a widget painted over the box does not receive it. On Windows, X11 and
     /// Wayland FLUI delivers the activating click unmarked, by those desktops' convention
     /// (Win32's `WM_MOUSEACTIVATE` could swallow it; FLUI does not), and the region changes
-    /// nothing ([`InputCapabilities::input_region`](crate::input::input_capabilities::InputCapabilities::input_region)).
+    /// nothing ([`InputCapabilities::input_region`](crate::input::capabilities::InputCapabilities::input_region)).
     FirstClick,
 }
 

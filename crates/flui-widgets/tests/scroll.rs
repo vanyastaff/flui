@@ -5052,14 +5052,14 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
 #[derive(Debug)]
 struct CountingBehavior {
     physics: SharedScrollPhysics,
-    devices: flui_platform::input::input_capabilities::PointerKindSet,
+    devices: flui_platform::input::capabilities::PointerKindSet,
     asked: Cell<usize>,
 }
 
 impl CountingBehavior {
     fn new(
         physics: SharedScrollPhysics,
-        devices: flui_platform::input::input_capabilities::PointerKindSet,
+        devices: flui_platform::input::capabilities::PointerKindSet,
     ) -> Rc<Self> {
         Rc::new(Self {
             physics,
@@ -5078,7 +5078,7 @@ impl flui_widgets::ScrollBehavior for CountingBehavior {
     fn drag_devices(
         &self,
         _details: &flui_widgets::ScrollBehaviorDetails,
-    ) -> flui_platform::input::input_capabilities::PointerKindSet {
+    ) -> flui_platform::input::capabilities::PointerKindSet {
         self.devices
     }
 }
@@ -5151,7 +5151,7 @@ pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
     let every = |controller: &ScrollController| {
         SingleChildScrollView::new()
             .controller(controller.clone())
-            .allowed_devices(flui_platform::input::input_capabilities::PointerKindSet::all())
+            .allowed_devices(flui_platform::input::capabilities::PointerKindSet::all())
             .child(SizedBox::new(300.0, 800.0))
             .boxed()
     };
@@ -5165,7 +5165,7 @@ pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
 /// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
 /// open, and what it names itself wins.
 pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
-    use flui_platform::input::input_capabilities::PointerKindSet;
+    use flui_platform::input::capabilities::PointerKindSet;
     use flui_widgets::{ScrollBehavior, ScrollConfiguration};
 
     let clamping = || -> SharedScrollPhysics { Rc::new(ClampingScrollPhysics::new()) };
@@ -5253,7 +5253,7 @@ pub(crate) fn the_default_scroll_behavior_follows_the_platform_convention() {
 /// A rebuild under the same behavior keeps the physics it answered; another
 /// behavior is asked again.
 pub(crate) fn a_scroll_view_asks_its_behavior_again_only_when_it_changes() {
-    use flui_platform::input::input_capabilities::PointerKindSet;
+    use flui_platform::input::capabilities::PointerKindSet;
     use flui_widgets::ScrollConfiguration;
 
     let controller = ScrollController::new();

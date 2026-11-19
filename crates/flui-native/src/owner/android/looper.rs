@@ -1360,11 +1360,9 @@ impl host::Clipboard<AndroidLoop> for AndroidLoop {
 /// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0348), the
 /// transport the host's [`AndroidHost::transfer`] made for the view.
 impl host::Drag<AndroidLoop> for AndroidLoop {
-    fn data_transfer(
-        owner: &AndroidLoop,
-    ) -> Arc<dyn flui_platform::transfer::data_transfer::DragTransport> {
+    fn data_transfer(owner: &AndroidLoop) -> Arc<dyn flui_platform::transfer::data::DragTransport> {
         Arc::clone(owner.java_view.transfer())
-            as Arc<dyn flui_platform::transfer::data_transfer::DragTransport>
+            as Arc<dyn flui_platform::transfer::data::DragTransport>
     }
 }
 

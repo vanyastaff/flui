@@ -20,7 +20,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
-use flui_platform::text::text_store::{
+use flui_platform::text::store::{
     OwnerCalls, TextChange, TextInputOptions, TextStore, TextStoreObserver, TextStoreStatus,
     utf16::Utf16Range,
 };

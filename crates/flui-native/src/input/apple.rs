@@ -802,7 +802,7 @@ pub(crate) mod title_bar {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::DevicePoint;
-    use flui_platform::input::input_regions::{
+    use flui_platform::input::regions::{
         ChromeHit, DeviceInputRegion, InputRegionKind, chrome_hit,
     };
 
@@ -1017,9 +1017,7 @@ pub(crate) mod title_bar {
     #[cfg(test)]
     mod tests {
         use flui_foundation::geometry::{DevicePoint, DeviceRect};
-        use flui_platform::input::input_regions::{
-            CaptionButton, DeviceInputRegion, InputRegionKind,
-        };
+        use flui_platform::input::regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
 
         use super::{
             DoubleClick, FirstClickTicket, FirstMouse, Press, PressReading, PressStamp,
@@ -1452,7 +1450,7 @@ pub(crate) mod macos {
 
     use std::cell::{Cell, RefCell};
 
-    use flui_platform::input::input_regions::InputRegion;
+    use flui_platform::input::regions::InputRegion;
     use objc2_app_kit::{NSEvent, NSEventType};
 
     use crate::input::apple::title_bar::{self, DoubleClick, Press};

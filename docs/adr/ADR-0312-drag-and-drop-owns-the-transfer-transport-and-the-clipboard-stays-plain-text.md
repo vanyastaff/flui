@@ -28,9 +28,9 @@ was not. At `vanyastaff/flui@24a496f4449bef02a26d3b67b13f93d5abc29068`:
 
 | Fact | Evidence |
 |---|---|
-| The transport trait still requires a clipboard offer | `DataTransferSource::clipboard_offer`, `crates/flui-platform/src/transfer/data_transfer.rs:492` |
+| The transport trait still requires a clipboard offer | `DataTransferSource::clipboard_offer`, `crates/flui-platform/src/data_transfer.rs:492` |
 | Every implementation answers `None`: the six hosts' transports, the inert one and three test doubles | `drag/{windows,wayland,x11,android,web,headless}.rs`, `data_transfer.rs:525`, `owner/windows/testing.rs`, `flui-app/tests/data_transfer_transport.rs`, `flui-interaction/tests/drag_sessions.rs` |
-| The clipboard is its own capability and reads plain text | `ClipboardRead = Result<Option<Arc<str>>, ClipboardError>` (`flui-platform/src/transfer/clipboard.rs:13`), `ClipboardHandle::read_text` (`flui-interaction/src/text_input/clipboard.rs:114`), `NativeClipboard` (`flui-native/src/host/clipboard.rs:17`), ADR-0152 §5 and §6 |
+| The clipboard is its own capability and reads plain text | `ClipboardRead = Result<Option<Arc<str>>, ClipboardError>` (`flui-platform/src/clipboard.rs:13`), `ClipboardHandle::read_text` (`flui-interaction/src/text_input/clipboard.rs:114`), `NativeClipboard` (`flui-native/src/host/clipboard.rs:17`), ADR-0152 §5 and §6 |
 | No widget reads anything but text | `EditableText`'s copy, cut and paste go through `ClipboardHandle::read_text` and `write_text` |
 | ADR-0038 describes forms that are gone | §6 and §9: the `arboard` worker, winit and `Arc<dyn Clipboard>`; §8, "the web backend returns `NullDataTransferSource`", against `drag/web.rs` |
 
@@ -110,7 +110,7 @@ in `flui-native`'s drag model, ADR-0151 §7), inside its one `DragTransport`, an
 
 ### §3. The vocabulary
 
-Plain data in `flui_platform::transfer::data_transfer`, with no lock guard in a public signature. It is
+Plain data in `flui_platform::transfer::data`, with no lock guard in a public signature. It is
 the vocabulary of every transfer, the clipboard's later read included (§7):
 
 - `Mime`: type, subtype and parameter names lowercased, parameter values kept byte for byte
@@ -130,7 +130,7 @@ the vocabulary of every transfer, the clipboard's later read included (§7):
 ### §4. The transport trait
 
 ```rust
-// flui_platform::transfer::data_transfer
+// flui_platform::transfer::data
 pub trait DragTransport: Send + Sync {
     fn request(
         &self,
@@ -262,7 +262,7 @@ Until then no type of §7 exists; `docs/gaps.md` lists the section.
 - Bad, because rich clipboard formats stay absent until a widget needs them.
 - Neutral, because `DataTransferSource` and `NullDataTransferSource` are renamed
   `DragTransport` and `NullDragTransport`; `Platform::data_transfer()` and the
-  `flui_platform::transfer::data_transfer` module keep their names, since the vocabulary is shared.
+  `flui_platform::transfer::data` module keep their names, since the vocabulary is shared.
 
 ### Confirmation
 

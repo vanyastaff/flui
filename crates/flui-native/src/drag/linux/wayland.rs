@@ -50,7 +50,7 @@ use std::time::Duration;
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::{FirstPanic, discard_payload};
-use flui_platform::transfer::data_transfer::{
+use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
     TransferRequest,

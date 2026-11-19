@@ -57,10 +57,8 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 /// answered at once, from what the owner published earlier (ADR-0211,
 /// ADR-0348). The transport is the host's one [`DragTransport`].
 ///
-/// [`DragTransport`]: flui_platform::transfer::data_transfer::DragTransport
-pub(crate) trait ViewTransfer:
-    flui_platform::transfer::data_transfer::DragTransport
-{
+/// [`DragTransport`]: flui_platform::transfer::data::DragTransport
+pub(crate) trait ViewTransfer: flui_platform::transfer::data::DragTransport {
     /// The media types `nativeDrag` received, another application's, read
     /// within the bounds every host's drag holds a source to; a `null` array
     /// is empty.
@@ -99,10 +97,10 @@ pub(crate) trait ViewTransfer:
 
     /// FLUI's own drag, which the view runs, advertises `allowed` to a target
     /// of this activity, or has ended (`None`).
-    fn set_own(&self, allowed: Option<flui_platform::transfer::data_transfer::TransferActions>);
+    fn set_own(&self, allowed: Option<flui_platform::transfer::data::TransferActions>);
 
     /// The action FLUI's target took when FLUI's own drag dropped on it, once.
-    fn take_local_drop(&self) -> Option<flui_platform::transfer::data_transfer::TransferActions>;
+    fn take_local_drop(&self) -> Option<flui_platform::transfer::data::TransferActions>;
 
     /// The system drag source of a window over `view`, at `api`: the drags
     /// that window starts are the view's (`View.startDragAndDrop`).
@@ -250,7 +248,7 @@ pub(crate) trait InputMethod: Send + Sync {
     fn store_host(
         &self,
         window: ActivityWindowId,
-    ) -> Option<std::rc::Rc<dyn flui_platform::text::text_store::TextStoreHost>>;
+    ) -> Option<std::rc::Rc<dyn flui_platform::text::store::TextStoreHost>>;
 }
 
 /// TalkBack's calls through `FluiView`'s node provider, which the window's

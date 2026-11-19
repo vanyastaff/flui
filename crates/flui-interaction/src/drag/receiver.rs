@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_platform::EventTime;
-use flui_platform::transfer::data_transfer::{DropFeedback, TransferActions};
+use flui_platform::transfer::data::{DropFeedback, TransferActions};
 
 use super::view::DragView;
 use crate::pointer::{

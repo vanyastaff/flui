@@ -36,7 +36,7 @@ use flui_interaction::{
     ids::PointerId,
 };
 use flui_platform::TargetPlatform;
-use flui_platform::input::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_view::environment::{GestureArenaScope, GesturePolicy, PlatformConvention};
 use flui_view::prelude::*;
 use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
