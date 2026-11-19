@@ -171,7 +171,8 @@ and the all-features run bracket it.
 - Bad, because the Chrome release is one more version to bump by hand, and the browser tests run
   against it, not against the release users have, until someone does.
 - Bad, because each `cross-typecheck` leg compiles the packages §6 adds, on runners an owner's
-  quota pays for, macOS among them.
+  quota pays for: on the first branch run a leg took half a minute (Windows) to two and a half
+  minutes (Android, macOS) longer than on main, the two macOS-hosted legs about 14 and 12 minutes.
 - Bad, because a native branch behind `testing` that only builds with some other optional
   feature off fails no leg, where the required-features run caught it (§6).
 
