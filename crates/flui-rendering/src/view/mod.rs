@@ -21,7 +21,7 @@ mod viewport;
 mod viewport_offset;
 
 pub use configuration::ViewConfiguration;
-pub use render_view::{CompositeResult, RenderView, RenderViewAdapter};
+pub use render_view::{RenderView, RenderViewAdapter};
 pub use scroll_position::{
     DimensionChangePolicy, OffsetWriteCause, ScrollOffsetWriter, ScrollPosition,
     ScrollPositionLayout, ScrollPositionSnapshot,

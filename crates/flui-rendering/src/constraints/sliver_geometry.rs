@@ -335,20 +335,6 @@ impl SliverGeometry {
         self.cache_extent > 0.0
     }
 
-    /// Returns layout extent that doesn't paint (dead space).
-    #[inline]
-    #[must_use]
-    pub fn non_painted_layout_extent(&self) -> f64 {
-        (self.layout_extent - self.paint_extent).max(0.0)
-    }
-
-    /// Returns cache extent beyond layout bounds.
-    #[inline]
-    #[must_use]
-    pub fn cache_beyond_layout(&self) -> f64 {
-        (self.cache_extent - self.layout_extent).max(0.0)
-    }
-
     // ============================================================================
     // VALIDATION
     // ============================================================================

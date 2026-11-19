@@ -359,26 +359,6 @@ impl<P: Protocol> RenderState<P> {
         parent_data.detach();
         true
     }
-
-    /// Returns a downcasted reference to the parent data, if the type matches.
-    ///
-    /// This is the typed read path — the parent calls this with its
-    /// concrete `ParentData` type to recover the typed data without
-    /// `dyn` dispatch on subsequent reads.
-    #[inline]
-    pub fn parent_data_as<T: crate::parent_data::ParentData>(&self) -> Option<&T> {
-        self.parent_data
-            .as_ref()
-            .and_then(|d| d.downcast_ref::<T>())
-    }
-
-    /// Returns a downcasted mutable reference to the parent data, if the type matches.
-    #[inline]
-    pub fn parent_data_as_mut<T: crate::parent_data::ParentData>(&mut self) -> Option<&mut T> {
-        self.parent_data
-            .as_mut()
-            .and_then(|d| d.downcast_mut::<T>())
-    }
 }
 
 // ============================================================================

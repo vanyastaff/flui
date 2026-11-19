@@ -121,9 +121,6 @@ bitflags! {
     /// - `IS_RELAYOUT_BOUNDARY` - Layout change isolation boundary
     /// - `IS_REPAINT_BOUNDARY` - Paint change isolation boundary
     ///
-    /// ## State Flags (computed properties)
-    /// - `HAS_OVERFLOW` - Overflow detected (debug only)
-    ///
     /// # Memory Layout
     ///
     /// Stored as a single `u32` (4 bytes) with bit positions:
@@ -134,8 +131,7 @@ bitflags! {
     /// Bit 3: IS_RELAYOUT_BOUNDARY
     /// Bit 4: IS_REPAINT_BOUNDARY
     /// Bit 5: NEEDS_SEMANTICS
-    /// Bit 6: (reserved — hole left intentionally)
-    /// Bit 7: HAS_OVERFLOW (debug only)
+    /// Bits 6-7: unused
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
     /// Bit 10: WAS_REPAINT_BOUNDARY
@@ -197,17 +193,6 @@ bitflags! {
         /// cached and reused. Paint changes below this boundary
         /// don't require repainting ancestors.
         const IS_REPAINT_BOUNDARY = 1 << 4;
-
-        // ===== State Flags (Computed Properties) =====
-
-        // Bit 6: reserved hole — do not reuse this bit position.
-
-        /// Overflow detected during layout or paint (debug only).
-        ///
-        /// Set when content exceeds available space. Used for
-        /// debugging overflow issues.
-        #[cfg(debug_assertions)]
-        const HAS_OVERFLOW = 1 << 7;
 
         // ===== Propagation Flags (Internal) =====
 
@@ -388,10 +373,6 @@ impl fmt::Display for RenderFlags {
         }
         if self.contains(Self::WAS_REPAINT_BOUNDARY) {
             flags.push("WAS_REPAINT_BOUNDARY");
-        }
-        #[cfg(debug_assertions)]
-        if self.contains(Self::HAS_OVERFLOW) {
-            flags.push("HAS_OVERFLOW");
         }
 
         write!(f, "RenderFlags({})", flags.join(" | "))
@@ -930,27 +911,6 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
         self.contains(RenderFlags::WAS_REPAINT_BOUNDARY)
-    }
-
-    /// Marks overflow detected (debug only).
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn mark_has_overflow(&self) {
-        self.set(RenderFlags::HAS_OVERFLOW);
-    }
-
-    /// Clears overflow flag (debug only).
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn clear_has_overflow(&self) {
-        self.remove(RenderFlags::HAS_OVERFLOW);
-    }
-
-    /// Checks if overflow was detected (debug only).
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn has_overflow(&self) -> bool {
-        self.contains(RenderFlags::HAS_OVERFLOW)
     }
 
     /// Whether the last committed geometry came from a degraded pass

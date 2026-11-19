@@ -236,17 +236,6 @@ impl RenderTester {
             scene,
         })
     }
-
-    /// Drives the tree through layout and asserts it fails, returning the
-    /// [`RenderError`].
-    ///
-    /// Panics if layout succeeds — the invariant being tested is that this
-    /// tree must produce a layout error.
-    #[must_use]
-    pub fn expect_layout_error(self) -> RenderError {
-        self.try_run_layout()
-            .expect_err("tree was expected to fail layout but layout succeeded")
-    }
 }
 
 /// The result of a [`RenderTester::run_layout`]: a pipeline parked in the

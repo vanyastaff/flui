@@ -166,14 +166,6 @@ impl VisualUpdateNotifier {
             .replace(std::sync::Arc::new(callback))
     }
 
-    /// Fires the semantics-owner-created callback if one is set.
-    #[inline]
-    pub fn fire_semantics_owner_created(&self) {
-        if let Some(callback) = &self.semantics_owner_created {
-            callback();
-        }
-    }
-
     // -- semantics owner disposed --
 
     /// Sets (or replaces) the semantics-owner-disposed callback.
@@ -193,14 +185,6 @@ impl VisualUpdateNotifier {
     {
         self.semantics_owner_disposed
             .replace(std::sync::Arc::new(callback))
-    }
-
-    /// Fires the semantics-owner-disposed callback if one is set.
-    #[inline]
-    pub fn fire_semantics_owner_disposed(&self) {
-        if let Some(callback) = &self.semantics_owner_disposed {
-            callback();
-        }
     }
 }
 

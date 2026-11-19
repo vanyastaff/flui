@@ -131,15 +131,6 @@ impl<P: Protocol> RenderState<P> {
     pub fn clear_needs_compositing(&self) {
         self.flags.remove(RenderFlags::NEEDS_COMPOSITING);
     }
-
-    /// Clears all dirty flags (after all phases complete).
-    ///
-    /// Use this sparingly - usually you want to clear flags individually
-    /// as each phase completes.
-    #[inline]
-    pub fn clear_all_flags(&self) {
-        self.flags.clear();
-    }
 }
 
 // ============================================================================

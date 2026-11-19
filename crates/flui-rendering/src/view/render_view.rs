@@ -39,9 +39,6 @@ pub struct RenderView {
 
     /// The root layer.
     layer: Option<TransformLayer>,
-
-    /// Whether automatic system UI adjustment is enabled.
-    automatic_system_ui_adjustment: bool,
     // A 9-field `#[allow(dead_code)]` placeholder block used to live here
     // (depth / needs_layout / needs_paint / needs_compositing_bits_update /
     // needs_semantics_update / is_repaint_boundary / needs_compositing /
@@ -96,7 +93,6 @@ impl RenderView {
             size: Size::ZERO,
             root_transform: None,
             layer: None,
-            automatic_system_ui_adjustment: true,
         }
     }
 
@@ -187,11 +183,6 @@ impl RenderView {
         self.layer.as_ref()
     }
 
-    /// Returns a mutable reference to the root layer.
-    pub fn layer_mut(&mut self) -> Option<&mut TransformLayer> {
-        self.layer.as_mut()
-    }
-
     /// Replaces the root layer with a new one.
     fn replace_root_layer_internal(&mut self) {
         let new_layer = self.update_matrices_and_create_new_root_layer();
@@ -204,20 +195,6 @@ impl RenderView {
         let matrix = config.to_matrix();
         self.root_transform = Some(matrix);
         TransformLayer::new(matrix)
-    }
-
-    // ========================================================================
-    // System UI
-    // ========================================================================
-
-    /// Whether the framework should automatically compute the desired system UI.
-    pub fn automatic_system_ui_adjustment(&self) -> bool {
-        self.automatic_system_ui_adjustment
-    }
-
-    /// Sets whether automatic system UI adjustment is enabled.
-    pub fn set_automatic_system_ui_adjustment(&mut self, value: bool) {
-        self.automatic_system_ui_adjustment = value;
     }
 
     // ========================================================================
@@ -284,43 +261,6 @@ impl RenderView {
         let config = self.configuration();
         let dpr = config.device_pixel_ratio();
         Rect::from_ltwh(0.0, 0.0, self.size.width * dpr, self.size.height * dpr)
-    }
-
-    /// Returns the semantic bounds for this render view.
-    pub fn semantic_bounds(&self) -> Rect {
-        if let Some(transform) = &self.root_transform {
-            let bounds = Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height);
-            let scale_x = transform[0];
-            let scale_y = transform[5];
-            Rect::from_ltwh(
-                bounds.min.x * scale_x,
-                bounds.min.y * scale_y,
-                bounds.width() * scale_x,
-                bounds.height() * scale_y,
-            )
-        } else {
-            Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
-        }
-    }
-
-    // ========================================================================
-    // Frame Composition
-    // ========================================================================
-
-    /// Uploads the composited layer tree to the engine.
-    pub fn composite_frame(&self) -> CompositeResult {
-        assert!(self.has_configuration());
-        assert!(self.root_transform.is_some());
-        assert!(self.layer.is_some());
-
-        let config = self.configuration();
-        let physical_size = config.to_physical_size(self.size);
-
-        CompositeResult {
-            physical_size,
-            logical_size: self.size,
-            device_pixel_ratio: config.device_pixel_ratio(),
-        }
     }
 
     // ========================================================================
@@ -479,21 +419,6 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
     // window-size input (set from the incoming root constraints), not a
     // render-state mirror; the engine reads root paint bounds via
     // `RenderView::physical_paint_bounds`.
-}
-
-// ============================================================================
-// CompositeResult
-// ============================================================================
-
-/// The result of compositing a frame.
-#[derive(Debug, Clone)]
-pub struct CompositeResult {
-    /// The physical size of the frame (in device pixels).
-    pub physical_size: Size,
-    /// The logical size of the frame (in logical pixels).
-    pub logical_size: Size,
-    /// The device pixel ratio.
-    pub device_pixel_ratio: f64,
 }
 
 // ============================================================================

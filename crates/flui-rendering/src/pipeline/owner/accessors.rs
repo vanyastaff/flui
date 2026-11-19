@@ -788,13 +788,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.note_render_child_membership_changed(parent_id);
     }
 
-    /// Detach an existing render child without deleting it and invalidate the
-    /// surviving parent's membership-dependent phases.
-    pub fn drop_render_child(&mut self, parent_id: RenderId, child_id: RenderId) {
-        self.render_tree.drop_child(parent_id, child_id);
-        self.note_render_child_membership_changed(parent_id);
-    }
-
     /// Invalidates every parent phase whose output depends on child membership.
     pub(crate) fn note_render_child_membership_changed(&mut self, parent_id: RenderId) {
         self.apply_render_update_impact(
@@ -2315,12 +2308,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     #[must_use]
     pub fn drain_mid_layout_marks(&mut self) -> usize {
         self.scheduler.drain_mid_marks()
-    }
-
-    /// Returns whether any mid-phase marks are pending drain.
-    #[inline]
-    pub fn has_mid_layout_marks(&self) -> bool {
-        self.scheduler.has_mid_marks()
     }
 
     /// Directly seed a pending child-build request for wiring tests.

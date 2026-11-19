@@ -3,7 +3,7 @@
 use flui_foundation::RenderId;
 
 use super::PipelineOwner;
-use crate::pipeline::phase::{Idle, PipelinePhase};
+use crate::pipeline::phase::PipelinePhase;
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Reassemble every render object in the tree and mark layout, compositing
@@ -54,13 +54,5 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             nodes = node_count,
             "PipelineOwner::reassemble — render objects marked for hot reload"
         );
-    }
-}
-
-/// Convenience impl for the common idle owner handle.
-impl PipelineOwner<Idle> {
-    /// See [`PipelineOwner::reassemble`].
-    pub fn reassemble_idle(&mut self) {
-        self.reassemble();
     }
 }

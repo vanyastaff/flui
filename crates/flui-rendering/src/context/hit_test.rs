@@ -488,15 +488,4 @@ where
         let pos = self.main_axis();
         pos >= start && pos < end
     }
-
-    /// Checks if cross axis position is within range.
-    pub fn is_within_cross_axis_range(&self, start: f64, end: f64) -> bool {
-        let pos = self.cross_axis();
-        pos >= start && pos < end
-    }
-
-    /// Translates position along main axis.
-    pub fn position_minus_main_axis(&self, offset: f64) -> MainAxisPosition {
-        MainAxisPosition::new(self.main_axis() - offset, self.cross_axis())
-    }
 }

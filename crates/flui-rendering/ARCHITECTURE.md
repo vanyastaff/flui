@@ -19,7 +19,7 @@ residency; offsets expose no unused implicit-scrolling policy flag
 | Pipeline | [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `PipelineOwner` holds the root node and dirty lists. Single-threaded phase serialisation: `run_layout` / `run_compositing` / `run_paint` / `run_semantics`, each living on the matching `PipelineOwner<Phase>` impl block (typestate-enforced ordering). The `debug_doing_layout` / `debug_doing_paint` flags on the owner are a debug-build cross-check; the type system is the load-bearing enforcement. |
 | Box protocol | [`src/protocol/box_protocol.rs`](src/protocol/box_protocol.rs), [`src/parent_data/box_parent_data.rs`](src/parent_data/box_parent_data.rs) | `BoxConstraints`, `BoxParentData`, `Size`-based geometry. |
 | Sliver protocol | [`src/protocol/sliver_protocol.rs`](src/protocol/sliver_protocol.rs), [`src/parent_data/sliver_parent_data.rs`](src/parent_data/sliver_parent_data.rs) | Sliver protocol for scrollable layout. |
-| Child storage | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage; the parent stores `Vec<RenderId>`. |
+| Child storage | [`src/storage/links.rs`](src/storage/links.rs) | Single-child + variable-children storage; the parent stores `Vec<RenderId>`. |
 | Concrete render objects | [`flui-objects`](../flui-objects/src/) crate | `Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`, …; this crate keeps only the protocol/pipeline machinery. |
 | Compositing layers | `flui-layer` crate | A sibling crate per the layered DAG ([`docs/architecture.md`](../../docs/architecture.md)). |
 
@@ -1197,7 +1197,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Rule:** strategy clause "sync hot path, async на краях" (lock contention on the hot path is functionally async-flavoured); no lock on per-node render storage touched during `perform_layout` / `paint` (no `RwLock<Box<dyn RenderObject<P>>>`).
 
-**Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which the pipeline obtains via `PipelineOwner::render_tree_mut() -> &mut RenderTree` at phase boundaries. Re-entrant access from a parent to a child during layout uses disjoint-borrow primitives on `RenderTree` (`get_two_mut`, `get_many_mut`; the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). Debug-build re-entrancy checks live in `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
+**Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which the pipeline obtains via `PipelineOwner::render_tree_mut() -> &mut RenderTree` at phase boundaries. Re-entrant access from a parent to a child during layout goes through the `SubtreeArena` disjoint-borrow substrate (the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). Debug-build re-entrancy checks live in `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
 
 **Alternatives considered:**
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
@@ -1714,7 +1714,7 @@ lives in `flui-interaction` (`crates/flui-interaction/src/pointer/mouse_tracker.
 the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 
-`NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` and `get_parent_and_children_mut` (both in `src/storage/tree.rs`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
+`NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced).
 
 ---
 
@@ -1730,12 +1730,6 @@ Known sites that do not yet match the intended design but do not break a current
 ## Shipped infrastructure (formerly "Outstanding refactors")
 
 These items were listed as pending in earlier drafts; all are now shipped.
-
-### `RenderTree::get_two_mut` / `get_parent_and_children_mut` — SHIPPED
-
-**File:** [`src/storage/tree.rs`](src/storage/tree.rs) (`get_two_mut`, `get_parent_and_children_mut`).
-
-Tree-aware disjoint-borrow primitives. `get_two_mut(a, b)` returns `(&mut RenderNode, &mut RenderNode)` for two distinct keys; `get_parent_and_children_mut` generalises to a parent + N children. The unsafe is local to each function with a disjoint-keys assertion and is unit-tested.
 
 ### `layout_dirty_root` + `layout_subtree_borrowed` — SHIPPED
 
@@ -1797,7 +1791,7 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 
 **Files:** new `crates/flui-rendering/tests/loom_handle.rs`.
 
-**Note:** `proptest` is already a dev-dependency and is used in `src/virtualization/tests.rs`. The miri half is LANDED: CI's advisory `miri` job runs `cargo +nightly miri test -p flui-rendering --lib pipeline::owner`, interpreting every unit test under `pipeline::owner` — the raw-pointer `SubtreeArena` substrate and the disjoint-borrow layout walks over it. Widening the filter to `storage::tree`'s own `get_two_mut` / `get_parent_and_children_mut` unit tests remains open alongside loom. The remaining deferred test class:
+**Note:** `proptest` is already a dev-dependency and is used in `src/virtualization/tests.rs`. The miri half is LANDED: CI's advisory `miri` job runs `cargo +nightly miri test -p flui-rendering --lib pipeline::owner`, interpreting every unit test under `pipeline::owner` — the raw-pointer `SubtreeArena` substrate and the disjoint-borrow layout walks over it. Loom coverage remains open. The remaining deferred test class:
 
 - **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + private dirty-channel send/recv sequencing across attachment epochs. Needs the `loom` crate gated on `#[cfg(loom)]`.
 
