@@ -78,7 +78,9 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
                 FailMode::Structural => {
                     RenderError::contract_violation("FlakyLeaf", "permanent structural failure")
                 }
-                FailMode::Retriable => RenderError::invalid_constraints("transient failure"),
+                FailMode::Retriable => {
+                    RenderError::invalid_constraints("FlakyLeaf", "transient failure")
+                }
             });
         }
         Ok(Size::new(40.0, 40.0))

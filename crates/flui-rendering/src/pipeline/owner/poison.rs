@@ -37,8 +37,8 @@ pub(super) const MAX_CONSECUTIVE_LAYOUT_FAILURES: u8 = 3;
 pub(super) enum LayoutFailureKind {
     /// Permanent for the current tree state: retrying with unchanged inputs
     /// deterministically fails again (layout cycles, contract violations,
-    /// invalid geometry, unbounded input, depth overflow, protocol
-    /// mismatches, child-index corruption, and panics). Poisons immediately.
+    /// invalid geometry, unbounded input, protocol
+    /// mismatches, and panics). Poisons immediately.
     Structural,
     /// Could plausibly self-heal on a later frame (stale ids mid-removal,
     /// pipeline-state races). Retried up to [`MAX_CONSECUTIVE_LAYOUT_FAILURES`]
@@ -55,11 +55,16 @@ impl LayoutFailureKind {
             | RenderError::ContractViolation { .. }
             | RenderError::InvalidGeometry { .. }
             | RenderError::UnboundedConstraint { .. }
-            | RenderError::LayoutDepthExceeded { .. }
             | RenderError::ProtocolMismatch { .. }
-            | RenderError::ChildIndexOutOfBounds { .. }
             | RenderError::Poisoned { .. } => Self::Structural,
-            _ => Self::Retriable,
+            RenderError::NodeNotFound(..)
+            | RenderError::InvalidConstraints { .. }
+            | RenderError::TextContextBusy
+            | RenderError::TextLayout(..)
+            | RenderError::TextPreparationPending(..)
+            | RenderError::ViewportOffsetChanged
+            | RenderError::PaintBeforeLayout
+            | RenderError::Semantics(..) => Self::Retriable,
         }
     }
 }
