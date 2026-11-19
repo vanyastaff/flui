@@ -280,7 +280,7 @@ const revised = await parallel(proposals.map((p) => async () => {
   })
   if (got.error) {
     gaps.push(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
-    return { stance: p.stance, design: p.design, answers: [], unanswered: against }
+    return { stance: p.stance, design: p.design, answers: [], unanswered: against, failed: true }
   }
   // Each attack keeps one answer: its first concession, which needs no reason and stays open whatever
   // else the author says, else its first answer that says how. Every other answer is not kept.
@@ -290,20 +290,28 @@ const revised = await parallel(proposals.map((p) => async () => {
     const kept = named.find((x) => x.verdict === 'conceded') || named.find((x) => x.how.trim())
     if (kept) answers.push({ ...kept, attack })
   }
-  const dropped = got.value.answers.length - answers.length
+  const unmatched = got.value.answers.filter((x) => !against.some((y) => y.id === x.id)).length
+  const dropped = got.value.answers.length - unmatched - answers.length
+  if (unmatched) gaps.push(`revision of ${p.stance}: ${unmatched} answers named no attack on this design`)
   if (dropped) gaps.push(`revision of ${p.stance}: ${dropped} answers not kept (each attack keeps its first concession, else its first answer that says how)`)
   return { stance: p.stance, design: boundDesign(`revision of ${p.stance}`, got.value.design), answers, unanswered: against.filter((x) => !answers.some((y) => y.id === x.id)) }
 }))
-const unanswered = revised.flatMap((r) => r.unanswered.map((x) => ({ ...x, stance: r.stance })))
-// An attack its author leaves unanswered or concedes is open: the script carries both to the judge
-// and to the result, whatever the judge lists.
+// An attack its author leaves unanswered or concedes is open, and so is every attack on a design whose
+// revision failed to run, named as such so the failure is not held against the design: the script
+// carries all three to the judge and to the result, whatever the judge lists.
+const unanswered = revised.flatMap((r) => r.unanswered.map((x) => ({ ...x, stance: r.stance, why: r.failed ? 'revision failed' : 'unanswered' })))
 const conceded = revised.flatMap((r) => r.answers.filter((x) => x.verdict === 'conceded').map((x) => ({ ...x.attack, stance: r.stance, how: x.how })))
-const open = [...unanswered.map((x) => ({ ...x, why: 'unanswered' })), ...conceded.map((x) => ({ ...x, why: 'conceded' }))]
+const open = [...unanswered, ...conceded.map((x) => ({ ...x, why: 'conceded' }))]
 // Each answer travels with the attack it answers, so a reader can check it.
-const showRevised = (r) => `${show(r)}\nAnswers, each with the attack it answers (JSON):\n${JSON.stringify(r.answers, null, 1)}`
+const showRevised = (r) => r.failed
+  ? `${show(r)}\n(Its revision failed to run: this is its first design, and its attacks went unanswered because of that failure, not by its author.)`
+  : `${show(r)}\nAnswers, each with the attack it answers (JSON):\n${JSON.stringify(r.answers, null, 1)}`
+// Agent failures so far, so a reader does not take a missing answer or a missing round of attacks for
+// a fault of a design.
+const failures = () => (gaps.length ? `\n\nGaps in this run, agent failures rather than faults of any design:\n${gaps.map((x) => `- ${x}`).join('\n')}` : '')
 
 // A second round on the revisions: a fix is where the next defect usually is.
-const second = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" or "refuted" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.\n\n${revised.map(showRevised).join('\n\n')}`, {
+const second = await attempt(`${brief}\n\nResearch everyone shares:\n${dossier}\n\nYou are the red team on the revised designs. For each, check whether each "fixed" or "refuted" answer holds and whether the revision broke something it did not break before. Attack only what is still wrong; return at most ${MAX_ATTACKS} attacks.${failures()}\n\n${revised.map(showRevised).join('\n\n')}`, {
   phase: 'Revise', label: 'second-round', schema: attackSchema(proposed), model: 'opus', effort: 'high',
 })
 if (second.error) gaps.push(`second round: ${second.error}`)
@@ -340,13 +348,13 @@ const verdictSchema = {
     },
     experiments: { type: 'array', items: { type: 'string' }, description: 'measurements or prototypes that decide what the research could not, each with the number that decides it' },
     debt: { type: 'array', items: { type: 'string' }, description: 'technical debt found on the way, each with its file:line, whether or not the synthesis removes it' },
-    unresolved: { type: 'array', items: { type: 'string' }, description: 'the unanswered or conceded attacks and the second-round attacks the synthesis does not answer, and what each leaves open' },
+    unresolved: { type: 'array', items: { type: 'string' }, description: 'the open attacks and the second-round attacks the synthesis does not answer, and what each leaves open' },
   },
   required: ['scores', 'synthesis', 'experiments', 'debt', 'unresolved'],
 }
 
 phase('Judge')
-const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map(showRevised).join('\n\n')}\n\nAttacks their authors left unanswered or conceded (JSON; \`why\` says which, and a conceded one carries what conceding costs in \`how\`):\n${JSON.stringify(open, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every unanswered or conceded attack above and every second-round attack the synthesis does not answer.`
+const judgePrompt = `${brief}\n\nResearch:\n${dossier}\n\nThe revised designs, each with its answers to the attacks:\n${revised.map(showRevised).join('\n\n')}\n\nAttacks left open (JSON; \`why\` says whether the author left it unanswered or conceded it, or its revision failed to run; a conceded one carries what conceding costs in \`how\`):\n${JSON.stringify(open, null, 1)}\n\nThe second round of attacks on the revisions (JSON):\n${JSON.stringify(secondAttacks, null, 1)}${failures()}\n\nYou judge. Verify the claims that decide the outcome in the code and the cited sources; a prediction whose arithmetic does not follow from the facts scores as no prediction. Score each design against the drivers and the target. Then synthesize the strongest design: start from the best one and graft every better idea from the others, saying where each came from and why. Aim at the architecture that is right, not the one that is easiest to merge, within AGENTS.md's rules. Name the experiments that decide what research could not, the technical debt found on the way with its file:line, and in "unresolved" every open attack above and every second-round attack the synthesis does not answer.`
 // The judge runs on the strongest model the account can start; a note is written once the outcome
 // it reports is known.
 const judgeOptions = { phase: 'Judge', label: 'judge', schema: verdictSchema, effort: 'high' }
@@ -407,7 +415,7 @@ ${v.debt.map((x) => `- ${x}`).join('\n')}
 ## Attacks the synthesis leaves unresolved, by the judge
 ${v.unresolved.length ? v.unresolved.map((x) => `- ${x}`).join('\n') : 'None.'}
 
-## Attacks their authors left unanswered or conceded, and the second round's attacks
+## Attacks left open (unanswered, conceded, or on a revision that failed), and the second round's attacks
 ${open.length || secondAttacks.length ? [
   ...open.map((x) => `- #${x.id} on ${x.stance} by ${x.by}, ${x.why}: ${x.claim}`),
   ...secondAttacks.map((x) => `- second round on ${x.target} (${x.severity}): ${x.claim}`),

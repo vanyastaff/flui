@@ -27,7 +27,7 @@ model, and the session's effort does not carry over to another model.
 | Run a named check and report it; an edit whose shape is settled (a rename, a move, a changelog fragment, a PR body) | `sonnet` | `low` |
 | Research across sources, tests for a settled contract, a contained change with a clear end state | `sonnet` | `medium` |
 | A reader of the review before a merge (AGENTS.md, "Before a merge"), whose workflow names the lenses that read on `opus`; the architecture tournament's research | `sonnet` | `high` |
-| Implementation that changes behaviour inside an accepted design; a school's design, attack or revision in the architecture tournament, which its judge verifies | `opus` | `high` |
+| Implementation that changes behaviour inside an accepted design; a design, attack or revision in the architecture tournament, its red team's two rounds included, which its judge verifies | `opus` | `high` |
 | Design and ADR options, the judge of the review before a merge and of the architecture tournament, any other review against "Recurring defects", diagnosis of re-entrancy, unwinding, lifetimes or races | `fable` | `high` |
 
 Work that fails at its row is rerun one row up with what the failed run found, and the top row

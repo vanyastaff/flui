@@ -68,7 +68,7 @@ const noAgent = () => assert.fail('no agent may run')
     assert.match(refused.error, /stances must be/, JSON.stringify(given))
     assert.equal(none.length, 0)
   }
-  for (const extra of [{ paths: 'crates/flui-layer' }, { drivers: 'stay under 2 ms' }, { drivers: ['ok', ' '] }, { paths: [7] }, { paths: [] }, { drivers: [] }]) {
+  for (const extra of [{ paths: 'crates/flui-layer' }, { drivers: 'stay under 2 ms' }, { drivers: ['ok', ' '] }, { paths: [7] }, { paths: [] }, { drivers: [] }, { paths: false }, { drivers: 0 }, { paths: '' }]) {
     const { result: refused, calls: none } = await run({ topic: 'T', ...extra }, noAgent)
     assert.match(refused.error, /paths and drivers must/, JSON.stringify(extra))
     assert.equal(none.length, 0)
@@ -77,12 +77,7 @@ const noAgent = () => assert.fail('no agent may run')
   {
     const { result: accepted, prompts } = await run({ topic: 'T', stances, paths: null, drivers: null }, happy())
     assert.equal(accepted.error, undefined)
-    assert.match(prompts['research:code'], /Code areas: find them\./)
-  }
-  for (const extra of []) {
-    const { result: refused, calls: none } = await run({ topic: 'T', ...extra }, noAgent)
-    assert.match(refused.error, /paths and drivers must/, JSON.stringify(extra))
-    assert.equal(none.length, 0)
+    assert.match(prompts['research:code'], /Code areas: find them\.\nDrivers a design must satisfy:\n- AGENTS\.md "Design stance", "Code for the next reader" and "Recurring defects"\n/)
   }
   {
     const { prompts } = await run({ topic: 'T', stances, paths: ['crates/flui-layer'], drivers: ['stay under 2 ms'] }, happy())
@@ -129,7 +124,7 @@ const noAgent = () => assert.fail('no agent may run')
   const b = result.proposals.find((p) => p.stance === 'b')
   assert.deepEqual(b.unanswered.map((x) => x.claim).sort(), ['c on b', 'red-team on b'])
   assert.deepEqual(result.open.map((x) => [x.claim, x.why]).sort(), [['c on b', 'unanswered'], ['red-team on b', 'unanswered']])
-  const judgeOpen = prompts.judge.split('left unanswered or conceded')[1].split('The second round')[0]
+  const judgeOpen = prompts.judge.split('Attacks left open (JSON')[1].split('The second round')[0]
   assert.match(judgeOpen, /"claim": "c on b"[\s\S]*"claim": "red-team on b"/)
   assert.doesNotMatch(judgeOpen, /"claim": "a on b"/)
   assert.match(result.markdown, /second round's attacks\n- #\d+ on b by c, unanswered: c on b\n- #\d+ on b by red-team, unanswered: red-team on b\n/)
@@ -182,7 +177,8 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(a.answers.map((x) => [x.id, x.verdict]), [[own[0], 'conceded']])
   assert.deepEqual(a.unanswered.map((x) => x.id), own.slice(1))
   assert.deepEqual(result.open.filter((x) => x.stance === 'a').map((x) => [x.id, x.why]), [[own[1], 'unanswered'], [own[2], 'unanswered'], [own[0], 'conceded']])
-  assert.ok(result.gaps.includes('revision of a: 5 answers not kept (each attack keeps its first concession, else its first answer that says how)'))
+  assert.ok(result.gaps.includes('revision of a: 2 answers named no attack on this design'))
+  assert.ok(result.gaps.includes('revision of a: 3 answers not kept (each attack keeps its first concession, else its first answer that says how)'))
   // In the other order the concession holds too, and the first of two concessions is kept.
   const { result: reversed } = await run({ topic: 'T', stances }, happy({
     'revise:a': (p) => {
@@ -220,7 +216,7 @@ const noAgent = () => assert.fail('no agent may run')
   const open = owned.open.find((x) => x.id === conceded)
   assert.equal(open.why, 'conceded')
   assert.equal(open.how, 'costs a second allocation')
-  assert.match(prompts.judge.split('left unanswered or conceded')[1].split('The second round')[0], new RegExp(`"id": ${conceded},[\\s\\S]*"why": "conceded"`))
+  assert.match(prompts.judge.split('Attacks left open (JSON')[1].split('The second round')[0], new RegExp(`"id": ${conceded},[\\s\\S]*"why": "conceded"`))
   assert.match(owned.markdown, new RegExp(`- #${conceded} on a by [a-z-]+, conceded: `))
 }
 
@@ -242,10 +238,17 @@ const noAgent = () => assert.fail('no agent may run')
 //    researcher is a named gap; a refused fable judge falls to opus and says so once opus has
 //    judged; no judge at all returns the material, not an empty verdict.
 {
-  const { result, calls } = await run({ topic: 'T', stances }, happy({ 'revise:a': null, 'attack:c': null, 'research:failures': null, judge: null, 'judge:opus': verdict }))
+  const { result, calls, prompts } = await run({ topic: 'T', stances }, happy({ 'revise:a': null, 'attack:c': null, 'research:failures': null, judge: null, 'judge:opus': verdict }))
   const a = result.proposals.find((p) => p.stance === 'a')
   assert.equal(a.design.title, 'a')
   assert.equal(a.unanswered.length, 2)
+  // The failure is named as such, not held against the design's author.
+  assert.deepEqual(result.open.filter((x) => x.stance === 'a').map((x) => x.why), ['revision failed', 'revision failed'])
+  assert.match(result.markdown, /- #\d+ on a by [a-z-]+, revision failed: /)
+  for (const label of ['second-round', 'judge:opus']) {
+    assert.match(prompts[label].split('### a: a')[1].split('### b:')[0], /Its revision failed to run/, label)
+    assert.match(prompts[label], /Gaps in this run, agent failures rather than faults of any design:\n[\s\S]*- revision of a: no result/, label)
+  }
   assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
   assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('research failures: no result (refused by a usage limit, skipped, or failed after retries)'))
