@@ -1030,10 +1030,7 @@ conversion glyphon applied to text on a gamma-space target
 the glyphs: each quad carries the CTM's linear part over the raster scale.
 The engine names no shaper and depends on none: no cosmic-text, Parley,
 fontique, skrifa or swash type or crate, and no text context, font collection
-or paragraph spec either (`the_engine_does_not_shape`). The performance
-overlay's labels arrive shaped: the layer carries a display list recorded
-through the UI runtime's text context, which the engine clips to the overlay's
-bounds and replays (`performance_overlay_labels_read_back`). `etagere` stays
+or paragraph spec either (`the_engine_does_not_shape`). `etagere` stays
 behind `glyph_atlas.rs` the way `lyon` stays behind `tessellator.rs`.
 
 A text shadow (`DrawOp::ParagraphShadow`, ADR-0309 §3) goes through the same

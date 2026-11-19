@@ -686,9 +686,10 @@ impl UiRuntime {
             scene.produce(
                 |writer| pipeline.run_frame(writer),
                 || {
-                    let overlay = presentation.performance_overlay_layer(text).map(|layer| {
+                    let overlay = presentation.performance_overlay_readout().map(|readout| {
                         crate::presentation_scene::OverlayFrame {
-                            layer,
+                            readout,
+                            text,
                             device_pixel_ratio: pipeline
                                 .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio)
                                 .get(),

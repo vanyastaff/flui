@@ -11,9 +11,9 @@ Citations below name symbols, not line numbers.
 
 | Layer | FLUI | Notes |
 |---|---|---|
-| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 16 variants; no `Box<dyn Layer>` (decision 1). |
+| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 15 variants; no `Box<dyn Layer>` (decision 1). |
 | `PictureLayer` | [`src/layer/picture.rs`](src/layer/picture.rs) | `Arc<DisplayList>`; the leaf the paint walk emits. |
-| `PerformanceOverlayLayer` | `performance_overlay.rs` | Written by `flui-runtime`; see [Producers](#producers). |
+| `Effect` | [`src/layer/effect.rs`](src/layer/effect.rs) | Every layer but a picture: what `ContentBuilder::push_effect` takes, so an effect of a content never draws; what a content draws is a `Chunk`. |
 | `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
 | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
@@ -35,13 +35,12 @@ Each decision names the shape chosen and why, and the tests that pin it.
 ### 1. Closed `Layer` enum, not a `Layer` class hierarchy
 
 `Layer` is a closed enum and deliberately **not** `#[non_exhaustive]`: compile-time exhaustiveness
-is the contract with `flui-engine`, whose wgpu backend matches every variant. A 20th variant breaks
+is the contract with `flui-engine`, whose wgpu backend matches every variant. A new variant breaks
 that match and lands its GPU lowering in the same change. There is no third-party `impl Layer`
 extension point, and plugin authors cannot define layer types — the accepted trade-off.
 
-Payloads are inline unless the variant would dominate the enum (`Canvas` carries a live recorder,
-~184 B); `Picture` (`Arc` + `Rect`), `ClipPath` (`Arc<Path>`) and `PerformanceOverlay` are small
-and unboxed, so a sealed picture run costs no heap allocation beyond its `Arc`. The budget is
+Every payload is inline: `Picture` (`Arc` + `Rect`) and `ClipPath` (`Arc<Path>`) are small, so a
+sealed picture run costs no heap allocation beyond its `Arc`. The budget is
 128 B; re-measure before boxing anything. **Unasserted:** no test pins this.
 
 ### 2. Append-only `LayerTree` with a leader index, not a mutable tree plus a side registry
@@ -143,15 +142,11 @@ set.
 `flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
 (decision 9), are defined here. The tracker keeps the seam's `Region` (up to eight disjoint rects,
 ADR-0304 §5), merged as `Region::insert` merges, and the engine redraws it rect by rect or under its bounding box (ADR-0304 §9, the engine's
-`ARCHITECTURE.md`). The overlay's numbers (a frame-clock reading of the
-presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
-composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
-caller's `TextContext` into the display list the layer carries, so the engine replays shaped
-labels and shapes nothing (ADR-0092). `record` stays here, beside the layer, because it is the
-one recorder of the layer's readout; it holds no state.
-`PerformanceOverlayOption`
-crosses the engine boundary as itself rather than as a `u32`
-(`performance_overlay_readout_rows`).
+`ARCHITECTURE.md`). The performance overlay has no layer of its own: `flui-runtime`, beside the
+presentation that knows when a frame was composited, samples its numbers from the frame clock,
+records the readout through the UI runtime's `TextContext` and publishes it as one chunk under a
+clip at a scene node of its own (`performance_overlay_matrix`), so the engine replays shaped labels
+and shapes nothing (ADR-0092).
 
 ### 8. The stamp differ is the damage oracle — [ADR-0304 §4](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
@@ -318,20 +313,23 @@ a repaint writes into a reclaimed chunk and never into a held one
 (one impl per type, no generic consumer); composition callbacks (see the module map); the `needs_add_to_scene` dirty-bit
 protocol (it fed retained-layer reuse, which this architecture does not have); `LayerNode::offset` (a second
 way to say "translate" that no production tree ever set); the 57 generated `is_*/as_*/as_*_mut`
-accessors bar the four with callers (`as_leader`, `as_follower`, `as_performance_overlay`); the
+accessors bar the two with callers (`as_leader`, `as_follower`); the
 `f32` sugar constructors (`OffsetLayer::from_xy`, `FollowerLayer::below/above/..`,
 `Clip*Layer::circular/circle/oval`), second spellings of the geometry constructors; the `testing`
 feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `prelude` and
-`VERSION` (no importer).
+`VERSION` (no importer); `PerformanceOverlayLayer` and its `PerformanceOverlayOption` (a layer
+that drew beside the chunks that draw, and options no row honoured: the readout is a chunk
+`flui-runtime` records).
 
 ---
 
 ## Producers
 
 Three variants have no production producer today: `Picture`, `ColorFilter` and `ImageFilter`.
-The other thirteen are written into the retained scene, all but one
-by `flui-rendering`'s paint composer (`crates/flui-rendering/src/pipeline/owner/paint.rs`), each
-as an effect entry of its boundary's content (`push_layer`, over `ContentBuilder::push_effect`):
+The other twelve are written into the retained scene as effect entries of a boundary's content
+(`ContentBuilder::push_effect`), by `flui-rendering`'s paint composer
+(`crates/flui-rendering/src/pipeline/owner/paint.rs`, `push_layer`) and, for the performance
+overlay, by `flui-runtime`:
 
 - `scope_layer` and `clip_layer` turn a recorded `FragmentScope` or `PaintClip` into `Opacity`,
   `ClipRect`, `ClipRRect`, `ClipSuperellipse`, `ClipPath`, `ShaderMask`, `BackdropFilter`,
@@ -343,8 +341,8 @@ as an effect entry of its boundary's content (`push_layer`, over `ContentBuilder
   root's device-pixel-ratio scale, and a node's own paint transform in `own_effect_layers`). A
   sealed recording is a chunk, not a `Picture` (`seal_picture`), and a repaint-boundary child is a
   slot (`place_boundary_impl`);
-- `flui-runtime` adds `PerformanceOverlay` (`PerformanceOverlayLayer::record` in
-  `crates/flui-runtime/src/presentation.rs`).
+- `flui-runtime`'s presentation scene writes a `ClipRect`, under a `Transform` at a device pixel
+  ratio other than 1, over the performance overlay's chunk (`presentation_scene.rs`).
 
 An external texture is not a layer: `RenderTexture` (`flui-objects`) records a `DrawOp::Texture`
 into its picture (ADR-0233), the version indexes each chunk's texture draws, and a texture frame

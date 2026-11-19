@@ -423,7 +423,10 @@ removal and nested-provider precedence. The runtime's
 `preferred_locales_select_resources_and_direction` exercises loaded resources.
 
 `RichText` reads inherited text sizing and weight adjustment during its stateless
-build and passes them with its unchanged authored spans to a private render view.
+build, and the ambient `Directionality` when it names no direction of its own (a
+run that names one takes no dependency), and passes them, the resolved direction
+included, with its unchanged authored spans to a private render view
+(`a_text_run_reads_the_ambient_direction_unless_it_names_one`).
 It reads them in `build` rather than through `RenderObjectContext::depend_on`,
 and native settings never enter `RenderObjectContext`. The paragraph update reports layout and semantics invalidation when sizing changes, so the same
 render object produces updated geometry. Weight changes likewise invalidate layout

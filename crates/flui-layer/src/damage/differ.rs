@@ -322,10 +322,6 @@ impl Frame {
                     }
                     picture.picture().damage_extent()
                 }
-                Layer::PerformanceOverlay(overlay) => {
-                    ctx.volatile = true;
-                    Some(DamageExtent::rect(overlay.bounds()))
-                }
                 // The masked result composites over the mask's whole bounds
                 // with the mask's blend mode: under a destination-replacing
                 // mode (Src, Clear, DstIn...) the pixels it changes reach the
