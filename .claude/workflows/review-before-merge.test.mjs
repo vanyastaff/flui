@@ -16,7 +16,7 @@ async function run(args, agentStub) {
   const result = await load()(agent, parallel, () => {}, () => {}, args)
   return { result, calls }
 }
-const scope = (extra = {}) => ({ base: SHA('a'), head: SHA('b'), since: '', since_base: '', since_is_ancestor: true, files: ['x.rs'], stat: '1 file', base_tree: SHA('e'), head_tree: SHA('f'), warnings: [], error: '', ...extra })
+const scope = (extra = {}) => ({ base: SHA('a'), head: SHA('b'), since: '', since_base: '', since_is_ancestor: true, files: ['x.rs'], stat: '1 file', warnings: [], error: '', ...extra })
 const finding = (title, extra = {}) => ({ title, file: 'x.rs', line: 1, state: 's', operation: 'o', wrong_result: 'w', evidence: 'e', ...extra })
 
 // 1. A ref with a smart quote or a dashed component is refused before any agent runs.
@@ -41,17 +41,28 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
   assert.match(result.markdown, /Independent read unavailable: the scope step failed: no result/)
 }
 
-// 2b. An empty file list is "no change" only when the two trees are the same object; a scope agent
-//     that lists no files for trees that differ, or gives no trees, leaves the read unavailable.
+// 2b. An empty file list (or one holding only a blank entry) is "no change" only when a second agent,
+//     which never sees the first answer, reports that `git diff --quiet` exited 0; any other answer
+//     leaves the read unavailable, and no reader runs.
 {
-  for (const [trees, expected] of [
-    [{ base_tree: SHA('e'), head_tree: SHA('f') }, /Independent read unavailable: the scope step listed no files, but the trees of the base and the head differ/],
-    [{ base_tree: '', head_tree: '' }, /Independent read unavailable: the scope step listed no files, but the trees of the base and the head differ or were not given/],
-    [{ base_tree: SHA('e'), head_tree: SHA('e') }, /No change to review: the merge base and the head have the same tree/],
+  for (const [files, check, expected] of [
+    [[], { exit_status: 1, error: '' }, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(git diff --quiet exited 1\)/],
+    [[], null, /Independent read unavailable: the scope step listed no files, and the diff's own test did not confirm that the change is empty \(no result/],
+    [[], { exit_status: 0, error: 'git: not found' }, /did not confirm that the change is empty \(git: not found\)/],
+    [[], { exit_status: 0, error: '' }, /No change to review: the merge base and the head have the same tree/],
+    [['""', ' '], { exit_status: 0, error: '' }, /No change to review/],
   ]) {
-    const { result, calls } = await run({}, (p, o) => (o.label === 'scope' ? scope({ files: [], stat: '', ...trees }) : assert.fail(o.label)))
-    assert.match(result.markdown, expected, JSON.stringify(trees))
-    assert.deepEqual(calls.map((o) => o.label ?? o), ['scope'])
+    let checkPrompt = ''
+    const { result, calls } = await run({ since: SHA('c') }, (p, o) => {
+      if (o.label === 'scope') return scope({ files, stat: '', since: '', since_base: '' })
+      if (o.label === 'scope:diff') { checkPrompt = p; return check }
+      return assert.fail(o.label)
+    })
+    assert.match(result.markdown, expected, JSON.stringify(check))
+    assert.deepEqual(calls, ['scope', 'scope:diff'])
+    assert.match(checkPrompt, new RegExp(`diff --quiet ${SHA('a')} ${SHA('b')}`))
+    // No reader ran, so no note says the readers read the whole change.
+    assert.doesNotMatch(result.markdown, /the readers read the whole change/)
   }
 }
 
@@ -325,15 +336,19 @@ for (const mutants of ["D:/it's", 42]) {
   assert.match(result.markdown, /changes a decision \(docs\/plans\/specs\/feat\/design\.md\); the design read \(mode "design"\) is owed/)
 }
 {
-  // An agent that writes the quotes of an empty string ("") in its error and since fields has
-  // returned empty fields, not a failure: the review runs.
-  const { result } = await run({}, (p, o) => {
-    if (o.label === 'scope') return scope({ error: '""', since: '""', since_base: "''", warnings: [] })
+  // An agent that writes the quotes of an empty string ("" or '', padded or not) has returned an
+  // empty field, not a failure: the review runs, a since written so cannot be placed, and a blank
+  // warning adds no note.
+  const { result } = await run({ since: SHA('c') }, (p, o) => {
+    if (o.label === 'scope') return scope({ error: " '' ", since: '""', since_base: "''", warnings: ['""', ' ', 'fetch failed'] })
     if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
     return { confirmed: [], rejected: [], not_kept: [] }
   })
   assert.equal(result.unavailable, undefined)
   assert.equal(result.judge, 'fable')
+  assert.match(result.markdown, /The earlier head [0-9a-f]{40} could not be placed/)
+  assert.match(result.markdown, /Scope: fetch failed\./)
+  assert.doesNotMatch(result.markdown, /Scope: (""|\s*)\./)
 }
 for (const mode of ['Design', 'adr', 7]) {
   const { result, calls } = await run({ mode }, () => assert.fail('no agent may run'))

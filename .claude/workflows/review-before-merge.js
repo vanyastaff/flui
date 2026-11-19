@@ -40,12 +40,19 @@ const SCOPE_SCHEMA = {
     since_is_ancestor: { type: 'boolean' },
     files: { type: 'array', items: { type: 'string' } },
     stat: { type: 'string', description: 'the last line of git diff --stat' },
-    base_tree: { type: 'string', description: 'full sha of the tree of base' },
-    head_tree: { type: 'string', description: 'full sha of the tree of head' },
     warnings: { type: 'array', items: { type: 'string' }, description: 'failures of the fetch or of since, each with its command' },
     error: { type: 'string', description: 'the failed command for head, base or files, and its error, or empty' },
   },
-  required: ['base', 'head', 'since', 'since_base', 'since_is_ancestor', 'files', 'stat', 'base_tree', 'head_tree', 'warnings', 'error'],
+  required: ['base', 'head', 'since', 'since_base', 'since_is_ancestor', 'files', 'stat', 'warnings', 'error'],
+}
+
+const DIFF_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    exit_status: { type: 'integer', description: 'the exit status of git diff --quiet' },
+    error: { type: 'string', description: 'the command and its error when it did not run, or empty' },
+  },
+  required: ['exit_status', 'error'],
 }
 
 const FINDINGS_SCHEMA = {
@@ -384,18 +391,19 @@ if (mode !== 'change' && mode !== 'design') {
 }
 const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
 
-// An agent that a usage limit or a skip refuses resolves to null, and one started past the turn's
-// token target throws; the runtime does not say which. Each is a failure the result names, and
-// none may read as an empty answer.
-// An agent asked for an empty string sometimes writes the quotes themselves (`""`); every string an
-// agent returns is read through `blankQuotes`, so such a field is empty wherever the script tests it.
+// An agent asked for an empty string sometimes writes the quotes themselves (`""` or `''`, padded or
+// not). Every value an agent returns is read through `blankQuotes`: such a string is empty, and a
+// list drops its blank strings, so a list holding only a blank entry is empty.
 function blankQuotes(value) {
   if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
-  if (Array.isArray(value)) return value.map(blankQuotes)
+  if (Array.isArray(value)) return value.map(blankQuotes).filter((x) => typeof x !== 'string' || x.trim())
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
   return value
 }
 
+// An agent that a usage limit or a skip refuses resolves to null, and one started past the turn's
+// token target throws; the runtime does not say which. Each is a failure the result names, and
+// none may read as an empty answer.
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
@@ -464,7 +472,6 @@ const scoped = await attempt(
     : 'since and since_base: the empty string; since_is_ancestor: true.'}
 5. files: \`git -C ${dir} diff --name-only <base> <head>\`
 6. stat: the last line of \`git -C ${dir} diff --stat <base> <head>\`
-7. base_tree and head_tree: the two lines of \`git -C ${dir} rev-parse <base>^{tree} <head>^{tree}\`
 Return full 40-character shas. When step 2, 3 or 5 fails, put the command and its error in "error"; never return an empty file list in place of a failed command.`,
   { phase: 'Scope', label: 'scope', schema: SCOPE_SCHEMA, model: 'haiku', effort: 'low' },
 )
@@ -475,11 +482,24 @@ if (scope.error) return unavailable(`the scope step failed: ${scope.error}`)
 if (!SHA.test(scope.head) || !SHA.test(scope.base)) {
   return unavailable(`the scope step returned no full sha for the base or the head ("${scope.base}", "${scope.head}")`)
 }
+const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
+const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
+// An empty file list is an agent's answer, and an agent can return one for a change it did not list.
+// A second agent, which never sees the first one's answer, runs the diff's own test, and "no change"
+// holds only when `git diff --quiet` exits 0.
+if (!scope.files.length) {
+  const checked = await attempt(
+    `Run exactly \`git -C ${dir} diff --quiet ${scope.base} ${scope.head}\` and report its exit status: 0 means the two commits have the same tree, 1 that they differ. If the command does not run, report its error.`,
+    { phase: 'Scope', label: 'scope:diff', schema: DIFF_CHECK_SCHEMA, model: 'sonnet', effort: 'low' },
+  )
+  const failure = checked.error || checked.value.error || (checked.value.exit_status === 0 ? '' : `git diff --quiet exited ${checked.value.exit_status}`)
+  if (failure) return unavailable(`the scope step listed no files, and the diff's own test did not confirm that the change is empty (${failure})`)
+  log('The merge base and the head have the same tree.')
+  return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }
+}
 // A since that cannot be placed loses the pointer to the fix, not the review: the readers read
 // the whole change, and the scope warnings above say why.
-const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
 if (sinceArg && !since) notes.push(`The earlier head ${sinceArg} could not be placed against ${baseRef}; the readers read the whole change.`)
-const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
 // A decision and code in one diff owe both reads: each read names the other when the diff asks
 // for it, so neither is taken for the whole.
 const decisionFiles = scope.files.filter((f) => /^docs\/adr\/ADR-\d+[^/]*\.md$|^docs\/plans\/specs\/[^/]+\/design\.md$/.test(f))
@@ -489,15 +509,6 @@ if (mode === 'design' && codeFiles.length) {
 }
 if (mode === 'change' && decisionFiles.length) {
   notes.push(`The diff changes a decision (${decisionFiles.join(', ')}); the design read (mode "design") is owed beside this one (AGENTS.md "Before a merge").`)
-}
-// An empty file list is an agent's answer, and an agent can return one for a change it did not
-// list: "no change" holds only when the two trees are the same object.
-if (!scope.files.length && !(SHA.test(scope.base_tree) && scope.base_tree === scope.head_tree)) {
-  return unavailable(`the scope step listed no files, but the trees of the base and the head differ or were not given ("${scope.base_tree}", "${scope.head_tree}")`)
-}
-if (!scope.files.length) {
-  log('The merge base and the head have the same tree.')
-  return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }
 }
 log(`Reviewing ${scope.base.slice(0, 9)}..${scope.head.slice(0, 9)}: ${scope.stat}`)
 
