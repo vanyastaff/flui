@@ -393,7 +393,7 @@ impl OwnerPlatform {
     }
 
     /// Where the application `app` keeps its data, as
-    /// [`Platform::data_store`](crate::Platform::data_store) says: `None` only
+    /// [`Platform::data_store`] says: `None` only
     /// on an Android Activity that reports no internal data path; a desktop
     /// host whose platform names no data folder answers a store that refuses
     /// each call.

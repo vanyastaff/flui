@@ -16,7 +16,7 @@
 //! `(rects − 1) · C` more in commands than the box, where `C` is every
 //! command of the version: when the box's extra pixels and the rects' extra
 //! passes already outweigh that, the rects are taken without the walk
-//! ([`shape`]).
+//! ([`shape`](crate::region_cost::shape)).
 //!
 //! An effect costs only through the commands under it: what a pass pays
 //! for each effect it reaches (a backdrop snapshot, a save-layer's

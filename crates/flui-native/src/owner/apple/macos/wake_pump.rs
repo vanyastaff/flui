@@ -464,7 +464,7 @@ mod tests {
         let window = RecordingWindowHandler::new();
         window.react_to_frame(|_| {});
         let delivery = pump
-            .window_delivery(window.clone(), InputCapabilities::UNAVAILABLE)
+            .window_delivery(window, InputCapabilities::UNAVAILABLE)
             .into_inner();
         let fire = || pump.fire(pump.generation.load(Ordering::Acquire));
 

@@ -529,6 +529,10 @@ struct ViewDisplay {
 impl FluiView {
     /// Build the content view for one window, sized to the screen's bounds,
     /// which hands its touches to `touches`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a part the window shares with its one view, built by its one caller"
+    )]
     fn new(
         mtm: MainThreadMarker,
         delivery: Arc<WindowDelivery>,
@@ -1360,6 +1364,10 @@ pub struct IOSWindow {
 
 impl IOSWindow {
     /// Allocate a stable view; a scene connection supplies its native container.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a host-owned part the window takes, from the host's one call"
+    )]
     fn new(
         mtm: MainThreadMarker,
         id: WindowId,

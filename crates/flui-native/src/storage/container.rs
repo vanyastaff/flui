@@ -15,9 +15,10 @@
 //!   its package's folders, `%LOCALAPPDATA%\Packages\<family name>\RoamingState`
 //!   and `LocalState`, which the system removes with the package, instead of
 //!   the private copy Windows redirects a write under `%APPDATA%` into. A
-//!   store it kept there before is copied over once ([`migrate`]); a store
+//!   store it kept there before is copied over once (`migrate`); a store
 //!   that was not copied stays where it is, and stays the store
-//!   ([`roots_after_migration`]).
+//!   (`roots_after_migration`). Both are built for Windows and tests only,
+//!   so a doc build for another target names them without a link.
 //!
 //! Reading `/.flatpak-info` (on Linux alone) and copying a store touch the
 //! file system: this runs at the store's first call, on the thread the host
