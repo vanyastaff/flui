@@ -9,13 +9,14 @@ use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use super::content::{BoundaryContent, Chunk};
 use super::owner::{SceneOp, SceneOwner, SurfaceKey};
 use super::version::SceneVersion;
-use crate::layer::Layer;
+use crate::layer::Effect;
 use crate::tree::LayerTree;
 
 impl SceneVersion {
     /// The version that paints `tree`: one node holding the whole tree, each
-    /// picture without children a chunk of its recording and every other
-    /// layer an effect over its children, in the tree's paint order.
+    /// picture a chunk of its recording, drawn before any layer the tree hangs
+    /// under it, and every other layer an [`Effect`](crate::Effect) over its
+    /// children, in the tree's paint order.
     ///
     /// No render tree owns a hand-built scene: a layer
     /// [`with_render`](crate::LayerNode::with_render) is filed under that
@@ -51,8 +52,20 @@ impl SceneVersion {
                 .get(id)
                 .expect("BUG: a tree's child ids name its nodes");
             let render = node.render_id().unwrap_or_else(|| filed_under(id));
-            match node.layer() {
-                Layer::Picture(picture) if node.children().is_empty() => {
+            let children = node
+                .children()
+                .iter()
+                .rev()
+                .map(|&child| Visit::Enter(child));
+            match Effect::try_from(node.layer().clone()) {
+                Ok(effect) => {
+                    content.push_effect(effect, render, 0);
+                    stack.push(Visit::Exit);
+                    stack.extend(children);
+                }
+                // A picture draws before the layers a tree hangs under it,
+                // in the scope it sits in.
+                Err(picture) => {
                     let version = writer
                         .next_content_version()
                         .expect("BUG: a fresh owner mints fewer than 2^64 - 1 recordings");
@@ -62,16 +75,7 @@ impl SceneVersion {
                         version,
                         Arc::clone(picture.shared()),
                     )));
-                }
-                layer => {
-                    content.push_effect(layer.clone(), render, 0);
-                    stack.push(Visit::Exit);
-                    stack.extend(
-                        node.children()
-                            .iter()
-                            .rev()
-                            .map(|&child| Visit::Enter(child)),
-                    );
+                    stack.extend(children);
                 }
             }
         }

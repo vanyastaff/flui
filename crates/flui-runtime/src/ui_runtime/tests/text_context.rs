@@ -254,13 +254,9 @@ fn the_overlay_shapes_through_the_ui_runtime_text_context() {
             400.0, 300.0,
         )))
         .expect("the first frame paints");
-    let overlay = scene
-        .version()
-        .flatten()
-        .iter()
-        .find_map(|(_, node)| node.layer().as_performance_overlay().cloned())
+    let overlay = super::performance_overlay::overlay_readout(scene.version())
         .expect("the overlay is attached");
-    let overlay_ids = paragraph_blob_ids(overlay.readout());
+    let overlay_ids = paragraph_blob_ids(overlay.commands());
     assert!(!overlay_ids.is_empty(), "the readout carries shaped labels");
 
     let ui_runtime_ids = ui_runtime.text_context_for_test().with(|text| {

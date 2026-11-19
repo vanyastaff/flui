@@ -6,7 +6,7 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
 use flui_layer::{
     AnnotatedRegionLayer, BackdropFilterLayer, BoundaryContent, ClipPathLayer, ClipRRectLayer,
-    ClipRectLayer, ClipSuperellipseLayer, ContentBuilder, EntryIndex, Layer, LeaderLayer, Lineage,
+    ClipRectLayer, ClipSuperellipseLayer, ContentBuilder, Effect, EntryIndex, LeaderLayer, Lineage,
     OffsetLayer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneWriter, ShaderMaskLayer,
     TransformLayer,
 };
@@ -405,9 +405,9 @@ impl PipelineOwner<PaintPhase> {
         composer.begin_boundary(None, self.scene_frame.as_ref().map(|frame| &frame.content));
         let root_layer =
             if self.device_pixel_ratio == flui_foundation::geometry::DevicePixelRatio::ONE {
-                Layer::Offset(OffsetLayer::zero())
+                Effect::from(OffsetLayer::zero())
             } else {
-                Layer::Transform(TransformLayer::new(
+                Effect::from(TransformLayer::new(
                     flui_foundation::geometry::Matrix4::scaling(
                         self.device_pixel_ratio.get(),
                         self.device_pixel_ratio.get(),
@@ -622,7 +622,7 @@ impl PipelineOwner<PaintPhase> {
         &self,
         record: &BoundaryRecord,
         targets: &[RenderId],
-        patches: &mut Vec<(EntryIndex, Layer)>,
+        patches: &mut Vec<(EntryIndex, Effect)>,
     ) -> crate::error::RenderResult<Option<SmallVec<[RenderId; 2]>>> {
         if targets.iter().any(|target| {
             !record
@@ -653,7 +653,7 @@ impl PipelineOwner<PaintPhase> {
             // which would call the same `paint_effects` and panic again; the
             // return comes before `consumed` reaches the caller, so the request
             // stays queued for the retry.
-            let mut fresh = SmallVec::<[Layer; 3]>::new();
+            let mut fresh = SmallVec::<[Effect; 3]>::new();
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: paint_effects runs contained; a panic poisons without a retry loop"
@@ -680,7 +680,7 @@ impl PipelineOwner<PaintPhase> {
                 // Under the fixed order `own_effect_layers` emits (opacity,
                 // clip, transform), the count check plus this per-position
                 // kind compare is a complete shape check.
-                if std::mem::discriminant(&layer) != std::mem::discriminant(recorded) {
+                if std::mem::discriminant(layer.as_layer()) != std::mem::discriminant(recorded) {
                     return Ok(None);
                 }
                 patches.push((index, layer));
@@ -965,7 +965,7 @@ impl PipelineOwner<PaintPhase> {
                     scope_opacity.push(1.0);
                     composer.push_layer(
                         node_id,
-                        Layer::Transform(TransformLayer::new(conjugate(*matrix, origin))),
+                        Effect::from(TransformLayer::new(conjugate(*matrix, origin))),
                     );
                 }
                 FragmentOp::Pop => {
@@ -1622,9 +1622,9 @@ struct EffectSlots {
 /// clip, [`conjugate`] for the transform). The opacity layer is
 /// origin-independent (always `Offset::ZERO`), which is why an alpha-only
 /// update is correct no matter where the node sits.
-fn own_effect_layers(effects: PaintEffects, origin: Offset, layers: &mut impl Extend<Layer>) {
+fn own_effect_layers(effects: PaintEffects, origin: Offset, layers: &mut impl Extend<Effect>) {
     if let Some(opacity) = effects.opacity {
-        layers.extend(Some(Layer::Opacity(OpacityLayer::with_offset(
+        layers.extend(Some(Effect::from(OpacityLayer::with_offset(
             opacity.alpha(),
             Offset::ZERO,
         ))));
@@ -1635,7 +1635,7 @@ fn own_effect_layers(effects: PaintEffects, origin: Offset, layers: &mut impl Ex
     if let Some(matrix) = effects.transform {
         // Same math and same reason as the per-child `PushTransform` fragment
         // op (RenderFlow and friends).
-        layers.extend(Some(Layer::Transform(TransformLayer::new(conjugate(
+        layers.extend(Some(Effect::from(TransformLayer::new(conjugate(
             matrix, origin,
         )))));
     }
@@ -1939,7 +1939,7 @@ struct ComposerScratch {
     visited: FxHashSet<RenderId>,
     ordinals: FxHashMap<(u64, RenderId), (u32, u32)>,
     effect_owner: FxHashMap<(u64, RenderId), usize>,
-    layer_patches: Vec<(EntryIndex, Layer)>,
+    layer_patches: Vec<(EntryIndex, Effect)>,
     republished: FxHashSet<SceneNodeId>,
     retired: Vec<SceneNodeId>,
     retired_set: FxHashSet<SceneNodeId>,
@@ -1965,7 +1965,7 @@ struct ComposerScratch {
     /// The layers of the node being painted for its own effects, collected
     /// inside its paint's containment and pushed before its children paint:
     /// empty between nodes.
-    own_effects: Vec<Layer>,
+    own_effects: Vec<Effect>,
     /// The words of [`PaintedSlots`] of the nodes on the path being painted
     /// that needed them, each after its ancestors': empty between passes.
     painted_slots: Vec<u64>,
@@ -2270,7 +2270,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     }
 
     /// Pushes `layer`, an effect `owner` painted, and opens it.
-    fn push_layer(&mut self, owner: RenderId, layer: Layer) -> EntryIndex {
+    fn push_layer(&mut self, owner: RenderId, layer: Effect) -> EntryIndex {
         self.seal_picture();
         let build = self
             .work
@@ -2568,17 +2568,17 @@ fn backdrop_filter_at(
 /// canvas clips inside a picture is a composer-side optimization
 /// gated on the `needs_compositing` bits — correctness is identical
 /// either way, so the recording API does not expose the choice.
-fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
+fn scope_layer(scope: FragmentScope, origin: Offset) -> Effect {
     match scope {
         FragmentScope::Opacity(opacity) => {
-            Layer::Opacity(OpacityLayer::with_offset(opacity.alpha(), Offset::ZERO))
+            Effect::from(OpacityLayer::with_offset(opacity.alpha(), Offset::ZERO))
         }
         FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,
             blend_mode,
             bounds,
-        } => Layer::ShaderMask(ShaderMaskLayer::new(
+        } => Effect::from(ShaderMaskLayer::new(
             shader,
             blend_mode,
             bounds.translate_offset(origin),
@@ -2588,7 +2588,7 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             blend_mode,
             bounds,
             group,
-        } => Layer::BackdropFilter(
+        } => Effect::from(
             BackdropFilterLayer::new(
                 backdrop_filter_at(filter, origin),
                 blend_mode,
@@ -2596,7 +2596,7 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             )
             .with_group(group),
         ),
-        FragmentScope::AnnotatedRegion { value, bounds } => Layer::AnnotatedRegion(
+        FragmentScope::AnnotatedRegion { value, bounds } => Effect::from(
             AnnotatedRegionLayer::from_value(bounds.translate_offset(origin), value),
         ),
         // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
@@ -2605,13 +2605,13 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         // variants above, `size` is NOT shifted by `origin` — it is a
         // pure dimension, not a position.
         FragmentScope::Leader { link, size } => {
-            Layer::Leader(LeaderLayer::with_offset(link, size, origin))
+            Effect::from(LeaderLayer::with_offset(link, size, origin))
         }
         // `Layer::Follower` carries no resolved transform at all — its
         // anchors and offsets are inputs to the composite-time
         // `SceneVersion::follower_transform`. `target_offset` is
         // recorded as-authored (not origin-shifted), like `size`.
-        FragmentScope::Follower(follower) => Layer::Follower(follower),
+        FragmentScope::Follower(follower) => Effect::from(follower),
     }
 }
 
@@ -2629,19 +2629,19 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
 /// translate-then-box shape as `Path` — the one difference is that its
 /// `Arc::new` is unavoidable either way, since the resolver always hands
 /// back a freshly built owned `Path`, not a pre-existing `Arc`.
-fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
+fn clip_layer(clip: PaintClip, origin: Offset) -> Effect {
     match clip {
         PaintClip::Rect { rect, behavior } => {
-            Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
+            Effect::from(ClipRectLayer::new(rect.translate_offset(origin), behavior))
         }
-        PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
+        PaintClip::RRect { rrect, behavior } => Effect::from(ClipRRectLayer::new(
             rrect.translate_offset(origin),
             behavior,
         )),
         PaintClip::RSuperellipse {
             rsuperellipse,
             behavior,
-        } => Layer::ClipSuperellipse(ClipSuperellipseLayer::new(
+        } => Effect::from(ClipSuperellipseLayer::new(
             rsuperellipse.translate_offset(origin),
             behavior,
         )),
@@ -2651,7 +2651,7 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
             } else {
                 Arc::new(path.translate(origin))
             };
-            Layer::ClipPath(ClipPathLayer::new(path, behavior))
+            Effect::from(ClipPathLayer::new(path, behavior))
         }
         PaintClip::PathTarget {
             target,
@@ -2670,7 +2670,7 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
             } else {
                 path.translate(origin)
             };
-            Layer::ClipPath(ClipPathLayer::new(Arc::new(path), behavior))
+            Effect::from(ClipPathLayer::new(Arc::new(path), behavior))
         }
     }
 }

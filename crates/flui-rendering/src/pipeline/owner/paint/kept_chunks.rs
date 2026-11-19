@@ -223,11 +223,7 @@ mod tests {
         let mut writer = owner.writer();
         let lineage = writer.current().id().lineage();
         let mut builder = BoundaryContent::builder();
-        builder.push_effect(
-            flui_layer::Layer::Offset(flui_layer::OffsetLayer::zero()),
-            RenderId::new(9),
-            0,
-        );
+        builder.push_effect(flui_layer::OffsetLayer::zero(), RenderId::new(9), 0);
         builder.pop_effect();
         let mut chunks = Vec::new();
         for slot in 0..4 {

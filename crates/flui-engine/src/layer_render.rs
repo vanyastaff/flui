@@ -5,8 +5,8 @@
 
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ColorFilterLayer,
-    FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer,
-    PerformanceOverlayLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer,
+    ShaderMaskLayer, TransformLayer,
 };
 
 use crate::{
@@ -90,10 +90,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
             // Annotation layers (metadata only, no visual rendering)
             Layer::AnnotatedRegion(_) => {
                 // AnnotatedRegion is metadata-only, no visual rendering needed
-            }
-
-            // Debug/Performance layers
-            Layer::PerformanceOverlay(layer) => layer.render(renderer),
+            } // Debug/Performance layers
         }
     }
 
@@ -126,10 +123,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
             Layer::Follower(layer) => layer.cleanup(renderer),
 
             // Annotation layers (metadata only, no cleanup needed)
-            Layer::AnnotatedRegion(_) => {}
-
-            // Debug/Performance layers
-            Layer::PerformanceOverlay(layer) => layer.cleanup(renderer),
+            Layer::AnnotatedRegion(_) => {} // Debug/Performance layers
         }
     }
 }
@@ -356,21 +350,5 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for FollowerL
 
     fn cleanup(&self, _renderer: &mut R) {
         // No state to clean up
-    }
-}
-
-// ============================================================================
-// PERFORMANCE OVERLAY LAYER
-// ============================================================================
-
-impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
-    /// Replays the readout, shaped upstream, clipped to the bounds: the
-    /// bounds are all the damage producer repaints for the overlay each
-    /// frame, so a readout recorded past them must not ink outside them. A
-    /// hard-edge rect clip is a scissor and opens no offscreen.
-    fn render(&self, renderer: &mut R) {
-        renderer.push_clip_rect(&self.bounds(), flui_painting::paint::Clip::HardEdge);
-        dispatch_commands(self.readout(), renderer);
-        renderer.pop_clip();
     }
 }

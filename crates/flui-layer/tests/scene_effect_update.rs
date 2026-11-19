@@ -7,9 +7,10 @@ use std::sync::Arc;
 use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
+use flui_layer::Effect;
 use flui_layer::{
     BoundaryContent, Chunk, ClipRectLayer, ContentVersion, DamageRect, DamageRegion, Entry,
-    EntryIndex, ImageFilterLayer, Layer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneOwner,
+    EntryIndex, ImageFilterLayer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneOwner,
     SceneWriter, SurfaceKey, TransformLayer,
 };
 use flui_painting::paint::{Clip, ImageFilter};
@@ -88,12 +89,12 @@ fn place(node: SceneNodeId, x: f64, y: f64) -> SceneOp {
     }
 }
 
-fn translate(dx: f64, dy: f64) -> Layer {
-    Layer::from(TransformLayer::new(Matrix4::translation(dx, dy, 0.0)))
+fn translate(dx: f64, dy: f64) -> Effect {
+    Effect::from(TransformLayer::new(Matrix4::translation(dx, dy, 0.0)))
 }
 
-fn clip(rect: Rect<f64>) -> Layer {
-    Layer::from(ClipRectLayer::new(rect, Clip::HardEdge))
+fn clip(rect: Rect<f64>) -> Effect {
+    Effect::from(ClipRectLayer::new(rect, Clip::HardEdge))
 }
 
 fn covering(l: f64, t: f64, r: f64, b: f64) -> DamageRect {
@@ -197,7 +198,7 @@ pub(crate) fn an_outer_effect_update_damages_its_unchanged_descendants(run: &mut
         let version = writer.next_content_version().expect("a version");
         let mut content = BoundaryContent::builder();
         outer = Some(content.push_effect(translate(0.0, 0.0), RenderId::new(1), 0));
-        content.push_effect(Layer::from(OpacityLayer::new(0.5)), RenderId::new(2), 0);
+        content.push_effect(Effect::from(OpacityLayer::new(0.5)), RenderId::new(2), 0);
         content.chunk(chunk(3, version, Rect::from_xywh(10.0, 10.0, 10.0, 10.0)));
         content.pop_effect();
         content.pop_effect();
@@ -231,15 +232,15 @@ pub(crate) fn an_outer_effect_update_damages_its_unchanged_descendants(run: &mut
 /// chunks `build` places around them.
 struct Shape {
     name: &'static str,
-    layers: Vec<Layer>,
+    layers: Vec<Effect>,
     /// Which of `layers` the update replaces, and with what.
-    replaced: Vec<(usize, Layer)>,
+    replaced: Vec<(usize, Effect)>,
 }
 
 /// The content of `shape` with `layers`, around the same chunks and slots,
 /// and the entry of each effect.
 fn build(
-    layers: &[Layer],
+    layers: &[Effect],
     chunks: &[Arc<Chunk>],
     slots: &[SceneNodeId],
 ) -> (BoundaryContent, Vec<EntryIndex>, EntryIndex) {
@@ -302,15 +303,15 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh(run: &mut Run) {
         Shape {
             name: "an image filter and an opacity",
             layers: vec![
-                Layer::from(OpacityLayer::new(1.0)),
+                Effect::from(OpacityLayer::new(1.0)),
                 translate(5.0, 5.0),
-                Layer::from(ImageFilterLayer::new(ImageFilter::blur(2.0))),
+                Effect::from(ImageFilterLayer::new(ImageFilter::blur(2.0))),
             ],
             replaced: vec![
-                (0, Layer::from(OpacityLayer::new(0.5))),
+                (0, Effect::from(OpacityLayer::new(0.5))),
                 (
                     2,
-                    Layer::from(ImageFilterLayer::new(ImageFilter::blur(6.0))),
+                    Effect::from(ImageFilterLayer::new(ImageFilter::blur(6.0))),
                 ),
             ],
         },

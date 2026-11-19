@@ -62,12 +62,6 @@ impl Inspect for Layer {
                 out.field("content", &layer.picture().fingerprint())
                     .level(Level::Detail);
             }
-            Layer::PerformanceOverlay(layer) => {
-                out.field("options", &layer.options().bits());
-                out.field("commands", &layer.readout().len());
-                out.field("content", &layer.readout().fingerprint())
-                    .level(Level::Detail);
-            }
             Layer::ColorFilter(layer) => {
                 #[expect(deprecated, reason = "ColorFilter is a composite with no typed value")]
                 out.value(

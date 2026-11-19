@@ -8,7 +8,7 @@ use super::{DamageMode, LayerDiffer};
 use crate::{
     BackdropFilterLayer, ClipRectLayer, ContentToken, DamageRect, DamageRegion, FollowerLayer,
     FullReason, Layer, LayerId, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
-    OpacityLayer, PerformanceOverlayLayer, PictureLayer, ResyncReason, TransformLayer,
+    OpacityLayer, PictureLayer, ResyncReason, TransformLayer,
 };
 
 const SURFACE: (u32, u32) = (400, 400);
@@ -352,33 +352,6 @@ fn size_change_is_full() {
         differ.diff(&one_boundary(&root, &child, at), (401, 400)),
         DamageRegion::Full(FullReason::SurfaceChanged)
     );
-}
-
-#[test]
-fn an_overlay_is_damaged_every_frame() {
-    let build = |root: &ContentToken| {
-        let mut frame = Frame::new(1.0, root);
-        let parent = frame.root();
-        frame.push(
-            parent,
-            PerformanceOverlayLayer::new(
-                Rect::from_xywh(300.0, 0.0, 100.0, 20.0),
-                crate::PerformanceOverlayOption::all(),
-                Canvas::new().finish(),
-            ),
-        );
-        frame.scene()
-    };
-    let root = ContentToken::mint();
-    let mut differ = LayerDiffer::default();
-    differ.diff(&build(&root), SURFACE);
-    for _ in 0..2 {
-        assert_eq!(
-            partial(differ.diff(&build(&root), SURFACE)),
-            covering(300.0, 0.0, 400.0, 20.0),
-            "no token vouches for an overlay's pixels"
-        );
-    }
 }
 
 /// Two overlapping sibling boundaries that swap paint order keep their

@@ -434,7 +434,7 @@ pub(crate) fn record_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_layer::LayerTree;
+    use flui_layer::{Effect, LayerTree};
 
     /// The order both production walkers must produce, recorded as a string so
     /// a mismatch reads as the sequence rather than an index.
@@ -592,33 +592,29 @@ mod tests {
         ))
     }
 
-    fn random_effect(
-        rng: &mut Rng,
-        link: flui_layer::LayerLink,
-        led: &mut bool,
-    ) -> flui_layer::Layer {
+    fn random_effect(rng: &mut Rng, link: flui_layer::LayerLink, led: &mut bool) -> Effect {
         use flui_foundation::geometry::{Offset, Size};
-        use flui_layer::{ClipRectLayer, FollowerLayer, Layer, LeaderLayer, TransformLayer};
+        use flui_layer::{ClipRectLayer, FollowerLayer, LeaderLayer, TransformLayer};
         match rng.below(5) {
-            0 => Layer::from(OffsetLayer::new(Offset::new(
+            0 => Effect::from(OffsetLayer::new(Offset::new(
                 rng.signed(40.0),
                 rng.signed(40.0),
             ))),
-            1 => Layer::from(TransformLayer::new(
+            1 => Effect::from(TransformLayer::new(
                 Matrix4::translation(rng.signed(30.0), rng.signed(30.0), 0.0)
                     * Matrix4::rotation_z(rng.signed(1.0)),
             )),
-            2 => Layer::from(ClipRectLayer::new(
+            2 => Effect::from(ClipRectLayer::new(
                 Rect::from_xywh(rng.signed(50.0), rng.signed(50.0), 60.0, 60.0),
                 flui_painting::paint::Clip::HardEdge,
             )),
-            3 if !std::mem::replace(led, true) => Layer::from(LeaderLayer::with_offset(
+            3 if !std::mem::replace(led, true) => Effect::from(LeaderLayer::with_offset(
                 link,
                 Size::new(20.0, 20.0),
                 Offset::new(rng.signed(30.0), rng.signed(30.0)),
             )),
-            3 => Layer::from(OffsetLayer::zero()),
-            _ => Layer::from(
+            3 => Effect::from(OffsetLayer::zero()),
+            _ => Effect::from(
                 FollowerLayer::new(link)
                     .with_target_offset(Offset::new(rng.signed(20.0), rng.signed(20.0)))
                     .with_size(Size::new(10.0, 10.0)),
@@ -864,7 +860,7 @@ mod tests {
     #[test]
     fn a_culled_walk_enters_a_slot_whose_blur_reaches_the_damage() {
         use flui_layer::{
-            BoundaryContent, ImageFilterLayer, Layer, Placement, SceneOp, SceneOwner,
+            BoundaryContent, Effect, ImageFilterLayer, Placement, SceneOp, SceneOwner,
         };
         let mut owner = SceneOwner::new();
         let mut writer = owner.writer();
@@ -884,7 +880,7 @@ mod tests {
         });
         let mut content = BoundaryContent::builder();
         content.push_effect(
-            Layer::from(ImageFilterLayer::new(
+            Effect::from(ImageFilterLayer::new(
                 flui_painting::paint::ImageFilter::blur(4.0),
             )),
             flui_foundation::RenderId::new(2),
@@ -989,7 +985,7 @@ mod tests {
     #[test]
     fn a_partial_walk_replays_only_the_chunks_its_damage_reaches() {
         use flui_layer::{
-            BoundaryContent, ImageFilterLayer, Layer, SceneOp, SceneOwner, TransformLayer,
+            BoundaryContent, Effect, ImageFilterLayer, SceneOp, SceneOwner, TransformLayer,
         };
         let replayed = |row: usize, damage: Rect<f64>| {
             let mut owner = SceneOwner::new();
@@ -1002,7 +998,7 @@ mod tests {
             }
             // Drawn at 0..10, moved to 300..310.
             content.push_effect(
-                Layer::from(TransformLayer::new(Matrix4::translation(300.0, 0.0, 0.0))),
+                Effect::from(TransformLayer::new(Matrix4::translation(300.0, 0.0, 0.0))),
                 flui_foundation::RenderId::new(row + 2),
                 0,
             );
@@ -1010,7 +1006,7 @@ mod tests {
             content.pop_effect();
             // Drawn at 400..410, spread a few pixels past that by the blur.
             content.push_effect(
-                Layer::from(ImageFilterLayer::new(
+                Effect::from(ImageFilterLayer::new(
                     flui_painting::paint::ImageFilter::blur(4.0),
                 )),
                 flui_foundation::RenderId::new(row + 4),
