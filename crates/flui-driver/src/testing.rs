@@ -207,6 +207,14 @@ pub enum Reply {
         /// What the stand-in does once they are sent.
         then: AfterLines,
     },
+    /// With `result`, then writing `bytes` as they are (an unfinished line, say), then closing
+    /// the connection.
+    ResultThenBytes {
+        /// The answer.
+        result: Value,
+        /// What is written after it, with no newline added.
+        bytes: Vec<u8>,
+    },
     /// By closing the connection, unanswered.
     Close,
 }
@@ -380,6 +388,7 @@ fn serve_one(
         };
         let mut after = AfterLines::Serve;
         let mut then: Vec<Value> = Vec::new();
+        let mut raw: Vec<u8> = Vec::new();
         let answer = if greeted {
             let Ok(request) = serde_json::from_slice::<Request<Value>>(&line) else {
                 return Ok(());
@@ -398,6 +407,11 @@ fn serve_one(
                 } => {
                     after = next;
                     then = lines;
+                    ServerLine::answer(request.id, Ok(result))
+                }
+                Reply::ResultThenBytes { result, bytes } => {
+                    after = AfterLines::Close;
+                    raw = bytes;
                     ServerLine::answer(request.id, Ok(result))
                 }
                 Reply::Close => return Ok(()),
@@ -426,6 +440,7 @@ fn serve_one(
             writing.write_all(&bytes)?;
             written.fetch_add(1, Ordering::SeqCst);
         }
+        writing.write_all(&raw)?;
         match after {
             AfterLines::Serve => {}
             AfterLines::Close => return Ok(()),

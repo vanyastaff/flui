@@ -126,17 +126,22 @@ impl fmt::Display for Announcement {
     }
 }
 
+/// The lock file's name in its directory.
+const LOCK_NAME: &str = "flui-driver-os-input.lock";
+
 /// The lock of an OS-input session: one per user's desktop at a time.
 ///
-/// An OS file lock on a file in the user's temporary directory, so it is released when the process
-/// holding it ends, however it ends. A desktop is a user's session, so the lock is per user.
+/// An OS file lock, so it is released when the process holding it ends, however it ends. A
+/// desktop is a user's session, so the lock is per user, and its file is in a directory only that
+/// user can write ([`default_path`](Self::default_path)): another user can neither hold this
+/// user's lock nor leave a file in its place.
 ///
 /// The lock is the OS's file lock, not the file's contents or permissions, so `busy` is answered
-/// only when the lock is shown to be held: the OS refuses it because another handle has it. A file
-/// this user may only read (another user's file in a shared `/tmp`, or one made read-only) is
-/// opened for reading, which is enough to take the lock, so a lock file left by a session that
-/// ended never blocks the next one. A file that cannot be opened at all is a typed [`Error::Io`]
-/// with no retry: no waiting makes it open.
+/// only when the lock is shown to be held: the OS refuses it because another handle has it. A lock
+/// file this user may only read (one made read-only, or left by an earlier session under other
+/// permissions) is opened for reading, which is enough to take the lock, so a lock file left by a
+/// session that ended never blocks the next one. A file that cannot be opened at all is a typed
+/// [`Error::Io`] with no retry: no waiting makes it open.
 #[derive(Debug)]
 #[must_use = "the lock is released when this is dropped"]
 pub struct OsInputLock {
@@ -145,10 +150,29 @@ pub struct OsInputLock {
 }
 
 impl OsInputLock {
-    /// The lock file of this user's desktop.
+    /// The lock file of this user's desktop, in a directory only this user can write: on Unix
+    /// `$XDG_RUNTIME_DIR` where it is set, and otherwise `flui-driver-<uid>` in the temporary
+    /// directory, which [`acquire_default`](Self::acquire_default) makes owner-only; elsewhere
+    /// the user's own temporary directory.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        std::env::temp_dir().join("flui-driver-os-input.lock")
+        lock_dir().path.join(LOCK_NAME)
+    }
+
+    /// Take the lock at [`default_path`](Self::default_path), making its private directory first
+    /// where it is the driver's to make.
+    ///
+    /// # Errors
+    ///
+    /// As [`acquire`](Self::acquire); [`Error::Io`] when the private directory cannot be made, or
+    /// is not a directory this user owns.
+    pub fn acquire_default() -> Result<Self> {
+        let dir = lock_dir();
+        #[cfg(unix)]
+        if dir.private {
+            make_private(&dir.path)?;
+        }
+        Self::acquire(&dir.path.join(LOCK_NAME))
     }
 
     /// Take the lock at `path`.
@@ -195,4 +219,68 @@ impl Drop for OsInputLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
+}
+
+/// The directory of this user's lock file.
+struct LockDir {
+    path: PathBuf,
+    /// Whether the driver makes it, owner-only, in a directory other users share.
+    #[cfg(unix)]
+    private: bool,
+}
+
+#[cfg(unix)]
+fn lock_dir() -> LockDir {
+    match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        // Owned by the user and owner-only, as the XDG base directory specification requires.
+        Some(path) if path.is_absolute() => LockDir {
+            path,
+            private: false,
+        },
+        _ => LockDir {
+            path: std::env::temp_dir().join(format!(
+                "flui-driver-{}",
+                rustix::process::geteuid().as_raw()
+            )),
+            private: true,
+        },
+    }
+}
+
+/// Windows keeps a temporary directory per user.
+#[cfg(not(unix))]
+fn lock_dir() -> LockDir {
+    LockDir {
+        path: std::env::temp_dir(),
+    }
+}
+
+/// Make `dir` owner-only, or check that the one there is: a directory this user owns, which is
+/// not a link. In a shared temporary directory with the sticky bit, as `/tmp` is, no other user
+/// can replace it afterwards.
+#[cfg(unix)]
+fn make_private(dir: &Path) -> Result<()> {
+    use std::io::ErrorKind;
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
+
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(Error::Io(error)),
+    }
+    let found = std::fs::symlink_metadata(dir).map_err(Error::Io)?;
+    if !found.is_dir() || found.uid() != rustix::process::geteuid().as_raw() {
+        return Err(Error::Io(std::io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!(
+                "{} is not a directory of this user's, so it cannot hold the OS-input lock; \
+                 remove it or set XDG_RUNTIME_DIR",
+                dir.display()
+            ),
+        )));
+    }
+    if found.mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(Error::Io)?;
+    }
+    Ok(())
 }

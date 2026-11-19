@@ -47,6 +47,8 @@ interprocess = { workspace = true }
 # The private directory a launched app's Unix socket lives in.
 [target.'cfg(unix)'.dependencies]
 tempfile = { workspace = true }
+# The user id that names the private directory of the OS-input lock.
+rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 flui-driver = { path = ".", features = ["headless", "testing"] }

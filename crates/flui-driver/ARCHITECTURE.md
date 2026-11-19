@@ -23,9 +23,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   thread shuts the stream down and is joined, so the app sees the driver leave on every exit. At
   most `INCOMING_ROOM` lines wait for the caller; past that the thread stops reading, and drops
   nothing. Why the connection broke is recorded in one place (`SocketConnection::take`), the first
-  failure kept for every later call, and every line the app sent before the break reaches the
-  caller first: the thread hands over what it read and what the stream has ready before why it
-  ended, and a send that finds the thread ended keeps the lines it reads to learn why.
+  failure kept for every later call. Before why it ended, the thread hands over every complete
+  line it read and those the stream has ready, reading at most `MAX_REPLY` bytes past the
+  failure, and why it ended names what it did not hand over (an unfinished last line, a line too
+  long, what the app sent past the bound); a send that finds the thread ended keeps the lines it
+  reads to learn why.
 - **A timed-out act is never resent.** A call with no answer in its budget is `timeout`, with
   `may_have_run` for a method that acts; a late answer is passed over by its id.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
@@ -33,15 +35,18 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
   run is announced and again at every `lane::send_guarded`, which asks the guard before every
   event and releases everything on every exit; `OsInputLock` holds one session per user's
-  desktop, `busy` only while another handle holds the OS file lock (a lock file this user may
-  only read is opened for reading, one it cannot open is `Error::Io`, never retried); the first OS
+  desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR`, or an
+  owner-only `flui-driver-<uid>` in the temporary directory on Unix), `busy` only while another
+  handle holds the OS file lock (a lock file this user may only read is opened for reading, one
+  it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
   `may_have_run`, never not run.
 - **Mapping refuses, never clamps.** `coordinates::to_device` maps in `f64` with every step checked
   and refuses a point outside the surface; `steps::os_events` hands a lane single-step moves, each
   followed by a pause, at most `steps::MAX_STEPS` per move; the moving sources of a tick share
   one timeline, each split by its own duration, so they move together and each keeps its own
-  speed, as on the synthetic path.
+  speed, as on the synthetic path. Steps due within one millisecond go out together, so every
+  pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts

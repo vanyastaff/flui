@@ -9,10 +9,12 @@
 //!
 //! The sources of a tick move together, each at its own speed: within one tick, the presses,
 //! releases, keys and text come first, in the order the sources are listed, and then the moves
-//! share one timeline. Each is split by its own duration, and the steps due at one instant go out
-//! together before the pause to the next, so two contacts of a pinch spread at once rather than
-//! one after the other, a jump stays a jump beside a stroke, and a short stroke is not slowed to a
-//! long one's pace, as on the synthetic path. A tick lasts as long as its longest move or pause.
+//! share one timeline. Each is split by its own duration, and the steps due within one
+//! millisecond go out together before the pause to the next, so two contacts of a pinch spread at
+//! once rather than one after the other, a jump stays a jump beside a stroke, and a short stroke
+//! is not slowed to a long one's pace, as on the synthetic path. Every pause is whole
+//! milliseconds, none shorter than one, which an OS timer can wait; a tick lasts exactly as long
+//! as its longest move or pause.
 
 use std::time::Duration;
 
@@ -122,13 +124,16 @@ pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result
 
 impl Tick<'_> {
     /// The tick's events, in order: what happens at once, then the strokes' steps on one timeline,
-    /// each stroke split by its own duration, so it keeps its own speed. The steps due at one
-    /// instant go out together, in the order the sources are listed, then a pause until the next
-    /// instant a step is due, or until the tick ends: at its longest stroke, its longest pause, or
-    /// one [`STEP`] after a stroke that names no duration.
+    /// each stroke split by its own duration, so it keeps its own speed. The steps due within one
+    /// millisecond go out together, in the order the sources are listed, then a pause until the
+    /// next millisecond a step is due in, or until the tick ends: at its longest stroke, its
+    /// longest pause, or one [`STEP`] after a stroke that names no duration.
     fn emit(self, geometry: &WindowGeometry, events: &mut Vec<OsEvent>) -> Result<()> {
         events.extend(self.instant);
-        // Every step of every stroke, at the instant it is due from the tick's start.
+        // Every step of every stroke, at the whole millisecond it is due in from the tick's start:
+        // steps due within one millisecond go out together, so no pause is shorter than one, and
+        // each instant is counted from the tick's start, so the pauses add up to its length
+        // exactly. One stroke's steps are at least a millisecond apart, so none of them merge.
         let mut steps: Vec<(Duration, usize, LogicalPoint)> = Vec::new();
         let mut end = self.pause;
         for (order, stroke) in self.strokes.iter().enumerate() {
@@ -140,7 +145,7 @@ impl Tick<'_> {
                     stroke.from.x + (stroke.to.x - stroke.from.x) * fraction,
                     stroke.from.y + (stroke.to.y - stroke.from.y) * fraction,
                 );
-                steps.push((share.saturating_mul(step - 1), order, at));
+                steps.push((whole_millis(share.saturating_mul(step - 1)), order, at));
             }
             end = end.max(if stroke.duration.is_zero() {
                 STEP
@@ -247,6 +252,11 @@ fn source_tick<'a>(
         _ => return Err(unsent("input_source")),
     }
     Ok(())
+}
+
+/// `instant` cut to the whole millisecond it falls in.
+fn whole_millis(instant: Duration) -> Duration {
+    Duration::new(instant.as_secs(), instant.subsec_millis() * 1_000_000)
 }
 
 /// How many single steps a move of `duration` takes: one per [`STEP`], at least one, at most

@@ -328,6 +328,43 @@ fn lines_waiting_for_the_caller_still_reach_it_when_a_write_to_the_app_fails() {
 }
 
 #[test]
+fn an_unfinished_last_line_is_named_when_the_app_closes() {
+    let unfinished = br#"{"event":"frame""#;
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME],
+        Box::new(move |_, _| Reply::ResultThenBytes {
+            result: json!({ "windows": ["w1"] }),
+            bytes: unfinished.to_vec(),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    driver
+        .windows()
+        .expect("the answer before the unfinished line");
+    agent
+        .join(Duration::from_secs(5))
+        .expect("the stand-in closed its end");
+    // Let the connection's thread read the unfinished line and the end, and stop.
+    std::thread::sleep(Duration::from_millis(300));
+    match driver.windows() {
+        Err(Error::Gone {
+            kind: Some(HandleKind::Process),
+            ref message,
+            ..
+        }) => assert!(
+            message.contains("the app closed the connection")
+                && message.contains(&format!(
+                    "an unfinished line of {} bytes is not handed over",
+                    unfinished.len()
+                )),
+            "why it ended names what was not handed over: {message}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
     let readings = Arc::new(AtomicUsize::new(0));
     let read = Arc::clone(&readings);
@@ -354,9 +391,11 @@ fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
                 }))
             }
             "wait.until" => {
-                // The frame presents at the very end of the wait's timeout.
+                // The frame presents at the end of the wait's timeout, and the answer arrives a
+                // millisecond past it: `timeout_ms` is the time left cut to whole milliseconds, so
+                // only then is the driver's clock surely past its deadline.
                 let timeout_ms = params["timeout_ms"].as_u64().unwrap_or(5_000).min(2_000);
-                std::thread::sleep(Duration::from_millis(timeout_ms));
+                std::thread::sleep(Duration::from_millis(timeout_ms + 1));
                 Reply::Result(json!({
                     "satisfied": true,
                     "frames": 1,
@@ -521,6 +560,74 @@ fn the_desktop_lock_is_busy_only_while_another_session_holds_it() {
     match refused {
         Err(ref error @ Error::Io(_)) => assert_eq!(error.retry(), Retry::Never),
         other => panic!("a lock file that cannot open is not busy: {other:?}"),
+    }
+}
+
+/// Set or clear `path`'s read-only permission.
+fn set_read_only(path: &std::path::Path, read_only: bool) {
+    let mut permissions = std::fs::metadata(path)
+        .expect("the lock file")
+        .permissions();
+    permissions.set_readonly(read_only);
+    std::fs::set_permissions(path, permissions).expect("the lock file's permissions");
+}
+
+#[test]
+fn a_lock_file_this_user_may_only_read_still_takes_the_lock() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("os-input.lock");
+    std::fs::write(&path, b"").expect("the lock file an earlier session left");
+    set_read_only(&path, true);
+    // Under root no mode bit refuses an open, so the file opens for writing: the read-only path
+    // is not taken there, and what is checked still holds, that such a file never makes the lock
+    // busy.
+    let held = OsInputLock::acquire(&path);
+    let second = held.as_ref().ok().map(|_| OsInputLock::acquire(&path));
+    let taken: std::result::Result<(), String> =
+        held.as_ref().map(|_| ()).map_err(ToString::to_string);
+    drop(held);
+    let after = OsInputLock::acquire(&path).map(drop);
+    // Restored before any assertion, so the temporary directory can be removed on Windows.
+    set_read_only(&path, false);
+    assert_eq!(
+        taken,
+        Ok(()),
+        "a lock file this user may only read still takes the lock"
+    );
+    assert!(
+        matches!(
+            second,
+            Some(Err(Error::Busy {
+                retry: Retry::Soon,
+                ..
+            }))
+        ),
+        "the lock taken through a read-only file is held: {second:?}"
+    );
+    assert!(after.is_ok(), "free again once released: {after:?}");
+}
+
+#[test]
+fn this_users_lock_is_in_a_directory_only_this_user_can_write() {
+    let held = OsInputLock::acquire_default().expect("this user's lock");
+    assert_eq!(held.path(), OsInputLock::default_path());
+    let refused = OsInputLock::acquire_default();
+    assert!(
+        matches!(refused, Err(Error::Busy { .. })),
+        "this user's second session is busy: {refused:?}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = held.path().parent().expect("the lock's directory");
+        let dir = std::fs::metadata(dir).expect("the lock's directory");
+        let lock = std::fs::metadata(held.path()).expect("the lock file");
+        assert_eq!(
+            dir.mode() & 0o077,
+            0,
+            "no other user may enter the lock's directory, so none can hold or replace the lock"
+        );
+        assert_eq!(dir.uid(), lock.uid(), "the directory is this user's own");
     }
 }
 

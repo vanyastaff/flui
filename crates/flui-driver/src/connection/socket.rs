@@ -16,9 +16,10 @@
 //!   [`SocketConnection::receive`], and why the connection broke is recorded in one place
 //!   ([`SocketConnection::take`]) the first time it is heard; once broken, every later call fails
 //!   at once as the app's process gone, never waiting. The lines that came before the break still
-//!   reach the caller, in order: the thread hands over every line it read, and those the stream
-//!   has ready, before why it ended, whether the app closed or a write to it failed, and a send
-//!   that finds the thread ended keeps the lines it reads off the channel to learn why.
+//!   reach the caller, in order: whether the app closed or a write to it failed, the thread hands
+//!   over every complete line it read, and those the stream has ready up to [`MAX_REPLY`] bytes
+//!   more, before why it ended, which names what was not handed over; a send that finds the
+//!   thread ended keeps the lines it reads off the channel to learn why.
 //! - A call takes the first line that answers its id: a late answer to an earlier call that timed
 //!   out is passed over.
 
@@ -420,10 +421,8 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
                 None => match reader.next_line() {
                     Ok(Some(line)) => line,
                     Ok(None) => break,
-                    Err(_) => {
-                        ended = Some(format!("the app sent a line longer than {MAX_REPLY} bytes"));
-                        break;
-                    }
+                    // The reader's refusal ends the conversation, and `finish` names it.
+                    Err(_) => return finish(stream, lines, None, &mut reader, &mut chunk, None),
                 },
             };
             match lines.try_send(Ok(line)) {
@@ -436,14 +435,14 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
             }
         }
         if let Some(why) = ended.take() {
-            return finish(stream, lines, waiting, &mut reader, &mut chunk, why);
+            return finish(stream, lines, waiting, &mut reader, &mut chunk, Some(why));
         }
         // Send what the driver handed over; its channel closing is the driver leaving.
         loop {
             match to_send.try_recv() {
                 Ok(line) => {
                     if let Err(why) = stream.write_line(&line) {
-                        return finish(stream, lines, waiting, &mut reader, &mut chunk, why);
+                        return finish(stream, lines, waiting, &mut reader, &mut chunk, Some(why));
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -469,7 +468,7 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
         match to_send.recv_timeout(IDLE) {
             Ok(line) => {
                 if let Err(why) = stream.write_line(&line) {
-                    return finish(stream, lines, waiting, &mut reader, &mut chunk, why);
+                    return finish(stream, lines, waiting, &mut reader, &mut chunk, Some(why));
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -478,42 +477,71 @@ fn converse(stream: &Io, to_send: &mpsc::Receiver<Vec<u8>>, lines: &SyncSender<I
     }
 }
 
-/// The end of the conversation, for `why`, its first failure: the line `waiting` for room, the
-/// complete lines `reader` holds and those the stream has ready, at most [`MAX_REPLY`] bytes more,
-/// are handed over in order, each as the caller makes room, and then `why`. A driver that leaves
-/// meanwhile takes what is left in its drop, so no hand-over waits for ever.
+/// The end of the conversation, for `why`, its first failure, or for the line too long that
+/// `reader` refuses when `why` is `None`.
+///
+/// Handed over in order, each as the caller makes room: the line `waiting` for room, the complete
+/// lines `reader` holds, and the complete lines among what the stream has ready, of which at most
+/// [`MAX_REPLY`] bytes are read. Then why it ended, naming what was not handed over: a line too
+/// long and what follows it, an unfinished last line, or what the app sent past the bound. A
+/// driver that leaves meanwhile takes what is left in its drop, so no hand-over waits for ever.
 fn finish(
     stream: &Io,
     lines: &SyncSender<Incoming>,
     waiting: Option<Vec<u8>>,
     reader: &mut LineReader,
     chunk: &mut [u8],
-    why: String,
+    why: Option<String>,
 ) {
     let mut pending = waiting;
     let mut residue = MAX_REPLY;
-    loop {
+    let lost = loop {
         let line = match pending.take() {
             Some(line) => line,
             None => match reader.next_line() {
                 Ok(Some(line)) => line,
-                Ok(None) if residue > 0 => match stream.read(chunk) {
-                    Ok(Received::Bytes(count)) => {
-                        reader.push(&chunk[..count]);
-                        residue = residue.saturating_sub(count);
-                        continue;
+                Ok(None) if residue == 0 => {
+                    break Some(format!(
+                        "the driver read {MAX_REPLY} bytes more, and what the app sent after them \
+                         is not handed over"
+                    ));
+                }
+                Ok(None) => {
+                    let room = residue.min(chunk.len());
+                    match stream.read(&mut chunk[..room]) {
+                        Ok(Received::Bytes(count)) => {
+                            reader.push(&chunk[..count]);
+                            residue -= count;
+                            continue;
+                        }
+                        // Nothing ready, the end or a break: only an unfinished line is left.
+                        Ok(Received::Nothing | Received::End) | Err(_) => {
+                            break match reader.buffered() {
+                                0 => None,
+                                left => Some(format!(
+                                    "an unfinished line of {left} bytes is not handed over"
+                                )),
+                            };
+                        }
                     }
-                    // Nothing ready, the end or a break: what came before it is handed over.
-                    Ok(Received::Nothing | Received::End) | Err(_) => break,
-                },
-                // The bound is spent, or a line too long: the first failure stays the one reported.
-                Ok(None) | Err(_) => break,
+                }
+                Err(_) => {
+                    break Some(format!(
+                        "the app sent a line longer than {MAX_REPLY} bytes, which is not handed \
+                         over, nor what follows it"
+                    ));
+                }
             },
         };
         if lines.send(Ok(line)).is_err() {
             return stream.shutdown();
         }
-    }
+    };
+    let why = match (why, lost) {
+        (Some(why), Some(lost)) => format!("{why}; {lost}"),
+        (Some(why), None) => why,
+        (None, lost) => lost.unwrap_or_else(|| "the connection to the app closed".to_owned()),
+    };
     let _ = lines.send(Err(why));
     stream.shutdown();
 }
