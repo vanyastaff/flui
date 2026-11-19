@@ -22,8 +22,8 @@ use flui_testing::replay::PointerScript;
 use flui_view::ViewExt;
 use flui_widgets::{
     ClipRect, Column, EditableText, GestureDetector, HitTestBehavior, LongPressSelection, Offstage,
-    OverflowBox, Padding, Positioned, ScrollController, ScrollView, SingleChildScrollView,
-    SizedBox, Stack, TextEditingController, WidgetsApp,
+    OverflowBox, Padding, Positioned, ScrollController, ScrollView, Scrollbar,
+    SingleChildScrollView, SizedBox, Stack, TextEditingController, WidgetsApp,
 };
 
 use crate::common::harness::{Harness, mount_with_selection_ui_on};
@@ -258,6 +258,76 @@ pub(crate) fn a_control_over_the_field_keeps_its_press() {
     harness.dispatch_pointer_up(150.0, 10.0);
     harness.pump_for(Duration::from_millis(500));
     assert_eq!(taps.get(), 1, "the button took its tap");
+}
+
+/// A press the field's own ancestors would take keeps it: a scrollbar's thumb
+/// beside the field, whose detector wraps the scroll view and so the field,
+/// and a tappable row around the field, pressed outside the field. The bare
+/// page beside the field under the same bar is nobody's, the scroll view's
+/// drag taking a press only past its slop.
+///
+/// Fails with ancestors' targets left out: the thumb and the row answer
+/// `Nothing`, and UIKit's gesture would take their press near a handle.
+pub(crate) fn a_control_an_ancestor_draws_beside_the_field_keeps_its_press() {
+    let controller = TextEditingController::with_text("hello world");
+    let node = FocusNode::with_debug_label("field under a scrollbar");
+    let page = SizedBox::new(400.0, 200.0).child(
+        Scrollbar::new(
+            SingleChildScrollView::new().child(SizedBox::new(400.0, 600.0).child(Stack::new((
+                SizedBox::new(300.0, 40.0).child(EditableText::new(controller, Rc::clone(&node))),
+            )))),
+        )
+        .thumb_visibility(true),
+    );
+    let mut harness =
+        mount_with_selection_ui_on(page.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    for (point, target, case) in [
+        ((397.0, 10.0), PressTarget::Other, "the scrollbar's thumb"),
+        (
+            (350.0, 10.0),
+            PressTarget::Nothing,
+            "the page beside the field",
+        ),
+        ((20.0, 10.0), PressTarget::Field, "the field"),
+    ] {
+        assert_eq!(
+            press_target_at(&store, Point::new(point.0, point.1)),
+            target,
+            "{case}"
+        );
+    }
+
+    let controller = TextEditingController::with_text("hello world");
+    let node = FocusNode::with_debug_label("field in a row");
+    let row = GestureDetector::new()
+        .behavior(HitTestBehavior::Opaque)
+        .on_tap(|_ctx| {})
+        .child(SizedBox::new(400.0, 60.0).child(Stack::new((
+            SizedBox::new(200.0, 40.0).child(EditableText::new(controller, Rc::clone(&node))),
+        ))));
+    let mut harness =
+        mount_with_selection_ui_on(row.boxed(), TargetPlatform::iOS, SelectionUi::Platform);
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field's store is served");
+    assert_eq!(
+        press_target_at(&store, Point::new(250.0, 10.0)),
+        PressTarget::Other,
+        "the row around the field, outside it"
+    );
+    assert_eq!(
+        press_target_at(&store, Point::new(20.0, 10.0)),
+        PressTarget::Field,
+        "the field in the row"
+    );
 }
 
 /// Inside a scroll view, whose gesture detector is on every press's path

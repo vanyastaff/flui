@@ -495,6 +495,10 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// Each drag claims its contact only past its slop.
+    fn takes_presses(&self) -> bool {
+        false
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;

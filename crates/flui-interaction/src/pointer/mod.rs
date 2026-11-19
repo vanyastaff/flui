@@ -31,7 +31,7 @@ pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, MouseEnterCallback,
     MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget,
-    PanZoomDispatch, PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget,
+    PanZoomDispatch, PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget, PressProbe,
     ResolvedRouteToken, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
     SmartZoomDispatch, SmartZoomTarget, resolve_local_payload, resolve_path_clip_target,
     resolve_shader_mask_target,

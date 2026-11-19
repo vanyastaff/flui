@@ -916,6 +916,10 @@ impl GestureRecognizer for DragGestureRecognizer {
     fn feeds_scroll_contact(&self) -> bool {
         self.allowed_devices.contains_kind(PointerKind::Trackpad)
     }
+    /// A drag claims its contact only past its slop.
+    fn takes_presses(&self) -> bool {
+        false
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         if !is_primary_down(dispatch.local) {
             return;

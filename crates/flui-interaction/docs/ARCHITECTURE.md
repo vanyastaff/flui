@@ -733,6 +733,23 @@ callback, the retirement failure propagates, and a healthy sibling still uses
 the parent coordinate space. It does not promise containment of multiple
 panicking destructors within one opaque capture.
 
+## Press admission
+
+A platform's own gesture asks, before it takes a touch over the window, whether
+a widget there would take the press (iOS's text interaction near a selection
+handle). A pointer target answers what it declared beside its handler
+(`InteractionDispatchHandle::declare_press_admission`), and a `PressProbe`
+asks it with a Down built and localised as dispatch localises one, delivering
+nothing. A listener declares from its pointer-down handler and recognizers:
+`RecognizerSet::takes_press` asks each live recognizer's admission predicate,
+or, without one, `GestureRecognizer::takes_presses`, which a drag, a scale, a
+swipe and a multi-drag answer `false` since they claim a contact only past
+their slop. A target that declared nothing takes no press. The probe answers on
+the lane's owner thread while the lane lives, without the UI runtime's scope a
+registration needs: the question arrives between owner turns. The predicate is
+user code and runs with no lane borrow held. The declaration goes with the
+target when it is unregistered.
+
 ## Pointer route capture retirement
 
 `PointerRouter::remove_all_routes`, `clear_global_handlers` and `clear` detach

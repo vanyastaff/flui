@@ -21,6 +21,7 @@ use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderNode;
 
 use super::PipelineOwner;
+use super::subtree_arena::ensure_stack;
 
 /// Where one render node's local space is drawn in the window after the last frame
 /// ([`PipelineOwner::presented_placement`]), in window-logical coordinates.
@@ -40,39 +41,47 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Where `id`'s local space is drawn in the window after the last frame: `None` when the
     /// paint walk draws nothing of it (it or an ancestor is skipped, offstage or awaiting
     /// layout, or its parent's last paint left it out), when it is not in the tree under the
-    /// root, or when its mapping into the window is not finite. Costs the node's depth.
+    /// root, or when its mapping into the window is not finite.
+    ///
+    /// Walks up the parent chain and composes on the way back down, allocating nothing; each
+    /// level finds the child's slot among its parent's children, as `transform_to` does (the
+    /// tree records no slot per child), so it costs the node's depth times its ancestors'
+    /// child counts.
     #[must_use]
     pub fn presented_placement(&self, id: RenderId) -> Option<PresentedPlacement> {
         let root = self.root_id()?;
-        let mut parent = self.render_tree.get(root)?;
-        let mut path = Vec::new();
-        let mut current = id;
-        while current != root {
-            path.push(current);
-            current = self.render_tree.parent(current)?;
-        }
-        if !self.paint_walk_draws(root, parent) {
-            return None;
-        }
-        let mut placement = self.root_placement(root)?;
-        let mut parent_id = root;
-        for &child_id in path.iter().rev() {
-            let child = self.render_tree.get(child_id)?;
-            let slot = parent.children().iter().position(|&id| id == child_id)?;
+        let node = self.render_tree.get(id)?;
+        node.laid_out_size()?;
+        self.placement_under(root, id, node)
+    }
+
+    /// [`Self::presented_placement`] of `node` (`id`), composed from its parent's.
+    fn placement_under(
+        &self,
+        root: RenderId,
+        id: RenderId,
+        node: &RenderNode,
+    ) -> Option<PresentedPlacement> {
+        ensure_stack(|| {
+            if !self.paint_walk_draws(id, node) {
+                return None;
+            }
+            if id == root {
+                return self.root_placement(root);
+            }
+            let parent_id = self.render_tree.parent(id)?;
+            let parent = self.render_tree.get(parent_id)?;
+            let placement = self.placement_under(root, parent_id, parent)?;
+            let slot = parent.children().iter().position(|&child| child == id)?;
             let painted = self
                 .last_child_paint_orders
                 .get(&parent_id)
                 .is_none_or(|order| order.iter().any(|entry| entry.slot == slot));
-            if !painted || !self.paint_walk_draws(child_id, child) {
+            if !painted {
                 return None;
             }
-            placement =
-                self.child_placement((parent_id, parent), slot, (child_id, child), placement)?;
-            parent_id = child_id;
-            parent = child;
-        }
-        parent.laid_out_size()?;
-        Some(placement)
+            self.child_placement((parent_id, parent), slot, (id, node), placement)
+        })
     }
 
     /// The root's placement: the window, its laid-out box, under the root's follower

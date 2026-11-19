@@ -254,11 +254,14 @@ pub trait TextStoreRead {
     fn visible_bounds(&self) -> Result<Option<Bounds<f64>>, TextStoreError>;
 
     /// What a press at `point` (window-root logical pixels) would land on, by
-    /// the window's own hit test: the field, another target drawn there (a
-    /// control over the field or beside it), or nothing that takes a press.
-    /// A platform that recognizes gestures over the field itself (iOS's
-    /// `UITextInteraction`) begins one only on the field, or where nothing
-    /// else takes the press, so every control keeps its tap.
+    /// the window's own hit test: the field, another target that would take
+    /// a touch going down there (a control over or beside the field, or one
+    /// an ancestor of the field draws, a scrollbar's thumb or a tappable
+    /// row), or nothing that takes a press (a scroll view's drag, which
+    /// claims only past its slop, included). A platform that recognizes
+    /// gestures over the field itself (iOS's `UITextInteraction`) begins one
+    /// only on the field, or where nothing else takes the press, so every
+    /// control keeps its tap.
     ///
     /// No default: a store that wraps another forwards it, and one that left
     /// it out would hand a control's tap to the platform.
@@ -279,9 +282,13 @@ pub trait TextStoreRead {
 pub enum PressTarget {
     /// The field.
     Field,
-    /// Another target that takes a press, drawn over the field or beside it.
+    /// Another target that would take a touch going down there: a press
+    /// recognizer or a pointer-down handler, or an admission that accepts the
+    /// Down, whether its widget is drawn over the field, beside it, or around
+    /// it (a scrollbar's thumb, a tappable row).
     Other,
-    /// Nothing that takes a press.
+    /// Nothing that takes a press: the bare page, or only targets that claim
+    /// a contact past their slop (a scroll view's drag).
     Nothing,
 }
 

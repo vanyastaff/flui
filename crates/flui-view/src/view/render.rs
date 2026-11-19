@@ -312,6 +312,45 @@ impl<'a> RenderObjectContext<'a> {
             .withdraw_scroll_contact_feed(target)?)
     }
 
+    /// Declare whether `target` would take the press a Down starts, for a
+    /// [`PressProbe`](flui_interaction::pointer::PressProbe) to ask. See
+    /// [`InteractionDispatchHandle::declare_press_admission`](flui_interaction::pointer::InteractionDispatchHandle::declare_press_admission).
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn declare_press_admission(
+        &self,
+        target: flui_interaction::pointer::PointerTarget,
+        takes: impl Fn(flui_interaction::pointer::PointerDispatch<'_>) -> bool + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .declare_press_admission(target, takes)?)
+    }
+
+    /// Take back [`declare_press_admission`](Self::declare_press_admission).
+    ///
+    /// # Errors
+    ///
+    /// As [`declare_press_admission`](Self::declare_press_admission).
+    pub fn withdraw_press_admission(
+        &self,
+        target: flui_interaction::pointer::PointerTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.withdraw_press_admission(target)?)
+    }
+
+    /// The probe that asks the pointer targets of this render object's UI
+    /// runtime whether they would take a press; `None` in a context mounted
+    /// without an interaction lane.
+    #[must_use]
+    pub fn press_probe(&self) -> Option<flui_interaction::pointer::PressProbe> {
+        self.interaction_dispatch
+            .map(flui_interaction::pointer::InteractionDispatchHandle::press_probe)
+    }
+
     /// Declare the axis a scroll target scrolls along and whether it has
     /// anywhere to go, so it competes for a touchpad pan (ADR-0251). See
     /// [`InteractionDispatchHandle::declare_scroll_target_axis`](flui_interaction::pointer::InteractionDispatchHandle::declare_scroll_target_axis).

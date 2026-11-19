@@ -69,4 +69,8 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
         self.owner()
             .is_some_and(|owner| owner.feeds_scroll_contact())
     }
+
+    fn takes_presses(&self) -> bool {
+        self.owner().is_some_and(|owner| owner.takes_presses())
+    }
 }

@@ -55,7 +55,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::events::PointerKind;
-use flui_interaction::pointer::HitTestResult;
+use flui_interaction::pointer::{HitTestResult, PressProbe};
 use flui_interaction::text_input::TextInputHandle;
 use flui_interaction::text_input::{
     CompositionLedger, EditGeneration, LockArbiter, committed_text,
@@ -248,6 +248,10 @@ pub(super) struct EditableTextStore {
     handle: Option<TextInputHandle>,
     pipeline: Option<PipelineCell>,
     inner_anchor: SubtreeAnchor,
+    /// Asks the window's pointer targets whether they would take a press
+    /// ([`Self::press_target_at`]); set by the field's render view, `None`
+    /// before it is mounted or in a window without an interaction lane.
+    press_probe: Rc<Cell<Option<PressProbe>>>,
     obscure: Rc<Cell<bool>>,
     text_input: Rc<Cell<TextInputOptions>>,
     obscuring_character: Rc<Cell<char>>,
@@ -293,6 +297,7 @@ pub(super) struct FieldParts {
     pub(super) handle: Option<TextInputHandle>,
     pub(super) pipeline: Option<PipelineCell>,
     pub(super) inner_anchor: SubtreeAnchor,
+    pub(super) press_probe: Rc<Cell<Option<PressProbe>>>,
     pub(super) obscure: Rc<Cell<bool>>,
     pub(super) text_input: Rc<Cell<TextInputOptions>>,
     pub(super) obscuring_character: Rc<Cell<char>>,
@@ -319,6 +324,7 @@ impl EditableTextStore {
             handle: parts.handle,
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
+            press_probe: parts.press_probe,
             obscure: parts.obscure,
             text_input: parts.text_input,
             obscuring_character: parts.obscuring_character,
@@ -1055,14 +1061,13 @@ impl TextStoreRead for Session<'_> {
 
     /// The window's own hit test, the one a touch is dispatched by, run at
     /// `point`: the field when its editable is on the path (a control drawn
-    /// over it keeps it off), another target when an entry on the path that
-    /// is not one of the field's ancestors takes pointer events (a scroll
-    /// view around the field takes none from it), nothing otherwise. A render
-    /// object's hit test is user
-    /// code: one that panics makes the walk resume its panic once the path is
-    /// complete (`PipelineOwner::hit_test`), and it leaves this call; the
-    /// platform's entry contains it (iOS's `interactionShouldBegin:atPoint:`
-    /// answers no gesture).
+    /// over it keeps it off), another target when an entry on the path would
+    /// take a touch going down there (`EditableTextStore::press_target_at`),
+    /// nothing otherwise. A render object's hit test and a target's press
+    /// admission are user code: a panic in the walk is resumed once the path
+    /// is complete (`PipelineOwner::hit_test`), one in an admission unwinds
+    /// directly, and either leaves this call; the platform's entry contains
+    /// it (iOS's `interactionShouldBegin:atPoint:` answers no gesture).
     fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
         self.store.press_target_at(point)
     }
@@ -1122,41 +1127,46 @@ impl EditableTextStore {
 
     /// What a press at `point` lands on, by the window's own hit test
     /// ([`TextStoreRead::press_target_at`]): the field when its editable is
-    /// on the path; another target when an entry that takes pointer events
-    /// and is not one of the field's own ancestors is (a control drawn over
-    /// or beside it, another field), since a scroll view or a page around the
-    /// field is on every path through it; nothing otherwise.
+    /// on the path; another target when an entry on the path would take a
+    /// touch going down there, by what its pointer target declared (a press
+    /// recognizer or a pointer-down handler, or an admission that accepts the
+    /// Down: a scrollbar's thumb, a list row's tap, a control over or beside
+    /// the field), whether or not it is one of the field's ancestors; nothing
+    /// otherwise, a scroll view's drag included, which claims only past its
+    /// slop. The targets' predicates are user code and run after the
+    /// pipeline is released; one that panics unwinds out of this call.
     fn press_target_at(&self, point: Point<f64>) -> Result<PressTarget, TextStoreError> {
         let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
         let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
-        // The path outlives the pipeline's borrow: its entries' payloads are
-        // destroyed after it is released.
+        // The path outlives the pipeline's borrow: the targets are asked, and
+        // the entries' payloads destroyed, after it is released.
         let mut path = HitTestResult::new();
-        let target = pipeline
+        let on_field = pipeline
             .try_with_layout(|owner| {
-                let tree = owner.render_tree();
-                let editable = *tree.children(anchor).first()?;
-                let ancestors: Vec<_> =
-                    std::iter::successors(tree.parent(editable), |&id| tree.parent(id)).collect();
+                let editable = *owner.render_tree().children(anchor).first()?;
                 owner.hit_test(Offset::new(point.x, point.y), PointerKind::Touch, &mut path);
-                let entries = path.path();
                 Some(
-                    if entries
+                    path.path()
                         .iter()
-                        .any(|entry| entry.target == editable || entry.target == anchor)
-                    {
-                        PressTarget::Field
-                    } else if entries.iter().any(|entry| {
-                        entry.pointer_target.is_some() && !ancestors.contains(&entry.target)
-                    }) {
-                        PressTarget::Other
-                    } else {
-                        PressTarget::Nothing
-                    },
+                        .any(|entry| entry.target == editable || entry.target == anchor),
                 )
             })
             .flatten()
             .ok_or(TextStoreError::NoLayout);
+        let target = on_field.map(|on_field| {
+            let global = Offset::new(point.x, point.y);
+            if on_field {
+                PressTarget::Field
+            } else if self.press_probe.get().is_some_and(|probe| {
+                path.path()
+                    .iter()
+                    .any(|entry| probe.takes_press_on(entry, global, PointerKind::Touch))
+            }) {
+                PressTarget::Other
+            } else {
+                PressTarget::Nothing
+            }
+        });
         drop(path);
         target
     }

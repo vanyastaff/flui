@@ -377,6 +377,11 @@ impl GestureRecognizer for SwipeGestureRecognizer {
         self.allowed_devices
     }
 
+    /// A swipe claims its contact only once it moves.
+    fn takes_presses(&self) -> bool {
+        false
+    }
+
     fn add_pointer(&self, down: crate::pointer::PointerDispatch<'_>) {
         if is_primary_down(down.local) {
             self.admit(down);

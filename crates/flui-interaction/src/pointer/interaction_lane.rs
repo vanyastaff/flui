@@ -932,6 +932,10 @@ impl HitTestSnapshot {
 /// anywhere to go (ADR-0251).
 type ScrollAxisDeclaration = (flui_foundation::geometry::Axis, Rc<dyn Fn() -> bool>);
 
+/// Whether a pointer target would take the press a Down starts
+/// ([`InteractionDispatchHandle::declare_press_admission`]).
+type PressAdmission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
+
 struct LocalLaneInner {
     owner: std::sync::Arc<DispatchOwner>,
     target_owners: RefCell<FxHashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
@@ -949,6 +953,9 @@ struct LocalLaneInner {
     /// Pointer targets that declared they feed a drag-family recognizer
     /// (ADR-0251 §2).
     scroll_contact_feeds: RefCell<FxHashSet<TargetId>>,
+    /// What each pointer target says of a Down it is asked about: whether it
+    /// would take that press ([`PressProbe`]).
+    press_admissions: RefCell<FxHashMap<TargetId, PressAdmission>>,
     /// The axis each scroll target scrolls along, for targets that take part in
     /// a scroll-fed contact as a competitor (ADR-0251 §2).
     scroll_target_axes: RefCell<FxHashMap<TargetId, ScrollAxisDeclaration>>,
@@ -1013,6 +1020,7 @@ impl InteractionLane {
             shader_mask_targets: RefCell::new(FxHashMap::default()),
             payload_targets: RefCell::new(FxHashMap::default()),
             scroll_contact_feeds: RefCell::new(FxHashSet::default()),
+            press_admissions: RefCell::new(FxHashMap::default()),
             scroll_target_axes: RefCell::new(FxHashMap::default()),
             routes: RefCell::new(FxHashMap::default()),
         });
@@ -1216,6 +1224,102 @@ impl Drop for LaneActivation<'_> {
 pub struct InteractionDispatchHandle {
     ticket: LaneTicket,
     owner: OwnerLatch,
+}
+
+/// Asks one UI runtime's pointer targets whether they would take a press,
+/// without delivering anything: what a platform asks before its own gesture
+/// takes a touch over a widget (iOS's text interaction near a selection
+/// handle). Each target answers what it declared
+/// ([`InteractionDispatchHandle::declare_press_admission`]); one that declared
+/// nothing takes no press.
+///
+/// A probe holds only the lane's identity. It answers on the lane's owner
+/// thread while the lane lives, inside or outside the UI runtime's scope, since
+/// a platform's question arrives between owner turns; elsewhere every target
+/// answers `false`.
+#[derive(Clone, Copy)]
+pub struct PressProbe {
+    ticket: LaneTicket,
+}
+
+impl std::fmt::Debug for PressProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PressProbe").finish_non_exhaustive()
+    }
+}
+
+impl PressProbe {
+    /// Whether `target` would take the press whose Down `dispatch` carries,
+    /// in `target`'s space (`dispatch.local`) and the root's
+    /// (`dispatch.global`). `false` for a target this probe's lane did not
+    /// register, one since unregistered, or one that declared nothing. The
+    /// target's predicate is user code: it runs with no lane borrow held, and
+    /// a panic in it unwinds out of this call.
+    #[must_use]
+    pub fn takes_press(&self, target: PointerTarget, dispatch: PointerDispatch<'_>) -> bool {
+        if target.lane_id != self.ticket.lane_id || thread::current().id() != self.ticket.owner {
+            return false;
+        }
+        let Some(lane) = LOCAL_LANES.with(|registry| {
+            registry
+                .borrow()
+                .get(&self.ticket.lane_id)
+                .and_then(Weak::upgrade)
+        }) else {
+            return false;
+        };
+        if !lane.targets.borrow().contains_key(&target.target_id) {
+            return false;
+        }
+        let takes = lane
+            .press_admissions
+            .borrow()
+            .get(&target.target_id)
+            .cloned();
+        drop(lane);
+        takes.is_some_and(|takes| takes(dispatch))
+    }
+
+    /// Whether the hit `entry` would take a primary press of a `kind` contact
+    /// going down at `global`, in the root's space: [`Self::takes_press`] for
+    /// that Down, localised into the entry's space as dispatch localises it.
+    /// `false` for an entry without a pointer target, and for a point that is
+    /// not finite or does not meet the entry's plane.
+    #[must_use]
+    pub fn takes_press_on(
+        &self,
+        entry: &HitTestEntry,
+        global: Offset<f64>,
+        kind: crate::events::PointerKind,
+    ) -> bool {
+        use crate::events::{
+            PointerButton, PointerButtons, PointerId, PointerPosition, PointerPress, PointerRole,
+            PointerSample, PointerSource,
+        };
+        let Some(target) = entry.pointer_target else {
+            return false;
+        };
+        let Ok(position) =
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(global.dx, global.dy))
+        else {
+            return false;
+        };
+        let down = PointerEvent::Down(PointerPress::new(
+            PointerSource::new(PointerId::new(std::num::NonZeroU64::MIN), kind)
+                .with_role(PointerRole::Primary),
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            PointerSample::new(flui_platform::EventTime::from_nanos(0), position),
+        ));
+        let local = match &entry.transform {
+            Some(transform) => match transform_pointer_event(&down, transform) {
+                Some(local) => local,
+                None => return false,
+            },
+            None => down.clone(),
+        };
+        self.takes_press(target, PointerDispatch::new(&local, &down))
+    }
 }
 
 #[derive(Default)]
@@ -1653,6 +1757,62 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
+    /// Declare whether `target` would take the press a Down starts: `takes`
+    /// answers for the Down a [`PressProbe`] asks about, in the target's own
+    /// space and the root's, without anything being delivered. A target that
+    /// declares nothing takes no press it is asked about. A listener declares
+    /// what its recognizers' admissions and press recognizers would do with
+    /// the Down ([`RecognizerSet::takes_press`](crate::gesture::RecognizerSet::takes_press)).
+    ///
+    /// Replaces an earlier declaration; the replaced predicate is dropped
+    /// with no borrow held.
+    ///
+    /// # Errors
+    ///
+    /// The typed dispatch error for wrong or detached owner state, or for a
+    /// target that no longer belongs to the active owner lane.
+    pub fn declare_press_admission(
+        &self,
+        target: PointerTarget,
+        takes: impl Fn(PointerDispatch<'_>) -> bool + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let takes: PressAdmission = Rc::new(takes);
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        let replaced = lane
+            .press_admissions
+            .borrow_mut()
+            .insert(target.target_id, takes);
+        drop(replaced);
+        Ok(())
+    }
+
+    /// Take back a [`declare_press_admission`](Self::declare_press_admission),
+    /// for a target that no longer takes presses.
+    ///
+    /// # Errors
+    ///
+    /// As [`declare_press_admission`](Self::declare_press_admission).
+    pub fn withdraw_press_admission(
+        &self,
+        target: PointerTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        let withdrawn = lane.press_admissions.borrow_mut().remove(&target.target_id);
+        drop(withdrawn);
+        Ok(())
+    }
+
+    /// The probe that asks this lane's pointer targets whether they would
+    /// take a press.
+    #[must_use]
+    pub fn press_probe(&self) -> PressProbe {
+        PressProbe {
+            ticket: self.ticket,
+        }
+    }
+
     /// Whether `target` declared itself a scroll-contact feed.
     pub(crate) fn feeds_scroll_contacts(&self, target: PointerTarget) -> bool {
         self.active_lane().is_ok_and(|lane| {
@@ -1682,7 +1842,9 @@ impl InteractionDispatchHandle {
         lane.scroll_contact_feeds
             .borrow_mut()
             .remove(&target.target_id);
+        let admission = lane.press_admissions.borrow_mut().remove(&target.target_id);
         drop(removed);
+        drop(admission);
         Ok(())
     }
 

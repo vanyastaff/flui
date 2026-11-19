@@ -318,6 +318,7 @@ fn text_editing() {
             ("editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui", crate::editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui),
             ("editable_text_platform_selection::a_control_over_the_field_keeps_its_press", crate::editable_text_platform_selection::a_control_over_the_field_keeps_its_press),
             ("editable_text_platform_selection::a_scroll_view_around_the_field_leaves_the_handles_their_reach", crate::editable_text_platform_selection::a_scroll_view_around_the_field_leaves_the_handles_their_reach),
+            ("editable_text_platform_selection::a_control_an_ancestor_draws_beside_the_field_keeps_its_press", crate::editable_text_platform_selection::a_control_an_ancestor_draws_beside_the_field_keeps_its_press),
             ("editable_text_platform_selection::a_field_shows_only_what_its_ancestors_clip_leaves", crate::editable_text_platform_selection::a_field_shows_only_what_its_ancestors_clip_leaves),
             ("editable_text_platform_selection::a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved", crate::editable_text_platform_selection::a_field_scrolled_inside_a_viewport_it_overflows_says_it_moved),
             ("editable_text_platform_selection::an_offstage_field_shows_nothing", crate::editable_text_platform_selection::an_offstage_field_shows_nothing),

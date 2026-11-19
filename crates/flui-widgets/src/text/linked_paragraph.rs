@@ -654,6 +654,11 @@ impl LinkRouting {
         let activation = ctx.register_local_payload(self.activation(routed));
         match (pointer, activation) {
             (Ok(pointer), Ok(target)) => {
+                // A link is hit only over its own span, and its tap takes the
+                // press there.
+                if let Err(error) = ctx.declare_press_admission(pointer, |_dispatch| true) {
+                    tracing::debug!(?error, "a link's press admission was not declared");
+                }
                 let handler: SemanticsActionHandler =
                     Rc::new(move |call| run_link_action(target, &call));
                 Some(TextLinkRoute::new(

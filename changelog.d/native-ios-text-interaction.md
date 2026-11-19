@@ -19,8 +19,14 @@
 - `TextStoreRead::press_target_at` and `PressTarget`: what a press at a point lands on (the
   field, another target, nothing), and `TextStoreRead::visible_bounds`: the part of the field the
   window shows, its ancestors' clips included. Both are required of every store session;
-  `EditableText` answers them with the window's hit test, where its own ancestors take no press
-  from it, and the pipeline's placement query.
+  `EditableText` answers them with the window's hit test, asking each target there whether it
+  would take the press, and the pipeline's placement query.
+- `PressProbe` and `InteractionDispatchHandle::declare_press_admission` in `flui-interaction`
+  (`RenderObjectContext::declare_press_admission` and `press_probe` in `flui-view`): a pointer
+  target says whether it would take the press a Down starts, and a platform's question is
+  answered without delivering anything. A `Listener` declares it from its pointer-down handler
+  and recognizers (`RecognizerSet::takes_press`, and `GestureRecognizer::takes_presses`, `false`
+  for a drag, a scale, a swipe), and a text link takes the presses on its span.
 - `PipelineOwner::presented_placement` and `PresentedPlacement` in `flui-rendering`: where one
   render node's local space is drawn in the window after the last frame and the part of the
   window its ancestors' clips leave it, by the paint walk's gates and composition, which the

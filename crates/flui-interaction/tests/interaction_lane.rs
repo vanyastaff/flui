@@ -167,6 +167,65 @@ fn router_mutation_diagnostics_observe_committed_unborrowed_state() {
     }
 }
 
+/// A press probe answers what each target declared of a Down, in the
+/// target's own space, outside the UI runtime's scope (a platform asks
+/// between owner turns): a target that declared nothing takes no press, nor
+/// does one since unregistered.
+///
+/// Fails with the Down left in the root's space for a transformed entry, and
+/// with the probe requiring the runtime's scope.
+#[test]
+fn a_press_probe_asks_what_each_target_declared() {
+    use flui_foundation::geometry::{Matrix4, Offset};
+    use flui_interaction::events::{PointerEventExt, PointerKind};
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let (silent, left_half, gone) = lane.enter(|| {
+        let register = || handle.register_pointer(|_| {}).expect("target");
+        let (silent, left_half, gone) = (register(), register(), register());
+        let in_left_half = |dispatch: flui_interaction::pointer::PointerDispatch<'_>| {
+            dispatch
+                .local
+                .position()
+                .is_some_and(|position| position.dx < 50.0)
+        };
+        handle
+            .declare_press_admission(left_half, in_left_half)
+            .expect("declared");
+        handle
+            .declare_press_admission(gone, |_| true)
+            .expect("declared");
+        handle.unregister_pointer(gone).expect("unregistered");
+        (silent, left_half, gone)
+    });
+    let probe = handle.press_probe();
+    let at = |x: f64| Offset::new(x, 10.0);
+    let touch = PointerKind::Touch;
+    assert!(
+        probe.takes_press_on(&hit_entry(left_half), at(10.0), touch),
+        "inside what it takes"
+    );
+    assert!(
+        !probe.takes_press_on(&hit_entry(left_half), at(60.0), touch),
+        "outside it"
+    );
+    let mut shifted = hit_entry(left_half);
+    shifted.transform = Some(Matrix4::translation(-50.0, 0.0, 0.0));
+    assert!(
+        probe.takes_press_on(&shifted, at(60.0), touch),
+        "asked in the target's own space"
+    );
+    assert!(
+        !probe.takes_press_on(&hit_entry(silent), at(10.0), touch),
+        "a target that declared nothing"
+    );
+    assert!(
+        !probe.takes_press_on(&hit_entry(gone), at(10.0), touch),
+        "an unregistered target"
+    );
+}
+
 #[test]
 fn explicit_pointer_capture_contract() {
     let rows: &[(&str, fn())] = &[

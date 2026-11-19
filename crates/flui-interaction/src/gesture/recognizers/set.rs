@@ -104,6 +104,27 @@ impl RecognizerSet {
                 .is_some_and(|recognizer| recognizer.feeds_scroll_contact())
         })
     }
+    /// Whether the Down `dispatch` carries would be taken here: a live
+    /// recognizer admits its device and either its admission predicate
+    /// accepts the Down, or it has none and takes presses
+    /// ([`GestureRecognizer::takes_presses`]). Nothing is delivered. The
+    /// admission predicates are user code and run with no borrow held; one
+    /// that panics unwinds out of this call.
+    #[must_use]
+    pub fn takes_press(&self, dispatch: PointerDispatch<'_>) -> bool {
+        let PointerEvent::Down(down) = dispatch.local else {
+            return false;
+        };
+        self.entries.iter().any(|entry| {
+            entry.recognizer.upgrade().is_some_and(|recognizer| {
+                admits_device(recognizer.allowed_devices(), down.pointer.kind)
+                    && entry
+                        .admit
+                        .as_ref()
+                        .map_or_else(|| recognizer.takes_presses(), |admit| admit(dispatch))
+            })
+        })
+    }
     /// Whether no recognizers have been attached.
     #[must_use]
     pub fn is_empty(&self) -> bool {

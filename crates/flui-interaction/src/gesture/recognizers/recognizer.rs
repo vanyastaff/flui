@@ -57,6 +57,17 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn feeds_scroll_contact(&self) -> bool {
         false
     }
+
+    /// Whether a contact's Down alone is this recognizer's to take: a tap, a
+    /// long press, a double tap or a hold contends for the press itself. A
+    /// recognizer that claims a contact only once it moves past its slop (a
+    /// drag, a scale, a swipe) answers `false`, so a press it would share with
+    /// a platform's own gesture (a text field's selection handles) is not
+    /// counted as its (see [`RecognizerSet::takes_press`](super::RecognizerSet::takes_press)).
+    /// An admission predicate it is attached with overrides this.
+    fn takes_presses(&self) -> bool {
+        true
+    }
 }
 
 /// Whether a recognizer allowing `devices` admits a contact of `kind`.

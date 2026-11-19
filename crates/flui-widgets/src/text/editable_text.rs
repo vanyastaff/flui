@@ -18,7 +18,7 @@ use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
-use flui_interaction::pointer::PointerDispatch;
+use flui_interaction::pointer::{PointerDispatch, PressProbe};
 use flui_interaction::text_input::{
     ClientToken, ClipboardCapability, ClipboardHandle, TextInputClient, TextInputHandle,
 };
@@ -806,6 +806,10 @@ pub struct EditableTextState {
     /// starts right at the editable instead of walking through `anchor`'s
     /// wider subtree (which also covers the `AnimatedBuilder` in between).
     inner_anchor: flui_objects::SubtreeAnchor,
+    /// The probe the field's store asks the window's pointer targets whether
+    /// they would take a press with, set by the `EditableTextRenderView`
+    /// from its render-object context each time it is built or updated.
+    press_probe: Rc<Cell<Option<PressProbe>>>,
     /// Acquired in `init_state`, never in `build` — the pointer handlers need
     /// it to reach the anchored `RenderEditable` and to map a global point
     /// into that object's local space, and a frame phase is not where a
@@ -973,6 +977,7 @@ impl StatefulView for EditableText {
             key_handler_registration: None,
             anchor: flui_objects::SubtreeAnchor::new(),
             inner_anchor: flui_objects::SubtreeAnchor::new(),
+            press_probe: Rc::new(Cell::new(None)),
             pipeline_owner: None,
             parent: None,
             controller: Rc::new(RefCell::new(self.controller.clone())),
@@ -1759,6 +1764,7 @@ impl ViewState<EditableText> for EditableTextState {
             handle: self.ime_handle.clone(),
             pipeline: self.pipeline_owner.clone(),
             inner_anchor: self.inner_anchor.clone(),
+            press_probe: Rc::clone(&self.press_probe),
             obscure: Rc::clone(&self.obscure),
             text_input: Rc::clone(&self.text_input),
             obscuring_character: Rc::clone(&self.obscuring_character),
@@ -2240,6 +2246,7 @@ impl ViewState<EditableText> for EditableTextState {
             platform_selection: self.platform_selection.is_active(),
         };
         let inner_anchor = self.inner_anchor.clone();
+        let press_probe = Rc::clone(&self.press_probe);
         // The handles look as the area's do: given, a default's, else dots
         // in the opaque active selection colour.
         let look = view
@@ -2306,7 +2313,10 @@ impl ViewState<EditableText> for EditableTextState {
                         &focus_node,
                         enabled,
                         &appearance,
-                        inner_anchor.clone(),
+                        FieldMount {
+                            inner_anchor: inner_anchor.clone(),
+                            press_probe: Rc::clone(&press_probe),
+                        },
                         &semantics_actions,
                         &touch_handles,
                     )
@@ -2802,6 +2812,18 @@ struct EditableTextRenderView {
     /// The links shown touch handles follow the start (or the caret) and
     /// the end under.
     handle_links: (Option<LayerLink>, Option<LayerLink>),
+    /// Where the field's store finds the probe of the window's pointer
+    /// targets: set from the render-object context on every build and
+    /// update, so it follows the UI runtime the field is mounted in.
+    press_probe: Rc<Cell<Option<PressProbe>>>,
+}
+
+/// What `build_field_view` mounts the editable under: the inner anchor that
+/// publishes its `RenderId`, and the cell its render view hands the press
+/// probe to.
+struct FieldMount {
+    inner_anchor: flui_objects::SubtreeAnchor,
+    press_probe: Rc<Cell<Option<PressProbe>>>,
 }
 
 impl EditableTextRenderView {
@@ -2831,18 +2853,17 @@ impl RenderView for EditableTextRenderView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderEditable;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.press_probe.set(ctx.press_probe());
         self.build_render_object()
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
+        self.press_probe.set(ctx.press_probe());
         let mut span = TextSpan::new(self.text.clone());
         if let Some(style) = self.text_style.clone() {
             span = span.with_style(style);
@@ -2903,7 +2924,7 @@ fn build_field_view(
     focus_node: &Rc<FocusNode>,
     enabled: bool,
     appearance: &FieldAppearance,
-    inner_anchor: flui_objects::SubtreeAnchor,
+    mount: FieldMount,
     actions: &FieldSemanticsActions,
     handles: &FieldHandles,
 ) -> BoxedView {
@@ -2991,7 +3012,7 @@ fn build_field_view(
         }
     }
     let field = crate::__private::AnchoredBox::new(
-        inner_anchor,
+        mount.inner_anchor,
         EditableTextRenderView {
             text,
             text_sizing: appearance.text_sizing.clone(),
@@ -3026,6 +3047,7 @@ fn build_field_view(
             },
             text_style: appearance.text_style.clone(),
             handle_links: handles.published_links(),
+            press_probe: mount.press_probe,
         },
     );
     semantics.child(field).boxed()

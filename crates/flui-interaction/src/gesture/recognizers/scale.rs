@@ -1709,6 +1709,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    /// A scale claims its contacts only once they move past its slop.
+    fn takes_presses(&self) -> bool {
+        false
+    }
     fn pointer_frame_end(&self) {
         self.settle_frame_moves();
     }

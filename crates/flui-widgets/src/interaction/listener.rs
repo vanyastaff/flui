@@ -576,6 +576,7 @@ impl Listener {
         match ctx.register_pointer(handler) {
             Ok(target) => {
                 self.sync_scroll_contact_feed(ctx, target);
+                self.sync_press_admission(ctx, target);
                 Some(target)
             }
             Err(error) => {
@@ -622,6 +623,28 @@ impl Listener {
         };
         if let Err(error) = outcome {
             tracing::debug!(?error, "Listener scroll-axis declaration failed");
+        }
+    }
+
+    /// Mirror on the pointer target whether this listener would take a
+    /// press: a pointer-down callback takes every one; otherwise its
+    /// recognizers answer for the Down (an admission that accepts it, or a
+    /// press recognizer; a drag alone takes none,
+    /// [`RecognizerSet::takes_press`]). A listener that takes none withdraws.
+    fn sync_press_admission(&self, ctx: &RenderObjectContext<'_>, target: PointerTarget) {
+        let outcome = if self.on_pointer_down.is_some() {
+            ctx.declare_press_admission(target, |_dispatch| true)
+        } else if self.recognizers.is_empty() {
+            ctx.withdraw_press_admission(target)
+        } else {
+            let recognizers = self.recognizers.clone();
+            let input = self.recognizer_input;
+            ctx.declare_press_admission(target, move |dispatch| {
+                input.admits(dispatch.local) && recognizers.takes_press(dispatch)
+            })
+        };
+        if let Err(error) = outcome {
+            tracing::debug!(?error, "Listener press-admission declaration failed");
         }
     }
 
@@ -822,6 +845,7 @@ impl RenderView for Listener {
                     tracing::warn!(?error, "Listener handler replacement failed");
                 }
                 self.sync_scroll_contact_feed(ctx, target);
+                self.sync_press_admission(ctx, target);
             }
             None => render_object.set_target(self.register(ctx)),
         }
