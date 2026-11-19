@@ -30,7 +30,6 @@ syn = { workspace = true, features = ["full", "parsing", "visit"] }
 tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
-wasmparser = { workspace = true }
 
 # `test-desktop`: the desktop a Windows test runs on, and the process started there.
 [target.'cfg(windows)'.dependencies]

@@ -164,8 +164,9 @@ conversation:
   backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`). So a change to a native backend, a shader, a trybuild case or a
-  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's. A red `main`
-  is fixed forward within the hour or reverted.
+  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's, and a change
+  to the steps of a job only main runs is run on its branch ("Before each push" item 14). A red
+  `main` is fixed forward within the hour or reverted.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -226,6 +227,10 @@ and the readers of "Before a merge" look for a change that breaks one:
   host), and a Rust source file has at most 3000 production lines.
 - A relative link in markdown stays inside the repository: lychee follows `../` above the root,
   where the runner's checkout makes it resolve (ADR-0383 §4).
+- `wasm-check` runs the wasm32 tests of each package whose dev-dependencies on wasm32 include
+  `wasm-bindgen-test`, and of flui-native's `web_browser`, which it names, and fails a target that
+  passes no assertion, except a lib target beside a `wasm32` target; its discovery and its count
+  are shell no pull request runs, so a change to them keeps both rules (ADR-0383 §5).
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.
@@ -326,7 +331,8 @@ with an answer you can point to in the code; the reviewers ask the same ones.
     `*.stderr`, `*.snap` or protocol schema, a raised perf baseline, fewer tests, a new
     `#[ignore]`, a new `deny.toml` or `typos.toml` value? For each, was the old expectation
     wrong, or is the code? An expectation moved to turn a check green is the defect the check was
-    there to find. The pull request's body says why for each.
+    there to find. The pull request's body says why for each. A change to the steps of a job only
+    main runs links a full-lane run of the head that merges (`gh workflow run CI --ref <branch>`).
 
 ## Before a merge
 
