@@ -168,10 +168,11 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   held capture whether it comes after the focus report,
   `a_focus_loss_leaves_the_hold_to_the_systems_answer`, or before it,
   `the_systems_false_before_the_focus_report_ends_the_hold`); a request made while the window is
-  unfocused is made when the focus returns, and nothing from before blocks the calls after it
-  (`a_request_while_unfocused_is_made_when_the_focus_returns`,
-  `a_release_and_an_ask_after_the_focus_returns_are_made`,
-  `a_call_unanswered_across_the_focus_return_is_forgotten`); the grab ends with the system
+  unfocused changes nothing and the focus return takes nothing
+  (`a_request_while_unfocused_is_dropped_and_the_focus_return_takes_nothing`), and nothing from
+  before blocks the calls after it (`a_release_and_an_ask_after_the_focus_returns_are_made`,
+  `a_wait_for_the_systems_release_does_not_outlast_the_focus_return`); the grab ends with the
+  system
   (`a_capture_the_system_ends_is_not_asked_for_again`); a replaced window's release or late grant
   never reaches its successor (`a_replaced_windows_release_does_not_cancel_its_successors_request`,
   `a_late_grant_for_a_replaced_window_goes_to_no_window`); no call is dropped while another is

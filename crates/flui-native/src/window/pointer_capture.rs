@@ -21,13 +21,16 @@
 //! The owner keeps the window's focus as `FluiView` reports it on the Java
 //! main thread (`onWindowFocusChanged`, and once as the view enters the
 //! window), and makes no call while the window is unfocused: the system
-//! drops a request of an unfocused window without an answer. A request made
-//! then is kept as wanted, and the focus coming back makes the call it calls
-//! for, forgetting any call still unanswered from before. A held capture
-//! ends with the focus by the system's `false`, which may come before or
-//! after the focus report (`ViewRootImpl` lines 3257 and 3283–3285 send it
-//! after; a focus change the input dispatcher reports first sends it
-//! before); the owner waits for it in place of a release of its own.
+//! drops a request of an unfocused window without an answer. A grab holds
+//! only while the window has the focus and nothing re-takes it (ADR-0354
+//! §2), so a request made while unfocused (one the owner thread sent before
+//! it heard of the loss) changes nothing, and the focus coming back takes
+//! nothing: it only releases a capture held for no window that wants it. A
+//! held capture ends with the focus by the system's `false`, which may come
+//! before or after the focus report (`ViewRootImpl` lines 3257 and 3283–3285
+//! send it after; a focus change the input dispatcher reports first sends it
+//! before); the owner waits for it (`Pending::SystemRelease`) in place of
+//! a release of its own.
 //!
 //! A call the system drops without any answer while the window keeps the
 //! focus (no such case is known) holds every later command until the next
@@ -94,6 +97,16 @@ impl<W: Copy> Held<W> {
     }
 }
 
+/// What the owner waits for before it makes another call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending<W> {
+    /// The answer to the call it made.
+    Call(CaptureCall<W>),
+    /// The `false` the system sends for a capture held when the focus left,
+    /// which ends it without a call of the owner's.
+    SystemRelease,
+}
+
 /// What one command or answer changed: the call to make now, and the windows
 /// whose published grab changed, with what each holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,8 +122,8 @@ pub(crate) struct CaptureStep<W> {
 pub(crate) struct CaptureOwner<W> {
     wanted: Option<W>,
     held: Held<W>,
-    /// The call made and not yet answered.
-    unanswered: Option<CaptureCall<W>>,
+    /// The answer the owner waits for; no call is made while it waits.
+    pending: Option<Pending<W>>,
     /// Whether the Activity window has the focus, as `FluiView` last said;
     /// focused until it says, since it says as it enters the window.
     focused: bool,
@@ -121,7 +134,7 @@ impl<W> Default for CaptureOwner<W> {
         Self {
             wanted: None,
             held: Held::Free,
-            unanswered: None,
+            pending: None,
             focused: true,
         }
     }
@@ -135,9 +148,13 @@ impl<W: Copy + Eq> CaptureOwner<W> {
         self.held.holder()
     }
 
-    /// `window` asks for the mouse.
+    /// `window` asks for the mouse. While the Activity window is unfocused
+    /// the request changes nothing: a grab is taken only while focused, and
+    /// the focus coming back does not take it.
     pub(crate) fn request(&mut self, window: W) -> CaptureStep<W> {
-        self.wanted = Some(window);
+        if self.focused {
+            self.wanted = Some(window);
+        }
         self.settle(self.held)
     }
 
@@ -158,16 +175,20 @@ impl<W: Copy + Eq> CaptureOwner<W> {
     /// so nothing takes the mouse again unasked.
     pub(crate) fn answered(&mut self, has_capture: bool) -> CaptureStep<W> {
         let before = self.held;
-        let unanswered = self.unanswered.take();
-        self.held = match (has_capture, unanswered) {
-            (true, Some(CaptureCall::Request(window))) if self.wanted == Some(window) => {
+        let pending = self.pending.take();
+        self.held = match (has_capture, pending) {
+            (true, Some(Pending::Call(CaptureCall::Request(window))))
+                if self.wanted == Some(window) =>
+            {
                 Held::For(window)
             }
             (true, _) => match before {
                 Held::For(window) => Held::For(window),
                 Held::Free | Held::Unattributed => Held::Unattributed,
             },
-            (false, Some(CaptureCall::Release)) => Held::Free,
+            (false, Some(Pending::Call(CaptureCall::Release) | Pending::SystemRelease)) => {
+                Held::Free
+            }
             (false, _) => {
                 self.wanted = None;
                 Held::Free
@@ -181,20 +202,21 @@ impl<W: Copy + Eq> CaptureOwner<W> {
     /// system may drop without an answer; what is held stays the system's to
     /// change, and a held capture is waited for to end by the system's
     /// `false` (before or after this report) in place of a release of the
-    /// owner's. A gain forgets any call still unanswered and makes the one
-    /// that moves `held` toward `wanted`, a request kept while unfocused
-    /// included.
+    /// owner's. A gain takes nothing: wanted is empty since the loss, so the
+    /// one call it may make releases a capture held for no window, and a
+    /// wait it finds is forgotten, so a `false` that never came cannot hold
+    /// the owner for good.
     pub(crate) fn focus_changed(&mut self, focused: bool) -> CaptureStep<W> {
         let before = self.held;
         if self.focused == focused {
             return self.settle(before);
         }
         self.focused = focused;
-        self.unanswered = None;
+        self.pending = None;
         if !focused {
             self.wanted = None;
             if before != Held::Free {
-                self.unanswered = Some(CaptureCall::Release);
+                self.pending = Some(Pending::SystemRelease);
             }
         }
         self.settle(before)
@@ -202,18 +224,18 @@ impl<W: Copy + Eq> CaptureOwner<W> {
 
     /// `call` never reached the system (the view is gone, or the call
     /// threw): it changed nothing, publishes nothing, and is not made again
-    /// until the next command or answer.
+    /// until the next command, answer or focus report.
     pub(crate) fn call_failed(&mut self, call: CaptureCall<W>) {
-        if self.unanswered == Some(call) {
-            self.unanswered = None;
+        if self.pending == Some(Pending::Call(call)) {
+            self.pending = None;
         }
     }
 
-    /// The call that moves `held` toward `wanted`, unless one is unanswered
+    /// The call that moves `held` toward `wanted`, unless the owner waits
     /// or the window is unfocused, and the publications from `before` to
     /// now.
     fn settle(&mut self, before: Held<W>) -> CaptureStep<W> {
-        let call = if self.unanswered.is_some() || !self.focused {
+        let call = if self.pending.is_some() || !self.focused {
             None
         } else {
             match (self.wanted, self.held) {
@@ -223,8 +245,8 @@ impl<W: Copy + Eq> CaptureOwner<W> {
                 _ => Some(CaptureCall::Release),
             }
         };
-        if call.is_some() {
-            self.unanswered = call;
+        if let Some(call) = call {
+            self.pending = Some(Pending::Call(call));
         }
         let (was, now) = (before.holder(), self.held.holder());
         let changed = if was == now {
@@ -449,40 +471,40 @@ mod tests {
     }
 
     /// A window that asks after the Activity window lost the focus, before
-    /// the owner thread heard of it, gets no call the system would drop
-    /// unanswered: the request is kept and made once the focus is back.
-    fn a_request_while_unfocused_is_made_when_the_focus_returns() {
+    /// the owner thread heard of it, changes nothing: no call the system
+    /// would drop unanswered, and the focus coming back takes nothing, since
+    /// nobody asked since the loss (ADR-0354 §2).
+    fn a_request_while_unfocused_is_dropped_and_the_focus_return_takes_nothing() {
         let mut owner = CaptureOwner::default();
         owner.focus_changed(false);
-        assert_eq!(owner.request(W1).call, None, "no call while unfocused");
-        assert_eq!(
-            owner.focus_changed(true).call,
-            Some(CaptureCall::Request(W1))
-        );
-        assert_eq!(owner.answered(true).changed, [None, Some((W1, true))]);
+        let asked = owner.request(W1);
+        assert_eq!((asked.call, asked.changed), (None, [None, None]));
+        let back = owner.focus_changed(true);
+        assert_eq!((back.call, back.changed), (None, [None, None]));
+        assert_eq!(owner.holder(), None);
     }
 
-    /// After the focus is back, a release and a new ask each make their
-    /// call: a request of the unfocused time is made at the return, not
-    /// dropped unanswered, so nothing stands in the way of the calls after.
+    /// After the focus is back, an ask, a release and another ask each make
+    /// their call: nothing of the unfocused time stands in their way.
     fn a_release_and_an_ask_after_the_focus_returns_are_made() {
         let mut owner = CaptureOwner::default();
         owner.focus_changed(false);
         owner.request(W1);
-        assert_eq!(
-            owner.focus_changed(true).call,
-            Some(CaptureCall::Request(W1))
-        );
+        owner.focus_changed(true);
+        assert_eq!(owner.request(W1).call, Some(CaptureCall::Request(W1)));
         owner.answered(true);
         assert_eq!(owner.release(W1).call, Some(CaptureCall::Release));
         owner.answered(false);
         assert_eq!(owner.request(W2).call, Some(CaptureCall::Request(W2)));
     }
 
-    /// A call still unanswered when the focus comes back (the system's
-    /// `false` for a capture held at the loss has not come) is forgotten,
-    /// and the call that moves the capture toward what is wanted is made.
-    fn a_call_unanswered_across_the_focus_return_is_forgotten() {
+    /// The system's `false` for a capture held at the loss has not come when
+    /// the focus comes back: the wait is forgotten and the capture, held for
+    /// no window that wants it, released. AOSP produces no such order (the
+    /// `false` comes at the loss, `ViewRootImpl` lines 3283–3285, or before
+    /// it); the row keeps a `false` that never came from holding the owner
+    /// for good.
+    fn a_wait_for_the_systems_release_does_not_outlast_the_focus_return() {
         let mut owner = CaptureOwner::default();
         owner.request(W1);
         owner.answered(true);
@@ -558,16 +580,16 @@ mod tests {
                     the_systems_false_before_the_focus_report_ends_the_hold,
                 ),
                 (
-                    "a_request_while_unfocused_is_made_when_the_focus_returns",
-                    a_request_while_unfocused_is_made_when_the_focus_returns,
+                    "a_request_while_unfocused_is_dropped_and_the_focus_return_takes_nothing",
+                    a_request_while_unfocused_is_dropped_and_the_focus_return_takes_nothing,
                 ),
                 (
                     "a_release_and_an_ask_after_the_focus_returns_are_made",
                     a_release_and_an_ask_after_the_focus_returns_are_made,
                 ),
                 (
-                    "a_call_unanswered_across_the_focus_return_is_forgotten",
-                    a_call_unanswered_across_the_focus_return_is_forgotten,
+                    "a_wait_for_the_systems_release_does_not_outlast_the_focus_return",
+                    a_wait_for_the_systems_release_does_not_outlast_the_focus_return,
                 ),
                 (
                     "a_capture_the_system_ends_is_not_asked_for_again",
