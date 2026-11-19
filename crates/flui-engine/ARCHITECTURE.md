@@ -1157,11 +1157,16 @@ here. The tracker keeps the region's rects (a further one merges the cheapest
 pair, as `Region` does), and a partial frame redraws them rect by rect or
 under their bounding box (ADR-0304 §9), counted as `region_passes`: each
 pass clears its own rect under its own scissor and walks the scene culled
-by that rect. `region_cost.rs` picks the shape once the damage is closed,
-from one walk of the version culled by the box: per rect costs each reached
+by that rect. `region_cost.rs` picks the shape each time the damage is
+closed, at most `Region::MAX` rounds a frame, from a walk of the version
+culled by the box: per rect costs each reached
 chunk's commands times the rects it meets, plus `PIXEL_COST` a pixel and
 `PASS_COST` a pass; the box costs each chunk's commands once, its own area
-and one pass. Rects in opposite corners of a grid of small chunks stay
+and one pass. The walk is skipped when the box's extra pixels, less the
+rects' extra passes, outweigh `(rects − 1)` times the version's commands,
+which the frame protocol sums once per version over every chunk the
+version holds, with no cull; an effect costs only through the commands under it.
+Rects in opposite corners of a grid of small chunks stay
 apart (on the `raster_share` bench the box redraws nearly the whole
 surface); a few rects over one large chunk take the box, which replays it
 once (`a_region_is_redrawn_the_way_predicted_cheaper`,

@@ -197,6 +197,10 @@ pub(crate) struct FrameProtocol {
     /// What the last frame [`Self::run`] was handed did: zero after a skipped
     /// frame or one that failed.
     counters: RasterCounters,
+    /// The commands of every chunk of the last version a region was planned
+    /// over, summed once per version: what bounds the gain of redrawing a
+    /// region under its box ([`crate::region_cost::shape`]).
+    version_commands: Option<(flui_layer::SceneVersionId, u64)>,
 }
 
 impl Default for FrameProtocol {
@@ -215,6 +219,7 @@ impl FrameProtocol {
             font_source: FontSource::Ordinary,
             damage_off: false,
             counters: RasterCounters::default(),
+            version_commands: None,
         }
     }
 
@@ -385,9 +390,12 @@ impl FrameProtocol {
             let SceneContent::Version(version) = scene.content() else {
                 return;
             };
-            if region.rects().len() == 1
-                || crate::region_cost::predict(version, &region).shape()
-                    == crate::region_cost::RegionShape::Rects
+            if region.rects().len() == 1 {
+                return;
+            }
+            let commands = self.version_commands(version);
+            if crate::region_cost::shape(version, &region, commands)
+                == crate::region_cost::RegionShape::Rects
             {
                 return;
             }
@@ -395,6 +403,18 @@ impl FrameProtocol {
             self.damage.mark_rect(region.bounds());
         }
         self.damage.mark_full_repaint();
+    }
+
+    /// The commands of every chunk of `version`, summed once per version.
+    fn version_commands(&mut self, version: &flui_layer::SceneVersion) -> u64 {
+        match self.version_commands {
+            Some((id, commands)) if id == version.id() => commands,
+            _ => {
+                let commands = crate::region_cost::version_commands(version);
+                self.version_commands = Some((version.id(), commands));
+                commands
+            }
+        }
     }
 
     /// Marks what closing `region` added, rect by rect.

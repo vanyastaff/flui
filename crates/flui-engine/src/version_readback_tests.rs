@@ -3345,7 +3345,8 @@ fn a_chunk_under_two_clips_draws_each_from_one_recording() {
 /// A version whose root chunk is heavy redraws a region of two distant boxes
 /// under their bounding box, which replays the chunk once instead of once per
 /// box (ADR-0304 §9): the closure then reaches the filter in the gap, and the
-/// frame still draws as a full one.
+/// frame still draws as a full one, and outside its one pass the bytes are
+/// the last frame's.
 #[test]
 fn a_heavy_chunk_redraws_a_region_under_its_bounding_box() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -3371,6 +3372,7 @@ fn a_heavy_chunk_redraws_a_region_under_its_bounding_box() {
     partial
         .render_scene(&Scene::of_version(owner.current().clone()))
         .expect("the warm-up renders");
+    let before = partial.read_rgba().expect("readback");
 
     gap_reader(&mut owner.writer(), boxes, Color::WHITE, false, 0);
     owner.apply(SURFACE).expect("a recolour applies");
@@ -3389,6 +3391,7 @@ fn a_heavy_chunk_redraws_a_region_under_its_bounding_box() {
     let [planned] = planned.rects() else {
         panic!("one pass under the box: {planned:?}");
     };
+    let planned = *planned;
     let bounds = region.bounds();
     assert!(
         planned.left() <= bounds.left() && planned.right() >= bounds.right(),
@@ -3423,4 +3426,14 @@ fn a_heavy_chunk_redraws_a_region_under_its_bounding_box() {
         stale, 0,
         "pixels the region frame drew unlike the full frame"
     );
+    // Outside the one pass the frame redrew, the bytes are the warm-up's.
+    let inside = |x: u32, y: u32| {
+        (planned.left()..planned.right()).contains(&x)
+            && (planned.top()..planned.bottom()).contains(&y)
+    };
+    let written_outside = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(&before, x, y) != px(&pixels, x, y))
+        .count();
+    assert_eq!(written_outside, 0, "pixels outside the pass changed");
 }

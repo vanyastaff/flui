@@ -12,11 +12,23 @@
 //! - per rect: `Σ commands · rects met + PIXEL_COST · Σ rect area + PASS_COST · rects`;
 //! - bounding box: `Σ commands + PIXEL_COST · box area + PASS_COST`.
 //!
+//! A chunk meets at most every rect, so the rects cost at most
+//! `(rects − 1) · C` more in commands than the box, where `C` is every
+//! command of the version: when the box's extra pixels and the rects' extra
+//! passes already outweigh that, the rects are taken without the walk
+//! ([`shape`]).
+//!
+//! An effect costs only through the commands under it: what a pass pays
+//! for each effect it reaches (a backdrop snapshot, a save-layer's
+//! offscreen, an opacity group) is not weighed, so a region over many
+//! effects is planned as if they were free, part of the hypothesis.
+//!
 //! Flutter's raster cache redraws one bounding rect of its damage, and
 //! Chromium's compositor collapses damage to a few rects or their union; the
 //! two weights are hypotheses fitted on lavapipe alone (the `raster_share`
-//! bench and the bad case in `docs/plans/specs/render-scaling/tasks.md`, RS11),
-//! owed a run on hardware (`docs/gaps.md`).
+//! bench's region rows and `a_region_is_redrawn_the_way_predicted_cheaper`),
+//! owed a run on hardware (the `partial-frames-redrawn-by-their-damage-region`
+//! row of `crates/flui-native/platform-parity.toml`).
 
 use flui_foundation::geometry::Rect;
 use flui_layer::{Region, SceneVersion};
@@ -58,6 +70,40 @@ impl RegionCost {
             RegionShape::Rects
         }
     }
+}
+
+/// How `region` of `version`, whose chunks hold `commands` commands in
+/// all, is redrawn: the rects without a walk when the box cannot win,
+/// otherwise the cheaper of [`predict`].
+pub(crate) fn shape(version: &SceneVersion, region: &Region, commands: u64) -> RegionShape {
+    let rects = region.rects().len();
+    if rects <= 1 || box_cannot_win(region, commands) {
+        return RegionShape::Rects;
+    }
+    predict(version, region).shape()
+}
+
+/// The commands of every chunk `version` holds, attached or not, summed
+/// over its nodes' entries with no cull: what bounds a chunk's share of
+/// either plan.
+pub(crate) fn version_commands(version: &SceneVersion) -> u64 {
+    version
+        .nodes()
+        .flat_map(|node| node.content().entries().iter())
+        .map(|entry| match entry {
+            flui_layer::Entry::Chunk { chunk, .. } => chunk.commands().len() as u64,
+            flui_layer::Entry::Effect { .. } | flui_layer::Entry::Slot { .. } => 0,
+        })
+        .fold(0_u64, u64::saturating_add)
+}
+
+/// Whether the box costs at least the rects whatever the chunks: the
+/// rects' surplus in commands is at most `(rects − 1) · commands`, and the
+/// box's surplus in pixels less the rects' extra passes already covers it.
+fn box_cannot_win(region: &Region, commands: u64) -> bool {
+    let extra_passes = region.rects().len().saturating_sub(1) as f64;
+    let extra_pixels = region.bounds().area().saturating_sub(region.area()) as f64;
+    PIXEL_COST * extra_pixels - PASS_COST * extra_passes >= extra_passes * commands as f64
 }
 
 /// Predicts what redrawing `region` of `version` costs either way, in one
@@ -205,20 +251,23 @@ mod tests {
         frame.owed_region().expect("a partial frame").rects().len()
     }
 
-    /// Each case is a measured one (lavapipe, `docs/plans/specs/render-scaling/tasks.md`,
-    /// RS11): eight small rects over one chunk of 20 000 rects redraw faster
+    /// Each case is a measured one (lavapipe, the `raster_share` bench and
+    /// `a_heavy_chunk_redraws_a_region_under_its_bounding_box`): eight small rects over one chunk of 20 000 rects redraw faster
     /// as their bounding box, which replays the chunk once, than in eight
     /// passes that replay it in each; two rects in opposite corners of a grid
     /// of small chunks redraw faster in two passes than under a box that
-    /// covers nearly the whole surface. Each fails with the plan fixed to
-    /// either shape.
+    /// covers nearly the whole surface; the bound skips the walk of every
+    /// region but the one over the large chunk. Each
+    /// fails with the plan fixed to either shape; a bound that skipped a box
+    /// the walk takes, or that never skipped, fails too.
     #[test]
     fn a_region_is_redrawn_the_way_predicted_cheaper() {
         let eight: Vec<DamageRect> = (0..8)
             .map(|i| square(16 + 124 * (i % 4), if i < 4 { 16 } else { 380 }, 18))
             .collect();
         let far = [square(20, 20, 22), square(1160, 1160, 22)];
-        // (case, version, surface side, rects, passes the frame redraws in)
+        // (case, version, surface side, rects, passes the frame redraws in,
+        // whether the bound skips the walk)
         let cases = [
             (
                 "eight small rects over one large chunk",
@@ -226,6 +275,7 @@ mod tests {
                 512,
                 eight.clone(),
                 1,
+                false,
             ),
             (
                 "eight small rects over nothing heavy",
@@ -233,6 +283,7 @@ mod tests {
                 512,
                 eight,
                 8,
+                true,
             ),
             (
                 "two far rects over a grid of small chunks",
@@ -240,10 +291,28 @@ mod tests {
                 1200,
                 far.to_vec(),
                 2,
+                true,
             ),
         ];
-        for (case, version, side, rects, passes) in cases {
+        for (case, version, side, rects, passes, skipped) in cases {
             assert_eq!(planned(&version, side, &rects), passes, "{case}");
+            let mut region = Region::new(rects[0]);
+            for &rect in &rects[1..] {
+                region.insert(rect);
+            }
+            let commands = super::version_commands(&version);
+            assert_eq!(
+                super::box_cannot_win(&region, commands),
+                skipped,
+                "{case}: whether the bound skips the walk"
+            );
+            if skipped {
+                assert_eq!(
+                    super::predict(&version, &region).shape(),
+                    super::RegionShape::Rects,
+                    "{case}: the bound skips only a box the walk would not take"
+                );
+            }
         }
     }
 }

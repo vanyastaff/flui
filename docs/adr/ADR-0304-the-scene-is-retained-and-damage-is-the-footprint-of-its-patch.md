@@ -508,16 +508,23 @@ every chunk that meets a written pixel is drawn there in paint order. One scisso
 with culling per rect breaks it: the pixels between the rects are cleared and not redrawn, or drawn
 and blended twice.
 
-The choice is made once the damage is closed over its backdrop readers, from one walk of the
-version culled by the bounding box (`crates/flui-engine/src/region_cost.rs`). For each chunk it
-reaches, the walk counts its commands and the rects its device bounds meet, `m`, and predicts:
+The choice is made each time the damage is closed over its backdrop readers, at most
+`Region::MAX` rounds a frame, from a walk of the version culled by the bounding box
+(`crates/flui-engine/src/region_cost.rs`). For each chunk it reaches, the walk counts its commands
+and the rects its device bounds meet, `m`, and predicts:
 
 ```text
 per rect  = Σ commands · m + PIXEL_COST · Σ rect area + PASS_COST · rects
 box       = Σ commands     + PIXEL_COST · box area    + PASS_COST
 ```
 
-The cheaper is taken, the rects on a tie. When the box is taken it is closed again, since it can
+The cheaper is taken, the rects on a tie. A chunk meets at most every rect, so the rects cost at
+most `(rects − 1) · C` commands more than the box, `C` being every command of the version, summed
+once per version over every chunk the version holds, with no cull: when `PIXEL_COST · (box area − Σ rect area)
+− PASS_COST · (rects − 1)` is at least that, the rects are taken without the walk. An effect costs
+only through the commands under it: what a pass pays for each effect it reaches (a backdrop
+snapshot, a save-layer's offscreen, an opacity group) is not weighed, so the rule prices a region
+over many effects as if they were free, which is part of the hypothesis. When the box is taken it is closed again, since it can
 meet readers the rects did not, until one rect is owed or the rects win; a closure that has not
 settled after `Region::MAX` rounds becomes a full frame. With the rects, a reader in the gap
 between them, which no rect meets, is left as the last frame drew it. The precedents are Flutter,
@@ -528,9 +535,11 @@ opposite corners of a 60 × 60 grid redraw 0.12 % of the surface in 4.2 ms per r
 rects, eight small rects cost 81 ms per rect against 25 ms under the box, which replays the chunk
 once instead of eight times. `PIXEL_COST` (0.15 commands a pixel), `PASS_COST` (500 commands) and
 the cap `Region::MAX` are hypotheses fitted on lavapipe so that every measured case picks the
-faster plan (`docs/plans/specs/render-scaling/tasks.md`); a desktop and a tiling mobile GPU are
+faster plan (the `raster_share` bench's region rows and
+`a_region_is_redrawn_the_way_predicted_cheaper`); a desktop and a tiling mobile GPU are
 owed a run ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)). The decision walk
-costs under 1 ms at the bench's largest box, and nothing for a region of one rect. A chunk that
+costs under 1 ms at the bench's largest box, and nothing for a region of one rect or one whose
+box cannot win, two corner cells of the 60 × 60 grid among them. A chunk that
 meets several rects and has no kept recording is recorded once per pass; recording it once and
 splicing it into the later passes is not built, since on that bench no chunk was recorded in more
 than one pass ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)).
