@@ -87,6 +87,9 @@ const SIGNING_STORE_PROPERTY: &str = "flui.signing.storeFile";
 /// key's alias from.
 const SIGNING_ALIAS_PROPERTY: &str = "flui.signing.keyAlias";
 
+/// The directory whose `flui_assets/` holds the declared assets (ADR-0384 §3).
+const ASSETS_PROPERTY: &str = "flui.assetsDir";
+
 /// What `flui build` states for a Gradle project.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GradleFacts<'a> {
@@ -110,6 +113,9 @@ pub(crate) struct GradleFacts<'a> {
     pub(crate) java_sources: &'a [PathBuf],
     /// The R8 rules files the linked crates declare.
     pub(crate) proguard_files: &'a [PathBuf],
+    /// The directory whose `flui_assets/` holds the application's assets, or
+    /// `None` when it declares none.
+    pub(crate) assets_dir: Option<&'a Path>,
 }
 
 /// Writes `facts` into the project's `gradle.properties`, after refusing a
@@ -175,6 +181,9 @@ fn command_properties(facts: &GradleFacts<'_>) -> BuildResult<Vec<OsString>> {
             &joined(PROGUARD_FILES_PROPERTY, facts.proguard_files)?,
         ),
     ];
+    if let Some(assets) = facts.assets_dir {
+        arguments.push(property(ASSETS_PROPERTY, assets.as_os_str()));
+    }
     if let Some((keystore, alias)) = facts.release_key {
         arguments.push(property(SIGNING_STORE_PROPERTY, keystore.as_os_str()));
         arguments.push(property(SIGNING_ALIAS_PROPERTY, alias.as_ref()));
@@ -285,6 +294,14 @@ fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
             crate::build::android_manifest::ACTIVITY
         ));
     }
+    if facts.assets_dir.is_some() && !reads(ASSETS_PROPERTY) {
+        return Some(format!(
+            "does not read `{ASSETS_PROPERTY}`, the directory of the assets flui.toml declares \
+             under `[assets] directories`, so the APK would carry none of them; add it to the \
+             main source set: `fluiProperty(\"{ASSETS_PROPERTY}\").takeIf {{ it.isNotEmpty() }}\
+             ?.let {{ assets.srcDirs(it) }}`"
+        ));
+    }
     (!facts.proguard_files.is_empty() && !reads(PROGUARD_FILES_PROPERTY)).then(|| {
         format!(
             "does not read `{PROGUARD_FILES_PROPERTY}`, the R8 rules of the crates the app \
@@ -311,6 +328,7 @@ fn restate_all(text: &str, facts: &GradleFacts<'_>) -> String {
         NDK_PATH_PROPERTY,
         JAVA_SOURCES_PROPERTY,
         PROGUARD_FILES_PROPERTY,
+        ASSETS_PROPERTY,
         SIGNING_STORE_PROPERTY,
         SIGNING_ALIAS_PROPERTY,
     ];
@@ -625,6 +643,7 @@ mod tests {
             release_key: None,
             java_sources: &[],
             proguard_files: &[],
+            assets_dir: None,
         }
     }
 
@@ -902,6 +921,38 @@ mod tests {
         );
     }
 
+    /// The staged assets reach Gradle as one command-line property only when
+    /// the project declares some (ADR-0384 §3); a script that does not read it
+    /// is refused, since the APK would ship without them, while the
+    /// scaffolded one reads it.
+    #[test]
+    fn gradle_packages_the_assets_the_project_declares() {
+        let staged = Path::new("/out/gradle-assets");
+        let declared = GradleFacts {
+            assets_dir: Some(staged),
+            ..facts()
+        };
+        assert!(
+            command_line(&declared).contains(&"-Pflui.assetsDir=/out/gradle-assets".to_owned()),
+            "{:?}",
+            command_line(&declared)
+        );
+        assert!(
+            !command_line(&facts())
+                .iter()
+                .any(|argument| argument.contains("assetsDir")),
+            "no assets declared, no property"
+        );
+        assert!(!restate_all("", &declared).contains("assetsDir"));
+
+        let template = include_str!("../../templates/platforms/android/build.gradle.kts");
+        assert_eq!(refusal(template, &declared), None);
+        let without = template.replace("\"flui.assetsDir\"", "\"other.assets\"");
+        let refused = refusal(&without, &declared).expect("a script without the assets");
+        assert!(refused.contains("flui.assetsDir"), "{refused}");
+        assert_eq!(refusal(&without, &facts()), None, "no assets, none to read");
+    }
+
     /// The R8 rules the linked crates declare reach Gradle's release build as
     /// one property, written as the Java sources are; a script that does not
     /// read them is refused, naming what a minified release would strip, while
@@ -915,6 +966,7 @@ mod tests {
         ];
         let declared = GradleFacts {
             proguard_files: &rules,
+            assets_dir: None,
             ..facts()
         };
         let expected = format!(
@@ -1123,6 +1175,7 @@ mod tests {
             release_key: Some((Path::new("/home/a/keys/upload.jks"), "upload")),
             java_sources: &sources,
             proguard_files: &rules,
+            assets_dir: None,
             ..facts()
         };
         let command_line = state_project(&android, &build).expect("stated");

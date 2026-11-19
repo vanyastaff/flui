@@ -464,6 +464,8 @@ impl AndroidBuilder {
             ));
         }
         let facts = self.package_facts(ctx.profile)?;
+        // Refused before anything is packaged: assets no APK can carry.
+        let assets = crate::build::assets::of_project(&self.workspace_root)?;
         if facts.signing.is_debug_for_release() {
             let _ = crate::ui::warning(format!(
                 "this release APK is signed with the debug key ({}), which a store refuses; \
@@ -488,7 +490,7 @@ impl AndroidBuilder {
 
         if !by_gradle {
             let apk = self
-                .package_with_build_tools(ctx, artifacts, &facts, &declarations, &output)
+                .package_with_build_tools(ctx, artifacts, &facts, &declarations, &assets, &output)
                 .await?;
             return Ok(AndroidPackage {
                 apk,
@@ -496,6 +498,10 @@ impl AndroidBuilder {
             });
         }
         crate::ui::debug("Building APK with Gradle...".to_string());
+        // Gradle adds this directory to the main source set's assets, so the APK
+        // carries `assets/flui_assets/<key>` (ADR-0384 §3).
+        let gradle_assets = ctx.output_dir.join("gradle-assets");
+        crate::build::assets::stage(&assets, &gradle_assets)?;
         let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
             tool: "JAVA_HOME (Gradle needs a JDK)".to_string(),
             install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
@@ -520,6 +526,7 @@ impl AndroidBuilder {
                     .android_proguard()
                     .map(|(_, path)| path.to_path_buf())
                     .collect::<Vec<_>>(),
+                assets_dir: (!assets.is_empty()).then_some(gradle_assets.as_path()),
             },
         )?;
         let gradle_task = match ctx.profile {
@@ -663,6 +670,7 @@ impl AndroidBuilder {
         artifacts: &BuildArtifacts,
         facts: &PackageFacts,
         declarations: &crate::declarations::Declarations,
+        assets: &[crate::build::assets::PackagedAsset],
         output: &Path,
     ) -> BuildResult<FinalArtifacts> {
         let manifest = super::android_manifest::path_in(&self.workspace_root);
@@ -697,6 +705,7 @@ impl AndroidBuilder {
                 version_code: facts.version_code,
                 version_name: &facts.version_name,
                 signing: &facts.signing,
+                assets,
             })
             .await?;
         let size_bytes = std::fs::metadata(output)?.len();

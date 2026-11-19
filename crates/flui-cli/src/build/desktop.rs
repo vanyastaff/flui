@@ -121,6 +121,8 @@ impl DesktopBuilder {
             return Self::stage_macos_app(ctx, artifacts, executable, bundle);
         }
 
+        // Refused before the output changes: assets no package can carry.
+        let assets = crate::build::assets::of_project(&ctx.workspace_root)?;
         std::fs::create_dir_all(&ctx.output_dir)?;
 
         let file_name = executable.file_name().ok_or_else(|| {
@@ -143,6 +145,8 @@ impl DesktopBuilder {
             std::fs::set_permissions(&output_binary, perms)?;
         }
 
+        // Beside the executable, where the host reads them (ADR-0384 §3).
+        crate::build::assets::stage(&assets, &ctx.output_dir)?;
         let size_bytes = std::fs::metadata(&output_binary)?.len();
 
         crate::ui::debug(format!(
@@ -242,6 +246,7 @@ impl DesktopBuilder {
         let declarations = Self::declarations(ctx, artifacts, &triple)?;
         crate::build::apple_opening::warn_about_types_only_a_linked_crate_declares(&declarations);
         let numbers = bundle.package_numbers(artifacts.package.as_ref(), ctx.profile)?;
+        let assets = crate::build::assets::of_project(&ctx.workspace_root)?;
         let plist = macos_info_plist(&MacosBundleFacts {
             bundle,
             numbers: &numbers,
@@ -278,6 +283,8 @@ impl DesktopBuilder {
             std::fs::set_permissions(&staged_exe, perms)?;
         }
         std::fs::write(contents.join("Info.plist"), plist)?;
+        // The bundle's resources, where `NSBundle` finds them (ADR-0384 §3).
+        crate::build::assets::stage(&assets, &resources_dir)?;
 
         let size_bytes = calculate_dir_size(&app_dir)?;
         crate::ui::debug(format!("macOS .app bundle staged at {}", app_dir.display()));

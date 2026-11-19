@@ -75,6 +75,27 @@ pub(crate) struct FluiConfig {
     /// What a web build's page states: `[web] base_href`.
     #[serde(default, skip_serializing_if = "WebConfig::is_default")]
     pub(crate) web: WebConfig,
+    /// The files the application ships: `[assets] directories`.
+    #[serde(default, skip_serializing_if = "AssetsConfig::is_empty")]
+    pub(crate) assets: AssetsConfig,
+}
+
+/// `[assets]`: the directories whose files every package carries, each
+/// read back by its path from the project root (ADR-0384 §3).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssetsConfig {
+    /// Directories relative to the project root (`assets`): every regular
+    /// file under each, at any depth, is an asset keyed by its path from
+    /// the root (`assets/images/logo.png`).
+    #[serde(default)]
+    pub(crate) directories: Vec<String>,
+}
+
+impl AssetsConfig {
+    fn is_empty(&self) -> bool {
+        self.directories.is_empty()
+    }
 }
 
 /// `[signing]`: the key each environment's release packages are signed
@@ -500,6 +521,7 @@ mod tests {
             platforms: PlatformsConfig::default(),
             signing: SigningConfig::default(),
             web: WebConfig::default(),
+            assets: AssetsConfig::default(),
         }
     }
 
