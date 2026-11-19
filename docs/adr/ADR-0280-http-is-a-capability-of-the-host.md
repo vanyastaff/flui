@@ -124,7 +124,7 @@ lets a test hand every layer the same scripted client.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
    with `Connect`. `HeadlessHost` registers it among its built-ins (`HeadlessHost::http`).
-5. **Images.** `AssetRegistry::load_image` and `load_network_image` take `LoadServices` (lanes and
+5. **Images.** `ImageCache::load_image` and `load_network_image` take `LoadServices` (lanes and
    an HTTP client, a builder), `flui-assets` drops `reqwest`, its `network` feature and
    `NetworkLoader`, and `flui-widgets` drops `network-images`. `Image` acquires `HttpCapability` in
    `init_state` beside `BackgroundCapability` and hands both to its provider as `ImageServices`.
@@ -187,7 +187,7 @@ lets a test hand every layer the same scripted client.
 - `network_image_loads_with_the_hosts_http_client` (`flui-widgets`): `Image::network` on the
   headless host.
 - `an_authority_is_its_states_allocation_and_outlives_it` (`flui-platform`) and
-  `one_registry_keeps_two_clients_images_of_one_url_apart` (`flui-assets`): §6.
+  `one_cache_keeps_two_clients_images_of_one_url_apart` (`flui-assets`): §6.
 - `cargo xtask send-positions` lists the contract's `Send` and `Sync` positions.
 
 ## Pros and cons of the options

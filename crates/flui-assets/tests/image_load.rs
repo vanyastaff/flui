@@ -1,14 +1,14 @@
-//! `AssetRegistry::load_image`: a decoded-image load on the lanes it is
+//! `ImageCache::load_image`: a decoded-image load on the lanes it is
 //! given, shared by every request for a source and owned by the registry
 //! rather than by any one request. A load the lanes or its request drop
 //! unfinished is handed over to the next request still waiting.
-#![cfg(feature = "images")]
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use flui_assets::{AssetError, AssetRegistry, AssetRegistryBuilder, Image, LoadServices};
+use flui_assets::{AssetError, ImageCache, ImageCacheConfig, LoadServices};
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
+use flui_painting::paint::Image;
 use flui_platform::executor::{Lane, SpawnError};
 
 use crate::lanes::{QueuedLanes, ThreadLanes, block_on};
@@ -19,12 +19,12 @@ fn fixture_path() -> &'static str {
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny.png")
 }
 
-fn registry() -> AssetRegistry {
-    AssetRegistryBuilder::new().default_capacity().build()
+fn registry() -> ImageCache {
+    ImageCache::default()
 }
 
 /// Loads `path` on a native host's default lanes and waits for it.
-fn load(registry: &AssetRegistry, path: impl Into<Arc<str>>) -> Result<Image, AssetError> {
+fn load(registry: &ImageCache, path: impl Into<Arc<str>>) -> Result<Image, AssetError> {
     block_on(registry.load_image(path, ThreadLanes::new().services()))
 }
 
@@ -240,10 +240,7 @@ fn a_load_on_lanes_that_shut_down_is_taken_over_on_other_lanes() {
 /// check before the decode slot (the decoder is reached).
 fn a_cancelled_load_never_reaches_the_decoder() {
     let lanes = QueuedLanes::new();
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
     drop(registry.load_image(fixture_path(), lanes.services()));
     lanes.run_until_idle();
     assert_eq!(lanes.computes(), 0, "the cancelled load never decoded");
@@ -308,10 +305,7 @@ fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
 /// Red-check: admit a load without lanes when it is created (the awaited
 /// load never starts).
 fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(NonZeroUsize::MIN)
-        .build();
+    let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
     let held: Vec<_> = (0..8)
         .map(|index| {
             registry.load_image(
@@ -329,7 +323,7 @@ fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
     );
     drop(held);
 
-    let shared = AssetRegistryBuilder::new().default_capacity().build();
+    let shared = ImageCache::default();
     let held = shared.load_image(fixture_path(), LoadServices::new());
     let lanes = ThreadLanes::new();
     assert_fixture(
@@ -407,14 +401,11 @@ impl Drop for FixtureCopies {
     }
 }
 
-fn budgeted(bytes: usize) -> flui_assets::AssetRegistry {
-    AssetRegistryBuilder::new()
-        .default_capacity()
-        .decoded_image_budget(bytes)
-        .build()
+fn budgeted(bytes: usize) -> flui_assets::ImageCache {
+    ImageCache::new(ImageCacheConfig::default().budget(bytes))
 }
 
-fn is_kept(registry: &flui_assets::AssetRegistry, path: &str) -> bool {
+fn is_kept(registry: &flui_assets::ImageCache, path: &str) -> bool {
     registry
         .cached_image(&flui_assets::ImageSource::Asset(path.into()))
         .is_some()
