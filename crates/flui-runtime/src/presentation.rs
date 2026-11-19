@@ -46,7 +46,7 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
-use crate::occluded_frame::{OccludedFrame, Session, Sight};
+use crate::occluded_frame::{OccludedFrame, OwedFrameRequest, Session, Sight};
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -615,6 +615,10 @@ pub struct PresentationState {
     /// Whether this presentation owes its surface a frame while it cannot be
     /// seen, and since when it has drawn none ([`OccludedFrame`]).
     occluded_frame: Cell<OccludedFrame>,
+    /// The instant the window was last asked for the frame it owes, on the
+    /// event timeline (ADR-0389): `None` while it was asked for none.
+    /// Shared with the [`OwedFrameRequest`] that records a delivery.
+    owed_frame_asked: Rc<Cell<Option<flui_platform::EventTime>>>,
     /// What the window system does with the window's last frame while it
     /// keeps the window off the screen, as the host named it.
     occluded_surface: flui_platform::OccludedSurface,
@@ -1202,6 +1206,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            owed_frame_asked: Rc::default(),
             occluded_surface,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
@@ -1357,6 +1362,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            owed_frame_asked: Rc::default(),
             occluded_surface: flui_platform::OccludedSurface::Discarded,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
@@ -1891,6 +1897,18 @@ impl PresentationState {
         }
         let due = self.occluded_frame.get().due_at(self.failure_retry_at())?;
         self.has_retained_frame_work().then_some(due)
+    }
+
+    /// What this presentation's window is to be asked for the frame it owes
+    /// its surface ([`Self::occluded_frame_at`], on the event timeline counted
+    /// from `epoch`), when that is not what it was last asked: the instant, or
+    /// the withdrawal of the one asked. `None` when the window was asked
+    /// exactly that, so a window hears an instant once (ADR-0389).
+    pub(crate) fn owed_frame_request(&self, epoch: Instant) -> Option<OwedFrameRequest> {
+        let at = self
+            .occluded_frame_at()
+            .map(|at| crate::occluded_frame::event_time(epoch, at));
+        OwedFrameRequest::of(&self.window, at, &self.owed_frame_asked)
     }
 
     /// At `now`, grant the owed frame of a presentation whose frame is due,

@@ -1254,6 +1254,9 @@ impl PlatformWindow for WithDragSource {
     fn request_redraw(&self) {
         self.window.request_redraw();
     }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.window.request_frame_at(at);
+    }
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         self.window.redraw_requester()
     }

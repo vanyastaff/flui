@@ -765,14 +765,22 @@ last frame (`OccludedSurface::Kept`, which the host names through `PresentationW
 alone; X11 without a compositing manager keeps no image, a suspended Wayland toplevel's frames
 are held), and its session shows windows (`occluded_frame::Session`: the lock and the machine's
 sleep are two flags, set and cleared by `SessionLocked`/`SessionUnlocked` and `Sleep`/`Wake`, so
-a lock that outlasts a sleep still counts). Once `OCCLUDED_FRAME_QUIET` has passed with work
-waiting, and not before the dropped-frame retry, the deadline is due work in `next_wake`,
-`runs_frames` is true (every runner's wake gate and the headless host ask it, so a runner whose
-frames are off runs the frame), and `FrameClock::grant_hidden_frame` lets the first poll that can
-produce it. The frame stays due until it runs, however late the host serves its wake; a hold
-(the dropped-frame backoff, text preparation) leaves it due, and while the sink holds as many
-frames as it may it asks for no wake, the settlement that frees a place being the one. Only a
-frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing follows every
+a lock that outlasts a sleep still counts). The frame is the window's own (ADR-0389): its instant,
+the end of `OCCLUDED_FRAME_QUIET` with work waiting and not before the dropped-frame retry, is
+asked of the presentation's window (`PlatformWindow::request_frame_at`, which the host serves for
+that window alone) and is no term of `next_wake`, which a host delivers to every window.
+`owed_frame_requests` makes the request only where the instant differs from what the window was
+last asked, so a window hears an instant once whatever other windows draw, and withdraws it once
+nothing is owed; `OwedFrameRequest::deliver` records it as asked after the host's call returns.
+`OwnerDelivery` delivers them at the end of every runtime work item that is not terminal and
+after an installation, with the runtime back, and the headless host after each pump, observation
+and notice. Once the instant has come `runs_frames` is true (every runner's wake gate and the
+headless host ask it, so a runner whose frames are off runs the frame), it counts as due work,
+and `FrameClock::grant_hidden_frame` lets the first poll that can produce it. The frame stays due
+until it runs, however late the host serves its request; a hold (the dropped-frame backoff, text
+preparation) leaves it due, and while the sink holds as many frames as it may the request is
+withdrawn, the settlement that frees a place asking for it again. Only a frame that runs starts
+the next quiet period (`occluded_frame_drawn`). The owing follows every
 change of sight (`follow_sight`: each window snapshot, the visibility edge, each session notice):
 a window whose frame would no longer be shown owes nothing, one that owes keeps its quiet period
 through any snapshot, and one that owed nothing starts one. A frame drawn while the window is
@@ -783,10 +791,13 @@ leaves open, that a covered window's uncovering shows the frame of before the co
 `an_occluded_window_draws_its_change_in_exactly_one_frame`,
 `a_covered_window_owes_by_its_sight_on_every_snapshot`, `a_late_wake_still_draws_the_owed_frame`,
 `an_owed_frame_the_surface_refuses_is_not_drawn_again`,
-`a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep` (`flui-testing`,
+`a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep`,
+`a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone` (`flui-testing`,
 `occluded_window`); `a_hidden_window_raises_no_redraw_flag`,
-`an_owed_frame_is_refused_by_its_own_settlement_only`, `a_hold_leaves_the_owed_frame_due`
-(`flui-runtime`, `occluded_frame`).
+`an_owed_frame_is_refused_by_its_own_settlement_only`, `a_hold_leaves_the_owed_frame_due`,
+`the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline`,
+`an_owner_work_item_asks_the_covered_window_for_its_owed_frame` (`flui-runtime`,
+`occluded_frame`).
 
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
 `QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose

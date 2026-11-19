@@ -305,6 +305,107 @@ fn run(case: &Case) {
     );
 }
 
+/// A covered window beside a shown one that draws a frame every 16 ms: the
+/// covered window is asked for its owed frame once, at the end of its quiet
+/// period, however many frames the shown window draws before and after; the
+/// frame served then draws the covered window's change; the request is
+/// withdrawn once that frame ran with nothing left, asked again for the next
+/// change at the next quiet period's end, and withdrawn when the window is
+/// seen again, which draws the change then. Fails when the owed frame rides
+/// the application's wake deadline: the covered window is asked for nothing.
+#[test]
+fn a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(40, 40));
+    let shown = SharedSignal::new(0_u32);
+    host.attach(&Content {
+        number: shown.clone(),
+        painted: Arc::new(AtomicU32::new(0)),
+    })
+    .expect("a fresh host has no root");
+    let covered = host.open_window(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    let number = SharedSignal::new(1);
+    let painted = Arc::new(AtomicU32::new(0));
+    host.attach_to(
+        covered,
+        &Content {
+            number: number.clone(),
+            painted: Arc::clone(&painted),
+        },
+    )
+    .expect("the opened window has no root");
+    let _ = host.pump(FRAME);
+    assert_eq!(painted.load(Ordering::SeqCst), 1, "the first frame");
+
+    // The shown window changes before each of its frames.
+    let mut shown_frame = 0;
+    let mut draw_shown = |host: &mut HeadlessHost, frames: u32| {
+        for _ in 0..frames {
+            shown_frame += 1;
+            shown.set(shown_frame);
+            let _ = host.pump(FRAME);
+        }
+    };
+    let quiet_ends = host.clock().elapsed() + Duration::from_secs(1);
+    let owed = flui_platform::EventTime::from_nanos(
+        u64::try_from(quiet_ends.as_nanos()).expect("BUG: a test's time fits the event timeline"),
+    );
+    host.set_window_occluded(covered, true);
+    number.set(2);
+
+    draw_shown(&mut host, 50);
+    assert_eq!(
+        host_requests(&host, covered),
+        [Some(owed)],
+        "asked once, at the quiet period's end, through 50 frames of the shown window"
+    );
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        1,
+        "nothing drawn before then"
+    );
+
+    draw_shown(&mut host, 20);
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        2,
+        "the owed frame draws the change"
+    );
+    assert_eq!(
+        host_requests(&host, covered),
+        [Some(owed), None],
+        "drawn with nothing left, the request is withdrawn, and the shown window's \
+         frames ask nothing again"
+    );
+
+    number.set(3);
+    draw_shown(&mut host, 30);
+    let next = match host_requests(&host, covered)[..] {
+        [Some(first), None, Some(next)] if first == owed && next > owed => next,
+        ref other => panic!("the next change is asked for once, later: {other:?}"),
+    };
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        2,
+        "the next change waits for its quiet period"
+    );
+    host.set_window_occluded(covered, false);
+    assert_eq!(
+        host_requests(&host, covered),
+        [Some(owed), None, Some(next), None],
+        "the window seen again: its request is withdrawn"
+    );
+    draw_shown(&mut host, 1);
+    assert_eq!(painted.load(Ordering::SeqCst), 3, "and it draws its change");
+}
+
+/// Every timed frame request `window` took, oldest first.
+fn host_requests(
+    host: &HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+) -> Vec<Option<flui_platform::EventTime>> {
+    host.window_of(window).timed_frame_requests()
+}
+
 /// A covered window minimized owes nothing, and restored while still covered
 /// owes its frame again, though it was never seen in between: a change of
 /// sight that leaves the window unseen changes no visibility, and the owing

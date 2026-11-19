@@ -49,6 +49,9 @@ impl PlatformWindow for Window {
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.inner.request_frame_at(at);
+    }
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         self.inner.redraw_requester()
     }
@@ -345,6 +348,9 @@ impl PlatformWindow for HapticWindow {
     }
     fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.inner.request_frame_at(at);
     }
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         self.inner.redraw_requester()

@@ -91,6 +91,7 @@ use crate::owner::apple::macos::{
 };
 use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 use crate::owner::apple::pump_delivery::FollowedDelivery;
+use crate::owner::apple::timed_frame::{TimedFrame, TimedTick};
 
 use crate::{
     owner::OpenWindowError,
@@ -189,6 +190,11 @@ pub struct MacOSWindow {
     /// platform's wake pump as it does. Set once, right after the window is
     /// made, since it reaches the window through a weak reference to it.
     redraw: OnceCell<Arc<MacOSRedraw>>,
+
+    /// The instant this window was asked for a frame at and has not been
+    /// served (`PlatformWindow::request_frame_at`, ADR-0389): what the owner
+    /// queue's tick for it compares against.
+    timed_frame: Cell<TimedFrame>,
 
     /// The platform's display registry, by which this window turns its
     /// screen into a [`DisplayId`], bound once by [`UnshownWindow::show`]
@@ -772,6 +778,7 @@ impl MacOSWindow {
             presentation: windows.presentation,
             facets,
             redraw: OnceCell::new(),
+            timed_frame: Cell::new(TimedFrame::default()),
             displays: OnceCell::new(),
             snapshot: Arc::new(WindowStateCell::new(
                 WindowState::new(WindowGeometry::unplaced(content), content)
@@ -1082,6 +1089,34 @@ fn defer_redraw(
             _ => tracing::trace!(
                 "request_redraw: window closed before the deferred request ran; request dropped"
             ),
+        }
+    });
+}
+
+/// Run `window`'s tick for the timed frame it was asked for at `at`, on its
+/// owner lane after `delay`: served, it asks the window for a frame; early, it
+/// runs again for the rest; stale, it does nothing ([`TimedFrame::tick`]). A
+/// window closed or gone by then has nothing to draw.
+fn schedule_timed_frame(
+    owner: &'static dispatch2::DispatchQueue,
+    window: Arc<OwnerWeak<MacOSWindow>>,
+    at: flui_platform::EventTime,
+    delay: std::time::Duration,
+) {
+    crate::owner::apple::macos::exec_after_on_owner(owner, delay, move || {
+        let Some(owned) = window.upgrade() else {
+            return;
+        };
+        if owned.closed.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut timed = owned.timed_frame.get();
+        let tick = timed.tick(at, flui_platform::EventTime::now());
+        owned.timed_frame.set(timed);
+        match tick {
+            TimedTick::Serve => PlatformWindow::request_redraw(&*owned),
+            TimedTick::Wait(rest) => schedule_timed_frame(owner, window, at, rest),
+            TimedTick::Stale => {}
         }
     });
 }
@@ -1568,6 +1603,26 @@ impl PlatformWindow for MacOSWindow {
     /// later from inside a display pass.
     fn request_redraw(&self) {
         self.redraw().request_redraw();
+    }
+
+    /// Served for this window alone: a tick on its owner lane at `at` makes
+    /// the request [`request_redraw`](PlatformWindow::request_redraw) makes,
+    /// once, and the tick of an instant replaced or withdrawn since does
+    /// nothing ([`TimedFrame`]). Nothing here reaches the wake pump's
+    /// deadline, whose deliveries ask every window.
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        let mut timed = self.timed_frame.get();
+        let scheduled = timed.request(at);
+        self.timed_frame.set(timed);
+        if let Some(at) = scheduled {
+            let redraw = self.redraw();
+            schedule_timed_frame(
+                redraw.owner,
+                Arc::clone(&redraw.window),
+                at,
+                at.saturating_duration_since(flui_platform::EventTime::now()),
+            );
+        }
     }
 
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {

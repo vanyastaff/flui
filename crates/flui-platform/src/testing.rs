@@ -87,7 +87,10 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// agrees with capabilities that leave
 /// [`frame_rate_hint`](crate::WindowCapabilities::frame_rate_hint) and
 /// every input region kind ([`input_region`](crate::input_capabilities::InputCapabilities::input_region))
-/// `Unavailable`. Written inside an `impl PlatformWindow` block.
+/// `Unavailable`. Its timed frame request
+/// ([`request_frame_at`](crate::PlatformWindow::request_frame_at)) returns at
+/// once: such a double keeps no surface while covered, so the runtime never
+/// asks it for one. Written inside an `impl PlatformWindow` block.
 ///
 /// ```
 /// # use std::sync::Arc;
@@ -150,5 +153,7 @@ macro_rules! window_takes_no_frame_verbs {
                 $crate::UnsupportedReason::NotOnThisPlatform,
             ))
         }
+
+        fn request_frame_at(&self, _: ::core::option::Option<$crate::EventTime>) {}
     };
 }

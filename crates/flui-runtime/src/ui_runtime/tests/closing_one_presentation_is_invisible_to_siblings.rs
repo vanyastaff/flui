@@ -514,6 +514,9 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn request_redraw(&self) {
         self.delegate.request_redraw();
     }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.delegate.request_frame_at(at);
+    }
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         self.delegate.redraw_requester()
     }

@@ -682,6 +682,8 @@ struct HeadlessWindowSetup {
 struct HeadlessHostWindowState {
     /// Every [`PlatformWindow::set_frame_rate_hint`] the window took, in order.
     frame_rate_hints: Vec<flui_platform::FrameRateHint>,
+    /// Every [`PlatformWindow::request_frame_at`] the window took, in order.
+    timed_frame_requests: Vec<Option<flui_platform::EventTime>>,
     /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
     materials: Vec<WindowMaterial>,
     title: String,
@@ -1011,6 +1013,7 @@ impl HeadlessHostWindow {
         let frame = display.as_ref().map(DesktopFrame::of);
         let mut model = HeadlessHostWindowState {
             frame_rate_hints: Vec::new(),
+            timed_frame_requests: Vec::new(),
             materials: Vec::new(),
             title: options.title.clone(),
             position,
@@ -1308,6 +1311,14 @@ impl HeadlessHostWindow {
         self.state.borrow_mut().frame_rate_hints.clone()
     }
 
+    /// Every timed frame request the window took
+    /// ([`PlatformWindow::request_frame_at`]), oldest first: an instant asked
+    /// for, or `None` for a withdrawal.
+    #[must_use]
+    pub fn timed_frame_requests(&self) -> Vec<Option<flui_platform::EventTime>> {
+        self.state.borrow().timed_frame_requests.clone()
+    }
+
     /// Every material the window applied, oldest first.
     #[must_use]
     pub fn materials(&self) -> Vec<WindowMaterial> {
@@ -1565,6 +1576,13 @@ impl PlatformWindow for HeadlessHostWindow {
 
     fn request_redraw(&self) {
         flui_platform::RedrawRequester::request_redraw(&self.redraw);
+    }
+
+    /// Recorded for a test to read ([`Self::timed_frame_requests`]), and
+    /// served by none: the headless host keeps no surface while covered
+    /// (`occluded_surface`), and its frames come from the test that drives it.
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.state.borrow_mut().timed_frame_requests.push(at);
     }
 
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {

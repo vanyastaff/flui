@@ -1804,6 +1804,11 @@ mod toplevel {
             }
         }
 
+        /// Never asked: the compositor holds a suspended toplevel's frames
+        /// (`occluded_surface`), so none drawn while covered runs and none is
+        /// owed (ADR-0389).
+        fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
         fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
             Arc::new(WaylandRedraw {
                 record: Arc::downgrade(&self.record),

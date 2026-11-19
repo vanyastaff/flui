@@ -2299,6 +2299,9 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.inner.request_frame_at(at);
+    }
     fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
         self.inner.redraw_requester()
     }
@@ -2402,6 +2405,9 @@ impl flui_platform::PlatformWindow for RegionWindow {
     }
     fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        self.inner.request_frame_at(at);
     }
     fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
         self.inner.redraw_requester()

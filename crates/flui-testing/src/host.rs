@@ -216,6 +216,11 @@ struct KitChrome {
     close_requests: usize,
     /// Whether the state changed since the host last told the UI runtime.
     unobserved: bool,
+    /// The instant the window was asked for a frame at and the host has not
+    /// served ([`PlatformWindow::request_frame_at`]).
+    timed_frame: Option<flui_platform::EventTime>,
+    /// Every timed frame request the window took, oldest first.
+    timed_frame_requests: Vec<Option<flui_platform::EventTime>>,
 }
 
 impl HeadlessWindow {
@@ -294,6 +299,30 @@ impl HeadlessWindow {
     #[must_use]
     pub fn close_requests(&self) -> usize {
         self.chrome.lock().close_requests
+    }
+
+    /// Every timed frame request the window took
+    /// ([`PlatformWindow::request_frame_at`]), oldest first: an instant on
+    /// the host's event timeline, or `None` for a withdrawal. The frame a
+    /// covered window owes its surface is asked for this way (ADR-0389).
+    #[must_use]
+    pub fn timed_frame_requests(&self) -> Vec<Option<flui_platform::EventTime>> {
+        self.chrome.lock().timed_frame_requests.clone()
+    }
+
+    /// The instant of the window's timed frame request the host has not
+    /// served yet.
+    fn pending_timed_frame(&self) -> Option<flui_platform::EventTime> {
+        self.chrome.lock().timed_frame
+    }
+
+    /// Serve the window's timed frame request if its instant is not later
+    /// than `now`: it is asked once.
+    fn serve_timed_frame(&self, now: flui_platform::EventTime) {
+        let mut chrome = self.chrome.lock();
+        if chrome.timed_frame.is_some_and(|at| at <= now) {
+            chrome.timed_frame = None;
+        }
     }
 
     /// Whether the host closed the window.
@@ -616,6 +645,16 @@ impl PlatformWindow for HeadlessWindow {
     fn reveal_after_first_frame(&self) {}
 
     fn request_redraw(&self) {}
+
+    /// Served by the host for this window: its loop waits no later than `at`
+    /// ([`HeadlessHost::time_to_next_frame`]), and the first pump at or after
+    /// it serves the request, once. Recorded for the test
+    /// ([`HeadlessWindow::timed_frame_requests`]).
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        let mut chrome = self.chrome.lock();
+        chrome.timed_frame = at;
+        chrome.timed_frame_requests.push(at);
+    }
 
     /// Nothing to ask: the host runs a frame when its test pumps one.
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
@@ -1658,6 +1697,12 @@ impl HeadlessHost {
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
         let vsync = self.event_now();
+        // A timed frame request whose instant has come is served by this frame,
+        // once: the runtime grants the owed frame of a window whose instant has
+        // come at its first poll.
+        for window in &self.open {
+            window.window.serve_timed_frame(vsync);
+        }
         let mut request = flui_platform::FrameRequest::new(vsync);
         if let Some(presented) = self.presented.take() {
             request = request.presented(presented);
@@ -1695,6 +1740,8 @@ impl HeadlessHost {
             failures.clear();
             first
         };
+        // As a runner's owner delivery does at the end of each work item.
+        self.ask_owed_frames();
         // Taken on every outcome: a failed frame's findings are its own, and
         // the failure that is raised already fails the test.
         let semantics_findings = self.take_semantics_findings();
@@ -2534,6 +2581,7 @@ impl HeadlessHost {
         if let Some(runtime) = self.try_ui_runtime() {
             runtime.deliver_host_notice(&flui_platform::HostNotice::from(notice));
         }
+        self.ask_owed_frames();
     }
 
     /// Report `insets` as what covers `window`, as a host reports a change of
@@ -2834,8 +2882,9 @@ impl HeadlessHost {
     /// How long a host's loop waits before its next frame: none while a frame
     /// is asked for or work is pending, unless a dropped frame waits for its
     /// retry; otherwise until the earliest deadline the UI runtime armed, such
-    /// as a gesture's or a dropped frame's retry, or the next change the
-    /// host's scenario scheduled. `None` when the loop would
+    /// as a gesture's or a dropped frame's retry, the instant a window asked
+    /// for a frame at (the frame a covered window owes its surface), or the
+    /// next change the host's scenario scheduled. `None` when the loop would
     /// wait for input alone.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
@@ -2871,12 +2920,12 @@ impl HeadlessHost {
         let runtime_wait = runtime
             .next_wake()
             .map(|wake| wake.saturating_duration_since(now));
-        // A change the scenario has scheduled is a deadline like any other.
-        let scenario_wait = self.scenario_wait();
-        match (runtime_wait, scenario_wait) {
-            (Some(runtime), Some(scenario)) => Some(runtime.min(scenario)),
-            (wait, None) | (None, wait) => wait,
-        }
+        // A change the scenario has scheduled is a deadline like any other, and
+        // so is a window's timed frame request, which the host serves.
+        [runtime_wait, self.scenario_wait(), self.timed_frame_wait()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// How long until the scenario's next scheduled change, if one is.
@@ -2990,6 +3039,7 @@ impl HeadlessHost {
                     && runtime.next_wake().is_none()
             });
             if runtime_idle
+                && self.timed_frame_wait().is_none()
                 && self.pending_background() == 0
                 && !self.observations_pending()
                 && !self.turn_owed()
@@ -3028,6 +3078,30 @@ impl HeadlessHost {
         self.ui_runtime().enter(|ui_runtime| {
             ui_runtime.apply_window_observation(address, observation, &|_| {});
         });
+        self.ask_owed_frames();
+    }
+
+    /// Ask each window for the frame its presentation owes its surface, or
+    /// withdraw the instant asked before, as a runner's owner delivery does
+    /// after each work item (ADR-0389). A retired host asks nothing.
+    fn ask_owed_frames(&self) {
+        let Some(runtime) = self.try_ui_runtime() else {
+            return;
+        };
+        for request in runtime.owed_frame_requests() {
+            request.deliver();
+        }
+    }
+
+    /// How long until the earliest timed frame request of an open window the
+    /// host has not served, if any.
+    fn timed_frame_wait(&self) -> Option<Duration> {
+        let now = self.event_now();
+        self.open
+            .iter()
+            .filter_map(|open| open.window.pending_timed_frame())
+            .min()
+            .map(|at| at.saturating_duration_since(now))
     }
 
     /// Size the sink to the primary window's device size.

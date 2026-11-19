@@ -174,6 +174,7 @@ mod tests {
             Ok(None)
         }
         fn request_redraw(&self) {}
+        fn request_frame_at(&self, _: Option<crate::EventTime>) {}
         fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
             Arc::new(|| {})
         }

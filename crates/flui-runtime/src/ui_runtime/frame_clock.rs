@@ -608,6 +608,28 @@ impl UiRuntime {
         self.scheduler.frames_enabled() || self.owes_occluded_frame()
     }
 
+    /// What each presentation's window is to be asked for the frame a covered
+    /// window owes its surface, where that changed since the window was last
+    /// asked: a frame at the instant it comes due, or the withdrawal of the
+    /// instant asked before, once nothing is owed (uncovered, drawn with
+    /// nothing left, refused, held by a full sink, closing). The host serves
+    /// each for its window alone (ADR-0389).
+    ///
+    /// Each request asks a window only when delivered, which runs the host's
+    /// code: a host takes these at the end of every owner work item, with no
+    /// borrow of the runtime held, and delivers them. An instant a window was
+    /// asked for is not asked again, so the frames of other windows never
+    /// deliver it twice; a delivery that panicked is offered again by the next
+    /// call.
+    #[must_use]
+    pub fn owed_frame_requests(&self) -> Vec<super::OwedFrameRequest> {
+        let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+        self.presentations
+            .iter()
+            .filter_map(|presentation| presentation.owed_frame_request(epoch))
+            .collect::<Vec<_>>()
+    }
+
     /// Whether a covered window's owed frame is due now (ADR-0357).
     fn owes_occluded_frame(&self) -> bool {
         self.presentations.iter().any(|presentation| {
@@ -721,8 +743,9 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
-                    // The frame an unseen window owes its surface (ADR-0357).
-                    presentation.occluded_frame_at(),
+                    // The frame an unseen window owes its surface is not here: the
+                    // presentation asks its own window for it (`owed_frame_requests`,
+                    // ADR-0389).
                     // A presentation at its in-flight limit attempts no frame when its backoff
                     // ends; the settlement that frees a place wakes it, and the in-flight floor
                     // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it
