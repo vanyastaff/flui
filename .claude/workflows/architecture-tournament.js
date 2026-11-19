@@ -55,11 +55,20 @@ ${drivers.length ? drivers.map((d) => `- ${d}`).join('\n') : '- AGENTS.md "Desig
 
 The repository is FLUI, a declarative UI framework in Rust; read it in the checkout ${dir}. AGENTS.md is the process and its rules bind every design. Do not edit files and do not build: other agents share this host.`
 
+// An agent asked for an empty string sometimes writes the quotes themselves (`""`); every string an
+// agent returns is read through `blankQuotes`, so such a field is empty wherever the script tests it.
+function blankQuotes(value) {
+  if (typeof value === 'string') return /^\s*(""|'')\s*$/.test(value) ? '' : value
+  if (Array.isArray(value)) return value.map(blankQuotes)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
+  return value
+}
+
 // An agent refused, skipped or past the token target is a gap the result names, never an empty answer.
 async function attempt(prompt, options) {
   try {
     const value = await agent(prompt, options)
-    return value ? { value } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
+    return value ? { value: blankQuotes(value) } : { error: 'no result (refused by a usage limit, skipped, or failed after retries)' }
   } catch (e) {
     return { error: String(e && e.message ? e.message : e) }
   }
