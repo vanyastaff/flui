@@ -126,8 +126,9 @@ impl PiecewiseLinear {
         if stops.len() < 2 {
             return Err(PiecewiseLinearError::TooFewStops);
         }
-        let count = u32::try_from(stops.len()).map_err(|_| PiecewiseLinearError::TooManyStops)?;
-        let mut stops = stops.to_vec();
+        if u32::try_from(stops.len()).is_err() {
+            return Err(PiecewiseLinearError::TooManyStops);
+        }
         for (index, stop) in stops.iter().enumerate() {
             if !stop.output.is_finite() {
                 return Err(PiecewiseLinearError::NonFiniteOutput { index });
@@ -144,53 +145,49 @@ impl PiecewiseLinear {
                 }
             }
         }
-        stops[0].input.get_or_insert(0.0);
-        stops
-            .last_mut()
-            .expect("BUG: two stops were admitted")
-            .input
-            .get_or_insert(1.0);
-        let mut maximum: f64 = 0.0;
-        for stop in &mut stops {
-            if let Some(input) = &mut stop.input {
-                *input = input.max(maximum);
-                maximum = *input;
+        // CSS `linear()` canonicalization: a missing first input is 0 and a
+        // missing last one is 1, an explicit input is raised to the largest
+        // before it, and a run of missing inputs is spread evenly between its
+        // neighbours. The first input is always known, so every run has a
+        // left neighbour, `known`.
+        let last_index = stops.len() - 1;
+        let mut knots: Vec<Knot> = Vec::with_capacity(stops.len());
+        let mut known = 0.0_f64;
+        let mut missing = 0_u32;
+        for (index, stop) in stops.iter().enumerate() {
+            let input = match stop.input {
+                Some(input) => input,
+                None if index == 0 => 0.0,
+                None if index == last_index => 1.0,
+                None => {
+                    missing += 1;
+                    continue;
+                }
+            };
+            let input = input.max(known);
+            // `missing < stops.len() ≤ u32::MAX`, so `missing + 1` does not overflow.
+            for step in 1..=missing {
+                let fraction = f64::from(step) / f64::from(missing + 1);
+                let output = stops[knots.len()].output;
+                knots.push(Knot {
+                    input: known + (input - known) * fraction,
+                    output,
+                });
             }
+            knots.push(Knot {
+                input,
+                output: stop.output,
+            });
+            known = input;
+            missing = 0;
         }
-        let mut left = 0_u32;
-        while left < count - 1 {
-            let right = (left + 1..count)
-                .find(|&index| stops[index as usize].input.is_some())
-                .expect("BUG: the last stop has an input");
-            let begin = stops[left as usize]
-                .input
-                .expect("BUG: the preceding input is known");
-            let end = stops[right as usize]
-                .input
-                .expect("BUG: the following input is known");
-            for index in left + 1..right {
-                let fraction = f64::from(index - left) / f64::from(right - left);
-                stops[index as usize].input = Some(begin + (end - begin) * fraction);
-            }
-            left = right;
-        }
-        let first = stops[0];
-        let last = *stops.last().expect("BUG: two stops were admitted");
-        if first.input != Some(0.0)
-            || first.output != 0.0
-            || last.input != Some(1.0)
-            || last.output != 1.0
-        {
+        // The last stop is always known, so every stop has its knot.
+        let (first, last) = (knots[0], knots[last_index]);
+        if first.input != 0.0 || first.output != 0.0 || last.input != 1.0 || last.output != 1.0 {
             return Err(PiecewiseLinearError::InvalidEndpoints);
         }
         Ok(Self {
-            knots: stops
-                .into_iter()
-                .map(|stop| Knot {
-                    input: stop.input.expect("BUG: every input was canonicalized"),
-                    output: stop.output,
-                })
-                .collect(),
+            knots: Rc::<[Knot]>::from(knots),
         })
     }
 }

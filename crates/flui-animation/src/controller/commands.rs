@@ -732,6 +732,14 @@ impl AnimationController {
         // only here, so `period_ns > 0` holds by construction for every live
         // run and nothing downstream needs to guard it again.
         let ratio = (v - lo) / (hi - lo);
+        // `ratio` is in `[0, 1]` (a NaN from an overflowed span casts to 0) and
+        // the float-to-integer cast saturates; `repeat_sample` reads the phase
+        // modulo the period, so a rounding past `period_ns` lands on its start.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a saturating cast of a phase in [0, period_ns]"
+        )]
         let initial_ns = (ratio * period_ns as f64).round() as u128;
         let run = RepeatRun {
             reverse,
