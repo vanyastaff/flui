@@ -528,7 +528,12 @@ fn member_admission(
     live: &Rc<dyn PressLive>,
 ) -> impl Fn(PointerDispatch<'_>) -> bool + 'static {
     let live = Rc::clone(live);
-    move |down: PointerDispatch<'_>| matches!(down.local, PointerEvent::Down(press) if live.press().acts_on(member, press.button()))
+    move |down: PointerDispatch<'_>| {
+        let PointerEvent::Down(press) = down.local else {
+            return false;
+        };
+        live.press().acts_on(member, press.button())
+    }
 }
 
 impl PressShape {
@@ -1265,10 +1270,9 @@ impl GestureRecognizer for PressRecognizers {
             .then_some(DownTake::Press)
     }
 
+    /// Offered only a Down [`Self::takes_down`] takes: the set the detector
+    /// attaches the group to holds that gate.
     fn add_pointer(&self, down: PointerDispatch<'_>) {
-        if self.takes_down(down).is_none() {
-            return;
-        }
         self.members().set.dispatch(down);
     }
 

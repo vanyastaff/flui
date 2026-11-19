@@ -27,10 +27,11 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// claims it only once it moves past its slop (a drag, a scale, a swipe).
     ///
     /// The one answer both questions ask: [`RecognizerSet::dispatch`](super::RecognizerSet::dispatch)
-    /// offers [`Self::add_pointer`] only a Down this takes (and the built-in
-    /// recognizers ask it again there, so a direct call is gated too), and a
-    /// platform asking whether a widget would take a press counts only
+    /// is the gate, offering [`Self::add_pointer`] only a Down this takes, and
+    /// a platform asking whether a widget would take a press counts only
     /// `Press` ([`RecognizerSet::claims_press`](super::RecognizerSet::claims_press)).
+    /// The built-in recognizers ask it again in `add_pointer`, so a direct call
+    /// is gated too; a recognizer need not.
     /// No default: a recognizer that left it out would either take every
     /// press from the platform or none.
     ///
@@ -42,8 +43,10 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// same: a platform's gesture then stands back from a touch that nobody
     /// takes, the cautious side of the question.
     fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake>;
-    /// Admit a Down, committing membership before invoking user callbacks.
-    /// Returns at once when [`Self::takes_down`] refuses it.
+    /// Admit a Down, committing membership before invoking user callbacks. A
+    /// [`RecognizerSet`](super::RecognizerSet) offers only a Down
+    /// [`Self::takes_down`] takes; whether a call made directly is checked
+    /// again is the recognizer's choice (the built-in ones check).
     fn add_pointer(&self, down: PointerDispatch<'_>);
     /// Admit the `Start` of a touchpad swipe
     /// ([`TouchpadSwipe`](crate::events::PointerEvent::TouchpadSwipe)), whose

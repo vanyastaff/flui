@@ -5944,8 +5944,8 @@ GPU-память простаивающего или невидимого окн
   `typing_moves_the_caret_and_only_a_moved_field_says_it_moved`); уход фокуса снимает жест и
   долги старого поля (`a_focus_move_asks_for_the_next_fields_geometry_once_whatever_the_last_one_held`).
   Жесты начинаются там, где hit test окна находит поле, или у ручки, где ни один распознаватель
-  не претендует на нажатие по тому же вопросу, что задаёт его `add_pointer`
-  (`GestureRecognizer::takes_down`, с допуском привязки): перетаскивание прокрутки и сырой
+  не претендует на нажатие по тому же вопросу, которым `RecognizerSet::dispatch` пропускает
+  нажатие к `add_pointer` (`GestureRecognizer::takes_down`, с допуском привязки): перетаскивание прокрутки и сырой
   слушатель нажатия чужой целью не считаются, бегунок полосы и строка со своим касанием —
   считаются (`TextStore::press_target_at` вне блокировки, `PressProbe` без копии ответов,
   `a_control_over_the_field_keeps_its_press`,

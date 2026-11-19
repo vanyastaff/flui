@@ -2612,67 +2612,6 @@ pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
 /// A tap reports a cancel only for a press it showed: a contact lost before
 /// the press timeout reports nothing, one lost after reports down then
 /// cancel, and a tap reports down, up, tap.
-/// A detector joins the arena only for a button one of its slots acts on:
-/// a detector with only `on_tap` does not join a secondary click, so the
-/// secondary tap of the detector around it wins it, and a detector with only
-/// `on_secondary_tap` does not join a primary press, so the tap around it
-/// wins that. Driven through dispatch, not asked of the press probe.
-///
-/// Fails with the press group taking every button its members are wired for
-/// (each inner detector's tap joins and, as the leaf, wins the press).
-pub(crate) fn a_detector_joins_only_the_presses_its_slots_act_on() {
-    use flui_widgets::SizedBox;
-    use std::{cell::Cell, rc::Rc, time::Duration};
-
-    let outer_secondary = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&outer_secondary);
-    let mut laid = lay_out(
-        GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
-            .on_secondary_tap(move |_| counted.set(counted.get() + 1))
-            .child(
-                GestureDetector::new()
-                    .behavior(flui_widgets::HitTestBehavior::Opaque)
-                    .on_tap(|_| {})
-                    .child(SizedBox::new(100.0, 100.0)),
-            ),
-        tight(100.0, 100.0),
-    );
-    laid.dispatch_secondary_down(50.0, 50.0);
-    laid.pump_for(Duration::from_millis(30));
-    laid.dispatch_secondary_up(50.0, 50.0);
-    laid.pump_for(Duration::from_millis(500));
-    assert_eq!(
-        outer_secondary.get(),
-        1,
-        "the secondary click is the surrounding secondary tap's"
-    );
-
-    let outer_taps = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&outer_taps);
-    let mut laid = lay_out(
-        GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
-            .on_tap(move |_| counted.set(counted.get() + 1))
-            .child(
-                GestureDetector::new()
-                    .behavior(flui_widgets::HitTestBehavior::Opaque)
-                    .on_secondary_tap(|_| {})
-                    .child(SizedBox::new(100.0, 100.0)),
-            ),
-        tight(100.0, 100.0),
-    );
-    laid.dispatch_pointer_down(50.0, 50.0);
-    laid.pump_for(Duration::from_millis(30));
-    laid.dispatch_pointer_up(50.0, 50.0);
-    laid.pump_for(Duration::from_millis(500));
-    assert_eq!(
-        outer_taps.get(),
-        1,
-        "the primary press is the surrounding tap's"
-    );
-}
-
 pub(crate) fn a_tap_cancel_only_follows_a_tap_down() {
     use flui_widgets::SizedBox;
     use std::{cell::RefCell, rc::Rc, time::Duration};
@@ -2728,6 +2667,74 @@ pub(crate) fn a_tap_cancel_only_follows_a_tap_down() {
         }
         laid.pump_for(Duration::from_millis(16));
         assert_eq!(*log.borrow(), expected);
+    }
+}
+
+/// A detector joins the arena only for a button one of its slots acts on,
+/// each of its members for its own slots, so a press passes an inner detector
+/// that would do nothing with it and the detector around it wins. Driven
+/// through dispatch, not asked of the press probe.
+///
+/// The first two rows fail with the press group taking every button its
+/// members are wired for (the inner tap joins and, as the leaf, wins the
+/// press). The last fails with the members attached without their own
+/// admissions: the inner long press makes the group take a primary press, and
+/// its tap, wired for every button, then joins and wins it.
+pub(crate) fn a_detector_joins_the_arena_only_for_buttons_its_slots_act_on() {
+    use flui_widgets::SizedBox;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    #[derive(Debug, Clone, Copy)]
+    enum Row {
+        SecondaryClickPastTapOnly,
+        PrimaryPressPastSecondaryTapOnly,
+        QuickTapPastSecondaryTapAndLongPress,
+    }
+    for row in [
+        Row::SecondaryClickPastTapOnly,
+        Row::PrimaryPressPastSecondaryTapOnly,
+        Row::QuickTapPastSecondaryTapAndLongPress,
+    ] {
+        let outer_fired = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&outer_fired);
+        let count = move || counted.set(counted.get() + 1);
+        let opaque = || GestureDetector::new().behavior(flui_widgets::HitTestBehavior::Opaque);
+        let (outer, inner, secondary) = match row {
+            Row::SecondaryClickPastTapOnly => (
+                opaque().on_secondary_tap(move |_| count()),
+                opaque().on_tap(|_| {}),
+                true,
+            ),
+            Row::PrimaryPressPastSecondaryTapOnly => (
+                opaque().on_tap(move |_| count()),
+                opaque().on_secondary_tap(|_| {}),
+                false,
+            ),
+            Row::QuickTapPastSecondaryTapAndLongPress => (
+                opaque().on_tap(move |_| count()),
+                opaque().on_secondary_tap(|_| {}).on_long_press(|_| {}),
+                false,
+            ),
+        };
+        let mut laid = lay_out(
+            outer.child(inner.child(SizedBox::new(100.0, 100.0))),
+            tight(100.0, 100.0),
+        );
+        if secondary {
+            laid.dispatch_secondary_down(50.0, 50.0);
+            laid.pump_for(Duration::from_millis(30));
+            laid.dispatch_secondary_up(50.0, 50.0);
+        } else {
+            laid.dispatch_pointer_down(50.0, 50.0);
+            laid.pump_for(Duration::from_millis(30));
+            laid.dispatch_pointer_up(50.0, 50.0);
+        }
+        laid.pump_for(Duration::from_millis(500));
+        assert_eq!(
+            outer_fired.get(),
+            1,
+            "{row:?}: the press is the surrounding detector's"
+        );
     }
 }
 

@@ -332,7 +332,7 @@ pub(crate) fn a_control_an_ancestor_draws_beside_the_field_keeps_its_press() {
 }
 
 /// Only a recognizer that would contend for the press makes a press another
-/// target's, asked the question its own `add_pointer` asks: the padding of a
+/// target's, asked the question its recognizer set gates delivery by: the padding of a
 /// `RawTextField`, whose raw listener focuses the field on a pointer-down
 /// and claims nothing, is nobody's; a drag beside the field, even one with an
 /// admission that accepts the Down, claims the contact only past its slop; a

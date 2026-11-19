@@ -1250,9 +1250,9 @@ pub struct InteractionDispatchHandle {
 /// without delivering anything: what a platform asks before its own gesture
 /// takes a touch over a widget (iOS's text interaction near a selection
 /// handle). Each target's own handler answers
-/// ([`PointerTargetHandler::claims_press`]): a listener asks its recognizers
-/// the question their `add_pointer` asks, so the probe keeps no copy of any
-/// target's answer.
+/// ([`PointerTargetHandler::claims_press`]): a listener asks its recognizer
+/// set the question its dispatch gates `add_pointer` by, so the probe keeps no
+/// copy of any target's answer.
 ///
 /// A probe holds only the lane's identity. It answers on the lane's owner
 /// thread while the lane lives, inside or outside the UI runtime's scope, since

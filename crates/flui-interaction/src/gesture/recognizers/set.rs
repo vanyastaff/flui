@@ -143,8 +143,8 @@ impl RecognizerSet {
     /// without delivering anything: the recognizer admits the contact's
     /// device, takes the Down as a press ([`GestureRecognizer::takes_down`]
     /// answers [`DownTake::Press`](super::recognizer::DownTake::Press), the
-    /// gate its `add_pointer` applies), and its admission predicate, if any,
-    /// accepts it. A drag, which claims a contact only past its slop, never
+    /// gate [`Self::dispatch`] applies before `add_pointer`), and its
+    /// admission predicate, if any, accepts it. A drag, which claims a contact only past its slop, never
     /// counts, admission or not. The predicates are user code and run with no
     /// borrow held; one that panics unwinds out of this call.
     #[must_use]

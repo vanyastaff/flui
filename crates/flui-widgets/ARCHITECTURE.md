@@ -1310,8 +1310,10 @@ magnifier all read it, and losing the input gives the field its own gestures bac
 field's store answers what a press lands on (`TextStore::press_target_at`, asked outside
 any lock) with the window's own hit test, the one a touch is dispatched by, and asks each
 target on the path, through the `PressProbe` its render view hands the store, whether a
-recognizer there would contend for the press by the gate its own `add_pointer` applies
-(`GestureRecognizer::takes_down`, with the attachment's admission). So a control drawn
+recognizer there would contend for the press by the gate `RecognizerSet::dispatch` applies
+before `add_pointer` (`GestureRecognizer::takes_down`, with the attachment's admission;
+a detector's press members each carry an admission for the buttons their own slots act
+on). So a control drawn
 over, beside or around the field keeps its tap (a scrollbar's thumb, a tappable row),
 while a scroll view's drag or an edge swipe, which claims only past its slop, a raw
 listener that only observes the Down (a `RawTextField`'s padding focusing it), and a

@@ -743,7 +743,9 @@ A platform's own gesture asks, before it takes a touch over the window, whether
 a widget there would contend for the press (iOS's text interaction near a
 selection handle). One source answers it and dispatch: every recognizer has a
 required `GestureRecognizer::takes_down`, judged from the Down and its
-configuration alone, which its `add_pointer` asks first. `None` refuses the Down
+configuration alone. `RecognizerSet::dispatch` is the gate: it offers
+`add_pointer` only a Down `takes_down` takes, and a built-in recognizer may
+check again in its own `add_pointer`. `None` refuses the Down
 (a button no callback handles, a secondary press of a primary-only tap),
 `DownTake::Press` contends for the press itself, `DownTake::Motion` claims the
 contact only past its slop (a drag, a scale, a swipe, a multi-drag). A
