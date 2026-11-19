@@ -62,7 +62,8 @@ pub enum SubmitVerdict {
     /// surface, or one its owner had released). Also no vsync block, but
     /// unlike [`Self::NoPresent`] the work was CONSUMED and never reached
     /// the screen — so the caller commits nothing (its tree and input regions
-    /// wait for a frame that is shown) and retries it, after the dropped-frame
+    /// wait for a frame that is shown) and retries it by publishing the same
+    /// version again (ADR-0304 §7), after the dropped-frame
     /// backoff once a withdrawal outlasts its budget (ADR-0335). The engine's
     /// raster executor draws the same
     /// distinction at the slot boundary with its `PresentDisposition`.

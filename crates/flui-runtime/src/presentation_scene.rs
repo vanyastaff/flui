@@ -12,12 +12,19 @@
 //! the lineage is renewed, and the pipeline, finding its staged patch never
 //! applied, repaints from the root into the new lineage on the next frame
 //! (ADR-0304 §10).
+//!
+//! A version the surface withheld (`SubmitVerdict::NotShown`) is owed to the
+//! screen as it is: the retry publishes it again, with the damage still
+//! counted from the acknowledged base, and paints nothing (ADR-0304 §7). The
+//! scene holds that debt beside the target the version was applied for, so a
+//! retry that finds another target or a newer version repaints instead.
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_layer::{
     BoundaryContent, Layer, ReleasedContents, ResyncReason, SceneNodeId, SceneOp, SceneOwner,
     ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey, TransformLayer,
@@ -34,6 +41,35 @@ pub(crate) struct PresentationScene {
     /// refusal is a producer defect a rebuild did not cure, so it asks for
     /// no retry.
     refusals: u8,
+    /// The target the current version was applied for; `None` before the
+    /// first version and after a renewal.
+    target: Option<SceneTarget>,
+    /// The version a withheld frame left owed to the screen, until the next
+    /// frame applies a version or republishes it ([`Self::held_retry`]), or a
+    /// frame shows it.
+    owed: Option<SceneVersionId>,
+}
+
+/// What a version is drawn for: the surface's size in device pixels and the
+/// device pixel ratio the pipeline painted it under.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SceneTarget {
+    pub(crate) size: (u32, u32),
+    pub(crate) scale: DevicePixelRatio,
+}
+
+/// What a frame owes a version its surface withheld (ADR-0304 §7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeldRetry {
+    /// No withheld version is owed.
+    None,
+    /// The current version is owed as it is: a frame whose paint changes
+    /// nothing publishes it again.
+    Republish,
+    /// The owed version is no longer what the screen should show (a newer
+    /// version was applied since, or the target changed): the frame repaints
+    /// the tree in full.
+    Repaint,
 }
 
 /// What [`PresentationScene::apply`] did with a frame's patch.
@@ -139,25 +175,27 @@ impl PresentationScene {
         });
     }
 
-    /// Applies the buffered patch for a surface of `size` device pixels.
-    pub(crate) fn apply(&mut self, size: (u32, u32)) -> Produced {
+    /// Applies the buffered patch for `target`.
+    pub(crate) fn apply(&mut self, target: SceneTarget) -> Produced {
         let surface = SurfaceKey {
-            size,
+            size: target.size,
             generation: SurfaceGeneration::ZERO,
         };
+        // A new version, or a renewed lineage, replaces whatever was owed.
+        self.owed = None;
         match self.owner.apply(surface) {
             Ok(applied) => {
                 self.refusals = 0;
+                self.target = Some(target);
                 Produced::Applied {
                     version: self.owner.current().clone(),
                     released: applied.released,
                 }
             }
             Err(error) => {
-                self.overlay = None;
                 self.refusals = self.refusals.saturating_add(1);
                 let retry = self.refusals < 2;
-                let released = self.owner.renew(ResyncReason::Rebuilt);
+                let released = self.renew_lineage(ResyncReason::Rebuilt);
                 tracing::error!(
                     %error,
                     retry,
@@ -173,17 +211,59 @@ impl PresentationScene {
         self.owner.publication()
     }
 
-    /// The raster side shows `rastered`: the log before it is let go.
+    /// The raster side shows `rastered`: the log before it is let go, and a
+    /// debt for that version or an older one of its lineage is paid, since the
+    /// screen shows what it owed or a later tree.
     pub(crate) fn completed(&mut self, rastered: SceneVersionId) -> ReleasedContents {
+        if self.owed.is_some_and(|owed| {
+            owed.lineage() == rastered.lineage() && owed.seq() <= rastered.seq()
+        }) {
+            self.owed = None;
+        }
         self.owner.completed(Some(rastered))
+    }
+
+    /// The surface withheld `version`: the next frame owes it to the screen.
+    fn owe(&mut self, version: SceneVersionId) {
+        self.owed = Some(version);
+    }
+
+    /// What a withheld version owes the frame about to draw for `target`:
+    /// [`HeldRetry::Republish`] when it is the current version and was applied
+    /// for `target`, [`HeldRetry::Repaint`] otherwise. The debt stays until a
+    /// frame pays it: a frame that applies a version
+    /// ([`Self::apply`]) or republishes this one ([`Self::republish`]), so a
+    /// frame that fails before either leaves it to the next.
+    pub(crate) fn held_retry(&self, target: SceneTarget) -> HeldRetry {
+        match self.owed {
+            None => HeldRetry::None,
+            Some(owed) if owed == self.owner.current().id() && self.target == Some(target) => {
+                HeldRetry::Republish
+            }
+            Some(_) => HeldRetry::Repaint,
+        }
+    }
+
+    /// The withheld version again, with the damage since the acknowledged
+    /// base, for a frame that painted nothing: the debt is paid.
+    pub(crate) fn republish(&mut self) -> ScenePublication {
+        self.owed = None;
+        self.owner.publication()
+    }
+
+    /// Starts a new lineage, which no debt or target carries over to.
+    fn renew_lineage(&mut self, reason: ResyncReason) -> ReleasedContents {
+        self.overlay = None;
+        self.target = None;
+        self.owed = None;
+        self.owner.renew(reason)
     }
 
     #[cfg(feature = "hot-reload")]
     /// Starts a new lineage: every node id the pipeline holds is refused, so
     /// its next frame repaints from the root (a hot reload, ADR-0304 §10).
     pub(crate) fn renew(&mut self, reason: ResyncReason) -> ReleasedContents {
-        self.overlay = None;
-        self.owner.renew(reason)
+        self.renew_lineage(reason)
     }
 }
 
@@ -255,6 +335,14 @@ impl SceneSlot {
         Ok(scene.as_mut().ok_or(SceneLent)?.completed(rastered))
     }
 
+    /// The surface withheld `version`; see [`PresentationScene::held_retry`].
+    /// `Err` while a frame holds the scene.
+    pub(crate) fn owe(&self, version: SceneVersionId) -> Result<(), SceneLent> {
+        let mut scene = self.scene.borrow_mut();
+        scene.as_mut().ok_or(SceneLent)?.owe(version);
+        Ok(())
+    }
+
     /// Runs the destructors of what the scene's owner released, here with no
     /// borrow held (an annotation's `Drop` is user code), and hands the owner
     /// back what nobody else holds, for its next frames to write into
@@ -313,10 +401,11 @@ impl Drop for LentScene<'_> {
         };
         // A renewal owed while the frame held the scene runs before it is
         // back; what it releases drops with the slot free.
-        let released = self.slot.renew_owed.take().map(|reason| {
-            scene.overlay = None;
-            scene.owner.renew(reason)
-        });
+        let released = self
+            .slot
+            .renew_owed
+            .take()
+            .map(|reason| scene.renew_lineage(reason));
         *self.slot.scene.borrow_mut() = Some(scene);
         drop(released);
     }
@@ -343,7 +432,10 @@ mod tests {
             || (None, None),
         );
         assert_eq!(painted, Ok(true));
-        scene.apply((800, 600))
+        scene.apply(SceneTarget {
+            size: (800, 600),
+            scale: DevicePixelRatio::ONE,
+        })
     }
 
     /// While a frame holds the scene, code it runs that reaches the slot is
@@ -448,5 +540,91 @@ mod tests {
         assert!(!retries(&mut scene));
         assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
         assert!(retries(&mut scene), "an applied patch resets the count");
+    }
+
+    /// A withheld version is republished only for the target it was applied for and while it is
+    /// the current version; the debt lasts until a frame applies a version, republishes it, or
+    /// the raster side shows it.
+    ///
+    /// Fails when the retry republishes a version drawn for another size or scale, or one a newer
+    /// version replaced, or when a paid debt is owed again.
+    #[test]
+    fn a_withheld_version_is_republished_only_for_its_own_target() {
+        let applied = SceneTarget {
+            size: (800, 600),
+            scale: DevicePixelRatio::ONE,
+        };
+        let doubled = DevicePixelRatio::try_new(2.0).expect("a ratio in range");
+        let owing = || {
+            let mut scene = PresentationScene::default();
+            assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+            let withheld = scene.publication().scene.id();
+            scene.owe(withheld);
+            (scene, withheld)
+        };
+        for (target, owed) in [
+            (applied, HeldRetry::Republish),
+            (
+                SceneTarget {
+                    size: (801, 600),
+                    ..applied
+                },
+                HeldRetry::Repaint,
+            ),
+            (
+                SceneTarget {
+                    scale: doubled,
+                    ..applied
+                },
+                HeldRetry::Repaint,
+            ),
+        ] {
+            let (scene, _) = owing();
+            assert_eq!(scene.held_retry(target), owed, "{target:?}");
+            assert_eq!(scene.held_retry(target), owed, "a look pays nothing");
+        }
+
+        let (mut scene, withheld) = owing();
+        assert_eq!(scene.republish().scene.id(), withheld);
+        assert_eq!(
+            scene.held_retry(applied),
+            HeldRetry::None,
+            "a republish pays it"
+        );
+
+        let (mut scene, withheld) = owing();
+        let _released = scene.completed(withheld);
+        assert_eq!(
+            scene.held_retry(applied),
+            HeldRetry::None,
+            "a shown version pays it"
+        );
+
+        let (mut scene, withheld) = owing();
+        assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+        scene.owe(withheld);
+        assert_eq!(
+            scene.held_retry(applied),
+            HeldRetry::Repaint,
+            "a newer version replaced the withheld one"
+        );
+        assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+        assert_eq!(
+            scene.held_retry(applied),
+            HeldRetry::None,
+            "an applied version pays it"
+        );
+
+        // A settlement that shows a later version pays a debt for an earlier one.
+        let (mut scene, withheld) = owing();
+        assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+        let later = scene.publication().scene.id();
+        scene.owe(withheld);
+        let _released = scene.completed(later);
+        assert_eq!(
+            scene.held_retry(applied),
+            HeldRetry::None,
+            "a later version shown pays it"
+        );
     }
 }
