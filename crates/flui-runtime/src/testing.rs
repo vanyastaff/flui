@@ -260,7 +260,16 @@ impl PlatformWindow for TestWindow {
 
     fn reveal_after_first_frame(&self) {}
 
+    /// Records `cursor`; an image is refused, as `set_cursor` answers, exactly
+    /// when the window's `cursor_image` capability is unavailable (it is,
+    /// as the window honours nothing).
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        if matches!(cursor, Cursor::Image(_)) && !self.capabilities.cursor_image().is_available() {
+            return Err(flui_platform::Unsupported::from(
+                flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+            )
+            .into());
+        }
         cursor.clone_into(&mut self.cursor.lock());
         Ok(())
     }

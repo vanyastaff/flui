@@ -185,7 +185,8 @@ fn texture_registry() {
 }
 
 /// A damage region holds at most eight disjoint rects, merges a ninth into
-/// the cheapest pair, and escalates a non-finite rect to `Full`, whose first
+/// the cheapest pair, merges two that share a side into the box they tile,
+/// and escalates a non-finite rect to `Full`, whose first
 /// reason survives a union (ADR-0304 §5); a rect enclosing the pixels a caller
 /// marked takes them with no margin.
 #[test]
@@ -197,6 +198,10 @@ fn region_contract() {
             (
                 "a_ninth_rect_merges_the_cheapest_pair",
                 r::a_ninth_rect_merges_the_cheapest_pair,
+            ),
+            (
+                "rects_that_share_a_side_merge",
+                r::rects_that_share_a_side_merge,
             ),
             (
                 "merged_rects_stay_pairwise_disjoint",

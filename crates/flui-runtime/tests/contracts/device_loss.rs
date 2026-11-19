@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::{ManualClock, MonotonicClock};
 use flui_runtime::frame_failure::{
     DeviceRecovery, FailureDisposition, FrameFailureHandler, FrameFailureKind,
 };
@@ -41,7 +42,7 @@ struct Lost {
     wakes: Arc<AtomicUsize>,
     reports: Arc<parking_lot::Mutex<Vec<(DeviceRecovery, FailureDisposition)>>>,
     device: Device,
-    now: web_time::Instant,
+    clock: ManualClock,
 }
 
 impl Lost {
@@ -49,9 +50,13 @@ impl Lost {
     fn new() -> Self {
         let wakes = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&wakes);
-        let runtime = crate::owner_publication::runtime_with_wake(Arc::new(move || {
-            count.fetch_add(1, Ordering::SeqCst);
-        }));
+        let clock = ManualClock::new();
+        let runtime = crate::owner_publication::runtime_with_wake_on(
+            Arc::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            }),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        );
         runtime
             .attach_root_widget_with_size(&flui_widgets::Text::new("lost"), 400.0, 400.0)
             .expect("mount text");
@@ -71,7 +76,7 @@ impl Lost {
                 lost: true,
                 submits: 0,
             },
-            now: web_time::Instant::now(),
+            clock,
         };
         assert!(!lost.run_frame(), "the lost device shows nothing");
         assert_eq!(lost.device.submits, 1, "the first frame reached the device");
@@ -79,22 +84,19 @@ impl Lost {
     }
 
     fn run_frame(&mut self) -> bool {
-        self.now += std::time::Duration::from_millis(16);
         self.runtime
-            .pump(
-                &mut flui_runtime::pump::SampledClock(self.now),
-                &mut self.device,
-            )
+            .pump(&mut self.clock, &mut self.device)
             .presented()
     }
 
-    /// Sleep until the dropped frame's retry deadline, as a host woken at it.
+    /// Move the clock to the dropped frame's retry deadline, as a host woken at it.
     fn wait_out_the_backoff(&self) {
         let deadline = self
             .runtime
             .failure_retry_deadline()
             .expect("a dropped frame waits out its backoff");
-        std::thread::sleep(deadline.saturating_duration_since(web_time::Instant::now()));
+        self.clock
+            .advance(deadline.saturating_duration_since(self.clock.now()));
         assert!(self.runtime.has_pending_work(), "the frame is due again");
     }
 

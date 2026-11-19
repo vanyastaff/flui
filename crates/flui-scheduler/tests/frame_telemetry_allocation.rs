@@ -31,7 +31,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
+use flui_foundation::{FrameEpoch, PresentationAddress, PresentationId, UiRuntimeId};
 use flui_scheduler::{
     ClockSource, DemandKind, FrameClock, FramePhaseDurations, FrameTimes, PollDecision,
     PresentOutcome,
@@ -123,6 +123,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     let _ = clock.record_frame(
         clock.telemetry_cut(),
         address(),
+        FrameEpoch::ZERO,
         frame_times(now),
         PresentOutcome::Presented,
     );
@@ -146,6 +147,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         let _snapshot = clock.record_frame(
             clock.telemetry_cut(),
             address(),
+            FrameEpoch::ZERO,
             frame_times(now),
             PresentOutcome::Presented,
         );

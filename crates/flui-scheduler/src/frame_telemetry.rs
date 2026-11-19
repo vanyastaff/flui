@@ -26,7 +26,7 @@
 //! allocates — a `Vec` built on the *consumer's* call, never on the frame
 //! path.
 
-use flui_foundation::PresentationAddress;
+use flui_foundation::{FrameEpoch, PresentationAddress};
 use web_time::{Duration, Instant};
 
 use crate::frame::{FrameId, FramePhase};
@@ -253,6 +253,10 @@ pub struct FrameSnapshot {
     /// doc for why it is derived from `produced_count()` rather than a
     /// second, redundant counter).
     pub frame_id: FrameId,
+    /// The stamp the frame was handed to its sink under, unique within its UI
+    /// runtime: what an answer that arrives after the frame was recorded names
+    /// it by, as its GPU time does.
+    pub epoch: FrameEpoch,
     /// The physical instant [`FrameClock::poll`](crate::frame_clock::FrameClock::poll)
     /// used to decide this frame should produce.
     pub clock_timestamp: Instant,
@@ -278,6 +282,13 @@ pub struct FrameSnapshot {
     pub input_epochs: InputEpochs,
     /// How long the segment's build, layout and paint took.
     pub phases: FramePhaseDurations,
+    /// How long the frame ran on the GPU (ADR-0388). Usually filled once the
+    /// GPU's answer arrives, a frame or more after the snapshot was recorded,
+    /// by [`FrameClock::record_gpu_time`](crate::frame_clock::FrameClock::record_gpu_time);
+    /// a queued frame whose answer came before its settlement is recorded with
+    /// it. `None` until then, and for good where the device has no timestamp
+    /// queries or the frame was not timed.
+    pub gpu_time: Option<Duration>,
 }
 
 /// How long one presentation's segment spent building, laying out and
@@ -379,26 +390,87 @@ pub(crate) struct FrameHistory {
     // materializing the whole array as a stack temporary first.
     slots: Box<[Option<FrameSnapshot>]>,
     next: usize,
+    // GPU times that arrived before their frame's snapshot: a queued frame is recorded when its
+    // settlement is drained, and the raster thread can hand back its time first (ADR-0388 §10).
+    // Fixed and inline, the oldest overwritten: a time whose frame never records (a frame
+    // replaced while queued, one not shown) stays until four later holds push it out, which
+    // is harmless, since no later snapshot shares its epoch.
+    early_gpu_times: [Option<(FrameEpoch, Duration)>; EARLY_GPU_TIMES],
+    next_early: usize,
 }
+
+/// How many GPU times [`FrameHistory`] holds for frames not recorded yet. A time waits only
+/// for its own frame's settlement, which the owner drains at its next wake, and a slot has at
+/// most three readbacks in flight (ADR-0388 §4); a time whose frame never records also takes
+/// an entry, so four leaves one to spare, and a burst of such times can push out a real one.
+const EARLY_GPU_TIMES: usize = 4;
 
 impl Default for FrameHistory {
     fn default() -> Self {
         Self {
             slots: vec![None; FRAME_HISTORY_CAPACITY].into_boxed_slice(),
             next: 0,
+            early_gpu_times: [None; EARLY_GPU_TIMES],
+            next_early: 0,
         }
     }
 }
 
 impl FrameHistory {
     /// Overwrite the oldest slot with `snapshot` — an index-and-assign, no
-    /// allocation, no shift of the other slots. Takes `&FrameSnapshot`
-    /// (copying the ~hundred-byte value once, into the slot) rather than by
-    /// value, per clippy's `large_types_passed_by_value`.
-    pub(crate) fn record(&mut self, snapshot: &FrameSnapshot) {
+    /// allocation, no shift of the other slots — after giving it the GPU time
+    /// that arrived for its epoch before it did, if one did. Takes
+    /// `&mut FrameSnapshot` (copying the ~hundred-byte value once, into the
+    /// slot) rather than by value, per clippy's `large_types_passed_by_value`.
+    pub(crate) fn record(&mut self, snapshot: &mut FrameSnapshot) {
+        // `record_gpu_time` never holds an unstamped epoch, so an unstamped frame finds nothing.
+        if let Some(early) = self
+            .early_gpu_times
+            .iter_mut()
+            .find(|early| early.is_some_and(|(epoch, _)| epoch == snapshot.epoch))
+        {
+            snapshot.gpu_time = early.take().map(|(_, gpu)| gpu);
+        }
         let capacity = self.slots.len();
         self.slots[self.next] = Some(*snapshot);
         self.next = (self.next + 1) % capacity;
+    }
+
+    /// Set the GPU time of the retained snapshot stamped `epoch`, unless it
+    /// has one, and return the snapshot as it now stands. A time for an epoch
+    /// no retained snapshot has is held for the snapshot [`Self::record`]
+    /// records next under it, and `None` is returned; so is `None` for an
+    /// unstamped frame ([`FrameEpoch::ZERO`]).
+    pub(crate) fn record_gpu_time(
+        &mut self,
+        epoch: FrameEpoch,
+        gpu: Duration,
+    ) -> Option<FrameSnapshot> {
+        if epoch == FrameEpoch::ZERO {
+            return None;
+        }
+        let Some(snapshot) = self
+            .slots
+            .iter_mut()
+            .flatten()
+            .find(|snapshot| snapshot.epoch == epoch)
+        else {
+            // A second time for a frame still waiting keeps the first, as a recorded frame does.
+            let waiting = self
+                .early_gpu_times
+                .iter()
+                .any(|early| early.is_some_and(|(held, _)| held == epoch));
+            if !waiting {
+                self.early_gpu_times[self.next_early] = Some((epoch, gpu));
+                self.next_early = (self.next_early + 1) % EARLY_GPU_TIMES;
+            }
+            return None;
+        };
+        if snapshot.gpu_time.is_some() {
+            return None;
+        }
+        snapshot.gpu_time = Some(gpu);
+        Some(*snapshot)
     }
 
     /// Every retained snapshot recorded after the one `since` names (or every retained

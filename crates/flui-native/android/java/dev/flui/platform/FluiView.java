@@ -97,6 +97,21 @@ public final class FluiView extends View {
     /** The keyboard's motion ended or was cancelled (API 30). */
     static native void nativeKeyboardSettled(long handle);
 
+    /**
+     * The window took the mouse ({@code hasCapture}) or let it go (API 26):
+     * the system's answer to {@link #requestPointerCapture}, its release, or
+     * the focus leaving the window.
+     */
+    static native void nativePointerCaptureChanged(long handle, boolean hasCapture);
+
+    /**
+     * The window has the focus or not, heard on this thread with the pointer
+     * capture's answers: on each change, and once as the view enters the
+     * window, which reports no change. The system's release of a held
+     * capture at a focus loss may come before or after it.
+     */
+    static native void nativeWindowFocusChanged(long handle, boolean hasWindowFocus);
+
     /** The node info of a virtual view, {@code HOST_VIEW_ID} for this view itself, or null. */
     static native AccessibilityNodeInfo nativeNodeInfo(long handle, View host, int virtualViewId);
 
@@ -249,6 +264,10 @@ public final class FluiView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        if (handle != 0) {
+            // Entering a window reports no focus change of its own.
+            nativeWindowFocusChanged(handle, hasWindowFocus());
+        }
         if (handle == 0 || observing) {
             return;
         }
@@ -326,6 +345,28 @@ public final class FluiView extends View {
 
     long handle() {
         return handle;
+    }
+
+    /**
+     * Every view of the window hears a change of its pointer capture; the
+     * captured mouse's relative motion itself reaches the native input queue.
+     */
+    @Override
+    public void onPointerCaptureChange(boolean hasCapture) {
+        long handle = this.handle;
+        if (handle != 0) {
+            nativePointerCaptureChanged(handle, hasCapture);
+        }
+    }
+
+    /** Every view of the window hears the window's focus change. */
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        long handle = this.handle;
+        if (handle != 0) {
+            nativeWindowFocusChanged(handle, hasWindowFocus);
+        }
     }
 
     /** The view covers the window, so every inset change reaches it. */

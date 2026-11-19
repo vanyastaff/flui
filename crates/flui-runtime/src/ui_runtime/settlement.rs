@@ -61,6 +61,11 @@ pub(crate) struct PendingFrame {
 }
 
 impl PendingFrame {
+    /// The frame, given the stamp `epoch` the sink was handed it under.
+    pub(super) fn stamped(self, epoch: FrameEpoch) -> Self {
+        Self { epoch, ..self }
+    }
+
     /// When the frame was handed to its sink.
     pub(crate) fn submitted_at(&self) -> Instant {
         self.submitted_at
@@ -189,7 +194,7 @@ impl UiRuntime {
         }
     }
 
-    /// The sink queued `frame`, stamped `epoch`: its record waits for the settlement that names
+    /// The sink queued `frame`, under its stamp: its record waits for the settlement that names
     /// it. A frame queued in place of the frame stamped `replaces` folds that frame's record,
     /// found by its stamp, so the reads it holds wait for a later scene; a stamp no record has
     /// (an inline verdict or a failure folded it first) folds nothing. Into a presentation that
@@ -197,11 +202,9 @@ impl UiRuntime {
     /// Returns the first panic of a fold, for the caller to resume after the frame's tail.
     pub(super) fn queue_pending_frame(
         producer: &PresentationState,
-        epoch: FrameEpoch,
-        mut frame: PendingFrame,
+        frame: PendingFrame,
         replaces: Option<FrameEpoch>,
     ) -> FirstPanic {
-        frame.epoch = epoch;
         let (replaced, overflow) = {
             let mut pending = producer.pending_frames.borrow_mut();
             let replaced = replaces
@@ -371,7 +374,7 @@ impl UiRuntime {
         mut held: FirstPanic,
     ) -> VerdictTail {
         let PendingFrame {
-            epoch: _,
+            epoch,
             submitted_at: _,
             telemetry,
             shown,
@@ -468,6 +471,7 @@ impl UiRuntime {
                     // the others leave the queue to its deadline.
                     producer.haptics().frame_presented(haptics);
                     self.record_submit_telemetry(
+                        epoch,
                         telemetry,
                         producer,
                         submit_at,
@@ -614,6 +618,7 @@ impl UiRuntime {
                     tail.retry_needed = true;
                     tail.retry_draw = RetryDraw::Repaint;
                     self.record_submit_telemetry(
+                        epoch,
                         telemetry,
                         producer,
                         submit_at,
@@ -658,6 +663,7 @@ impl UiRuntime {
                     reported.contain(|| self.mark_needs_full_repaint_for(producer));
                     reported.contain(|| {
                         self.record_submit_telemetry(
+                            epoch,
                             telemetry,
                             producer,
                             submit_at,
@@ -709,6 +715,7 @@ impl UiRuntime {
                         });
                     held.contain(|| {
                         self.record_submit_telemetry(
+                            epoch,
                             telemetry,
                             producer,
                             submit_at,

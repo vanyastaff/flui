@@ -18,7 +18,7 @@ use flui_layer::{
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 
-use crate::damage::{FramePlan, RegionPlan};
+use crate::damage::FramePlan;
 use crate::headless::RetainedCapture;
 use crate::recording_cache::admission::DRAWS_TO_ADMIT;
 
@@ -490,9 +490,6 @@ fn region_frames_match_a_full_frame() {
         return;
     };
     let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
-    // Production plans the bounding box (`RegionPlan::of`); this pins the
-    // rect-by-rect plan it switches to once a frame records once.
-    partial.plan_rect_by_rect();
     let mut corners = Corners::new();
     apply(
         &mut partial,
@@ -520,7 +517,7 @@ fn region_frames_match_a_full_frame() {
         .expect("the region frame renders");
     assert_eq!(
         partial.last_plan(),
-        Some(FramePlan::RetainedPartial(RegionPlan::Rects(region))),
+        Some(FramePlan::RetainedPartial(region)),
         "two distant rects redraw rect by rect"
     );
     assert_eq!(partial.counters().region_passes, 2, "one pass per rect");
@@ -570,8 +567,16 @@ fn region_frames_match_a_full_frame() {
 
 /// Two tall boxes of `color` over stripes and, when `root_too`, the root:
 /// the stripes, the boxes' slots and between them a backdrop filter that
-/// reaches below them, which neither box's damage meets.
-fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Color, root_too: bool) {
+/// reaches below them, which neither box's damage meets. `heavy` more 2×2
+/// squares, the background's colour, make the root's chunk one that costs
+/// a pass per rect it meets.
+fn gap_reader(
+    writer: &mut SceneWriter<'_>,
+    boxes: [SceneNodeId; 2],
+    color: Color,
+    root_too: bool,
+    heavy: usize,
+) {
     use flui_layer::{BackdropFilterLayer, Layer};
     use flui_painting::paint::{BlendMode, ImageFilter};
 
@@ -608,6 +613,10 @@ fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Colo
         Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
         &Paint::fill(Color::GREEN),
     );
+    for index in 0..heavy {
+        let (x, y) = ((index % 64) as f64 * 2.0, ((index / 64) % 64) as f64 * 2.0);
+        canvas.draw_rect(Rect::from_xywh(x, y, 2.0, 2.0), &Paint::fill(Color::GREEN));
+    }
     for x in (0..SIDE).step_by(8) {
         canvas.draw_rect(
             Rect::from_xywh(f64::from(x), 0.0, 4.0, f64::from(SIDE)),
@@ -639,13 +648,13 @@ fn gap_reader(writer: &mut SceneWriter<'_>, boxes: [SceneNodeId; 2], color: Colo
     });
 }
 
-/// A version's region planned as its bounding box has the box closed over
-/// the version's backdrop readers: a filter in the gap between the damaged
-/// boxes, which neither box's damage meets, is redrawn whole, and the frame
-/// draws as a full one. A version has no straddle self-heal, so a filter
-/// left cut by the box's scissor would stay wrong in the frames after it.
+/// A version's region of two distant boxes is redrawn box by box, and a
+/// filter in the gap between them, which neither box's damage meets and
+/// whose backdrop did not change, is left as the last frame drew it: the
+/// frame draws as a full one, and its two passes redraw only the boxes. The
+/// region's bounding box would redraw the gap, cutting the filter there.
 #[test]
-fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
+fn a_backdrop_effect_in_the_gap_between_a_regions_rects_is_left_alone() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -654,7 +663,7 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     let boxes: [SceneNodeId; 2] = {
         let mut writer = owner.writer();
         let boxes = std::array::from_fn(|_| writer.mint_node());
-        gap_reader(&mut writer, boxes, Color::RED, true);
+        gap_reader(&mut writer, boxes, Color::RED, true, 0);
         boxes
     };
     owner.apply(SURFACE).expect("the scene applies");
@@ -669,8 +678,9 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     partial
         .render_scene(&Scene::of_version(owner.current().clone()))
         .expect("the warm-up renders");
+    let retained = partial.read_retained_rgba().expect("readback");
 
-    gap_reader(&mut owner.writer(), boxes, Color::WHITE, false);
+    gap_reader(&mut owner.writer(), boxes, Color::WHITE, false, 0);
     owner.apply(SURFACE).expect("a recolour applies");
     let damage = owner.patch_damage();
     let DamageRegion::Region(region) = damage else {
@@ -681,14 +691,26 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     partial
         .render_scene(&Scene::of_version(owner.current().clone()))
         .expect("the region frame renders");
-    assert!(
-        matches!(
-            partial.last_plan(),
-            Some(FramePlan::RetainedPartial(RegionPlan::Bounds(_)))
-        ),
-        "{:?}",
-        partial.last_plan()
+    assert_eq!(
+        partial.last_plan(),
+        Some(FramePlan::RetainedPartial(region)),
+        "the closure adds nothing, and the region is redrawn rect by rect"
     );
+    assert_eq!(partial.counters().region_passes, 2, "one pass per box");
+    // The filter's gap, and every other pixel outside the boxes' rects,
+    // holds the bytes the frame started from.
+    let now = partial.read_retained_rgba().expect("readback");
+    let inside = |x: u32, y: u32| {
+        region
+            .rects()
+            .iter()
+            .any(|r| (r.left()..r.right()).contains(&x) && (r.top()..r.bottom()).contains(&y))
+    };
+    let rewritten = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(&retained, x, y) != px(&now, x, y))
+        .count();
+    assert_eq!(rewritten, 0, "pixels outside the rects were rewritten");
     let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     apply(
         &mut full,
@@ -867,8 +889,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    // (case, where the first member is, one pass per rect)
-    for (case, placed, by_rect) in [
+    // (case, where the first member is, a second rect far from the group)
+    for (case, placed, far_rect) in [
         ("first member in the root", FirstMember::InRoot, false),
         ("first member in its own node", FirstMember::Alone, false),
         ("one pass per rect", FirstMember::Alone, true),
@@ -912,9 +934,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         );
         owner.apply(SURFACE).expect("a recolour applies");
         apply(&mut partial, owner.patch_damage());
-        if by_rect {
+        if far_rect {
             // A second rect far from the group.
-            partial.plan_rect_by_rect();
             partial.mark_dirty(Rect::from_xywh(50.0, 100.0, 10.0, 10.0));
         }
         partial
@@ -925,7 +946,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             "{case}: the frame is partial: {:?}",
             partial.last_plan()
         );
-        if by_rect {
+        if far_rect {
             // The group's members share one rect, the far one has its own.
             assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
         }
@@ -3319,4 +3340,100 @@ fn a_chunk_under_two_clips_draws_each_from_one_recording() {
         inked(&fresh.pixels, 8..30, 10..30) && inked(&fresh.pixels, 60..82, 30..70),
         "precondition: each clip shows a part of the text"
     );
+}
+
+/// A version whose root chunk is heavy redraws a region of two distant boxes
+/// under their bounding box, which replays the chunk once instead of once per
+/// box (ADR-0304 §9): the closure then reaches the filter in the gap, and the
+/// frame still draws as a full one, and outside its one pass the bytes are
+/// the last frame's.
+#[test]
+fn a_heavy_chunk_redraws_a_region_under_its_bounding_box() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut owner = SceneOwner::new();
+    let boxes: [SceneNodeId; 2] = {
+        let mut writer = owner.writer();
+        let boxes = std::array::from_fn(|_| writer.mint_node());
+        gap_reader(&mut writer, boxes, Color::RED, true, 20_000);
+        boxes
+    };
+    owner.apply(SURFACE).expect("the scene applies");
+    apply(
+        &mut partial,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    partial
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the first frame renders");
+    partial.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    partial
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the warm-up renders");
+    let before = partial.read_rgba().expect("readback");
+
+    gap_reader(&mut owner.writer(), boxes, Color::WHITE, false, 0);
+    owner.apply(SURFACE).expect("a recolour applies");
+    let damage = owner.patch_damage();
+    let DamageRegion::Region(region) = damage else {
+        panic!("a recolour damages a region: {damage:?}");
+    };
+    assert_eq!(region.rects().len(), 2, "one rect per box: {region:?}");
+    apply(&mut partial, damage);
+    partial
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the region frame renders");
+    let Some(FramePlan::RetainedPartial(planned)) = partial.last_plan() else {
+        panic!("a region frame: {:?}", partial.last_plan());
+    };
+    let [planned] = planned.rects() else {
+        panic!("one pass under the box: {planned:?}");
+    };
+    let planned = *planned;
+    let bounds = region.bounds();
+    assert!(
+        planned.left() <= bounds.left() && planned.right() >= bounds.right(),
+        "the pass covers the gap between the boxes: {planned:?}"
+    );
+    assert!(
+        planned.bottom() > bounds.bottom(),
+        "the closure over the box reaches the filter below it: {planned:?}"
+    );
+    assert_eq!(partial.counters().region_passes, 1, "one pass");
+    let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    apply(
+        &mut full,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    full.render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the full frame renders");
+    let (pixels, oracle) = (
+        partial.read_rgba().expect("readback"),
+        full.read_rgba().expect("readback"),
+    );
+    let stale = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            px(&pixels, x, y)
+                .iter()
+                .zip(px(&oracle, x, y))
+                .any(|(&a, b)| a.abs_diff(b) > 2)
+        })
+        .count();
+    assert_eq!(
+        stale, 0,
+        "pixels the region frame drew unlike the full frame"
+    );
+    // Outside the one pass the frame redrew, the bytes are the warm-up's.
+    let inside = |x: u32, y: u32| {
+        (planned.left()..planned.right()).contains(&x)
+            && (planned.top()..planned.bottom()).contains(&y)
+    };
+    let written_outside = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(&before, x, y) != px(&pixels, x, y))
+        .count();
+    assert_eq!(written_outside, 0, "pixels outside the pass changed");
 }

@@ -102,9 +102,11 @@ path. It delivers all exits first, in hit-test (leaf-first) order, then all
 enters in reverse hit-test order (outermost region first), then the cursor
 change callback (`DeviceWork::invoke`, `pointer/mouse_tracker.rs`). The cursor
 is `HitTestResult::resolve_cursor`: the first entry along the leaf-first path
-whose request is `CursorRequest::Icon`, including an explicit `CursorIcon::Default`
-arrow. `CursorRequest::Defer` leaves the choice to the next entry; an entirely
-deferring path resolves to the arrow (ADR-0158).
+whose request is `CursorRequest::Show`, with a system icon (an explicit
+`CursorIcon::Default` arrow included), an application's image or no cursor
+(`Cursor::Hidden`, ADR-0354 §1). `CursorRequest::Defer` leaves the choice to the
+next entry; an entirely deferring path resolves to the arrow (ADR-0158). The
+presentation shows the arrow where its window refuses an image.
 
 ## Transform support
 

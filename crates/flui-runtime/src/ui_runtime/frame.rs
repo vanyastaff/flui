@@ -1106,6 +1106,7 @@ impl UiRuntime {
                     unreachable!("BUG: the submit closure returns only after the sink answered")
                 }
             };
+            let pending = pending.stamped(epoch);
             let queued = match render_verdict {
                 SubmitVerdict::Queued => Some(None),
                 SubmitVerdict::QueuedReplacing(replaced) => Some(Some(replaced)),
@@ -1121,9 +1122,7 @@ impl UiRuntime {
             if let Some(replaces) = queued {
                 // The sink took the frame and settles it later, by its stamp: the record waits
                 // for that settlement, which arms whatever retry its verdict needs.
-                hover_panic.absorb(Self::queue_pending_frame(
-                    producer, epoch, pending, replaces,
-                ));
+                hover_panic.absorb(Self::queue_pending_frame(producer, pending, replaces));
             } else {
                 // A frame the sink answered inline with a verdict that commits it supersedes every
                 // frame it queued before: what they read waits for a later scene, and a settlement
@@ -1151,6 +1150,9 @@ impl UiRuntime {
                 overlay_style = tail.overlay_style;
                 hover_panic = tail.held;
             }
+            // The GPU times of this presentation's earlier frames, read back since the last
+            // submit: each lands on its own frame's snapshot (ADR-0388).
+            hover_panic.absorb(self.record_gpu_times(producer, sink));
         }
 
         // Each window refreshes from its own acknowledged tree. A sibling's
@@ -1434,8 +1436,12 @@ impl UiRuntime {
     /// recorded as the snapshot's `clock_timestamp` so a late segment start shows against it),
     /// its segment's span, and its cut, so a frame settled after later ones were produced keeps
     /// its own frame id and drains only the input epochs stamped before it was submitted.
+    ///
+    /// `frame_epoch` is the stamp the sink was handed the frame under, which the frame's GPU
+    /// time names it by when it arrives later (ADR-0388).
     pub(super) fn record_submit_telemetry(
         &self,
+        frame_epoch: flui_foundation::FrameEpoch,
         telemetry: super::settlement::SubmittedTelemetry,
         presentation: &PresentationState,
         submit_at: Instant,
@@ -1458,17 +1464,26 @@ impl UiRuntime {
                 EpochDisposition::Drain => presentation.clock().record_frame(
                     telemetry.cut,
                     address,
+                    frame_epoch,
                     times,
                     present_outcome,
                 ),
                 EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
                     telemetry.cut,
                     address,
+                    frame_epoch,
                     times,
                     present_outcome,
                 ),
             };
-            Self::emit_frame_telemetry(presentation, &snapshot);
+            // A GPU time that arrived before this frame was recorded rides on its snapshot. Each
+            // event runs contained, so a subscriber that panics on the first still gets the
+            // second, which no later answer could send again; the first panic goes on to the
+            // caller's containment.
+            let mut caught = FirstPanic::new();
+            caught.contain(|| Self::emit_frame_telemetry(presentation, &snapshot));
+            caught.contain(|| Self::emit_frame_gpu_time(&snapshot));
+            caught.resume();
         }
     }
 
@@ -1511,6 +1526,47 @@ impl UiRuntime {
             produces_deferred = presentation.clock().produces_deferred(),
             frames_dropped = presentation.frames_dropped(),
             "frame telemetry"
+        );
+    }
+
+    /// Take from `sink` the GPU times of `presentation`'s earlier frames and record each on its
+    /// frame's snapshot, tracing a `frame_gpu_time` event for each one that landed (ADR-0388): the
+    /// snapshot was recorded, and its `frame_telemetry` event sent, before the time existed. A
+    /// time whose frame is not recorded yet waits in the presentation's clock and is traced
+    /// with that frame's `frame_telemetry` ([`Self::record_submit_telemetry`]). The sink and the
+    /// subscriber run contained: a panic in either is returned for the frame's tail, which
+    /// still settles, and a subscriber that panics on one event loses no later time.
+    fn record_gpu_times<S: crate::sink::FrameSink + ?Sized>(
+        &self,
+        presentation: &PresentationState,
+        sink: &mut S,
+    ) -> FirstPanic {
+        let mut caught = FirstPanic::new();
+        let mut times = self.gpu_times.take();
+        times.clear();
+        caught.contain(|| sink.take_gpu_times(&mut times));
+        for time in times.drain(..) {
+            if let Some(snapshot) = presentation.clock().record_gpu_time(time.epoch, time.gpu) {
+                caught.contain(|| Self::emit_frame_gpu_time(&snapshot));
+            }
+        }
+        self.gpu_times.set(times);
+        caught
+    }
+
+    fn emit_frame_gpu_time(snapshot: &FrameSnapshot) {
+        let Some(gpu) = snapshot.gpu_time else {
+            return;
+        };
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_gpu_time",
+            ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
+            presentation = %snapshot.address.presentation_id,
+            frame_id = %snapshot.frame_id,
+            epoch = snapshot.epoch.get(),
+            gpu_us = Self::duration_micros_saturated(gpu),
+            "frame GPU time"
         );
     }
 

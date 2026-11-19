@@ -108,8 +108,9 @@ pub struct Region {
 }
 
 impl Region {
-    /// The most rectangles a region holds; a ninth disjoint one merges the
-    /// cheapest pair. A hypothesis the damage perf scenario measures.
+    /// The most rectangles a region holds, and so the most passes a partial
+    /// frame redraws it in, one per rect (ADR-0304 §9); a ninth disjoint one
+    /// merges the cheapest pair. A hypothesis measured on lavapipe alone.
     pub const MAX: usize = 8;
 
     /// The region of one rectangle.
@@ -123,8 +124,9 @@ impl Region {
 
     /// Adds `rect`, keeping the rects pairwise disjoint.
     ///
-    /// `rect` merges with every rect it overlaps into their bounding box,
-    /// repeatedly until none overlap. When that leaves more than
+    /// `rect` merges with every rect it overlaps, or that it tiles a box with
+    /// (one that shares a whole side with it), into their bounding box,
+    /// repeatedly until none does. When that leaves more than
     /// [`Self::MAX`] rects, the pair whose bounding box adds the least area
     /// merges, under the same repetition.
     pub fn insert(&mut self, rect: DamageRect) {
@@ -190,8 +192,9 @@ impl PartialEq for Region {
 
 impl Eq for Region {}
 
-/// Merges every rect of `rects[..*len]` that overlaps `pending` into it,
-/// repeatedly until none does, and removes the merged ones.
+/// Merges every rect of `rects[..*len]` that overlaps `pending`, or that tiles
+/// a box with it, into it, repeatedly until none does, and removes the merged
+/// ones.
 fn absorb_overlapping(
     rects: &mut [DamageRect; Region::MAX + 1],
     len: &mut usize,
@@ -199,7 +202,7 @@ fn absorb_overlapping(
 ) -> DamageRect {
     let mut index = 0;
     while index < *len {
-        if rects[index].overlaps(pending) {
+        if rects[index].overlaps(pending) || tiles(rects[index], pending) {
             pending = pending.union(rects[index]);
             rects.copy_within(index + 1..*len, index);
             *len -= 1;
@@ -210,6 +213,12 @@ fn absorb_overlapping(
         }
     }
     pending
+}
+
+/// Whether disjoint `a` and `b` tile their bounding box: they share a whole
+/// side, so merging them adds no pixel and saves a pass.
+fn tiles(a: DamageRect, b: DamageRect) -> bool {
+    a.union(b).area() == a.area() + b.area()
 }
 
 /// The indexes `(i, j)`, `i < j`, of the pair whose bounding box adds the
