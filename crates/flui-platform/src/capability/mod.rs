@@ -30,7 +30,7 @@ mod owner;
 mod portal_parent;
 mod registrar;
 mod runtime_local;
-#[cfg(feature = "scripted")]
+#[cfg(any(test, feature = "scripted"))]
 pub mod scripted;
 mod window_lifetime;
 mod window_ref;

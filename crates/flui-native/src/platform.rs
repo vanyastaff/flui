@@ -572,11 +572,11 @@ impl<H: Host> HostPlatform<H> {
     /// The host's loop, for what a host offers beyond [`Platform`] (test
     /// controls, a scene registration).
     #[cfg_attr(
-        not(feature = "scripted"),
-        allow(
+        not(any(feature = "scripted", target_os = "ios", target_os = "android")),
+        expect(
             dead_code,
-            reason = "outside the test controls only the iOS, Android and X11 hosts reach their \
-                      loop through the platform: a target building none of them leaves it unused"
+            reason = "outside the headless host's test controls only the UIKit scene registration \
+                      and the Android start reach a loop through its platform"
         )
     )]
     pub(crate) fn owner(&self) -> &H::Loop {

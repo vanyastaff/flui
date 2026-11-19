@@ -42,8 +42,6 @@ static_assertions = { workspace = true }
 serde_json = { workspace = true }
 # `CountingWaker`, the waker whose wakes a transfer or capability test counts.
 flui-foundation = { workspace = true, features = ["testing"] }
-# The unit tests' window double (`testing::MockWindow`).
-flui-platform = { path = ".", features = ["testing"] }
 # Compile-fail fixtures: `DisplayId` cannot be built from a number.
 trybuild = { workspace = true }
 

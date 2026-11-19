@@ -19,10 +19,10 @@
 /// last turn delivered for it.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(
-    not(feature = "scripted"),
-    allow(
+    not(any(feature = "scripted", native_loop)),
+    expect(
         dead_code,
-        reason = "a build whose only host is the headless one, without its test controls, has no loop that turns at a deadline"
+        reason = "only a native loop and the headless host's test controls turn at a deadline"
     )
 )]
 pub(crate) struct TurnDeadline {
@@ -33,10 +33,10 @@ pub(crate) struct TurnDeadline {
 }
 
 #[cfg_attr(
-    not(feature = "scripted"),
-    allow(
+    not(any(feature = "scripted", native_loop)),
+    expect(
         dead_code,
-        reason = "a build whose only host is the headless one, without its test controls, has no loop that turns at a deadline"
+        reason = "only a native loop and the headless host's test controls turn at a deadline"
     )
 )]
 impl TurnDeadline {

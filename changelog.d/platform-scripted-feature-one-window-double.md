@@ -1,14 +1,14 @@
 ### Added
 
 - **`flui_testing::MockWindow`** (also `flui_platform::testing::MockWindow` under
-  `flui-platform`'s `testing`): the one test double of `PlatformWindow`, standalone or over a
-  host's window, with builders for what a test sets, recordings of redraws, commands and input
-  regions, an observer (`WindowCall`) that runs the test's code at each call, and values it keeps
-  that drop with the window.
+  `flui-platform`'s `testing`): the one test double of `PlatformWindow`. Standalone, its
+  refresh-rate request, image cursor and input regions answer as its capabilities say;
+  `MockWindow::over(window)` is a `MockWindow<Wrapping>` whose state, id and commands are the
+  wrapped window's, with no builders for them. Both record redraws, the commands they took and
+  input regions, run the test's code at each call through an observer (`WindowCall`), and keep
+  values that drop with the window.
 - **`flui-native`'s `scripted` feature**: names the headless host's type, window, doubles and test
   controls at the crate root; `testing` includes it, and `flui-app`'s `testing` turns it on.
-- **`flui-app`'s `driver`** (and the facade's) now turns on the contract's scenario primitive,
-  `flui_platform::capability::scripted`.
 
 ### Changed
 
@@ -24,5 +24,3 @@
 - **`flui_runtime::testing::TestWindow`**: use `flui_testing::MockWindow`
   (`with_sizes(physical, logical)` is `with_size(width, height)` at the scale factor, and
   `redraw_calls_handle()` is `redraw_requests()`).
-- **`flui_platform::window_takes_no_frame_verbs!`**: a window double is `MockWindow`, which
-  answers both frame verbs itself.

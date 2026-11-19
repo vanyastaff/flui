@@ -66,11 +66,9 @@ testing = ["flui-engine/testing", "flui-native/scripted"]
 
 # The driver agent (ADR-0239) in an optimized build: a debug build always
 # carries it. It serves the app's windows only when the launch names an
-# endpoint (`flui_protocol::launch`); with none, nothing is created. With it
-# comes the contract's scenario primitive (`flui_platform::capability::scripted`,
-# ADR-0154 §10), which a driver substitutes a dialog's or a permission's answer
-# with. The facade's `driver` feature forwards here.
-driver = ["flui-platform/scripted"]
+# endpoint (`flui_protocol::launch`); with none, nothing is created. The facade's
+# `driver` feature forwards here.
+driver = []
 
 [dependencies]
 flui-platform = { workspace = true }

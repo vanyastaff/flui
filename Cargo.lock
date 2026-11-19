@@ -2245,7 +2245,6 @@ version = "0.2.0-dev"
 dependencies = [
  "cursor-icon",
  "flui-foundation",
- "flui-platform",
  "js-sys",
  "language-tags",
  "libc",

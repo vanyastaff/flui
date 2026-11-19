@@ -15,9 +15,9 @@ use crate::drag::PlatformDragSource;
 use crate::haptics::PlatformHaptics;
 use crate::input_regions::InputRegion;
 use crate::{
-    AdmittedCommand, ApplyError, Cursor, CursorError, DisplayId, FrameRateHint, GestureGeometry,
-    PlatformSystemChrome, PlatformTextInput, PlatformWindow, PreferenceQueryError, RedrawRequester,
-    SurfaceTarget, Unsupported, UnsupportedReason, WindowAt, WindowCapabilities, WindowCommand,
+    AdmittedCommand, ApplyError, CapabilityAbsence, Cursor, CursorError, DisplayId, FrameRateHint,
+    GestureGeometry, PlatformSystemChrome, PlatformTextInput, PlatformWindow, PreferenceQueryError,
+    RedrawRequester, SurfaceTarget, Unsupported, WindowAt, WindowCapabilities, WindowCommand,
     WindowExtent, WindowFocus, WindowGeometry, WindowId, WindowIdMint, WindowState,
 };
 
@@ -36,8 +36,9 @@ pub enum WindowCall<'a> {
     /// [`PlatformWindow::gesture_geometry`], once it read its answer and
     /// before it returns it.
     GestureGeometry,
-    /// [`PlatformWindow::apply`] took this command: told after the window
-    /// recorded it, never for a command it refused.
+    /// [`PlatformWindow::apply`] took this command: told once the window took
+    /// it (over another window, once that window did) and recorded it, never
+    /// for a command refused.
     Apply(&'a WindowCommand),
     /// [`PlatformWindow::set_cursor`], before the window takes the cursor.
     SetCursor(&'a Cursor),
@@ -62,15 +63,261 @@ enum DisplayReport {
     On(Option<DisplayId>),
 }
 
+/// What a [`MockWindow`] stands on: a window of its own ([`Standalone`]) or
+/// another window ([`Wrapping`]), which answers what the double's builders do
+/// not set.
+mod base {
+    use super::{
+        AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint, GeometryAnswer,
+        InputRegion, PlatformDragSource, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
+        Point, PortalParent, RedrawRequester, Resolver, SurfaceTarget, Unsupported, WindowAt,
+        WindowCommand, WindowId, WindowState,
+    };
+    use std::sync::Arc;
+
+    /// The answers of what a [`MockWindow`](super::MockWindow) stands on.
+    /// Sealed: [`Standalone`](super::Standalone) and
+    /// [`Wrapping`](super::Wrapping) are the two.
+    pub trait Base {
+        fn id(&self) -> WindowId;
+        fn state(&self) -> WindowState;
+        /// Carry out `command`; `took` runs with it once it is taken.
+        fn take(
+            &self,
+            command: AdmittedCommand,
+            took: &dyn Fn(WindowCommand),
+        ) -> Result<(), ApplyError>;
+        fn gesture_geometry(&self) -> GeometryAnswer;
+        fn request_redraw(&self);
+        fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>>;
+        fn surface_target(&self) -> Arc<dyn SurfaceTarget>;
+        fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>>;
+        fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>>;
+        fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>>;
+        fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>>;
+        fn window_at(&self, position: Point<f64>) -> WindowAt;
+        fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported>;
+        fn reveal_after_first_frame(&self);
+        fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError>;
+        fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported>;
+        fn portal_parent(&self, answer: Resolver<PortalParent>);
+    }
+}
+
+use base::Base;
+
+/// A window of its own under a [`MockWindow`]: its id, extent, scale, focus,
+/// visibility and capabilities, which the standalone builders set.
+#[derive(Debug)]
+pub struct Standalone {
+    id: WindowId,
+    extent: WindowExtent,
+    scale_factor: DevicePixelRatio,
+    focused: bool,
+    visible: bool,
+    capabilities: WindowCapabilities,
+}
+
+/// Another window under a [`MockWindow`] built [`over`](MockWindow::over) it:
+/// its id, state, commands and every handle the double's builders leave
+/// unset are that window's.
+pub struct Wrapping(Rc<dyn PlatformWindow>);
+
+impl std::fmt::Debug for Wrapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Wrapping").field(&self.0.id()).finish()
+    }
+}
+
+/// The refusal of a verb whose capability a window lacks.
+fn not_on_this_platform() -> Unsupported {
+    Unsupported::from(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+}
+
+impl Base for Standalone {
+    fn id(&self) -> WindowId {
+        self.id
+    }
+
+    fn state(&self) -> WindowState {
+        let extent = self.extent;
+        WindowState::new(WindowGeometry::unplaced(extent), extent)
+            .with_visible(self.visible)
+            .with_focus(if self.focused && self.visible {
+                WindowFocus::Focused
+            } else {
+                WindowFocus::Inactive
+            })
+            .with_metrics(WindowMetrics::from_logical(extent.get(), self.scale_factor).ok())
+            .with_capabilities(self.capabilities)
+    }
+
+    /// Takes what its capabilities admitted and leaves the window as it was.
+    fn take(
+        &self,
+        command: AdmittedCommand,
+        took: &dyn Fn(WindowCommand),
+    ) -> Result<(), ApplyError> {
+        took(command.against(&self.capabilities)?);
+        Ok(())
+    }
+
+    fn gesture_geometry(&self) -> GeometryAnswer {
+        Ok(None)
+    }
+
+    fn request_redraw(&self) {}
+
+    fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {
+        None
+    }
+
+    fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+        Arc::new(super::NoNativeSurface)
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
+        None
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
+        None
+    }
+
+    fn window_at(&self, _: Point<f64>) -> WindowAt {
+        WindowAt::Unknown
+    }
+
+    /// A window that does not [take them](MockWindow::taking_input_regions)
+    /// honours no kind of input region.
+    fn set_input_regions(&self, _: &[InputRegion]) -> Result<(), Unsupported> {
+        Err(not_on_this_platform())
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
+    /// Every cursor but an image, which it refuses exactly when its
+    /// capabilities make no cursor image.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        if matches!(cursor, Cursor::Image(_)) && !self.capabilities.cursor_image().is_available() {
+            return Err(not_on_this_platform().into());
+        }
+        Ok(())
+    }
+
+    /// Refused exactly when its capabilities take no refresh-rate request.
+    fn set_frame_rate_hint(&self, _: FrameRateHint) -> Result<(), Unsupported> {
+        if self.capabilities.frame_rate_hint().is_available() {
+            Ok(())
+        } else {
+            Err(not_on_this_platform())
+        }
+    }
+
+    fn portal_parent(&self, answer: Resolver<PortalParent>) {
+        // The owner retiring first leaves nothing waiting for it.
+        let _ = answer.resolve(PortalParent::none());
+    }
+}
+
+impl Base for Wrapping {
+    fn id(&self) -> WindowId {
+        self.0.id()
+    }
+
+    fn state(&self) -> WindowState {
+        self.0.state()
+    }
+
+    /// Takes a command once the wrapped window took it.
+    fn take(
+        &self,
+        command: AdmittedCommand,
+        took: &dyn Fn(WindowCommand),
+    ) -> Result<(), ApplyError> {
+        let taken = command.command().clone();
+        self.0.apply(command)?;
+        took(taken);
+        Ok(())
+    }
+
+    fn gesture_geometry(&self) -> GeometryAnswer {
+        self.0.gesture_geometry()
+    }
+
+    fn request_redraw(&self) {
+        self.0.request_redraw();
+    }
+
+    fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {
+        Some(self.0.redraw_requester())
+    }
+
+    fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+        self.0.surface_target()
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        self.0.text_input()
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        self.0.haptics()
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
+        self.0.system_chrome()
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
+        self.0.drag_source()
+    }
+
+    fn window_at(&self, position: Point<f64>) -> WindowAt {
+        self.0.window_at(position)
+    }
+
+    fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
+        self.0.set_input_regions(regions)
+    }
+
+    fn reveal_after_first_frame(&self) {
+        self.0.reveal_after_first_frame();
+    }
+
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        self.0.set_cursor(cursor)
+    }
+
+    fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported> {
+        self.0.set_frame_rate_hint(hint)
+    }
+
+    fn portal_parent(&self, answer: Resolver<PortalParent>) {
+        self.0.portal_parent(answer);
+    }
+}
+
 /// A [`PlatformWindow`] with no window system behind it: the one window
 /// double, for a test that needs a window and not a host.
 ///
-/// Built standalone ([`new`](Self::new)) it is its own window: a fresh id from
-/// its thread's mint, a zero extent at scale 1 (so no metrics), visible and
-/// unfocused, honouring no command but the normal mode. Built
-/// [`over`](Self::over) another window it is that window, with what its
-/// builders set in front: what a test changes of a real host window, such as
-/// the headless host's.
+/// Built standalone ([`new`](MockWindow::new)) it is its own window: a fresh
+/// id from its thread's mint, a zero extent at scale 1 (so no metrics),
+/// visible and unfocused, honouring no command but the normal mode; its verbs
+/// answer as its capabilities say. Built [`over`](MockWindow::over) another
+/// window it is that window, with what its builders set in front: what a test
+/// changes of a real host window, such as the headless host's. A window built
+/// over another has no builders of its own state (size, scale, focus,
+/// visibility, capabilities, id): those are the wrapped window's, and setting
+/// them does not compile.
 ///
 /// What a test sets is a builder; what it reads back is a recording
 /// ([`redraw_requests`](Self::redraw_requests), [`applied`](Self::applied),
@@ -83,15 +330,9 @@ enum DisplayReport {
 ///
 /// The builders are named `with_*` where a bare name would shadow the
 /// [`PlatformWindow`] method a test calls on the same value.
-pub struct MockWindow {
-    inner: Option<Rc<dyn PlatformWindow>>,
-    id: WindowId,
-    extent: WindowExtent,
-    scale_factor: DevicePixelRatio,
-    focused: bool,
-    visible: bool,
+pub struct MockWindow<B = Standalone> {
+    base: B,
     display: Cell<DisplayReport>,
-    capabilities: WindowCapabilities,
     gesture_geometry: RefCell<Option<GeometryAnswer>>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
     haptics: Option<Arc<dyn PlatformHaptics>>,
@@ -109,11 +350,10 @@ pub struct MockWindow {
     kept: Vec<Box<dyn Any>>,
 }
 
-impl std::fmt::Debug for MockWindow {
+impl<B: Base> std::fmt::Debug for MockWindow<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MockWindow")
-            .field("id", &self.id)
-            .field("over", &self.inner.is_some())
+            .field("id", &self.base.id())
             .finish_non_exhaustive()
     }
 }
@@ -136,27 +376,86 @@ impl MockWindow {
         let id = WINDOW_IDS
             .with(WindowIdMint::next)
             .expect("BUG: a test opens far fewer windows than a mint issues");
-        Self::built(None, id)
-    }
-
-    /// `inner`, with what the builders set in front of it: its id, and every
-    /// call this window does not answer itself, are `inner`'s.
-    #[must_use]
-    pub fn over(inner: Rc<dyn PlatformWindow>) -> Self {
-        let id = inner.id();
-        Self::built(Some(inner), id)
-    }
-
-    fn built(inner: Option<Rc<dyn PlatformWindow>>, id: WindowId) -> Self {
-        Self {
-            inner,
+        MockWindow::on(Standalone {
             id,
             extent: WindowExtent::ZERO,
             scale_factor: DevicePixelRatio::ONE,
             focused: false,
             visible: true,
+            capabilities: publish(WindowCapabilities::NONE),
+        })
+    }
+
+    /// `inner`, with what the builders set in front of it: its id, its state,
+    /// its commands and every call this window does not answer itself are
+    /// `inner`'s.
+    #[must_use]
+    pub fn over(inner: Rc<dyn PlatformWindow>) -> MockWindow<Wrapping> {
+        MockWindow::on(Wrapping(inner))
+    }
+
+    /// Answer `id` from [`PlatformWindow::id`].
+    #[must_use]
+    pub fn with_id(mut self, id: WindowId) -> Self {
+        self.base.id = id;
+        self
+    }
+
+    /// A window `width` × `height` logical pixels large: its metrics are that
+    /// extent at its [scale](Self::with_scale_factor).
+    ///
+    /// # Panics
+    /// When a side is negative or not finite: a test names a window's size.
+    #[must_use]
+    pub fn with_size(mut self, width: f64, height: f64) -> Self {
+        self.base.extent = WindowExtent::try_new(Size::new(width, height))
+            .expect("a test names a finite, non-negative window size");
+        self
+    }
+
+    /// Device pixels per logical pixel, which the metrics are at.
+    #[must_use]
+    pub fn with_scale_factor(mut self, scale_factor: DevicePixelRatio) -> Self {
+        self.base.scale_factor = scale_factor;
+        self
+    }
+
+    /// Whether the window has focus; a hidden window never has.
+    #[must_use]
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.base.focused = focused;
+        self
+    }
+
+    /// Whether the window is shown.
+    #[must_use]
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.base.visible = visible;
+        self
+    }
+
+    /// Honour `capabilities`, as a new publication of them: what its commands
+    /// are admitted against, and what its verbs answer by (a refresh-rate
+    /// request, an image cursor).
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: WindowCapabilities) -> Self {
+        self.base.capabilities = publish(capabilities);
+        self
+    }
+}
+
+/// `capabilities` as a new publication.
+fn publish(capabilities: WindowCapabilities) -> WindowCapabilities {
+    capabilities
+        .publish()
+        .expect("BUG: a test publishes far fewer than u64::MAX capabilities")
+}
+
+impl<B: Base> MockWindow<B> {
+    fn on(base: B) -> Self {
+        Self {
+            base,
             display: Cell::new(DisplayReport::Unset),
-            capabilities: Self::publish(WindowCapabilities::NONE),
             gesture_geometry: RefCell::new(None),
             text_input: None,
             haptics: None,
@@ -172,60 +471,6 @@ impl MockWindow {
             input_regions: None,
             kept: Vec::new(),
         }
-    }
-
-    fn publish(capabilities: WindowCapabilities) -> WindowCapabilities {
-        capabilities
-            .publish()
-            .expect("BUG: a test publishes far fewer than u64::MAX capabilities")
-    }
-
-    /// Answer `id` from [`PlatformWindow::id`].
-    #[must_use]
-    pub fn with_id(mut self, id: WindowId) -> Self {
-        self.id = id;
-        self
-    }
-
-    /// A window `width` × `height` logical pixels large: its metrics are that
-    /// extent at its [scale](Self::with_scale_factor).
-    ///
-    /// # Panics
-    /// When a side is negative or not finite: a test names a window's size.
-    #[must_use]
-    pub fn with_size(mut self, width: f64, height: f64) -> Self {
-        self.extent = WindowExtent::try_new(Size::new(width, height))
-            .expect("a test names a finite, non-negative window size");
-        self
-    }
-
-    /// Device pixels per logical pixel, which the metrics are at.
-    #[must_use]
-    pub fn with_scale_factor(mut self, scale_factor: DevicePixelRatio) -> Self {
-        self.scale_factor = scale_factor;
-        self
-    }
-
-    /// Whether the window has focus; a hidden window never has.
-    #[must_use]
-    pub fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
-        self
-    }
-
-    /// Whether the window is shown.
-    #[must_use]
-    pub fn visible(mut self, visible: bool) -> Self {
-        self.visible = visible;
-        self
-    }
-
-    /// Honour `capabilities`, as a new publication of them: what its commands
-    /// are admitted against.
-    #[must_use]
-    pub fn with_capabilities(mut self, capabilities: WindowCapabilities) -> Self {
-        self.capabilities = Self::publish(capabilities);
-        self
     }
 
     /// Answer every gesture-geometry query with `answer`; a test changes it
@@ -264,7 +509,8 @@ impl MockWindow {
         self
     }
 
-    /// Present into `target` instead of no native surface.
+    /// Present into `target` instead of no native surface, or the wrapped
+    /// window's.
     #[must_use]
     pub fn with_surface_target(mut self, target: Arc<dyn SurfaceTarget>) -> Self {
         self.surface_target = Some(target);
@@ -309,8 +555,9 @@ impl MockWindow {
     }
 
     /// Take input regions, recording each set
-    /// ([`input_regions`](Self::input_regions)); without it the window refuses
-    /// them, as one whose system has none.
+    /// ([`input_regions`](Self::input_regions)); without it a window of its
+    /// own refuses them, as one whose system honours no kind of input region,
+    /// and a window over another hands them to it.
     #[must_use]
     pub fn taking_input_regions(mut self) -> Self {
         self.input_regions = Some(RefCell::new(Vec::new()));
@@ -341,7 +588,8 @@ impl MockWindow {
         self.redraw_requests.load(Ordering::Relaxed)
     }
 
-    /// Every command the window took, in order.
+    /// Every command the window took, in order (over another window, every
+    /// command that window took).
     #[must_use]
     pub fn applied(&self) -> Vec<WindowCommand> {
         self.applied.borrow().clone()
@@ -362,20 +610,6 @@ impl MockWindow {
             observer(call);
         }
     }
-
-    /// The state of a window of its own.
-    fn own_state(&self) -> WindowState {
-        let extent = self.extent;
-        WindowState::new(WindowGeometry::unplaced(extent), extent)
-            .with_visible(self.visible)
-            .with_focus(if self.focused && self.visible {
-                WindowFocus::Focused
-            } else {
-                WindowFocus::Inactive
-            })
-            .with_metrics(WindowMetrics::from_logical(extent.get(), self.scale_factor).ok())
-            .with_capabilities(self.capabilities)
-    }
 }
 
 /// Counts a redraw request and runs the hook, from whichever thread asks.
@@ -386,10 +620,10 @@ fn record_redraw(requests: &AtomicUsize, hook: Option<&(dyn Fn() + Send + Sync)>
     }
 }
 
-impl PlatformWindow for MockWindow {
+impl<B: Base> PlatformWindow for MockWindow<B> {
     fn id(&self) -> WindowId {
         self.observe(WindowCall::Id);
-        self.id
+        self.base.id()
     }
 
     /// What was set when the query began: an observer that
@@ -397,26 +631,20 @@ impl PlatformWindow for MockWindow {
     /// query's, as a system whose geometry changes during a read.
     fn gesture_geometry(&self) -> GeometryAnswer {
         let set = self.gesture_geometry.borrow().clone();
-        let answer = match (set, &self.inner) {
-            (Some(answer), _) => answer,
-            (None, Some(inner)) => inner.gesture_geometry(),
-            (None, None) => Ok(None),
-        };
+        let answer = set.unwrap_or_else(|| self.base.gesture_geometry());
         self.observe(WindowCall::GestureGeometry);
         answer
     }
 
     fn request_redraw(&self) {
         record_redraw(&self.redraw_requests, self.redraw_hook.as_deref());
-        if let Some(inner) = &self.inner {
-            inner.request_redraw();
-        }
+        self.base.request_redraw();
     }
 
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
         let requests = Arc::clone(&self.redraw_requests);
         let hook = self.redraw_hook.clone();
-        let inner = self.inner.as_ref().map(|inner| inner.redraw_requester());
+        let inner = self.base.redraw_requester();
         Arc::new(move || {
             record_redraw(&requests, hook.as_deref());
             if let Some(inner) = &inner {
@@ -426,29 +654,25 @@ impl PlatformWindow for MockWindow {
     }
 
     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
-        match (&self.surface_target, &self.inner) {
-            (Some(target), _) => Arc::clone(target),
-            (None, Some(inner)) => inner.surface_target(),
-            (None, None) => Arc::new(super::NoNativeSurface),
-        }
+        self.surface_target
+            .clone()
+            .unwrap_or_else(|| self.base.surface_target())
     }
 
-    /// The window's own state, or `inner`'s; on the display a test
+    /// The window's own state, or the wrapped window's; on the display a test
     /// [set](Self::set_display) either way.
     fn state(&self) -> WindowState {
         self.observe(WindowCall::State);
-        let state = match &self.inner {
-            Some(inner) => inner.state(),
-            None => self.own_state(),
-        };
+        let state = self.base.state();
         match self.display.get() {
             DisplayReport::On(display) => state.with_display(display),
             DisplayReport::Unset => state,
         }
     }
 
-    /// Records the command and leaves the window as it was; over another
-    /// window, that window carries it out.
+    /// Records the command once the window took it: a window of its own
+    /// leaves itself as it was, a window over another hands the command to
+    /// it first.
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         let refused = self
             .refusal
@@ -457,99 +681,181 @@ impl PlatformWindow for MockWindow {
         if let Some(error) = refused {
             return Err(error);
         }
-        let Some(inner) = &self.inner else {
-            let command = command.against(&self.capabilities)?;
-            self.applied.borrow_mut().push(command.clone());
-            self.observe(WindowCall::Apply(&command));
-            return Ok(());
-        };
-        let taken = command.command().clone();
-        self.applied.borrow_mut().push(taken.clone());
-        self.observe(WindowCall::Apply(&taken));
-        inner.apply(command)
+        self.base.take(command, &|taken| {
+            self.applied.borrow_mut().push(taken.clone());
+            self.observe(WindowCall::Apply(&taken));
+        })
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.text_input
-            .clone()
-            .or_else(|| self.inner.as_ref().and_then(|inner| inner.text_input()))
+        self.text_input.clone().or_else(|| self.base.text_input())
     }
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
-        self.haptics
-            .clone()
-            .or_else(|| self.inner.as_ref().and_then(|inner| inner.haptics()))
+        self.haptics.clone().or_else(|| self.base.haptics())
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
         self.system_chrome
             .clone()
-            .or_else(|| self.inner.as_ref().and_then(|inner| inner.system_chrome()))
+            .or_else(|| self.base.system_chrome())
     }
 
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
-        self.drag_source
-            .clone()
-            .or_else(|| self.inner.as_ref().and_then(|inner| inner.drag_source()))
+        self.drag_source.clone().or_else(|| self.base.drag_source())
     }
 
     fn window_at(&self, position: Point<f64>) -> WindowAt {
-        self.inner
-            .as_ref()
-            .map_or(WindowAt::Unknown, |inner| inner.window_at(position))
+        self.base.window_at(position)
     }
 
     fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
-        if let Some(taken) = &self.input_regions {
-            taken.borrow_mut().push(regions.to_vec());
-            self.observe(WindowCall::SetInputRegions(regions));
-            return Ok(());
-        }
-        match &self.inner {
-            Some(inner) => inner.set_input_regions(regions),
-            None => Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform)),
-        }
+        let Some(taken) = &self.input_regions else {
+            return self.base.set_input_regions(regions);
+        };
+        taken.borrow_mut().push(regions.to_vec());
+        self.observe(WindowCall::SetInputRegions(regions));
+        Ok(())
     }
 
     fn reveal_after_first_frame(&self) {
-        if let Some(inner) = &self.inner {
-            inner.reveal_after_first_frame();
-        }
+        self.base.reveal_after_first_frame();
     }
 
-    /// A window of its own takes every cursor but an image, which it refuses
-    /// exactly when its capabilities make no cursor image, as the contract
-    /// says; over another window, that window answers.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         self.observe(WindowCall::SetCursor(cursor));
-        match &self.inner {
-            Some(inner) => inner.set_cursor(cursor),
-            None if matches!(cursor, Cursor::Image(_))
-                && !self.capabilities.cursor_image().is_available() =>
-            {
-                Err(Unsupported::from(crate::CapabilityAbsence::NOT_ON_THIS_PLATFORM).into())
-            }
-            None => Ok(()),
-        }
+        self.base.set_cursor(cursor)
     }
 
     fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported> {
-        match &self.inner {
-            Some(inner) => inner.set_frame_rate_hint(hint),
-            None => Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform)),
-        }
+        self.base.set_frame_rate_hint(hint)
     }
 
     fn portal_parent(&self, answer: Resolver<PortalParent>) {
-        match (&self.portal_parent, &self.inner) {
-            (Some(parent), _) => {
+        match &self.portal_parent {
+            Some(parent) => {
                 // The owner retiring first leaves nothing waiting for it.
                 let _ = answer.resolve(parent());
             }
-            (None, Some(inner)) => inner.portal_parent(answer),
-            (None, None) => {
-                let _ = answer.resolve(PortalParent::none());
-            }
+            None => self.base.portal_parent(answer),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use super::{MockWindow, WindowCall};
+    use crate::{
+        ApplyError, Availability, Cursor, CursorImage, FrameRateHint, PlatformWindow,
+        WindowCapabilities, WindowCommand,
+    };
+
+    /// Capabilities honouring nothing, with the verbs' own two set to `on`.
+    fn verbs(on: bool) -> WindowCapabilities {
+        let availability = if on {
+            Availability::Native
+        } else {
+            Availability::Unavailable
+        };
+        let mut parts = WindowCapabilities::NONE.into_parts();
+        parts.frame_rate_hint = availability;
+        parts.cursor_image = availability;
+        parts.into_capabilities()
+    }
+
+    fn image() -> Cursor {
+        Cursor::Image(
+            CursorImage::try_new(1, 1, (0, 0), vec![0; 4]).expect("a 1 × 1 RGBA image is a cursor"),
+        )
+    }
+
+    /// Each verb a window takes outside the command queue answers as its
+    /// capabilities say, refused exactly when the capability is unavailable
+    /// (`PlatformWindow::set_frame_rate_hint`, `set_cursor` for an image,
+    /// `set_input_regions`).
+    #[test]
+    fn a_standalone_windows_verbs_answer_as_its_capabilities_say() {
+        for on in [true, false] {
+            let window = MockWindow::new().with_capabilities(verbs(on));
+            let window = if on {
+                window.taking_input_regions()
+            } else {
+                window
+            };
+            let rows: [(&str, bool); 3] = [
+                (
+                    "frame rate hint",
+                    window.set_frame_rate_hint(FrameRateHint::High).is_ok(),
+                ),
+                ("image cursor", window.set_cursor(&image()).is_ok()),
+                ("input regions", window.set_input_regions(&[]).is_ok()),
+            ];
+            for (verb, taken) in rows {
+                assert_eq!(taken, on, "{verb} with the capability available: {on}");
+            }
+            assert!(
+                window
+                    .set_cursor(&Cursor::Icon(crate::CursorIcon::Default))
+                    .is_ok(),
+                "an icon cursor is taken either way"
+            );
+        }
+    }
+
+    /// Over another window, a command is recorded and told to the observer
+    /// only once that window took it: one it refuses leaves no record.
+    #[test]
+    fn a_wrapped_window_records_only_what_the_inner_window_took() {
+        for refuses in [true, false] {
+            let inner = MockWindow::new()
+                .with_capabilities(WindowCapabilities::ALL)
+                .with_refusal(move |_| {
+                    refuses.then(|| ApplyError::failed("the system said no".to_owned()))
+                });
+            let inner = Rc::new(inner);
+            let told = Rc::new(Cell::new(0));
+            let counted = Rc::clone(&told);
+            let wrapper = MockWindow::over(Rc::clone(&inner) as Rc<dyn PlatformWindow>)
+                .with_observer(move |call| {
+                    if matches!(call, WindowCall::Apply(_)) {
+                        counted.set(counted.get() + 1);
+                    }
+                });
+            let command = WindowCommand::SetTitle("Notes".to_owned());
+            let admitted = command
+                .clone()
+                .admit(&wrapper.state().capabilities)
+                .expect("the inner window honours every command");
+
+            let outcome = wrapper.apply(admitted);
+
+            assert_eq!(outcome.is_err(), refuses);
+            let recorded = if refuses { vec![] } else { vec![command] };
+            assert_eq!(wrapper.applied(), recorded, "refused: {refuses}");
+            assert_eq!(inner.applied(), recorded, "refused: {refuses}");
+            assert_eq!(told.get(), usize::from(!refuses), "refused: {refuses}");
+        }
+    }
+
+    /// A haptics handle set on a wrapper answers in place of the wrapped
+    /// window's, which answers the rest.
+    #[test]
+    fn a_wrapped_window_answers_what_its_builders_leave_unset() {
+        let inner: Rc<dyn PlatformWindow> =
+            Rc::new(MockWindow::new().with_capabilities(verbs(true)));
+        let haptics = Arc::new(crate::testing::FakeHaptics::new());
+        let wrapper = MockWindow::over(Rc::clone(&inner)).with_haptics(haptics);
+
+        assert!(wrapper.haptics().is_some());
+        assert_eq!(wrapper.id(), inner.id());
+        assert!(wrapper.set_frame_rate_hint(FrameRateHint::High).is_ok());
+        assert_eq!(
+            wrapper.state().capabilities.frame_rate_hint(),
+            Availability::Native
+        );
     }
 }
