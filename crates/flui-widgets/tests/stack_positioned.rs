@@ -64,6 +64,66 @@ pub(crate) fn positioned_start_resolves_against_directionality() {
 
 /// An indexed stack is heard only through the child it shows, and switching the index
 /// switches what is heard.
+/// `Stack` and `IndexedStack` clip a child that overflows them unless built
+/// with `Clip::None`, at creation and on every rebuild. The clip governs
+/// paint only: the overflowing child keeps its layout either way.
+pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
+    use crate::common::LaidOut;
+    use flui_painting::paint::Clip;
+    use flui_rendering::layer::Layer;
+    use flui_view::ViewExt;
+    use flui_widgets::IndexedStack;
+
+    fn clips(laid: &LaidOut) -> usize {
+        laid.layer_tree().map_or(0, |tree| {
+            tree.iter()
+                .filter(|(_, node)| {
+                    matches!(node.layer(), Layer::ClipRect(clip) if clip.clip_behavior() != Clip::None)
+                })
+                .count()
+        })
+    }
+    // A 200×200 stack whose positioned child reaches 20 past its right edge.
+    let overflowing = || {
+        Positioned::new(SizedBox::new(40.0, 40.0))
+            .left(180.0)
+            .top(0.0)
+    };
+    let sequence = [Clip::None, Clip::HardEdge, Clip::None, Clip::AntiAlias];
+
+    let stack = |clip| Stack::new((overflowing(),)).clip_behavior(clip);
+    let mut laid = lay_out(stack(sequence[0]), tight(200.0, 200.0));
+    for (index, &clip) in sequence.iter().enumerate() {
+        if index > 0 {
+            laid.pump_widget(stack(clip));
+        }
+        assert_eq!(
+            clips(&laid),
+            usize::from(clip != Clip::None),
+            "Stack with {clip:?}"
+        );
+        let child = laid.only_child(laid.root());
+        assert_eq!(
+            laid.offset(child),
+            offset(180.0, 0.0),
+            "Stack with {clip:?}"
+        );
+    }
+
+    let indexed = |clip| IndexedStack::new(vec![overflowing().boxed()]).clip_behavior(clip);
+    let mut laid = lay_out(indexed(sequence[0]), tight(200.0, 200.0));
+    for (index, &clip) in sequence.iter().enumerate() {
+        if index > 0 {
+            laid.pump_widget(indexed(clip));
+        }
+        assert_eq!(
+            clips(&laid),
+            usize::from(clip != Clip::None),
+            "IndexedStack with {clip:?}"
+        );
+    }
+}
+
 pub(crate) fn an_indexed_stack_is_heard_only_through_its_shown_child() {
     use flui_view::ViewExt;
     use flui_widgets::{IndexedStack, Semantics};
