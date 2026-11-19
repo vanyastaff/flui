@@ -27,7 +27,7 @@ runtime (ADR-0027), so its counterpart is one cache per runtime.
 
 ## Decision drivers
 
-- An application writes `Image::asset(path)`, as in Flutter, with no cache to make or pass.
+- An application writes `Image::asset(key)`, as in Flutter, with no cache to make or pass.
 - Every image of one runtime shares decodes and pixels; two runtimes share nothing (ADR-0027,
   ADR-0250 §1).
 - The framework gives back the memory it keeps without an application registering anything.
@@ -94,7 +94,7 @@ impl RuntimeLocals {
 }
 
 impl Image {
-    pub fn asset(path: impl Into<String>) -> Self;
+    pub fn asset(key: impl Into<String>) -> Self;   // read through the asset bundle (ADR-0384 §6)
     pub fn network(url: impl Into<String>) -> Self;
 }
 impl ImageServices {
@@ -105,7 +105,7 @@ impl ImageServices {
 
 ### Consequences
 
-- An application turns on `images` and writes `Image::asset(path)`; a network image also needs
+- An application turns on `images` and writes `Image::asset(key)`; a network image also needs
   `http`. It registers nothing for memory pressure.
 - `MemoryImage` and `FileImage` still decode per widget: they take no cache, so two widgets
   with equal bytes decode twice.

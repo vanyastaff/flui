@@ -4,14 +4,16 @@
 //! unfinished is handed over to the next request still waiting.
 
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use flui_assets::{
     ImageCache, ImageCacheConfig, ImageLoadError, ImageLoadErrorKind, ImageSource, LoadServices,
 };
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 use flui_painting::paint::Image;
+use flui_platform::assets::{AssetBundle, AssetKey, DirectoryAssets};
 use flui_platform::executor::{Lane, SpawnError};
+use flui_platform::testing::MemoryAssets;
 
 use crate::lanes::{QueuedLanes, ThreadLanes, block_on};
 
@@ -20,13 +22,39 @@ fn fixture_path() -> &'static str {
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny.png")
 }
 
+fn key(name: &str) -> AssetKey {
+    AssetKey::try_new(name).expect("the test's asset key is valid")
+}
+
+/// A bundle over `directory`: the one value every load that must share an
+/// identity goes through, since a new bundle is a new identity.
+fn directory_bundle(directory: impl Into<std::path::PathBuf>) -> AssetBundle {
+    AssetBundle::new(Arc::new(DirectoryAssets::new(directory)))
+}
+
+/// The bundle over the committed fixtures directory.
+fn fixtures() -> &'static AssetBundle {
+    static FIXTURES: OnceLock<AssetBundle> = OnceLock::new();
+    FIXTURES
+        .get_or_init(|| directory_bundle(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")))
+}
+
+/// The fixture PNG, as the fixtures bundle serves it.
+fn fixture_source() -> ImageSource {
+    ImageSource::asset(key("tiny.png"), fixtures())
+}
+
 fn registry() -> ImageCache {
     ImageCache::default()
 }
 
-/// Loads `path` on a native host's default lanes and waits for it.
-fn load(registry: &ImageCache, path: impl Into<Arc<str>>) -> Result<Image, ImageLoadError> {
-    block_on(registry.load(&ImageSource::asset(path), &ThreadLanes::new().services()))
+/// Loads asset `name` of `bundle` on a native host's default lanes and waits
+/// for it.
+fn load(registry: &ImageCache, bundle: &AssetBundle, name: &str) -> Result<Image, ImageLoadError> {
+    block_on(registry.load(
+        &ImageSource::asset(key(name), bundle),
+        &ThreadLanes::new().services(),
+    ))
 }
 
 fn assert_fixture(image: &Image) {
@@ -41,7 +69,7 @@ fn assert_fixture(image: &Image) {
 fn loads_on_the_given_lanes() {
     let lanes = QueuedLanes::new();
     let registry = registry();
-    let pending = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
+    let pending = registry.load(&fixture_source(), &lanes.services());
     assert_eq!(lanes.pending_io(), 1, "the read waits on the IO lane");
     lanes.run_until_idle();
     assert_eq!(lanes.computes(), 1, "the decode ran on the compute lane");
@@ -50,9 +78,8 @@ fn loads_on_the_given_lanes() {
 
 /// With no lanes the load runs inside the request, where it is polled.
 fn without_lanes_the_load_runs_where_it_is_polled() {
-    let image =
-        block_on(registry().load(&ImageSource::asset(fixture_path()), &LoadServices::new()))
-            .expect("the fixture decodes");
+    let image = block_on(registry().load(&fixture_source(), &LoadServices::new()))
+        .expect("the fixture decodes");
     assert_fixture(&image);
 }
 
@@ -64,7 +91,7 @@ fn without_lanes_the_load_runs_where_it_is_polled() {
 fn saturated_lanes_leave_the_load_to_the_request() {
     let lanes = QueuedLanes::new();
     lanes.refuse(SpawnError::Saturated);
-    let mut load = registry().load(&ImageSource::asset(fixture_path()), &lanes.services());
+    let mut load = registry().load(&fixture_source(), &lanes.services());
     poll_until(&mut load, || lanes.waiting_for_room() > 0);
     assert_eq!(
         (lanes.pending_io(), lanes.computes()),
@@ -90,7 +117,7 @@ fn saturated_lanes_leave_the_load_to_the_request() {
 fn a_full_compute_lane_is_waited_for_off_the_io_lane() {
     let lanes = QueuedLanes::new();
     lanes.refuse_lane(Lane::Compute, SpawnError::Saturated);
-    let mut load = registry().load(&ImageSource::asset(fixture_path()), &lanes.services());
+    let mut load = registry().load(&fixture_source(), &lanes.services());
     lanes.run_io_until_idle();
     assert_eq!(lanes.waiting_for_room(), 1, "waits for the compute lane");
     assert_eq!(
@@ -118,7 +145,7 @@ fn a_full_compute_lane_is_waited_for_off_the_io_lane() {
 fn a_lane_shutting_down_ends_the_wait_for_room() {
     let lanes = QueuedLanes::new();
     lanes.refuse_lane(Lane::Compute, SpawnError::Saturated);
-    let load = registry().load(&ImageSource::asset(fixture_path()), &lanes.services());
+    let load = registry().load(&fixture_source(), &lanes.services());
     lanes.run_io_until_idle();
     assert_eq!(lanes.waiting_for_room(), 1);
 
@@ -154,16 +181,12 @@ fn poll_until<F: std::future::Future + Unpin>(load: &mut F, done: impl Fn() -> b
 /// A missing file resolves to a typed error, and the next load succeeds.
 fn a_missing_file_is_an_error_and_the_next_load_succeeds() {
     let registry = registry();
-    let missing = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/does-not-exist.png"
-    );
-    let result = load(&registry, missing);
+    let result = load(&registry, fixtures(), "does-not-exist.png");
     assert!(
         matches!(&result, Err(error) if matches!(error.kind(), ImageLoadErrorKind::NotFound)),
-        "a nonexistent path is a typed error, got {result:?}",
+        "a nonexistent key is a typed error, got {result:?}",
     );
-    assert_fixture(&load(&registry, fixture_path()).expect("the next load succeeds"));
+    assert_fixture(&load(&registry, fixtures(), "tiny.png").expect("the next load succeeds"));
 }
 
 /// Dropping one of two requests, the one that started the load or the one
@@ -174,8 +197,8 @@ fn a_request_that_leaves_does_not_cancel_the_load_for_the_rest() {
     for drop_lead in [false, true] {
         let lanes = QueuedLanes::new();
         let registry = registry();
-        let lead = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
-        let joined = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
+        let lead = registry.load(&fixture_source(), &lanes.services());
+        let joined = registry.load(&fixture_source(), &lanes.services());
         assert_eq!(lanes.pending_io(), 1, "one load for both requests");
         let kept = if drop_lead {
             drop(lead);
@@ -195,8 +218,8 @@ fn a_request_that_leaves_does_not_cancel_the_load_for_the_rest() {
 /// Red-check: answer a closed load as a failure instead of handing it over.
 fn a_load_whose_request_left_is_taken_over() {
     let registry = registry();
-    let lead = registry.load(&ImageSource::asset(fixture_path()), &LoadServices::new());
-    let joined = registry.load(&ImageSource::asset(fixture_path()), &LoadServices::new());
+    let lead = registry.load(&fixture_source(), &LoadServices::new());
+    let joined = registry.load(&fixture_source(), &LoadServices::new());
     drop(lead);
     assert_fixture(&block_on(joined).expect("the waiting request took the load over"));
 }
@@ -210,17 +233,14 @@ fn a_load_on_lanes_that_shut_down_is_taken_over_on_other_lanes() {
     let retiring = QueuedLanes::new();
     let other = ThreadLanes::new();
     let registry = registry();
-    let first = registry.load(&ImageSource::asset(fixture_path()), &retiring.services());
-    let second = registry.load(&ImageSource::asset(fixture_path()), &other.services());
+    let first = registry.load(&fixture_source(), &retiring.services());
+    let second = registry.load(&fixture_source(), &other.services());
     retiring.shut_down();
     assert_fixture(&block_on(second).expect("the other runtime's request took the load over"));
     assert_fixture(&block_on(first).expect("the first request then finds the image kept"));
 
     let refused = block_on(registry.load(
-        &ImageSource::asset(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/never-loaded.png"
-        )),
+        &ImageSource::asset(key("never-loaded.png"), fixtures()),
         &retiring.services(),
     ));
     assert!(
@@ -243,12 +263,12 @@ fn a_load_on_lanes_that_shut_down_is_taken_over_on_other_lanes() {
 fn a_cancelled_load_never_reaches_the_decoder() {
     let lanes = QueuedLanes::new();
     let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
-    drop(registry.load(&ImageSource::asset(fixture_path()), &lanes.services()));
+    drop(registry.load(&fixture_source(), &lanes.services()));
     lanes.run_until_idle();
     assert_eq!(lanes.computes(), 0, "the cancelled load never decoded");
     assert_eq!(lanes.pending_io(), 0, "and its read is gone");
 
-    let next = registry.load(&ImageSource::asset(fixture_path()), &lanes.services());
+    let next = registry.load(&fixture_source(), &lanes.services());
     lanes.run_until_idle();
     assert_fixture(&block_on(next).expect("the decode slot is free"));
 }
@@ -262,8 +282,8 @@ fn a_decode_its_lanes_drop_is_taken_over_on_other_lanes() {
     let retiring = QueuedLanes::new();
     let other = ThreadLanes::new();
     let registry = registry();
-    let first = registry.load(&ImageSource::asset(fixture_path()), &retiring.services());
-    let second = registry.load(&ImageSource::asset(fixture_path()), &other.services());
+    let first = registry.load(&fixture_source(), &retiring.services());
+    let second = registry.load(&fixture_source(), &other.services());
     retiring.run_io_until_idle();
     assert_eq!(
         retiring.computes(),
@@ -286,11 +306,11 @@ fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
     let retiring = QueuedLanes::new();
     let other = ThreadLanes::new();
     let registry = registry();
-    let first = registry.load(&ImageSource::asset(fixture_path()), &retiring.services());
-    let second = registry.load(&ImageSource::asset(fixture_path()), &other.services());
+    let first = registry.load(&fixture_source(), &retiring.services());
+    let second = registry.load(&fixture_source(), &other.services());
     retiring.refuse(SpawnError::ShuttingDown);
     retiring.run_until_idle();
-    let source = flui_assets::ImageSource::asset(fixture_path());
+    let source = fixture_source();
     assert!(
         registry.get(&source).is_none(),
         "the retiring IO lane decoded nothing"
@@ -311,38 +331,38 @@ fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
     let held: Vec<_> = (0..8)
         .map(|index| {
             registry.load(
-                &ImageSource::asset(format!(
-                    "{}/tests/fixtures/held-{index}.png",
-                    env!("CARGO_MANIFEST_DIR")
-                )),
+                &ImageSource::asset(key(&format!("held-{index}.png")), fixtures()),
                 &LoadServices::new(),
             )
         })
         .collect();
     assert_fixture(
-        &block_on(registry.load(&ImageSource::asset(fixture_path()), &LoadServices::new()))
+        &block_on(registry.load(&fixture_source(), &LoadServices::new()))
             .expect("the awaited load runs"),
     );
     drop(held);
 
     let shared = ImageCache::default();
-    let held = shared.load(&ImageSource::asset(fixture_path()), &LoadServices::new());
+    let held = shared.load(&fixture_source(), &LoadServices::new());
     let lanes = ThreadLanes::new();
     assert_fixture(
-        &block_on(shared.load(&ImageSource::asset(fixture_path()), &lanes.services()))
+        &block_on(shared.load(&fixture_source(), &lanes.services()))
             .expect("the request for the held source loads it"),
     );
     drop(held);
 }
 
-/// A path that names no regular file is refused before it is opened: a FIFO
+/// A key that names no regular file is refused before it is opened: a FIFO
 /// or a device could block the shared IO lane in `open`.
 ///
 /// Red-check: drop the regular-file check (the directory opens and its read
 /// fails with an OS error instead).
 fn a_path_that_is_not_a_regular_file_is_refused() {
     let refused = block_on(registry().load(
-        &ImageSource::asset(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")),
+        &ImageSource::asset(
+            key("fixtures"),
+            &directory_bundle(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
+        ),
         &LoadServices::new(),
     ));
     assert!(
@@ -351,16 +371,65 @@ fn a_path_that_is_not_a_regular_file_is_refused() {
     );
 }
 
+/// Two bundles never share an image under one key: each is its own identity,
+/// so the cache loads, keeps and answers `get` for each separately, as two
+/// applications' assets of one name would need.
+///
+/// Red-check: leave the bundle out of the source's cache identity (the second
+/// load answers the first bundle's 4x2 image, and `get` finds it).
+fn two_bundles_never_share_an_image_under_one_key() {
+    let mut wide = Vec::new();
+    image::RgbaImage::new(2, 3)
+        .write_to(
+            &mut std::io::Cursor::new(&mut wide),
+            image::ImageFormat::Png,
+        )
+        .expect("the second image encodes");
+    let tiny = std::fs::read(fixture_path()).expect("the fixture is read");
+    let first = AssetBundle::new(Arc::new(MemoryAssets::new().asset(key("a.png"), tiny)));
+    let second = AssetBundle::new(Arc::new(MemoryAssets::new().asset(key("a.png"), wide)));
+    let cache = registry();
+
+    assert_fixture(&load(&cache, &first, "a.png").expect("the first bundle's image decodes"));
+    let source = ImageSource::asset(key("a.png"), &second);
+    assert!(
+        cache.get(&source).is_none(),
+        "the first bundle's image is not the second's"
+    );
+    let image = load(&cache, &second, "a.png").expect("the second bundle's image decodes");
+    assert_eq!(
+        (image.width(), image.height()),
+        (2, 3),
+        "the second bundle answers its own bytes"
+    );
+    assert_eq!(
+        cache.get(&source).map(|kept| (kept.width(), kept.height())),
+        Some((2, 3))
+    );
+    assert_fixture(
+        &cache
+            .get(&ImageSource::asset(key("a.png"), &first))
+            .expect("the first bundle's image is still kept"),
+    );
+
+    let empty = AssetBundle::new(Arc::new(MemoryAssets::new()));
+    let missing = load(&cache, &empty, "a.png");
+    assert!(
+        matches!(&missing, Err(error) if matches!(error.kind(), ImageLoadErrorKind::NotFound)),
+        "a bundle without the key does not borrow another's image, got {missing:?}"
+    );
+}
+
 /// A file over the 256 MiB encoded-image cap fails with a typed error before
 /// it is buffered. `set_len` makes the file without writing its bytes.
 fn an_oversized_file_is_refused_before_it_is_read() {
     let files = FixtureCopies::new("oversized");
-    let path = files.0.join("huge.png");
+    let path = files.directory.join("huge.png");
     std::fs::File::create(&path)
         .and_then(|file| file.set_len(256 * 1024 * 1024 + 1))
         .expect("oversized test file is created");
     let registry = budgeted(FIXTURE_BYTES);
-    let result = load(&registry, path.to_string_lossy().into_owned());
+    let result = load(&registry, &files.bundle, "huge.png");
     assert!(
         matches!(&result, Err(error)
             if matches!(error.kind(), ImageLoadErrorKind::TooLarge { limit } if *limit == 256 * 1024 * 1024)),
@@ -368,9 +437,12 @@ fn an_oversized_file_is_refused_before_it_is_read() {
     );
 }
 
-/// Copies of the 4x2 fixture (32 decoded bytes each) under distinct paths, in
-/// a directory removed on drop.
-struct FixtureCopies(std::path::PathBuf);
+/// Copies of the 4x2 fixture (32 decoded bytes each) under distinct keys, in
+/// a directory removed on drop, served by one bundle.
+struct FixtureCopies {
+    directory: std::path::PathBuf,
+    bundle: AssetBundle,
+}
 
 /// Decoded bytes of one fixture image.
 const FIXTURE_BYTES: usize = 4 * 2 * 4;
@@ -386,19 +458,20 @@ impl FixtureCopies {
                 .as_nanos()
         ));
         std::fs::create_dir(&directory).expect("test directory is created");
-        Self(directory)
+        let bundle = directory_bundle(&directory);
+        Self { directory, bundle }
     }
 
     fn copy(&self, name: &str) -> String {
-        let path = self.0.join(name);
+        let path = self.directory.join(name);
         std::fs::copy(fixture_path(), &path).expect("fixture is copied");
-        path.to_string_lossy().into_owned()
+        name.to_owned()
     }
 }
 
 impl Drop for FixtureCopies {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 
@@ -406,9 +479,9 @@ fn budgeted(bytes: usize) -> flui_assets::ImageCache {
     ImageCache::new(ImageCacheConfig::default().budget(bytes))
 }
 
-fn is_kept(registry: &flui_assets::ImageCache, path: &str) -> bool {
+fn is_kept(registry: &flui_assets::ImageCache, bundle: &AssetBundle, name: &str) -> bool {
     registry
-        .get(&flui_assets::ImageSource::asset(path))
+        .get(&ImageSource::asset(key(name), bundle))
         .is_some()
 }
 
@@ -417,22 +490,22 @@ fn budget_evicts_the_least_recently_used_image() {
     let registry = budgeted(2 * FIXTURE_BYTES);
     let [a, b, c] = ["a.png", "b.png", "c.png"].map(|name| files.copy(name));
     for path in [&a, &b, &c] {
-        load(&registry, path.as_str()).expect("fixture decodes");
+        load(&registry, &files.bundle, path.as_str()).expect("fixture decodes");
     }
     assert!(
-        !is_kept(&registry, &a),
+        !is_kept(&registry, &files.bundle, &a),
         "the oldest image goes past the budget"
     );
-    assert!(is_kept(&registry, &b) && is_kept(&registry, &c));
+    assert!(is_kept(&registry, &files.bundle, &b) && is_kept(&registry, &files.bundle, &c));
 }
 
 fn an_image_over_the_budget_is_returned_but_not_kept() {
     let files = FixtureCopies::new("over-budget");
     let registry = budgeted(FIXTURE_BYTES - 1);
     let path = files.copy("large.png");
-    let image = load(&registry, path.as_str()).expect("fixture decodes");
+    let image = load(&registry, &files.bundle, path.as_str()).expect("fixture decodes");
     assert_eq!((image.width(), image.height()), (4, 2));
-    assert!(!is_kept(&registry, &path));
+    assert!(!is_kept(&registry, &files.bundle, &path));
 }
 
 fn trims_by_pressure_level(level: MemoryPressureLevel, older_kept: bool, newer_kept: bool) {
@@ -440,14 +513,22 @@ fn trims_by_pressure_level(level: MemoryPressureLevel, older_kept: bool, newer_k
     let registry = budgeted(2 * FIXTURE_BYTES);
     let [older, newer] = ["older.png", "newer.png"].map(|name| files.copy(name));
     for path in [&older, &newer] {
-        load(&registry, path.as_str()).expect("fixture decodes");
+        load(&registry, &files.bundle, path.as_str()).expect("fixture decodes");
     }
 
     registry.reclaim(level);
 
-    assert_eq!(is_kept(&registry, &older), older_kept, "{level:?}");
-    assert_eq!(is_kept(&registry, &newer), newer_kept, "{level:?}");
-    let reloaded = load(&registry, older.as_str()).expect("reloads");
+    assert_eq!(
+        is_kept(&registry, &files.bundle, &older),
+        older_kept,
+        "{level:?}"
+    );
+    assert_eq!(
+        is_kept(&registry, &files.bundle, &newer),
+        newer_kept,
+        "{level:?}"
+    );
+    let reloaded = load(&registry, &files.bundle, older.as_str()).expect("reloads");
     assert_eq!((reloaded.width(), reloaded.height()), (4, 2));
 }
 
@@ -542,6 +623,10 @@ fn image_loads_run_on_their_lanes_and_survive_the_requests_that_leave() {
         (
             "not a regular file",
             a_path_that_is_not_a_regular_file_is_refused,
+        ),
+        (
+            "two bundles under one key",
+            two_bundles_never_share_an_image_under_one_key,
         ),
     ]);
 }

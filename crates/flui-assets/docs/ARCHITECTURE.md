@@ -13,7 +13,7 @@ is the crate root:
 | `ImageCache` | The decoded images one owner keeps, and the loads that fill them: `load` and the synchronous probe `get`; `ReclaimMemory` gives them back under pressure. |
 | `ImageCacheConfig` | The byte budget and the number of decodes at once. |
 | `ImageCacheCapability` | The cache of the acquiring widget's UI runtime; `per_runtime` is the provider every host registers. |
-| `ImageSource` | What a load reads: a file path, or a URL with the HTTP client that fetches it (ADR-0386). |
+| `ImageSource` | What a load reads: an asset key with the bundle that reads it (ADR-0384 §6), or a URL with the HTTP client that fetches it (ADR-0386). |
 | `LoadServices` | The caller's lanes a load runs on. |
 | `ImageLoad` | The future one request awaits; dropping the last one cancels the load. |
 | `ImageLoadError`, `ImageLoadErrorKind` | The source a load failed for, and why. |
@@ -24,7 +24,7 @@ with `image_cache::ordered_slots` beneath it.
 
 ## Failures
 
-A failed load answers `ImageLoadError`: its source and a kind. A file answers `NotFound`,
+A failed load answers `ImageLoadError`: its source and a kind. An asset answers `NotFound`,
 `NotAFile` (never opened), `TooLarge` (refused before it is read whole) or `Io`; a request
 `Http` or `HttpStatus`; bytes that do not decode `Decode`; lanes shutting down `LanesRefused`;
 a panic in the read, the request or the decode `Panicked`; and a load the lanes kept dropping
@@ -60,10 +60,12 @@ There is no process-wide image cache, so equal sources in two caches are two
 images (ADR-0250). Each UI runtime keeps one, made by `ImageCacheCapability::per_runtime` at
 its first acquisition and kept in `ProviderContext::runtime_cache`, so the runtime trims it
 under memory pressure before any subscriber hears the notice and ends it when it retires
-(ADR-0387). Images and loads are kept under the path, or the URL with the
+(ADR-0387). Images and loads are kept under the asset key with the `AssetAuthority` of the
+source's bundle, or the URL with the
 `HttpAuthority` of the source's client, so two clients answered different images at one URL
-never share a decoded image or a load (ADR-0280 §6); the key holds no client, so a kept image
-keeps none alive.
+never share a decoded image or a load (ADR-0280 §6), nor two bundles holding different images
+under one key (ADR-0384 §6); the key holds no client and no bundle, so a kept image
+keeps neither alive.
 
 A load runs on the `LoadServices` its first request hands it: lanes (an
 `Arc<dyn flui_platform::executor::Executor>`, the UI runtime's for the `Image`
@@ -76,7 +78,8 @@ A request for a source already loading joins that load. The load is the
 cache's: every `ImageLoad` waiting on it is a subscriber, and only when the
 last one is dropped is the pending entry removed, its ticket cancelled and its
 cancel signal sent, which the load sees before its next step. An HTTP request is
-dropped at once. A file is read in 256 KiB chunks with a yield between them, so
+dropped at once. A bundle reads a file in chunks with a yield between them
+(`flui_platform::assets::DirectoryAssets`), so
 the read stops at the next chunk. A load cancelled before its bytes are ready
 never asks for a decode slot, and a decode that has not started never runs. The
 ticket's allocation is the load's identity: a load finishing after its entry was
@@ -107,10 +110,11 @@ first one polled claims it and drives it where it is polled; if they are shuttin
 answers `LanesRefused` and the rest take the load over. A load
 waits for its slot before it reads and holds it until its decode
 returns, so the reads in flight and the encoded bytes waiting to decode are
-bounded by count, and each by size: a response body by `MAX_ENCODED_IMAGE_BYTES`, a file
+bounded by count, and each by size: a response body by `MAX_ENCODED_IMAGE_BYTES`, an asset
 by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`), refused
-before more than that is buffered. Only a regular file is opened, so a FIFO or a
-device cannot block the shared IO lane in `open`. Once its bytes are read it asks for a decode
+before more than that is buffered. The bundle reads only a regular file and opens it without
+blocking (ADR-0384 §2), so a FIFO or a
+device cannot hold the shared IO lane. Once its bytes are read it asks for a decode
 slot. Load slots are granted in admission order. A decode slot goes to the
 earliest-admitted load whose bytes are ready; a load still fetching holds none,
 so a ready load admitted later decodes first rather than leaving the decoder idle

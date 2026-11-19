@@ -59,10 +59,12 @@ pub struct ImageServices {
     http: Option<Http>,
     #[cfg(feature = "asset-images")]
     image_cache: Option<Arc<flui_assets::ImageCache>>,
+    #[cfg(feature = "asset-images")]
+    asset_bundle: Option<flui_platform::assets::AssetBundle>,
 }
 
 impl ImageServices {
-    /// No lanes, no HTTP client and no image cache.
+    /// No lanes, no HTTP client, no image cache and no asset bundle.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -82,6 +84,22 @@ impl ImageServices {
     #[must_use]
     pub fn image_cache(&self) -> Option<&Arc<flui_assets::ImageCache>> {
         self.image_cache.as_ref()
+    }
+
+    /// Read the application's assets through `bundle`.
+    #[cfg(feature = "asset-images")]
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_asset_bundle(mut self, bundle: flui_platform::assets::AssetBundle) -> Self {
+        self.asset_bundle = Some(bundle);
+        self
+    }
+
+    /// The application's asset bundle, if the host provides one
+    /// (`flui_platform::assets::AssetBundleCapability`).
+    #[cfg(feature = "asset-images")]
+    #[must_use]
+    pub fn asset_bundle(&self) -> Option<&flui_platform::assets::AssetBundle> {
+        self.asset_bundle.as_ref()
     }
 
     /// Run on `background`'s lanes.
@@ -365,15 +383,15 @@ pub enum ImageProviderError {
         provider_name: &'static str,
     },
 
-    /// The image source (an asset path or a URL) could not be found.
+    /// The image source (an asset key or a URL) could not be found.
     ///
     /// Distinct from [`FileNotFound`](Self::FileNotFound): this variant
     /// covers `AssetImage`/`NetworkImage`'s asynchronous sources, backed by
-    /// a missing file in `flui-assets`. `path` may be a URL, not
+    /// an asset the bundle does not hold. `path` may be a URL, not
     /// necessarily a filesystem path, so a `PathBuf` would misrepresent it.
     #[error("image source not found: {path}")]
     SourceNotFound {
-        /// The asset path or URL that could not be found.
+        /// The asset key or URL that could not be found.
         path: String,
     },
 
@@ -403,8 +421,28 @@ pub enum ImageProviderError {
     /// cache (`flui_assets::ImageCacheCapability`); nothing was read.
     #[error("no image cache to load `{image}` through")]
     ImageCacheUnavailable {
-        /// The asset path or URL that was not loaded.
+        /// The asset key or URL that was not loaded.
         image: String,
+    },
+
+    /// An asset image was requested where the host provides no asset bundle
+    /// (`flui_platform::assets::AssetBundleCapability`); nothing was read.
+    #[error("no asset bundle to read `{key}` from")]
+    AssetBundleUnavailable {
+        /// The asset key that was not read.
+        key: String,
+    },
+
+    /// An asset image names a key no bundle holds: one
+    /// `flui_platform::assets::AssetKey::try_new` refuses (an absolute
+    /// path, a `..` segment); nothing was read.
+    #[cfg(feature = "asset-images")]
+    #[error("`{key}` is not an asset key: {reason}")]
+    InvalidAssetKey {
+        /// The key as written.
+        key: String,
+        /// Why it names no asset.
+        reason: flui_platform::assets::AssetKeyError,
     },
 
     /// A [`DecodeJob`] step ended without an answer: its lane refused it, it
@@ -433,13 +471,16 @@ impl ImageProviderError {
             Self::AssetLoadFailed { .. } => "asset-load-failed",
             Self::HttpUnavailable { .. } => "http-unavailable",
             Self::ImageCacheUnavailable { .. } => "image-cache-unavailable",
+            Self::AssetBundleUnavailable { .. } => "asset-bundle-unavailable",
+            #[cfg(feature = "asset-images")]
+            Self::InvalidAssetKey { .. } => "invalid-asset-key",
             Self::Background(_) => "background",
         }
     }
 }
 
 /// Maps a failed `flui-assets` load onto the [`ImageProviderError`] its kind
-/// names: a missing file is [`SourceNotFound`](ImageProviderError::SourceNotFound),
+/// names: a missing asset is [`SourceNotFound`](ImageProviderError::SourceNotFound),
 /// bytes that did not decode are [`DecodeFailed`](ImageProviderError::DecodeFailed),
 /// and every other failure (a read error, a failed request, refused lanes, a
 /// panic) is [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed) with the

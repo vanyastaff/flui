@@ -193,6 +193,37 @@ fn an_image_missing_a_service_answers_which_one() {
     assert!(asset.cached(&ImageServices::new()).is_none());
 }
 
+/// An asset image whose host lacks the bundle, or names a key no bundle can
+/// hold, answers which, and nothing is read: a cache without a bundle answers
+/// `AssetBundleUnavailable` with the key, and a key that is not a relative
+/// `/`-separated path answers `InvalidAssetKey`.
+///
+/// Red-check: answer the missing bundle as `NotFound`, or hand the key
+/// `../logo.png` to the bundle unchecked.
+#[test]
+fn an_asset_image_without_a_bundle_or_with_a_bad_key_answers_which() {
+    let no_bundle = ImageServices::new().with_image_cache(Arc::new(ImageCache::default()));
+    let asset = AssetImage::new("logo.png");
+    let answered = block_on(asset.resolve_async(&no_bundle));
+    assert!(
+        matches!(&answered, Err(ImageProviderError::AssetBundleUnavailable { key }) if key == "logo.png"),
+        "{answered:?}"
+    );
+    assert!(asset.cached(&no_bundle).is_none());
+
+    let bundle = flui_platform::assets::AssetBundle::new(Arc::new(
+        flui_platform::assets::DirectoryAssets::new(std::env::temp_dir()),
+    ));
+    let with_bundle = no_bundle.with_asset_bundle(bundle);
+    let escaping = AssetImage::new("../logo.png");
+    let answered = block_on(escaping.resolve_async(&with_bundle));
+    assert!(
+        matches!(&answered, Err(ImageProviderError::InvalidAssetKey { key, .. }) if key == "../logo.png"),
+        "{answered:?}"
+    );
+    assert!(escaping.cached(&with_bundle).is_none());
+}
+
 /// Polls `future` on this thread until it is ready.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
