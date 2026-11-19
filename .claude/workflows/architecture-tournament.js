@@ -15,8 +15,8 @@ export const meta = {
 //
 // args:
 //   topic     the problem: what hurts, the measured facts with their evidence, the target (required)
-//   paths     the code areas the problem lives in, as repository paths
-//   drivers   the forces a design must satisfy, one sentence each
+//   paths     optional list of the code areas the problem lives in, as repository paths
+//   drivers   optional list of the forces a design must satisfy, one sentence each
 //   stances   optional [{ key, focus }], two to six: the schools the proposals come from (default:
 //             four); a key is lower-case words joined by dashes, unique, and not "red-team"
 //   checkout  the checkout to read (default, also for an empty or null value: the session's working
@@ -27,15 +27,21 @@ if (typeof opts.topic !== 'string' || !opts.topic.trim()) {
   return { error: 'a topic is required: the problem, its measured facts and the target' }
 }
 const checkout = opts.checkout === undefined || opts.checkout === null || opts.checkout === '' ? '.' : opts.checkout
-// Every agent's brief quotes the checkout as one single-quoted word, the rule review-before-merge
-// holds for the same path: the word ends at a quote (in PowerShell also at U+2018 to U+201B) or a
-// line break, and a blank path names nothing.
+// Every agent's brief quotes the checkout as one single-quoted word. QUOTABLE is review-before-merge's
+// pattern for the same path: the word ends at a quote (in PowerShell also at U+2018 to U+201B), a
+// line break or NUL. This script also refuses a blank path, which names nothing.
 const QUOTABLE = /^[^'‘-‛\r\n\0]+$/
 if (typeof checkout !== 'string' || !QUOTABLE.test(checkout) || !checkout.trim()) {
   return { error: 'checkout must be a path with no single quote, line break or NUL' }
 }
-const paths = Array.isArray(opts.paths) ? opts.paths : []
-const drivers = Array.isArray(opts.drivers) ? opts.drivers : []
+// Paths and drivers a caller names are used as named or refused, like the stances: a default in
+// their place would judge the designs against forces nobody named.
+const listOfText = (value) => value === undefined || (Array.isArray(value) && value.every((x) => typeof x === 'string' && x.trim()))
+if (!listOfText(opts.paths) || !listOfText(opts.drivers)) {
+  return { error: 'paths and drivers must each be a list of non-empty strings' }
+}
+const paths = opts.paths || []
+const drivers = opts.drivers || []
 
 const DEFAULT_STANCES = [
   {
@@ -275,14 +281,20 @@ const revised = await parallel(proposals.map((p) => async () => {
     gaps.push(`revision of ${p.stance}: ${got.error}; its first design stands with its attacks unanswered`)
     return { stance: p.stance, design: p.design, answers: [], unanswered: against }
   }
-  // An attack is answered once, by the first answer that names it and says how; an answer that names
-  // no attack on this design, repeats one, or has a blank `how` answers nothing.
+  // An attack is answered once: by its first concession if any answer concedes it, else by the first
+  // answer that names it, so a concession stays open whatever order the answers come in. An answer
+  // that names no attack on this design, repeats one, or has a blank `how` answers nothing.
   const answers = []
   let refused = 0
   for (const x of got.value.answers) {
     const attack = against.find((y) => y.id === x.id)
-    if (attack && x.how.trim() && !answers.some((y) => y.id === x.id)) answers.push({ ...x, attack })
-    else refused += 1
+    const kept = answers.findIndex((y) => y.id === x.id)
+    if (!attack || !x.how.trim()) refused += 1
+    else if (kept < 0) answers.push({ ...x, attack })
+    else {
+      refused += 1
+      if (x.verdict === 'conceded' && answers[kept].verdict !== 'conceded') answers[kept] = { ...x, attack }
+    }
   }
   if (refused) gaps.push(`revision of ${p.stance}: ${refused} answers named no attack on this design, repeated one, or said nothing, and answer nothing`)
   return { stance: p.stance, design: boundDesign(`revision of ${p.stance}`, got.value.design), answers, unanswered: against.filter((x) => !answers.some((y) => y.id === x.id)) }
@@ -333,7 +345,7 @@ const verdictSchema = {
     },
     experiments: { type: 'array', items: { type: 'string' }, description: 'measurements or prototypes that decide what the research could not, each with the number that decides it' },
     debt: { type: 'array', items: { type: 'string' }, description: 'technical debt found on the way, each with its file:line, whether or not the synthesis removes it' },
-    unresolved: { type: 'array', items: { type: 'string' }, description: 'attacks no design answered, and what each leaves open' },
+    unresolved: { type: 'array', items: { type: 'string' }, description: 'the unanswered or conceded attacks and the second-round attacks the synthesis does not answer, and what each leaves open' },
   },
   required: ['scores', 'synthesis', 'experiments', 'debt', 'unresolved'],
 }
@@ -397,10 +409,10 @@ ${v.experiments.map((x) => `- ${x}`).join('\n')}
 ## Technical debt found on the way
 ${v.debt.map((x) => `- ${x}`).join('\n')}
 
-## Attacks no design answered
+## Attacks the synthesis leaves unresolved, by the judge
 ${v.unresolved.length ? v.unresolved.map((x) => `- ${x}`).join('\n') : 'None.'}
 
-## Attacks still open in the record
+## Attacks their authors left unanswered or conceded, and the second round's attacks
 ${open.length || secondAttacks.length ? [
   ...open.map((x) => `- #${x.id} on ${x.stance} by ${x.by}, ${x.why}: ${x.claim}`),
   ...secondAttacks.map((x) => `- second round on ${x.target} (${x.severity}): ${x.claim}`),
