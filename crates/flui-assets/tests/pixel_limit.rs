@@ -1,7 +1,8 @@
 //! An image whose header declares more pixels than the decoder's cap is
 //! refused by size before the decoder allocates them.
 
-use flui_assets::{AssetError, ImageCache, LoadServices};
+use flui_assets::{ImageCache, ImageLoadErrorKind, ImageSource, LoadServices};
+use flui_painting::paint::ImageDecodeError;
 
 use crate::lanes::block_on;
 
@@ -54,11 +55,14 @@ fn decoded_pixels_are_bounded_before_decoding() {
     std::fs::create_dir(&directory).expect("test directory is created");
     let path = directory.join("huge.png");
     std::fs::write(&path, &huge).expect("the oversized header is written");
-    let decoded =
-        block_on(cache.load_image(path.to_string_lossy().into_owned(), LoadServices::new()));
+    let decoded = block_on(cache.load(
+        &ImageSource::asset(path.to_string_lossy().into_owned()),
+        &LoadServices::new(),
+    ));
     let _ = std::fs::remove_dir_all(&directory);
     assert!(
-        matches!(&decoded, Err(AssetError::LoadFailed { reason, .. }) if reason.contains("larger than")),
+        matches!(&decoded, Err(error)
+            if matches!(error.kind(), ImageLoadErrorKind::Decode(ImageDecodeError::TooLarge { .. }))),
         "the load is refused by size, got {decoded:?}"
     );
 }

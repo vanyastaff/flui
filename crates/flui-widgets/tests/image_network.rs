@@ -28,7 +28,7 @@ fn fixture_bytes() -> Vec<u8> {
 
 /// `Image::network` on the headless host: the widget acquires the host's
 /// HTTP client, the request goes out from the deterministic lanes, which run
-/// no async runtime, and the decoded image lands in the registry.
+/// no async runtime, and the decoded image lands in the cache.
 ///
 /// Red-check: leave `HttpCapability` out of what `Image` acquires (the load
 /// answers `HttpUnavailable` and the image never decodes).
@@ -42,7 +42,7 @@ fn network_image_loads_with_the_hosts_http_client() {
         .expect("root attaches");
     let source = flui_assets::ImageSource::network(URL, &host.http().handle());
     let deadline = Instant::now() + DECODE_BUDGET;
-    while registry.cached_image(&source).is_none() {
+    while registry.get(&source).is_none() {
         assert!(
             Instant::now() < deadline,
             "the network image did not decode within the {DECODE_BUDGET:?} budget"
@@ -50,7 +50,7 @@ fn network_image_loads_with_the_hosts_http_client() {
         let _ = host.pump(Duration::ZERO);
         std::thread::sleep(POLL_INTERVAL);
     }
-    let image = registry.cached_image(&source).expect("the image is kept");
+    let image = registry.get(&source).expect("the image is kept");
     assert_eq!((image.width(), image.height()), (5, 3));
     assert_eq!(host.http().requests_to(URL), 1);
 }
@@ -156,4 +156,29 @@ fn registry_responses(concurrent: bool) {
         "retained cache keys must not own the registry"
     );
     drop(retained_key);
+}
+
+/// Where the host provides no HTTP client, a network image answers
+/// `HttpUnavailable` and nothing reaches the cache.
+///
+/// The check itself is a type: a network source cannot be built without its
+/// client, so this pins the answer, not the check.
+#[test]
+fn a_network_image_without_a_client_answers_http_unavailable() {
+    let registry = Arc::new(ImageCache::default());
+    let image = NetworkImage::new(Arc::clone(&registry), URL);
+    let answered = block_on(image.resolve_async(&ImageServices::new()));
+    assert!(
+        matches!(&answered, Err(flui_widgets::ImageProviderError::HttpUnavailable { url }) if url == URL),
+        "{answered:?}"
+    );
+    assert!(image.cached(&ImageServices::new()).is_none());
+}
+
+/// Polls `future` on this thread until it is ready.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("BUG: a current-thread runtime builds")
+        .block_on(future)
 }

@@ -51,9 +51,9 @@ Chosen option: 2. `flui-assets` exports one cache and what a load needs:
 ```rust
 pub struct ImageCache;                 // new(ImageCacheConfig), Default, ReclaimMemory
 pub struct ImageCacheConfig;           // Default; budget(bytes), decode_threads(n)
-pub enum ImageSource { Asset(..), Network(NetworkSource) }
-pub struct LoadServices;               // the caller's lanes and HTTP client
-pub struct ImageLoad;                  // Future<Output = Result<Image, AssetError>>
+pub struct ImageSource;                // a path, or a URL with its client (ADR-0386)
+pub struct LoadServices;               // the caller's lanes
+pub struct ImageLoad;                  // Future<Output = Result<Image, ImageLoadError>>
 ```
 
 `ImageCache` is the former `AssetRegistry` without its typed caches, and `ImageCacheConfig`
@@ -68,7 +68,7 @@ application's bundle is not decided here ([gaps](../gaps.md#an-application-has-n
 
 ### Confirmation
 
-- `crates/flui-assets/src/lib.rs` exports only the types above and `AssetError`; `rg
+- `crates/flui-assets/src/lib.rs` exports only the types above and the error types; `rg
   'AssetRegistry|AssetCache|AssetHandle|AssetKey|FontAsset|ImageAsset|BytesFileLoader'` over
   `crates/`, `packages/`, `src/` and `docs/` outside superseded records finds no user.
 - `Cargo.lock` has no `moka`.
