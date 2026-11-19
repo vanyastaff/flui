@@ -298,6 +298,346 @@ fn a_base_mismatch_renders_full() {
     );
 }
 
+/// A retained scene of a root slotting `user`, a boundary whose one chunk
+/// draws a texture over `size` at `at`, and `plain`, the 10x10 box of
+/// [`ten_by_ten_chunk`] at (300, 200).
+struct TextureScene {
+    owner: flui_layer::SceneOwner,
+    plain: flui_layer::SceneNodeId,
+    epoch: flui_foundation::FrameEpoch,
+}
+
+impl TextureScene {
+    fn new(
+        texture: flui_painting::paint::TextureId,
+        at: Offset<f64>,
+        size: flui_foundation::geometry::Size<f64>,
+    ) -> Self {
+        use flui_layer::{BoundaryContent, Placement, SceneOp};
+        let mut owner = flui_layer::SceneOwner::new();
+        let plain;
+        {
+            let mut writer = owner.writer();
+            let root = writer.current().root();
+            let user = writer.mint_node();
+            plain = writer.mint_node();
+            let version = writer.next_content_version().expect("a version");
+            let mut canvas = flui_painting::Canvas::new();
+            canvas.draw_texture(
+                texture,
+                Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                None,
+                flui_painting::paint::FilterQuality::None,
+                1.0,
+            );
+            let mut leaf = BoundaryContent::builder();
+            leaf.chunk(Arc::new(flui_layer::Chunk::new(
+                flui_foundation::RenderId::new(2),
+                0,
+                version,
+                canvas.finish(),
+            )));
+            writer.push(SceneOp::Publish {
+                node: user,
+                content: Arc::new(leaf.finish()),
+            });
+            let version = writer.next_content_version().expect("a version");
+            let mut leaf = BoundaryContent::builder();
+            leaf.chunk(ten_by_ten_chunk(3, version));
+            writer.push(SceneOp::Publish {
+                node: plain,
+                content: Arc::new(leaf.finish()),
+            });
+            let mut top = BoundaryContent::builder();
+            top.slot(user);
+            top.slot(plain);
+            writer.push(SceneOp::Publish {
+                node: root,
+                content: Arc::new(top.finish()),
+            });
+            for (node, at) in [(user, at), (plain, Offset::new(300.0, 200.0))] {
+                writer.push(SceneOp::Place {
+                    node,
+                    placement: Placement::try_new(at).expect("finite"),
+                });
+            }
+        }
+        owner.apply(PRODUCER_SURFACE).expect("the first version");
+        Self {
+            owner,
+            plain,
+            epoch: flui_foundation::FrameEpoch::ZERO,
+        }
+    }
+
+    /// Republishes the plain box with fresh content.
+    fn republish_plain(&mut self, owner_id: usize) {
+        use flui_layer::{BoundaryContent, SceneOp};
+        {
+            let mut writer = self.owner.writer();
+            let version = writer.next_content_version().expect("a version");
+            let mut leaf = BoundaryContent::builder();
+            leaf.chunk(ten_by_ten_chunk(owner_id, version));
+            writer.push(SceneOp::Publish {
+                node: self.plain,
+                content: Arc::new(leaf.finish()),
+            });
+        }
+        self.owner.apply(PRODUCER_SURFACE).expect("a patch");
+    }
+
+    fn apply_empty_patch(&mut self) {
+        let _ = self.owner.writer();
+        self.owner.apply(PRODUCER_SURFACE).expect("an empty patch");
+    }
+
+    /// Submits the newest version to an inline host, expects it presented,
+    /// acknowledges it and answers the damage the backend drew it with.
+    fn present(&mut self, host: &mut RasterHost, slots: &ScriptedSlots) -> DamageRegion {
+        let publication = self.owner.publication();
+        let id = publication.scene.id();
+        self.epoch = self.epoch.next();
+        assert_eq!(
+            host.submit(address(), SIZE, self.epoch, publication),
+            SubmitVerdict::Presented
+        );
+        drop(self.owner.completed(Some(id)));
+        renders(slots).last().copied().expect("a render")
+    }
+
+    /// Submits the newest version through a threaded host and answers its
+    /// epoch and verdict.
+    fn send(&mut self, shared: &SharedRasterHost) -> (flui_foundation::FrameEpoch, SubmitVerdict) {
+        let publication = self.owner.publication();
+        self.epoch = self.epoch.next();
+        let epoch = self.epoch;
+        let verdict = shared
+            .try_with(|host| host.submit(address(), SIZE, epoch, publication))
+            .expect("the host is idle");
+        (epoch, verdict)
+    }
+}
+
+/// An inline host over scripted slots with one window attached that draws
+/// the textures of `registry`.
+fn texture_host(registry: flui_layer::TextureRegistry) -> (RasterHost, ScriptedSlots) {
+    let slots = ScriptedSlots::new();
+    let mut host = RasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
+    host.attach_target(
+        Arc::new(FakeWindow::new(1)),
+        None,
+        address(),
+        &crate::app::AppConfig::default(),
+        Some(registry),
+        None,
+    )
+    .expect("the scripted backend attaches any window");
+    (host, slots)
+}
+
+fn pixel() -> flui_painting::paint::Image {
+    flui_painting::paint::Image::from_rgba8(1, 1, vec![255, 0, 0, 255])
+}
+
+fn covering_on_surface(x: f64, y: f64, width: f64, height: f64) -> flui_layer::DamageRect {
+    flui_layer::DamageRect::try_covering(Rect::from_xywh(x, y, width, height), SIZE)
+        .expect("finite")
+        .expect("on the surface")
+}
+
+fn region_rects(damage: DamageRegion) -> Vec<flui_layer::DamageRect> {
+    match damage {
+        DamageRegion::Region(region) => region.rects().to_vec(),
+        other @ (DamageRegion::Unchanged | DamageRegion::Full(_)) => {
+            panic!("a partial frame, not {other:?}")
+        }
+    }
+}
+
+const TEN: flui_foundation::geometry::Size<f64> = flui_foundation::geometry::Size::new(10.0, 10.0);
+
+/// A texture frame drained with a publication damages the device footprint
+/// of the chunks that draw that texture and nothing else, whatever the
+/// patch damaged: with an empty patch the frame redraws the texture's user
+/// alone, with a patch elsewhere it redraws both, a retirement damages the
+/// user as a frame does, and a texture no chunk draws damages nothing.
+///
+/// Red-check: drop the texture damage from `RasterHost::submit` and the
+/// empty patch reaches the backend `Unchanged`, so the new image is never
+/// drawn.
+fn a_texture_frame_damages_only_its_users() {
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let shown = registry.register().expect("a texture id");
+    let unused = registry.register().expect("a texture id");
+    let (mut host, slots) = texture_host(registry);
+    let mut scene = TextureScene::new(shown.id(), AT, TEN);
+    assert!(matches!(
+        scene.present(&mut host, &slots),
+        DamageRegion::Full(_)
+    ));
+
+    shown.submit_frame(pixel());
+    unused.submit_frame(pixel());
+    scene.apply_empty_patch();
+    assert_eq!(
+        region_rects(scene.present(&mut host, &slots)),
+        vec![covering_on_surface(100.0, 50.0, 10.0, 10.0)],
+        "a frame with nothing republished redraws the texture's user alone"
+    );
+
+    shown.submit_frame(pixel());
+    scene.republish_plain(4);
+    let mut both = region_rects(scene.present(&mut host, &slots));
+    both.sort_by_key(|rect| rect.left());
+    assert_eq!(
+        both,
+        vec![
+            covering_on_surface(100.0, 50.0, 10.0, 10.0),
+            covering_on_surface(300.0, 200.0, 10.0, 10.0)
+        ],
+        "the patch's rect and the texture's user"
+    );
+
+    unused.submit_frame(pixel());
+    scene.apply_empty_patch();
+    assert_eq!(
+        scene.present(&mut host, &slots),
+        DamageRegion::Unchanged,
+        "a texture no chunk draws damages nothing"
+    );
+
+    drop(shown);
+    scene.apply_empty_patch();
+    assert_eq!(
+        region_rects(scene.present(&mut host, &slots)),
+        vec![covering_on_surface(100.0, 50.0, 10.0, 10.0)],
+        "a retired texture's user draws without it"
+    );
+}
+
+/// The threshold holds for the damage a texture frame adds: a texture user
+/// that covers half the surface draws partially on its own, and with a
+/// small patch beside it the frame draws in full, as a patch of that size
+/// would.
+///
+/// Red-check: union the texture damage without asking
+/// `RasterBase::thresholded` again and the frame reaches the backend as a
+/// region over more than half the surface.
+fn a_texture_frame_over_most_of_the_surface_draws_in_full() {
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
+    let (mut host, slots) = texture_host(registry);
+    // Its covering rect, a pixel of margin included, is (0, 240)-(640, 480):
+    // exactly half of the 640x480 surface, which is not above the threshold.
+    let mut scene = TextureScene::new(
+        texture.id(),
+        Offset::new(0.0, 241.0),
+        flui_foundation::geometry::Size::new(640.0, 239.0),
+    );
+    assert!(matches!(
+        scene.present(&mut host, &slots),
+        DamageRegion::Full(_)
+    ));
+
+    texture.submit_frame(pixel());
+    scene.apply_empty_patch();
+    let half = scene.present(&mut host, &slots);
+    assert_eq!(
+        region_rects(half),
+        vec![covering_on_surface(0.0, 241.0, 640.0, 239.0)],
+        "the user alone is half the surface"
+    );
+
+    texture.submit_frame(pixel());
+    scene.republish_plain(4);
+    assert_eq!(
+        scene.present(&mut host, &slots),
+        DamageRegion::Full(flui_layer::FullReason::AboveThreshold),
+        "the user and the patch beside it are more than half"
+    );
+}
+
+/// A frame whose damage is already full draws everything, so the texture
+/// frame it carries adds nothing and its users are never read: the reason
+/// stays the frame's own and the host's scratch stays untouched.
+///
+/// Red-check: drop the `Full` test before the texture union in
+/// `RasterHost::submit` and the scratch holds the user's footprint.
+fn a_full_frame_reads_no_texture_users() {
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
+    let (mut host, slots) = texture_host(registry);
+    let mut scene = TextureScene::new(texture.id(), AT, TEN);
+    texture.submit_frame(pixel());
+    assert_eq!(
+        scene.present(&mut host, &slots),
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        "the window's first frame draws in full for its own reason"
+    );
+    let scratch = &host.placed.as_ref().expect("placed").texture_damage;
+    assert_eq!(
+        format!("{scratch:?}"),
+        format!("{:?}", flui_layer::TextureDamageScratch::default()),
+        "no texture user was read"
+    );
+}
+
+/// On a raster thread a frame waiting behind a render is replaced by the
+/// next, and the texture frame the replaced one carried still damages its
+/// users: the survivor reaches the backend with the replaced frame's
+/// damage, the texture's user included, though its own patch damaged only
+/// the plain box and it carries no texture frame of its own.
+///
+/// Red-check: drop the damage fold from the slot inbox's replacement
+/// (`raster_executor/sender.rs`) and the survivor reaches the backend as
+/// the plain box alone.
+fn a_replaced_texture_frame_still_damages_its_users() {
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
+    let texture_id = texture.id();
+    let (shared, slots, _wakes) = threaded_host_at(address(), Some(registry));
+    let mut scene = TextureScene::new(texture_id, AT, TEN);
+    let first = scene.owner.publication().scene.id();
+    assert_eq!(scene.send(&shared).1, SubmitVerdict::Queued);
+    assert_eq!(
+        settle_threaded(&shared, 1).len(),
+        1,
+        "the first frame settles"
+    );
+    drop(scene.owner.completed(Some(first)));
+
+    let held = slots.hold_next_render();
+    scene.republish_plain(4);
+    assert_eq!(scene.send(&shared).1, SubmitVerdict::Queued);
+    assert!(
+        held.began_within(THREAD_WAIT),
+        "the thread renders the second frame"
+    );
+    texture.submit_frame(pixel());
+    scene.apply_empty_patch();
+    let (replaced, verdict) = scene.send(&shared);
+    assert_eq!(verdict, SubmitVerdict::Queued, "the texture frame waits");
+    scene.apply_empty_patch();
+    let (_, verdict) = scene.send(&shared);
+    assert_eq!(verdict, SubmitVerdict::QueuedReplacing(replaced));
+    held.release();
+    assert_eq!(settle_threaded(&shared, 2).len(), 2);
+
+    let mut survivor = region_rects(renders(&slots).last().copied().expect("a render"));
+    survivor.sort_by_key(|rect| rect.left());
+    assert_eq!(
+        survivor,
+        vec![
+            covering_on_surface(100.0, 50.0, 10.0, 10.0),
+            covering_on_surface(300.0, 200.0, 10.0, 10.0)
+        ],
+        "the plain box the patches damaged and the replaced frame's texture user"
+    );
+}
+
 #[test]
 fn raster_host_damage_matrix() {
     crate::table_test::run_table(
@@ -322,6 +662,22 @@ fn raster_host_damage_matrix() {
             (
                 "a_base_mismatch_renders_full",
                 a_base_mismatch_renders_full as fn(),
+            ),
+            (
+                "a_texture_frame_damages_only_its_users",
+                a_texture_frame_damages_only_its_users as fn(),
+            ),
+            (
+                "a_texture_frame_over_most_of_the_surface_draws_in_full",
+                a_texture_frame_over_most_of_the_surface_draws_in_full as fn(),
+            ),
+            (
+                "a_full_frame_reads_no_texture_users",
+                a_full_frame_reads_no_texture_users as fn(),
+            ),
+            (
+                "a_replaced_texture_frame_still_damages_its_users",
+                a_replaced_texture_frame_still_damages_its_users as fn(),
             ),
         ],
     );
