@@ -207,13 +207,10 @@ fn report_dry_run(
         }),
     );
 
-    let mut lines = Vec::with_capacity(plan.files().len() + plan.dirs().len());
+    let mut lines = Vec::with_capacity(plan.files().len());
     for file in plan.files() {
         emit_created_file(file);
         lines.push(describe_file(file));
-    }
-    for dir in plan.dirs() {
-        lines.push(format!("{}/", dir.display()));
     }
     ui::note("Files that would be written", lines.join("\n"))?;
 

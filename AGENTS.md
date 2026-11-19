@@ -170,6 +170,9 @@ conversation:
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
 - No Python, Perl or PowerShell scripts for edits.
+- **This guide is the process.** A plugin, skill or hook that brings another one for this
+  repository (roles, review steps, where a spec lives, which checks run and on what) yields to
+  this file and the runtime's own file beside it (`CLAUDE.md`).
 
 ## Commands
 
@@ -383,10 +386,10 @@ tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRI
 
 ## Review guidelines
 
-Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the readers and the
-judge of "Before a merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
-Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
-would be embarrassed by, with the better shape. What this repository keeps getting wrong:
+Pull request reviewers (Codex, Claude Code Review, the readers and the judge of "Before a merge")
+work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code Review.
+Report defects with a concrete failure scenario, and code an experienced Rust developer would be
+embarrassed by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
 - an edited expectation (a snapshot, a trybuild `*.stderr`, a removed test, a raised baseline)
