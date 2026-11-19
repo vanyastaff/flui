@@ -93,9 +93,10 @@ with `docs-links`, so such a link is the reader's to catch.
 The job builds `flui-web-demo` and `flui-painting-demo` for wasm32, so the demos link; rustc
 stopped passing `--allow-undefined` to the wasm linker in 1.96 (rust-lang/rust#149868), so an
 undefined symbol fails that link where it used to become an `env` import. What still becomes an
-import is an extern that names its module (`#[link(wasm_import_module = …)]`), in the workspace or
-in a dependency, and no page provides one wasm-bindgen does not generate. Four options were weighed
-for that class:
+import is an extern that names its module (`#[link(wasm_import_module = …)]`), and no page
+provides one wasm-bindgen does not generate. The check below reads the code the two demos link
+(the workspace crates they use and those crates' dependencies), as `wasm-imports` did; code no demo
+links, such as `flui-app`'s web runner, is outside it. Four options were weighed for that class:
 
 - *An allowlist read by `wasm-tools`* (what `wasm-imports` did with `wasmparser`): a tool version
   beside the toolchain, an allowlist file and a scrape of a printer's output.
@@ -113,7 +114,8 @@ for that class:
 The job then runs `cargo test --target wasm32-unknown-unknown`, through the runner
 `.cargo/config.toml` names, for each workspace package whose dev-dependencies on wasm32 include
 `wasm-bindgen-test`, as cargo's resolver reports them (`cargo metadata --filter-platform
-wasm32-unknown-unknown`, which evaluates each target table's `cfg`): its lib test, and its
+wasm32-unknown-unknown` keeps a dependency only when one of its target tables is active on wasm32,
+though it then lists every kind of that edge): its lib test, and its
 `wasm32` test target when it has one, each run and counted on its own, and flui-native's
 `web_browser` target, which the loop names. A test runs on node, or in the job's headless Chrome
 for Testing, at the exact release the step names, with its matching ChromeDriver, when its crate

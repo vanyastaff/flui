@@ -1485,8 +1485,8 @@ jobs:
       # module and lists the modules it imports from, which may only be
       # wasm-bindgen's own two: the linker refuses an undefined symbol, but an
       # extern that names its module (`#[link(wasm_import_module = …)]`), in
-      # the workspace or a dependency, still links as an import no page
-      # provides.
+      # the code the two demos link (the workspace crates they use and their
+      # dependencies), still links as an import no page provides.
       - name: wasm-bindgen and the import modules of the web demos
         run: |
           target_dir=$(cargo metadata --locked --no-deps --format-version 1 | jq -r .target_directory)
@@ -1569,8 +1569,10 @@ jobs:
         run: |
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/webdriver.json"
           set -o pipefail
-          # cargo's resolver, filtered to wasm32, evaluates each target table's
-          # cfg: a `cfg(not(target_arch = "wasm32"))` table does not opt in
+          # cargo's resolver, filtered to wasm32, keeps a dependency only when it
+          # is active there, so a package whose only edge to wasm-bindgen-test is
+          # a non-wasm32 table does not opt in (an edge another, wasm32-active
+          # kind keeps still lists its dev kind)
           list=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown \
             | jq -r '
               .workspace_members as $members
