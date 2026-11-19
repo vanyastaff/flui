@@ -393,12 +393,13 @@ if (mode !== 'change' && mode !== 'design') {
 }
 const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
 
-// A scope agent asked for an empty field sometimes writes the quotes themselves (`""` or `''`) or
-// only whitespace. The scope steps' answers are read through `blankQuotes`: a string that is
-// whitespace, with or without one pair of quotes, is empty, and a list drops its empty strings, so a
-// list holding only a blank entry is empty. Readers and the judge are read as they wrote.
+// An agent that runs commands and reports their output (the scope step, the diff check, the
+// mutation read) sometimes fills a field it was asked to leave empty with quotes (`""`, `' '`) or
+// whitespace. Those three answers are read through `blankQuotes`: a string that is whitespace, inside
+// one pair of quotes or none, is empty, and a list drops its empty strings, so a list holding only a
+// blank entry is empty. Readers and the judge write prose, and are read as they wrote.
 function blankQuotes(value) {
-  if (typeof value === 'string') return /^\s*(""|'')?\s*$/.test(value) ? '' : value
+  if (typeof value === 'string') return /^\s*(?:"\s*"|'\s*')?\s*$/.test(value) ? '' : value
   if (Array.isArray(value)) return value.map(blankQuotes).filter((x) => x !== '')
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
   return value
@@ -631,7 +632,7 @@ if (mode === 'design') {
   notes.push('No mutation run was supplied (AGENTS.md "Before each push" item 10).')
 } else {
   const m = await mutantsRead
-  const v = m.value
+  const v = m.value && blankQuotes(m.value)
   const judged = v ? v.counts.killed + v.counts.survived + v.counts.uncovered + v.counts.timed_out : 0
   if (m.error || v.error) {
     mutation = 'unreadable'

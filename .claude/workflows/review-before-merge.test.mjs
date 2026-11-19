@@ -55,6 +55,7 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
     [[], { ...ok, head: SHA('c') }, /did not confirm that the change is empty \(it worked out/],
     [[], ok, /No change to review: the merge base and the head have the same tree/],
     [[], { ...ok, error: ' "" ' }, /No change to review/],
+    [[], { ...ok, error: '" "' }, /No change to review/],
     [['""', ' '], ok, /No change to review/],
   ]) {
     let checkPrompt = ''
@@ -198,6 +199,12 @@ async function withRun(report, readers = () => ({ findings: [], tried: ['t'] }),
   assert.match(result.findings[1].wrong_result, /no test reached it/)
   assert.match(judgePrompt, /No test notices `replace - with \+ \[arith\.sub_to_add\]`/)
   assert.match(judgePrompt, /readers and a mutation run reported/)
+  // The mutation read runs commands and reports their output, so a quoted or blank empty field
+  // (an error, or a list holding only a blank entry) is empty, and the run's findings still count.
+  for (const quoted of [{ error: '""' }, { error: "' '" }, { extra_files: ['""', ' '] }]) {
+    const { result: clean } = await withRun(gamma({ counts: counts({ uncovered: 1 }), uncovered: [mutant(9, 'u')], ...quoted }))
+    assert.deepEqual(clean.findings.map((f) => f.lens), ['mutants', 'mutants'], JSON.stringify(quoted))
+  }
   assert.match(judgePrompt, /built only for another target/)
   assert.match(result.markdown, /Mutation run: 1 killed, 1 survived, 1 uncovered\./)
 }
