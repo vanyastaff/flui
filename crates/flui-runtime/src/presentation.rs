@@ -1678,13 +1678,16 @@ impl PresentationState {
         &self.textures
     }
 
-    /// Whether a texture frame or retirement waits for the raster host: a
-    /// frame finding no tree work publishes the held version for it
-    /// (ADR-0304 §8). The registry holds it until the host takes it with a
-    /// publication, so a frame that never reached the host leaves it for the
-    /// next.
-    pub(crate) fn has_texture_updates(&self) -> bool {
-        self.textures.has_updates()
+    /// Whether a texture update waits that the held version owes a
+    /// publication for: a retirement, or a frame of a texture it draws, while
+    /// the window does not refuse it (ADR-0304 §8, ADR-0334 §4). A frame
+    /// finding no tree work publishes the held version for it, and the
+    /// registry holds the update until the host takes it with a publication,
+    /// so a frame that never reached the host leaves it for the next. The one
+    /// predicate the runner's gate, sampling admission and the frame's
+    /// republish read; `false` while a frame holds the scene.
+    pub(crate) fn owes_texture_frame(&self) -> bool {
+        self.scene.owes_texture_frame(&self.textures)
     }
 
     /// This presentation's semantics enablement gate and platform
@@ -1878,12 +1881,13 @@ impl PresentationState {
     }
 
     /// Whether frame work waits on this presentation: a demand its clock
-    /// keeps, a redraw mark, tree work, or a texture frame for the raster host.
+    /// keeps, a redraw mark, tree work, or a texture frame the held version owes
+    /// ([`Self::owes_texture_frame`]).
     pub(crate) fn has_retained_frame_work(&self) -> bool {
         !self.clock.demand_mask().is_empty()
             || self.redraw_pending.get()
             || self.has_pending_work_snapshot()
-            || self.has_texture_updates()
+            || self.owes_texture_frame()
     }
 
     /// When this presentation, unseen with frame work waiting, draws the
@@ -2169,7 +2173,7 @@ impl PresentationState {
 
     /// Whether this presentation has work a frame would do: demand its clock keeps, a redraw it
     /// was asked for, a build or a dirty node, completion callbacks that wait, or a texture frame
-    /// for the raster host. What a
+    /// the held version owes ([`Self::owes_texture_frame`]). What a
     /// settlement that frees an in-flight place wakes the loop for, unless a dropped frame's
     /// backoff or an abandoned device holds the presentation (ADR-0305 §5).
     pub(crate) fn has_frame_work(&self) -> bool {
@@ -2177,7 +2181,7 @@ impl PresentationState {
             || self.redraw_pending.get()
             || self.has_pending_work_snapshot()
             || self.has_eligible_completion()
-            || self.has_texture_updates()
+            || self.owes_texture_frame()
     }
 
     /// While this presentation has frames pending, the latest the owner sleeps until: the next

@@ -679,7 +679,14 @@ impl UiRuntime {
         // nothing (ADR-0304 §7). One applied for another target, or superseded by a newer
         // version, is not what the screen should show: the tree repaints in full.
         let held_retry = scene.held_retry(target);
-        if held_retry == crate::presentation_scene::HeldRetry::Repaint {
+        // A texture update the held version owes a publication for rides it again when this
+        // frame paints nothing (ADR-0304 §8). A version applied for another target cannot carry
+        // it: the tree repaints, and the update rides the new version.
+        let textures = scene.owes_texture_frame(presentation.texture_registry());
+        let textures_republish = textures && scene.holds_version_for(target);
+        if held_retry == crate::presentation_scene::HeldRetry::Repaint
+            || (textures && !textures_republish)
+        {
             Self::mark_root_needs_paint(presentation);
         }
         let painted = {
@@ -717,12 +724,11 @@ impl UiRuntime {
         if !painted {
             phases.lap(FramePhase::Paint);
             // A frame that painted nothing publishes nothing, unless the screen is owed the held
-            // version: the surface withheld it, or a texture frame waits for the raster host,
-            // which takes it with the publication and damages the texture's users alone
-            // (ADR-0304 §7, §8). A version applied for another target is not republished for a
-            // texture frame: the frame waits in the registry for the frame that paints it.
-            let textures = scene.holds_version_for(target) && presentation.has_texture_updates();
-            if held_retry != crate::presentation_scene::HeldRetry::Republish && !textures {
+            // version: the surface withheld it, or a texture update it owes a publication for
+            // waits for the raster host, which takes it with the publication and damages the
+            // texture's users alone (ADR-0304 §7, §8).
+            if held_retry != crate::presentation_scene::HeldRetry::Republish && !textures_republish
+            {
                 return Ok(FramePaintOutcome::Idle);
             }
             // The held version again, with the damage since the acknowledged base, which is none

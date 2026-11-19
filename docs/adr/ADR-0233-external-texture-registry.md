@@ -26,10 +26,10 @@ next frame from any thread, and dropping it retires the id. Frames are CPU image
 (straight-alpha, encoded-sRGB RGBA8); importing a GPU texture without a copy needs a
 shared device and is not part of this contract.
 
-Each frame bumps the id's revision, runs its listeners outside the registry's lock,
-and wakes the runtime. The `Texture` widget listens to its id, rebuilds with the new
-revision, and `RenderTexture` repaints on a revision change, so the frame reaches
-the screen without anything else changing.
+A frame's path to the screen is ADR-0304 §8's: the registry holds it as its id's pending
+frame and wakes the runtime, whose next frame publishes the version it holds when that
+version draws the texture, and the raster host takes the frame with the publication. The
+`Texture` widget neither listens nor rebuilds.
 
 The registry's updates (the newest frame per texture, and the retired ids) travel to
 the raster side. A retired id is unregistered at once.

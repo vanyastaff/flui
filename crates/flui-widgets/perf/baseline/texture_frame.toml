@@ -2,8 +2,8 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [texture_frame]
-allocated_bytes = 96
-allocations = 1
+allocated_bytes = 0
+allocations = 0
 builds_run = 0
 damage_full = 0
 damage_rects = 0

@@ -5,15 +5,15 @@ use std::cell::OnceCell;
 use std::num::NonZeroU32;
 
 use flui_rendering::layer::{
-    LayerTree, ScenePublication, SceneVersion, TextureRegistry, TextureUpdates,
+    LayerTree, Lineage, ScenePublication, SceneVersion, TextureRegistry, TextureUpdates,
 };
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 
 /// The frame sink of a [`HeadlessHost`](super::HeadlessHost): a surface of fixed size that
 /// presents every scene and keeps the last version, unless told to leave
 /// some unshown ([`HeadlessHost::leave_unshown`](super::HeadlessHost::leave_unshown)).
-/// Like a runner's raster host, a frame it presents takes the primary
-/// presentation's texture frames and retirements with it
+/// Like a runner's raster host, a frame it presents takes the texture
+/// frames and retirements of the presentation that produced it
 /// ([`Self::textures`]); one it leaves unshown leaves them in the registry.
 ///
 /// The version is flattened into a layer tree only when a test reads it, so a
@@ -28,9 +28,12 @@ pub struct HeadlessSink {
     /// The epochs of the frames presented most recently, oldest first, at
     /// most [`PRESENTED_KEPT`].
     presented: std::collections::VecDeque<flui_foundation::FrameEpoch>,
-    /// The primary presentation's external textures.
-    registry: Option<TextureRegistry>,
-    /// What the frame presented last took from the registry.
+    /// Each open presentation's external textures, by the lineage of its
+    /// scene: a publication takes the updates of the registry its lineage
+    /// names. Refreshed before each pump into the same buffer.
+    registries: Vec<(Lineage, TextureRegistry)>,
+    /// What the frame presented last took from its presentation's registry,
+    /// kept so a frame takes them without allocating.
     textures: TextureUpdates,
 }
 
@@ -85,7 +88,7 @@ const PRESENTED_KEPT: usize = 16;
 impl HeadlessSink {
     /// A `width` × `height` surface that has presented nothing yet.
     #[must_use]
-    pub(crate) fn new(width: u32, height: u32, registry: Option<TextureRegistry>) -> Self {
+    pub(crate) fn new(width: u32, height: u32) -> Self {
         Self {
             size: (width, height),
             last: None,
@@ -93,9 +96,20 @@ impl HeadlessSink {
             unshown: None,
             // Its room is taken here, so a frame that presents allocates nothing.
             presented: std::collections::VecDeque::with_capacity(PRESENTED_KEPT),
-            registry,
+            registries: Vec::new(),
             textures: TextureUpdates::default(),
         }
+    }
+
+    /// Replaces the registries a publication takes its texture updates from
+    /// with `registries`, each open presentation's under its scene's current
+    /// lineage, reusing the buffer.
+    pub(super) fn track_textures(
+        &mut self,
+        registries: impl IntoIterator<Item = (Lineage, TextureRegistry)>,
+    ) {
+        self.registries.clear();
+        self.registries.extend(registries);
     }
 
     /// The epoch of the frame presented last, which a presentation report
@@ -160,11 +174,14 @@ impl FrameSink for HeadlessSink {
             self.unshown = NonZeroU32::new(frames.get() - 1).map(|left| (left, how));
             return how.verdict();
         }
-        // Taken with the frame it rides, as the raster host takes them.
-        self.textures = self
-            .registry
-            .as_ref()
-            .map_or_else(TextureUpdates::default, TextureRegistry::take_updates);
+        // Taken with the frame it rides, from the registry of the
+        // presentation that produced it, as the raster host takes them.
+        self.textures.frames.clear();
+        self.textures.retired.clear();
+        let lineage = publication.scene.id().lineage();
+        if let Some((_, registry)) = self.registries.iter().find(|(of, _)| *of == lineage) {
+            registry.take_updates_into(&mut self.textures);
+        }
         self.last = Some((publication.scene, OnceCell::new()));
         self.submits = self.submits.saturating_add(1);
         if self.presented.len() == PRESENTED_KEPT {

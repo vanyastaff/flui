@@ -452,6 +452,104 @@ fn secondary_window_preserves_its_text_store_backend() {
     assert!(host.text_store_host_on(absent).is_none());
 }
 
+/// Registers a texture when mounted and shows it; the test feeds it through
+/// the shared registration.
+#[derive(Clone)]
+struct VideoSurface {
+    shared: Rc<RefCell<Option<flui_rendering::layer::TextureRegistration>>>,
+}
+
+struct VideoSurfaceState {
+    shared: Rc<RefCell<Option<flui_rendering::layer::TextureRegistration>>>,
+    id: Option<flui_painting::paint::TextureId>,
+}
+
+impl View for VideoSurface {
+    fn create_element(self: Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for VideoSurface {
+    type State = VideoSurfaceState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        VideoSurfaceState {
+            shared: Rc::clone(&self.shared),
+            id: None,
+        }
+    }
+}
+
+impl ViewState<VideoSurface> for VideoSurfaceState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let registration = ctx
+            .texture_registry()
+            .expect("a window offers external textures")
+            .register()
+            .expect("a texture id");
+        self.id = Some(registration.id());
+        *self.shared.borrow_mut() = Some(registration);
+    }
+
+    fn build(&self, _view: &VideoSurface, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::Texture::new(self.id.expect("registered in init_state"))
+    }
+}
+
+/// Each window's texture frames ride the frames its own scene publishes, as
+/// each window's ride its raster host: a frame fed to a secondary window is
+/// taken by that window's publication, and the primary's stays pending.
+#[test]
+fn each_window_takes_its_own_texture_frames() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    let primary = VideoSurface {
+        shared: Rc::default(),
+    };
+    let secondary = VideoSurface {
+        shared: Rc::default(),
+    };
+    host.attach(&primary).expect("primary root");
+    let window = host.open_window(HeadlessWindow::new(100, 100));
+    host.attach_to(window, &secondary).expect("secondary root");
+    let _ = host.pump(Duration::ZERO);
+    let _ = host.pump(Duration::ZERO);
+
+    let frame =
+        |shade: u8| flui_painting::paint::Image::from_rgba8(1, 1, vec![shade, shade, shade, 255]);
+    let secondary_id = {
+        let registration = secondary.shared.borrow();
+        let registration = registration.as_ref().expect("registered");
+        registration.submit_frame(frame(5));
+        registration.id()
+    };
+    let submits = host.sink().submits();
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        host.sink().submits(),
+        submits + 1,
+        "the texture frame is published"
+    );
+    let taken: Vec<_> = host
+        .sink()
+        .textures()
+        .frames
+        .iter()
+        .map(|(id, image)| (*id, image.data()[0]))
+        .collect();
+    assert_eq!(
+        taken,
+        [(secondary_id, 5)],
+        "the secondary's frame rides its publication"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        host.sink().submits(),
+        submits + 1,
+        "and nothing stays owed for it"
+    );
+}
+
 /// A headless test's gestures follow the preset it names, never the machine
 /// that runs it: a 9 px drift exceeds Android's 8 dp touch slop and stays
 /// within iOS's 10 pt and the platform-neutral 18 px.

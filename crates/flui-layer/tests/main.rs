@@ -176,6 +176,14 @@ fn texture_registry() {
                 "merged_updates_keep_the_newest_frame_and_every_retirement",
                 t::merged_updates_keep_the_newest_frame_and_every_retirement,
             ),
+            (
+                "a_frame_nothing_draws_owes_no_publication",
+                t::a_frame_nothing_draws_owes_no_publication,
+            ),
+            (
+                "taking_into_a_kept_buffer_folds_as_merge",
+                t::taking_into_a_kept_buffer_folds_as_merge,
+            ),
         ],
     );
 }
@@ -359,6 +367,10 @@ fn scene_patch_damage() {
             (
                 "a_texture_frame_damages_the_footprint_of_its_users",
                 d::a_texture_frame_damages_the_footprint_of_its_users,
+            ),
+            (
+                "a_version_draws_only_the_textures_of_attached_users",
+                d::a_version_draws_only_the_textures_of_attached_users,
             ),
             (
                 "an_unattached_leader_never_shadows_the_attached_one",

@@ -561,11 +561,13 @@ impl UiRuntime {
     }
 
     /// Whether a presentation's tree waits for a frame: a pending build, a
-    /// dirty render node, or a completion the next frame takes. A
-    /// presentation waiting out a dropped frame's backoff, one whose sink
-    /// holds as many frames as it may, one whose device rebuild was given
-    /// up and one that cannot be seen have none: the backoff's deadline and
-    /// the frame an unseen window owes its surface are
+    /// dirty render node, a completion the next frame takes, or a texture
+    /// update the held version owes a publication for (ADR-0304 §8), which a
+    /// frame fed while the previous one rendered leaves after the redraw mark
+    /// was cleared. A presentation waiting out a dropped frame's backoff, one
+    /// whose sink holds as many frames as it may, one whose device rebuild
+    /// was given up and one that cannot be seen have none: the backoff's
+    /// deadline and the frame an unseen window owes its surface are
     /// [due work](Self::has_pending_due_work), a settlement or a new
     /// rebuild asks for the frame, and a window seen again asks for its own.
     /// A frame that showed nothing and left tree work behind is what a runner
@@ -577,7 +579,8 @@ impl UiRuntime {
                 && !presentation.frames_in_flight().is_saturated()
                 && !presentation.device_abandoned()
                 && (presentation.has_pending_work_snapshot()
-                    || presentation.has_eligible_completion())
+                    || presentation.has_eligible_completion()
+                    || presentation.owes_texture_frame())
         })
     }
 

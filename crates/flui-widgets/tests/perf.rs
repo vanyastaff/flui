@@ -959,18 +959,27 @@ fn shown_version(laid: &LaidOut) -> flui_rendering::layer::SceneVersionId {
 /// A texture frame with nothing changed in the tree publishes the version the
 /// scene holds, with that frame for the raster host and no scene damage
 /// (ADR-0304 §8): it builds, lays out and paints nothing, applies no patch,
-/// and the sink takes the frame with it. The raster host's half, which
-/// damages the texture's users alone, is `flui-app`'s
+/// and the sink takes the frame with it into the buffer it keeps, so a
+/// video's steady frames ask nothing of the heap. The raster host's half,
+/// which damages the texture's users alone, is `flui-app`'s
 /// `a_texture_frame_reaches_the_slot_as_its_users_damage`.
 #[test]
 fn perf_a_texture_frame_republishes_the_held_version() {
     let (mut laid, _label, feeds) = mount_videos();
+    // The first frame grows the sink's buffer to its working size.
+    feed(&feeds, 0, 8);
+    laid.pump_for(FRAME);
     let shown = shown_version(&laid);
     let submits = laid.painted_frame_count();
 
     feed(&feeds, 0, 9);
     let (report, heap) = perf_measured(|| laid.pump_report(FRAME));
     record("texture_frame", &report, heap);
+    assert_eq!(
+        heap,
+        HeapCounts::default(),
+        "a steady texture frame allocates nothing"
+    );
     for name in [
         "builds_run",
         "elements_rebuilt",

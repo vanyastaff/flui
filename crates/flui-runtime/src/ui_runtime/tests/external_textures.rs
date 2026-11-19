@@ -258,9 +258,10 @@ pub(crate) fn a_fed_frame_republishes_the_held_version() {
     );
 }
 
-/// A texture an ancestor hides while it stays mounted repaints nothing for
-/// the frames its producer feeds: each goes out with the held version, which
-/// draws no user of the texture.
+/// A texture an ancestor hides while it stays mounted costs nothing for the
+/// frames its producer feeds: the held version draws no user of it, so no
+/// frame is published and none stays owed; the newest frame waits in the
+/// registry for the next publication.
 pub(crate) fn a_hidden_texture_repaints_nothing() {
     let fixture = mounted(Placement::Small);
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -275,20 +276,126 @@ pub(crate) fn a_hidden_texture_repaints_nothing() {
         fixture.shared.lock().is_some(),
         "an offstage texture stays mounted"
     );
-    let hidden = seen.lock().last().expect("the hiding frame").version;
 
     for shade in 1..=3 {
         feed(&fixture.shared, shade);
         fixture.ui_runtime.render_frame(&mut sink);
+        assert!(
+            !fixture.ui_runtime.has_pending_work(),
+            "a hidden texture's frame owes no frame"
+        );
     }
-    let seen = seen.lock();
-    assert_eq!(seen.len(), 5, "each fed frame goes out: {seen:?}");
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 2, "nothing is published: {seen:?}");
+    let registry = fixture
+        .ui_runtime
+        .texture_registry(fixture.ui_runtime.presentation_id())
+        .expect("primary presentation");
+    let frames = registry.take_updates().frames;
+    assert_eq!(frames.len(), 1, "the newest frame waits, one per texture");
+    assert_eq!(frames[0].1.data()[0], 3);
+}
+
+/// A frame fed while the previous one is submitted, after the raster side
+/// took the updates, outlives the redraw mark the frame's end clears: the
+/// runner's gate still sees it, and its next frame publishes it.
+pub(crate) fn a_frame_fed_during_a_submit_is_still_owed() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = {
+        let registry = fixture
+            .ui_runtime
+            .texture_registry(fixture.ui_runtime.presentation_id())
+            .expect("primary presentation");
+        let (seen, shared) = (Arc::clone(&seen), Arc::clone(&fixture.shared));
+        ScriptedSink::new(move |index, publication| {
+            let frames = registry
+                .take_updates()
+                .frames
+                .iter()
+                .map(|(id, image)| (*id, image.data()[0]))
+                .collect();
+            seen.lock().push(Seen {
+                version: publication.scene.id(),
+                damage: publication.damage,
+                frames,
+            });
+            if index == 1 {
+                // The producer's next frame lands while this one renders.
+                feed(&shared, 10);
+            }
+            crate::sink::SubmitVerdict::Presented
+        })
+    };
+    fixture.ui_runtime.render_frame(&mut sink);
+    feed(&fixture.shared, 9);
+    fixture.ui_runtime.render_frame(&mut sink);
     assert!(
-        seen[2..]
-            .iter()
-            .all(|frame| frame.version == hidden && frame.damage == DamageRegion::Unchanged),
-        "a hidden texture's frames repaint nothing: {seen:?}"
+        !fixture.ui_runtime.needs_redraw(),
+        "the frame's end cleared the wake the feed raised"
     );
+    assert!(
+        fixture.ui_runtime.has_pending_work(),
+        "the runner's gate still sees the texture frame"
+    );
+    fixture.ui_runtime.render_frame(&mut sink);
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(seen[2].version, seen[0].version, "the held version again");
+    assert_eq!(seen[2].frames, [(texture_id(&fixture), 10)]);
+    assert!(!fixture.ui_runtime.has_pending_work(), "and nothing more");
+}
+
+/// A window that refuses the version costs no frame per texture frame
+/// (ADR-0334 §4): the refused version is not published again for one, the
+/// runner's gate sees nothing owed, and the newest frame waits, one per
+/// texture, for the frame that applies a version.
+pub(crate) fn a_refused_window_costs_no_texture_frame() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Refused);
+    fixture.ui_runtime.render_frame(&mut sink);
+    for shade in 1..=3 {
+        feed(&fixture.shared, shade);
+        fixture.ui_runtime.render_frame(&mut sink);
+        assert!(
+            !fixture.ui_runtime.has_pending_work(),
+            "a refused window owes no texture frame"
+        );
+    }
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 1, "only the refused frame: {seen:?}");
+    let registry = fixture
+        .ui_runtime
+        .texture_registry(fixture.ui_runtime.presentation_id())
+        .expect("primary presentation");
+    let frames = registry.take_updates().frames;
+    assert_eq!(frames.len(), 1, "the newest frame waits, one per texture");
+    assert_eq!(frames[0].1.data()[0], 3);
+}
+
+/// A texture frame that finds the held version applied for another target
+/// (the scale changed and nothing else) repaints the tree, and the frame
+/// rides the new version rather than waiting, owed, for ever.
+pub(crate) fn a_texture_frame_under_a_new_target_repaints() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented);
+    fixture.ui_runtime.render_frame(&mut sink);
+    assert!(fixture.ui_runtime.set_pipeline_device_pixel_ratio_for(
+        fixture.ui_runtime.presentation_id(),
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    ));
+    feed(&fixture.shared, 9);
+    fixture.ui_runtime.render_frame(&mut sink);
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 2, "the texture frame is published: {seen:?}");
+    assert_ne!(
+        seen[1].version, seen[0].version,
+        "a version for the new target"
+    );
+    assert_eq!(seen[1].frames, [(texture_id(&fixture), 9)]);
+    assert!(!fixture.ui_runtime.has_pending_work(), "nothing stays owed");
 }
 
 /// Unmounting the widget that owns the registration retires its texture.

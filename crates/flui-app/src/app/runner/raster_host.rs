@@ -2089,10 +2089,12 @@ impl RasterHost {
         };
         let stamp = FrameStamp::new(address, epoch, generation);
         // The images a replaced context kept go first, so the registry's
-        // newer frames replace them.
+        // newer frames replace them, folded into the carried buffer. The
+        // buffer rides the snapshot to the raster thread, so a texture frame
+        // costs its list here; a frame with no update allocates nothing.
         let mut updates = std::mem::take(&mut slot.carried);
         if let Some(textures) = &slot.textures {
-            updates.merge(textures.take_updates());
+            textures.take_updates_into(&mut updates);
         }
         let mut damage = slot.base.damage_for(&publication, key);
         // A new image or a retirement changes the pixels of the texture's

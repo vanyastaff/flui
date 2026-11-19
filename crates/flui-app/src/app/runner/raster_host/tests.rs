@@ -1162,17 +1162,15 @@ fn window_frame(slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::
     presented == Some(true)
 }
 
-/// A texture frame fed to a window whose tree changes nothing reaches its
-/// slot as the damage of the texture's user alone: the UI runtime publishes
-/// the version it holds with no scene damage (ADR-0304 §8), and the host
-/// takes the frame from the window's registry with it and adds the user's
-/// footprint (§9). The frame after asks nothing of the slot.
-///
-/// Red-check: let a frame that painted nothing publish nothing whatever the
-/// registry holds (`draw_prepared_frame_for_presentation` in flui-runtime),
-/// and the texture frame never reaches the slot.
-#[test]
-fn a_texture_frame_reaches_the_slot_as_its_users_damage() {
+/// A window that draws a 10-px texture at [`AT`] over a background through a
+/// slot of an inline host over scripted slots, its first frames run, and
+/// the texture's registration.
+fn window_with_a_texture() -> (
+    crate::app::ui_runtime::UiRuntime,
+    RasterSlot,
+    ScriptedSlots,
+    flui_layer::TextureRegistration,
+) {
     use flui_widgets::{Align, ColoredBox, Padding, SizedBox, Texture};
 
     let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
@@ -1221,14 +1219,29 @@ fn a_texture_frame_reaches_the_slot_as_its_users_damage() {
         device: DeviceHealth::Healthy,
         renderer_dead: false,
     };
+    for _ in 0..3 {
+        let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+    }
+    assert!(!renders(&slots).is_empty(), "the first frame draws");
+    (ui_runtime, slot, slots, texture)
+}
+
+/// A texture frame fed to a window whose tree changes nothing reaches its
+/// slot as the damage of the texture's user alone: the UI runtime publishes
+/// the version it holds with no scene damage (ADR-0304 §8), and the host
+/// takes the frame from the window's registry with it and adds the user's
+/// footprint (§9). The frame after asks nothing of the slot.
+///
+/// Red-check: let a frame that painted nothing publish nothing whatever the
+/// registry holds (`draw_prepared_frame_for_presentation` in flui-runtime),
+/// and the texture frame never reaches the slot.
+#[test]
+fn a_texture_frame_reaches_the_slot_as_its_users_damage() {
+    let (mut ui_runtime, mut slot, slots, texture) = window_with_a_texture();
     let mut frame = |ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
         slot.pump(ui_runtime, web_time::Instant::now(), None)
     };
-    for _ in 0..3 {
-        let _ = frame(&mut ui_runtime);
-    }
     let drawn = renders(&slots).len();
-    assert!(drawn >= 1, "the first frame draws");
 
     texture.submit_frame(pixel());
     assert!(frame(&mut ui_runtime), "the texture frame presents");
@@ -1244,6 +1257,89 @@ fn a_texture_frame_reaches_the_slot_as_its_users_damage() {
         vec![covering_on_surface(AT.dx, AT.dy, TEN.width, TEN.height)],
         "the texture's user alone is redrawn"
     );
+}
+
+/// A window whose version the host refused costs no frame per texture frame
+/// (ADR-0334 §4), whether its size is one the device refused or its render
+/// panicked: the refused version is not drawn again, the frames a producer
+/// feeds wait in the registry, no frame stays owed for them, and the
+/// window's next change presents and takes the newest.
+///
+/// Red-check: drop the refusal the settlement records (`SceneSlot::refuse`
+/// in flui-runtime), and each texture frame republishes the refused version
+/// (a render after the panic; at the refused size, frame work left owed,
+/// which the runner's gate spins on).
+#[test]
+fn a_refused_window_costs_no_texture_frame() {
+    #[derive(Debug, Clone, Copy)]
+    enum Refusal {
+        SizeRefused,
+        RenderPanicked,
+    }
+    for refusal in [Refusal::SizeRefused, Refusal::RenderPanicked] {
+        let (mut ui_runtime, mut slot, slots, texture) = window_with_a_texture();
+        let refused = match refusal {
+            Refusal::SizeRefused => {
+                let over = (800_u32, 600_u32);
+                slots.script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+                    width: over.0,
+                    height: over.1,
+                }));
+                // The window resizes past the device's limit, which asks for a frame.
+                slot.size = over;
+                ui_runtime.mark_primary_needs_full_repaint();
+                assert!(
+                    !slot.pump(&mut ui_runtime, web_time::Instant::now(), None),
+                    "{refusal:?}: the size is refused"
+                );
+                held_version(&ui_runtime)
+            }
+            Refusal::RenderPanicked => {
+                slots.script_render(ScriptedAnswer::Panic);
+                texture.submit_frame(pixel());
+                let mut caught = flui_foundation::panic::FirstPanic::new();
+                let presented =
+                    caught.contain(|| slot.pump(&mut ui_runtime, web_time::Instant::now(), None));
+                if let Some(payload) = caught.into_payload() {
+                    flui_foundation::panic::discard_payload(payload);
+                }
+                assert_ne!(presented, Some(true), "{refusal:?}: the render panicked");
+                held_version(&ui_runtime)
+            }
+        };
+        let drawn = renders(&slots).len();
+        for _ in 0..3 {
+            texture.submit_frame(pixel());
+            let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+            assert!(
+                !ui_runtime.has_pending_work(),
+                "{refusal:?}: a texture frame leaves no frame owed"
+            );
+        }
+        assert_eq!(
+            renders(&slots).len(),
+            drawn,
+            "{refusal:?}: the refused version is not drawn again"
+        );
+        assert_eq!(held_version(&ui_runtime), refused, "{refusal:?}");
+        // The window's next change asks for a frame: a size the device
+        // takes, or a rebuild of the tree.
+        slot.size = SIZE;
+        ui_runtime.mark_primary_needs_full_repaint();
+        assert!(
+            slot.pump(&mut ui_runtime, web_time::Instant::now(), None),
+            "{refusal:?}: the window's next change presents"
+        );
+        assert_ne!(held_version(&ui_runtime), refused, "{refusal:?}");
+        assert!(
+            ui_runtime
+                .texture_registry(ui_runtime.active_presentation_for_test())
+                .expect("the window's registry")
+                .take_updates()
+                .is_empty(),
+            "{refusal:?}: and takes the waiting texture frame"
+        );
+    }
 }
 
 /// A retry whose probe answers no device, or whose device's adoption

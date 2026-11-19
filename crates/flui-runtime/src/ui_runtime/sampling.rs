@@ -205,7 +205,7 @@ impl<'runtime> PresentationSampling<'runtime> {
             let woken = presentation.take_redraw_pending();
             let pending = presentation.prepare_pending_work(recovery);
             // A texture frame is drawn whatever layout waits for: it changes no tree.
-            let textures = presentation.has_texture_updates();
+            let textures = presentation.owes_texture_frame();
             let blocked = presentation.pipeline().with(PipelineOwner::layout_waits_for_input);
             if (woken && !blocked) || pending || textures || resuming {
                 presentation.clock().mark_demand(DemandKind::Dirty);

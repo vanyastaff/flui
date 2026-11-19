@@ -6,10 +6,11 @@
 //! issued again, which accepts frames until it is dropped. Each frame is held as
 //! its id's pending frame and wakes the presentation, as Flutter's
 //! `markTextureFrameAvailable` schedules a frame: the runtime's next frame,
-//! finding the registry holding updates ([`TextureRegistry::has_updates`]),
+//! finding the registry holding updates its held version draws
+//! ([`TextureRegistry::has_updates_for`]),
 //! publishes the version its scene holds even when nothing in the tree changed,
 //! and the raster host takes the newest frame per id
-//! ([`TextureRegistry::take_updates`]) with that publication (ADR-0304 §8). A
+//! ([`TextureRegistry::take_updates_into`]) with that publication (ADR-0304 §8). A
 //! producer that outruns the display only costs its skipped frames. Dropping a
 //! registration retires its id; the backend releases the allocation on its next
 //! update.
@@ -39,6 +40,8 @@ struct State {
     /// Each live texture's frame not yet taken.
     live: rustc_hash::FxHashMap<TextureId, Option<Image>>,
     retired: Vec<TextureId>,
+    /// How many entries of `live` hold a frame.
+    pending: usize,
 }
 
 /// Every texture id has been issued; the registry refuses further ids rather
@@ -130,39 +133,85 @@ impl TextureRegistry {
         })
     }
 
-    /// Whether a frame or a retirement waits for [`Self::take_updates`]: what
-    /// the presentation's next frame publishes the held version for, when
-    /// nothing in its tree changed (ADR-0304 §8).
+    /// Whether the presentation's next frame owes a publication for these
+    /// updates when nothing in its tree changed (ADR-0304 §8): a retirement
+    /// waits, or a texture `drawn` reports as drawn by the held version has a
+    /// pending frame. A frame no drawn texture shows waits, one per id, for
+    /// the next publication. With no pending frame the answer costs no walk.
+    ///
+    /// `drawn` runs under the registry's lock, so it must not reach the
+    /// registry.
     #[must_use]
-    pub fn has_updates(&self) -> bool {
+    pub fn has_updates_for(&self, mut drawn: impl FnMut(TextureId) -> bool) -> bool {
         let state = self.shared.state.lock();
-        !state.retired.is_empty() || state.live.values().any(Option::is_some)
+        if !state.retired.is_empty() {
+            return true;
+        }
+        if state.pending == 0 {
+            return false;
+        }
+        state
+            .live
+            .iter()
+            .any(|(id, frame)| frame.is_some() && drawn(*id))
     }
 
     /// Takes the newest pending frame of each live texture and the retired
     /// ids, for the raster backend to apply before it renders.
     #[must_use]
     pub fn take_updates(&self) -> TextureUpdates {
-        let mut state = self.shared.state.lock();
-        let frames = state
-            .live
-            .iter_mut()
-            .filter_map(|(id, pending)| pending.take().map(|frame| (*id, frame)))
-            .collect();
-        TextureUpdates {
-            frames,
-            retired: std::mem::take(&mut state.retired),
+        let mut updates = TextureUpdates::default();
+        self.take_updates_into(&mut updates);
+        updates
+    }
+
+    /// Takes the pending updates into `into`, folded as
+    /// [`TextureUpdates::merge`] folds a newer update: a backend that keeps
+    /// one buffer across frames takes them without allocating once the
+    /// buffer has grown to its working size.
+    pub fn take_updates_into(&self, into: &mut TextureUpdates) {
+        // Frames the newer ones replace drop after the lock.
+        let mut replaced = Vec::new();
+        {
+            let mut state = self.shared.state.lock();
+            let State {
+                live,
+                retired,
+                pending,
+                ..
+            } = &mut *state;
+            if *pending > 0 {
+                for (id, frame) in live.iter_mut() {
+                    let Some(frame) = frame.take() else { continue };
+                    if let Some(at) = into.frames.iter().position(|(held, _)| held == id) {
+                        replaced.push(std::mem::replace(&mut into.frames[at].1, frame));
+                    } else {
+                        into.frames.push((*id, frame));
+                    }
+                }
+                *pending = 0;
+            }
+            if !retired.is_empty() {
+                into.frames.retain(|(id, _)| !retired.contains(id));
+                into.retired.append(retired);
+            }
         }
+        drop(replaced);
     }
 
     fn submit(&self, id: TextureId, frame: Image) {
         // The frame a newer one replaces drops after the lock.
         let replaced = {
             let mut state = self.shared.state.lock();
-            let Some(pending) = state.live.get_mut(&id) else {
+            let State { live, pending, .. } = &mut *state;
+            let Some(slot) = live.get_mut(&id) else {
                 return;
             };
-            pending.replace(frame)
+            let replaced = slot.replace(frame);
+            if replaced.is_none() {
+                *pending += 1;
+            }
+            replaced
         };
         // Outside the lock: the wake is the host's, and may reach this
         // registry again. The frame is already pending, so a wake that panics
@@ -174,9 +223,12 @@ impl TextureRegistry {
     fn retire(&self, id: TextureId) {
         let retired = {
             let mut state = self.shared.state.lock();
-            let pending = state.live.remove(&id);
+            let frame = state.live.remove(&id).flatten();
+            if frame.is_some() {
+                state.pending -= 1;
+            }
             state.retired.push(id);
-            pending
+            frame
         };
         // The id is already queued, so a wake that panics leaves the
         // retirement for the presentation's next frame; the frame it never

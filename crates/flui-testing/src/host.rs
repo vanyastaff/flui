@@ -1477,14 +1477,11 @@ impl HeadlessHost {
             accessibility,
             text_store_host,
         };
-        // The primary presentation's texture frames ride the frames its sink
-        // presents, as they ride a runner's raster host.
-        let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         Self {
             ui_runtime_id: ui_runtime.id(),
             ui_runtime: Some(ui_runtime),
             clock,
-            sink: HeadlessSink::new(surface.0, surface.1, textures),
+            sink: HeadlessSink::new(surface.0, surface.1),
             open: vec![primary.clone()],
             primary,
             scripted,
@@ -1669,6 +1666,10 @@ impl HeadlessHost {
                 self.observe(presentation, flui_runtime::owner::WindowObservation::State);
             }
         }
+        // Each open presentation's texture frames ride the frames its scene
+        // publishes, as each window's ride its raster host. Refreshed in place
+        // by position, so an idle pump asks nothing of the heap.
+        self.track_textures();
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -3146,6 +3147,26 @@ impl HeadlessHost {
         first.contain(move || drop(runtime));
         first.resume();
         true
+    }
+
+    /// Points the sink at each open presentation's texture registry, under
+    /// its scene's current lineage.
+    fn track_textures(&mut self) {
+        let Self {
+            ui_runtime: Some(ui_runtime),
+            sink,
+            open,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let ui_runtime = &*ui_runtime;
+        sink.track_textures(open.iter().filter_map(|window| {
+            let registry = ui_runtime.texture_registry(window.id)?;
+            let totals = ui_runtime.presentation_scene_totals_for_test(window.id)?;
+            Some((totals.version.lineage(), registry))
+        }));
     }
 
     /// The presentations of the open windows, in opening order.

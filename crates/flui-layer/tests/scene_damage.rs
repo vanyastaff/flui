@@ -1330,6 +1330,55 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
     );
 }
 
+/// A version draws a texture when an attached entry draws it: a loose
+/// node's draw and a texture nothing names draw nothing.
+pub(crate) fn a_version_draws_only_the_textures_of_attached_users() {
+    let (attached, loose_only, unnamed) = (
+        flui_painting::paint::TextureId::new(7),
+        flui_painting::paint::TextureId::new(9),
+        flui_painting::paint::TextureId::new(8),
+    );
+    let drawing = |texture, version: ContentVersion| {
+        let mut canvas = Canvas::new();
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+            None,
+            flui_painting::paint::FilterQuality::Low,
+            1.0,
+        );
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::new(Chunk::new(
+            RenderId::new(2),
+            0,
+            version,
+            canvas.finish(),
+        )));
+        content.finish()
+    };
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (a, loose) = (writer.mint_node(), writer.mint_node());
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(a, drawing(attached, version)));
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(loose, drawing(loose_only, version)));
+    let mut top = BoundaryContent::builder();
+    top.slot(a);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(a, 100.0, 100.0));
+    owner.apply(SURFACE).expect("an attached and a loose user");
+
+    let version = owner.current();
+    assert!(version.draws_texture(attached));
+    assert!(
+        !version.draws_texture(loose_only),
+        "the loose user is not drawn"
+    );
+    assert!(!version.draws_texture(unnamed));
+}
+
 // patch_damage_covers_diff_damage
 
 /// A small deterministic generator, so a failing case is reproducible by its

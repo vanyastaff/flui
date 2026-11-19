@@ -33,7 +33,8 @@ use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_layer::{
     BoundaryContent, Layer, ReleasedContents, ResyncReason, SceneNodeId, SceneOp, SceneOwner,
-    ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey, TransformLayer,
+    ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey, TextureRegistry,
+    TransformLayer,
 };
 
 /// The retained scene of one presentation, and the node its debug overlay is
@@ -55,6 +56,10 @@ pub(crate) struct PresentationScene {
     /// its lineage ([`Self::held_retry`]). A republish leaves it: the
     /// republished frame may be discarded before any verdict.
     owed: Option<SceneVersionId>,
+    /// The version the window refused, until a frame applies a version: a
+    /// texture frame does not publish it again, since a refused window costs
+    /// none (ADR-0334 §4); the frame waits in the registry.
+    refused: Option<SceneVersionId>,
 }
 
 /// What a version is drawn for: the surface's size in device pixels and the
@@ -188,8 +193,10 @@ impl PresentationScene {
             size: target.size,
             generation: SurfaceGeneration::ZERO,
         };
-        // A new version, or a renewed lineage, replaces whatever was owed.
+        // A new version, or a renewed lineage, replaces whatever was owed or
+        // refused.
         self.owed = None;
+        self.refused = None;
         match self.owner.apply(surface) {
             Ok(applied) => {
                 self.refusals = 0;
@@ -268,6 +275,31 @@ impl PresentationScene {
         self.target == Some(target)
     }
 
+    /// Whether `textures` holds updates the held version owes a publication
+    /// for (ADR-0304 §8): a retirement, or a pending frame of a texture an
+    /// attached entry of the version draws. `false` before the first version,
+    /// after a renewal and while the window refuses the version
+    /// ([`Self::refuse`]), so a texture nothing shows, or a window that takes
+    /// nothing, costs no frame; its updates wait for the next publication.
+    /// The one answer the runner's gate, sampling admission and the frame's
+    /// republish read.
+    pub(crate) fn owes_texture_frame(&self, textures: &TextureRegistry) -> bool {
+        if self.target.is_none() {
+            return false;
+        }
+        let current = self.owner.current();
+        if self.refused == Some(current.id()) {
+            return false;
+        }
+        textures.has_updates_for(|texture| current.draws_texture(texture))
+    }
+
+    /// The window refused `version`: a texture frame does not publish it
+    /// again until a frame applies a version ([`Self::apply`]).
+    fn refuse(&mut self, version: SceneVersionId) {
+        self.refused = Some(version);
+    }
+
     /// The current version again, with the damage since the acknowledged
     /// base, for a frame that painted nothing: a withheld version owed to the
     /// screen, or the held version a texture frame rides to the raster host
@@ -283,6 +315,7 @@ impl PresentationScene {
         self.overlay = None;
         self.target = None;
         self.owed = None;
+        self.refused = None;
         self.owner.renew(reason)
     }
 
@@ -306,6 +339,9 @@ pub(crate) struct SceneSlot {
     /// The newest version the raster side showed while the scene was lent,
     /// acknowledged when it returns.
     completed_owed: Cell<Option<SceneVersionId>>,
+    /// The version the window refused while the scene was lent, latched when
+    /// it returns.
+    refused_owed: Cell<Option<SceneVersionId>>,
 }
 
 impl Default for SceneSlot {
@@ -314,6 +350,7 @@ impl Default for SceneSlot {
             scene: RefCell::new(Some(PresentationScene::default())),
             renew_owed: Cell::new(None),
             completed_owed: Cell::new(None),
+            refused_owed: Cell::new(None),
         }
     }
 }
@@ -383,6 +420,27 @@ impl SceneSlot {
         Ok(())
     }
 
+    /// See [`PresentationScene::owes_texture_frame`]. `false` while a frame
+    /// holds the scene: that frame answers for itself.
+    pub(crate) fn owes_texture_frame(&self, textures: &TextureRegistry) -> bool {
+        self.scene
+            .borrow()
+            .as_ref()
+            .is_some_and(|scene| scene.owes_texture_frame(textures))
+    }
+
+    /// The window refused `version`; see [`PresentationScene::refuse`].
+    /// While a frame holds the scene the refusal waits for its return, where
+    /// a version that frame applied overrides it.
+    pub(crate) fn refuse(&self, version: SceneVersionId) {
+        let mut scene = self.scene.borrow_mut();
+        if let Some(scene) = scene.as_mut() {
+            scene.refuse(version);
+        } else {
+            self.refused_owed.set(Some(version));
+        }
+    }
+
     /// Runs the destructors of what the scene's owner released, here with no
     /// borrow held (an annotation's `Drop` is user code), and hands the owner
     /// back what nobody else holds, for its next frames to write into
@@ -439,7 +497,7 @@ impl Drop for LentScene<'_> {
         let Some(mut scene) = self.scene.take() else {
             return;
         };
-        // An acknowledgement, then a renewal, owed while the frame held the
+        // An acknowledgement, a refusal, then a renewal, owed while the frame held the
         // scene run before it is back; what they release drops with the slot
         // free.
         let acknowledged = self
@@ -447,6 +505,9 @@ impl Drop for LentScene<'_> {
             .completed_owed
             .take()
             .map(|rastered| scene.completed(rastered));
+        if let Some(refused) = self.slot.refused_owed.take() {
+            scene.refuse(refused);
+        }
         let released = self
             .slot
             .renew_owed
