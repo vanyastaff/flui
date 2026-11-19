@@ -3039,33 +3039,54 @@ fn a_static_shadow_outside_the_damage_is_not_repainted() {
 }
 
 /// Renders `before` in full, warms the retained target, marks `rects` and
-/// renders `after` into a capture that plans rect by rect when `by_rect` is
-/// set. Answers the capture, after that frame.
+/// renders `after`. Answers the capture, after that frame.
 fn region_frame(
     renderer: &crate::headless::HeadlessRenderer,
     before: &Scene,
     after: &Scene,
     rects: &[Rect<f64>],
-    by_rect: bool,
 ) -> RetainedCapture {
+    region_frame_over(renderer, before, after, rects).0
+}
+
+/// [`region_frame`], answering also the retained pixels the region frame
+/// started from.
+fn region_frame_over(
+    renderer: &crate::headless::HeadlessRenderer,
+    before: &Scene,
+    after: &Scene,
+    rects: &[Rect<f64>],
+) -> (RetainedCapture, Vec<u8>) {
     let mut capture = renderer
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
-    if by_rect {
-        capture.plan_rect_by_rect();
-    }
     capture.mark_full_repaint();
     capture
         .render_scene(before)
         .expect("the first frame renders");
     warm(&mut capture, before);
+    let retained = capture.read_retained_rgba().expect("readback");
     for &rect in rects {
         capture.mark_dirty(rect);
     }
     capture
         .render_scene(after)
         .expect("the region frame renders");
-    capture
+    (capture, retained)
+}
+
+/// How many pixels outside `rects` differ between `before` and `after`, in
+/// any byte.
+fn written_outside(before: &[u8], after: &[u8], rects: &[flui_layer::DamageRect]) -> usize {
+    let inside = |x: u32, y: u32| {
+        rects
+            .iter()
+            .any(|r| (r.left()..r.right()).contains(&x) && (r.top()..r.bottom()).contains(&y))
+    };
+    (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| !inside(x, y) && px(before, x, y) != px(after, x, y))
+        .count()
 }
 
 /// The plan's rects, or `None` for a frame that was not partial.
@@ -3076,13 +3097,13 @@ fn planned_rects(capture: &RetainedCapture) -> Option<Vec<flui_layer::DamageRect
     }
 }
 
-/// A region planned as its bounding box redraws the gap between its rects,
-/// so a backdrop filter in that gap, which neither rect meets, is closed
-/// over with the box: its read footprint joins the frame, and the frame
-/// draws as a full one. Closing only the rects leaves the filter cut by the
-/// box's scissor, blurring pixels it already blurred.
+/// On a hand-built tree, a region of two distant rects is redrawn rect by
+/// rect, and a backdrop filter in the gap between them, which neither rect
+/// meets and whose backdrop did not change, is left as the last frame drew
+/// it: the closure adds nothing and the frame draws as a full one. The
+/// region's bounding box would redraw the gap, cutting the filter there.
 #[test]
-fn a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
+fn a_backdrop_reader_in_the_gap_between_a_regions_rects_is_left_alone() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -3108,7 +3129,7 @@ fn a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
         })
     };
     let (before, after) = (build(Color::RED), build(Color::WHITE));
-    let partial = region_frame(
+    let (partial, retained) = region_frame_over(
         &renderer,
         &before,
         &after,
@@ -3116,17 +3137,22 @@ fn a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
             Rect::from_xywh(0.0, 0.0, 30.0, 100.0),
             Rect::from_xywh(70.0, 0.0, 30.0, 100.0),
         ],
-        false,
     );
     let rects = planned_rects(&partial).expect("a partial frame");
-    assert_eq!(rects.len(), 1, "one pass under the box: {rects:?}");
+    assert_eq!(rects.len(), 2, "one pass per rect: {rects:?}");
+    assert_eq!(partial.counters().region_passes, 2, "one pass per rect");
+    assert!(
+        rects.iter().all(|rect| rect.bottom() <= 100),
+        "the closure added nothing below the boxes: {rects:?}"
+    );
     let pixels = partial.read_rgba().expect("readback");
     let stale = mismatches(&pixels, &full_frame_pixels(&renderer, &after), 2);
     assert!(stale.is_empty(), "stale pixels at {stale:?}");
-    assert!(
-        rects[0].bottom() > 120,
-        "the box joined the filter's read footprint below it: {rects:?}"
-    );
+    // The filter's gap, and every other pixel outside the rects, holds the
+    // bytes the frame started from.
+    let now = partial.read_retained_rgba().expect("readback");
+    let rewritten = written_outside(&retained, &now, &rects);
+    assert_eq!(rewritten, 0, "pixels outside the rects were rewritten");
 }
 
 /// Grouped backdrop filters damaged in two corners of a rect-by-rect frame
@@ -3177,7 +3203,6 @@ fn a_backdrop_group_takes_one_rect_of_a_region_frame() {
             Rect::from_xywh(4.0, 4.0, 24.0, 24.0),
             Rect::from_xywh(100.0, 100.0, 24.0, 24.0),
         ],
-        true,
     );
     assert_eq!(
         planned_rects(&partial).map(|rects| rects.len()),
@@ -3201,8 +3226,8 @@ fn a_backdrop_group_takes_one_rect_of_a_region_frame() {
 /// its first member, in a partial frame as in a full one. Damage that meets
 /// only the second member still makes the group capture at the first, so
 /// the second does not blur a box painted between the two. Each row puts
-/// the first member somewhere the damage does not reach; the last plans one
-/// pass per rect, with a second rect far from the group.
+/// the first member somewhere the damage does not reach, and each frame has
+/// a second rect far from the group, redrawn in a pass of its own.
 #[test]
 fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     use flui_layer::BackdropGroupKey;
@@ -3213,13 +3238,11 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     // Over everything the second member reads and writes.
     let box_over = Rect::from_xywh(90.0, 0.0, 38.0, 36.0);
     let far = Rect::from_xywh(50.0, 100.0, 10.0, 10.0);
-    // (case, the damaged box, the first member in its own boundary, one pass
-    // per rect)
-    for (case, near, first_alone, by_rect) in [
-        ("first member under the root", box_under, false, false),
-        ("first member in its own boundary", box_under, true, false),
-        ("one pass per rect", box_under, true, true),
-        ("damage over the whole second member", box_over, true, false),
+    // (case, the damaged box, the first member in its own boundary)
+    for (case, near, first_alone) in [
+        ("first member under the root", box_under, false),
+        ("first member in its own boundary", box_under, true),
+        ("damage over the whole second member", box_over, true),
     ] {
         let (root, background, holder) = (
             ContentToken::mint(),
@@ -3263,16 +3286,14 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             px(&full, 112, 16)[0] < 200,
             "{case}: precondition: the second member blurs the backdrop without the white box"
         );
-        let partial = region_frame(&renderer, &before, &after, &[near, far], by_rect);
+        let partial = region_frame(&renderer, &before, &after, &[near, far]);
         assert!(
             matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
             "{case}: the frame is partial: {:?}",
             partial.last_plan()
         );
-        if by_rect {
-            // The group's members share one rect, the far box has its own.
-            assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
-        }
+        // The group's members share one rect, the far box has its own.
+        assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
         let pixels = partial.read_rgba().expect("readback");
         let stale = mismatches(&pixels, &full, 2);
         assert!(stale.is_empty(), "{case}: stale pixels at {stale:?}");
@@ -3328,7 +3349,7 @@ fn a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full() {
             })
         };
         let (before, after) = (build(Color::RED), build(Color::BLUE));
-        let mut capture = region_frame(&renderer, &before, &after, &rects, true);
+        let mut capture = region_frame(&renderer, &before, &after, &rects);
         assert_eq!(
             capture.counters().region_passes,
             2,

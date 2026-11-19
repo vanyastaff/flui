@@ -95,7 +95,10 @@ full = ["profiling", "timeline", "inspector"]
 flui-testing = { workspace = true }
 # The display whose refresh period the jank test puts its window on, as a runner does.
 flui-platform = { workspace = true }
-# The capture unit test that drives a scheduler frame by hand.
+# The frame-snapshot test's address and epochs.
+flui-foundation = { workspace = true }
+# The capture unit test that drives a scheduler frame by hand, and the
+# frame-snapshot test's frame clock.
 flui-scheduler = { workspace = true }
 # The end-to-end tests' one-leaf tree: a `RenderView` over `RenderSizedBox`,
 # and the pipeline owner the inspector tests lay it out with. Neither is SDK surface.

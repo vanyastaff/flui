@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use flui_engine::{
-    EngineError, EngineResult, FrameLatency, GpuFrameTime, PresentDisposition, RasterBackend,
-    SlotConfig, SlotId, SlotTarget, UnconfiguredSurface,
+    EngineError, EngineResult, FrameLatency, PresentDisposition, RasterBackend, SlotConfig, SlotId,
+    SlotTarget, UnconfiguredSurface,
 };
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::memory::MemoryPressureLevel;
@@ -420,7 +420,7 @@ impl RasterBackend for StandInBackend {
         true
     }
 
-    fn take_gpu_time(&mut self, _slot: SlotId) -> Option<GpuFrameTime> {
+    fn take_gpu_time(&mut self, _slot: SlotId) -> Option<flui_foundation::GpuFrameTime> {
         None
     }
 }

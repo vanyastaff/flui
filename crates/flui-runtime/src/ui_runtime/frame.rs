@@ -664,6 +664,23 @@ impl UiRuntime {
         let mut scene = presentation.scene.lend().expect(
             "BUG: a frame is admitted once at a time, so its presentation's scene is in its slot",
         );
+        let dpr = presentation
+            .pipeline()
+            .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio);
+        let target = crate::presentation_scene::SceneTarget {
+            size: (
+                device_extent(constraints.max_width, dpr),
+                device_extent(constraints.max_height, dpr),
+            ),
+            scale: dpr,
+        };
+        // A version the surface withheld is published again as it is when this frame paints
+        // nothing (ADR-0304 §7). One applied for another target, or superseded by a newer
+        // version, is not what the screen should show: the tree repaints in full.
+        let held_retry = scene.held_retry(target);
+        if held_retry == crate::presentation_scene::HeldRetry::Repaint {
+            Self::mark_root_needs_paint(presentation);
+        }
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
@@ -698,19 +715,24 @@ impl UiRuntime {
 
         if !painted {
             phases.lap(FramePhase::Paint);
-            return Ok(FramePaintOutcome::Idle);
+            if held_retry != crate::presentation_scene::HeldRetry::Republish {
+                return Ok(FramePaintOutcome::Idle);
+            }
+            // The withheld version again, with the damage since the acknowledged base: the
+            // pipeline, its probes and input regions already read it, and only the system bars'
+            // style, which the withheld frame took with it, is staged once more.
+            presentation.enter_segment_phase(SegmentPhase::Scene);
+            let publication = scene.republish();
+            presentation
+                .overlay_style
+                .stage(&publication.scene, constraints.max_width);
+            drop(scene);
+            return Ok(FramePaintOutcome::Painted(publication));
         }
 
         // Phase 4: apply the patch and publish the version.
         presentation.enter_segment_phase(SegmentPhase::Scene);
-        let dpr = presentation
-            .pipeline()
-            .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio);
-        let surface = (
-            device_extent(constraints.max_width, dpr),
-            device_extent(constraints.max_height, dpr),
-        );
-        let produced = scene.apply(surface);
+        let produced = scene.apply(target);
         let outcome = match produced {
             crate::presentation_scene::Produced::Applied { version, released } => {
                 // The pipeline's probes, input regions, leader watches and
@@ -897,9 +919,10 @@ impl UiRuntime {
     /// what keeps it off the engine. A stale/lost surface, a lost device,
     /// and a pipeline `Errored` outcome all count as a dropped (not
     /// settled) frame, arming a retry via [`Self::wake_frame`] instead of
-    /// [`Self::mark_rendered`]'s idle-clear — but only the submit-failure
-    /// verdicts (`SurfaceStale`/`DeviceLost`) additionally set the local
-    /// `retry_needs_repaint` flag. A Tail/Scene panic also consumed the
+    /// [`Self::mark_rendered`]'s idle-clear — but only the submit verdicts
+    /// additionally set the local `retry_draw`: a full repaint after a
+    /// submit that consumed the scene, the withheld version republished
+    /// after `NotShown` (ADR-0304 §7). A Tail/Scene panic also consumed the
     /// pipeline, but its per-presentation catch immediately re-dirties the
     /// exact failed presentation before a later sibling can become the
     /// pump's producer. A structured pipeline error and a generic `Failed`
@@ -1007,15 +1030,15 @@ impl UiRuntime {
         // presentation's retry needs (and on a pump whose failure consumed
         // its build-dirty state, nothing else would ever reopen the gate).
         let mut retry_needed = any_retry_needed;
-        // Tracks a NARROWER condition than `retry_needed`: whether a SUBMIT
-        // failure consumed the scene and therefore needs
-        // [`Self::mark_needs_full_repaint_for`] before a later retry. A
+        // Tracks a NARROWER condition than `retry_needed`: what a SUBMIT
+        // verdict owes the retry beyond its wake: a repaint
+        // ([`Self::mark_needs_full_repaint_for`]) or the withheld version again. A
         // post-pipeline Tail/Scene panic has already re-dirtied the exact
         // failed presentation in the per-presentation catch; it never sets
         // this pump-local flag. A structured pipeline error, or a panic in
         // Build/Finalize/Pipeline, has not successfully produced a scene and
         // likewise does not use this submit-specific flag.
-        let mut retry_needs_repaint = false;
+        let mut retry_draw = super::settlement::RetryDraw::Wake;
         let mut replay_committed_input = false;
         // Only a scene the screen shows (or already showed: no damage) may
         // change the system bars; a withheld one takes its style with it, and the next
@@ -1083,6 +1106,7 @@ impl UiRuntime {
                     unreachable!("BUG: the submit closure returns only after the sink answered")
                 }
             };
+            let pending = pending.stamped(epoch);
             let queued = match render_verdict {
                 SubmitVerdict::Queued => Some(None),
                 SubmitVerdict::QueuedReplacing(replaced) => Some(Some(replaced)),
@@ -1098,9 +1122,7 @@ impl UiRuntime {
             if let Some(replaces) = queued {
                 // The sink took the frame and settles it later, by its stamp: the record waits
                 // for that settlement, which arms whatever retry its verdict needs.
-                hover_panic.absorb(Self::queue_pending_frame(
-                    producer, epoch, pending, replaces,
-                ));
+                hover_panic.absorb(Self::queue_pending_frame(producer, pending, replaces));
             } else {
                 // A frame the sink answered inline with a verdict that commits it supersedes every
                 // frame it queued before: what they read waits for a later scene, and a settlement
@@ -1123,11 +1145,14 @@ impl UiRuntime {
                 let tail = self.settle_pending_frame(producer, pending, render_verdict, held);
                 presented = tail.presented;
                 retry_needed |= tail.retry_needed;
-                retry_needs_repaint = tail.retry_needs_repaint;
+                retry_draw = tail.retry_draw;
                 replay_committed_input = tail.replay_committed_input;
                 overlay_style = tail.overlay_style;
                 hover_panic = tail.held;
             }
+            // The GPU times of this presentation's earlier frames, read back since the last
+            // submit: each lands on its own frame's snapshot (ADR-0388).
+            hover_panic.absorb(self.record_gpu_times(producer, sink));
         }
 
         // Each window refreshes from its own acknowledged tree. A sibling's
@@ -1162,7 +1187,7 @@ impl UiRuntime {
                 presented,
                 any_retry_needed,
                 retry_needed,
-                retry_needs_repaint,
+                retry_draw = ?retry_draw,
                 "frame tail resolved"
             );
 
@@ -1176,40 +1201,29 @@ impl UiRuntime {
                 // `mark_rendered()` clears the flag having never reached
                 // `render_scene`: one no-op frame, then the retry silently parks.
                 //
-                // `retry_needs_repaint` (set only by the submit-failure arms;
-                // post-pipeline segment panics were already re-dirtied at their
-                // exact per-presentation catch) gates
-                // [`Self::mark_needs_full_repaint_for`], the same fix #630
-                // already established for the pre-frame device-recovery-success
-                // arm (`flui-app`'s `RasterSlot::pump`) —
-                // shared rather than duplicated via that one function, since
-                // both are "a retry needs the pipeline to actually have work to
-                // redo, not just a wake"; see that function's own doc for why
-                // `mark_needs_paint` (not `mark_needs_layout`) is the right
-                // weight. Addressed to `producer` — the presentation whose
-                // segment actually produced the scene that just failed to
-                // submit, resolved above and NEVER assumed to be `primary()`
-                // (this method's own doc, at the `producer` binding, explains
-                // why the two can differ) — not `self.presentations.primary()`:
-                // an earlier version of this fix wrongly hard-coded `primary()`
-                // here, which left the fix inert on any pump where a secondary
-                // presentation was the actual producer.
+                // `retry_draw` (set only by the submit verdicts; post-pipeline
+                // segment panics were already re-dirtied at their exact
+                // per-presentation catch) gives the retry its work: a
+                // [`Self::mark_needs_full_repaint_for`] after a submit that
+                // consumed the scene (see that function's own doc for why
+                // `mark_needs_paint`, not `mark_needs_layout`, is the right
+                // weight), or, after `NotShown`, the withheld version owed to
+                // the scene, which the retry publishes again without painting
+                // (ADR-0304 §7). Addressed to `producer` — the presentation
+                // whose segment actually produced the scene that just failed
+                // to submit, resolved above and NEVER assumed to be
+                // `primary()` (this method's own doc, at the `producer`
+                // binding, explains why the two can differ).
                 //
                 // Steady-state cost of a PERMANENTLY failing submit: unlike the
                 // pre-frame device-recovery path, this arm is not gated by
-                // the raster executor's rebuild backoff — a surface that keeps failing every
-                // submit now retries every wake, throttled only by
+                // the raster executor's rebuild backoff — a surface that keeps
+                // failing every submit retries every wake, throttled only by
                 // `frame_pacing.rs`'s fallback wake (one display period after
-                // the last present), running a full-tree paint each time,
-                // indefinitely. Before this fix that
-                // same surface went quiet after one no-op frame. A working
-                // retry that costs CPU forever on a permanently broken surface
-                // is still strictly better than one that silently gives up, but
-                // whether this steady state deserves its own backoff is a
-                // separate question this change does not answer.
-                if retry_needs_repaint {
-                    self.mark_needs_full_repaint_for(producer);
-                }
+                // the last present), running a full-tree paint each time
+                // (a withheld frame past its budget waits out the
+                // dropped-frame backoff instead, ADR-0335).
+                self.owe_retry_draw(producer, retry_draw);
                 // Still called unconditionally for every `retry_needed` cause,
                 // retryable pipeline `Errored` included: unlike the pre-frame success arm
                 // (which runs synchronously right before this same call's own
@@ -1422,8 +1436,12 @@ impl UiRuntime {
     /// recorded as the snapshot's `clock_timestamp` so a late segment start shows against it),
     /// its segment's span, and its cut, so a frame settled after later ones were produced keeps
     /// its own frame id and drains only the input epochs stamped before it was submitted.
+    ///
+    /// `frame_epoch` is the stamp the sink was handed the frame under, which the frame's GPU
+    /// time names it by when it arrives later (ADR-0388).
     pub(super) fn record_submit_telemetry(
         &self,
+        frame_epoch: flui_foundation::FrameEpoch,
         telemetry: super::settlement::SubmittedTelemetry,
         presentation: &PresentationState,
         submit_at: Instant,
@@ -1446,17 +1464,26 @@ impl UiRuntime {
                 EpochDisposition::Drain => presentation.clock().record_frame(
                     telemetry.cut,
                     address,
+                    frame_epoch,
                     times,
                     present_outcome,
                 ),
                 EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
                     telemetry.cut,
                     address,
+                    frame_epoch,
                     times,
                     present_outcome,
                 ),
             };
-            Self::emit_frame_telemetry(presentation, &snapshot);
+            // A GPU time that arrived before this frame was recorded rides on its snapshot. Each
+            // event runs contained, so a subscriber that panics on the first still gets the
+            // second, which no later answer could send again; the first panic goes on to the
+            // caller's containment.
+            let mut caught = FirstPanic::new();
+            caught.contain(|| Self::emit_frame_telemetry(presentation, &snapshot));
+            caught.contain(|| Self::emit_frame_gpu_time(&snapshot));
+            caught.resume();
         }
     }
 
@@ -1499,6 +1526,47 @@ impl UiRuntime {
             produces_deferred = presentation.clock().produces_deferred(),
             frames_dropped = presentation.frames_dropped(),
             "frame telemetry"
+        );
+    }
+
+    /// Take from `sink` the GPU times of `presentation`'s earlier frames and record each on its
+    /// frame's snapshot, tracing a `frame_gpu_time` event for each one that landed (ADR-0388): the
+    /// snapshot was recorded, and its `frame_telemetry` event sent, before the time existed. A
+    /// time whose frame is not recorded yet waits in the presentation's clock and is traced
+    /// with that frame's `frame_telemetry` ([`Self::record_submit_telemetry`]). The sink and the
+    /// subscriber run contained: a panic in either is returned for the frame's tail, which
+    /// still settles, and a subscriber that panics on one event loses no later time.
+    fn record_gpu_times<S: crate::sink::FrameSink + ?Sized>(
+        &self,
+        presentation: &PresentationState,
+        sink: &mut S,
+    ) -> FirstPanic {
+        let mut caught = FirstPanic::new();
+        let mut times = self.gpu_times.take();
+        times.clear();
+        caught.contain(|| sink.take_gpu_times(&mut times));
+        for time in times.drain(..) {
+            if let Some(snapshot) = presentation.clock().record_gpu_time(time.epoch, time.gpu) {
+                caught.contain(|| Self::emit_frame_gpu_time(&snapshot));
+            }
+        }
+        self.gpu_times.set(times);
+        caught
+    }
+
+    fn emit_frame_gpu_time(snapshot: &FrameSnapshot) {
+        let Some(gpu) = snapshot.gpu_time else {
+            return;
+        };
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_gpu_time",
+            ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
+            presentation = %snapshot.address.presentation_id,
+            frame_id = %snapshot.frame_id,
+            epoch = snapshot.epoch.get(),
+            gpu_us = Self::duration_micros_saturated(gpu),
+            "frame GPU time"
         );
     }
 
