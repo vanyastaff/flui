@@ -66,7 +66,8 @@ pub fn generate(name: &str, app_id: &str, source: &DependencySource) -> ProjectP
             "README.md",
             readme(name, &types_package, &worker_package, &host_package),
         )
-        .dir("assets")
+        // Git keeps no empty directory; a hidden file is no asset (ADR-0384 §3).
+        .file("assets/.gitkeep", "")
         .merge(types_plan(&types_package, source))
         .merge(logic_plan(
             &types_package,

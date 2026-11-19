@@ -396,16 +396,15 @@ fn with_registration(cmd: &mut Command, register_associations: bool) {
 }
 
 /// Point the application `cmd` starts at the project's own files for its
-/// assets (ADR-0384 §4): the nearest directory at or above `root` holding
-/// `flui.toml`, which the keys `[assets] directories` declares are relative
-/// to, as an absolute path, so an edited asset is read on its next load
-/// without a copy. Outside a project nothing is set, and the application
-/// reads its package.
+/// assets (ADR-0384 §4): the project's root, which the keys `[assets]
+/// directories` declares are relative to, as an absolute path, so an edited
+/// asset is read on its next load without a copy. Outside a project nothing
+/// is set, and the application reads its package.
 fn with_asset_root(cmd: &mut Command, root: &Path) {
     let Ok(root) = std::path::absolute(root) else {
         return;
     };
-    if let Some(project) = root.ancestors().find(|dir| dir.join("flui.toml").is_file()) {
+    if let Some(project) = crate::config::nearest_project_dir(&root) {
         cmd.env(env::ASSET_ROOT, project);
     }
 }
@@ -3124,8 +3123,9 @@ mod tests {
         let variable = |root: &std::path::Path| {
             let mut cmd = std::process::Command::new("cargo");
             super::with_asset_root(&mut cmd, root);
+            // The name `flui-native` reads (`assets::DEVELOPMENT_ROOT_VAR`).
             cmd.get_envs()
-                .find(|(name, _)| *name == env::ASSET_ROOT)
+                .find(|(name, _)| *name == "FLUI_ASSET_ROOT")
                 .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
         };
         let project = tempfile::tempdir().expect("a temporary directory");
@@ -3138,14 +3138,11 @@ mod tests {
             Some(expected.clone().into_os_string())
         );
         assert_eq!(variable(&nested), Some(expected.into_os_string()));
-        assert!(
-            std::path::Path::new(&variable(&nested).expect("a root")).is_absolute(),
-            "a relative root is ignored by the host"
-        );
 
         let outside = tempfile::tempdir().expect("a temporary directory");
         assert_eq!(variable(outside.path()), None);
     }
+
     fn device_selection_prefers_exact_id_then_name_then_unique_prefix() {
         use crate::DevicePlatform;
         use crate::commands::devices::{Device, Kind, Status};

@@ -1,6 +1,7 @@
 //! The application's assets in each package (ADR-0384 §3).
 //!
-//! Every regular file under each directory `[assets] directories` lists is
+//! Every regular file under each directory `[assets] directories` lists, but
+//! a hidden one (a name starting with `.`, in any segment), is
 //! copied to `flui_assets/<key>` inside the package, where `key` is its path
 //! from the project root with `/` between segments: the key the application
 //! reads it back by, through the host's asset bundle. A key is admitted by
@@ -56,6 +57,21 @@ pub(crate) fn declared(project: &Path, config: &AssetsConfig) -> BuildResult<Vec
         if !metadata.is_dir() {
             return Err(refuse(format!("{directory:?} is not a directory")));
         }
+        // `symlink_metadata` sees only the last segment: a linked parent
+        // would bring files from outside the project under its keys.
+        let inside = |path: &Path| {
+            std::fs::canonicalize(path).map_err(|error| {
+                refuse(format!(
+                    "{directory:?} cannot be resolved under the project: {error}"
+                ))
+            })
+        };
+        if !inside(&root)?.starts_with(inside(project)?) {
+            return Err(refuse(format!(
+                "{directory:?} leaves the project through a symbolic link; a package carries \
+                 the project's own files only"
+            )));
+        }
         walk(&root, directory, &mut assets)?;
     }
     let mut folded = BTreeMap::<String, &str>::new();
@@ -106,9 +122,17 @@ pub(crate) fn stage(assets: &[PackagedAsset], package_root: &Path) -> BuildResul
         let mut target = destination.clone();
         target.extend(asset.key.split('/'));
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|error| {
+                BuildError::Other(format!("could not create {}: {error}", parent.display()))
+            })?;
         }
-        std::fs::copy(&asset.source, &target)?;
+        std::fs::copy(&asset.source, &target).map_err(|error| {
+            BuildError::Other(format!(
+                "could not copy {} to {}: {error}",
+                asset.source.display(),
+                target.display()
+            ))
+        })?;
     }
     if !assets.is_empty() {
         crate::ui::debug(format!(
@@ -130,6 +154,12 @@ fn walk(dir: &Path, prefix: &str, assets: &mut BTreeMap<String, PathBuf>) -> Bui
         let name = name
             .to_str()
             .ok_or_else(|| refuse(format!("{} is not a UTF-8 name", path.display())))?;
+        // A hidden file or directory (`.gitkeep`, `.DS_Store`, `.git/`) is
+        // not an asset: Android's packagers drop it from an APK by default,
+        // so no package carries it (ADR-0384 §3).
+        if name.starts_with('.') {
+            continue;
+        }
         let key = format!("{prefix}/{name}");
         let kind = entry.file_type()?;
         if kind.is_symlink() {
@@ -226,8 +256,12 @@ fn refuse(reason: String) -> BuildError {
 mod tests {
     use std::path::Path;
 
-    use super::{PACKAGE_DIR, PackagedAsset, declared, key_of, stage};
+    use super::{PackagedAsset, declared, key_of, stage};
     use crate::config::AssetsConfig;
+
+    /// The directory the runtime reads, written out: `flui_native::assets`
+    /// reads this name, so renaming the CLI's constant alone must fail here.
+    const PACKAGE_DIR: &str = "flui_assets";
 
     fn config(directories: &[&str]) -> AssetsConfig {
         AssetsConfig {
@@ -289,7 +323,8 @@ mod tests {
     /// Every regular file under each listed directory is an asset keyed by
     /// its path from the project root, at any depth and in key order; a
     /// directory listed twice or inside another yields each file once, and
-    /// staging replaces what an earlier build staged.
+    /// staging replaces what an earlier build staged; a hidden file or
+    /// directory is no asset.
     ///
     /// Red-check: key a file by its path from the listed directory, or stage
     /// without removing the earlier `flui_assets/`.
@@ -303,6 +338,8 @@ mod tests {
         );
         write(&project.path().join("data/levels.json"), b"[]");
         write(&project.path().join("src/main.rs"), b"fn main() {}");
+        write(&project.path().join("assets/.gitkeep"), b"");
+        write(&project.path().join("assets/.cache/thumb.png"), b"hidden");
 
         let assets = declared(
             project.path(),
@@ -346,7 +383,8 @@ mod tests {
     }
 
     /// A build refuses what no package can carry or no key can name: a
-    /// directory outside the project, a missing one, a symbolic link, and
+    /// directory outside the project, a missing one, a symbolic link (a file,
+    /// the listed directory or a parent of it), and
     /// two files one case-insensitive file system holds as one.
     ///
     /// Red-check: follow symbolic links, or compare keys case-sensitively.
@@ -388,6 +426,28 @@ mod tests {
             let refusal =
                 declared(linked.path(), &config(&["assets"])).expect_err("a symbolic link");
             assert!(refusal.to_string().contains("symbolic link"), "{refusal}");
+
+            // A listed directory that is a link, and one under a linked
+            // parent, both reach files outside the project.
+            let outside = tempfile::tempdir().expect("fixture");
+            write(&outside.path().join("assets/secret.txt"), b"secret");
+            let project = tempfile::tempdir().expect("fixture");
+            std::os::unix::fs::symlink(outside.path(), project.path().join("link"))
+                .expect("fixture");
+            std::os::unix::fs::symlink(
+                outside.path().join("assets"),
+                project.path().join("assets"),
+            )
+            .expect("fixture");
+            for listed in ["assets", "link/assets"] {
+                let refusal = declared(project.path(), &config(&[listed]))
+                    .expect_err("a directory outside the project");
+                assert!(
+                    refusal.to_string().contains("symbolic link")
+                        || refusal.to_string().contains("not a directory"),
+                    "{listed:?}: {refusal}"
+                );
+            }
         }
 
         assert_eq!(

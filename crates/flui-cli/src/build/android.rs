@@ -500,7 +500,9 @@ impl AndroidBuilder {
         crate::ui::debug("Building APK with Gradle...".to_string());
         // Gradle adds this directory to the main source set's assets, so the APK
         // carries `assets/flui_assets/<key>` (ADR-0384 §3).
-        let gradle_assets = ctx.output_dir.join("gradle-assets");
+        // Absolute: Gradle resolves a relative source directory against the
+        // module, not the directory `flui` runs in.
+        let gradle_assets = std::path::absolute(ctx.output_dir.join("gradle-assets"))?;
         crate::build::assets::stage(&assets, &gradle_assets)?;
         let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
             tool: "JAVA_HOME (Gradle needs a JDK)".to_string(),

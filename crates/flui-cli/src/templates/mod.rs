@@ -403,10 +403,11 @@ mod tests {
         }
     }
 
-    /// Every template makes each directory its `flui.toml` lists under
-    /// `[assets] directories`, so `flui build` right after `flui create`
-    /// packages the project instead of refusing a directory that is not
-    /// there (ADR-0384 §3).
+    /// Every template holds a file in each directory its `flui.toml` lists
+    /// under `[assets] directories`, so `flui build` right after `flui create`,
+    /// or in a clone of the project (git keeps no empty directory), packages
+    /// the project instead of refusing a directory that is not there
+    /// (ADR-0384 §3).
     #[test]
     fn every_template_makes_the_asset_directories_it_declares() {
         let templates = [

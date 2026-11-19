@@ -271,12 +271,18 @@ pub(crate) struct Project {
     pub(crate) dir: std::path::PathBuf,
 }
 
+/// The nearest directory at or above `root` that holds `flui.toml`: the
+/// project's root, which its own paths are relative to.
+pub(crate) fn nearest_project_dir(root: &Path) -> Option<&Path> {
+    root.ancestors().find(|dir| dir.join("flui.toml").is_file())
+}
+
 /// The nearest project at or above `root` ([`nearest_config`]).
 ///
 /// # Errors
 /// When `flui.toml` cannot be read or parsed.
 pub(crate) fn nearest_project(root: &Path) -> CliResult<Option<Project>> {
-    let Some(dir) = root.ancestors().find(|dir| dir.join("flui.toml").is_file()) else {
+    let Some(dir) = nearest_project_dir(root) else {
         return Ok(None);
     };
     Ok(Some(Project {
