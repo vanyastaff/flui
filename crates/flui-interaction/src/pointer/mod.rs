@@ -38,7 +38,7 @@ pub use interaction_lane::{
 };
 pub(crate) use interaction_lane::{PanZoomAdmissionAuthority, PanZoomRetirement};
 pub use mouse_tracker::{
-    CursorChangeCallback, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
+    CursorChange, CursorChangeCallback, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 pub use pointer_capture::{PointerCapture, PointerCaptureError};
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};

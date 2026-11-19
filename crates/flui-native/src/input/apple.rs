@@ -2361,11 +2361,9 @@ pub(crate) mod ios {
         }
 
         /// GameController reports the mouse's own counts, before the
-        /// system's pointer speed; a motion of nothing delivers nothing.
+        /// system's pointer speed (the lock owner skips a motion of nothing,
+        /// `pointer_lock::locked_delta`).
         fn locked_motion(&mut self, (dx, dy): (f64, f64)) -> Vec<PlatformInput> {
-            if dx == 0.0 && dy == 0.0 {
-                return Vec::new();
-            }
             let Ok(delta) = MotionDelta::try_new(dx, dy) else {
                 return Vec::new();
             };

@@ -500,46 +500,76 @@ fn mouse_region_cursor_reaches_the_window_through_the_ui_runtime() {
     }
 }
 
-/// A region asking for an image over a window that shows none gets the arrow,
-/// not the cursor of the region the pointer came from: the window refuses the
-/// image `Unsupported`, as its `cursor_image` capability says.
+/// A region asking for an image over a window that refuses it gets the arrow,
+/// not the cursor of the region the pointer came from, whichever refusal: a
+/// window that shows no image (`Unsupported`, as its `cursor_image`
+/// capability says) and one whose window system fails to make the cursor
+/// (`Platform`). Back over the hand, the hand shows again.
 ///
-/// Fails without the fallback: the window keeps the pointing hand.
+/// Fails without the fallback: the window keeps the pointing hand; and, with
+/// a fallback for `Unsupported` alone, in the `Platform` case.
 #[test]
 fn an_image_cursor_over_a_window_without_images_shows_the_arrow() {
-    let image = flui_platform::CursorImage::try_new(2, 2, (0, 0), vec![255; 16])
-        .expect("a 2x2 image with its hotspot inside");
-    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100).without_cursor_images());
-    host.attach(&Row::new((
-        MouseRegion::new()
-            .cursor(CursorIcon::Pointer)
-            .child(SizedBox::new(40.0, 40.0)),
-        MouseRegion::new()
-            .cursor(Cursor::Image(image))
-            .child(SizedBox::new(40.0, 40.0)),
-    )))
-    .expect("the tree attaches");
-    let _ = host.pump(std::time::Duration::from_millis(16));
-    let hover = |x: f64| {
-        let mouse = flui_interaction::ids::PointerId::try_from(1).expect("nonzero pointer id");
-        let mut event = flui_interaction::events::make_move_event_for_id(
-            mouse,
-            // The row centres its 40 by 40 regions across its 100 pixels.
-            flui_foundation::geometry::Offset::new(x, 50.0),
-            flui_interaction::events::PointerKind::Mouse,
-        )
-        .expect("a finite position");
-        if let flui_interaction::events::PointerEvent::Move(update) = &mut event {
-            update.buttons = flui_interaction::events::PointerButtons::NONE;
-        }
-        host.dispatch(flui_platform::PlatformInput::Pointer(event));
-    };
+    let windows = [
+        (
+            "shows no image",
+            HeadlessWindow::new(100, 100).without_cursor_images(),
+        ),
+        (
+            "fails to make one",
+            HeadlessWindow::new(100, 100).failing_cursor_images(),
+        ),
+    ];
+    for (case, window) in windows {
+        let image = flui_platform::CursorImage::try_new(2, 2, (0, 0), vec![255; 16])
+            .expect("a 2x2 image with its hotspot inside");
+        let mut host = HeadlessHost::new(window);
+        host.attach(&Row::new((
+            MouseRegion::new()
+                .cursor(CursorIcon::Pointer)
+                .child(SizedBox::new(40.0, 40.0)),
+            MouseRegion::new()
+                .cursor(Cursor::Image(image))
+                .child(SizedBox::new(40.0, 40.0)),
+        )))
+        .expect("the tree attaches");
+        let _ = host.pump(std::time::Duration::from_millis(16));
+        let hover = |x: f64| {
+            let mouse = flui_interaction::ids::PointerId::try_from(1).expect("nonzero pointer id");
+            let mut event = flui_interaction::events::make_move_event_for_id(
+                mouse,
+                // The row centres its 40 by 40 regions across its 100 pixels.
+                flui_foundation::geometry::Offset::new(x, 50.0),
+                flui_interaction::events::PointerKind::Mouse,
+            )
+            .expect("a finite position");
+            if let flui_interaction::events::PointerEvent::Move(update) = &mut event {
+                update.buttons = flui_interaction::events::PointerButtons::NONE;
+            }
+            host.dispatch(flui_platform::PlatformInput::Pointer(event));
+        };
 
-    hover(20.0);
-    assert_eq!(host.window().cursor(), Cursor::Icon(CursorIcon::Pointer));
+        hover(20.0);
+        assert_eq!(
+            host.window().cursor(),
+            Cursor::Icon(CursorIcon::Pointer),
+            "{case}"
+        );
 
-    hover(60.0);
-    assert_eq!(host.window().cursor(), Cursor::Icon(CursorIcon::Default));
+        hover(60.0);
+        assert_eq!(
+            host.window().cursor(),
+            Cursor::Icon(CursorIcon::Default),
+            "{case}: the image refused"
+        );
+
+        hover(20.0);
+        assert_eq!(
+            host.window().cursor(),
+            Cursor::Icon(CursorIcon::Pointer),
+            "{case}: back over the hand"
+        );
+    }
 }
 
 #[derive(Clone, StatefulView)]

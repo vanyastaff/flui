@@ -130,9 +130,10 @@ impl MouseRegion {
     /// Sets the cursor the window shows while the pointer is over this region:
     /// a [`CursorIcon`](crate::CursorIcon), an application's [`CursorImage`](crate::CursorImage)
     /// as [`Cursor::Image`], or [`Cursor::Hidden`] for none. A window that
-    /// shows no application image (`WindowCapabilities::cursor_image`) shows
-    /// the arrow over a region that asks for one; a window with no pointer
-    /// cursor at all (a phone's) shows nothing either way.
+    /// refuses the image (it shows none, by `WindowCapabilities::cursor_image`,
+    /// or its window system failed to make the cursor) shows the arrow over
+    /// the region; a window with no pointer cursor at all (a phone's) shows
+    /// nothing either way.
     #[must_use]
     pub fn cursor(mut self, cursor: impl Into<Cursor>) -> Self {
         self.cursor = CursorRequest::Show(cursor.into());

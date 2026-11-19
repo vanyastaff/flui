@@ -124,17 +124,20 @@ impl Gate for PointerLock {
 }
 
 /// Why a UIKit window does not lock the pointer, `None` where it does: an iPad
-/// from iPadOS 14. An iPhone shows no pointer to lock, nor has an iPad below
-/// 14 the call. A scene that does not fill its screen is refused at the
+/// from iPadOS 14 whose UIKit tells when it locks (`tells_locks`, its lock
+/// notification read at run time). An iPhone shows no pointer to lock, an
+/// iPad below 14 has no call, and a UIKit that tells nothing would leave the
+/// snapshot guessing. A scene that does not fill its screen is refused at the
 /// command (UIKit locks only a full-screen scene's pointer), as that changes
 /// while the window lives.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) fn pointer_lock_absence(
     version: AppleVersion,
     shows_a_pointer: bool,
+    tells_locks: bool,
 ) -> Option<CapabilityAbsence> {
     match version.since::<PointerLock>() {
-        Some(_) if shows_a_pointer => None,
+        Some(_) if shows_a_pointer && tells_locks => None,
         Some(_) | None => Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     }
 }
@@ -397,24 +400,31 @@ mod tests {
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
         const PLATFORM: CapabilityAbsence = CapabilityAbsence::NOT_ON_THIS_PLATFORM;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 32] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 33] = [
             (
                 "UIKit pointer lock on an iPad, iPadOS 14",
-                scene_capabilities(pointer_lock_absence(ios(14, 0, 0), true))
+                scene_capabilities(pointer_lock_absence(ios(14, 0, 0), true, true))
                     .locks_cursor()
                     .absence(),
                 None,
             ),
             (
                 "UIKit pointer lock on an iPad, iOS 13.7",
-                scene_capabilities(pointer_lock_absence(ios(13, 7, 0), true))
+                scene_capabilities(pointer_lock_absence(ios(13, 7, 0), true, true))
                     .locks_cursor()
                     .absence(),
                 Some(DEVICE),
             ),
             (
                 "UIKit pointer lock on an iPhone, iOS 17",
-                scene_capabilities(pointer_lock_absence(ios(17, 0, 0), false))
+                scene_capabilities(pointer_lock_absence(ios(17, 0, 0), false, true))
+                    .locks_cursor()
+                    .absence(),
+                Some(DEVICE),
+            ),
+            (
+                "UIKit pointer lock where UIKit tells no lock",
+                scene_capabilities(pointer_lock_absence(ios(17, 0, 0), true, false))
                     .locks_cursor()
                     .absence(),
                 Some(DEVICE),

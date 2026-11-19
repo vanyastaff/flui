@@ -138,6 +138,9 @@ pub struct HeadlessWindow {
     /// How the window is named to a portal, when it plays an exported
     /// Wayland window ([`HeadlessWindow::with_portal_export`]).
     portal_exports: Option<HeadlessPortalExports>,
+    /// Whether the window system fails to make a cursor of an image
+    /// ([`HeadlessWindow::failing_cursor_images`]).
+    fails_cursor_images: bool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -318,6 +321,7 @@ impl HeadlessWindow {
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
             portal_exports: None,
+            fails_cursor_images: false,
         }
     }
 
@@ -444,6 +448,16 @@ impl HeadlessWindow {
         self
     }
 
+    /// Play a window system that takes cursor images and fails to make one
+    /// (a Win32 `CreateIconIndirect` or an AppKit `NSCursor` that fails): the
+    /// window refuses every image with `CursorError::Platform` though its
+    /// `cursor_image` capability is available.
+    #[must_use]
+    pub fn failing_cursor_images(mut self) -> Self {
+        self.fails_cursor_images = true;
+        self
+    }
+
     /// Offer a text-input capability that records every call the UI runtime's
     /// text-input owner makes, so the presentation installs a working
     /// `TextInputHandle` over it.
@@ -549,14 +563,23 @@ impl PlatformWindow for HeadlessWindow {
             .map(|input| Arc::clone(input) as Arc<dyn PlatformTextInput>)
     }
 
-    /// Records `cursor`; an image is refused, as `set_cursor` answers, exactly
-    /// when the window's `cursor_image` capability is unavailable.
+    /// Records `cursor`; an image is refused `Unsupported`, as `set_cursor`
+    /// answers, exactly when the window's `cursor_image` capability is
+    /// unavailable, and `Platform` where the window plays one that fails to
+    /// make it.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
-        if matches!(cursor, Cursor::Image(_)) && !self.capabilities.cursor_image().is_available() {
-            return Err(flui_platform::Unsupported::from(
-                flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
-            )
-            .into());
+        if matches!(cursor, Cursor::Image(_)) {
+            if !self.capabilities.cursor_image().is_available() {
+                return Err(flui_platform::Unsupported::from(
+                    flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+                )
+                .into());
+            }
+            if self.fails_cursor_images {
+                return Err(CursorError::failed(
+                    "the window system made no cursor of the image".to_owned(),
+                ));
+            }
         }
         cursor.clone_into(&mut self.cursor.lock());
         Ok(())

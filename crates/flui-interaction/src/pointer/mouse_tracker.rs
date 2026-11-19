@@ -255,8 +255,9 @@ impl std::fmt::Debug for MouseTracker {
 /// or none, as the hovered region asked for it.
 pub type CursorChangeCallback = Rc<CursorChange>;
 
-/// What a [`CursorChangeCallback`] calls.
-type CursorChange = dyn Fn(PointerSource, &Cursor) + 'static;
+/// What a [`CursorChangeCallback`] calls: the source whose motion moved the
+/// cursor, and the cursor the window is to show.
+pub type CursorChange = dyn Fn(PointerSource, &Cursor) + 'static;
 
 struct CursorPublication {
     observation: Rc<()>,

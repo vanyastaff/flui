@@ -247,7 +247,8 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   selects the arrow even when an ancestor asks for another cursor, as an image
   or a hidden cursor (`Show(Cursor::Image(_))`, `Show(Cursor::Hidden)`) does.
   The tracker publishes the whole `Cursor`, and the presentation shows the
-  arrow where its window refuses an image `Unsupported`. Render objects without
+  arrow where its window refuses an image (`Unsupported`, or a `Platform`
+  failure to make the cursor). Render objects without
   a cursor contribution and unconfigured `MouseRegion` widgets defer.
   `explicit_arrow_cursor_wins` pins both hit-path resolution and tracker delivery.
 - **Hover annotations survive until every device leaves.** The tracker keeps a

@@ -57,10 +57,11 @@ fn format_millis(duration: Duration) -> String {
 
 /// Show `cursor`, the cursor the hovered region asks for, on `window`.
 ///
-/// A window that shows no application image (its `cursor_image` capability)
-/// refuses one `Unsupported`; it then shows the arrow, so the region does not
-/// keep the cursor of the region the pointer came from. A window with no
-/// pointer cursor at all refuses both, which is no failure.
+/// A window that refuses an application's image (one that shows none, by its
+/// `cursor_image` capability, or whose window system failed to make a cursor
+/// of the pixels) shows the arrow instead, so the region does not keep the
+/// cursor of the region the pointer came from. A window with no pointer
+/// cursor at all refuses both, which is no failure.
 fn show_cursor(
     window: &dyn PlatformWindow,
     cursor: &Cursor,
@@ -69,12 +70,12 @@ fn show_cursor(
 ) {
     let refused = match window.set_cursor(cursor) {
         Ok(()) => return,
-        Err(CursorError::Unsupported(unsupported)) if matches!(cursor, Cursor::Image(_)) => {
-            tracing::trace!(
+        Err(error) if matches!(cursor, Cursor::Image(_)) => {
+            tracing::debug!(
                 ?id,
                 ?device_id,
-                reason = %unsupported.reason,
-                "the window shows no cursor image: it shows the arrow over the region"
+                ?error,
+                "the window refused the cursor image: it shows the arrow over the region"
             );
             match window.set_cursor(&Cursor::Icon(CursorIcon::Default)) {
                 Ok(()) => return,

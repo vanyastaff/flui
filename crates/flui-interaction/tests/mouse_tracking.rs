@@ -20,6 +20,7 @@ use flui_interaction::{
     ids::{DeviceId, PointerId},
     pointer::{EventPropagation, HitTestEntry, HitTestResult},
 };
+use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 /// The icon a published cursor names; the paths of these tests ask for icons
 /// only.
@@ -29,7 +30,6 @@ fn icon(cursor: &Cursor) -> CursorIcon {
         other => panic!("these paths ask for icons, not {other:?}"),
     }
 }
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 const MOUSE: u64 = 2;
 const PEN: u64 = 3;

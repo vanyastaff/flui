@@ -210,9 +210,9 @@ impl HitTestBehavior {
 ///
 /// The first target along the leaf-first hit path that asks for a cursor
 /// chooses what the window shows while the pointer is over it
-/// ([`HitTestResult::resolve_cursor`]). A window that shows no application
-/// image (its `cursor_image` capability) shows the arrow over a target that
-/// asks for one.
+/// ([`HitTestResult::resolve_cursor`]). A window that refuses an
+/// application's image shows the arrow over a target that asks for one (the
+/// presentation's fallback).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[expect(
     clippy::exhaustive_enums,

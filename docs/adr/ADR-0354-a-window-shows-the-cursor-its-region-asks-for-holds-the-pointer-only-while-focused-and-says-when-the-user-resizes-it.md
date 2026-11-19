@@ -140,9 +140,9 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
 - Good: a grab cannot outlive the focus in the snapshot, and the conformance check
   `a_grab_ends_with_the_focus` holds each host's window system to it.
 - Good: a region asks for any cursor the way it asks for an icon (`CursorRequest::Show(Cursor)`,
-  `MouseRegion::cursor`); a window that shows no image refuses it `Unsupported`, and the
-  presentation then shows the arrow, so the region does not keep the cursor of the one the
-  pointer left.
+  `MouseRegion::cursor`); a window that refuses an image (`Unsupported` where it shows none, a
+  `Platform` failure where its window system made no cursor of it) gets the arrow from the
+  presentation instead, so the region does not keep the cursor of the one the pointer left.
 
 ## Compliance
 
@@ -161,7 +161,11 @@ refuses whole, so its format version moves and protocol 0.24 is a break relative
   and its `native_capability_absences`, where UIKit locks from iPadOS 14 on an iPad and an
   Activity from API 26).
 - Android: `a_captured_mouse_moves_by_raw_motion_and_clicks_where_it_rests`
-  (`crates/flui-native/src/input/android/motion/tests.rs`).
+  (`crates/flui-native/src/input/android/motion/tests.rs`) and
+  `the_systems_capture_is_the_published_grab` (`crates/flui-native/src/window/pointer_capture.rs`).
+- UIKit: `ios_pointer_lock_ledger` (`crates/flui-native/src/window/apple/pointer_lock.rs`): a lock
+  held from the system's grant, let go with the scene or the focus and not asked for again, one
+  scene's unlock leaving another's lock.
 - A region's cursor reaches the window: `mouse_region_cursor_reaches_the_window_through_the_ui_runtime`
   and `an_image_cursor_over_a_window_without_images_shows_the_arrow`
   (`crates/flui-testing/tests/runtime_driver.rs`).

@@ -79,8 +79,11 @@ use flui_platform::{
     Cursor, CursorError, PlatformWindow, RedrawRequester, SurfaceChange, SurfaceTarget,
     WindowExecutionState, WindowId, WindowOptions,
 };
+use pointer_lock::PointerLocks;
 use status_bar::FluiViewController;
 pub(crate) use status_bar::IOSSystemChrome;
+
+mod pointer_lock;
 
 /// Where a content view stands between its scene attachments, which decides
 /// whether it may report metrics and for which window.
@@ -158,25 +161,19 @@ pub struct FluiViewIvars {
     /// coordinates, which each metrics sample converts into the view as it
     /// lies then.
     keyboard: std::cell::Cell<Option<keyboard::Note>>,
-    /// The scene's pointer lock as the view follows it ([`ViewPointerLock`]).
-    pointer_lock: ViewPointerLock,
+    /// Where the view tells what the system said of its scene's pointer
+    /// lock; `None` on a device that locks no pointer.
+    pointer_lock: Option<ViewPointerLock>,
 }
 
-/// What a content view keeps of its scene's pointer lock.
-///
-/// The root controller asks for the lock (`prefersPointerLocked`), and the
-/// system decides: it locks only a full-screen scene's pointer, and lets it go
-/// when the scene leaves full screen or the app goes inactive. The view hears
-/// each decision (`UIPointerLockStateDidChangeNotification`) and records it in
-/// `locked`, which the window's snapshot publishes, so the snapshot says what
-/// the system holds, never what was asked.
+/// The process's lock owner and the window a content view tells it about:
+/// the system decides per scene (it locks only a full-screen scene's pointer,
+/// and lets it go when the scene leaves full screen or the app goes
+/// inactive), and the view hears each decision through UIKit's lock
+/// notification.
 struct ViewPointerLock {
-    /// Whether the system holds the scene's pointer locked, as it last said;
-    /// shared with the window.
-    locked: Rc<Cell<bool>>,
-    /// The window's root controller, reached weakly: a lock the system ends
-    /// is no longer preferred, so it is not taken again unasked.
-    status_bar: std::sync::Weak<status_bar::StatusBar>,
+    locks: Rc<PointerLocks>,
+    window: WindowId,
 }
 
 define_class!(
@@ -542,12 +539,6 @@ impl FluiView {
         display: ViewDisplay,
         pointer_lock: Option<ViewPointerLock>,
     ) -> Retained<Self> {
-        // A device that locks no pointer hears no lock: its view records none.
-        let follows_pointer_lock = pointer_lock.is_some();
-        let pointer_lock = pointer_lock.unwrap_or_else(|| ViewPointerLock {
-            locked: Rc::new(Cell::new(false)),
-            status_bar: std::sync::Weak::new(),
-        });
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(ContainedIvars::new(FluiViewIvars {
@@ -622,14 +613,16 @@ impl FluiView {
                 center.addObserver_selector_name_object(&this, selector, Some(name), None);
             }
         }
-        if follows_pointer_lock {
-            // The notification's name is spelled out, not linked: UIKit
-            // defines its symbol from iPadOS 14, and a reference to it would
-            // keep the app from loading on the iOS 13 floor. Its value is its
-            // name, as for every UIKit notification. A `nil` object hears
-            // every scene's, as the notification names the scene only in its
-            // user info: the view reads its own scene's lock again.
-            let name = NSString::from_str("UIPointerLockStateDidChangeNotification");
+        // The name is UIKit's own, read at run time by the lock owner; a
+        // device without it locks nothing and the view observes nothing. A
+        // `nil` object hears every scene's, as the notification names the
+        // scene only in its user info: the view reads its own scene's lock.
+        if let Some(name) = this
+            .ivars()
+            .pointer_lock
+            .as_ref()
+            .and_then(|lock| lock.locks.lock_notification())
+        {
             // SAFETY: the live view declares `pointerLockStateDidChange:`
             // above, taking the one `NSNotification` argument the center
             // sends; the center drops the observer when the view deallocates,
@@ -638,7 +631,7 @@ impl FluiView {
                 NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                     &this,
                     sel!(pointerLockStateDidChange:),
-                    Some(&*name),
+                    Some(name),
                     None,
                 );
             }
@@ -732,44 +725,33 @@ impl FluiView {
         }
     }
 
-    /// Read the system's pointer lock of this view's scene again, and follow
-    /// it: from a lock on, the mouse's motion arrives as raw motion
-    /// ([`locked_mouse`]); once the system lets the lock go (the scene left
-    /// full screen, the app went inactive) the controller stops preferring
-    /// it, so nothing takes the pointer again unasked. A view out of its
-    /// scene holds no lock. The snapshot is published on each change.
+    /// Read the system's pointer lock of this view's scene again and tell the
+    /// lock owner, which publishes, moves the mouse's motion and stops the
+    /// preference of a lock the system let go of. A view out of its scene
+    /// holds no lock.
     fn follow_pointer_lock(&self) {
-        let lock = &self.ivars().pointer_lock;
-        // UIKit is messaged with nothing of the view borrowed.
+        let Some(lock) = &self.ivars().pointer_lock else {
+            return;
+        };
+        // UIKit is messaged with nothing of the owner borrowed.
         let locked = self
             .window()
             .and_then(|window| window.windowScene())
             .and_then(|scene| scene.pointerLockState())
             .is_some_and(|state| state.isLocked());
-        if lock.locked.replace(locked) == locked {
-            return;
-        }
-        locked_mouse::follow(self, locked);
-        if !locked && let Some(status_bar) = lock.status_bar.upgrade() {
-            status_bar.prefer_pointer_locked(self.mtm(), false);
-        }
-        self.delivery().publish_state();
+        lock.locks.reported(lock.window, locked, self.mtm());
     }
 
-    /// The locked mouse moved by (`dx`, `dy`), as `GCMouse` reports it: one
-    /// raw motion at the place the pointer rests, delivered once the view's
-    /// input lets go of its borrow. Nothing is delivered while no lock holds.
-    fn locked_motion(&self, dx: f32, dy: f32) {
+    /// The locked mouse moved by `delta` (right and down positive), as the
+    /// lock owner routes it to the window holding the lock: one raw motion at
+    /// the place the pointer rests, delivered once the view's input lets go
+    /// of its borrow. A view out of its window delivers nothing.
+    fn locked_motion(&self, delta: (f64, f64)) {
         self.pin_for_native_callback();
-        if self.window().is_none() || !self.ivars().pointer_lock.locked.get() {
+        if self.window().is_none() {
             return;
         }
-        // GameController measures up as positive; FLUI's motion is down.
-        let events = self
-            .ivars()
-            .input
-            .borrow_mut()
-            .locked_motion((f64::from(dx), -f64::from(dy)));
+        let events = self.ivars().input.borrow_mut().locked_motion(delta);
         for event in events {
             self.delivery().dispatch_input(event);
         }
@@ -1274,13 +1256,14 @@ struct WindowMetrics {
     keyboard: flui_platform::SoftKeyboard,
 }
 
-/// Whether `window` fills its screen, as a scene UIKit locks the pointer of
-/// does: not one beside another app, over one, or in a Stage Manager frame.
-/// Both sizes are points in the interface's orientation; half a point allows
-/// for rounding.
+/// Whether `window` fills its screen, the one scene UIKit locks the pointer of
+/// ([`crate::window::apple::pointer_lock::fills_its_screen`]).
 fn fills_its_screen(window: &UIWindow) -> bool {
     let (own, screen) = (window.bounds().size, window.screen().bounds().size);
-    (own.width - screen.width).abs() < 0.5 && (own.height - screen.height).abs() < 0.5
+    crate::window::apple::pointer_lock::fills_its_screen(
+        (own.width, own.height),
+        (screen.width, screen.height),
+    )
 }
 
 /// UIKit's edge set for the edges the exclusion regions reach.
@@ -1358,9 +1341,9 @@ pub struct IOSWindow {
     /// Why the window does not lock the pointer on this device; `None` where
     /// it does ([`pointer_lock_absence`]).
     pointer_lock: Option<flui_platform::CapabilityAbsence>,
-    /// Whether the system holds the scene's pointer locked, as the view last
-    /// heard it ([`ViewPointerLock`]).
-    pointer_locked: Rc<Cell<bool>>,
+    /// The process's lock owner, which says whether the system holds this
+    /// window's scene's pointer locked.
+    locks: Rc<PointerLocks>,
     /// The input regions last projected, and the screen edges they reach.
     input_regions: RefCell<(
         crate::input::regions::ProjectedInputRegions,
@@ -1384,6 +1367,7 @@ impl IOSWindow {
         touches: Box<dyn ViewTouches>,
         positions: &WindowPositions<ViewRef>,
         handler: SceneDelivery,
+        locks: &Rc<PointerLocks>,
     ) -> Self {
         let screen = Rc::new(Cell::new(ScreenIdentity::default()));
         let delivery = Arc::new(
@@ -1406,9 +1390,18 @@ impl IOSWindow {
         }));
         let dark = Rc::new(Cell::new(false));
         let pointer = pointer_absence(displays.version(), displays.shows_a_pointer());
-        let pointer_lock = pointer_lock_absence(displays.version(), displays.shows_a_pointer());
-        let pointer_locked = Rc::new(Cell::new(false));
-        let status_bar = status_bar::StatusBar::new(mtm);
+        let pointer_lock = pointer_lock_absence(
+            displays.version(),
+            displays.shows_a_pointer(),
+            locks.tells_locks(),
+        );
+        let status_bar = status_bar::StatusBar::new(
+            mtm,
+            pointer_lock.is_none().then(|| status_bar::PreferredLock {
+                locks: Rc::downgrade(locks),
+                window: id,
+            }),
+        );
         let view = FluiView::new(
             mtm,
             Arc::clone(&delivery),
@@ -1422,10 +1415,18 @@ impl IOSWindow {
                 window: id,
             },
             pointer_lock.is_none().then(|| ViewPointerLock {
-                locked: Rc::clone(&pointer_locked),
-                status_bar: Arc::downgrade(&status_bar),
+                locks: Rc::clone(locks),
+                window: id,
             }),
         );
+        if pointer_lock.is_none() {
+            locks.register(
+                id,
+                objc2::rc::Weak::from_retained(&view),
+                Arc::downgrade(&status_bar),
+                Arc::downgrade(&delivery),
+            );
+        }
         let this = ViewRef {
             view: Retained::into_super(view.clone()),
             marker: mtm,
@@ -1459,7 +1460,7 @@ impl IOSWindow {
             id,
             pointer,
             pointer_lock,
-            pointer_locked,
+            locks: Rc::clone(locks),
             input_regions: RefCell::default(),
             snapshot: WindowStateCell::new(WindowState::new(
                 WindowGeometry::EMPTY,
@@ -1718,7 +1719,7 @@ impl IOSWindow {
                 "UIKit locks the pointer only for a scene that fills its screen".to_owned(),
             ));
         }
-        self.status_bar.prefer_pointer_locked(marker, true);
+        self.locks.ask(self.id, marker);
         Ok(())
     }
 
@@ -1791,9 +1792,9 @@ impl IOSWindow {
                 // The user can resize a scene in Stage Manager or split view,
                 // which this host does not read: it cannot tell.
                 interaction: flui_platform::WindowInteraction::Unknown,
-                // What the system holds, as the view last heard it; the
+                // What the system holds, as the lock owner keeps it; the
                 // snapshot keeps it only for a focused scene.
-                cursor_grab: if self.pointer_locked.get() {
+                cursor_grab: if self.locks.holds(self.id) {
                     flui_platform::CursorGrab::Locked
                 } else {
                     flui_platform::CursorGrab::None
@@ -1865,7 +1866,12 @@ impl IOSWindow {
             .sampling
             .set(SamplingAdmission::Detached);
         native.view.detach_screen();
+        // A window out of its scene holds no lock: the owner lets it go, and
+        // takes the mouse's motion back from it, whatever the system says
+        // later of the scene it left.
+        self.locks.withdraw(self.id, marker);
     }
+
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
         use LifecycleObservation::{Active, Background, Detached, Foreground, Inactive};
         {
@@ -1901,20 +1907,21 @@ impl IOSWindow {
                 }
             }
         }
-        // The pointer is held only while the scene has the focus: the
-        // controller stops preferring the lock as the focus goes, so the
-        // system does not take it again when the focus comes back.
-        if matches!(observation, Inactive | Background | Detached)
-            && let Some(marker) = MainThreadMarker::new()
-        {
-            self.status_bar.prefer_pointer_locked(marker, false);
-        }
         // Each step below runs whichever one before it panics (a state
         // publication's announcement, the handler's surface change): a
         // background or detach releases the surface even when its snapshot's
         // announcement panics, so UIKit never takes the layer from a handler
         // still holding its surface. The first panic resumes at the end.
         let mut failure = flui_foundation::panic::FirstPanic::new();
+        // The pointer is held only while the scene has the focus: the owner
+        // lets it go as the focus goes (the controller stops preferring it,
+        // so the system does not take it again when the focus comes back,
+        // and the mouse's motion stops), before the revision below.
+        if matches!(observation, Inactive | Background | Detached)
+            && let Some(marker) = MainThreadMarker::new()
+        {
+            failure.contain(|| self.locks.withdraw(self.id, marker));
+        }
         // Execution, visibility and focus are published in one revision.
         failure.contain(|| self.delivery.publish_state());
         let current =
@@ -1977,17 +1984,38 @@ impl std::fmt::Debug for IOSWindow {
 
 /// Makes the iOS windows: one per scene session, which a scene connection
 /// attaches, each with what the table's window-level positions make for it.
-/// The loop keeps the windows it made.
-#[derive(Debug)]
+/// The loop keeps the windows it made; they share one pointer-lock owner.
 pub struct IOSWindows {
     positions: WindowPositions<ViewRef>,
+    /// The windows' lock owner, made on the main thread with the first
+    /// window.
+    locks: std::sync::OnceLock<NativeOwner<Rc<PointerLocks>>>,
 }
 
 impl IOSWindows {
     /// The windows of a platform whose table's window-level positions are
     /// `positions`.
     pub(crate) fn new(positions: WindowPositions<ViewRef>) -> Self {
-        Self { positions }
+        Self {
+            positions,
+            locks: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The windows' lock owner, on the main thread `marker` proves; made with
+    /// the first window.
+    fn locks(&self, marker: MainThreadMarker) -> &Rc<PointerLocks> {
+        self.locks
+            .get_or_init(|| NativeOwner::new(PointerLocks::new(), marker))
+            .get(marker)
+    }
+}
+
+impl std::fmt::Debug for IOSWindows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IOSWindows")
+            .field("positions", &self.positions)
+            .finish_non_exhaustive()
     }
 }
 
@@ -2009,6 +2037,7 @@ impl SceneWindows for IOSWindows {
             touches,
             &self.positions,
             handler,
+            self.locks(marker),
         ));
         window
             .delivery
@@ -2036,6 +2065,7 @@ impl host::Window<IOSLoop> for IOSWindow {
         scene_capabilities(pointer_lock_absence(
             owner.displays.version(),
             owner.displays.shows_a_pointer(),
+            pointer_lock::uikit_tells_locks(),
         ))
     }
 
@@ -2295,7 +2325,7 @@ impl PlatformWindow for IOSWindow {
             }
             WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => {
                 if let Some(marker) = MainThreadMarker::new() {
-                    self.status_bar.prefer_pointer_locked(marker, false);
+                    self.locks.withdraw(self.id, marker);
                 }
                 self.delivery.publish_state();
                 Ok(())
@@ -2331,6 +2361,11 @@ impl Drop for IOSWindow {
             // A handler method queued ahead of the release may panic: the
             // drop still finishes.
             crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
+        }
+        // The lock owner reaches the window no more, and a lock it held is
+        // let go of.
+        if let Some(marker) = MainThreadMarker::new() {
+            self.locks.unregister(self.id, marker);
         }
     }
 }
@@ -2647,78 +2682,6 @@ impl<H: Host<Loop = IOSLoop>> HostPlatform<H> {
     }
 }
 
-mod locked_mouse {
-    //! The motion of a locked pointer, from GameController's `GCMouse`.
-    //!
-    //! While the system holds a scene's pointer locked, UIKit hides the
-    //! pointer and delivers no hover; the mouse's motion is GameController's
-    //! (`GCMouseInput.mouseMovedHandler`, iPadOS 14), run on the main queue,
-    //! each mouse's `handlerQueue` by default. The classes are reached by name:
-    //! FLUI binds no GameController crate, and on the iOS 13 floor `GCMouse`
-    //! is missing, where no lock is taken either.
-
-    use objc2::msg_send;
-    use objc2::rc::Retained;
-    use objc2::runtime::{AnyClass, AnyObject};
-    use objc2_foundation::NSArray;
-
-    use super::FluiView;
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
-
-    // GameController's classes are found by name only once it is loaded.
-    #[link(name = "GameController", kind = "framework")]
-    unsafe extern "C" {}
-
-    /// The handler type `mouseMovedHandler` takes: the input that moved and
-    /// its deltas.
-    type Moved = dyn Fn(*mut AnyObject, f32, f32);
-
-    /// Hand every connected mouse's motion to `view` while `locked`, and
-    /// take the handlers back once it is not. A mouse connected during a
-    /// lock reports nothing until the next one.
-    pub(super) fn follow(view: &FluiView, locked: bool) {
-        let handler = locked.then(|| {
-            let view = objc2::rc::Weak::new(view);
-            block2::RcBlock::new(move |_input: *mut AnyObject, dx: f32, dy: f32| {
-                os_entry(
-                    "GCMouseInput.mouseMovedHandler",
-                    (),
-                    AfterPanic::Answer(|()| ()),
-                    || {
-                        if let Some(view) = view.load() {
-                            view.locked_motion(dx, dy);
-                        }
-                    },
-                );
-            })
-        });
-        for mouse in mice() {
-            // SAFETY: `mouseInput` is `GCMouse`'s getter of its
-            // `GCMouseInput`, `nil` until the mouse reports.
-            let input: Option<Retained<AnyObject>> = unsafe { msg_send![&*mouse, mouseInput] };
-            let Some(input) = input else {
-                continue;
-            };
-            let block: Option<&block2::Block<Moved>> = handler.as_deref();
-            // SAFETY: `mouseMovedHandler` is a copied block property of type
-            // `void (^)(GCMouseInput *, float, float)`, which `Moved`'s
-            // arguments match; `nil` removes it.
-            let _: () = unsafe { msg_send![&*input, setMouseMovedHandler: block] };
-        }
-    }
-
-    /// The mice GameController has connected; none where it has no
-    /// `GCMouse`.
-    fn mice() -> Vec<Retained<AnyObject>> {
-        let Some(class) = AnyClass::get(c"GCMouse") else {
-            return Vec::new();
-        };
-        // SAFETY: `+[GCMouse mice]` answers an `NSArray<GCMouse *>`.
-        let mice: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send![class, mice] };
-        mice.map_or_default(|mice| mice.to_vec())
-    }
-}
-
 pub(crate) mod status_bar {
     //! The status-bar style a window's content asks for.
     //!
@@ -2729,12 +2692,16 @@ pub(crate) mod status_bar {
     //! any thread and asks UIKit, on the main thread, to read it again.
 
     use std::cell::{Cell, RefCell};
+    use std::rc::Weak;
     use std::sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
     };
 
     use dispatch2::DispatchQueue;
+    use flui_platform::WindowId;
+
+    use super::PointerLocks;
     use objc2::rc::Retained;
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
@@ -2775,22 +2742,31 @@ pub(crate) mod status_bar {
     pub struct FluiViewControllerIvars {
         style: Arc<AtomicU8>,
         deferred_edges: Cell<UIRectEdge>,
-        /// Whether the controller prefers the scene's pointer locked: the
-        /// application asked and nothing let the lock go since.
-        pointer_locked: Cell<bool>,
+        /// The lock owner the controller answers `prefersPointerLocked` from,
+        /// and its window; `None` on a device that locks no pointer.
+        pointer_lock: Option<PreferredLock>,
+    }
+
+    /// Where a root controller reads whether it prefers the pointer locked:
+    /// the process's lock owner, reached weakly, and the controller's window.
+    #[derive(Clone)]
+    pub(super) struct PreferredLock {
+        pub(super) locks: Weak<PointerLocks>,
+        pub(super) window: WindowId,
     }
 
     define_class!(
         // SAFETY:
         // - `UIViewController` has no subclassing requirements beyond those the
         //   superclass already satisfies.
-        // - The class does not implement `Drop`; its ivars are an `Arc` and
-        //   `Cell`s of plain values, destroyed inside the panic boundary like
-        //   every class's (`ContainedIvars`).
+        // - The class does not implement `Drop`; its ivars are an `Arc`, a
+        //   `Cell` of a plain value and a `Weak`, destroyed inside the panic
+        //   boundary like every class's (`ContainedIvars`).
         //
         /// The root view controller, reporting the status-bar style the content
         /// asked for and answering `preferredScreenEdgesDeferringSystemGestures`
-        /// and `prefersPointerLocked` from its ivars. One class serves all
+        /// from its ivars and `prefersPointerLocked` from the process's lock
+        /// owner. One class serves all
         /// three: UIKit asks the root controller for each, and an Objective-C
         /// class name registers once per process.
         #[unsafe(super(UIViewController))]
@@ -2826,7 +2802,13 @@ pub(crate) mod status_bar {
                 os_entry(
                     "prefersPointerLocked",
                     (), AfterPanic::Answer(|()| false),
-                    || self.ivars().pointer_locked.get(),
+                    || {
+                        self.ivars().pointer_lock.as_ref().is_some_and(|lock| {
+                            lock.locks
+                                .upgrade()
+                                .is_some_and(|locks| locks.prefers(lock.window))
+                        })
+                    },
                 )
             }
         }
@@ -2840,14 +2822,14 @@ pub(crate) mod status_bar {
             mtm: MainThreadMarker,
             style: Arc<AtomicU8>,
             deferred_edges: UIRectEdge,
+            pointer_lock: Option<PreferredLock>,
         ) -> Retained<Self> {
             let this =
                 mtm.alloc::<Self>()
                     .set_ivars(ContainedIvars::new(FluiViewControllerIvars {
                         style,
                         deferred_edges: Cell::new(deferred_edges),
-                        // A new attachment takes no lock of an earlier one.
-                        pointer_locked: Cell::new(false),
+                        pointer_lock,
                     }));
             // SAFETY: `init` reaches UIViewController's designated initializer
             // with no nib; the receiver is the allocation whose ivars were set
@@ -2862,13 +2844,10 @@ pub(crate) mod status_bar {
             }
         }
 
-        /// Prefer the scene's pointer `locked` from now on, and ask UIKit to
-        /// read the preference again (iPadOS 14); below 14 UIKit has no
-        /// lock to ask for, and nothing is sent.
-        fn prefer_pointer_locked(&self, locked: bool) {
-            if self.ivars().pointer_locked.replace(locked) != locked
-                && self.respondsToSelector(sel!(setNeedsUpdateOfPrefersPointerLocked))
-            {
+        /// Ask UIKit to read `prefersPointerLocked` again (iPadOS 14); below
+        /// 14 UIKit has no lock to ask for, and nothing is sent.
+        fn refresh_pointer_lock(&self) {
+            if self.respondsToSelector(sel!(setNeedsUpdateOfPrefersPointerLocked)) {
                 self.setNeedsUpdateOfPrefersPointerLocked();
             }
         }
@@ -2879,13 +2858,16 @@ pub(crate) mod status_bar {
     pub(super) struct StatusBar {
         style: Arc<AtomicU8>,
         controller: NativeOwner<RefCell<Option<Retained<FluiViewController>>>>,
+        /// What each controller attached reads its lock preference from.
+        pointer_lock: NativeOwner<Option<PreferredLock>>,
     }
 
     impl StatusBar {
-        pub(super) fn new(mtm: MainThreadMarker) -> Arc<Self> {
+        pub(super) fn new(mtm: MainThreadMarker, pointer_lock: Option<PreferredLock>) -> Arc<Self> {
             Arc::new(Self {
                 style: Arc::new(AtomicU8::new(UNSET)),
                 controller: NativeOwner::new(RefCell::new(None), mtm),
+                pointer_lock: NativeOwner::new(pointer_lock, mtm),
             })
         }
 
@@ -2907,19 +2889,25 @@ pub(crate) mod status_bar {
             mtm: MainThreadMarker,
             deferred_edges: UIRectEdge,
         ) -> Retained<FluiViewController> {
-            let controller = FluiViewController::new(mtm, Arc::clone(&self.style), deferred_edges);
+            let controller = FluiViewController::new(
+                mtm,
+                Arc::clone(&self.style),
+                deferred_edges,
+                self.pointer_lock.get(mtm).clone(),
+            );
             *self.controller.get(mtm).borrow_mut() = Some(controller.clone());
             controller
         }
 
-        /// Prefer the attached scene's pointer `locked` or not, on the main
-        /// thread `mtm` proves; a window not in a scene has no controller to
-        /// ask, and its next one prefers no lock.
-        pub(super) fn prefer_pointer_locked(&self, mtm: MainThreadMarker, locked: bool) {
+        /// The lock owner changed whether the window prefers the lock: the
+        /// attached controller asks UIKit to read it again, on the main
+        /// thread `mtm` proves. A window not in a scene has no controller to
+        /// tell; the next one reads the owner when UIKit asks.
+        pub(super) fn refresh_pointer_lock(&self, mtm: MainThreadMarker) {
             // Cloned out first: no borrow is held while UIKit is messaged.
             let controller = self.controller.get(mtm).borrow().clone();
             if let Some(controller) = controller {
-                controller.prefer_pointer_locked(locked);
+                controller.refresh_pointer_lock();
             }
         }
 
