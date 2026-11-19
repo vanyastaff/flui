@@ -50,7 +50,7 @@
 //!   that sent bytes, so a slow link delays it and only a server that takes
 //!   nothing for that long stalls it, and at the latest [`REPLY_TIMEOUT`]
 //!   plus its size at [`MIN_WRITE_RATE`](super::connection::MIN_WRITE_RATE)
-//!   from its first bytes, however it progresses; a wait past its deadline still
+//!   from its first call to the socket, however it progresses; a wait past its deadline still
 //!   goes on if the socket is ready when it looks once more. A write past
 //!   either breaks the connection, and a connection broken or lost ends the
 //!   clipboard for the rest of the process, its handles
@@ -173,8 +173,8 @@ const MAX_EVENTS_PER_STEP: usize = 64;
 /// when `Stop` came ends first: a reply at [`REPLY_TIMEOUT`], a write once
 /// it sends nothing for as long, and at the latest [`REPLY_TIMEOUT`] plus
 /// its size at [`MIN_WRITE_RATE`](super::connection::MIN_WRITE_RATE) from its
-/// first bytes. So an exit waits at most [`REPLY_TIMEOUT`] for that write's
-/// first bytes, its allowance, and then this.
+/// first call to the socket. So an exit waits at most [`REPLY_TIMEOUT`] for
+/// that write's first call, its allowance, and then this.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// What the thread hears of a requestor's window while a transfer writes to
@@ -2640,7 +2640,13 @@ mod tests {
 
     /// A requestor's window on a connection of its own.
     fn requestor() -> (RustConnection, xproto::Window) {
-        let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
+        requestor_on(None)
+    }
+
+    /// A requestor's window on a connection of its own to the X server
+    /// `display` names.
+    fn requestor_on(display: Option<&str>) -> (RustConnection, xproto::Window) {
+        let (connection, screen) = RustConnection::connect(display).expect("the X server answers");
         let root = connection.setup().roots[screen].root;
         let window = connection.generate_id().expect("an id");
         connection
@@ -2944,6 +2950,66 @@ mod tests {
                 .iter()
                 .any(|diagnostic| matches!(diagnostic, Diagnostic::Dropped(1))),
             "the answer dropped is reported"
+        );
+    }
+
+    /// A close past its deadline reports the answers it drops before it
+    /// flushes what is written, so a flush that breaks the connection, on a
+    /// socket that takes nothing, still leaves them reported. The server is
+    /// the case's own: another client holds it while the case fills the
+    /// clipboard's socket, a request waiting in the connection's buffer.
+    #[test]
+    fn a_close_whose_flush_breaks_still_reports_the_answers_it_drops() {
+        use std::os::fd::AsFd as _;
+        use x11rb::wrapper::ConnectionExt as _;
+
+        let Some(private) = PrivateServer::start() else {
+            return;
+        };
+        let display = Some(private.display.as_str());
+        let mut selections = selections_on(display);
+        let (_requestor, window) = requestor_on(display);
+        let (holder, _) = RustConnection::connect(display).expect("the X server answers");
+        holder.grab_server().expect("the request is sent");
+        holder
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        // A request in the connection's buffer, then a socket that takes no
+        // more: the held server reads none of it.
+        selections
+            .connection
+            .change_property8(
+                xproto::PropMode::REPLACE,
+                selections.window,
+                xproto::AtomEnum::STRING,
+                xproto::AtomEnum::STRING,
+                &[0],
+            )
+            .expect("the request is buffered");
+        let chunk = [0_u8; 4096];
+        while rustix::io::write(selections.connection.stream().as_fd(), &chunk).is_ok() {}
+        // A mark in flight that will not come back, covering one answer.
+        selections.pending.marked.extend([Decided {
+            request: request(window),
+            property: 1,
+            form: TextForm::Latin1,
+            verdict: Verdict::Refused,
+        }]);
+        selections.pending.in_flight = true;
+        let deadline = Instant::now();
+        selections.connection.stream().end_by(deadline);
+        let closed = selections.deliver_owed(deadline);
+        holder.ungrab_server().expect("the request is sent");
+        holder.flush().expect("the request is sent");
+        assert!(closed.is_err(), "the flush breaks the connection");
+        assert!(
+            selections
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, Diagnostic::Dropped(1))),
+            "the answer dropped is reported before the flush"
         );
     }
 

@@ -25,10 +25,10 @@
 //!   last write that sent bytes, so a slow link or a pause of the server's
 //!   delays a write and only a server that takes nothing for that long stalls
 //!   it; and, however it progresses, no later than [`REPLY_TIMEOUT`] plus
-//!   its size at [`MIN_WRITE_RATE`] from the call that sends its first
-//!   bytes. A write past either may
-//!   have sent part of a request, so the connection is broken from then on,
-//!   every use failing at once;
+//!   its size at [`MIN_WRITE_RATE`] from its first call to the socket,
+//!   whatever that call sends. A write past either may have sent part of a
+//!   request, so the connection is broken from then on, every use failing at
+//!   once;
 //! - both end sooner at the close's deadline ([`ReplyStream::end_by`]).
 //!
 //! A wait whose deadline passed still looks at the socket once without
@@ -481,7 +481,7 @@ mod tests {
     use web_time::Instant;
     use x11rb::rust_connection::{DefaultStream, PollMode, Stream as _};
 
-    use super::{REPLY_TIMEOUT, ReplyStream, Step, write_allowance};
+    use super::{REPLY_TIMEOUT, ReplyStream, Step, serving_reply_within, write_allowance};
 
     /// `ours` as the clipboard's stream, unbounded until the case bounds it.
     fn stream_over(ours: UnixStream) -> ReplyStream {
@@ -585,6 +585,47 @@ mod tests {
         }
     }
 
+    /// Each reply's wait gets its own look past its deadline: on one stream, a
+    /// first wait looks, finds nothing and is late; the next, its reply in by
+    /// then, looks again and reads it. The peer stands in for the server.
+    #[test]
+    fn each_reply_wait_looks_once_past_its_deadline() {
+        use x11rb::protocol::xproto::{ConnectionExt as _, Setup};
+        use x11rb::rust_connection::RustConnection;
+
+        let (ours, mut theirs) = UnixStream::pair().expect("a socket pair");
+        let setup = Setup {
+            resource_id_base: 0x0020_0000,
+            resource_id_mask: 0x001f_ffff,
+            ..Setup::default()
+        };
+        let connection = RustConnection::for_connected_stream(stream_over(ours), setup)
+            .expect("the connection is made");
+        connection.stream().end_by(Instant::now());
+
+        let first = connection.get_input_focus().expect("the request is sent");
+        assert!(
+            serving_reply_within(&connection, first)
+                .expect("the connection holds")
+                .is_none(),
+            "nothing came for the first wait"
+        );
+        connection.stream().begin_step();
+        let second = connection.get_input_focus().expect("the request is sent");
+        let sequence = u16::try_from(second.sequence_number() & 0xffff).expect("BUG: it fits");
+        // `GetInputFocus`'s reply, in the byte order the connection uses.
+        let mut reply = [0_u8; 32];
+        reply[0] = 1;
+        reply[2..4].copy_from_slice(&sequence.to_ne_bytes());
+        theirs.write_all(&reply).expect("the reply is sent");
+        assert!(
+            serving_reply_within(&connection, second)
+                .expect("the connection holds")
+                .is_some(),
+            "the second wait looks and reads its reply"
+        );
+    }
+
     /// A late reply holds the server until an event shows the server carried
     /// the late request out: an event it sent before, queued behind the late
     /// request's reply, does not end the hold; one sent as it carried that
@@ -654,8 +695,8 @@ mod tests {
             } else {
                 let error = written.expect_err("the write breaks past its allowance");
                 assert_eq!(error.kind(), io::ErrorKind::BrokenPipe, "{case}");
-                // The allowance runs from the write's first bytes, which a
-                // wait of up to `REPLY_TIMEOUT` may precede.
+                // The allowance runs from the write's first call to the
+                // socket, which a wait of up to `REPLY_TIMEOUT` may precede.
                 assert!(
                     took > allowance.saturating_sub(Duration::from_millis(500))
                         && took < allowance + REPLY_TIMEOUT,
