@@ -597,6 +597,15 @@ impl GpuContext {
     /// # Errors
     /// The device request failed, or no request under `ticket` is held; the
     /// context keeps its lost device and every slot as it was.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "wasm32 has no worker to request a device on, so every request is refused \
+                      through the shape the backend trait shares with native"
+        )
+    )]
     fn install_requested(
         &mut self,
         ticket: DeviceTicket,
@@ -618,7 +627,7 @@ impl GpuContext {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _unheld = ticket;
+            let _ = ticket;
             Some(Err(EngineError::GpuUnavailable))
         }
     }
