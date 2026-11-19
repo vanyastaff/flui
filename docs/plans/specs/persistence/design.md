@@ -27,7 +27,7 @@
 - **IO-пул.** `ExecutionServices::spawn_io` (`execution.rs:516`) доступен только `flui-app`;
   ADR-0047 обещает realm'ам capability поверх него, не пулы.
 - **Закрытие.** Сейчас вето — `AppConfig::close_request_handler` и `CloseRequestRouter::consult`
-  (`crates/flui-app/src/app/close_request.rs:432`–`471`). Teardown design вводит `CloseReason`,
+  (`crates/flui-runtime/src/owner_turn/close.rs`). Teardown design вводит `CloseReason`,
   отзыв запроса и двухфазное завершение сеанса с бюджетом 3 с, где persistence пишет первой
   (`teardown/design.md`, раздел (d)); общий контракт close guard задан оркестратором и
   потребляется здесь как есть (раздел «Из teardown» ниже).

@@ -16,7 +16,6 @@ pub(crate) mod agent;
 pub(crate) mod asset_host;
 pub(crate) mod capability;
 pub(crate) mod clipboard_expiry;
-pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;
 pub mod direct;
@@ -48,9 +47,6 @@ pub(crate) use flui_runtime::{presentation, ui_runtime};
 #[cfg(test)]
 pub(crate) mod window_test_support;
 
-pub use close_request::{
-    CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
-};
 pub use config::{AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling};
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
@@ -58,6 +54,10 @@ pub use flui_runtime::frame_failure::{
     FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, PanicText, SamplingFailure,
     SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
+pub use flui_runtime::owner_turn::{
+    CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
+};
+pub use flui_view::CloseReason;
 pub use hot_reload::DevReload;
 // The recording hook (ADR-0215 §1): the tap and the records it observes.
 pub use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -91,7 +91,7 @@ pub use runner::open_window;
 pub use runner::run_app;
 pub use runner::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
-pub use runner::{request_presentation_close, window_handle};
+pub use runner::{PresentationCloseError, request_presentation_close, window_handle};
 #[cfg(not(target_os = "ios"))]
 pub use runtime::ExitPolicy;
 #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]

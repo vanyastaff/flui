@@ -77,6 +77,9 @@ flui-objects = { workspace = true }
 flui-runtime = { workspace = true, features = ["testing"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
+# The instant a session end's deadlines are named in (`SessionEndHost`), the
+# std one on native targets and `performance.now()`'s on wasm32.
+web-time = { workspace = true }
 # The font collection a headless UI runtime shapes on (bundled faces only, so text
 # measures alike on every host) and the painting values the widget harness
 # reads.

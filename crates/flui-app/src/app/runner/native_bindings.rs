@@ -5,8 +5,8 @@ use std::{cell::RefCell, rc::Rc};
 use flui_foundation::PresentationAddress;
 use flui_runtime::ui_runtime::UiRuntime;
 
-use crate::app::close_request::{CloseRequestRouter, PreparedCloseRequest};
 use crate::app::window_registry::{PreparedWindowRegistration, RegistryError, WindowRegistry};
+use flui_runtime::owner_turn::{CloseRequestRouter, PreparedCloseRequest};
 
 use super::frame_driver::{FrameDriverLease, FrameDrivers, PreparedFrame};
 use super::native_retirement::NativeRetirement;
