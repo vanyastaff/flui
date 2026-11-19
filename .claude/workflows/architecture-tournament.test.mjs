@@ -224,13 +224,13 @@ const noAgent = () => assert.fail('no agent may run')
   assert.match(owned.markdown, new RegExp(`- #${conceded} on a by [a-z-]+, conceded: `))
 }
 
-// 4. A refused proposal is a named gap, an attack on it is left out with a gap, and fewer than two
-//    proposals stop the run.
+// 4. A refused proposal is a named gap, an attacker that names it anyway returned a result off its
+//    schema, and fewer than two proposals stop the run.
 {
   const onAll = (by) => () => ({ attacks: stances.filter((s) => s.key !== by).map((s) => ({ target: s.key, claim: `${by} on ${s.key}`, scenario: 'sc', evidence: 'ev', severity: 'major' })) })
   const { result } = await run({ topic: 'T', stances }, happy({ 'propose:c': null, 'attack:a': onAll('a') }))
   assert.ok(result.gaps.includes('proposal c: no result (refused by a usage limit, skipped, or failed after retries)'))
-  assert.ok(result.gaps.includes('attacks by a: 1 named no design on the table and were left out'))
+  assert.ok(result.gaps.includes('attacks by a: a result off its schema at $.attacks[1].target'))
   assert.equal(result.proposals.length, 2)
   assert.ok(result.attacks.every((x) => x.target !== 'c'))
   const { result: two } = await run({ topic: 'T', stances }, happy({ 'propose:b': null, 'propose:c': null }))
@@ -250,8 +250,8 @@ const noAgent = () => assert.fail('no agent may run')
   assert.deepEqual(result.open.filter((x) => x.stance === 'a').map((x) => x.why), ['revision failed', 'revision failed'])
   assert.match(result.markdown, /- #\d+ on a by [a-z-]+, revision failed: /)
   for (const label of ['second-round', 'judge:opus']) {
-    assert.match(prompts[label].split('### a: a')[1].split('### b:')[0], /Its revision failed to run/, label)
-    assert.match(prompts[label], /Agents that returned nothing in this run, failures rather than faults of any design:\n[\s\S]*- revision of a: no result/, label)
+    assert.match(prompts[label].split('### a: a')[1].split('### b:')[0], /Its revision returned nothing usable/, label)
+    assert.match(prompts[label], /Agents that returned nothing usable in this run, failures rather than faults of any design:\n[\s\S]*- revision of a: no result/, label)
     // A design's own list past its bound is a gap, not an agent failure.
     assert.doesNotMatch(prompts[label].split('Agents that returned nothing')[1], /debt items past the bound/, label)
   }
@@ -259,13 +259,44 @@ const noAgent = () => assert.fail('no agent may run')
   // A failed proposal and a failed second round reach the judge as failures too.
   const { prompts: lost } = await run({ topic: 'T', stances }, happy({ 'propose:c': null, 'second-round': null }))
   for (const line of ['proposal c: no result', 'second round: no result']) assert.match(lost.judge.split('Agents that returned nothing')[1], new RegExp(`- ${line}`), line)
-  // A unit whose own handling throws on a value the schema let through is contained: the run goes on,
-  // the design keeps its first form, and the throw is named as a failure.
-  const { result: thrown } = await run({ topic: 'T', stances }, happy({ 'revise:a': { answers: 'not a list', design: design('a revised') } }))
-  assert.equal(thrown.error, undefined)
-  assert.equal(thrown.proposals.find((p) => p.stance === 'a').design.title, 'a')
-  assert.ok(thrown.open.filter((x) => x.stance === 'a').every((x) => x.why === 'revision failed'))
-  assert.ok(thrown.gaps.some((g) => /^revision of a: .*filter/.test(g)))
+  // A value off its schema, in any phase, is an agent that returned nothing usable: named with the
+  // path where it breaks, told to the judge, and the run goes on to its judge.
+  const { result: off, prompts: offPrompts } = await run({ topic: 'T', stances }, happy({
+    'research:code': { facts: 'a string', summary: 'sum' },
+    'propose:c': { ...design('c'), debt_removed: 'a string' },
+    'attack:b': { attacks: [{ target: 'a', claim: 'x', scenario: 'sc', evidence: 'ev', severity: 'grave' }] },
+    'revise:a': { answers: 'not a list', design: design('a revised') },
+    'second-round': { attacks: 'none' },
+    judge: (p, o) => ({ ...verdict(p, o), scores: 'high' }),
+    'judge:opus': verdict,
+  }))
+  const offLines = [
+    'research code: a result off its schema at $.facts',
+    'proposal c: a result off its schema at $.debt_removed',
+    'attacks by b: a result off its schema at $.attacks[0].severity',
+    'revision of a: a result off its schema at $.answers; its first design stands with its attacks unanswered',
+    'second round: a result off its schema at $.attacks',
+  ]
+  for (const line of offLines) {
+    assert.ok(off.gaps.includes(line), line)
+    assert.ok(offPrompts['judge:opus'].split('Agents that returned nothing usable')[1].includes(`- ${line}`), line)
+  }
+  assert.ok(off.gaps.includes('judged on opus after the fable judge returned a result off its schema at $.scores'))
+  assert.equal(off.proposals.length, 2)
+  assert.deepEqual(off.open.filter((x) => x.stance === 'a').map((x) => x.why), ['revision failed'])
+  // Each kind of break is found where it is: a type, a list's item, a missing field, a nested integer.
+  const { result: kinds } = await run({ topic: 'T', stances }, happy({
+    'research:code': { facts: [], summary: 7 },
+    'research:prior-art': { facts: ['a string'], summary: 'sum' },
+    'propose:a': { title: 'a', thesis: 't', shapes: 's', flow: 'f', prediction: 'p', migration: 'm', risks: 'r' },
+    'revise:b': { answers: [{ id: '3', verdict: 'fixed', how: 'h' }], design: design('b revised') },
+  }))
+  for (const line of [
+    'research code: a result off its schema at $.summary',
+    'research prior-art: a result off its schema at $.facts[0]',
+    'proposal a: a result off its schema at $.debt_removed',
+    'revision of b: a result off its schema at $.answers[0].id; its first design stands with its attacks unanswered',
+  ]) assert.ok(kinds.gaps.includes(line), line)
   assert.ok(result.gaps.includes('revision of a: no result (refused by a usage limit, skipped, or failed after retries); its first design stands with its attacks unanswered'))
   assert.ok(result.gaps.includes('attacks by c: no result (refused by a usage limit, skipped, or failed after retries)'))
   assert.ok(result.gaps.includes('research failures: no result (refused by a usage limit, skipped, or failed after retries)'))
@@ -284,6 +315,9 @@ const noAgent = () => assert.fail('no agent may run')
   // The cut counts code points, so a character above U+FFFF at the edge stays whole.
   const { result: wide } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw new Error('x'.repeat(299) + '\u{1F600}tail') } }))
   assert.ok(wide.gaps.find((g) => g.startsWith('research prior-art: ')).endsWith('\u{1F600}'))
+  // Its line breaks become spaces, so it stays one entry of the list it joins.
+  const { result: lines } = await run({ topic: 'T', stances }, happy({ 'research:prior-art': () => { throw new Error('refused:\n- revision of a: no result') } }))
+  assert.ok(lines.gaps.includes('research prior-art: refused: - revision of a: no result'))
   assert.ok(none.gaps.some((g) => g.startsWith('no judge: fable returned no result')))
   assert.ok(!none.gaps.some((g) => g.startsWith('judged on opus')))
   assert.equal(none.proposals.length, 3)
@@ -306,11 +340,10 @@ const noAgent = () => assert.fail('no agent may run')
   const { result: closed } = await run({ topic: 'T', stances }, happy({ 'second-round': { attacks: [late] }, 'revise:b': answerAll }))
   assert.deepEqual(closed.open, [])
   assert.match(closed.markdown, /second round's attacks\n- second round on b \(fatal\): the fix of b leaks\n/)
-  // The second round keeps the first round's target filter and bound, with their gaps.
-  const many = [...Array.from({ length: 15 }, (_, i) => ({ ...late, claim: `late ${i}` })), { ...late, target: 'zzz' }]
+  // The second round keeps the first round's bound, with its gap.
+  const many = Array.from({ length: 15 }, (_, i) => ({ ...late, claim: `late ${i}` }))
   const { result: bounded } = await run({ topic: 'T', stances }, happy({ 'second-round': { attacks: many } }))
   assert.equal(bounded.second.length, 12)
-  assert.ok(bounded.gaps.includes('second round: 1 named no design on the table and were left out'))
   assert.ok(bounded.gaps.includes('second round: 3 past the bound of 12 were left out'))
   const { result: refused } = await run({ topic: 'T', stances }, happy({ 'second-round': null }))
   assert.ok(refused.gaps.includes('second round: no result (refused by a usage limit, skipped, or failed after retries)'))
@@ -326,7 +359,7 @@ const noAgent = () => assert.fail('no agent may run')
     'attack:red-team': { attacks: many(15, (i) => ({ target: 'a', claim: `red ${i}`, scenario: 'sc', evidence: 'ev', severity: 'minor' })) },
     'propose:a': { ...design('a'), debt_removed: many(15, (i) => `debt ${i}`) },
     'revise:b': () => ({ answers: [], design: { ...design('b revised'), debt_removed: many(14, (i) => `rdebt ${i}`) } }),
-    judge: (p, o) => ({ ...verdict(p, o), scores: [{ stance: 'a', score: 150, why: 'w' }, { stance: 'a', score: 30, why: 'w2' }, { stance: 'b', score: -5, why: 'w' }, { stance: 'zzz', score: 10, why: 'w' }] }),
+    judge: (p, o) => ({ ...verdict(p, o), scores: [{ stance: 'a', score: 150, why: 'w' }, { stance: 'a', score: 30, why: 'w2' }, { stance: 'b', score: -5, why: 'w' }] }),
   }))
   assert.equal(result.research.find((r) => r.key === 'code').facts.length, 30)
   assert.ok(result.gaps.includes('research code: 5 facts past the bound of 30 were left out'))
