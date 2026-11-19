@@ -129,7 +129,7 @@ set.
 `DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) lives in
 `flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
 (decision 9), are defined here. The tracker keeps the seam's `Region` (up to eight disjoint rects,
-ADR-0304 §5), merged as `Region::insert` merges, and the engine redraws it by a `RegionPlan` (ADR-0304 §9, the engine's
+ADR-0304 §5), merged as `Region::insert` merges, and the engine redraws it rect by rect or under its bounding box (ADR-0304 §9, the engine's
 `ARCHITECTURE.md`). The overlay's numbers (a frame-clock reading of the
 presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
 composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the

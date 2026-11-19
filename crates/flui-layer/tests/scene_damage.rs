@@ -1804,6 +1804,21 @@ fn walk_cull(
                     return Err(format!("{at:?}: walked {walked}, fresh {fresh}"));
                 }
                 skipped.1 += u32::from(!walked);
+                // The rects a chunk meets, counted in walk order, are the
+                // rects whose own fresh cull it meets.
+                let rects = [
+                    rect,
+                    rect.translate_offset(Offset::new(rect.width() + 1.0, 0.0)),
+                    Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+                ];
+                let counted = cull.rects_met_by_chunk(at, &rects);
+                let fresh = rects
+                    .iter()
+                    .filter(|&&each| version.subtree_cull(each).meets_chunk(at))
+                    .count();
+                if counted != fresh {
+                    return Err(format!("{at:?}: counted {counted}, fresh {fresh}"));
+                }
             }
             Entry::Effect { .. } => {}
         }
@@ -1814,7 +1829,8 @@ fn walk_cull(
 /// A cull asked in walk order, which keeps the chains of the path it walks,
 /// answers each slot and chunk as a cull asked about it alone (ADR-0304 §9);
 /// a chunk lands through its node's placement, and an address that names no
-/// chunk meets nothing.
+/// chunk meets nothing; the rects it counts a chunk meeting are the rects whose
+/// own cull it meets.
 pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
     let mut skipped = (0_u32, 0_u32);
     for case in 0..2_000_u64 {

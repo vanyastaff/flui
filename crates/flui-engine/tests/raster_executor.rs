@@ -11,10 +11,9 @@ use std::{
 };
 
 use flui_engine::{
-    DeviceHealth, EngineError, ExecutorHealth, GpuFrameTime, PresentDisposition, RasterCommand,
-    RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange,
-    SlotConfig, SlotFailure, SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility,
-    SurfaceHold,
+    DeviceHealth, EngineError, ExecutorHealth, PresentDisposition, RasterCommand, RasterExecutor,
+    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
+    SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility, SurfaceHold,
     raster_executor::LIFECYCLE_CAPACITY,
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
@@ -1663,7 +1662,7 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
         true
     }
 
-    fn take_gpu_time(&mut self, _slot: SlotId) -> Option<GpuFrameTime> {
+    fn take_gpu_time(&mut self, _slot: SlotId) -> Option<flui_foundation::GpuFrameTime> {
         None
     }
 }
@@ -2705,7 +2704,7 @@ fn a_backends_gpu_times_reach_the_owner_after_the_frame_that_read_them() {
     assert_eq!(
         times
             .iter()
-            .map(|time: &GpuFrameTime| (time.epoch.get(), time.gpu))
+            .map(|time: &flui_foundation::GpuFrameTime| (time.epoch.get(), time.gpu))
             .collect::<Vec<_>>(),
         (3..=10)
             .map(|epoch| (epoch, Duration::from_micros(epoch * 100)))

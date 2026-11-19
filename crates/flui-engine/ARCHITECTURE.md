@@ -64,9 +64,9 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers; `GpuFrameTime`, a frame's GPU time, which `RasterSender::drain_gpu_times` hands the owner |
+| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers; a frame's GPU time (`flui_foundation::GpuFrameTime`), which `RasterSender::drain_gpu_times` hands the owner |
 | GPU frame time | `gpu_timer.rs` | `FrameGpuTimer` (ADR-0388): per slot, a ring of three timestamp query sets around a frame's encoder, read back after the GPU finished; absent without `TIMESTAMP_QUERY` |
-| Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders) and its `RegionPlan` (one pass under the bounding box or one per rect, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
+| Damage | `damage.rs`, `region_cost.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders), `region_cost.rs` (whether a partial frame redraws its region in one pass per rect or one under its bounding box, by their predicted cost, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
@@ -1160,26 +1160,37 @@ to that base with `RasterBase` (ADR-0304 §7). The enum is exhaustive (ADR-0304 
 `Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
 engine matches all three with no wildcard, so a new variant fails to compile
 here. The tracker keeps the region's rects (a further one merges the cheapest
-pair, as `Region` does), and a partial frame redraws them by a
-`damage::RegionPlan` (ADR-0304 §9): `Bounds`, one pass under the bounding box,
-or `Rects`, one pass per rect, each clearing its own rect under its own
-scissor and walking the scene culled by that rect, counted as
-`region_passes`. Production plans `Bounds` for every region
-(`RegionPlan::of`): a pass per rect records everything its rect reaches
-again, which costs more than one pass over the box, so `Rects` is switched on
-once a frame records once and replays per rect ([gaps](../../docs/gaps.md)).
-Until then the tests drive it through `RetainedCapture::plan_rect_by_rect`.
-Either way no pixel outside the plan's rects is written and every chunk that
-meets a written pixel is drawn there once, in paint order
+pair, as `Region` does), and a partial frame redraws them rect by rect or
+under their bounding box (ADR-0304 §9), counted as `region_passes`: each
+pass clears its own rect under its own scissor and walks the scene culled
+by that rect. `region_cost.rs` picks the shape each time the damage is
+closed, at most `Region::MAX` rounds a frame, from a walk of the version
+culled by the box: per rect costs each reached
+chunk's commands times the rects it meets, plus `PIXEL_COST` a pixel and
+`PASS_COST` a pass; the box costs each chunk's commands once, its own area
+and one pass. The walk is skipped when the box's extra pixels, less the
+rects' extra passes, outweigh `(rects − 1)` times the version's commands,
+which the frame protocol sums once per version over every chunk the
+version holds, with no cull; an effect costs only through the commands under it.
+Rects in opposite corners of a grid of small chunks stay
+apart (on the `raster_share` bench the box redraws nearly the whole
+surface); a few rects over one large chunk take the box, which replays it
+once (`a_region_is_redrawn_the_way_predicted_cheaper`,
+`a_heavy_chunk_redraws_a_region_under_its_bounding_box`). A box is closed
+again before it is drawn, so a reader it meets is redrawn whole. A chunk that meets two
+rects is drawn in each pass, from its kept recording when it has one, and
+recorded again in each pass otherwise ([gaps](../../docs/gaps.md)). No
+pixel outside the rects is written and every chunk that meets a written
+pixel is drawn there once, in paint order
 (`region_frames_match_a_full_frame`); one scissor around the region with the
 walk culled per rect would clear the gap without redrawing it and blend what
-meets both rects twice. The damage is closed over backdrop readers as the
-plan redraws it (`FrameProtocol::include_backdrop_dependencies`): the closure
-of a region leaves each read footprint it joined inside one rect, and a
-region planned as its box is closed as the box itself, so a reader in the
-gap between the rects is redrawn whole
-(`a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole`,
-`a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole`). Damage
+meets both rects twice. The damage is closed over backdrop readers rect by
+rect (`FrameProtocol::include_backdrop_dependencies`): the closure of a
+region leaves each read footprint it joined inside one rect, and a reader
+in the gap between kept rects, which no rect meets, is left as the last
+frame drew it
+(`a_backdrop_reader_in_the_gap_between_a_regions_rects_is_left_alone`,
+`a_backdrop_effect_in_the_gap_between_a_regions_rects_is_left_alone`). Damage
 that meets one member of a backdrop group takes the rect over every member,
 so the group lies in one rect, and the one pass that redraws it captures at
 the first member that writes, as a full frame does
