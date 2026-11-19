@@ -1,9 +1,9 @@
 //! The memory the host gives back when the system asks for it (ADR-0237
 //! decision 9): the receivers the application registered
-//! ([`AppConfig::memory_reclaim`]), among them the asset registry that
-//! keeps decoded images. The GPU memory behind every window (pooled buffers,
-//! the glyph atlas and image textures) is the raster host's to trim, which
-//! the same notice reaches (`runner::raster_host`).
+//! ([`AppConfig::memory_reclaim`]). Each UI runtime trims its own caches,
+//! its decoded images among them, after these. The GPU memory behind every
+//! window (pooled buffers, the glyph atlas and image textures) is the raster
+//! host's to trim, which the same notice reaches (`runner::raster_host`).
 //!
 //! One [`HostMemory`] per host is reclaimed once per notice, however many
 //! windows it has, and a window opened later is reached along with the

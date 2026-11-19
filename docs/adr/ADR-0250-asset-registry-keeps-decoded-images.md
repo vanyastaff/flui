@@ -4,7 +4,9 @@
 - **Date:** 2026-10-19
 - **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
   for §2 only how a load is aborted and what a dropped load does to its waiters, and for §3
-  only where a decode runs
+  only where a decode runs; [ADR-0387](ADR-0387-each-ui-runtime-keeps-one-image-cache.md) for
+  §4 the key of a built-in provider and for §5 who owns the cache and registers it for memory
+  pressure
 - **Supersedes:** [ADR-0118](ADR-0118-network-image-registry-identity.md), the key's shape only
   (registry identity now covers asset images too, and the key is opaque);
   [ADR-0120](ADR-0120-typed-asset-cache-retention.md), its Consequences paragraph on the widget

@@ -96,7 +96,7 @@ pub enum ImageLoadErrorKind {
 - `a_missing_file_is_an_error_and_the_next_load_succeeds`, `a_path_that_is_not_a_regular_file_is_refused`,
   `an_oversized_file_is_refused_before_it_is_read` and `decoded_pixels_are_bounded_before_decoding`
   match on `NotFound`, `NotAFile`, `TooLarge` and `Decode(TooLarge)`.
-- `a_network_image_without_a_client_answers_http_unavailable` (`flui-widgets`).
+- `an_image_missing_a_service_answers_which_one` (`flui-widgets`).
 
 ## Pros and cons of the options
 

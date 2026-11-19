@@ -12,6 +12,10 @@
   brings its own client, a network source carries that client's typed `HttpAuthority`, and one
   registry keeps two clients' images of one URL apart. The rule that a URL alone never
   identifies a response stands.
+- **Superseded-by:** [ADR-0387](ADR-0387-each-ui-runtime-keeps-one-image-cache.md) for the
+  widget's key: an `Image` loads through its UI runtime's cache, which does not change while it
+  is mounted, so `ImageCacheKey` names the URL alone and the cache keeps two runtimes' images
+  apart.
 - **Revised:** 2026-11-03 — the two amendment lines are recorded as the supersessions they are.
 - **Related:** ADR-0105 (asset runtime ownership), ADR-0107 (asset byte sources)
 
@@ -70,8 +74,8 @@ images. A bare address could alias a later allocation. Comparing client labels
 or settings cannot establish ownership identity. The weak allocation identity
 avoids all three cases.
 
-`network_images_scope_cached_and_pending_responses_to_the_registry` exercises
+`network_images_scope_cached_and_pending_responses_to_their_cache` exercises
 two real PNG responses with different dimensions at one URL, sequential cached
-loads, concurrent pending loads, same-registry response coalescing and owner release
-while a cache key remains live. Restoring URL-only identity makes the decoded
+loads, concurrent pending loads and same-cache response coalescing. Sharing one cache
+between the two makes the decoded
 dimensions assertion fail.

@@ -5,9 +5,12 @@
 //! the IO lane of the caller's lanes and decodes it on their compute lane
 //! (ADR-0279), and fetches network images with the host's HTTP client
 //! (ADR-0280). It starts no runtime or thread of its own: [`LoadServices`]
-//! names the lanes and the client a load runs on.
+//! names the lanes a load runs on, and a network source the client that
+//! fetches it.
 //!
-//! `flui-widgets` resolves `Image::asset` and `Image::network` through it.
+//! `flui-widgets` resolves `Image::asset` and `Image::network` through it: each
+//! UI runtime keeps one, which a widget acquires as [`ImageCacheCapability`]
+//! and the runtime trims under memory pressure (ADR-0387).
 //!
 //! ```
 //! use flui_assets::{ImageCache, ImageCacheConfig, ImageSource, LoadServices};
@@ -30,8 +33,10 @@
 )]
 #![deny(missing_docs)]
 
+mod capability;
 mod error;
 mod image_cache;
 
+pub use crate::capability::ImageCacheCapability;
 pub use crate::error::{ImageLoadError, ImageLoadErrorKind};
 pub use crate::image_cache::{ImageCache, ImageCacheConfig, ImageLoad, ImageSource, LoadServices};

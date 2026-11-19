@@ -8,6 +8,8 @@
 #![cfg(feature = "asset-images")]
 
 mod common;
+#[path = "common/image_cache.rs"]
+mod image_cache;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -316,42 +318,92 @@ fn reuse_decoded_source(fail_first: bool) {
         )));
             std::fs::create_dir(&directory.0).expect("test directory created");
             let path = directory.0.join("image.png");
-            let registry = Arc::new(flui_assets::ImageCache::default());
-            let provider = flui_widgets::AssetImage::new(registry, path.to_string_lossy());
-            assert!(provider.resolve().is_err(), "a new source is cold");
+            let services = flui_widgets::ImageServices::new()
+                .with_image_cache(Arc::new(flui_assets::ImageCache::default()));
+            let provider = flui_widgets::AssetImage::new(path.to_string_lossy());
+            assert!(provider.cached(&services).is_none(), "a new source is cold");
             if fail_first {
                 assert!(
-                    tokio::time::timeout(
-                        DECODE_BUDGET,
-                        provider.resolve_async(&flui_widgets::ImageServices::new())
-                    )
-                    .await
-                    .expect("missing source completes")
-                    .is_err(),
+                    tokio::time::timeout(DECODE_BUDGET, provider.resolve_async(&services))
+                        .await
+                        .expect("missing source completes")
+                        .is_err(),
                     "failed loads must not become completed cache entries"
                 );
             }
             std::fs::write(&path, include_bytes!("fixtures/tiny.png"))
                 .expect("source fixture writes");
-            let first = tokio::time::timeout(
-                DECODE_BUDGET,
-                provider.resolve_async(&flui_widgets::ImageServices::new()),
-            )
-            .await
-            .expect("first decode completes")
-            .expect("available source decodes");
+            let first = tokio::time::timeout(DECODE_BUDGET, provider.resolve_async(&services))
+                .await
+                .expect("first decode completes")
+                .expect("available source decodes");
             assert_eq!((first.width(), first.height()), (5, 3));
             std::fs::remove_file(&path).expect("remove source after successful decode");
-            let repeated = tokio::time::timeout(
-                DECODE_BUDGET,
-                provider
-                    .clone()
-                    .resolve_async(&flui_widgets::ImageServices::new()),
-            )
-            .await
-            .expect("cached decode completes")
-            .expect("completed cache hit must not reload the missing source");
+            let repeated =
+                tokio::time::timeout(DECODE_BUDGET, provider.clone().resolve_async(&services))
+                    .await
+                    .expect("cached decode completes")
+                    .expect("completed cache hit must not reload the missing source");
             assert_eq!((repeated.width(), repeated.height()), (5, 3));
             assert_eq!(repeated.data(), first.data());
         });
+}
+
+/// Every `Image::asset` of one UI runtime loads through that runtime's one
+/// image cache, another runtime keeps its own, and a critical memory-pressure
+/// notice to the runtime empties it.
+///
+/// Red-check: leave the runtime's caches out of what a memory-pressure notice
+/// trims (the image stays kept), or `ImageCacheCapability` out of what `Image`
+/// acquires (the load answers `ImageCacheUnavailable` and nothing is kept).
+#[test]
+fn asset_images_share_their_runtimes_cache_until_memory_pressure() {
+    let directory = std::env::temp_dir().join(format!(
+        "flui-runtime-image-cache-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock is after epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir(&directory).expect("test directory created");
+    let path = directory.join("image.png");
+    std::fs::write(&path, include_bytes!("fixtures/tiny.png")).expect("source fixture writes");
+    let path = path.to_string_lossy().into_owned();
+    let source = flui_assets::ImageSource::asset(path.as_str());
+
+    let mut host = flui_testing::HeadlessHost::new(flui_testing::HeadlessWindow::new(100, 100));
+    let cache = image_cache::runtime_image_cache(&mut host);
+    host.attach(&Image::asset(path.as_str()))
+        .expect("root attaches");
+    let deadline = Instant::now() + DECODE_BUDGET;
+    while cache.get(&source).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the asset image did not decode within the {DECODE_BUDGET:?} budget"
+        );
+        let _ = host.pump(Duration::ZERO);
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    std::fs::remove_file(&path).expect("remove source after decode");
+    std::fs::remove_dir(&directory).expect("remove test directory");
+
+    assert!(
+        Arc::ptr_eq(&cache, &image_cache::runtime_image_cache(&mut host)),
+        "one UI runtime keeps one cache"
+    );
+    let mut other = flui_testing::HeadlessHost::new(flui_testing::HeadlessWindow::new(100, 100));
+    let other_cache = image_cache::runtime_image_cache(&mut other);
+    assert!(
+        !Arc::ptr_eq(&cache, &other_cache) && other_cache.get(&source).is_none(),
+        "another UI runtime keeps its own"
+    );
+
+    host.notify(flui_platform::SystemNotice::MemoryPressure(
+        flui_platform::MemoryPressureLevel::Critical,
+    ));
+    assert!(
+        cache.get(&source).is_none(),
+        "critical pressure drops the runtime's decoded images"
+    );
 }
