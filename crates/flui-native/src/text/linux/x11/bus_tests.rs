@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_platform::WindowId;
-use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{Selection, TextStore, TextStoreHost};
+use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::store::{Selection, TextStore, TextStoreHost};
 use flui_testing::text_store_kit::InMemoryTextStore;
 use parking_lot::Mutex;
 use web_time::Instant;

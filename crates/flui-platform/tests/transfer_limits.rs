@@ -1,7 +1,7 @@
 //! The transport's size policy: `TransferLimits::enforce`, the one predicate
 //! every delivery passes.
 
-use flui_platform::data_transfer::{TransferError, TransferLimits};
+use flui_platform::transfer::data::{TransferError, TransferLimits};
 
 #[test]
 fn transfer_limits_admit_up_to_the_ceiling() {

@@ -3,7 +3,7 @@
 //! runs in Chrome (`tests/web_browser.rs`).
 
 use crate::input::web::keys::{IME_PROCESS_KEY_CODE, key_composition};
-use flui_platform::keyboard::ImeComposition;
+use flui_platform::input::keyboard::ImeComposition;
 
 const ESCAPE: u32 = 27;
 

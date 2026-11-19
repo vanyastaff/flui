@@ -35,10 +35,10 @@ use flui_interaction::{
     ids::PointerId,
     pointer::HitTestHandle,
 };
-use flui_platform::data_transfer::TransferActions;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::{PointerSource, PressId};
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::{PointerSource, PressId};
+use flui_platform::transfer::data::TransferActions;
 use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
 use flui_view::environment::GesturePolicy;
@@ -484,7 +484,7 @@ impl Source {
             .copied()
             .find(|contact| contact.info.id == pointer);
         let info = pressed.map_or_else(
-            || PointerSource::new(pointer, flui_platform::pointer::PointerKind::Unknown),
+            || PointerSource::new(pointer, flui_platform::input::pointer::PointerKind::Unknown),
             |contact| contact.info,
         );
         // A frame lifts the feedback from the box around the child, so it

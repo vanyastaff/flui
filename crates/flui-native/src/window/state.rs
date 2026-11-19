@@ -1551,7 +1551,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        use flui_platform::input_capabilities::InputCapabilities;
+        use flui_platform::input::capabilities::InputCapabilities;
         use flui_testing::window_handler::RecordingWindowHandler;
 
         use crate::owner::window_delivery::WindowDelivery;
@@ -1775,7 +1775,7 @@ mod tests {
 
         let delivery = crate::owner::window_delivery::WindowDelivery::new(
             flui_testing::window_handler::RecordingWindowHandler::new(),
-            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+            flui_platform::input::capabilities::InputCapabilities::UNAVAILABLE,
         );
         cell.invalidate();
         let focused = cell.read(&delivery, || read(1.0, true));

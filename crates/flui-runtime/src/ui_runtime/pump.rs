@@ -27,7 +27,7 @@ struct FrameTimeGuard<'a> {
 pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() {
     use flui_animation::{Animation as _, AnimationController};
     use flui_interaction::testing::InMemoryTextStore;
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
     };
     use flui_view::SignalWriteExt as _;

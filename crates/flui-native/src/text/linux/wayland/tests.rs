@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, Weak};
 
 use flui_platform::WindowId;
-use flui_platform::text_store::{TextStore, TextStoreHost};
+use flui_platform::text::store::{TextStore, TextStoreHost};
 use flui_testing::text_store_kit::InMemoryTextStore;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;

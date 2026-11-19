@@ -1316,7 +1316,7 @@ impl crate::host_window::HostWindow for MacOSWindow {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    ) -> Option<std::rc::Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()
@@ -1587,7 +1587,7 @@ impl PlatformWindow for MacOSWindow {
 
     /// AppKit starts no OS drag session from this window yet; its input
     /// capabilities say so.
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         None
     }
 
@@ -1744,7 +1744,7 @@ impl PlatformWindow for MacOSWindow {
     /// answers `NoWindow`.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(flui_platform::Unsupported::new(

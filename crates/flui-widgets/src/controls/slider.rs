@@ -11,7 +11,7 @@ use flui_interaction::{
     focus::{FocusNode, KeyEventResult},
 };
 use flui_painting::{Canvas, paint::Paint, styling::Color};
-use flui_platform::keyboard::ImeComposition;
+use flui_platform::input::keyboard::ImeComposition;
 use flui_rendering::{
     delegates::CustomPainter, hit_testing::HitTestBehavior, semantics::NumericRange,
 };

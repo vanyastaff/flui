@@ -14,15 +14,15 @@ use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
 use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as _};
 use flui_platform::DragDropEvent;
 use flui_platform::WindowOptions;
-use flui_platform::data_transfer::{
+use flui_platform::input::pointer::PressId;
+use flui_platform::transfer::data::{
     DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
-use flui_platform::drag::{
+use flui_platform::transfer::drag::{
     DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, OsDragTerms,
     ProcessNonce,
 };
-use flui_platform::pointer::PressId;
 use flui_platform::{DispatchEventResult, PlatformInput};
 
 const COPY: TransferActions = TransferActions::COPY;
@@ -149,7 +149,7 @@ impl Desktop {
     fn press(&self, down: bool, press: PressId) {
         use flui_foundation::geometry::Point as At;
         use flui_platform::EventTime;
-        use flui_platform::pointer::{
+        use flui_platform::input::pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
             PointerPress, PointerRelease, PointerSample, PointerSource,
         };

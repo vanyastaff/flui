@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::generation::Generation;
-use flui_platform::data_transfer::RepresentationDescriptor;
+use flui_platform::transfer::data::RepresentationDescriptor;
 #[cfg(any(
     target_os = "android",
     target_arch = "wasm32",
@@ -17,7 +17,7 @@ use flui_platform::data_transfer::RepresentationDescriptor;
     wayland_host,
     test
 ))]
-use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
+use flui_platform::transfer::data::{Mime, TransferFormat, TransferPayload};
 
 // ============================================================================
 // The offer table: the single minting authority
@@ -121,7 +121,7 @@ mod uri_list {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use flui_platform::data_transfer::{Mime, TransferPayload};
+    use flui_platform::transfer::data::{Mime, TransferPayload};
 
     /// The media type of a URI list.
     const URI_LIST: &str = "text/uri-list";

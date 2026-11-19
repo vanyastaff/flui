@@ -19,7 +19,7 @@ use flui_native::{
     HeadlessPreferences, OwnerPlatform,
 };
 use flui_platform::CloseDecision;
-use flui_platform::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 use flui_platform::{
     CapabilityAbsence, DisplayId, DisplayKey, DisplayParts, DisplayRegistry, Headroom, ImeEvent,
     MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
@@ -520,7 +520,7 @@ fn first_store(target: &WindowTarget) -> Rc<InMemoryTextStore> {
 /// replay to the same decisions, a vetoed one keeping the window and a
 /// granted one closing it.
 fn window_store_and_close_recordings_replay_on_the_headless_host() {
-    use flui_platform::text_store::{Selection, Utf16Offset};
+    use flui_platform::text::store::{Selection, utf16::Utf16Offset};
 
     let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
     let (window, handler) = headless_window(&owner);
@@ -1453,7 +1453,7 @@ fn a_header_out_of_its_stream_is_refused() {
 /// then behaved; a sign or a separator on a purpose that is not a number is
 /// refused.
 fn a_store_focus_keeps_every_field_of_its_status() {
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions,
         TextInputPurpose, TextStoreStatus,
     };
@@ -2014,7 +2014,7 @@ thread_local! {
 struct ServedStore;
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-impl flui_platform::text_store::TextStoreHost for ServedStore {
+impl flui_platform::text::store::TextStoreHost for ServedStore {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         if let Some(store) = &store {
             store.set_observer(Some(Rc::new(QuietObserver)));
@@ -2026,10 +2026,10 @@ impl flui_platform::text_store::TextStoreHost for ServedStore {
         &self,
         _store: &Rc<dyn TextStore>,
     ) -> Result<
-        flui_platform::text_store::CompositionEnd,
-        flui_platform::text_store::TextStoreHostError,
+        flui_platform::text::store::CompositionEnd,
+        flui_platform::text::store::TextStoreHostError,
     > {
-        Err(flui_platform::text_store::TextStoreHostError::NotFocused)
+        Err(flui_platform::text::store::TextStoreHostError::NotFocused)
     }
 
     fn show_keyboard(&self, _store: &Rc<dyn TextStore>) {}
@@ -2040,8 +2040,8 @@ impl flui_platform::text_store::TextStoreHost for ServedStore {
 struct QuietObserver;
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-impl flui_platform::text_store::TextStoreObserver for QuietObserver {
-    fn text_changed(&self, _change: flui_platform::text_store::TextChange) {}
+impl flui_platform::text::store::TextStoreObserver for QuietObserver {
+    fn text_changed(&self, _change: flui_platform::text::store::TextChange) {}
 
     fn selection_changed(&self) {}
 
@@ -2071,12 +2071,12 @@ enum StorePath {
 fn captured_store_session(
     path: StorePath,
     privacy: flui_native::journal::recorder::Privacy,
-    status: flui_platform::text_store::TextStoreStatus,
+    status: flui_platform::text::store::TextStoreStatus,
 ) -> (Rc<InMemoryTextStore>, NativeRecording) {
     use flui_native::journal::codec::{Backend, Stream};
     use flui_native::journal::recorder::Recorder;
     use flui_native::text::conformance::{AndroidMirror, TsfDocument, WebEditContext};
-    use flui_platform::text_store::{Utf16Offset, Utf16Range};
+    use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
 
     let recorder = Recorder::with_privacy(Backend::Headless, privacy);
     let platform = HeadlessPlatform::new().with_text_store_host(|| Rc::new(ServedStore) as Rc<_>);
@@ -2153,8 +2153,8 @@ fn document_of(
     store: &InMemoryTextStore,
 ) -> (
     String,
-    flui_platform::text_store::Selection,
-    Option<flui_platform::text_store::Composition>,
+    flui_platform::text::store::Selection,
+    Option<flui_platform::text::store::Composition>,
 ) {
     (store.text(), store.selection(), store.composition())
 }
@@ -2192,7 +2192,7 @@ fn captured_store_locks_replay_to_the_document_they_left() {
         let (field, recording) = captured_store_session(
             path,
             Privacy::KeepText,
-            flui_platform::text_store::TextStoreStatus::EDITABLE_SINGLE_LINE,
+            flui_platform::text::store::TextStoreStatus::EDITABLE_SINGLE_LINE,
         );
         assert_eq!(field.text(), text, "{path:?}: the input method composed");
         assert!(
@@ -2231,7 +2231,7 @@ fn captured_store_locks_replay_to_the_document_they_left() {
         let (_, redacted) = captured_store_session(
             path,
             Privacy::Redact,
-            flui_platform::text_store::TextStoreStatus::EDITABLE_SINGLE_LINE,
+            flui_platform::text::store::TextStoreStatus::EDITABLE_SINGLE_LINE,
         );
         let mut written = Vec::new();
         redacted
@@ -2266,7 +2266,7 @@ fn a_store_lock_past_its_bounds_or_unwound_is_incomplete() {
     use flui_native::journal::codec::{Backend, Stream};
     use flui_native::journal::recorder::{Privacy, Recorder};
     use flui_native::journal::store::MAX_STORE_STEPS;
-    use flui_platform::text_store::{LockGrant, LockTiming};
+    use flui_platform::text::store::{LockGrant, LockTiming};
 
     let recorder = Recorder::with_privacy(Backend::Headless, Privacy::KeepText);
     let platform = HeadlessPlatform::new().with_text_store_host(|| Rc::new(ServedStore) as Rc<_>);
@@ -2515,7 +2515,7 @@ fn asked_decision(answer: flui_native::journal::codec::CloseAnswer) -> Option<Cl
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn a_protected_store_journals_nothing_of_its_content() {
     use flui_native::journal::recorder::Privacy;
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         Autofill, NumberFormat, TextInputOptions, TextInputPurpose, TextStoreStatus,
     };
 
@@ -2582,7 +2582,7 @@ fn the_journal_reads_no_document_it_cannot_hold_or_nobody_wants() {
     use flui_native::journal::lines::{Forms, LineSink, StreamLine, capture_lines};
     use flui_native::journal::recorder::Recorder;
     use flui_native::journal::store::MAX_STORE_TEXT_BYTES;
-    use flui_platform::text_store::{LockGrant, LockTiming, Selection, Utf16Offset};
+    use flui_platform::text::store::{LockGrant, LockTiming, Selection, utf16::Utf16Offset};
 
     /// Opens a headless window, focuses `field` through its journaled host
     /// counting the reads of its text, and sets the caret in one lock.
@@ -2684,40 +2684,40 @@ struct CountedSession<'a, S: ?Sized> {
 }
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-impl<S: flui_platform::text_store::TextStoreRead + ?Sized> flui_platform::text_store::TextStoreRead
-    for CountedSession<'_, S>
+impl<S: flui_platform::text::store::TextStoreRead + ?Sized>
+    flui_platform::text::store::TextStoreRead for CountedSession<'_, S>
 {
-    fn document_len(&self) -> flui_platform::text_store::Utf16Offset {
+    fn document_len(&self) -> flui_platform::text::store::utf16::Utf16Offset {
         self.session.document_len()
     }
 
     fn text(
         &self,
-        range: flui_platform::text_store::Utf16Range,
-    ) -> Result<String, flui_platform::text_store::TextStoreError> {
+        range: flui_platform::text::store::utf16::Utf16Range,
+    ) -> Result<String, flui_platform::text::store::TextStoreError> {
         self.reads.set(self.reads.get() + 1);
         self.session.text(range)
     }
 
-    fn selection(&self) -> flui_platform::text_store::Selection {
+    fn selection(&self) -> flui_platform::text::store::Selection {
         self.session.selection()
     }
 
-    fn composition(&self) -> Option<flui_platform::text_store::Composition> {
+    fn composition(&self) -> Option<flui_platform::text::store::Composition> {
         self.session.composition()
     }
 
     fn rect_for_range(
         &self,
-        range: flui_platform::text_store::Utf16Range,
-    ) -> Result<flui_platform::text_store::RangeRect, flui_platform::text_store::TextStoreError>
+        range: flui_platform::text::store::utf16::Utf16Range,
+    ) -> Result<flui_platform::text::store::RangeRect, flui_platform::text::store::TextStoreError>
     {
         self.session.rect_for_range(range)
     }
 
     fn document_bounds(
         &self,
-    ) -> Result<flui_foundation::geometry::Bounds<f64>, flui_platform::text_store::TextStoreError>
+    ) -> Result<flui_foundation::geometry::Bounds<f64>, flui_platform::text::store::TextStoreError>
     {
         self.session.document_bounds()
     }
@@ -2725,9 +2725,11 @@ impl<S: flui_platform::text_store::TextStoreRead + ?Sized> flui_platform::text_s
     fn index_at_point(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-        mode: flui_platform::text_store::PointMode,
-    ) -> Result<flui_platform::text_store::Utf16Offset, flui_platform::text_store::TextStoreError>
-    {
+        mode: flui_platform::text::store::PointMode,
+    ) -> Result<
+        flui_platform::text::store::utf16::Utf16Offset,
+        flui_platform::text::store::TextStoreError,
+    > {
         self.session.index_at_point(point, mode)
     }
 
@@ -2735,21 +2737,21 @@ impl<S: flui_platform::text_store::TextStoreRead + ?Sized> flui_platform::text_s
         &self,
     ) -> Result<
         Option<flui_foundation::geometry::Bounds<f64>>,
-        flui_platform::text_store::TextStoreError,
+        flui_platform::text::store::TextStoreError,
     > {
         self.session.visible_bounds()
     }
 }
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-impl<S: flui_platform::text_store::TextStoreEdit + ?Sized> flui_platform::text_store::TextStoreEdit
-    for CountedSession<'_, S>
+impl<S: flui_platform::text::store::TextStoreEdit + ?Sized>
+    flui_platform::text::store::TextStoreEdit for CountedSession<'_, S>
 {
     fn replace(
         &mut self,
-        range: flui_platform::text_store::Utf16Range,
+        range: flui_platform::text::store::utf16::Utf16Range,
         text: &str,
-    ) -> Result<flui_platform::text_store::TextChange, flui_platform::text_store::TextStoreError>
+    ) -> Result<flui_platform::text::store::TextChange, flui_platform::text::store::TextStoreError>
     {
         self.session.replace(range, text)
     }
@@ -2757,29 +2759,29 @@ impl<S: flui_platform::text_store::TextStoreEdit + ?Sized> flui_platform::text_s
     fn insert_at_selection(
         &mut self,
         text: &str,
-    ) -> Result<flui_platform::text_store::TextChange, flui_platform::text_store::TextStoreError>
+    ) -> Result<flui_platform::text::store::TextChange, flui_platform::text::store::TextStoreError>
     {
         self.session.insert_at_selection(text)
     }
 
     fn set_selection(
         &mut self,
-        selection: flui_platform::text_store::Selection,
-    ) -> Result<(), flui_platform::text_store::TextStoreError> {
+        selection: flui_platform::text::store::Selection,
+    ) -> Result<(), flui_platform::text::store::TextStoreError> {
         self.session.set_selection(selection)
     }
 
     fn set_composition(
         &mut self,
-        composition: Option<flui_platform::text_store::Composition>,
-    ) -> Result<(), flui_platform::text_store::TextStoreError> {
+        composition: Option<flui_platform::text::store::Composition>,
+    ) -> Result<(), flui_platform::text::store::TextStoreError> {
         self.session.set_composition(composition)
     }
 }
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 impl TextStore for CountedReads {
-    fn status(&self) -> flui_platform::text_store::TextStoreStatus {
+    fn status(&self) -> flui_platform::text::store::TextStoreStatus {
         assert!(!self.panic_status.get(), "the application's status fails");
         self.inner.status()
     }
@@ -2787,18 +2789,18 @@ impl TextStore for CountedReads {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
+    ) -> Result<flui_platform::text::store::PressTarget, flui_platform::text::store::TextStoreError>
     {
         self.inner.press_target_at(point)
     }
 
     fn request_lock(
         &self,
-        grant: flui_platform::text_store::LockGrant,
-        timing: flui_platform::text_store::LockTiming,
-    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+        grant: flui_platform::text::store::LockGrant,
+        timing: flui_platform::text::store::LockTiming,
+    ) -> Result<flui_platform::text::store::LockOutcome, flui_platform::text::store::TextStoreError>
     {
-        use flui_platform::text_store::LockGrant;
+        use flui_platform::text::store::LockGrant;
 
         let reads = Rc::clone(&self.reads);
         // The test's locks are read-write: a read lock is passed on uncounted.
@@ -2818,11 +2820,14 @@ impl TextStore for CountedReads {
         self.inner.run_deferred_grants()
     }
 
-    fn set_commit_gate(&self, gate: flui_platform::text_store::CommitGate) {
+    fn set_commit_gate(&self, gate: flui_platform::text::store::CommitGate) {
         self.inner.set_commit_gate(gate);
     }
 
-    fn set_observer(&self, observer: Option<Rc<dyn flui_platform::text_store::TextStoreObserver>>) {
+    fn set_observer(
+        &self,
+        observer: Option<Rc<dyn flui_platform::text::store::TextStoreObserver>>,
+    ) {
         self.inner.set_observer(observer);
     }
 }
@@ -2892,7 +2897,10 @@ fn served_store(
 fn the_granted_body_runs_when_the_store_status_panics() {
     use flui_native::journal::codec::Backend;
     use flui_native::journal::recorder::Recorder;
-    use flui_platform::text_store::{LockGrant, LockTiming, Utf16Offset, Utf16Range};
+    use flui_platform::text::store::{
+        LockGrant, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
+    };
 
     let recorder = Recorder::start(Backend::Headless);
     let field = InMemoryTextStore::new("ab");
@@ -3015,7 +3023,10 @@ fn served_store_of(
 fn an_unchanged_document_is_not_written_again() {
     use flui_native::journal::codec::{Backend, Stream};
     use flui_native::journal::recorder::{Privacy, Recorder};
-    use flui_platform::text_store::{LockGrant, LockTiming, Utf16Offset, Utf16Range};
+    use flui_platform::text::store::{
+        LockGrant, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
+    };
 
     let recorder = Recorder::with_privacy(Backend::Headless, Privacy::KeepText);
     let (_owner, _window, served) = served_store(InMemoryTextStore::new("ab"), false);

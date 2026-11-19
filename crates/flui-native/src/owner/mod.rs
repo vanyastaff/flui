@@ -158,13 +158,13 @@ use std::sync::Arc;
 use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::error::PlatformError;
 use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::Platform;
-use flui_platform::data_transfer::DragTransport;
+use flui_platform::transfer::data::DragTransport;
 use flui_platform::{WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, OwnerTurnSlot, SignalTransport};
 

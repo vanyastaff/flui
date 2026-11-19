@@ -13,7 +13,9 @@
 use rustc_hash::FxHashMap;
 use std::rc::{Rc, Weak};
 
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::input::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey,
+};
 
 use super::FocusNode;
 use crate::ids::FocusNodeId;

@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use flui_platform::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 use flui_testing::text_store_kit::InMemoryTextStore;
 
 use super::{HostQueue, MirrorHostOp};

@@ -25,7 +25,7 @@ use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration,
     FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
 };
-use flui_platform::keyboard::KeyEvent;
+use flui_platform::input::keyboard::KeyEvent;
 use flui_view::prelude::*;
 use flui_view::{Provided, RebuildHandle};
 

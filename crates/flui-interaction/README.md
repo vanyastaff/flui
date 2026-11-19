@@ -55,7 +55,7 @@ use flui_interaction::gesture::{RecognizerSet, TapGestureRecognizer};
 use flui_interaction::ids::PointerId;
 use flui_interaction::pointer::{HitTestEntry, HitTestResult, InteractionLane};
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerKind, PointerPosition, PointerPress, PointerRelease,
     PointerSample, PointerSource,
 };

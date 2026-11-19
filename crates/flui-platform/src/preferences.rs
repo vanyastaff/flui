@@ -2,6 +2,9 @@
 //!
 //! Unknown values remain absent. A consumer chooses its fallback and application
 //! policy; constructing this value does not install either one.
+//!
+//! The user's locale and regional formats, which a snapshot carries, are in
+//! the [`locale`] and [`regional`] modules.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,9 +40,10 @@ impl TextWeightPreference {
 }
 
 mod geometry;
+pub(crate) mod locale;
+pub(crate) mod regional;
 pub use geometry::{
     Distance, FlingSpeeds, GestureGeometry, NativeMouseGeometry, NativeTouchGeometry,
-    PreferenceQueryError,
 };
 
 /// An invalid numeric observation refused before snapshot publication.

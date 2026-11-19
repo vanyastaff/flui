@@ -329,7 +329,7 @@ fn resampling_siblings_competing_failures() {
 
 fn resampling_sibling_case(fail: bool, compete: bool) {
     use crate::presentation::PointerResampling;
-    use flui_platform::pointer::*;
+    use flui_platform::input::pointer::*;
     use flui_platform::{EventTime, PlatformInput};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -499,7 +499,7 @@ fn a_ui_runtime_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
     let down = flui_interaction::events::make_down_event_for_id(
         PointerId::new(std::num::NonZeroU64::MIN),
         position,
-        flui_platform::pointer::PointerKind::Touch,
+        flui_platform::input::pointer::PointerKind::Touch,
     )
     .expect("valid Down sample");
     recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));

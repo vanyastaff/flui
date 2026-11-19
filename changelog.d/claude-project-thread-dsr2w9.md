@@ -25,5 +25,5 @@
 ### Removed
 
 - `flui_foundation::panic::retain_opaque_payload`; use `discard_payload` instead.
-- `flui_platform::text_store::RetainOnFailure` and `flui_scheduler::PostFrameRejection::Retained`:
+- `flui_platform::text::store::RetainOnFailure` and `flui_scheduler::PostFrameRejection::Retained`:
   nothing is retained after a failure any more.

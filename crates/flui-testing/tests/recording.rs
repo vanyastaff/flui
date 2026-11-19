@@ -560,7 +560,7 @@ fn a_truncated_recording_dispatches_nothing() {
 
 /// Rows carrying text in each place a recording redacts it.
 fn text_rows() -> Vec<InputRecord> {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, ImeEvent, WindowId};
 
     let at = EventTime::from_nanos(1_000);
@@ -611,7 +611,7 @@ const SECRETS: [&str; 7] = [
 
 fn written(privacy: Privacy) -> Vec<u8> {
     use flui_platform::WindowId;
-    use flui_platform::pointer::{DeviceId, PenTool};
+    use flui_platform::input::pointer::{DeviceId, PenTool};
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let mut header = RecordingHeader::new(RecordingClock::Virtual)
@@ -1117,7 +1117,7 @@ fn focused_beside(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 fn a_key_records_the_window_focus_dispatched_it_to() {
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform::PlatformWindow;
-    use flui_platform::keyboard::Code;
+    use flui_platform::input::keyboard::Code;
     use flui_runtime::RecordedSurface;
 
     let (bytes, fired) = recorded_on(focused_beside, Privacy::KeepText, |host| {

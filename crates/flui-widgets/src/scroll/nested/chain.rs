@@ -1311,7 +1311,7 @@ mod tests {
     use flui_foundation::geometry::{Axis, Point, Vec2};
     use flui_interaction::gesture::{GestureArena, RemainderHandoff};
     use flui_platform::EventTime;
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
 
     use super::{ChainNode, Participant, ScrollSequence};
     use crate::scroll::nested::{

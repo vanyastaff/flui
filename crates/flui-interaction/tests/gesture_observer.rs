@@ -29,7 +29,7 @@ use flui_interaction::{
     pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
 use flui_platform::EventTime;
-use flui_platform::pointer::CancelReason;
+use flui_platform::input::pointer::CancelReason;
 
 fn run_rows(rows: &[(&str, fn())]) {
     for &(name, row) in rows {

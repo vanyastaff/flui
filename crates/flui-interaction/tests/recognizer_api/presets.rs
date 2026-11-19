@@ -15,7 +15,7 @@ use flui_interaction::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
-use flui_platform::{GesturePreferences, TargetPlatform, pointer::PenTool};
+use flui_platform::{GesturePreferences, TargetPlatform, input::pointer::PenTool};
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
 

@@ -21,7 +21,7 @@ use flui_platform::WindowOptions;
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,
 };
-use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, input::pointer::DeviceId};
 
 use HapticOutcome::{Approximated, FellBack, Submitted};
 

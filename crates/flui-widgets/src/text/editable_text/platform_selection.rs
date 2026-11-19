@@ -15,7 +15,7 @@
 use std::cell::Cell;
 
 use flui_foundation::RebuildReason;
-use flui_platform::text_store::SelectionUi;
+use flui_platform::text::store::SelectionUi;
 use flui_view::RebuildHandle;
 
 /// Whether the platform draws the field's selection UI now, and the rebuild

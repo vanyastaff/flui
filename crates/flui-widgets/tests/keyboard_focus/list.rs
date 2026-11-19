@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_interaction::focus::KeyEventResult;
-use flui_platform::keyboard::{Key, KeyPress, KeyState, NamedKey};
+use flui_platform::input::keyboard::{Key, KeyPress, KeyState, NamedKey};
 use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;
 use flui_widgets::{
@@ -197,7 +197,7 @@ pub(crate) fn list_keyboard_navigation() {
         super::chord(
             &manager,
             &Key::Named(NamedKey::Tab),
-            flui_platform::keyboard::Modifiers::SHIFT,
+            flui_platform::input::keyboard::Modifiers::SHIFT,
         )
     });
     assert!(shift_tab);
@@ -466,7 +466,7 @@ pub(crate) fn sliver_keyboard_navigation() {
         super::chord(
             &manager,
             &Key::Named(NamedKey::Tab),
-            flui_platform::keyboard::Modifiers::SHIFT,
+            flui_platform::input::keyboard::Modifiers::SHIFT,
         )
     });
     assert!(shift_tab);

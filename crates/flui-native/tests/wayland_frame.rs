@@ -31,8 +31,8 @@ mod cases {
         client_frame_report, compositor_report, last_input_serial, present, run_for,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
-    use flui_platform::input_regions::{InputRegion, InputRegionKind};
-    use flui_platform::pointer::PointerEvent;
+    use flui_platform::input::pointer::PointerEvent;
+    use flui_platform::input::regions::{InputRegion, InputRegionKind};
     use flui_platform::{
         AppTitleBar, PlatformInput, WindowCommand, WindowFrame, WindowMode, WindowOptions,
     };

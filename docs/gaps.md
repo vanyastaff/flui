@@ -743,6 +743,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The likely shape on Android is the desktop's worker path, pushed to the device as the scene plugin is; on the Web, which has no `dlopen`, a code patcher (ADR-0311 §7).
 - The check is a widget edit on an Android device and in a browser that reloads with a stateful counter's value kept.
 
+### The window and capability areas of flui-platform import each other
+
+> **Environments:** all · **Who it hurts:** A contributor who changes either area and has to build both; the rule that a crate's top-level modules import in one direction (AGENTS.md, "Rules a reader holds") · **Parity:** none (module graph)
+
+- `flui-platform`'s areas import in one direction except these two. `PlatformWindow::portal_parent` takes a `capability::Resolver<capability::PortalParent>` (`crates/flui-platform/src/window/platform_window.rs`), and `capability::WindowRef` holds the window it names as a `Weak<dyn PlatformWindow>` beside its `WindowId` and `SurfaceTarget` (`crates/flui-platform/src/capability/window_ref.rs`). The two files named each other before the crate was grouped by area.
+- The entry closes when one of the two areas stops naming the other, which is a change to the window contract or to the capability seam (ADR-0254, ADR-0151 §2), owned by the platform-layer feature.
+
 ### Two versions of zbus on Linux
 
 > **Environments:** Linux · **Who it hurts:** Every Linux application, which compiles both D-Bus stacks · **Parity:** none (build graph)

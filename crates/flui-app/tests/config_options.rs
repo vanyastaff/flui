@@ -4,7 +4,9 @@
 
 use flui_app::AppConfig;
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
-use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
+use flui_platform::window::os_options::{
+    OsWindowOptions, Win32WindowOptions, WindowsCornerPreference,
+};
 use flui_platform::{
     AppTitleBar, ControlsOffset, DesktopOrigin, DisplayBounds, DisplayDescription, DisplayKey,
     DisplayRegistry, DisplaySnapshot, InputLatency, SystemControls, WindowExtent, WindowFrame,

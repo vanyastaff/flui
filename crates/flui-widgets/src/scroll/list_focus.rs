@@ -27,7 +27,7 @@ use flui_foundation::{SaltedKey, Subscription};
 use flui_interaction::focus::{
     EntryTarget, FocusCause, FocusNode, FocusNodeRegistration, KeyEventResult,
 };
-use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::input::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::view::{ScrollPosition, ViewportOffset as _};
 use flui_view::element::ElementKind;

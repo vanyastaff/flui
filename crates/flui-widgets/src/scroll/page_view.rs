@@ -65,7 +65,7 @@ use std::time::Duration;
 use flui_animation::{SharedCurve, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{ChangeNotifier, Listenable};
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::view::{CacheExtentStyle, DimensionChangePolicy, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;

@@ -50,16 +50,38 @@ this one path (ADR-0151 §9).
   luminance ratio that overflows. A profile change
   is a display change: a new revision of the same monotone snapshot, so an older sample
   never replaces a newer profile.
-- **Flat root.** The contract's everyday names are re-exported at the crate
-  root, the input vocabulary's (`PointerEvent`, `Key`, `Modifiers`, …) among
-  them. A module is public where its other types keep their module path
-  because they are not everyone's vocabulary: `os_options` (one operating
-  system's window creation options), `haptics` (the second haptic tier, which
-  the facade and `flui-sdk` re-export only under `unstable-input`, ADR-0210 §9,
-  while `PlatformHaptics` and `HapticFeedback` stay at the root),
-  `data_transfer`, `drag`, `text_store` (whose four traits are also at the
-  root), `pointer`, `keyboard`, `input_capabilities`, `input_regions`,
-  `assets`, `capability`, `executor`, `http` and `launch`. `testing` exists only under
+- **Grouped by area, one path per item.** The crate is grouped by area
+  (ADR-0151 §2): `window` (the window vocabulary, the window trait, state and
+  commands, capabilities, placement, geometry, frame, insets, the handler,
+  the surface target, the cursor, brightness, frame requests and
+  `window::os_options`), `input` (`PlatformInput`, `input::pointer`,
+  `input::keyboard`, `input::capabilities`, `input::regions`,
+  `EventTime`), `text` (`PlatformTextInput`, `ImeEvent`, `text::store`),
+  `transfer` (the clipboard's vocabulary, `transfer::data`,
+  `transfer::drag`), `preferences` (with the locale and the regional
+  formats), `haptics` (with the tier-1 `HapticFeedback`), `display`,
+  `capability` and `notice`, beside the modules that are not an area. The
+  contract's everyday names are re-exported at the crate root from an area's
+  private modules, so `flui_platform::WindowOptions` is their one path. The
+  exceptions are items another crate defines and the contract's signatures
+  name, re-exported beside them: `flui-foundation`'s `PressId`
+  (`input::pointer::PressId`), `FirstPanic` (`capability::FirstPanic`) and
+  `MemoryPressureLevel` (at the root), and `cursor-icon`'s `CursorIcon` (at the
+  root, ADR-0089). A
+  module is public where its types keep their module path because they are
+  not everyone's vocabulary: the eight above inside their areas, `haptics`
+  (`PlatformHaptics` and the second haptic tier, which the facade and
+  `flui-sdk` re-export only under `unstable-input`, ADR-0210 §9, while
+  `HapticFeedback` is at the root), `assets`, `capability`, `executor`,
+  `http`, `launch` and `sandbox`. The UTF-16 offset types live in
+  `text::store::utf16` beside the conversions that take them. The areas
+  import in one direction (`lib.rs` names the edges): `window` names `input`,
+  `text`, `transfer`, `haptics`, `display` and `preferences`, `input` names
+  `text` and `transfer`, and `haptics` names `input`; `transfer::drag` takes
+  `PressId` from `flui-foundation`, which defines it, so `transfer` names no
+  other area. `window` and `capability` still name each other, an entry of
+  `docs/gaps.md`. The menu model's area lands with its first implementation
+  and its consumer (ADR-0151 §2's table). `testing` exists only under
   the `testing` feature and in this crate's own unit tests: the doubles of its contracts, among them the
   one window double, `MockWindow` (`flui-testing` re-exports it; no crate
   outside the core host and the kits implements `PlatformWindow`), and
@@ -553,7 +575,7 @@ Implementation and native acceptance remain separate: ADR-0142's outstanding
 composition-exit, slot-residence and anchor-debt requirements are still obligations.
 The native adapter does not replace the portable store's lock/settle contract.
 
-`text_store` is a pull protocol (ADR-0090), not a push of whole editing values
+`text::store` is a pull protocol (ADR-0090), not a push of whole editing values
 between engine and client: the field is
 a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the
 shape of TSF's `ITextStoreACP` that AppKit's `NSTextInputClient` and Android's
@@ -617,7 +639,7 @@ hardware Enter and every platform's action key behave alike. The Send action is
 `EnterAction::SendMessage`: a variant named `Send` would make rustc print the
 marker trait in full (`std::marker::Send`) in every user's diagnostics.
 
-**Tests:** the `text_store` module's unit tests; the store tests that need a
+**Tests:** the `text::store` module's unit tests; the store tests that need a
 store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,
 `ime_events_project_onto_the_store_as_the_text_input_contract_says`); each host's
 mapping of the options is pinned beside it (`keyboard_traits`,
@@ -716,7 +738,7 @@ application sets every system's options without a `cfg` of its own. Only that
 system's host reads its field. Another host (the headless host, another
 system's) opens the window without it, and the application sees that its
 options were not taken when that system's extension in `flui::native` has no
-view of the window. They sit in their own public module, `os_options`, not at
+view of the window. They sit in their own public module, `window::os_options`, not at
 the root: they are Stable like every item of this crate (ADR-0089 §1 gives no
 module a tier of its own), so they take the least committal shape, every
 struct and enum `#[non_exhaustive]` and no conversion to the system's own

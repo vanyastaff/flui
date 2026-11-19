@@ -9,7 +9,7 @@
 //! or answers why not ([`Win32WindowError`]). [`system_appearance`] and
 //! [`apply_chrome`] are what the window procedure applies when the theme
 //! changes; [`apply_corners`] and [`opening_chrome`] are what a window opens
-//! with (`flui_platform::os_options::Win32WindowOptions`).
+//! with (`flui_platform::window::os_options::Win32WindowOptions`).
 //!
 //! Each desktop window manager attribute is an [`Attribute`] constant that
 //! pairs its ordinal with the type of its value, and each mapping between a
@@ -18,7 +18,9 @@
 use std::marker::PhantomData;
 
 use flui_painting::styling::Color;
-use flui_platform::os_options::{Win32WindowOptions, WindowsCornerPreference, WindowsTheme};
+use flui_platform::window::os_options::{
+    Win32WindowOptions, WindowsCornerPreference, WindowsTheme,
+};
 use flui_platform::{Brightness, Unsupported, UnsupportedReason, WindowMaterial};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{

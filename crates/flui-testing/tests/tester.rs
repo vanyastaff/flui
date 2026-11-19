@@ -370,7 +370,7 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
 /// key, and `^` for each of Control and Shift held.
 fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
     use flui_interaction::focus::KeyEventResult;
-    use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers};
+    use flui_platform::input::keyboard::{Key, KeyPress, KeyState, Modifiers};
 
     let log = Rc::new(std::cell::RefCell::new(Vec::new()));
     let heard = Rc::clone(&log);

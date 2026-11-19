@@ -7,8 +7,8 @@ use crate::presentation::PresentationState;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{events::PointerEvent, ids::InputSurface};
-use flui_platform::keyboard::KeyState;
-use flui_platform::pointer::{ButtonChange, PointerButton};
+use flui_platform::input::keyboard::KeyState;
+use flui_platform::input::pointer::{ButtonChange, PointerButton};
 use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
@@ -195,8 +195,8 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
 
 /// Whether `event` is the press of Escape that cancels a drag: its first
 /// press, while no input method composes.
-fn is_escape_press(event: &flui_platform::keyboard::KeyEvent) -> bool {
-    use flui_platform::keyboard::{ImeComposition, Key, KeyPress, NamedKey};
+fn is_escape_press(event: &flui_platform::input::keyboard::KeyEvent) -> bool {
+    use flui_platform::input::keyboard::{ImeComposition, Key, KeyPress, NamedKey};
     matches!(
         event.state,
         KeyState::Down(KeyPress::First | KeyPress::Unpaired)
@@ -217,7 +217,7 @@ fn pointer_pressed(event: &PointerEvent) -> bool {
 /// repeat) or a pointer button pressed. Only these try a dropped frame before
 /// its backoff ends.
 fn is_discrete_press(input: &PlatformInput) -> bool {
-    use flui_platform::keyboard::KeyPress;
+    use flui_platform::input::keyboard::KeyPress;
     match input {
         PlatformInput::Keyboard(event) => {
             matches!(
@@ -237,7 +237,7 @@ fn is_discrete_press(input: &PlatformInput) -> bool {
 fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
     let (state, button, time) = match event {
         PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => (
-            KeyState::Down(flui_platform::keyboard::KeyPress::First),
+            KeyState::Down(flui_platform::input::keyboard::KeyPress::First),
             press.button(),
             press.sample.time,
         ),

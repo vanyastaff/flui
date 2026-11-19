@@ -20,7 +20,7 @@ use std::{
 };
 
 use flui_foundation::geometry::{Axis, Point};
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerId, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, ScrollEvent, ScrollPhase, ScrollPrecision,
     ScrollUnit,

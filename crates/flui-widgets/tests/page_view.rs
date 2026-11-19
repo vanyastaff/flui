@@ -9,7 +9,7 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_painting::styling::Color;
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;

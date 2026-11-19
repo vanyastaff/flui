@@ -580,7 +580,7 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
 fn the_headless_window_drops_input_regions_no_host_could_send() {
     use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
     use flui_platform::PlatformWindow as _;
-    use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
+    use flui_platform::input::regions::{DeviceInputRegion, InputRegion, InputRegionKind};
 
     const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;
     let window = HeadlessWindow::new(40, 24);
@@ -862,7 +862,7 @@ pub(crate) fn a_failure_streak_past_thirty_three_keeps_the_one_second_cap() {
 fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
     use flui_interaction::focus::KeyEventResult;
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
 
     let log = Rc::new(RefCell::new(Vec::new()));
     let keys = Rc::clone(&log);
@@ -921,7 +921,7 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
 #[test]
 fn opening_a_window_cancels_the_keys_the_focused_one_held() {
     use flui_interaction::focus::{FocusNode, KeyEventResult};
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, PlatformInput};
 
     let node = FocusNode::with_debug_label("held");
@@ -969,7 +969,7 @@ fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another()
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
     use flui_interaction::focus::{FocusNode, KeyEventResult};
     use flui_interaction::ids::PointerId;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, PlatformInput};
 
     let node = FocusNode::with_debug_label("held");
@@ -1027,7 +1027,9 @@ fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another()
 #[test]
 fn tab_moves_focus_in_a_headless_host_attached_app() {
     use flui_interaction::focus::FocusNode;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{
+        Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+    };
     use flui_platform::{EventTime, PlatformInput};
     use flui_view::ViewExt as _;
     use flui_widgets::{Column, Focus, SizedBox};
@@ -1091,7 +1093,9 @@ fn tab_moves_focus_in_a_headless_host_attached_app() {
 #[test]
 fn closing_the_focused_window_moves_the_focus_to_a_survivor() {
     use flui_interaction::focus::FocusNode;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{
+        Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+    };
     use flui_platform::{EventTime, PlatformInput};
     use flui_view::ViewExt as _;
     use flui_widgets::{Column, Focus, SizedBox};

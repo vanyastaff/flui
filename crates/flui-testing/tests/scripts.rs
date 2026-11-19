@@ -9,7 +9,7 @@ use std::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::PointerEvent;
 use flui_interaction::ids::PointerId;
-use flui_platform::pointer::DeviceId;
+use flui_platform::input::pointer::DeviceId;
 use flui_platform::{GesturePreferences, SystemPreferences};
 use flui_runtime::HostInput;
 use flui_testing::replay::{

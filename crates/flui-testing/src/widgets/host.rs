@@ -118,7 +118,7 @@ impl WidgetHost {
     }
 
     /// Deliver a key event through the UI runtime's input path.
-    pub(super) fn dispatch_key(&self, event: flui_platform::keyboard::KeyEvent) {
+    pub(super) fn dispatch_key(&self, event: flui_platform::input::keyboard::KeyEvent) {
         self.ui_runtime.dispatch(PlatformInput::Keyboard(event));
     }
 

@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{
+use flui_platform::input::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
 };
 use flui_view::element::ElementKind;
@@ -1005,7 +1005,7 @@ mod collision_tests {
     use super::{ReservedKey, ShowContextMenuIntent, SingleActivator, reserved_key};
     use flui_foundation::geometry::Axis;
     use flui_platform::TargetPlatform;
-    use flui_platform::keyboard::NamedKey;
+    use flui_platform::input::keyboard::NamedKey;
 
     const PLATFORMS: [TargetPlatform; 7] = [
         TargetPlatform::Android,

@@ -554,7 +554,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
 
     use flui_animation::Vsync;
     use flui_foundation::geometry::Point;
-    use flui_platform::pointer::PointerEvent;
+    use flui_platform::input::pointer::PointerEvent;
     use flui_view::environment::VsyncScope;
     use flui_widgets::Listener;
 

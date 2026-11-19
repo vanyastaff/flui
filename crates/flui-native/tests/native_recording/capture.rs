@@ -14,7 +14,7 @@ use flui_native::input::assembly::{
 };
 use flui_native::journal::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use flui_platform::EventTime;
-use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
+use flui_platform::input::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
 use super::codec::{Backend, NativeRecording, Row, Stream};
@@ -129,7 +129,7 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
         let Some(event) = input.as_pointer() else {
             continue;
         };
-        let head = |verb: &str, pointer: &flui_platform::pointer::PointerSource| {
+        let head = |verb: &str, pointer: &flui_platform::input::pointer::PointerSource| {
             format!("{verb} p{} {:?}", pointer.id.get(), pointer.kind)
         };
         let line = match event {
@@ -158,10 +158,10 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
             ),
             PointerEvent::PanZoom(gesture) => {
                 let phase = match gesture.phase {
-                    flui_platform::pointer::PanZoomPhase::Start => "start",
-                    flui_platform::pointer::PanZoomPhase::Update(_) => "update",
-                    flui_platform::pointer::PanZoomPhase::End => "end",
-                    flui_platform::pointer::PanZoomPhase::Cancelled => "cancelled",
+                    flui_platform::input::pointer::PanZoomPhase::Start => "start",
+                    flui_platform::input::pointer::PanZoomPhase::Update(_) => "update",
+                    flui_platform::input::pointer::PanZoomPhase::End => "end",
+                    flui_platform::input::pointer::PanZoomPhase::Cancelled => "cancelled",
                     _ => "?",
                 };
                 format!("{} {phase}", head("panzoom", gesture.pointer()))
@@ -178,7 +178,7 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
 }
 
 /// The sensor readings a press carries, to two decimals.
-fn sensors(sample: &flui_platform::pointer::PointerSample) -> String {
+fn sensors(sample: &flui_platform::input::pointer::PointerSample) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     if let Some(pressure) = sample.pressure {

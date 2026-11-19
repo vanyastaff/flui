@@ -41,7 +41,7 @@ use flui_objects::{
     TextLinkFocus, TextLinkKey, TextLinkRoute,
 };
 use flui_painting::typography::{InlineSpan, TextLink};
-use flui_platform::keyboard::NamedKey;
+use flui_platform::input::keyboard::NamedKey;
 use flui_rendering::hit_testing::PointerEvent;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionHandler};

@@ -5,8 +5,8 @@
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect};
 use flui_platform::Availability;
-use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::input_regions::{
+use flui_platform::input::capabilities::InputCapabilities;
+use flui_platform::input::regions::{
     CaptionButton, ChromeHit, DeviceInputRegion, InputRegionKind, ResizeEdge, chrome_hit,
 };
 

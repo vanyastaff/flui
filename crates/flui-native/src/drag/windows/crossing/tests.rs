@@ -12,10 +12,10 @@ use super::{
     encode_file_drop, encode_html, encode_text, identity_descriptor, native_format,
     offer_representations, os_loop_buttons, transfer_format,
 };
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data::{
     Mime, TransferActions, TransferError, TransferFormat, TransferPayload,
 };
-use flui_platform::drag::IDENTITY_ESSENCE;
+use flui_platform::transfer::drag::IDENTITY_ESSENCE;
 
 use crate::drag::offers::{PathStyle, TransferUri};
 
@@ -267,7 +267,7 @@ fn the_drop_source_drops_on_release_and_cancels_otherwise() {
 /// contact on every Windows device.
 fn the_os_loop_carries_only_a_drag_a_mouse_button_holds() {
     use flui_platform::UnsupportedReason::{NotOnThisPlatform, Unavailable};
-    use flui_platform::pointer::{PenTool, PointerKind};
+    use flui_platform::input::pointer::{PenTool, PointerKind};
     const LEFT: u32 = 0x01;
     const SHIFT: u32 = 0x04;
     let pen = PointerKind::Pen { tool: PenTool::Tip };

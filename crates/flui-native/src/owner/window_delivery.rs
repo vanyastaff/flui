@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::{
     CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
     WindowHandler,
@@ -366,7 +366,7 @@ pub struct WindowDelivery {
     input: Mutex<InputFront>,
     /// Keys answered "not handled" while queued behind a running method,
     /// newest last, whose platform follow-up must not be delivered again.
-    unanswered_keys: Mutex<VecDeque<flui_platform::keyboard::KeyEvent>>,
+    unanswered_keys: Mutex<VecDeque<flui_platform::input::keyboard::KeyEvent>>,
     dispatch: Mutex<DispatchState>,
     /// Incremented each time `frame_requested` produces a frame (or fails, or panics),
     /// nested requests delivered later included; a declined request, or one
@@ -475,8 +475,8 @@ impl WindowDelivery {
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     pub(crate) fn journaled_store_host(
         &self,
-        host: Rc<dyn flui_platform::text_store::TextStoreHost>,
-    ) -> Rc<dyn flui_platform::text_store::TextStoreHost> {
+        host: Rc<dyn flui_platform::text::store::TextStoreHost>,
+    ) -> Rc<dyn flui_platform::text::store::TextStoreHost> {
         if !self.journal.is_reporting() || !self.store_journal.is_owner_thread() {
             return host;
         }

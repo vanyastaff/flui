@@ -12,9 +12,9 @@
 
 use std::num::NonZeroU8;
 
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::keyboard::Modifiers;
+use flui_platform::input::pointer::{
     MotionAcceleration, MotionDelta, PointerButton, PointerButtons, PointerEvent, PointerKind,
     ScrollDelta, ScrollInversion, ScrollPrecision, ScrollUnit, TouchpadHoldPhase,
 };
@@ -1088,7 +1088,7 @@ impl SeatAssembly {
         &self,
         device: NativeDevice,
         surface: NativeSurface,
-        phase: Option<flui_platform::pointer::ScrollPhase>,
+        phase: Option<flui_platform::input::pointer::ScrollPhase>,
         delta: ScrollDelta,
         precision: ScrollPrecision,
         time: WireTime,

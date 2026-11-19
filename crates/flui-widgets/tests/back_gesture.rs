@@ -415,7 +415,7 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
     use flui_painting::styling::Color;
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
             PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },

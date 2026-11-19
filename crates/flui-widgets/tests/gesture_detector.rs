@@ -124,7 +124,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     };
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
             PointerPosition, PointerSource,
         },
@@ -933,7 +933,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
     use flui_interaction::gesture::{GestureSettings, VelocityEstimator};
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
             PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },
@@ -1660,7 +1660,7 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
     use flui_interaction::gesture::GestureSettings;
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
             PointerPosition, PointerSource,
         },
@@ -1744,7 +1744,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
     use flui_interaction::gesture::{GestureSettings, GestureSettingsSource, VelocityEstimator};
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
             PointerPosition, PointerSource,
         },
@@ -1857,7 +1857,7 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
             PointerPosition, PointerSource,
         },
@@ -2401,12 +2401,12 @@ fn target_for_viewer() -> ColoredBox {
 /// A timed primary contact for the slot rows: Down, Moves and Up of one
 /// pointer, each sample carrying a pressure when given.
 struct TimedContact {
-    info: flui_platform::pointer::PointerSource,
+    info: flui_platform::input::pointer::PointerSource,
 }
 
 impl TimedContact {
-    fn new(id: u64, kind: flui_platform::pointer::PointerKind) -> Self {
-        use flui_platform::pointer::{PointerId, PointerSource};
+    fn new(id: u64, kind: flui_platform::input::pointer::PointerKind) -> Self {
+        use flui_platform::input::pointer::{PointerId, PointerSource};
         Self {
             info: PointerSource::new(PointerId::try_from(id).expect("nonzero contact"), kind),
         }
@@ -2417,11 +2417,11 @@ impl TimedContact {
         x: f64,
         y: f64,
         pressure: Option<f32>,
-    ) -> flui_platform::pointer::PointerSample {
+    ) -> flui_platform::input::pointer::PointerSample {
         use flui_foundation::geometry::Point;
         use flui_platform::{
             EventTime,
-            pointer::{PointerPosition, PointerSample, Pressure},
+            input::pointer::{PointerPosition, PointerSample, Pressure},
         };
         let sample = PointerSample::new(
             EventTime::from_nanos(millis * 1_000_000),
@@ -2434,7 +2434,9 @@ impl TimedContact {
     }
 
     fn down(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64), pressure: Option<f32>) {
-        use flui_platform::pointer::{PointerButton, PointerButtons, PointerEvent, PointerPress};
+        use flui_platform::input::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerPress,
+        };
         let (millis, x, y) = at;
         laid.dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
             self.info,
@@ -2445,7 +2447,9 @@ impl TimedContact {
     }
 
     fn moved(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64), pressure: Option<f32>) {
-        use flui_platform::pointer::{PointerButton, PointerButtons, PointerEvent, PointerMove};
+        use flui_platform::input::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerMove,
+        };
         let (millis, x, y) = at;
         laid.dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
             self.info,
@@ -2455,7 +2459,9 @@ impl TimedContact {
     }
 
     fn up(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64)) {
-        use flui_platform::pointer::{PointerButton, PointerButtons, PointerEvent, PointerRelease};
+        use flui_platform::input::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerRelease,
+        };
         let (millis, x, y) = at;
         laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
             self.info,
@@ -2469,7 +2475,7 @@ impl TimedContact {
 /// A vertical drag slot claims only vertical motion: a horizontal drag of
 /// the same length never starts it, a vertical one does.
 pub(crate) fn a_vertical_drag_slot_claims_only_vertical_motion() {
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
     use std::{cell::Cell, rc::Rc};
 
     let starts = Rc::new(Cell::new(0));
@@ -2500,7 +2506,7 @@ pub(crate) fn a_vertical_drag_slot_claims_only_vertical_motion() {
 /// both contacts. A count below two is refused as a value, before any
 /// detector is built, rather than panicking in the parent's `build`.
 pub(crate) fn two_contacts_released_together_fire_on_multi_tap() {
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
     use flui_widgets::MultiTapCount;
     use std::{cell::RefCell, rc::Rc};
 
@@ -2535,7 +2541,7 @@ pub(crate) fn two_contacts_released_together_fire_on_multi_tap() {
 /// A pen pressing past the start and then the peak pressure starts, peaks
 /// and ends one force press.
 pub(crate) fn a_pressure_contact_starts_peaks_and_ends_a_force_press() {
-    use flui_platform::pointer::{PenTool, PointerKind};
+    use flui_platform::input::pointer::{PenTool, PointerKind};
     use std::{cell::RefCell, rc::Rc};
 
     let phases = Rc::new(RefCell::new(Vec::new()));
@@ -2564,7 +2570,7 @@ pub(crate) fn a_pressure_contact_starts_peaks_and_ends_a_force_press() {
 /// callback whole without it and much reduced with it.
 pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
     use flui_interaction::gesture::{GestureSettings, OneEuroTuning};
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
     use std::{cell::RefCell, rc::Rc};
 
     let jitter = |smoothing: Option<OneEuroTuning>| {

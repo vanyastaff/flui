@@ -13,14 +13,11 @@ use flui_foundation::geometry::{
 use flui_interaction::gesture::GestureDisposition;
 use flui_platform::Availability;
 use flui_platform::PointerFrame;
-use flui_platform::data_transfer::{
-    DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
-};
-use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
-use flui_platform::keyboard::{
+use flui_platform::input::capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::input::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
     MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
     PointerButton, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId,
@@ -29,6 +26,9 @@ use flui_platform::pointer::{
     ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset,
     TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
     TouchpadSwipePhase, Twist,
+};
+use flui_platform::transfer::data::{
+    DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,

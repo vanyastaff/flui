@@ -5,8 +5,8 @@ use std::num::{NonZeroU8, NonZeroU64};
 use flui_foundation::IdMint;
 use flui_foundation::geometry::{Offset, Point, Size};
 use flui_platform::EventTime;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::{
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, MotionAcceleration, MotionDelta,
     PanZoomEvent, PenOrientation, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
     PointerId, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
@@ -133,7 +133,7 @@ impl DeviceRegistry {
     }
 
     /// The kinds of the devices present: what
-    /// [`InputCapabilities::present`](flui_platform::input_capabilities::InputCapabilities::present)
+    /// [`InputCapabilities::present`](flui_platform::input::capabilities::InputCapabilities::present)
     /// reports, from the same registry that mints the events' device ids. A
     /// device whose kind is not known yet, or whose readings disagree, counts
     /// as no kind.

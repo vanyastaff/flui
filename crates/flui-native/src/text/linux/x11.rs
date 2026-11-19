@@ -33,7 +33,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::Bounds;
 use flui_foundation::panic::FirstPanic;
 use flui_platform::WindowId;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use web_time::Instant;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{self, ConnectionExt as _, NotifyDetail, NotifyMode};

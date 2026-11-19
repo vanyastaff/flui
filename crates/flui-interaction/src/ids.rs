@@ -32,8 +32,8 @@ use std::{fmt, num::NonZeroU64};
 
 /// Unique identifier for a pointer device (mouse, touch, stylus).
 ///
-/// Re-exported from [`flui_platform::pointer::PointerId`].
-pub use flui_platform::pointer::PointerId;
+/// Re-exported from [`flui_platform::input::pointer::PointerId`].
+pub use flui_platform::input::pointer::PointerId;
 
 // ============================================================================
 // FocusNodeId - Identifier for focusable UI elements
@@ -95,8 +95,8 @@ impl From<FocusNodeId> for NonZeroU64 {
 
 /// Unique identifier for an input device.
 ///
-/// Re-exported from [`flui_platform::pointer::DeviceId`].
-pub use flui_platform::pointer::DeviceId;
+/// Re-exported from [`flui_platform::input::pointer::DeviceId`].
+pub use flui_platform::input::pointer::DeviceId;
 
 // ============================================================================
 // InputSurface - the routing root of an input stream

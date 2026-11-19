@@ -560,7 +560,7 @@ impl flui_view::StatefulView for ComposingField {
 
 impl flui_view::ViewState<ComposingField> for ComposingFieldState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        let store: Rc<dyn flui_platform::text_store::TextStore> = self.field.store.clone();
+        let store: Rc<dyn flui_platform::text::store::TextStore> = self.field.store.clone();
         self.token = Some(
             ctx.text_input_handle()
                 .expect("the window takes text input")
@@ -617,8 +617,9 @@ impl flui_view::View for ComposingField {
 /// Red-check: drop the commit from the owner's close — the observer sees the
 /// store still composing.
 pub(crate) fn closing_during_composition_commits_before_detached() {
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let store = flui_interaction::testing::InMemoryTextStore::new("ab");
@@ -633,7 +634,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
         Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::RecordingTextStoreHost::new()
-            as Rc<dyn flui_platform::text_store::TextStoreHost>
+            as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let run = HeadlessRun::start_on(application, field, platform);
     run.run_owner_turn();
@@ -996,15 +997,16 @@ pub(crate) fn a_refused_session_end_is_released_when_an_earlier_close_carries_ou
 /// Red-check: skip the close delivery in the ending phase — the observer
 /// hears Detached only from the teardown its quit starts.
 pub(crate) fn session_end_commits_composition_before_the_flush() {
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let store = flui_interaction::testing::InMemoryTextStore::new("ab");
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::RecordingTextStoreHost::new()
-            as Rc<dyn flui_platform::text_store::TextStoreHost>
+            as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let running = Rc::new(std::cell::Cell::new(None));
     let field = ComposingField {
@@ -1067,7 +1069,7 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
         .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
         .with_text_store_host(|| {
             flui_testing::RecordingTextStoreHost::new()
-                as Rc<dyn flui_platform::text_store::TextStoreHost>
+                as Rc<dyn flui_platform::text::store::TextStoreHost>
         });
     let run = HeadlessRun::start_on(application, field, platform);
     run.run_owner_turn();
@@ -1106,7 +1108,7 @@ pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::RecordingTextStoreHost::new()
-            as Rc<dyn flui_platform::text_store::TextStoreHost>
+            as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let running = Rc::new(std::cell::Cell::new(None));
     let field = ComposingField {

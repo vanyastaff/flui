@@ -35,7 +35,7 @@ impl WindowHandler for ConsoleLog {
     fn input(&self, input: PlatformInput) -> DispatchEventResult {
         match &input {
             PlatformInput::Pointer(pe) => {
-                use flui_platform::pointer::PointerEvent;
+                use flui_platform::input::pointer::PointerEvent;
                 match pe {
                     PointerEvent::Down(e) => log(&format!(
                         "Pointer Down: button={:?} pos=({:.0}, {:.0})",

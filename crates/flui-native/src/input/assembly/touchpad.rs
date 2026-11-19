@@ -6,7 +6,7 @@
 //! them through the same decoder.
 
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_platform::keyboard::Modifiers;
+use flui_platform::input::keyboard::Modifiers;
 
 use super::ReadingTime;
 

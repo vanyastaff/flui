@@ -6,7 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use flui_platform::{PlatformWindow, pointer::PointerSource};
+use flui_platform::{PlatformWindow, input::pointer::PointerSource};
 
 use super::PointerTarget;
 

@@ -1,6 +1,6 @@
 use flui_foundation::geometry::Offset;
 use flui_interaction::{gesture::{TapDragDownDetails, TapDragEndDetails, TapDragStartDetails, TapDragUpDetails, TapDragUpdateDetails, Velocity}};
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 
 fn main() {
     let _ = TapDragDownDetails {

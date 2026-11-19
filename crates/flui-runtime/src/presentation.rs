@@ -24,7 +24,7 @@ use flui_interaction::{
 use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
@@ -66,7 +66,7 @@ fn show_cursor(
     window: &dyn PlatformWindow,
     cursor: &Cursor,
     id: PresentationId,
-    device_id: flui_platform::pointer::PointerSource,
+    device_id: flui_platform::input::pointer::PointerSource,
 ) {
     let refused = match window.set_cursor(cursor) {
         Ok(()) => return,
@@ -505,10 +505,10 @@ pub struct PresentationState {
     held_pointer_input: RefCell<HeldPointerQueue>,
     /// The input regions collected when this frames scene was built, handed to the
     /// window once the sink accepts the scene (ADR-0217 §5).
-    staged_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
+    staged_input_regions: RefCell<Rc<[flui_platform::input::regions::InputRegion]>>,
     /// The input regions of the last committed frame, handed to the window again when
     /// it moves, so its backend can re-project them for a new display.
-    published_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
+    published_input_regions: RefCell<Rc<[flui_platform::input::regions::InputRegion]>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -1731,13 +1731,13 @@ impl PresentationState {
         // A frame whose regions did not change keeps the staged slice, so a
         // steady frame allocates no new one.
         if **staged != *regions {
-            *staged = Rc::<[flui_platform::input_regions::InputRegion]>::from(regions);
+            *staged = Rc::<[flui_platform::input::regions::InputRegion]>::from(regions);
         }
     }
 
     /// The input regions the frame about to be submitted carries: the slice the window gets
     /// once that frame is shown ([`Self::publish_input_regions`]).
-    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input_regions::InputRegion]> {
+    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input::regions::InputRegion]> {
         Rc::clone(&self.staged_input_regions.borrow())
     }
 
@@ -1749,7 +1749,7 @@ impl PresentationState {
     /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(
         &self,
-        regions: Rc<[flui_platform::input_regions::InputRegion]>,
+        regions: Rc<[flui_platform::input::regions::InputRegion]>,
     ) {
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.hand_input_regions(&regions);
@@ -1766,7 +1766,7 @@ impl PresentationState {
     /// Hands `regions` to the window. A window whose input capabilities leave input regions
     /// `Unavailable` refuses them on every frame; the regions then have no effect, which
     /// those capabilities already say, so the refusal is only traced.
-    fn hand_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+    fn hand_input_regions(&self, regions: &[flui_platform::input::regions::InputRegion]) {
         if let Some(Err(refused)) = self.with_window(|window| window.set_input_regions(regions)) {
             tracing::trace!(%refused, "the window takes no input regions");
         }

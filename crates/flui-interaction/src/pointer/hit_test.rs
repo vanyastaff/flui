@@ -12,7 +12,7 @@
 use crate::containment::keep_first;
 pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     ButtonChange, PanZoomEvent, PointerMove, PointerPosition, PointerSample, ScrollDelta,
     ScrollEvent, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
