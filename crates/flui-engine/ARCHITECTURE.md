@@ -205,9 +205,10 @@ Ok under a finite affine transform whose translation is below 2^23.
 `RecordingKey` holds the chunk's `ContentVersion`, the transform's bits
 (`RasterKey`: the linear part and the fraction of the translation, so a chunk
 moved by a fraction of a pixel records again), what the IR bakes from outside
-the chunk (`AmbientKey`: the scissor relative to the chunk's `PixelOrigin` or
-`Covers`, the inherited opacity, and the target's size, which a fill of the
-whole target records) and the painter's `ResourceEpoch`. The whole pixels of
+the chunk (`AmbientKey`: the inherited opacity and the target's size, which a
+fill of the whole target records) and the painter's `ResourceEpoch`. The
+scissor, SDF clip and clip chain the chunk is entered under are not in it
+(ADR-0306 §2). The whole pixels of
 the translation are the `PixelOrigin` a recording keeps: a chunk moved by whole
 device pixels hits when the fraction of its translation keeps its bits, as a
 translation on a dyadic grid (whole or quarter pixels) does at every magnitude
@@ -221,12 +222,21 @@ position (`ShapedRun::placed_glyphs`), so a replay places the glyphs a fresh
 recording at the new origin does while the paragraph is drawn under the
 chunk's own translation; under a translation pushed inside the chunk, which
 is composed at the device magnitude, a glyph at a rounding boundary can land a
-bin or a row away. A scissor that cuts the chunk
-moves with it only when its clip does, so a chunk moved under a fixed clip that
-cuts it records again. A recording holds no clip chain or scissor: the splice
-gives it the entry's clip and scissor, rebases every arena offset onto the
-segment as it stands, runs the merge rules on its first element only, and
-charges the frame's `RecordingBudget`. Whatever moves texels a recording
+bin or a row away. A recording holds no clip chain, and it culls no glyph:
+a chunk captured for the cache records every glyph it places
+(`GlyphCull::None`), whatever its entry scissor hides. The splice gives it
+the entry's clip chain, scissor and SDF clip, leaves out the glyphs wholly
+outside the entry scissor by the rule recording culls with
+(`batches::outside_scissor`), shortening the runs and regions that held them,
+rebases every arena offset onto the segment as it stands, runs the merge
+rules on its first element and on the run and tessellated batch after one
+the cull emptied, skips the glyph pass when the entry scissor holds the
+recording's grid glyphs (`GridExtent`), and
+charges the frame's `RecordingBudget`. A kept chunk opens no clip of its own,
+so each of its regions held the entry scissor alone and takes the new
+entry's; one recording serves a chunk scrolled under a fixed clip that cuts
+it (`scroll_one_row_under_fixed_clip`) and a chunk drawn under two clips
+(`a_chunk_under_two_clips_draws_each_from_one_recording`). Whatever moves texels a recording
 names (a glyph slot evicted or dropped, a glyph-atlas reset, a font-source
 switch, an image evicted, the image atlas reset, a reclaim) advances the epoch,
 which drops every entry, as a raster panic does (ADR-0304 §10). The target
