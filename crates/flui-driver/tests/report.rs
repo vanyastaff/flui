@@ -26,6 +26,7 @@ fn unsupported(name: &str, capability: &str) -> Check {
         &Err(Error::NotSupported {
             capability: Some(capability.into()),
             message: "missing".into(),
+            retry: Retry::Never,
         }),
     )
 }
@@ -140,6 +141,28 @@ fn a_check_asked_for_and_not_run_keeps_the_report_from_passing() {
 }
 
 #[test]
+fn a_scenario_that_checked_nothing_cannot_be_verified() {
+    let mut report = Report::new();
+    let mut driver = flui_driver::Driver::launch(flui_driver::Launch::headless(|| {
+        flui_widgets::Text::new("nothing to check")
+    }))
+    .expect("the headless app starts");
+    report.run_scenario("empty", &mut driver, |_, _| Ok(()));
+    assert_eq!(report.verdict(), Verdict::CannotVerify, "{report}");
+    let not_checked: Vec<&str> = report
+        .not_checked()
+        .map(|check| check.name.as_str())
+        .collect();
+    assert_eq!(not_checked, ["empty"]);
+
+    let mut checked = Report::new();
+    checked.run_scenario("one check", &mut driver, |driver, report| {
+        report.check("reads the window", || driver.main_window().map(|_| ()))
+    });
+    assert_eq!(checked.verdict(), Verdict::Pass, "{checked}");
+}
+
+#[test]
 fn the_report_names_the_isolation_and_the_announcements() {
     let mut report = Report::new();
     report.push(passed("tap"));
@@ -156,12 +179,20 @@ fn an_error_reads_into_its_code_with_the_retry_and_effect_it_carries() {
     for &code in ErrorCode::ALL {
         let error = Error::from_wire(ErrorObject::new(code, "m"));
         assert_eq!(error.code(), Some(code), "{code}");
+        assert_eq!(error.retry(), code.default_retry(), "{code}");
+        // The retry the app said is kept, whatever the code's own would be.
+        for said in [Retry::Never, Retry::Soon, Retry::WhenAppears] {
+            let error = Error::from_wire(ErrorObject::new(code, "m").retry(said));
+            assert_eq!(error.retry(), said, "{code} said {said}");
+        }
     }
     let unknown: ErrorObject = serde_json::from_value(serde_json::json!({
         "code": "rate_limited", "message": "a code a newer app added", "retry": "soon"
     }))
     .expect("an unknown code still reads");
-    assert_eq!(Error::from_wire(unknown).code(), Some(ErrorCode::Platform));
+    let unknown = Error::from_wire(unknown);
+    assert_eq!(unknown.code(), Some(ErrorCode::Platform));
+    assert_eq!(unknown.retry(), Retry::Soon);
 
     let rows: Vec<(&str, Error, Retry, bool, bool)> = vec![
         (
@@ -179,8 +210,8 @@ fn an_error_reads_into_its_code_with_the_retry_and_effect_it_carries() {
             false,
         ),
         (
-            "a read that timed out",
-            Error::from_wire(ErrorObject::new(ErrorCode::Timeout, "m")),
+            "a read that timed out, which the app says to ask again soon",
+            Error::from_wire(ErrorObject::new(ErrorCode::Timeout, "m").retry(Retry::Soon)),
             Retry::Soon,
             false,
             false,

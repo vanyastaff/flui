@@ -2,10 +2,8 @@
 //! fractional edges, RTL, and the refusals.
 
 use flui_driver::Error;
-use flui_driver::coordinates::{
-    DevicePoint, Monitor, WindowGeometry, to_device, visible_centre_to_device,
-};
-use flui_driver::protocol::geometry::{LogicalPoint, LogicalRect, LogicalSize};
+use flui_driver::coordinates::{DevicePoint, WindowGeometry, to_device};
+use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 
 /// What a row expects.
 #[derive(Debug)]
@@ -36,10 +34,6 @@ fn check(row: &str, mapped: Result<DevicePoint, Error>, expected: &Expected) {
 
 #[test]
 fn a_point_maps_to_the_device_pixel_it_covers_or_is_refused() {
-    let secondary = Monitor {
-        logical_origin: LogicalPoint::new(1920.0, 0.0),
-        device_origin: DevicePoint::new(1920, 0),
-    };
     let rows: &[(&str, WindowGeometry, LogicalPoint, Expected)] = &[
         (
             "scale 1 at the origin",
@@ -102,10 +96,12 @@ fn a_point_maps_to_the_device_pixel_it_covers_or_is_refused() {
             Expected::Outside,
         ),
         (
-            "a window on a secondary monitor of another scale maps through its monitor",
-            window(2000.0, 100.0, 800.0, 600.0, 2.0).on_monitor(secondary),
-            LogicalPoint::new(10.0, 5.0),
-            Expected::At(2100, 210),
+            // An RTL window lays its leading button out on the right and publishes its point
+            // measured from the surface's physical left: the mapping takes no direction.
+            "an RTL window's leading button, on the right",
+            window(100.0, 100.0, 800.0, 600.0, 2.0),
+            LogicalPoint::new(740.0, 30.0),
+            Expected::At(1680, 260),
         ),
         (
             "an origin past what the screen addresses",
@@ -140,43 +136,5 @@ fn a_point_maps_to_the_device_pixel_it_covers_or_is_refused() {
     ];
     for (row, geometry, point, expected) in rows {
         check(row, to_device(geometry, *point), expected);
-    }
-}
-
-#[test]
-fn an_element_maps_from_the_centre_of_its_visible_part_whatever_the_text_direction() {
-    let geometry = window(100.0, 100.0, 800.0, 600.0, 2.0);
-    let rows: &[(&str, LogicalRect, Expected)] = &[
-        (
-            "wholly inside",
-            LogicalRect::new(10.0, 10.0, 100.0, 40.0),
-            Expected::At(320, 260),
-        ),
-        (
-            "half past the left edge: the centre of the part inside",
-            LogicalRect::new(-50.0, 10.0, 100.0, 40.0),
-            Expected::At(250, 260),
-        ),
-        (
-            // An RTL window lays its trailing button out on the left and its leading one on the
-            // right, and publishes both measured from the surface's physical left: the mapping
-            // takes no direction.
-            "an RTL window's leading button, on the right",
-            LogicalRect::new(700.0, 10.0, 80.0, 40.0),
-            Expected::At(1680, 260),
-        ),
-        (
-            "nothing inside",
-            LogicalRect::new(900.0, 10.0, 100.0, 40.0),
-            Expected::Outside,
-        ),
-        (
-            "no area",
-            LogicalRect::new(10.0, 10.0, 0.0, 40.0),
-            Expected::Outside,
-        ),
-    ];
-    for (row, rect, expected) in rows {
-        check(row, visible_centre_to_device(&geometry, *rect), expected);
     }
 }

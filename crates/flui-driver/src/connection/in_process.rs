@@ -70,6 +70,8 @@ pub(crate) struct InProcess {
     events: Events,
     /// Why the app ended, once it did.
     ended: Option<String>,
+    /// The virtual time the app's frames have advanced since it started serving.
+    elapsed: Duration,
 }
 
 impl InProcess {
@@ -90,6 +92,7 @@ impl InProcess {
             next_id: 1,
             events: Events::default(),
             ended: None,
+            elapsed: Duration::ZERO,
         };
         connection.send(ToApp::Line(super::hello_line(&token)?))?;
         let mut hello = None;
@@ -142,6 +145,7 @@ impl InProcess {
         mut heard: impl FnMut(Heard),
     ) -> Result<()> {
         self.send(ToApp::Run { frames })?;
+        self.elapsed = self.elapsed.saturating_add(FRAME.saturating_mul(frames));
         loop {
             match self.from_app.recv() {
                 Ok(FromApp::Line(line)) => match super::hear(&line, waiting)? {
@@ -218,6 +222,10 @@ impl Connection for InProcess {
 
     fn take_events(&mut self) -> (Vec<Event>, u64) {
         self.events.take()
+    }
+
+    fn clock(&self) -> Duration {
+        self.elapsed
     }
 }
 

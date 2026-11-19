@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::envelope::{Greeting, Request, RequestId, ServerLine};
+use flui_protocol::error::Retry;
 use flui_protocol::events::Event;
 use flui_protocol::method::MethodEffect;
 use flui_protocol::session::{Hello, HelloReply};
@@ -70,6 +71,10 @@ pub(crate) trait Connection: Send {
     /// The events the app sent since the last take, oldest first, and how many were dropped
     /// because nobody took them.
     fn take_events(&mut self) -> (Vec<Event>, u64);
+
+    /// How long the connection has been open on the clock its budgets are counted in: the wall
+    /// clock over a socket, the app's virtual clock on the headless target.
+    fn clock(&self) -> Duration;
 }
 
 /// The hello line presenting `token`, as the app's driver.
@@ -137,6 +142,12 @@ pub(crate) fn unanswered(call: &Call) -> Error {
         Effect::new(EffectKind::MayHaveRun)
             .detail("the request was accepted and is still queued; read the tree for its effect")
     });
+    // A read can be asked again; an act is never resent as it stands.
+    let retry = if effect.is_some() {
+        Retry::Never
+    } else {
+        Retry::Soon
+    };
     Error::Timeout {
         effect,
         message: format!(
@@ -144,6 +155,7 @@ pub(crate) fn unanswered(call: &Call) -> Error {
             call.method,
             call.budget.as_millis()
         ),
+        retry,
     }
 }
 

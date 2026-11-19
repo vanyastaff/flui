@@ -13,7 +13,7 @@
 //!   refused when the policy requires it, and otherwise falls back to synthetic, then semantic; a
 //!   fallback never takes the OS path, so a session that did not ask for OS input never gets it.
 //!   The answer names the path taken.
-//! - **OS input** is admitted by the isolation rule, takes the host-wide lock, is announced before
+//! - **OS input** is admitted by the isolation rule, takes the desktop's lock, is announced before
 //!   its first event, is sent through the lane's guard, and is `ran` only when the app's input
 //!   journal saw it; otherwise `may_have_run`.
 
@@ -22,7 +22,7 @@ use std::time::Duration;
 use flui_protocol::act::{
     ActOutcome, ActParams, Actionability, ActionabilityParams, Effect, EffectKind, JournalSpan,
 };
-use flui_protocol::error::HandleKind;
+use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::geometry::{LogicalPoint, LogicalRect};
 use flui_protocol::input::{
     ActionSequence, Direction, DragParams, GestureOptions, InputKind, InputParams, InputPath,
@@ -43,12 +43,8 @@ use serde_json::Value;
 
 use crate::driver::Driver;
 use crate::error::{Error, Result};
-use crate::os_input::{self, Announcement, OsDevice};
+use crate::os_input::{Announcement, OsDevice};
 use crate::steps::{self, OsEvent};
-
-/// How long one frame of the app's timeline is taken to last when an action's timeout is counted
-/// in frames: 60 Hz.
-const FRAME_MS: u64 = 16;
 
 /// The id of the pointer a composed gesture moves.
 const POINTER: &str = "driver.pointer";
@@ -110,17 +106,15 @@ pub(crate) fn call(driver: &mut Driver, name: &'static str, params: Value) -> Re
             run(name, params, |_: Empty| Ok(driver.capabilities()))
         }
         method::SessionLaunch::NAME | method::SessionAttach::NAME | method::SessionClose::NAME => {
-            Err(Error::InvalidArgument {
-                message: format!(
-                    "`{name}` begins or ends a session, which the front end holds: its Rust form is \
-                     `Driver::launch`, `Driver::attach` or `Driver::close`"
-                ),
-            })
+            Err(Error::invalid_argument(format!(
+                "`{name}` begins or ends a session, which the front end holds: its Rust form is \
+                 `Driver::launch`, `Driver::attach` or `Driver::close`"
+            )))
         }
-        _ => Err(Error::NotSupported {
-            capability: Some(name.to_owned()),
-            message: format!("this version of the driver does not compose `{name}`"),
-        }),
+        _ => Err(Error::not_supported(
+            name,
+            format!("this version of the driver does not compose `{name}`"),
+        )),
     }
 }
 
@@ -130,8 +124,8 @@ fn run<P: DeserializeOwned, O: Serialize>(
     params: Value,
     body: impl FnOnce(P) -> Result<O>,
 ) -> Result<Value> {
-    let params = serde_json::from_value(params).map_err(|error| Error::InvalidArgument {
-        message: format!("the parameters do not read as `{name}`'s: {error}"),
+    let params = serde_json::from_value(params).map_err(|error| {
+        Error::invalid_argument(format!("the parameters do not read as `{name}`'s: {error}"))
     })?;
     serde_json::to_value(body(params)?).map_err(|error| Error::Protocol {
         message: format!("the output of `{name}` did not serialize: {error}"),
@@ -156,12 +150,10 @@ pub(crate) fn resolve(
     match target {
         Target::Element(element) => Ok(*element),
         Target::Locator(locator) => resolve_locator(driver, locator, timeout),
-        Target::Point { .. } => Err(Error::InvalidArgument {
-            message: "a point names no element".into(),
-        }),
-        _ => Err(Error::InvalidArgument {
-            message: "a target of a kind this driver does not know".into(),
-        }),
+        Target::Point { .. } => Err(Error::invalid_argument("a point names no element")),
+        _ => Err(Error::invalid_argument(
+            "a target of a kind this driver does not know",
+        )),
     }
 }
 
@@ -210,6 +202,7 @@ fn resolve_locator(
                         several.len()
                     ),
                     candidates,
+                    retry: ErrorCode::Ambiguous.default_retry(),
                 });
             }
         }
@@ -217,10 +210,7 @@ fn resolve_locator(
 }
 
 fn not_found(locator: &Locator) -> Error {
-    Error::NotFound {
-        message: format!("nothing matches {locator:?}"),
-        candidates: Vec::new(),
-    }
+    Error::not_found(format!("nothing matches {locator:?}"))
 }
 
 /// The app's first window.
@@ -229,10 +219,7 @@ pub(crate) fn main_window(driver: &mut Driver) -> Result<WindowId> {
         .windows()?
         .into_iter()
         .next()
-        .ok_or_else(|| Error::NotFound {
-            message: "the app has no window with content".into(),
-            candidates: Vec::new(),
-        })
+        .ok_or_else(|| Error::not_found("the app has no window with content"))
 }
 
 /// Wait in `window` for `condition`, at most `timeout` of the app's clock.
@@ -248,54 +235,55 @@ pub(crate) fn wait_until(
     driver.agent::<method::WaitUntil>(params, holds)
 }
 
-/// Wait for `window` to present one more frame.
-fn next_frame(driver: &mut Driver, window: WindowId) -> Result<()> {
-    wait_until(driver, window, Condition::Frames(1), Duration::from_secs(1))?;
-    Ok(())
-}
-
-/// The facts of `element` once it is actionable, waiting frame by frame up to `timeout`.
+/// The facts of `element` once it is actionable, read again after each frame the window presents,
+/// until `timeout` has passed on the connection's clock (the virtual one on the headless target).
+/// A window that presents no frame before the deadline ends the wait there.
 fn actionable(
     driver: &mut Driver,
     element: ElementRef,
     force: bool,
     timeout: Duration,
 ) -> Result<Actionability> {
-    let frames = (u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX) / FRAME_MS).max(1);
-    let mut last = None;
-    for _ in 0..=frames {
+    let deadline = driver.clock().saturating_add(timeout);
+    loop {
         let facts = driver.agent::<method::ElementActionability>(
             ActionabilityParams::new(element),
             Duration::ZERO,
         )?;
         if !facts.attached {
-            return Err(Error::Gone {
-                kind: Some(HandleKind::Element),
-                handle: Some(element.to_string()),
-                exit: None,
-                message: format!("{element} is no longer in its window's tree"),
+            return Err(Error::gone(
+                HandleKind::Element,
+                Some(element.to_string()),
+                None,
+                format!("{element} is no longer in its window's tree"),
+            ));
+        }
+        let Some(failed) = facts.first_failed() else {
+            return Ok(facts);
+        };
+        if force {
+            return Ok(facts);
+        }
+        let left = deadline.saturating_sub(driver.clock());
+        let presented = !left.is_zero()
+            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
+        if !presented || driver.clock() >= deadline {
+            let covered_by = facts.covered_by;
+            return Err(Error::NotActionable {
+                failed: Some(failed),
+                message: format!(
+                    "{element} was not {} within {} ms{}",
+                    failed.name(),
+                    timeout.as_millis(),
+                    covered_by
+                        .as_deref()
+                        .map_or_default(|cover| format!("; the point reached {cover}"))
+                ),
+                covered_by,
+                retry: ErrorCode::NotActionable.default_retry(),
             });
         }
-        match facts.first_failed() {
-            None => return Ok(facts),
-            Some(_) if force => return Ok(facts),
-            Some(check) => last = Some((check, facts.covered_by)),
-        }
-        next_frame(driver, element.window)?;
     }
-    let (failed, covered_by) = last.expect("BUG: the loop above runs at least once");
-    Err(Error::NotActionable {
-        failed: Some(failed),
-        message: format!(
-            "{element} was not {} within {} ms{}",
-            failed.name(),
-            timeout.as_millis(),
-            covered_by
-                .as_deref()
-                .map_or_default(|cover| format!("; the point reached {cover}"))
-        ),
-        covered_by,
-    })
 }
 
 /// Where `target` lands, after the checks its options ask for.
@@ -318,6 +306,7 @@ fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result
             failed: Some(flui_protocol::act::ActionabilityCheck::Visible),
             covered_by: None,
             message: format!("{element} shows no point to aim at"),
+            retry: ErrorCode::NotActionable.default_retry(),
         })?;
     Ok(Aim {
         window: element.window,
@@ -350,20 +339,19 @@ pub(crate) fn choose_path(
     if available(policy.prefer) {
         return Ok(policy.prefer);
     }
-    let missing = || Error::NotSupported {
-        capability: Some(match policy.prefer {
-            InputPath::Os => "os_input".to_owned(),
-            path => format!("{}_input", path.name()),
-        }),
-        message: format!(
-            "the target takes no {} input{}",
-            policy.prefer.name(),
-            if policy.prefer == InputPath::Os {
-                "; attach an OS lane"
-            } else {
-                ""
-            }
-        ),
+    let missing = || {
+        Error::not_supported(
+            format!("{}_input", policy.prefer.name()),
+            format!(
+                "the target takes no {} input{}",
+                policy.prefer.name(),
+                if policy.prefer == InputPath::Os {
+                    "; attach an OS lane"
+                } else {
+                    ""
+                }
+            ),
+        )
     };
     if policy.require {
         return Err(missing());
@@ -423,47 +411,51 @@ fn perform_os(
     window: WindowId,
     sequence: ActionSequence,
 ) -> Result<ActOutcome> {
-    let capabilities = driver
+    // The same admission `send_guarded` holds, asked before anything is locked or announced.
+    lane_run(driver, crate::lane::admit)??;
+    let isolation = driver
         .lane()
-        .map(|lane| lane.capabilities().clone())
-        .ok_or_else(|| Error::NotSupported {
-            capability: Some("os_input".into()),
-            message: "the session has no OS lane".into(),
-        })?;
-    os_input::admit(capabilities.isolation, capabilities.guarded)?;
+        .map(|lane| lane.capabilities().isolation)
+        .ok_or_else(no_lane)?;
     driver.lock_os_input()?;
     let placement: Placement =
         driver.agent::<method::WindowPlacement>(WindowParams::new(window), Duration::ZERO)?;
     let geometry = lane_run(driver, move |lane| lane.locate_window(&placement))??;
     let events = steps::os_events(&sequence, &geometry)?;
     let announcement = match driver.scenario() {
-        Some(scenario) if !scenario.devices().is_empty() => Announcement::new(
-            scenario.devices().to_vec(),
-            scenario.duration(),
-            capabilities.isolation,
-        ),
-        _ => Announcement::new(devices_of(&events), sequence.span(), capabilities.isolation),
+        Some(scenario) if !scenario.devices().is_empty() => {
+            Announcement::new(scenario.devices().to_vec(), scenario.duration(), isolation)
+        }
+        _ => Announcement::new(devices_of(&events), sequence.span(), isolation),
     };
     driver.announce_once(|| announcement.to_string());
     let before = journal(driver, window, None)?;
     let since = before.span.map(|span| span.to);
     let sent = events.clone();
     lane_run(driver, move |lane| crate::lane::send_guarded(lane, &sent))??;
-    let after = journal(driver, window, since)?;
-    Ok(observed(&events, &after))
+    // The input went out: from here on, a failure to read what it did leaves its effect unknown,
+    // never not run.
+    Ok(match journal(driver, window, since) {
+        Ok(after) => observed(&events, &after),
+        Err(error) => ActOutcome::new(
+            InputPath::Os,
+            Effect::new(EffectKind::MayHaveRun).detail(format!(
+                "the OS accepted the input, and the app's journal could not be read after it: \
+                 {error}"
+            )),
+        ),
+    })
+}
+
+fn no_lane() -> Error {
+    Error::not_supported("os_input", "the session has no OS lane")
 }
 
 fn lane_run<R: Send + 'static>(
     driver: &Driver,
     job: impl FnOnce(&mut dyn crate::lane::Lane) -> R + Send + 'static,
 ) -> Result<R> {
-    driver
-        .lane()
-        .ok_or_else(|| Error::NotSupported {
-            capability: Some("os_input".into()),
-            message: "the session has no OS lane".into(),
-        })?
-        .run(job)
+    driver.lane().ok_or_else(no_lane)?.run(job)
 }
 
 fn journal(driver: &mut Driver, window: WindowId, since: Option<u64>) -> Result<Journal> {
@@ -608,12 +600,10 @@ pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutc
     let from = aim(driver, &params.target, &params.options)?;
     let to = aim(driver, &params.to, &params.options)?;
     if from.window != to.window {
-        return Err(Error::InvalidArgument {
-            message: format!(
-                "a drag starts in {} and ends in {}: a pointer stays in one window",
-                from.window, to.window
-            ),
-        });
+        return Err(Error::invalid_argument(format!(
+            "a drag starts in {} and ends in {}: a pointer stays in one window",
+            from.window, to.window
+        )));
     }
     let sequence = ActionSequence::new(vec![pointer(
         PointerDevice::Mouse,
@@ -644,9 +634,9 @@ pub(crate) fn swipe(driver: &mut Driver, params: SwipeParams, fling: bool) -> Re
     let distance = params.distance.unwrap_or(extent * 0.8);
     let velocity = params.velocity.unwrap_or(FLING_VELOCITY);
     if !(distance.is_finite() && distance > 0.0 && velocity.is_finite() && velocity > 0.0) {
-        return Err(Error::InvalidArgument {
-            message: format!("a stroke of {distance} px at {velocity} px/s goes nowhere"),
-        });
+        return Err(Error::invalid_argument(format!(
+            "a stroke of {distance} px at {velocity} px/s goes nowhere"
+        )));
     }
     let end = LogicalPoint::new(aim.point.x + dx * distance, aim.point.y + dy * distance);
     let stroke_ms = ((distance / velocity) * 1_000.0).clamp(1.0, 10_000.0);
@@ -672,9 +662,10 @@ pub(crate) fn swipe(driver: &mut Driver, params: SwipeParams, fling: bool) -> Re
 /// `element.pinch`.
 pub(crate) fn pinch(driver: &mut Driver, params: PinchParams) -> Result<ActOutcome> {
     if !(params.scale.is_finite() && params.scale > 0.0) {
-        return Err(Error::InvalidArgument {
-            message: format!("a pinch to scale {} is not one", params.scale),
-        });
+        return Err(Error::invalid_argument(format!(
+            "a pinch to scale {} is not one",
+            params.scale
+        )));
     }
     let aim = aim(driver, &params.target, &params.options)?;
     let radius = aim
@@ -764,9 +755,9 @@ pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result
     for chord in &params.keys {
         let keys: Vec<&str> = chord.split('+').filter(|key| !key.is_empty()).collect();
         if keys.is_empty() {
-            return Err(Error::InvalidArgument {
-                message: format!("the chord {chord:?} names no key"),
-            });
+            return Err(Error::invalid_argument(format!(
+                "the chord {chord:?} names no key"
+            )));
         }
         actions.extend(keys.iter().map(|key| KeyAction::Down {
             key: (*key).to_owned(),

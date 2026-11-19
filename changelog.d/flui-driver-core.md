@@ -14,12 +14,12 @@
   never takes the OS path, and OS input through a `Lane` is announced before its first event,
   watched by the lane's `ActivityGuard` (the first foreign event stops the run before its next
   event, releases everything and ends it `cannot_verify`), refused on a shared desktop by a lane
-  without a guard, and held to one session per host by `OsInputLock`. A scenario fixes its window
+  without a guard, and held to one session per user's desktop by `OsInputLock`. A scenario fixes its window
   (`WindowSpec`) and refuses a window of another size or scale; a lane receives every move as a
   single step followed by a pause (`steps::os_events`).
 - `flui-testing`: `HeadlessAgentService` and `HeadlessConversation` serve the driver agent's
   conversation in process, polled at the instants of the caller's clock.
-- `flui-protocol`: `Placement::new` and its `visible`, `focused` and `position` builders.
+- `flui-protocol`: `Placement::new` and its `visible` and `focused` builders.
 
 ### Changed
 

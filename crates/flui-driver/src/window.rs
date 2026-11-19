@@ -330,8 +330,8 @@ fn with_options<P: serde::de::DeserializeOwned>(
     mut params: serde_json::Value,
     options: GestureOptions,
 ) -> Result<P> {
-    let invalid = |error: serde_json::Error| crate::Error::InvalidArgument {
-        message: format!("a gesture's parameters do not read: {error}"),
+    let invalid = |error: serde_json::Error| {
+        crate::Error::invalid_argument(format!("a gesture's parameters do not read: {error}"))
     };
     if let (Some(fields), serde_json::Value::Object(extra)) = (
         params.as_object_mut(),

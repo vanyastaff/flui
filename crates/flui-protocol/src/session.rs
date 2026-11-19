@@ -460,11 +460,4 @@ impl Placement {
         self.focused = focused;
         self
     }
-
-    /// Its surface's top-left at `position` on screen.
-    #[must_use]
-    pub const fn position(mut self, position: LogicalPoint) -> Self {
-        self.position = Some(position);
-        self
-    }
 }

@@ -469,12 +469,16 @@ front ends see `Driver`.
 
 The agent answers surface-logical rects plus `window.placement`: the surface's logical size and
 scale, and whether it is shown and focused. Where the surface sits on screen is the lane's to say
-(`Lane::locate_window`, which reads the placement's `position` where an app reports one), with the
-monitor's device-pixel origin where the OS has one. Lanes map them with checked arithmetic in `f64`, refuse non-finite results and refuse a point outside
-the window's visible surface as `outside_target`. Points are never clamped into it. Mapping and
-refusal sit in one pure module with a table test over extreme scales (0.5 to 8), negative monitor
-origins, fractional boundaries and RTL mirroring (an RTL window's rects are already physical-left
-based, so mapping is direction-free; a test pins that).
+(`Lane::locate_window`, which reads the placement's `position` where an app reports one); a lane
+that knows its monitors' device-pixel origins (mixed-DPI desktops) adds them to the geometry when it
+lands. The OS path maps each point with checked arithmetic in `f64`, refuses non-finite results and
+refuses a point outside the window's surface as `outside_target`. Points are never clamped into
+it. Whether the point is shown (not clipped by an ancestor, not covered) is the actionability
+check's, which the app answers before the point is chosen; the mapping checks the surface's
+bounds. Mapping and refusal sit in one pure module with a table test over extreme scales (0.5 to
+8), negative origins, fractional boundaries and RTL (an RTL window's points are already
+physical-left based, so mapping is direction-free; a test pins that, and another drives an OS tap
+on an RTL row's first button through a scripted lane).
 
 ### OS input on a shared desktop
 
@@ -954,8 +958,9 @@ fixture, with an identifier on every interactive widget.
   pins that the agent refuses a handle it cannot tell apart, never re-binds it (F6). The same
   applies to the element and layer ids that `InspectId` wraps.
 - One owner per window serializes jobs (F7). The endpoint keeps a bounded queue per connection
-  (`busy` beyond it) and a connection cap. OS lanes take a host-wide input lock (a named mutex on
-  Windows, a lock file elsewhere), so two drivers never interleave real input.
+  (`busy` beyond it) and a connection cap. OS lanes take the desktop's input lock (an OS file lock
+  in the user's temporary directory, one per user's desktop; a lock file another user owns is
+  `busy` too), so two drivers never interleave real input on one desktop.
 - Accepted work stays deliverable (F3). An action enqueued before its deadline stays queued; the
   reply says `may_have_run`. The driver never resends an `Acts` method on timeout; front ends
   surface the effect.

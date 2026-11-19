@@ -127,10 +127,10 @@ impl Driver {
 
     #[cfg(not(any(unix, windows)))]
     fn launch_process(_launch: &Launch) -> Result<Self> {
-        Err(Error::NotSupported {
-            capability: Some("local_socket".into()),
-            message: "this host has no local sockets to reach an app with".into(),
-        })
+        Err(Error::not_supported(
+            "local_socket",
+            "this host has no local sockets to reach an app with",
+        ))
     }
 
     /// Connect to an app already running with its agent at `endpoint`, presenting `token`. An
@@ -215,7 +215,7 @@ impl Driver {
         Ok(self)
     }
 
-    /// Take the host-wide OS-input lock at `path` instead of this user's default.
+    /// Take the desktop's OS-input lock at `path` instead of this user's default.
     #[must_use]
     pub fn with_os_input_lock(mut self, path: impl Into<PathBuf>) -> Self {
         self.os_lock_path = path.into();
@@ -334,8 +334,11 @@ impl Driver {
         M::Params: Serialize,
         M::Output: DeserializeOwned,
     {
-        let params = serde_json::to_value(params).map_err(|error| Error::InvalidArgument {
-            message: format!("the parameters of `{}` did not serialize: {error}", M::NAME),
+        let params = serde_json::to_value(params).map_err(|error| {
+            Error::invalid_argument(format!(
+                "the parameters of `{}` did not serialize: {error}",
+                M::NAME
+            ))
         })?;
         let output = self.call_value(M::NAME, params)?;
         decode(M::NAME, output)
@@ -349,25 +352,24 @@ impl Driver {
     /// As [`Self::call`]; [`Error::InvalidArgument`] for a name the table does not have, or
     /// parameters that do not read as the method's.
     pub fn call_value(&mut self, method: &str, params: Value) -> Result<Value> {
-        let row = method::find(method).ok_or_else(|| Error::InvalidArgument {
-            message: format!("no method is named `{method}`"),
-        })?;
+        let row = method::find(method)
+            .ok_or_else(|| Error::invalid_argument(format!("no method is named `{method}`")))?;
         match row.served_by {
             ServedBy::Agent => {
                 if !self.serves(row.name) {
-                    return Err(Error::NotSupported {
-                        capability: Some(row.name.to_owned()),
-                        message: format!("the app's agent does not serve `{}`", row.name),
-                    });
+                    return Err(Error::not_supported(
+                        row.name,
+                        format!("the app's agent does not serve `{}`", row.name),
+                    ));
                 }
                 let holds = holds_for(row.name, &params);
                 self.agent_value(row.name, row.effect, params, holds)
             }
             ServedBy::Driver => crate::compose::call(self, row.name, params),
-            _ => Err(Error::NotSupported {
-                capability: Some(row.name.to_owned()),
-                message: format!("`{}` needs an OS lane that serves it", row.name),
-            }),
+            _ => Err(Error::not_supported(
+                row.name,
+                format!("`{}` needs an OS lane that serves it", row.name),
+            )),
         }
     }
 
@@ -401,13 +403,16 @@ impl Driver {
         M::Output: DeserializeOwned,
     {
         if !self.serves(M::NAME) {
-            return Err(Error::NotSupported {
-                capability: Some(M::NAME.to_owned()),
-                message: format!("the app's agent does not serve `{}`", M::NAME),
-            });
+            return Err(Error::not_supported(
+                M::NAME,
+                format!("the app's agent does not serve `{}`", M::NAME),
+            ));
         }
-        let params = serde_json::to_value(params).map_err(|error| Error::InvalidArgument {
-            message: format!("the parameters of `{}` did not serialize: {error}", M::NAME),
+        let params = serde_json::to_value(params).map_err(|error| {
+            Error::invalid_argument(format!(
+                "the parameters of `{}` did not serialize: {error}",
+                M::NAME
+            ))
         })?;
         decode(
             M::NAME,
@@ -423,6 +428,7 @@ impl Driver {
                 handle,
                 exit: None,
                 message,
+                retry,
             } => {
                 let exit = self.process.as_mut().and_then(AppProcess::exit_code);
                 Error::Gone {
@@ -430,6 +436,7 @@ impl Driver {
                     handle,
                     exit,
                     message,
+                    retry,
                 }
             }
             other => other,
@@ -456,10 +463,7 @@ impl Driver {
             .windows()?
             .into_iter()
             .next()
-            .ok_or_else(|| Error::NotFound {
-                message: "the app has no window with content".into(),
-                candidates: Vec::new(),
-            })?;
+            .ok_or_else(|| Error::not_found("the app has no window with content"))?;
         Ok(Window::new(self, first))
     }
 
@@ -498,6 +502,11 @@ impl Driver {
         self.process.is_some() || self.target_isolation == Isolation::InProcess
     }
 
+    /// How long the session has run on the clock its waits are counted in.
+    pub(crate) fn clock(&self) -> Duration {
+        self.connection.clock()
+    }
+
     /// The OS lane the session's OS input goes through, when it has one.
     #[must_use]
     pub fn lane_name(&self) -> Option<&str> {
@@ -512,7 +521,7 @@ impl Driver {
         self.scenario.as_ref()
     }
 
-    /// Take the host-wide OS-input lock, once per session.
+    /// Take the desktop's OS-input lock, once per session.
     pub(crate) fn lock_os_input(&mut self) -> Result<()> {
         if self.os_lock.is_none() {
             self.os_lock = Some(OsInputLock::acquire(&self.os_lock_path)?);

@@ -53,19 +53,17 @@ impl WindowSpec {
         if same_size && same_scale {
             return Ok(());
         }
-        Err(Error::InvalidArgument {
-            message: format!(
-                "the scenario is written for a {} x {} window at scale {}, and the app's window {} \
-                 is {} x {} at scale {}",
-                self.size.width,
-                self.size.height,
-                self.scale,
-                placement.window,
-                placement.size.width,
-                placement.size.height,
-                placement.scale
-            ),
-        })
+        Err(Error::invalid_argument(format!(
+            "the scenario is written for a {} x {} window at scale {}, and the app's window {} is \
+             {} x {} at scale {}",
+            self.size.width,
+            self.size.height,
+            self.scale,
+            placement.window,
+            placement.size.width,
+            placement.size.height,
+            placement.scale
+        )))
     }
 }
 

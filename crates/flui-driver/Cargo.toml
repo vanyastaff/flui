@@ -50,6 +50,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 flui-driver = { path = ".", features = ["headless", "testing"] }
+flui-foundation = { workspace = true }
 flui-view = { workspace = true }
 flui-widgets = { workspace = true }
 tempfile = { workspace = true }

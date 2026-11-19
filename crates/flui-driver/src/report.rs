@@ -149,16 +149,23 @@ impl Report {
     }
 
     /// Run `scenario` against `driver` as the check `name`, the scenario adding its own checks.
-    /// What it fails with becomes the check's outcome; the driver's OS-input announcements and
-    /// isolation join the report.
+    /// What it fails with becomes the check's outcome; a scenario that returns having made no
+    /// check is `cannot_verify`, since it covered nothing. The driver's OS-input announcements,
+    /// isolation and lane join the report.
     pub fn run_scenario(
         &mut self,
         name: impl Into<String>,
         driver: &mut Driver,
         scenario: impl FnOnce(&mut Driver, &mut Self) -> Result<()>,
     ) {
+        let before = self.checks.len();
         let result = scenario(driver, self);
-        self.push(Check::from_result(name, &result));
+        let checked_nothing = result.is_ok() && self.checks.len() == before;
+        if checked_nothing {
+            self.not_run(name, "the scenario made no check");
+        } else {
+            self.push(Check::from_result(name, &result));
+        }
         self.isolation = Some(driver.isolation());
         self.lane = driver.lane_name().map(str::to_owned);
         self.announcements.extend(driver.take_announcements());
@@ -167,11 +174,6 @@ impl Report {
     /// Name the isolation the run's OS input ran in.
     pub fn set_isolation(&mut self, isolation: Isolation) {
         self.isolation = Some(isolation);
-    }
-
-    /// Name the OS lane the run's OS input went through.
-    pub fn set_lane(&mut self, lane: impl Into<String>) {
-        self.lane = Some(lane.into());
     }
 
     /// The OS lane the run's OS input went through, when it had one.

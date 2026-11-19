@@ -138,19 +138,19 @@ impl Launch {
     pub(crate) fn executable_path(&self) -> Result<PathBuf> {
         match &self.target {
             Target::Artifact(Artifact::Executable(path)) => Ok(path.clone()),
-            Target::Artifact(artifact) => Err(Error::NotSupported {
-                capability: Some(format!("{}_lane", artifact.lane())),
-                message: format!(
+            Target::Artifact(artifact) => Err(Error::not_supported(
+                format!("{}_lane", artifact.lane()),
+                format!(
                     "{artifact:?} is installed by the {} lane, which this build of the driver has \
                      not",
                     artifact.lane()
                 ),
-            }),
+            )),
             Target::CargoExample { example, package } => build_example(example, package.as_deref()),
             #[cfg(feature = "headless")]
-            Target::Headless(_) => Err(Error::InvalidArgument {
-                message: "a headless launch starts no executable".into(),
-            }),
+            Target::Headless(_) => Err(Error::invalid_argument(
+                "a headless launch starts no executable",
+            )),
         }
     }
 
@@ -173,10 +173,12 @@ impl Launch {
             ))
         })?;
         Ok(Launched {
-            process: AppProcess { child },
             endpoint: place.address.clone(),
             token,
-            _place: place,
+            process: AppProcess {
+                child,
+                _place: place,
+            },
         })
     }
 }
@@ -204,13 +206,14 @@ pub(crate) struct Launched {
     pub(crate) process: AppProcess,
     pub(crate) endpoint: String,
     pub(crate) token: String,
-    /// The private directory the socket lives in (Unix); removed with the session.
-    _place: EndpointPlace,
 }
 
 /// A process the session owns: killed when the session ends while it still runs.
 pub(crate) struct AppProcess {
     child: Child,
+    /// Where its agent listens: the private directory its socket lives in (Unix), removed with the
+    /// session, after the process ended.
+    _place: EndpointPlace,
 }
 
 impl AppProcess {
@@ -276,8 +279,8 @@ impl EndpointPlace {
             .join("agent.sock")
             .into_os_string()
             .into_string()
-            .map_err(|_| Error::InvalidArgument {
-                message: "the temporary directory's path is not UTF-8; set TMPDIR".into(),
+            .map_err(|_| {
+                Error::invalid_argument("the temporary directory's path is not UTF-8; set TMPDIR")
             })?;
         Ok(Self { address, _dir: dir })
     }
@@ -291,10 +294,10 @@ impl EndpointPlace {
 
     #[cfg(not(any(unix, windows)))]
     pub(crate) fn new() -> Result<Self> {
-        Err(Error::NotSupported {
-            capability: Some("local_socket".into()),
-            message: "this host has no local sockets to launch an app with".into(),
-        })
+        Err(Error::not_supported(
+            "local_socket",
+            "this host has no local sockets to launch an app with",
+        ))
     }
 }
 

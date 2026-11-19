@@ -42,28 +42,24 @@ pub struct LaneCapabilities {
     pub keys: bool,
     /// Where its input lands.
     pub isolation: Isolation,
-    /// Whether it has a user-activity guard ([`Lane::guard`]).
-    pub guarded: bool,
     /// What replay compares of its runs.
     pub fidelity: PositionFidelity,
 }
 
 impl LaneCapabilities {
-    /// A lane sending `pointers`, keys when `keys`, into `isolation`, guarded when `guarded`,
-    /// reproducing positions as `fidelity` says.
+    /// A lane sending `pointers`, keys when `keys`, into `isolation`, reproducing positions as
+    /// `fidelity` says. Whether it is guarded is [`Lane::guard`]'s to say, and only its.
     #[must_use]
     pub fn new(
         pointers: Vec<PointerDevice>,
         keys: bool,
         isolation: Isolation,
-        guarded: bool,
         fidelity: PositionFidelity,
     ) -> Self {
         Self {
             pointers,
             keys,
             isolation,
-            guarded,
             fidelity,
         }
     }
@@ -124,13 +120,16 @@ pub trait Lane: Send {
     ///
     /// [`Error::NotSupported`] naming `window_position` when neither the app nor the lane knows it.
     fn locate_window(&mut self, placement: &Placement) -> Result<WindowGeometry> {
-        let origin = placement.position.ok_or_else(|| Error::NotSupported {
-            capability: Some("window_position".into()),
-            message: format!(
-                "the app does not know where window {} is on screen, and the {} lane does not say",
-                placement.window,
-                self.name()
-            ),
+        let origin = placement.position.ok_or_else(|| {
+            Error::not_supported(
+                "window_position",
+                format!(
+                    "the app does not know where window {} is on screen, and the {} lane does not \
+                     say",
+                    placement.window,
+                    self.name()
+                ),
+            )
         })?;
         Ok(WindowGeometry::new(origin, placement.size, placement.scale))
     }
@@ -150,20 +149,31 @@ pub trait Lane: Send {
     fn release_all(&mut self) -> Result<()>;
 }
 
+/// Whether `lane` may send OS input: [`os_input::admit`](crate::os_input::admit) over where its
+/// input lands and whether it has a guard, the one source of which is [`Lane::guard`].
+///
+/// # Errors
+///
+/// [`Error::NotSupported`] naming `os_input` for a lane whose input lands in process, and naming
+/// `user_activity_guard` for one with no guard on the shared desktop.
+pub fn admit(lane: &mut dyn Lane) -> Result<()> {
+    let isolation = lane.capabilities().isolation;
+    let guarded = lane.guard().is_some();
+    crate::os_input::admit(isolation, guarded)
+}
+
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
 /// pressed is released on every exit, a failed send included.
 ///
 /// # Errors
 ///
-/// [`Error::NotSupported`] naming `user_activity_guard` when the lane has no guard and its input
-/// lands on the shared desktop; [`Error::InterruptedByUser`]; the lane's own failure.
+/// As [`admit`], before any event; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
-    let isolation = lane.capabilities().isolation;
+    admit(lane)?;
     let name = lane.name().to_owned();
-    match lane.guard() {
-        Some(guard) => guard.arm()?,
-        None => crate::os_input::admit(isolation, false)?,
+    if let Some(guard) = lane.guard() {
+        guard.arm()?;
     }
     let sent = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {

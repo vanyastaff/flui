@@ -536,9 +536,10 @@ graph LR
   - the coordinates module;
   - `Error` with the code mapping, and `Report` with its verdict and exit codes;
   - `Launch` with the artifact kinds and `cargo_example`;
-  - lane worker threads and the host-wide input lock;
+  - lane worker threads and the desktop's input lock (one session per user's desktop);
   - `InputPolicy::default()` set to `Synthetic`;
-  - the OS-input announcement (scenario-declared devices and duration, the CLI grace period);
+  - the OS-input announcement (scenario-declared devices and duration; the interactive grace
+    period and `--yes` are `flui drive`'s, built with the CLI in FD17);
   - the `ActivityGuard` trait lanes implement;
   - `Isolation` (`flui-protocol`'s) in the session and the report, and the refusal of OS input on
     a `shared` desktop without a guard;
@@ -576,26 +577,39 @@ graph LR
       and a semantic-preferred move all go synthetic, the lane sends nothing and nothing is
       announced), `a_certification_scenario_takes_the_os_path_announced_once_before_its_first_event`,
       `a_scenario_written_for_another_window_size_refuses_to_run` (size and scale, naming both),
-      `os_input_without_a_guard_runs_only_where_it_is_isolated`.
+      `os_input_without_a_guard_runs_only_where_it_is_isolated`,
+      `a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (in process even
+      guarded, shared unguarded),
+      `an_rtl_windows_button_is_aimed_at_from_the_surfaces_physical_left` (an OS tap on an RTL
+      row's first button: the lane gets the point the app published, unmirrored).
     - `coordinates::a_point_maps_to_the_device_pixel_it_covers_or_is_refused` (scales 0.5, 1.25,
-      1.5, 2 and 8, negative origins, fractional edges, a secondary monitor, overflow, non-finite
-      input) and `an_element_maps_from_the_centre_of_its_visible_part_whatever_the_text_direction`
-      (RTL).
+      1.5, 2 and 8, negative origins, fractional edges, RTL, overflow, non-finite input).
     - `report::the_verdict_is_fail_then_cannot_verify_then_pass`,
       `a_check_asked_for_and_not_run_keeps_the_report_from_passing`,
+      `a_scenario_that_checked_nothing_cannot_be_verified`,
       `the_report_names_the_isolation_and_the_announcements`,
-      `an_error_reads_into_its_code_with_the_retry_and_effect_it_carries`.
-    - `steps::every_move_is_a_single_step_followed_by_a_pause`,
-      `a_very_long_move_takes_longer_steps_not_more_of_them`,
+      `an_error_reads_into_its_code_with_the_retry_and_effect_it_carries` (the app's `retry` kept
+      for every code).
+    - `steps::every_move_is_a_single_step_followed_by_a_pause` (two contacts of one tick step
+      together), `a_very_long_move_takes_longer_steps_not_more_of_them`,
       `input_no_lane_sends_is_refused_before_any_event`.
-    - `socket::an_app_that_closes_mid_call_answers_its_process_gone_then_and_after`,
+    - `socket::a_driver_that_goes_closes_its_connection_on_every_exit` (dropped, closed, and a
+      panic unwinding past it: the app sees the connection close),
+      `a_connection_the_app_closed_between_calls_answers_gone_at_once`,
+      `actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing`,
+      `os_input_whose_effect_cannot_be_read_back_may_have_run`, `a_lock_file_another_user_owns_is_busy`,
+      `an_app_that_closes_mid_call_answers_its_process_gone_then_and_after`,
       `an_app_that_exits_before_its_agent_answers_reports_its_exit_code` (exit code 3, without
       waiting out the connect timeout), `an_artifact_without_its_lane_is_named_as_the_capability_missing`,
-      `a_lane_worker_cancels_a_queued_job_and_serves_past_a_panicking_one`.
+      `a_lane_worker_cancels_a_queued_job_and_serves_past_a_panicking_one`,
+      `a_driver_moves_to_the_thread_that_runs_it`.
   - Taking out, one at a time, the agent's `window.placement`, the headless frame containment, the
-    guard's per-event check, the isolation rule, the host-wide lock, the never-the-OS fallback, the
-    clamp refusal, the empty-report rule, the release frame after the driver goes and the
-    liveness check of a launched app each fails a test above.
+    guard's per-event check, the isolation rule (and its check at every send), the desktop lock
+    (and its answer to another user's file), the never-the-OS fallback, the clamp refusal, the
+    empty-report and empty-scenario rules, the release frame after the driver goes, the liveness
+    check of a launched app, the kept `retry`, the interleaved steps, the effect after unread OS
+    input and the clock-bound actionability wait each fails a test above; the previous socket
+    transport fails the two connection tests.
   - As built:
     - The isolation mode is `flui_protocol::session::Isolation`, which main already carries.
     - The agent answers `window.placement` now (size and scale from the root media query,
@@ -613,6 +627,12 @@ graph LR
     - The kill-mid-call test of FD7 (a FLUI app launched on a Linux CI host and killed) still
       waits for a CI job that opens a window; the driver's `gone` of the process with its exit
       code is held by the socket tests above.
+    - `OsInputLock` holds one OS-input session per user's desktop (a file lock in the user's
+      temporary directory); a lock file another user owns is `busy`.
+    - Left for later tasks, which take them: `Driver::call_value` (by wire name) is the entry
+      `flui drive call` and the MCP adapter use (FD17); `Report::set_trace` is filled by the trace
+      writer (FD10); monitor-aware mapping for mixed-DPI desktops comes with the first lane that
+      reads monitors (the OS-lane tasks).
 
 ### FD10. Pixels and trace
 

@@ -5,19 +5,19 @@
 //!   send, with a [`ScriptedGuard`] that reports foreign input after a set number of events, so
 //!   the user-activity rule runs without a desktop.
 //! - [`ScriptedAgent`]: a stand-in for an app's agent on a real local socket, answering each
-//!   request by a script, so the socket transport's failures (an app that closes mid-call, exits
-//!   with a code, refuses the hello) run without a FLUI app.
+//!   request by a script, so the socket transport's cases (an app that closes mid-call or answers
+//!   slowly, a driver that leaves) run without a FLUI app.
 
 use std::io::{self, Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use flui_protocol::envelope::{Greeting, Request, ServerLine};
 use flui_protocol::error::ErrorObject;
 use flui_protocol::framing::LineReader;
 use flui_protocol::input::PointerDevice;
-use flui_protocol::launch::{ENDPOINT_ENV, TOKEN_ENV};
 use flui_protocol::session::{AppDescription, Capabilities, HelloReply, Isolation, Placement};
 use flui_protocol::version::PROTOCOL_VERSION;
 use serde_json::Value;
@@ -66,7 +66,7 @@ pub struct ScriptedGuard {
     sent: Arc<Mutex<Vec<OsEvent>>>,
     armed: Arc<AtomicUsize>,
     watching: bool,
-    reported: AtomicBool,
+    reported: bool,
 }
 
 impl ActivityGuard for ScriptedGuard {
@@ -83,8 +83,11 @@ impl ActivityGuard for ScriptedGuard {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .len();
-        (self.watching && sent >= *after && !self.reported.swap(true, Ordering::SeqCst))
-            .then(|| ForeignInput::new(description.clone()))
+        if !self.watching || sent < *after || self.reported {
+            return None;
+        }
+        self.reported = true;
+        Some(ForeignInput::new(description.clone()))
     }
 
     fn disarm(&mut self) {
@@ -135,7 +138,7 @@ impl ScriptedLane {
             sent: Arc::clone(&self.log.sent),
             armed: Arc::clone(&self.log.armed),
             watching: false,
-            reported: AtomicBool::new(false),
+            reported: false,
         }
     }
 }
@@ -150,7 +153,6 @@ impl Lane for ScriptedLane {
             vec![PointerDevice::Mouse, PointerDevice::Touch],
             true,
             self.isolation,
-            self.guard.is_some(),
             PositionFidelity::Exact,
         )
     }
@@ -193,6 +195,8 @@ pub enum Reply {
     Result(Value),
     /// With this error.
     Error(ErrorObject),
+    /// With this result, then closing the connection.
+    ResultThenClose(Value),
     /// By closing the connection, unanswered.
     Close,
 }
@@ -236,23 +240,6 @@ impl ScriptedAgent {
         })
     }
 
-    /// Serve one connection at the endpoint a launch's environment names, with its token, on
-    /// this thread: what a stand-in app process runs.
-    ///
-    /// # Errors
-    ///
-    /// When the environment names no endpoint, or the endpoint cannot be bound.
-    pub fn serve_from_env(methods: &[&str], script: Script) -> Result<()> {
-        let missing = |name: &str| Error::InvalidArgument {
-            message: format!("{name} is not set: the process was not launched by a driver"),
-        };
-        let endpoint = std::env::var(ENDPOINT_ENV).map_err(|_| missing(ENDPOINT_ENV))?;
-        let token = std::env::var(TOKEN_ENV).map_err(|_| missing(TOKEN_ENV))?;
-        let methods: Vec<String> = methods.iter().map(|method| (*method).to_owned()).collect();
-        let listener = listen(&endpoint)?;
-        Ok(serve_one(&listener, &token, &methods, script)?)
-    }
-
     /// The endpoint, as a driver attaches to it.
     #[must_use]
     pub fn endpoint(&self) -> crate::connection::socket::Endpoint {
@@ -265,16 +252,36 @@ impl ScriptedAgent {
         &self.token
     }
 
-    /// Wait for the connection it served to end.
+    /// Wait at most `within` for the connection it served to end: the driver closed it, or the
+    /// script did.
     ///
     /// # Errors
     ///
-    /// The serving thread's failure.
-    pub fn join(mut self) -> Result<()> {
-        match self.thread.take().map(JoinHandle::join) {
-            Some(Ok(served)) => Ok(served?),
-            Some(Err(payload)) => std::panic::resume_unwind(payload),
-            None => Ok(()),
+    /// [`Error::Protocol`] when the connection is still open after `within`; the serving thread's
+    /// failure.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the serving thread's panic.
+    pub fn join(mut self, within: Duration) -> Result<()> {
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + within;
+        while !thread.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(Error::Protocol {
+                    message: format!(
+                        "the stand-in still holds its connection after {} ms",
+                        within.as_millis()
+                    ),
+                });
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        match thread.join() {
+            Ok(served) => Ok(served?),
+            Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 }
@@ -317,12 +324,27 @@ fn serve_one(
                 Ok(None) => {}
                 Err(_) => return Ok(()),
             }
-            let read = reading.read(&mut chunk)?;
+            let read = match reading.read(&mut chunk) {
+                Ok(read) => read,
+                // The driver went: a pipe reports it as broken rather than ended.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    0
+                }
+                Err(error) => return Err(error),
+            };
             if read == 0 {
                 return Ok(());
             }
             lines.push(&chunk[..read]);
         };
+        let mut close_after = false;
         let answer = if greeted {
             let Ok(request) = serde_json::from_slice::<Request<Value>>(&line) else {
                 return Ok(());
@@ -330,6 +352,10 @@ fn serve_one(
             match script(&request.method, &request.params) {
                 Reply::Result(result) => ServerLine::answer(request.id, Ok(result)),
                 Reply::Error(error) => ServerLine::answer(request.id, Err(error)),
+                Reply::ResultThenClose(result) => {
+                    close_after = true;
+                    ServerLine::answer(request.id, Ok(result))
+                }
                 Reply::Close => return Ok(()),
             }
         } else {
@@ -351,5 +377,8 @@ fn serve_one(
         bytes.push(b'\n');
         writing.write_all(&bytes)?;
         writing.flush()?;
+        if close_after {
+            return Ok(());
+        }
     }
 }

@@ -1,13 +1,13 @@
 //! OS input on a person's desktop: never the default, always announced, guarded, and one session
-//! at a time on a host (ADR-0238 §5).
+//! at a time on a desktop (ADR-0238 §5).
 //!
 //! - [`InputPolicy::default`](flui_protocol::input::InputPolicy) is synthetic: a session takes
 //!   the OS path only when it asks for it.
 //! - [`admit`] holds the isolation rule: in process there is no OS input at all, and on the
 //!   shared desktop it runs only with a lane that can tell the user's input from its own.
 //! - An [`Announcement`] says, before the first OS event, what the run takes and for how long.
-//! - [`OsInputLock`] is the host-wide lock two OS-input sessions on one desktop contend for: the
-//!   second is refused `busy` instead of interleaving its events with the first's.
+//! - [`OsInputLock`] is the lock two OS-input sessions on one desktop contend for: the second is
+//!   refused `busy` instead of interleaving its events with the first's.
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -34,17 +34,18 @@ const ISOLATED: &str = "a sandbox or a second session (Windows), Xvfb or a neste
 /// instead.
 pub fn admit(isolation: Isolation, guarded: bool) -> Result<()> {
     match isolation {
-        Isolation::InProcess => Err(Error::NotSupported {
-            capability: Some("os_input".into()),
-            message: "an app hosted in process takes no OS input; attach an OS lane".into(),
-        }),
-        Isolation::Shared if !guarded => Err(Error::NotSupported {
-            capability: Some("user_activity_guard".into()),
-            message: format!(
+        Isolation::InProcess => Err(Error::not_supported(
+            "os_input",
+            "input that lands in process is no OS input: run the lane on a desktop, a device or a \
+             browser",
+        )),
+        Isolation::Shared if !guarded => Err(Error::not_supported(
+            "user_activity_guard",
+            format!(
                 "this lane cannot tell your input from its own, so it takes no OS input on your \
                  desktop; run it in {ISOLATED}"
             ),
-        }),
+        )),
         _ => Ok(()),
     }
 }
@@ -125,10 +126,12 @@ impl fmt::Display for Announcement {
     }
 }
 
-/// The host-wide lock of an OS-input session: one per desktop at a time.
+/// The lock of an OS-input session: one per user's desktop at a time.
 ///
 /// An OS file lock on a file in the user's temporary directory, so it is released when the process
-/// holding it ends, however it ends.
+/// holding it ends, however it ends. A desktop is a user's session, so the lock is per user; where
+/// the temporary directory is shared between users (`/tmp`), a lock file another user created and
+/// holds cannot be opened for writing, and that is answered `busy` too, as another session's.
 #[derive(Debug)]
 #[must_use = "the lock is released when this is dropped"]
 pub struct OsInputLock {
@@ -147,25 +150,33 @@ impl OsInputLock {
     ///
     /// # Errors
     ///
-    /// [`Error::Busy`] while another session holds it; [`Error::Io`] when the file cannot be
-    /// opened.
+    /// [`Error::Busy`] while another session holds it, or another user owns the file;
+    /// [`Error::Io`] when the file cannot be opened for another reason.
     pub fn acquire(path: &Path) -> Result<Self> {
-        let file = OpenOptions::new()
+        let busy = |whose: &str| {
+            Error::busy(format!(
+                "{whose} sends OS input on this desktop ({}); one runs at a time",
+                path.display()
+            ))
+        };
+        let opened = OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(path)?;
+            .open(path);
+        let file = match opened {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(busy("another user's session"));
+            }
+            Err(error) => return Err(Error::Io(error)),
+        };
         match file.try_lock() {
             Ok(()) => Ok(Self {
                 file,
                 path: path.to_owned(),
             }),
-            Err(std::fs::TryLockError::WouldBlock) => Err(Error::Busy {
-                message: format!(
-                    "another session sends OS input on this desktop ({}); one runs at a time",
-                    path.display()
-                ),
-            }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(busy("another session")),
             Err(std::fs::TryLockError::Error(error)) => Err(Error::Io(error)),
         }
     }

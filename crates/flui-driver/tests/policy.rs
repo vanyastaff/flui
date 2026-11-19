@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use flui_driver::lane;
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{ActionSequence, InputSource, PointerAction, PointerDevice};
@@ -134,7 +135,7 @@ fn a_scenario_written_for_another_window_size_refuses_to_run() {
         Driver::launch(counter(&probe).window_size(640, 480)).expect("the headless app starts");
     let refused = driver.declare(Scenario::new("drop").window(WindowSpec::new(800.0, 600.0, 1.0)));
     match refused {
-        Err(Error::InvalidArgument { ref message }) => assert!(
+        Err(Error::InvalidArgument { ref message, .. }) => assert!(
             message.contains("800 x 600") && message.contains("640 x 480"),
             "it names what was expected and what the app has: {message}"
         ),
@@ -183,6 +184,7 @@ fn os_input_without_a_guard_runs_only_where_it_is_isolated() {
                 Err(Error::NotSupported {
                     capability: Some(ref capability),
                     ref message,
+                    ..
                 }) => {
                     assert_eq!(capability, "user_activity_guard");
                     assert!(message.contains("Xvfb"), "it names where to run: {message}");
@@ -199,4 +201,101 @@ fn os_input_without_a_guard_runs_only_where_it_is_isolated() {
             );
         }
     }
+}
+
+#[test]
+fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
+    let an_event = || OsEvent::Pause(Duration::from_millis(1));
+    let rows = [
+        (
+            "in process, even guarded",
+            Isolation::InProcess,
+            true,
+            Some("os_input"),
+        ),
+        (
+            "shared, unguarded",
+            Isolation::Shared,
+            false,
+            Some("user_activity_guard"),
+        ),
+        ("shared, guarded", Isolation::Shared, true, None),
+        ("an emulator, unguarded", Isolation::Emulator, false, None),
+    ];
+    for (row, isolation, guarded, refused) in rows {
+        let (lane, log) = ScriptedLane::new(isolation);
+        let mut lane = if guarded { lane.guarded() } else { lane };
+        let sent = lane::send_guarded(&mut lane, &[an_event()]);
+        match (refused, sent) {
+            (None, Ok(())) => assert_eq!(log.sent().len(), 1, "{row}"),
+            (
+                Some(expected),
+                Err(Error::NotSupported {
+                    capability: Some(capability),
+                    ..
+                }),
+            ) => {
+                assert_eq!(capability, expected, "{row}");
+                assert!(log.sent().is_empty(), "{row}: nothing was sent");
+            }
+            (expected, sent) => panic!("{row}: expected refusal {expected:?}, got {sent:?}"),
+        }
+    }
+}
+
+#[test]
+fn an_rtl_windows_button_is_aimed_at_from_the_surfaces_physical_left() {
+    use flui_foundation::TextDirection;
+    use flui_widgets::{Directionality, RawButton, Row, Text};
+
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let mut driver = Driver::launch(Launch::headless(|| {
+        Directionality::new(
+            TextDirection::Rtl,
+            Row::new((
+                RawButton::new(Text::new("First"))
+                    .identifier("first")
+                    .on_pressed(|_| {}),
+                RawButton::new(Text::new("Second")).on_pressed(|_| {}),
+            )),
+        )
+    }))
+    .expect("the headless app starts")
+    .with_os_input_lock(dir.path().join("os-input.lock"))
+    .with_input_policy(InputPolicy::require(InputPath::Os))
+    .with_lane(lane.guarded())
+    .expect("the lane starts");
+    let mut window = driver.main_window().expect("a window");
+    let point = window
+        .locate(Locator::identifier("first"))
+        .resolve()
+        .expect("the first button")
+        .actionability()
+        .expect("its facts")
+        .point
+        .expect("a point");
+    assert!(
+        point.x > 400.0,
+        "an RTL row puts its first child on the right: {point:?}"
+    );
+    window
+        .locate(Locator::identifier("first"))
+        .tap()
+        .expect("an OS tap");
+    let first_move = log.sent().into_iter().find_map(|event| match event {
+        OsEvent::PointerMove { to, .. } => Some(to),
+        _ => None,
+    });
+    // The scripted lane's screen is the surface, at scale 1: the device pixel is the point's.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a point inside an 800 by 600 surface"
+    )]
+    let expected = (point.x.floor() as i32, point.y.floor() as i32);
+    assert_eq!(
+        first_move.map(|to| (to.x, to.y)),
+        Some(expected),
+        "the OS path maps the point the app published, with no mirroring"
+    );
 }
