@@ -24,7 +24,7 @@
 
 use flui_foundation::geometry::Rect;
 use flui_hot_reload::scene_plugin;
-use flui_layer::{Layer, LayerTree, PictureLayer, Scene};
+use flui_layer::{Scene, SceneBuilder};
 use flui_painting::{Canvas, paint::Paint, styling::Color};
 
 fn my_scene(width: f64, height: f64) -> Scene {
@@ -60,9 +60,9 @@ fn my_scene(width: f64, height: f64) -> Scene {
         &Paint::fill(Color::WHITE),
     );
 
-    Scene::new(LayerTree::new(Layer::from(PictureLayer::new(
-        canvas.finish(),
-    ))))
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    builder.build()
 }
 
 scene_plugin!(my_scene);

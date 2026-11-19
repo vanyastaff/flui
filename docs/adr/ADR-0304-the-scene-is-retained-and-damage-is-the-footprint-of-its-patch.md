@@ -265,8 +265,9 @@ the depths below it recomputed, counted as `scene_depth_updates`. The indexes ch
 `Publish` whose link, texture or filter entries differ from the old content's (the old ones leave,
 the new ones enter) and on `Retire`, and on nothing else; an unattached node's links resolve to nothing. Two leaders on one link resolve to the
 one indexed last, and a debug build asserts, as `LayerTree::push` does today
-(`layer_tree.rs:226-234`). `flui_layer::resolve_follower_transform` takes the version and the
-follower's address (node and entry) and keeps ADR-0276's rule.
+(`layer_tree.rs:226-234`). `SceneVersion::follower_transform` takes the follower's address in the version
+(node and entry) and keeps ADR-0276's rule; `resolve_follower_transform` over a hand-built tree
+is its oracle, behind `flui-layer`'s `testing` feature.
 
 A later operation that writes one effect property without republishing content is a new `SceneOp`
 variant: §4 already stores the subtree bounds and §6 the footprints its damage needs.

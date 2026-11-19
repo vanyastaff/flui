@@ -1910,7 +1910,7 @@ mod tests {
         UiRuntimeId,
         geometry::{DeviceSize, Offset, Rect},
     };
-    use flui_layer::{DamageRegion, LayerTree, Scene, SceneBuilder, SceneSnapshot};
+    use flui_layer::{DamageRegion, Scene, SceneBuilder, SceneSnapshot};
     use flui_painting::{
         Canvas, TextPainter,
         paint::Paint,
@@ -1946,9 +1946,9 @@ mod tests {
         assert!(refusals.take(|_| true).is_empty(), "taken once");
     }
 
-    /// A picture that draws `texture` over `side`×`side` logical pixels at the
+    /// A scene that draws `texture` over `side`×`side` logical pixels at the
     /// origin, the way `RenderTexture` paints one.
-    fn texture_tree(texture: flui_painting::paint::TextureId, side: f64) -> LayerTree {
+    fn texture_scene(texture: flui_painting::paint::TextureId, side: f64) -> Scene {
         let mut canvas = Canvas::new();
         canvas.draw_texture(
             texture,
@@ -1957,14 +1957,14 @@ mod tests {
             flui_painting::paint::FilterQuality::Low,
             1.0,
         );
-        LayerTree::new(flui_layer::Layer::from(flui_layer::PictureLayer::new(
-            canvas.finish(),
-        )))
+        let mut builder = SceneBuilder::new();
+        builder.add_picture(canvas.finish());
+        builder.build()
     }
 
     /// A red square beside a black glyph, so a frame samples both the shape
     /// pipelines and the glyph atlas.
-    fn square_and_glyph() -> LayerTree {
+    fn square_and_glyph() -> Scene {
         let mut painter = TextPainter::new()
             .with_text(
                 TextSpan::new("I").with_style(
@@ -2144,19 +2144,19 @@ mod tests {
         );
     }
 
-    /// A frame of `tree` for the slot at `address`, stamped with `generation`.
+    /// A frame of `scene` for the slot at `address`, stamped with `generation`.
     fn frame(
         slot: SlotId,
         address: PresentationAddress,
         generation: SurfaceGeneration,
-        tree: LayerTree,
+        scene: Scene,
     ) -> RasterCommand {
         RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
                 FrameStamp::new(address, FrameEpoch::ZERO, generation),
                 DamageRegion::Full(flui_layer::FullReason::FirstFrame),
-                Scene::new(tree),
+                scene,
             ),
         }
     }
@@ -2333,7 +2333,7 @@ mod tests {
                     snapshot: SceneSnapshot::new(
                         FrameStamp::new(address, FrameEpoch::from_raw(epoch), generation),
                         DamageRegion::Full(flui_layer::FullReason::FirstFrame),
-                        Scene::new(square_and_glyph()),
+                        square_and_glyph(),
                     ),
                 })
                 .expect("the frame is accepted");
@@ -2426,10 +2426,10 @@ mod tests {
             };
             (slot, address, generation)
         });
-        let draw = |executor: &mut RasterExecutor<GpuContext>, tree: fn() -> LayerTree| {
+        let draw = |executor: &mut RasterExecutor<GpuContext>, scene: fn() -> Scene| {
             for (slot, address, generation) in slots {
                 sender
-                    .send(frame(slot, address, generation, tree()))
+                    .send(frame(slot, address, generation, scene()))
                     .expect("the frame is accepted");
             }
             let _ = executor.turn();
@@ -2813,9 +2813,9 @@ mod tests {
                     .record(*slot)
                     .expect("the owner holds the slot")
                     .required_generation;
-                let tree = texture_tree(texture.id(), f64::from(SIDE));
+                let scene = texture_scene(texture.id(), f64::from(SIDE));
                 let RasterCommand::Frame { slot, snapshot } =
-                    frame(*slot, *address, generation, tree)
+                    frame(*slot, *address, generation, scene)
                 else {
                     unreachable!("BUG: `frame` makes a frame command");
                 };
@@ -2929,8 +2929,8 @@ mod tests {
                 .record(slot)
                 .expect("the owner holds the slot")
                 .required_generation;
-            let tree = texture_tree(texture.id(), 8.0);
-            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            let scene = texture_scene(texture.id(), 8.0);
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, scene)
             else {
                 unreachable!("BUG: `frame` makes a frame command");
             };
@@ -3014,8 +3014,8 @@ mod tests {
                 .record(slot)
                 .expect("the owner holds the slot")
                 .required_generation;
-            let tree = texture_tree(texture.id(), 8.0);
-            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            let scene = texture_scene(texture.id(), 8.0);
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, scene)
             else {
                 unreachable!("BUG: `frame` makes a frame command");
             };
@@ -3114,8 +3114,8 @@ mod tests {
                 .record(slot)
                 .expect("the owner holds the slot")
                 .required_generation;
-            let tree = texture_tree(texture.id(), 8.0);
-            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            let scene = texture_scene(texture.id(), 8.0);
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, scene)
             else {
                 unreachable!("BUG: `frame` makes a frame command");
             };
@@ -3354,7 +3354,7 @@ mod tests {
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
             .expect("the slot's index is free");
-        let scene = Scene::new(square_and_glyph());
+        let scene = square_and_glyph();
         for _ in 0..2 {
             assert!(
                 context
@@ -3431,8 +3431,7 @@ mod tests {
             }
             let registry = TextureRegistry::new(Arc::new(|| {}));
             let texture = registry.register().expect("an id is left");
-            let tree = texture_tree(texture.id(), 8.0);
-            let scene = Scene::new(tree);
+            let scene = texture_scene(texture.id(), 8.0);
             for shade in [10, 20, 30] {
                 texture.submit_frame(Image::from_rgba8(2, 2, [shade, 0, 0, 255].repeat(4)));
                 context
@@ -3505,7 +3504,7 @@ mod tests {
             context
                 .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
                 .expect("the slot's index is free");
-            let scene = Scene::new(square_and_glyph());
+            let scene = square_and_glyph();
             format!(
                 "{:?}",
                 context.render_window(
@@ -3555,7 +3554,7 @@ mod tests {
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
             .expect("the slot's index is free");
-        let scene = Scene::new(square_and_glyph());
+        let scene = square_and_glyph();
         let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
         assert!(matches!(
             context.render_window(slot, drawn_frame(), &scene, full),
@@ -3604,7 +3603,7 @@ mod tests {
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
             .expect("the slot's index is free");
-        let scene = Scene::new(square_and_glyph());
+        let scene = square_and_glyph();
         let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
         assert!(
             context

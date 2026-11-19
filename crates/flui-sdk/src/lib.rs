@@ -329,6 +329,7 @@ pub mod interaction {
 pub mod painting {
     pub use flui_foundation::TextDirection;
     pub use flui_painting::Alignment;
+    pub use flui_painting::AlignmentDirectional;
     pub use flui_painting::BlurSigma;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;

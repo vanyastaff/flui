@@ -21,7 +21,6 @@ use super::version::{Address, NodeRecord, VersionInner};
 use crate::damage::closure::{device_spread, footprint, moved};
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
-use crate::tree::annotations::clip_admits;
 use crate::{LayerLink, LeaderClip};
 
 /// One step from a space into the one it holds, as a footprint crosses it
@@ -1230,7 +1229,7 @@ impl<'v> Geometry<'v> {
                         let (x, y) = chain
                             .project_plane_point(anchor.dx, anchor.dy)
                             .ok_or(Unresolved::Hidden)?;
-                        if !clip_admits(layer, Point::new(x, y)) {
+                        if !layer.clip_admits(Point::new(x, y)) {
                             return Err(Unresolved::Hidden);
                         }
                     }

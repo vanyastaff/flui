@@ -35,7 +35,7 @@ pub enum LeaderClip {
 /// Anchors outside `[-1, 1]` are legal off-rectangle pivots.
 ///
 /// The resolved transform is computed by
-/// [`resolve_follower_transform`](crate::resolve_follower_transform), not
+/// [`SceneVersion::follower_transform`](crate::SceneVersion::follower_transform), not
 /// stored here.
 ///
 /// [`linked_offset`]: Self::linked_offset
