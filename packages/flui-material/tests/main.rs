@@ -590,6 +590,10 @@ fn navigation_and_layout_contracts() {
             app_bar::the_title_announces_as_a_level_one_heading,
         ),
         (
+            "app_bar::a right to left app bar starts its toolbar at the right",
+            app_bar::a_right_to_left_app_bar_starts_its_toolbar_at_the_right,
+        ),
+        (
             "sliver_app_bar::a pinned bar holds its collapsed height at deep scroll",
             sliver_app_bar::a_pinned_bar_holds_its_collapsed_height_at_deep_scroll,
         ),

@@ -120,6 +120,53 @@ pub fn tapping_the_implied_back_button_pops_the_route() {
     );
 }
 
+/// Under a right-to-left `Directionality` the toolbar runs from the right: the
+/// leading slot takes the right edge, the title starts against it, and the
+/// actions sit at the left edge.
+pub fn a_right_to_left_app_bar_starts_its_toolbar_at_the_right() {
+    use flui_sdk::painting::TextDirection;
+    use flui_sdk::widgets::{Directionality, SizedBox};
+
+    let laid = lay_out(
+        Directionality::new(
+            TextDirection::Rtl,
+            MediaQuery::new(
+                MediaQueryData::default(),
+                Theme::new(
+                    ThemeData::light(),
+                    AppBar::new()
+                        .leading(Text::new("Lead"))
+                        .title(Text::new("Inbox"))
+                        .actions(vec![SizedBox::new(40.0, 40.0).boxed()]),
+                ),
+            ),
+        ),
+        tight(400.0, 64.0),
+    );
+    let left = |id| laid.absolute_offset(id).dx;
+    let right = |id| laid.absolute_offset(id).dx + laid.size(id).width;
+    let leading = laid
+        .find_text("Lead")
+        .expect("the leading slot is laid out");
+    let title = laid.find_text("Inbox").expect("the title is laid out");
+    let action = laid
+        .find_all_by_render_type("RenderConstrainedBox")
+        .into_iter()
+        .find(|id| laid.size(*id).width == 40.0)
+        .expect("the action is laid out");
+
+    assert!(
+        left(leading) > 344.0,
+        "the 56-wide leading slot is at the right edge"
+    );
+    assert_eq!(
+        right(title),
+        344.0,
+        "the title starts against the leading slot"
+    );
+    assert_eq!(left(action), 0.0, "the action is at the left edge");
+}
+
 /// The title is the screen's top-level heading: a screen reader announces it
 /// as "heading level 1" and its heading navigation lands on it.
 pub fn the_title_announces_as_a_level_one_heading() {
