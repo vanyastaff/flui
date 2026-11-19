@@ -80,52 +80,78 @@ fn chip_only_point() -> (f64, f64) {
 // (b) Delete-icon vs. chip-body tap separation — nested InkWells.
 // ------------------------------------------------------------------
 
-/// Under a right-to-left `Directionality` the chip's row runs from the right:
-/// the delete icon sits against the left edge, a tap there deletes, and a tap
-/// near the right edge presses the chip.
+/// Under a right-to-left `Directionality` a chip's row runs from the right, for
+/// `Chip` and `FilterChip` alike: the avatar sits in the right half, the delete
+/// icon against the left edge, a tap there deletes, and a tap near the right
+/// edge activates the chip.
 pub fn a_right_to_left_chip_puts_its_delete_icon_on_the_left() {
-    use flui_sdk::painting::TextDirection;
-    use flui_sdk::widgets::Directionality;
+    use flui_material::FilterChip;
+    use flui_sdk::painting::{Color, TextDirection};
+    use flui_sdk::view::{BoxedView, ViewExt};
+    use flui_sdk::widgets::{ColoredBox, Directionality, SizedBox};
 
-    let presses = Rc::new(RefCell::new(0_u32));
-    let deletions = Rc::new(RefCell::new(0_u32));
-    let press_counter = Rc::clone(&presses);
-    let delete_counter = Rc::clone(&deletions);
-
-    let laid = lay_out(
-        Directionality::new(
-            TextDirection::Rtl,
-            themed(
-                Chip::new(Text::new("Tag"))
-                    .on_pressed(move |_ctx| {
-                        *press_counter.borrow_mut() += 1;
-                    })
-                    .on_deleted(move |_ctx| {
-                        *delete_counter.borrow_mut() += 1;
-                    }),
-            ),
-        ),
-        loose(300.0),
-    );
-    let size = container_size(&laid);
-    let tap = |x: f64| {
-        laid.dispatch_pointer_down(x, size.height / 2.0);
-        laid.dispatch_pointer_up(x, size.height / 2.0);
+    type Counter = Rc<RefCell<u32>>;
+    let avatar = || ColoredBox::new(Color::BLACK).child(SizedBox::new(18.0, 18.0));
+    let chip = |activations: Counter, deletions: Counter| -> BoxedView {
+        Chip::new(Text::new("Tag"))
+            .avatar(avatar())
+            .on_pressed(move |_ctx| *activations.borrow_mut() += 1)
+            .on_deleted(move |_ctx| *deletions.borrow_mut() += 1)
+            .boxed()
+    };
+    let filter_chip = |activations: Counter, deletions: Counter| -> BoxedView {
+        FilterChip::new(Text::new("Tag"))
+            .avatar(avatar())
+            .on_selected(move |_ctx, _selected| *activations.borrow_mut() += 1)
+            .on_deleted(move |_ctx| *deletions.borrow_mut() += 1)
+            .boxed()
     };
 
-    tap(CONTAINER_PADDING + CHIP_ICON_SIZE / 2.0);
-    assert_eq!(
-        (*deletions.borrow(), *presses.borrow()),
-        (1, 0),
-        "the delete icon is at the left edge, and a tap on it only deletes"
-    );
+    for (name, build) in [
+        ("Chip", &chip as &dyn Fn(Counter, Counter) -> BoxedView),
+        ("FilterChip", &filter_chip),
+    ] {
+        let activations = Rc::new(RefCell::new(0_u32));
+        let deletions = Rc::new(RefCell::new(0_u32));
+        let laid = lay_out(
+            Directionality::new(
+                TextDirection::Rtl,
+                themed(build(Rc::clone(&activations), Rc::clone(&deletions))),
+            ),
+            loose(300.0),
+        );
+        let size = container_size(&laid);
+        // The avatar is the only 18-wide decorated box: a `ColoredBox` paints
+        // through `RenderDecoratedBox`.
+        let avatar = laid
+            .find_all_by_render_type("RenderDecoratedBox")
+            .into_iter()
+            .find(|id| laid.size(*id).width == 18.0)
+            .expect("the avatar is laid out");
+        let avatar_center = laid.absolute_offset(avatar).dx + laid.size(avatar).width / 2.0;
+        assert!(
+            avatar_center > size.width / 2.0,
+            "{name}: the avatar leads from the right, centred at {avatar_center} of {}",
+            size.width
+        );
 
-    tap(size.width - CONTAINER_PADDING - 2.0);
-    assert_eq!(
-        (*deletions.borrow(), *presses.borrow()),
-        (1, 1),
-        "the right edge is the chip's body, and a tap there only presses"
-    );
+        let tap = |x: f64| {
+            laid.dispatch_pointer_down(x, size.height / 2.0);
+            laid.dispatch_pointer_up(x, size.height / 2.0);
+        };
+        tap(CONTAINER_PADDING + CHIP_ICON_SIZE / 2.0);
+        assert_eq!(
+            (*deletions.borrow(), *activations.borrow()),
+            (1, 0),
+            "{name}: the delete icon is at the left edge, and a tap on it only deletes"
+        );
+        tap(size.width - CONTAINER_PADDING - 2.0);
+        assert_eq!(
+            (*deletions.borrow(), *activations.borrow()),
+            (1, 1),
+            "{name}: the right edge is the chip's body, and a tap there only activates it"
+        );
+    }
 }
 
 /// The shared root arena installed by the binding makes the nested delete
