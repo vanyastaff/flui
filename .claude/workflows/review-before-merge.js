@@ -46,6 +46,17 @@ const SCOPE_SCHEMA = {
   required: ['base', 'head', 'since', 'since_base', 'since_is_ancestor', 'files', 'stat', 'warnings', 'error'],
 }
 
+const DIFF_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    head: { type: 'string', description: 'full sha the head ref names' },
+    base: { type: 'string', description: 'full sha of the merge base of head and the base ref' },
+    exit_status: { type: 'integer', description: 'the exit status of git diff --quiet' },
+    error: { type: 'string', description: 'the command and its error when one did not run, or empty' },
+  },
+  required: ['head', 'base', 'exit_status', 'error'],
+}
+
 const FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -382,6 +393,18 @@ if (mode !== 'change' && mode !== 'design') {
 }
 const lenses = mode === 'design' ? DESIGN_LENSES : LENSES
 
+// An agent that runs commands and reports their output (the scope step, the diff check, the
+// mutation read) sometimes fills a field it was asked to leave empty with quotes (`""`, `' '`) or
+// whitespace. Those three answers are read through `blankQuotes`: a string that is whitespace, inside
+// one pair of quotes or none, is empty, and a list drops its empty strings, so a list holding only a
+// blank entry is empty. Readers and the judge write prose, and are read as they wrote.
+function blankQuotes(value) {
+  if (typeof value === 'string') return /^\s*(?:"\s*"|'\s*')?\s*$/.test(value) ? '' : value
+  if (Array.isArray(value)) return value.map(blankQuotes).filter((x) => x !== '')
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankQuotes(v)]))
+  return value
+}
+
 // An agent that a usage limit or a skip refuses resolves to null, and one started past the turn's
 // token target throws; the runtime does not say which. Each is a failure the result names, and
 // none may read as an empty answer.
@@ -457,17 +480,41 @@ Return full 40-character shas. When step 2, 3 or 5 fails, put the command and it
   { phase: 'Scope', label: 'scope', schema: SCOPE_SCHEMA, model: 'haiku', effort: 'low' },
 )
 if (scoped.error) return unavailable(`the scope step failed: ${scoped.error}`)
-const scope = scoped.value
+// A changed path is data, not an empty field: the file list keeps every name git printed, and only an
+// empty string is dropped. A list of quote-only names therefore goes to the readers, who read the
+// range from git, rather than to a "no change" the diff check would have to confirm.
+const scope = { ...blankQuotes(scoped.value), files: scoped.value.files.filter((f) => f !== '') }
 notes.push(...scope.warnings.map((w) => `Scope: ${w}.`))
 if (scope.error) return unavailable(`the scope step failed: ${scope.error}`)
 if (!SHA.test(scope.head) || !SHA.test(scope.base)) {
   return unavailable(`the scope step returned no full sha for the base or the head ("${scope.base}", "${scope.head}")`)
 }
+const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
+const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
+// An empty file list is an agent's answer, and an agent can return one for a change it did not list.
+// A second agent, which never sees the first one's answer, works the range out again from the refs
+// and runs the diff's own test: "no change" holds only when it names the same base and head and
+// `git diff --quiet` exits 0.
+if (!scope.files.length) {
+  const checked = await attempt(
+    `Run only these git commands, each exactly as written, in the checkout ${dir}.
+1. head: \`git -C ${dir} rev-parse '${headRef}'\`
+2. base: \`git -C ${dir} merge-base <head> '${baseRef}'\`
+3. exit_status: the exit status of \`git -C ${dir} diff --quiet <base> <head>\`; 0 means the two commits have the same tree, 1 that they differ.
+Return full 40-character shas. If a command does not run, put it and its error in "error".`,
+    { phase: 'Scope', label: 'scope:diff', schema: DIFF_CHECK_SCHEMA, model: 'sonnet', effort: 'low' },
+  )
+  const check = checked.error ? null : blankQuotes(checked.value)
+  const failure = checked.error || check.error
+    || (check.head !== scope.head || check.base !== scope.base ? `it worked out ${check.base}..${check.head} where the scope step gave ${scope.base}..${scope.head}` : '')
+    || (check.exit_status === 0 ? '' : `git diff --quiet exited ${check.exit_status}`)
+  if (failure) return unavailable(`the scope step listed no files, and the diff's own test did not confirm that the change is empty (${failure})`)
+  log('The merge base and the head have the same tree.')
+  return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }
+}
 // A since that cannot be placed loses the pointer to the fix, not the review: the readers read
 // the whole change, and the scope warnings above say why.
-const since = sinceArg && SHA.test(scope.since) && SHA.test(scope.since_base) ? scope.since : ''
 if (sinceArg && !since) notes.push(`The earlier head ${sinceArg} could not be placed against ${baseRef}; the readers read the whole change.`)
-const header = `Read (${mode}) at ${scope.head} (base ${scope.base}${since ? `, fix since ${since}` : ''}).`
 // A decision and code in one diff owe both reads: each read names the other when the diff asks
 // for it, so neither is taken for the whole.
 const decisionFiles = scope.files.filter((f) => /^docs\/adr\/ADR-\d+[^/]*\.md$|^docs\/plans\/specs\/[^/]+\/design\.md$/.test(f))
@@ -477,10 +524,6 @@ if (mode === 'design' && codeFiles.length) {
 }
 if (mode === 'change' && decisionFiles.length) {
   notes.push(`The diff changes a decision (${decisionFiles.join(', ')}); the design read (mode "design") is owed beside this one (AGENTS.md "Before a merge").`)
-}
-if (!scope.files.length) {
-  log('The merge base and the head have the same tree.')
-  return { base: scope.base, head: scope.head, confirmed: [], rejected: [], markdown: `${header} No change to review: the merge base and the head have the same tree.${footer()}` }
 }
 log(`Reviewing ${scope.base.slice(0, 9)}..${scope.head.slice(0, 9)}: ${scope.stat}`)
 
@@ -592,7 +635,7 @@ if (mode === 'design') {
   notes.push('No mutation run was supplied (AGENTS.md "Before each push" item 10).')
 } else {
   const m = await mutantsRead
-  const v = m.value
+  const v = m.value && blankQuotes(m.value)
   const judged = v ? v.counts.killed + v.counts.survived + v.counts.uncovered + v.counts.timed_out : 0
   if (m.error || v.error) {
     mutation = 'unreadable'
