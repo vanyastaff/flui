@@ -97,6 +97,24 @@ pub struct DeviceRetries {
     pub unadopted: u64,
 }
 
+/// How many times an executor let go of the painter its slots share: a
+/// device rebuilt, or a render that panicked and dropped the painter it
+/// unwound in (ADR-0305 §7). An owner that reads another count than the one
+/// it read before its window's last frame owes that window a full repaint:
+/// the recordings and caches the window's last scene was drawn from are
+/// gone, so a version held for a retry is not republished (ADR-0304 §7).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PainterResets(u64);
+
+impl PainterResets {
+    /// The count after one more reset. It saturates rather than wraps, at a
+    /// count no executor reaches.
+    #[must_use]
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
 /// The context's device as the executor last published it.
 #[derive(Default)]
 pub(crate) struct DeviceRecord {
@@ -110,6 +128,9 @@ pub(crate) struct DeviceRecord {
     /// health their adoption left is published: an owner that reads these
     /// before the health never reads a served retry with the health before it.
     pub(crate) retries: DeviceRetries,
+    /// The painter resets so far, counted before the settlement of the
+    /// frame that caused one is written.
+    pub(crate) painter_resets: PainterResets,
 }
 
 /// What the owner and the executor share: the lifecycle queue, the coalesced
@@ -216,6 +237,13 @@ impl Shared {
     /// The device's record, locked to swap a value.
     pub(crate) fn device(&self) -> MutexGuard<'_, DeviceRecord> {
         self.device.lock()
+    }
+
+    /// The executor let its painter go: counted for every window's owner
+    /// ([`RasterSender::painter_resets`]).
+    pub(crate) fn note_painter_reset(&self) {
+        let mut record = self.device.lock();
+        record.painter_resets = record.painter_resets.next();
     }
 
     pub(crate) fn health(&self) -> ExecutorHealth {
@@ -678,6 +706,14 @@ impl RasterSender {
     #[must_use]
     pub fn device_retries(&self) -> DeviceRetries {
         self.shared.device().retries
+    }
+
+    /// How many times the executor let its painter go (ADR-0305 §7, §8). A
+    /// window whose last frame was drawn before the count moved repaints in
+    /// full ([`PainterResets`]).
+    #[must_use]
+    pub fn painter_resets(&self) -> PainterResets {
+        self.shared.device().painter_resets
     }
 
     /// Why the raster thread stopped serving, or a turn of it failed, once:

@@ -790,6 +790,54 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
     );
 }
 
+/// The retry of a frame its surface withheld (`SubmitVerdict::NotShown`)
+/// publishes the version the scene already holds (ADR-0304 §7): it builds,
+/// lays out and paints nothing and applies no patch, and the withheld change
+/// reaches the screen. The engine's half, a retry that records no chunk, is
+/// `flui-engine`'s `a_frame_not_shown_is_retried_without_recording`.
+#[test]
+fn perf_a_not_shown_retry_republishes_the_held_version() {
+    let label = SharedSignal::new(String::from("label"));
+    let (position, _writer) = ScrollPosition::with_writer(0.0);
+    let mut laid = lay_out(
+        PerfApp {
+            label: label.clone(),
+            position,
+        },
+        tight(WIDTH, HEIGHT),
+    );
+    laid.enable_semantics();
+    // The lazy band lands a frame after the mount's paint.
+    for _ in 0..3 {
+        laid.pump_for(FRAME);
+    }
+    label.set(String::from("withheld"));
+    laid.leave_unshown(1, flui_testing::UnshownFrame::Withdrawn);
+    let withheld = laid.pump_report(FRAME);
+    assert!(
+        counter(&withheld, "nodes_painted") > 0,
+        "the withheld frame paints the change: {withheld:#?}"
+    );
+    let shown = laid.painted_frame_count();
+
+    let (retry, heap) = perf_measured(|| laid.pump_report(FRAME));
+    record("not_shown_retry", &retry, heap);
+    assert_eq!(
+        laid.painted_frame_count(),
+        shown + 1,
+        "the retry shows the withheld frame"
+    );
+    for name in [
+        "builds_run",
+        "nodes_laid_out",
+        "nodes_painted",
+        "layers_produced",
+        "scene_ops",
+    ] {
+        assert_eq!(counter(&retry, name), 0, "{name}: {retry:#?}");
+    }
+}
+
 /// What a `Semantics` with one action adds to the `Text` it holds in a
 /// window that collects no semantics: its element and render object, and no
 /// action route (ADR-0322 §8).
