@@ -180,6 +180,6 @@ workspace = true
 [package.metadata.flui]
 tier = "H"
 tier-kind = "tool"
-order = 3
+order = 4
 # A host tool: it spawns cargo and serves files (mio, uuid).
 wasm = false

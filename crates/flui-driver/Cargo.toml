@@ -1,0 +1,79 @@
+[package]
+autotests = false
+publish = ["crates-io"]
+name = "flui-driver"
+# Evolving: versioned `0.N` apart from the train (ADR-0238 §8), as `flui-sdk` is.
+version = "0.1.0-dev"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Drives a running FLUI app for tests, people and agents: locate by semantics, act through the app's own input path or the OS, wait on its frames, report a verdict"
+keywords = ["ui", "testing", "automation", "accessibility", "flui"]
+categories = ["gui", "development-tools::testing"]
+
+# Dev-only files kept out of the published archive:
+exclude = ["/ARCHITECTURE.md"]
+
+[features]
+default = []
+# The headless target: the app's view hosted in process by `flui-testing`'s headless host on a
+# virtual clock, its agent served without a socket (ADR-0238 §8).
+headless = ["dep:flui-testing", "dep:flui-view", "dep:flui-foundation", "dep:web-time"]
+# Test support: a scripted OS lane and its activity guard, and a scripted agent served over a
+# local socket, for tests of the driver itself and of front ends built on it (ADR-0243).
+testing = []
+
+[dependencies]
+# The wire: the method table, its parameters and outputs, the envelope and the launch contract.
+flui-protocol = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# The launch token handed to a launched app.
+getrandom = { workspace = true }
+flui-testing = { workspace = true, optional = true }
+flui-view = { workspace = true, optional = true }
+# The containment of a panic out of the headless host, which ends the app (ADR-0287).
+flui-foundation = { workspace = true, optional = true }
+# The instants the in-process agent's conversation is polled at (std's on native targets).
+web-time = { workspace = true, optional = true }
+
+# Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
+[target.'cfg(any(unix, windows))'.dependencies]
+interprocess = { workspace = true }
+
+# The private directory a launched app's Unix socket lives in.
+[target.'cfg(unix)'.dependencies]
+tempfile = { workspace = true }
+
+[dev-dependencies]
+flui-driver = { path = ".", features = ["headless", "testing"] }
+flui-foundation = { workspace = true }
+flui-view = { workspace = true }
+flui-widgets = { workspace = true }
+tempfile = { workspace = true }
+
+[[test]]
+name = "driver_it"
+path = "tests/main.rs"
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.flui]
+tier = "H"
+tier-kind = "evolving"
+# Above `flui-app`, below `flui-cli`, its first front end (ADR-0238 §8).
+order = 3
+# A client of the app, never linked into one: the CLI is its front end, and applications, tools
+# and dev-dependencies are not restricted.
+allowed-dependents = ["flui-cli"]
+# It never links the app's host (ADR-0238 §8): its OS code is a client's.
+reach-forbid = ["flui-native", "flui-app"]
+# A host tool: it starts processes and connects to local sockets.
+wasm = false

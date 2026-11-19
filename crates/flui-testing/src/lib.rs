@@ -85,6 +85,7 @@
 #![deny(missing_docs)]
 
 pub mod a11y;
+pub mod agent_service;
 pub mod backend_conformance;
 pub mod clipboard;
 pub mod control_cost;
@@ -115,6 +116,7 @@ pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
     InvokeActionError, NodeId, TreeId,
 };
+pub use agent_service::{ConversationRefused, HeadlessAgentService, HeadlessConversation};
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};

@@ -28,8 +28,11 @@ tier pkg ── flui-material [1], flui-cupertino [2], flui-devtools [3],
         │    (official packages on the SDK: material, cupertino,
         │     devtools; flui-system is the capability crate)
         │
-tier H  ── flui-native [1], flui-app [2], flui-cli [3], flui [4]
+tier H  ── flui-native [1], flui-app [2], flui-driver [3], flui-cli [4],
+        │    flui [5]
         │    (flui-native = the core host; only flui-app depends on it;
+        │     flui-driver = the driver's client, never linked into an
+        │     app: it reaches neither flui-native nor flui-app;
         │     flui = the facade, the root package)
         │
 tier K  ── flui-view [1], flui-widgets [3], flui-runtime [4],

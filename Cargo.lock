@@ -1930,6 +1930,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-driver"
+version = "0.1.0-dev"
+dependencies = [
+ "flui-driver",
+ "flui-foundation",
+ "flui-protocol",
+ "flui-testing",
+ "flui-view",
+ "flui-widgets",
+ "getrandom 0.4.3",
+ "interprocess",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
 name = "flui-engine"
 version = "0.2.0-dev"
 dependencies = [

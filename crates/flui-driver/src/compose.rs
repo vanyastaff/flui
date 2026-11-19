@@ -1,0 +1,783 @@
+//! The driver's methods (`ServedBy::Driver`), composed from the agent's: locate, check
+//! actionability, perform by the chosen input path, observe (ADR-0238 §5, §6).
+//!
+//! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
+//!   strict with several matches is [`Error::Ambiguous`] with the first ten as outline lines;
+//!   none waits once on the app's timeline for one to appear (`wait.until`), then is
+//!   [`Error::NotFound`].
+//! - **Actionability.** Pointer input waits, frame by frame, for the element to be attached,
+//!   visible, stable, enabled and to receive the pointer at its point; past the timeout it is
+//!   [`Error::NotActionable`] naming the check that never held and what covered the point. `force`
+//!   skips every check but attached.
+//! - **Path.** The call's policy, or the session's, chooses the path. A path the target lacks is
+//!   refused when the policy requires it, and otherwise falls back to synthetic, then semantic; a
+//!   fallback never takes the OS path, so a session that did not ask for OS input never gets it.
+//!   The answer names the path taken.
+//! - **OS input** is admitted by the isolation rule, takes the desktop's lock, is announced before
+//!   its first event, is sent through the lane's guard, and is `ran` only when the app's input
+//!   journal saw it; otherwise `may_have_run`.
+
+use std::time::Duration;
+
+use flui_protocol::act::{
+    ActOutcome, ActParams, Actionability, ActionabilityParams, Effect, EffectKind, JournalSpan,
+};
+use flui_protocol::error::{ErrorCode, HandleKind};
+use flui_protocol::geometry::{LogicalPoint, LogicalRect};
+use flui_protocol::input::{
+    ActionSequence, Direction, DragParams, GestureOptions, InputKind, InputParams, InputPath,
+    InputPolicy, InputSource, Journal, JournalParams, KeyAction, LongPressParams, PinchParams,
+    PointerAction, PointerButton, PointerDevice, PressKeysParams, ScrollIntoViewParams,
+    SwipeParams, TapParams, TypeTextParams,
+};
+use flui_protocol::locator::{LocateParams, Locator, Matches, Pick, Target};
+use flui_protocol::method::{self, Method};
+use flui_protocol::session::{Empty, Placement, WindowParams};
+use flui_protocol::snapshot::Snapshot;
+use flui_protocol::tree::{ElementRef, WindowId};
+use flui_protocol::wait::{Condition, WaitOutcome, WaitParams};
+use flui_protocol::wire::ActionName;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
+use crate::driver::Driver;
+use crate::error::{Error, Result};
+use crate::os_input::{Announcement, OsDevice};
+use crate::steps::{self, OsEvent};
+
+/// The id of the pointer a composed gesture moves.
+const POINTER: &str = "driver.pointer";
+
+/// How long a long press holds when the call names no duration: the long-press delay (500 ms)
+/// and a margin.
+const LONG_PRESS_MS: u64 = 800;
+
+/// The gap between the two taps of a double tap.
+const DOUBLE_TAP_GAP_MS: u64 = 60;
+
+/// How long a drag's and a pinch's move lasts.
+const STROKE_MS: u64 = 300;
+
+/// A fling's speed, in logical pixels a second, when the call names none: well above the
+/// platform's fling velocity.
+const FLING_VELOCITY: f64 = 2_500.0;
+
+/// How long a swipe holds still before it lifts, so its release velocity is under the fling
+/// velocity whatever speed it moved at.
+const SWIPE_SETTLE_MS: u64 = 120;
+
+/// The wire names of the methods composed here.
+const COMPOSED: &[&str] = &[
+    method::ElementDoubleTap::NAME,
+    method::ElementDragTo::NAME,
+    method::ElementFling::NAME,
+    method::ElementLongPress::NAME,
+    method::ElementPinch::NAME,
+    method::ElementPressKeys::NAME,
+    method::ElementScrollIntoView::NAME,
+    method::ElementSwipe::NAME,
+    method::ElementTap::NAME,
+    method::ElementTypeText::NAME,
+    method::InputPerform::NAME,
+    method::SessionCapabilities::NAME,
+];
+
+/// Whether the driver composes the method `name`.
+pub(crate) fn composes(name: &str) -> bool {
+    COMPOSED.contains(&name)
+}
+
+/// Run the driver's method `name` with `params`.
+pub(crate) fn call(driver: &mut Driver, name: &'static str, params: Value) -> Result<Value> {
+    match name {
+        method::ElementTap::NAME => run(name, params, |p| tap(driver, p)),
+        method::ElementDoubleTap::NAME => run(name, params, |p| double_tap(driver, p)),
+        method::ElementLongPress::NAME => run(name, params, |p| long_press(driver, p)),
+        method::ElementDragTo::NAME => run(name, params, |p| drag_to(driver, p)),
+        method::ElementSwipe::NAME => run(name, params, |p| swipe(driver, p, false)),
+        method::ElementFling::NAME => run(name, params, |p| swipe(driver, p, true)),
+        method::ElementPinch::NAME => run(name, params, |p| pinch(driver, p)),
+        method::ElementScrollIntoView::NAME => run(name, params, |p| scroll_into_view(driver, p)),
+        method::ElementTypeText::NAME => run(name, params, |p| type_text(driver, p)),
+        method::ElementPressKeys::NAME => run(name, params, |p| press_keys(driver, p)),
+        method::InputPerform::NAME => run(name, params, |p| perform(driver, p)),
+        method::SessionCapabilities::NAME => {
+            run(name, params, |_: Empty| Ok(driver.capabilities()))
+        }
+        method::SessionLaunch::NAME | method::SessionAttach::NAME | method::SessionClose::NAME => {
+            Err(Error::invalid_argument(format!(
+                "`{name}` begins or ends a session, which the front end holds: its Rust form is \
+                 `Driver::launch`, `Driver::attach` or `Driver::close`"
+            )))
+        }
+        _ => Err(Error::not_supported(
+            name,
+            format!("this version of the driver does not compose `{name}`"),
+        )),
+    }
+}
+
+/// Read `params`, run `body`, write its output.
+fn run<P: DeserializeOwned, O: Serialize>(
+    name: &str,
+    params: Value,
+    body: impl FnOnce(P) -> Result<O>,
+) -> Result<Value> {
+    let params = serde_json::from_value(params).map_err(|error| {
+        Error::invalid_argument(format!("the parameters do not read as `{name}`'s: {error}"))
+    })?;
+    serde_json::to_value(body(params)?).map_err(|error| Error::Protocol {
+        message: format!("the output of `{name}` did not serialize: {error}"),
+    })
+}
+
+/// Where an action lands.
+#[derive(Debug, Clone, Copy)]
+struct Aim {
+    window: WindowId,
+    element: Option<ElementRef>,
+    point: LogicalPoint,
+    rect: Option<LogicalRect>,
+}
+
+/// The element `target` names now, strictly.
+pub(crate) fn resolve(
+    driver: &mut Driver,
+    target: &Target,
+    timeout: Duration,
+) -> Result<ElementRef> {
+    match target {
+        Target::Element(element) => Ok(*element),
+        Target::Locator(locator) => resolve_locator(driver, locator, timeout),
+        Target::Point { .. } => Err(Error::invalid_argument("a point names no element")),
+        _ => Err(Error::invalid_argument(
+            "a target of a kind this driver does not know",
+        )),
+    }
+}
+
+/// The one element `locator` matches; waits once, on the app's timeline, for one to appear.
+fn resolve_locator(
+    driver: &mut Driver,
+    locator: &Locator,
+    timeout: Duration,
+) -> Result<ElementRef> {
+    let mut waited = false;
+    loop {
+        let found = driver
+            .agent::<method::SemanticsLocate>(LocateParams::new(locator.clone()), Duration::ZERO)?;
+        let Matches { matches, .. } = found;
+        match matches.as_slice() {
+            [] if !waited => {
+                waited = true;
+                let window = match locator.window {
+                    Some(window) => window,
+                    None => main_window(driver)?,
+                };
+                let outcome =
+                    wait_until(driver, window, Condition::Appears(locator.clone()), timeout)?;
+                if !outcome.satisfied {
+                    return Err(not_found(locator));
+                }
+            }
+            [] => return Err(not_found(locator)),
+            [only] => return Ok(only.element),
+            [first, ..] if locator.pick != Pick::Strict => return Ok(first.element),
+            several => {
+                let candidates = several
+                    .iter()
+                    .take(10)
+                    .map(|found| {
+                        flui_protocol::tree::outline(std::slice::from_ref(&found.node))
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned()
+                    })
+                    .collect();
+                return Err(Error::Ambiguous {
+                    message: format!(
+                        "{} elements match a strict locator; narrow it, or pick first, last or nth",
+                        several.len()
+                    ),
+                    candidates,
+                    retry: ErrorCode::Ambiguous.default_retry(),
+                });
+            }
+        }
+    }
+}
+
+fn not_found(locator: &Locator) -> Error {
+    Error::not_found(format!("nothing matches {locator:?}"))
+}
+
+/// The app's first window.
+pub(crate) fn main_window(driver: &mut Driver) -> Result<WindowId> {
+    driver
+        .windows()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::not_found("the app has no window with content"))
+}
+
+/// Wait in `window` for `condition`, at most `timeout` of the app's clock.
+pub(crate) fn wait_until(
+    driver: &mut Driver,
+    window: WindowId,
+    condition: Condition,
+    timeout: Duration,
+) -> Result<WaitOutcome> {
+    let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    let params = WaitParams::new(window, condition).timeout_ms(timeout_ms);
+    let holds = Duration::from_millis(params.effective_timeout_ms());
+    driver.agent::<method::WaitUntil>(params, holds)
+}
+
+/// The facts of `element` once it is actionable, read again after each frame the window presents,
+/// until `timeout` has passed on the connection's clock (the virtual one on the headless target).
+/// A window that presents no frame before the deadline ends the wait there.
+fn actionable(
+    driver: &mut Driver,
+    element: ElementRef,
+    force: bool,
+    timeout: Duration,
+) -> Result<Actionability> {
+    let deadline = driver.clock().saturating_add(timeout);
+    loop {
+        let facts = driver.agent::<method::ElementActionability>(
+            ActionabilityParams::new(element),
+            Duration::ZERO,
+        )?;
+        if !facts.attached {
+            return Err(Error::gone(
+                HandleKind::Element,
+                Some(element.to_string()),
+                None,
+                format!("{element} is no longer in its window's tree"),
+            ));
+        }
+        let Some(failed) = facts.first_failed() else {
+            return Ok(facts);
+        };
+        if force {
+            return Ok(facts);
+        }
+        let left = deadline.saturating_sub(driver.clock());
+        let presented = !left.is_zero()
+            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
+        if !presented || driver.clock() >= deadline {
+            let covered_by = facts.covered_by;
+            return Err(Error::NotActionable {
+                failed: Some(failed),
+                message: format!(
+                    "{element} was not {} within {} ms{}",
+                    failed.name(),
+                    timeout.as_millis(),
+                    covered_by
+                        .as_deref()
+                        .map_or_default(|cover| format!("; the point reached {cover}"))
+                ),
+                covered_by,
+                retry: ErrorCode::NotActionable.default_retry(),
+            });
+        }
+    }
+}
+
+/// Where `target` lands, after the checks its options ask for.
+fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result<Aim> {
+    let timeout = timeout_of(driver, options);
+    if let Target::Point { window, at } = target {
+        return Ok(Aim {
+            window: *window,
+            element: None,
+            point: *at,
+            rect: None,
+        });
+    }
+    let element = resolve(driver, target, timeout)?;
+    let facts = actionable(driver, element, options.force, timeout)?;
+    let point = facts
+        .point
+        .or_else(|| facts.rect.map(|rect| rect.center()))
+        .ok_or_else(|| Error::NotActionable {
+            failed: Some(flui_protocol::act::ActionabilityCheck::Visible),
+            covered_by: None,
+            message: format!("{element} shows no point to aim at"),
+            retry: ErrorCode::NotActionable.default_retry(),
+        })?;
+    Ok(Aim {
+        window: element.window,
+        element: Some(element),
+        point,
+        rect: facts.rect,
+    })
+}
+
+fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
+    options
+        .timeout_ms
+        .map_or(driver.timeout, Duration::from_millis)
+}
+
+/// The path an action takes under `requested` (the session's policy when `None`), when the
+/// semantic path can carry it where `semantic`.
+pub(crate) fn choose_path(
+    driver: &Driver,
+    requested: Option<InputPolicy>,
+    semantic: bool,
+) -> Result<InputPath> {
+    let policy = requested.unwrap_or_else(|| driver.input_policy());
+    let available = |path: InputPath| match path {
+        InputPath::Semantic => semantic && driver.serves(method::SemanticsAct::NAME),
+        InputPath::Synthetic => driver.serves(method::InputInject::NAME),
+        InputPath::Os => driver.lane().is_some(),
+        _ => false,
+    };
+    if available(policy.prefer) {
+        return Ok(policy.prefer);
+    }
+    let missing = || {
+        Error::not_supported(
+            format!("{}_input", policy.prefer.name()),
+            format!(
+                "the target takes no {} input{}",
+                policy.prefer.name(),
+                if policy.prefer == InputPath::Os {
+                    "; attach an OS lane"
+                } else {
+                    ""
+                }
+            ),
+        )
+    };
+    if policy.require {
+        return Err(missing());
+    }
+    // A fallback never takes the OS path: OS input is asked for, never fallen into.
+    [InputPath::Synthetic, InputPath::Semantic]
+        .into_iter()
+        .find(|path| available(*path))
+        .ok_or_else(missing)
+}
+
+/// Perform `sequence` at `aim` by the chosen path; `semantic` is the semantics action that does
+/// the same, where one does.
+fn act(
+    driver: &mut Driver,
+    aim: Aim,
+    options: &GestureOptions,
+    sequence: ActionSequence,
+    semantic: Option<ActionName>,
+) -> Result<ActOutcome> {
+    let path = choose_path(
+        driver,
+        options.via,
+        semantic.is_some() && aim.element.is_some(),
+    )?;
+    let mut outcome = match (path, semantic, aim.element) {
+        (InputPath::Semantic, Some(action), Some(element)) => driver
+            .agent::<method::SemanticsAct>(
+                ActParams::new(element, action).snapshot(options.snapshot),
+                Duration::ZERO,
+            )?,
+        (InputPath::Os, ..) => perform_os(driver, aim.window, sequence)?,
+        _ => inject(driver, aim.window, sequence, options.snapshot)?,
+    };
+    if outcome.element.is_none() {
+        outcome.element = aim.element;
+    }
+    Ok(outcome)
+}
+
+/// Inject `sequence` into `window` through the app's own input path.
+fn inject(
+    driver: &mut Driver,
+    window: WindowId,
+    sequence: ActionSequence,
+    snapshot: Snapshot,
+) -> Result<ActOutcome> {
+    let mut params = InputParams::new(window, sequence);
+    params.snapshot = snapshot;
+    let holds = params.actions.span();
+    driver.agent::<method::InputInject>(params, holds)
+}
+
+/// Send `sequence` into `window` through the session's OS lane: see the [module docs](self).
+fn perform_os(
+    driver: &mut Driver,
+    window: WindowId,
+    sequence: ActionSequence,
+) -> Result<ActOutcome> {
+    // The same admission `send_guarded` holds, asked before anything is locked or announced.
+    lane_run(driver, crate::lane::admit)??;
+    let isolation = driver
+        .lane()
+        .map(|lane| lane.capabilities().isolation)
+        .ok_or_else(no_lane)?;
+    driver.lock_os_input()?;
+    let placement: Placement =
+        driver.agent::<method::WindowPlacement>(WindowParams::new(window), Duration::ZERO)?;
+    let geometry = lane_run(driver, move |lane| lane.locate_window(&placement))??;
+    let events = steps::os_events(&sequence, &geometry)?;
+    let announcement = match driver.scenario() {
+        Some(scenario) if !scenario.devices().is_empty() => {
+            Announcement::new(scenario.devices().to_vec(), scenario.duration(), isolation)
+        }
+        _ => Announcement::new(devices_of(&events), sequence.span(), isolation),
+    };
+    driver.announce_once(|| announcement.to_string());
+    let before = journal(driver, window, None)?;
+    let since = before.span.map(|span| span.to);
+    let sent = events.clone();
+    lane_run(driver, move |lane| crate::lane::send_guarded(lane, &sent))??;
+    // The input went out: from here on, a failure to read what it did leaves its effect unknown,
+    // never not run.
+    Ok(match journal(driver, window, since) {
+        Ok(after) => observed(&events, &after),
+        Err(error) => ActOutcome::new(
+            InputPath::Os,
+            Effect::new(EffectKind::MayHaveRun).detail(format!(
+                "the OS accepted the input, and the app's journal could not be read after it: \
+                 {error}"
+            )),
+        ),
+    })
+}
+
+fn no_lane() -> Error {
+    Error::not_supported("os_input", "the session has no OS lane")
+}
+
+fn lane_run<R: Send + 'static>(
+    driver: &Driver,
+    job: impl FnOnce(&mut dyn crate::lane::Lane) -> R + Send + 'static,
+) -> Result<R> {
+    driver.lane().ok_or_else(no_lane)?.run(job)
+}
+
+fn journal(driver: &mut Driver, window: WindowId, since: Option<u64>) -> Result<Journal> {
+    let mut params = JournalParams::new(window);
+    params.since = since;
+    driver.agent::<method::InputJournal>(params, Duration::ZERO)
+}
+
+/// What OS input did, by what the app's journal saw after it: `ran` when every kind of input
+/// sent reached the app, `may_have_run` otherwise.
+fn observed(events: &[OsEvent], journal: &Journal) -> ActOutcome {
+    let kinds_sent = events.iter().filter_map(|event| match event {
+        OsEvent::PointerDown { .. } => Some(InputKind::PointerDown),
+        OsEvent::PointerUp { .. } => Some(InputKind::PointerUp),
+        OsEvent::KeyDown(_) => Some(InputKind::KeyDown),
+        OsEvent::KeyUp(_) => Some(InputKind::KeyUp),
+        OsEvent::Text(_) => Some(InputKind::Text),
+        OsEvent::Scroll { .. } => Some(InputKind::Scroll),
+        _ => None,
+    });
+    let seen = |kind: InputKind| journal.entries.iter().any(|entry| entry.kind == kind);
+    let mut kinds_sent = kinds_sent.peekable();
+    let ran = kinds_sent.peek().is_some() && kinds_sent.all(seen);
+    let effect = if ran {
+        Effect::new(EffectKind::Ran)
+    } else {
+        Effect::new(EffectKind::MayHaveRun)
+            .detail("the OS accepted the input, and the app's journal did not show all of it")
+    };
+    let mut outcome = ActOutcome::new(InputPath::Os, effect);
+    outcome.observed = journal.span.map(|span| JournalSpan {
+        from: span.from,
+        to: span.to,
+    });
+    outcome
+}
+
+fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {
+    let mut devices = Vec::new();
+    for event in events {
+        let device = match event {
+            OsEvent::PointerMove { device, .. }
+            | OsEvent::PointerDown { device, .. }
+            | OsEvent::PointerUp { device, .. } => match device {
+                PointerDevice::Touch => OsDevice::Touch,
+                PointerDevice::Pen => OsDevice::Pen,
+                _ => OsDevice::Mouse,
+            },
+            OsEvent::Scroll { .. } => OsDevice::Mouse,
+            OsEvent::KeyDown(_) | OsEvent::KeyUp(_) | OsEvent::Text(_) => OsDevice::Keyboard,
+            _ => continue,
+        };
+        if !devices.contains(&device) {
+            devices.push(device);
+        }
+    }
+    devices
+}
+
+fn pointer(device: PointerDevice, id: &str, actions: Vec<PointerAction>) -> InputSource {
+    InputSource::Pointer {
+        id: id.to_owned(),
+        device,
+        actions,
+    }
+}
+
+fn move_to(to: LogicalPoint, duration_ms: u64) -> PointerAction {
+    PointerAction::Move {
+        to,
+        duration_ms,
+        pressure: None,
+    }
+}
+
+fn down(button: PointerButton) -> PointerAction {
+    PointerAction::Down {
+        button,
+        pressure: None,
+    }
+}
+
+fn up(button: PointerButton) -> PointerAction {
+    PointerAction::Up { button }
+}
+
+fn pause(duration_ms: u64) -> PointerAction {
+    PointerAction::Pause { duration_ms }
+}
+
+/// `element.tap`.
+pub(crate) fn tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> {
+    let aim = aim(driver, &params.target, &params.options)?;
+    let button = params.button;
+    let sequence = ActionSequence::new(vec![pointer(
+        PointerDevice::Mouse,
+        POINTER,
+        vec![move_to(aim.point, 0), down(button), up(button)],
+    )]);
+    let semantic = (button == PointerButton::Primary).then_some(ActionName::Invoke);
+    act(driver, aim, &params.options, sequence, semantic)
+}
+
+/// `element.double_tap`.
+pub(crate) fn double_tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> {
+    let aim = aim(driver, &params.target, &params.options)?;
+    let button = params.button;
+    let sequence = ActionSequence::new(vec![pointer(
+        PointerDevice::Mouse,
+        POINTER,
+        vec![
+            move_to(aim.point, 0),
+            down(button),
+            up(button),
+            pause(DOUBLE_TAP_GAP_MS),
+            down(button),
+            up(button),
+        ],
+    )]);
+    act(driver, aim, &params.options, sequence, None)
+}
+
+/// `element.long_press`.
+pub(crate) fn long_press(driver: &mut Driver, params: LongPressParams) -> Result<ActOutcome> {
+    let aim = aim(driver, &params.target, &params.options)?;
+    let hold = params.duration_ms.unwrap_or(LONG_PRESS_MS);
+    let sequence = ActionSequence::new(vec![pointer(
+        PointerDevice::Touch,
+        POINTER,
+        vec![
+            move_to(aim.point, 0),
+            down(PointerButton::Primary),
+            pause(hold),
+            up(PointerButton::Primary),
+        ],
+    )]);
+    act(driver, aim, &params.options, sequence, None)
+}
+
+/// `element.drag_to`.
+pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutcome> {
+    let from = aim(driver, &params.target, &params.options)?;
+    let to = aim(driver, &params.to, &params.options)?;
+    if from.window != to.window {
+        return Err(Error::invalid_argument(format!(
+            "a drag starts in {} and ends in {}: a pointer stays in one window",
+            from.window, to.window
+        )));
+    }
+    let sequence = ActionSequence::new(vec![pointer(
+        PointerDevice::Mouse,
+        POINTER,
+        vec![
+            move_to(from.point, 0),
+            down(PointerButton::Primary),
+            move_to(to.point, STROKE_MS),
+            up(PointerButton::Primary),
+        ],
+    )]);
+    act(driver, from, &params.options, sequence, None)
+}
+
+/// `element.swipe` (`fling` false) and `element.fling`.
+pub(crate) fn swipe(driver: &mut Driver, params: SwipeParams, fling: bool) -> Result<ActOutcome> {
+    let aim = aim(driver, &params.target, &params.options)?;
+    let (dx, dy) = match params.direction {
+        Direction::Up => (0.0, -1.0),
+        Direction::Down => (0.0, 1.0),
+        Direction::Left => (-1.0, 0.0),
+        _ => (1.0, 0.0),
+    };
+    let extent = aim.rect.map_or(
+        100.0,
+        |rect| if dx == 0.0 { rect.height } else { rect.width },
+    );
+    let distance = params.distance.unwrap_or(extent * 0.8);
+    let velocity = params.velocity.unwrap_or(FLING_VELOCITY);
+    if !(distance.is_finite() && distance > 0.0 && velocity.is_finite() && velocity > 0.0) {
+        return Err(Error::invalid_argument(format!(
+            "a stroke of {distance} px at {velocity} px/s goes nowhere"
+        )));
+    }
+    let end = LogicalPoint::new(aim.point.x + dx * distance, aim.point.y + dy * distance);
+    let stroke_ms = ((distance / velocity) * 1_000.0).clamp(1.0, 10_000.0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped to 1..=10000 just above"
+    )]
+    let stroke_ms = stroke_ms as u64;
+    let mut actions = vec![
+        move_to(aim.point, 0),
+        down(PointerButton::Primary),
+        move_to(end, stroke_ms),
+    ];
+    if !fling {
+        actions.push(pause(SWIPE_SETTLE_MS));
+    }
+    actions.push(up(PointerButton::Primary));
+    let sequence = ActionSequence::new(vec![pointer(PointerDevice::Touch, POINTER, actions)]);
+    act(driver, aim, &params.options, sequence, None)
+}
+
+/// `element.pinch`.
+pub(crate) fn pinch(driver: &mut Driver, params: PinchParams) -> Result<ActOutcome> {
+    if !(params.scale.is_finite() && params.scale > 0.0) {
+        return Err(Error::invalid_argument(format!(
+            "a pinch to scale {} is not one",
+            params.scale
+        )));
+    }
+    let aim = aim(driver, &params.target, &params.options)?;
+    let radius = aim
+        .rect
+        .map_or(50.0, |rect| rect.width.min(rect.height) / 4.0)
+        .max(4.0);
+    let contact = |id: &str, side: f64| {
+        let at = |r: f64| LogicalPoint::new(aim.point.x + side * r, aim.point.y);
+        pointer(
+            PointerDevice::Touch,
+            id,
+            vec![
+                move_to(at(radius), 0),
+                down(PointerButton::Primary),
+                move_to(at(radius * params.scale), STROKE_MS),
+                up(PointerButton::Primary),
+            ],
+        )
+    };
+    let sequence = ActionSequence::new(vec![
+        contact("driver.pinch.a", -1.0),
+        contact("driver.pinch.b", 1.0),
+    ]);
+    act(driver, aim, &params.options, sequence, None)
+}
+
+/// `element.scroll_into_view`: the semantics action that scrolls each scrollable ancestor; the
+/// element need not be actionable, since it may be out of view.
+pub(crate) fn scroll_into_view(
+    driver: &mut Driver,
+    params: ScrollIntoViewParams,
+) -> Result<ActOutcome> {
+    let timeout = timeout_of(driver, &params.options);
+    let element = resolve(driver, &params.target, timeout)?;
+    let mut outcome = driver.agent::<method::SemanticsAct>(
+        ActParams::new(element, ActionName::ScrollIntoView).snapshot(params.options.snapshot),
+        Duration::ZERO,
+    )?;
+    outcome.element = Some(element);
+    Ok(outcome)
+}
+
+/// `element.type_text`: tap the field to focus it, then commit the text.
+pub(crate) fn type_text(driver: &mut Driver, params: TypeTextParams) -> Result<ActOutcome> {
+    let aim = aim(driver, &params.target, &params.options)?;
+    focus(driver, aim, &params.options)?;
+    let text = ActionSequence::new(vec![InputSource::Text { text: params.text }]);
+    act(driver, aim, &params.options, text, None)
+}
+
+/// Tap `aim` to focus it, reading nothing back.
+fn focus(driver: &mut Driver, aim: Aim, options: &GestureOptions) -> Result<ActOutcome> {
+    let mut quiet = *options;
+    quiet.snapshot = Snapshot::None;
+    let sequence = ActionSequence::new(vec![pointer(
+        PointerDevice::Mouse,
+        POINTER,
+        vec![
+            move_to(aim.point, 0),
+            down(PointerButton::Primary),
+            up(PointerButton::Primary),
+        ],
+    )]);
+    act(driver, aim, &quiet, sequence, Some(ActionName::Focus))
+}
+
+/// `element.press_keys`: focus the target when there is one, then each chord in turn.
+pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result<ActOutcome> {
+    let aim = if let Some(target) = &params.target {
+        let aim = aim(driver, target, &params.options)?;
+        focus(driver, aim, &params.options)?;
+        aim
+    } else {
+        let window = match params.window {
+            Some(window) => window,
+            None => main_window(driver)?,
+        };
+        // Keys go to whatever holds focus in the window: no point is aimed at.
+        Aim {
+            window,
+            element: None,
+            point: LogicalPoint::new(0.0, 0.0),
+            rect: None,
+        }
+    };
+    let mut actions = Vec::new();
+    for chord in &params.keys {
+        let keys: Vec<&str> = chord.split('+').filter(|key| !key.is_empty()).collect();
+        if keys.is_empty() {
+            return Err(Error::invalid_argument(format!(
+                "the chord {chord:?} names no key"
+            )));
+        }
+        actions.extend(keys.iter().map(|key| KeyAction::Down {
+            key: (*key).to_owned(),
+        }));
+        actions.extend(keys.iter().rev().map(|key| KeyAction::Up {
+            key: (*key).to_owned(),
+        }));
+    }
+    let sequence = ActionSequence::new(vec![InputSource::Keys {
+        id: "driver.keys".to_owned(),
+        actions,
+    }]);
+    act(driver, aim, &params.options, sequence, None)
+}
+
+/// `input.perform`: an action sequence by the path the policy chooses; an action sequence has no
+/// semantic form.
+pub(crate) fn perform(driver: &mut Driver, params: InputParams) -> Result<ActOutcome> {
+    match choose_path(driver, params.via, false)? {
+        InputPath::Os => perform_os(driver, params.window, params.actions),
+        _ => inject(driver, params.window, params.actions, params.snapshot),
+    }
+}

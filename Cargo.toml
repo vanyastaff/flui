@@ -40,6 +40,7 @@ members = [
     # H: hosts
     "crates/flui-native", # The core host: native and headless hosts
     "crates/flui-app",    # Per-window UiRuntimes and the run loop
+    "crates/flui-driver", # Drives a running app: locate, act, wait, report (ADR-0238)
     "crates/flui-cli",    # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
@@ -305,7 +306,6 @@ flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
 
 # The package-author surface (ADR-0088 §4); Evolving, its own `0.N` version.
 flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
-
 # The capability traits with no OS backend (ADR-0082).
 flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
@@ -757,7 +757,7 @@ categories = ["gui", "rendering::engine"]
 [package.metadata.flui]
 tier = "H"
 tier-kind = "stable"
-order = 4
+order = 5
 # The facade names official packages until they build on the SDK.
 edge-exceptions = [
     { to = "flui-cupertino", exit = "ADR-0088", reason = "the optional `cupertino` catalog re-export" },

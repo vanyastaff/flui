@@ -624,6 +624,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The check is the counter scenario passing on a Simulator, then on a device.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
+### The CLI speaks to the driver agent through a client of its own
+
+> **Environments:** all · **Who it hurts:** Contributors, who keep two clients of one conversation in step · **Parity:** none (a tool's internals)
+
+- `flui mcp` and `flui record` reach an app's agent through `crates/flui-cli/src/agent/client.rs`, beside `flui-driver`'s socket connection, which speaks the same conversation (ADR-0238 §2). A change to the envelope, the hello or the timeout rule is made twice until the CLI is a front end of `flui-driver`.
+- The flui-driver spec's CLI and MCP task moves `flui drive`, `flui mcp` and `flui record` onto `flui-driver` and deletes the CLI's client; the check is `rg agent::client crates/flui-cli` finding nothing.
+
 ### An interactive widget costs eighteen elements
 
 > **Environments:** all · **Who it hurts:** Every screen with many controls; every catalog built on the wrappers · **Parity:** [Quality bar](platform-parity.md#quality-bar)
