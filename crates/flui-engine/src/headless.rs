@@ -220,10 +220,11 @@ impl HeadlessRenderer {
         // A capture is synchronous, so it returns once its work has retired,
         // refused or not. One that reaches its readback has waited for that
         // work already; one refused partway (a frame past the prepared
-        // budget) leaves what it submitted before the refusal in flight, and
-        // on a hardware queue the next capture would find that room still
-        // held and answer `GpuBackpressure` for room that is only late. The
-        // capture's own failure is the one it reports.
+        // budget) closes its frame with permits wgpu releases only on a poll
+        // (`on_submitted_work_done`), and on a hardware queue the next capture
+        // would find that room still held and answer `GpuBackpressure` for
+        // room that is only late. The capture's own failure is the one it
+        // reports.
         let drained = drain(context);
         let pixels = captured?;
         drained?;
@@ -1161,8 +1162,8 @@ mod twin_readback_tests {
                 )),
             );
         }
-        // Refused partway, after it submitted its target clear and the passes
-        // before the refusal.
+        // Refused partway, at the prepared budget: its encoder is discarded
+        // unsubmitted, and the frame's permits wait for the next poll.
         let outcome = renderer.render_layer_tree(&tree, (side, side));
         assert!(
             matches!(

@@ -1097,8 +1097,6 @@ impl GpuContext {
                     crate::layer_walk::record_scene(scene, None, reads, &mut backend)?
                 };
                 painter.settle_recording_cache();
-                #[cfg(test)]
-                assert!(!panics, "injected panic in the middle of a slot's frame");
                 let mut encoder =
                     domain
                         .device()
@@ -1111,6 +1109,11 @@ impl GpuContext {
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 crate::headless::record_background_clear(&mut encoder, &view);
                 painter.render_to_texture(&texture, &mut encoder)?;
+                #[cfg(test)]
+                assert!(
+                    !panics,
+                    "injected panic between a slot's encoding and its submission"
+                );
                 painter.submit_encoder(encoder).map(|_submitted| counters)
             })();
             // Once a frame began, an error closes it as a completed frame
@@ -2931,7 +2934,7 @@ mod tests {
         };
         assert_eq!(
             payload.downcast_ref::<&str>().copied(),
-            Some("injected panic in the middle of a slot's frame"),
+            Some("injected panic between a slot's encoding and its submission"),
             "the record holds the frame's panic, not the cleanup's"
         );
         flui_foundation::panic::discard_payload(payload);
