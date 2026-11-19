@@ -356,10 +356,10 @@ pub(crate) struct JavaView {
     scale: Mutex<DevicePixelRatio>,
     /// The Activity's pointer capture, which every window's commands and
     /// every system answer go through on the Java main thread. A lock, though
-    /// that one thread runs every step: the bridge is shared with the owner
-    /// thread, this crate has no cell bound to the Java main thread, and a
-    /// call that never reached the main thread is settled where its post
-    /// failed. No JNI call runs under it.
+    /// that one thread alone touches it: the bridge is an `Arc` the owner
+    /// thread shares, so its fields are `Sync`, and this crate has no cell
+    /// bound to the Java main thread. Never contended, and no JNI call runs
+    /// under it.
     capture: Mutex<CaptureOwner<ActivityWindowId>>,
 }
 
@@ -596,8 +596,7 @@ impl JavaView {
             .is_ok()
         });
         if !made {
-            let step = self.capture.lock().call_failed(call);
-            debug_assert!(step.call.is_none(), "BUG: a failed call makes no other");
+            self.capture.lock().call_failed(call);
         }
     }
 

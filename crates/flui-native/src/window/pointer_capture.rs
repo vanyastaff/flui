@@ -169,15 +169,11 @@ impl<W: Copy + Eq> CaptureOwner<W> {
     }
 
     /// `call` never reached the system (the view is gone, or the call
-    /// threw): it changed nothing, and is not made again until the next
-    /// command or answer.
-    pub(crate) fn call_failed(&mut self, call: CaptureCall<W>) -> CaptureStep<W> {
+    /// threw): it changed nothing, publishes nothing, and is not made again
+    /// until the next command or answer.
+    pub(crate) fn call_failed(&mut self, call: CaptureCall<W>) {
         if self.unanswered == Some(call) {
             self.unanswered = None;
-        }
-        CaptureStep {
-            call: None,
-            changed: [None, None],
         }
     }
 
@@ -326,19 +322,24 @@ mod tests {
     }
 
     /// A call that never reached the system changes nothing: a held capture
-    /// stays published as held, and nothing is made again by itself.
+    /// stays published as held, the next command is not blocked behind an
+    /// answer that never comes, and nothing is made again by itself.
     fn a_failed_call_changes_nothing() {
         let mut owner = CaptureOwner::default();
         owner.request(W1);
         owner.answered(true);
         let release = owner.release(W1).call.expect("a release is made");
-        let failed = owner.call_failed(release);
-        assert_eq!((failed.call, failed.changed), (None, [None, None]));
+        owner.call_failed(release);
         assert_eq!(owner.holder(), Some(W1), "the system still holds it");
         assert_eq!(
             owner.request(W1).call,
             None,
             "wanted and held agree again, nothing to call"
+        );
+        assert_eq!(
+            owner.release(W1).call,
+            Some(CaptureCall::Release),
+            "the failed release does not stand unanswered"
         );
     }
 
