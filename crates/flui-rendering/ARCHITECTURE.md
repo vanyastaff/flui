@@ -1372,9 +1372,13 @@ outside it, while the walk has already subtracted `o`; the side table therefore 
 
 **Staleness.** Hit-testing uses the last applied scene, so it is one frame stale. The transform is
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
-need the downstream engine to write into the upstream owner; the logic lives once in
-`resolve_follower_transform`
+need the downstream engine to write into the upstream owner; both read it off the same applied
+version through `SceneVersion::follower_transform`
 ([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
+Input regions place a follower's subtree by the same side table and skip a hidden one
+(`harness_input_regions_follow_a_follower_to_its_resolved_position`), and the runtime collects
+them after it reports the applied version (`stage_input_regions` after `scene_applied` in
+`crates/flui-runtime/src/ui_runtime/frame.rs`).
 
 ### A follower's build hears its leader's geometry after paint
 

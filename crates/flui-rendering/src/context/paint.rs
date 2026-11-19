@@ -195,7 +195,7 @@ pub enum FragmentScope {
     /// everything painted inside relative to whichever `Leader`
     /// currently publishes under the layer's link. Also pushed
     /// UNCONDITIONALLY; the layer's transform is resolved against its leader
-    /// at composite time (`flui_layer::resolve_follower_transform`), not
+    /// at composite time (`SceneVersion::follower_transform`), not
     /// here. The layer's `size` is this node's laid-out size (node-local),
     /// published the same way [`Leader::size`](FragmentScope::Leader) is.
     Follower(FollowerLayer),

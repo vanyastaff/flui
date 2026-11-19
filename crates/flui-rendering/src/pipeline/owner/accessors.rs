@@ -921,7 +921,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else if self.last_hidden_follower_ids.contains(&id) {
             // Correlated as a follower this frame but resolved to hidden
             // (unlinked and not shown, or its leader clipped out) — mirrors the
-            // render path's `resolve_follower_transform -> None -> don't
+            // render path's `SceneVersion::follower_transform -> None -> don't
             // descend` (flui-engine's `layer_walk`).
             // No HitTestEntry, no descent.
             return false;

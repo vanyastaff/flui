@@ -2,7 +2,7 @@
 //!
 //! A node of the tree is a boundary's [`SceneNode`](super::SceneNode), or an effect or a chunk of
 //! its content; a slot entry is not a node of its own, the child boundary it names stands there.
-//! Each is named by the boundary's slot, generation and the scene's lineage, and an entry by its
+//! Each is named by the boundary's `SceneNodeId` (its lineage, slot and generation), and an entry by its
 //! position in the boundary's content as well (`l4.2:3@7`, see [`SceneLayer`]). A boundary keeps
 //! its node across frames, so an id read before a repaint elsewhere still names it after; one
 //! kept from a retired node, from another lineage, or from an entry its content no longer holds
