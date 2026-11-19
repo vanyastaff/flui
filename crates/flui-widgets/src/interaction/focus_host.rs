@@ -51,6 +51,10 @@ struct Shared {
     /// The focus-edge listener and the key handler open their writes from
     /// it (ADR-0086).
     writer: WriterSource,
+    /// What the node's listener schedules, so the subtree that reads the
+    /// node in `build` follows it. Held here rather than captured, so the
+    /// listener captures this allocation alone.
+    rebuild: RebuildHandle,
     /// The node the listener reads, which a live replacement moves before
     /// the focus tree announces it.
     observed_node: RefCell<Weak<FocusNode>>,
@@ -282,8 +286,6 @@ pub(crate) struct FocusHost {
     action_chain: Option<FocusRecord>,
     /// Generation-checked ownership of that record on the current node.
     context_registration: Option<FocusNodeRegistration>,
-    /// Lifecycle-acquired rebuild capability used by the node subscription.
-    rebuild_handle: RebuildHandle,
     /// Listener installed on the current node. It drives both inherited
     /// dependents and the optional focus-edge callbacks.
     focus_subscription: Option<Subscription>,
@@ -306,6 +308,7 @@ impl FocusHost {
         let node = config.make_node();
         let shared = Rc::new(Shared {
             writer: ctx.writer_source(),
+            rebuild: ctx.rebuild_handle(),
             observed_node: RefCell::new(Rc::downgrade(&node)),
             was_focused: Cell::new(false),
             node_revision: Cell::new(0),
@@ -329,7 +332,6 @@ impl FocusHost {
             rect_provider_registration: None,
             action_chain: None,
             context_registration: None,
-            rebuild_handle: ctx.rebuild_handle(),
             focus_subscription: None,
             autofocus: config.autofocus,
             did_autofocus: false,
@@ -344,9 +346,7 @@ impl FocusHost {
     /// The rebuild-on-focus-change listener: descendants that read the node's
     /// state during build stay current, and the edge callbacks fire.
     fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
-        let rebuild = self.rebuild_handle.clone();
         let shared = Rc::clone(&self.shared);
-        let writer = shared.writer.clone();
         node.subscribe(move || {
             let next_revision = shared
                 .node_revision
@@ -354,7 +354,7 @@ impl FocusHost {
                 .checked_add(1)
                 .expect("BUG: Focus inherited revision exhausted");
             shared.node_revision.set(next_revision);
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            shared.rebuild.schedule(flui_view::RebuildReason::StateChange);
 
             // The host holds the node it observes; a notification that
             // arrives after the host let it go has nothing to report.
@@ -375,7 +375,7 @@ impl FocusHost {
                 // same re-entrancy reason.
                 let handler = shared.on_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    failure.contain(|| writer.write(|ctx| handler(ctx, now_focused)));
+                    failure.contain(|| shared.writer.write(|ctx| handler(ctx, now_focused)));
                 }
             }
             // Recorded before user code runs, so a notification it causes
@@ -384,7 +384,7 @@ impl FocusHost {
             if was_shown != now_shown {
                 let handler = shared.on_visible_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    failure.contain(|| writer.write(|ctx| handler(ctx, now_shown)));
+                    failure.contain(|| shared.writer.write(|ctx| handler(ctx, now_shown)));
                 }
             }
             // Shown focus is never left where the user cannot see it
