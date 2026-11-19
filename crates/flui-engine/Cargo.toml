@@ -32,12 +32,6 @@ dx12 = ["wgpu/dx12", "wgpu/wgsl"]
 webgpu = ["wgpu/webgpu", "wgpu/wgsl"]
 gles = ["wgpu/gles", "wgpu/wgsl"]
 
-# GPU profiling via wgpu-profiler 0.28. OFF by default and excluded from wasm32
-# — not because the crate cannot build there any more (0.28 type-checks clean
-# for wasm32; see the `compile_error!` in src/lib.rs for the measurement) but
-# because nothing exercises the combination. Requires TIMESTAMP_QUERY adapter
-# support at runtime; the engine gracefully no-ops when the adapter lacks it.
-gpu-profiler = ["dep:wgpu-profiler"]
 
 # testing: the GPU readback/oracle suites (`cargo nextest run -p flui-engine
 # --features testing`, the GPU readback steps of CI's `test` job) and the bench scaffolding they share
@@ -94,10 +88,6 @@ crossbeam-channel = { workspace = true }
 # derivation and `!Sync` posture) — same convention as flui-app/flui-view/
 # flui-rendering etc.
 static_assertions = { workspace = true }
-
-# GPU profiling (optional, feature-gated, excluded from wasm32 via feature design)
-wgpu-profiler = { workspace = true, optional = true }
-
 
 # === Per-platform default GPU backends ===
 # wgpu compiles only the backends named in its Cargo features. These

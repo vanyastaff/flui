@@ -18,7 +18,7 @@ use parking_lot::{Mutex, MutexGuard};
 
 use flui_platform::DisplayColor;
 
-use super::command::{RasterVerdict, SlotSettlement, SlotVisibility};
+use super::command::{GpuFrameTime, RasterVerdict, SlotSettlement, SlotVisibility};
 use super::surface::SlotSurface;
 use crate::{FrameLatency, error::EngineError};
 
@@ -30,6 +30,10 @@ pub(crate) const INLINE_DEPTH: usize = 1;
 /// owner builds the next (ADR-0305 §5).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const THREADED_DEPTH: usize = 2;
+
+/// How many GPU frame times a slot holds undrained: past it the oldest goes,
+/// so an owner that never reads them holds no more (ADR-0388).
+pub(crate) const UNDRAINED_GPU_TIMES: usize = 8;
 
 /// Where a slot is in its life, as its record reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +130,9 @@ pub(crate) struct InboxState {
     pub(crate) in_flight: u32,
     /// Settlements not drained yet, oldest first.
     pub(crate) settlements: VecDeque<SlotSettlement>,
+    /// GPU frame times not drained yet, oldest first, at most
+    /// [`UNDRAINED_GPU_TIMES`].
+    pub(crate) gpu_times: VecDeque<GpuFrameTime>,
     /// Settlements written over the slot's life, and how many of them a wake
     /// that returned has announced: those not announced yet are the newest
     /// of `settlements`.
@@ -166,6 +173,7 @@ impl SlotInbox {
                 generation,
                 in_flight: 0,
                 settlements: VecDeque::with_capacity(depth),
+                gpu_times: VecDeque::with_capacity(UNDRAINED_GPU_TIMES),
                 written: 0,
                 announced: 0,
                 phase: SlotPhase::Attaching,
@@ -234,6 +242,15 @@ impl InboxState {
             verdict,
             panicked: std::mem::take(&mut self.panicked),
         });
+    }
+
+    /// Hold `time` for the owner's drain, dropping the oldest held time once
+    /// [`UNDRAINED_GPU_TIMES`] are.
+    pub(crate) fn hold_gpu_time(&mut self, time: GpuFrameTime) {
+        if self.gpu_times.len() >= UNDRAINED_GPU_TIMES {
+            let _oldest = self.gpu_times.pop_front();
+        }
+        self.gpu_times.push_back(time);
     }
 
     /// Mark every settlement written so far as announced: the wake that

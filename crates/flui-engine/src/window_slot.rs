@@ -324,23 +324,23 @@ impl WindowSlot {
 
     /// Render `scene`, the frame `frame` stamps, with `painter` (retargeted
     /// to [`Self::target_format`]) and present it, repainting at least
-    /// `damage`.
+    /// `damage`; `timer` times the frame on the GPU (ADR-0388).
     ///
     /// # Errors
     /// The frame's acquire, render or submission error.
     pub(crate) fn render(
         &mut self,
         gpu: &Gpu<'_>,
-        painter: &mut WgpuPainter,
-        offscreen: &mut OffscreenRenderer,
+        (painter, offscreen): (&mut WgpuPainter, &mut OffscreenRenderer),
         scene: &Scene,
         damage: DamageRegion,
         frame: FrameStamp,
+        timer: Option<&mut crate::gpu_timer::FrameGpuTimer>,
     ) -> EngineResult<PresentDisposition> {
         self.frame.apply_damage(damage);
         self.frame
             .select_font_source(painter, FontSource::Ordinary, false);
-        self.present(gpu, painter, offscreen, scene, Some(frame))
+        self.present(gpu, painter, offscreen, scene, Some(frame), timer)
     }
 
     /// Render `scene`, lent outside the slot's frames, in full with the fonts
@@ -361,7 +361,7 @@ impl WindowSlot {
         self.frame
             .select_font_source(painter, FontSource::Plugin, reset_fonts);
         self.frame.begin_unmanaged();
-        let presented = self.present(gpu, painter, offscreen, scene, None);
+        let presented = self.present(gpu, painter, offscreen, scene, None, None);
         self.frame.end_unmanaged();
         presented
     }
@@ -376,6 +376,7 @@ impl WindowSlot {
         offscreen: &mut OffscreenRenderer,
         scene: &Scene,
         frame: Option<FrameStamp>,
+        timer: Option<&mut crate::gpu_timer::FrameGpuTimer>,
     ) -> EngineResult<PresentDisposition> {
         let Some((working_format, size)) = self.target_format() else {
             return Ok(PresentDisposition::NotShown);
@@ -405,23 +406,23 @@ impl WindowSlot {
                 configured.color.output()
             });
         let domain = Arc::clone(painter.domain());
-        #[cfg(feature = "gpu-profiler")]
-        let mut no_profiler = None;
         let mut steps = SwapchainFrame {
             painter,
             offscreen,
             output: output_encoding,
             scene,
-            #[cfg(feature = "gpu-profiler")]
-            gpu_profiler: &mut no_profiler,
         };
         self.frame.run(
             plan,
             &domain,
-            size,
-            working_format,
-            (&view, &output.texture),
+            crate::frame_protocol::FrameTarget {
+                view: &view,
+                texture: &output.texture,
+                size,
+                format: working_format,
+            },
             &mut steps,
+            timer.zip(frame.map(|frame| frame.epoch)),
         )?;
         let SwapchainFrame {
             painter, offscreen, ..
@@ -447,7 +448,7 @@ impl WindowSlot {
         match reconfigure_after_suboptimal_present(&mut Acquire { slot: self, gpu }) {
             // The configure owes a repaint nothing else asks for: present the
             // same scene again, at most once (the episode is answered).
-            Ok(true) => return self.present(gpu, painter, offscreen, scene, frame),
+            Ok(true) => return self.present(gpu, painter, offscreen, scene, frame, None),
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");
