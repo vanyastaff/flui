@@ -101,7 +101,8 @@ pub struct DeviceRetries {
 #[derive(Default)]
 pub(crate) struct DeviceRecord {
     pub(crate) health: DeviceHealth,
-    /// When the next rebuild may run, for the owner's wake.
+    /// When the executor must next turn for the device, for the owner's
+    /// wake: the next rebuild, or the deadline of the request under way.
     pub(crate) next_attempt_at: Option<Instant>,
     /// Why the last rebuild failed, until the owner takes it.
     pub(crate) failure: Option<EngineError>,
@@ -655,8 +656,10 @@ impl RasterSender {
         self.shared.device().health
     }
 
-    /// When the executor may next rebuild the lost device: the owner runs a
-    /// turn then. `None` while the device renders or its rebuild is given up.
+    /// When the executor must next turn for the lost device: the owner runs
+    /// a turn then. That is the next rebuild, or the deadline of the request
+    /// under way, whose answer wakes the owner sooner. `None` while the
+    /// device renders or its rebuild is given up.
     #[must_use]
     pub fn device_retry_at(&self) -> Option<Instant> {
         self.shared.device().next_attempt_at

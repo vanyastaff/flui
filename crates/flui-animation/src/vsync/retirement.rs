@@ -107,6 +107,10 @@ impl VsyncRetirement {
     }
 
     /// Publish under the enclosing framework owner's first-failure custody.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "failures go into `recovery`; the only `expect` is the invariant that `recovery` is held until `self` is consumed"
+    )]
     pub fn publish_with(mut self, recovery: &mut RecoveryScope<'_>) {
         let prepared = self
             .recovery

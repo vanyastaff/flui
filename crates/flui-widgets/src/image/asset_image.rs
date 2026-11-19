@@ -4,14 +4,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::{AssetRegistry, ImageSource};
+use flui_assets::{ImageCache, ImageSource};
 use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 
 /// An [`ImageProvider`] that loads and decodes an asset file through a
-/// `flui-assets` [`AssetRegistry`], off the calling thread.
+/// `flui-assets` [`ImageCache`], off the calling thread.
 ///
 /// # The registry is an argument
 ///
@@ -27,14 +27,14 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 /// Prefer [`Image::asset`](crate::Image::asset) as the ergonomic constructor.
 #[derive(Debug, Clone)]
 pub struct AssetImage {
-    registry: Arc<AssetRegistry>,
+    registry: Arc<ImageCache>,
     path: Arc<str>,
 }
 
 impl AssetImage {
     /// Creates a provider that loads `path` through `registry` on a decoded
     /// cache miss during asynchronous resolution.
-    pub fn new(registry: Arc<AssetRegistry>, path: impl Into<String>) -> Self {
+    pub fn new(registry: Arc<ImageCache>, path: impl Into<String>) -> Self {
         Self {
             registry,
             path: Arc::from(path.into()),

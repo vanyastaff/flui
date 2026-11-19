@@ -5,7 +5,7 @@ use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::DisplayColor;
 
 use super::{
-    SlotId,
+    DeviceAnswered, DeviceTicket, SlotId,
     command::{SlotConfig, SlotTarget},
 };
 use crate::{
@@ -119,14 +119,30 @@ pub trait RasterBackend {
     fn reclaim(&mut self, level: MemoryPressureLevel);
 
     /// Whether the device is lost: every frame fails
-    /// [`EngineError::DeviceLost`] until a
-    /// [`rebuild_device`](Self::rebuild_device) succeeds.
+    /// [`EngineError::DeviceLost`] until a requested device is installed
+    /// ([`install_requested_device`](Self::install_requested_device)).
     fn device_lost(&self) -> bool;
 
-    /// Make a new device on the instance every surface was made on, keeping
-    /// every slot's target, and configure each slot on it again (ADR-0305
-    /// §8). The executor calls it only while [`device_lost`](Self::device_lost)
-    /// answers `true`, paced by the context's backoff.
+    /// Start asking for a new device on the instance every surface was made
+    /// on, off the executor's thread, under `ticket` (ADR-0305 §8). The
+    /// executor calls it only while [`device_lost`](Self::device_lost)
+    /// answers `true`, paced by the context's backoff, and only while it
+    /// waits for no other request: a request under an earlier ticket is
+    /// dropped. Once the answer can be installed, the backend calls
+    /// `answered`, from whichever thread answered.
+    ///
+    /// # Errors
+    /// No request could start (no adapter presents to the slots' surfaces,
+    /// the operating system refused the worker): the attempt failed.
+    fn request_device(
+        &mut self,
+        ticket: DeviceTicket,
+        answered: DeviceAnswered,
+    ) -> EngineResult<()>;
+
+    /// Install the device the request under `ticket` answered, keeping every
+    /// slot's target, and configure each slot on it again; `None` while the
+    /// request is still asking. An answer under another ticket is dropped.
     ///
     /// Answers the slots the new device cannot serve, each with why: a window
     /// whose surface was dropped or failed to configure, for which the owner
@@ -135,13 +151,18 @@ pub trait RasterBackend {
     /// the new device's size limit, which waits for a size that fits.
     ///
     /// # Errors
-    /// No device could be made; the device stays lost.
-    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>>;
+    /// The request answered no device, or no request under `ticket` is held:
+    /// the device stays lost.
+    fn install_requested_device(
+        &mut self,
+        ticket: DeviceTicket,
+    ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>>;
 
     /// Adopt `device`, which the owner's probe answered in an instance of
     /// its own, in place of a device whose rebuilds were given up, and
-    /// configure each slot on it as [`rebuild_device`](Self::rebuild_device)
-    /// does (ADR-0305 §8). Every window slot's surface was made on the
+    /// configure each slot on it as
+    /// [`install_requested_device`](Self::install_requested_device) does
+    /// (ADR-0305 §8). Every window slot's surface was made on the
     /// instance this replaces and is dropped: the owner sends each window
     /// another, made with the probe's factory, in a
     /// [`RasterCommand::Restore`](super::RasterCommand::Restore).
@@ -149,11 +170,11 @@ pub trait RasterBackend {
     /// Answers the slots the new device cannot serve otherwise, each with why.
     fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)>;
 
-    /// Whether [`rebuild_device`](Self::rebuild_device) can succeed where the
-    /// executor runs. One that cannot (the web, whose device request is a
-    /// future the owner spawns) is given up at the first due attempt instead
-    /// of walking the backoff.
-    fn rebuilds_inline(&self) -> bool;
+    /// Whether [`request_device`](Self::request_device) can be answered
+    /// where the executor runs. One that cannot (the web, whose device
+    /// request is a future the owner spawns) is given up at the first due
+    /// attempt instead of walking the backoff.
+    fn requests_devices(&self) -> bool;
 }
 
 /// A boxed backend is one, so a host that picks its backend at run time (a
@@ -222,15 +243,26 @@ impl<B: RasterBackend + ?Sized> RasterBackend for Box<B> {
         (**self).device_lost()
     }
 
-    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
-        (**self).rebuild_device()
+    fn request_device(
+        &mut self,
+        ticket: DeviceTicket,
+        answered: DeviceAnswered,
+    ) -> EngineResult<()> {
+        (**self).request_device(ticket, answered)
+    }
+
+    fn install_requested_device(
+        &mut self,
+        ticket: DeviceTicket,
+    ) -> Option<EngineResult<Vec<(SlotId, EngineError)>>> {
+        (**self).install_requested_device(ticket)
     }
 
     fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)> {
         (**self).adopt_device(device)
     }
 
-    fn rebuilds_inline(&self) -> bool {
-        (**self).rebuilds_inline()
+    fn requests_devices(&self) -> bool {
+        (**self).requests_devices()
     }
 }

@@ -409,8 +409,8 @@ impl ImageProviderError {
 /// unsupported format, …) happens before any bytes reach a decoder. Shared by
 /// `AssetImage` and `NetworkImage`.
 ///
-/// As of `flui-assets` 0.2, `ImageAsset::load`'s file-read branch wraps I/O
-/// errors — including "not found" — as `AssetError::LoadFailed`, not
+/// `flui-assets` reports a failed file read, "not found" included, as
+/// `AssetError::LoadFailed`, not
 /// `AssetError::NotFound`, so [`SourceNotFound`](ImageProviderError::SourceNotFound)
 /// is not reachable through a missing local file today; a missing file
 /// currently surfaces as [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed)

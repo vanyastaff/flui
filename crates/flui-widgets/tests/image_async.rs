@@ -316,7 +316,7 @@ fn reuse_decoded_source(fail_first: bool) {
         )));
             std::fs::create_dir(&directory.0).expect("test directory created");
             let path = directory.0.join("image.png");
-            let registry = Arc::new(flui_assets::AssetRegistry::default());
+            let registry = Arc::new(flui_assets::ImageCache::default());
             let provider = flui_widgets::AssetImage::new(registry, path.to_string_lossy());
             assert!(provider.resolve().is_err(), "a new source is cold");
             if fail_first {

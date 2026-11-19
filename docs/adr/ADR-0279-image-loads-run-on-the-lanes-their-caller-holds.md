@@ -51,13 +51,13 @@ every request for a source.
 Chosen option: 1, because the registry keeps ownership of a shared load, so who started it no
 longer decides how long it lives.
 
-1. **Lanes per load.** `AssetRegistry::load_image(path, lanes)` and
+1. **Lanes per load.** `ImageCache::load_image(path, lanes)` and
    `load_network_image(url, lanes)` take `lanes: Option<Arc<dyn flui_platform::executor::Executor>>`
    and return `ImageLoad`. The first request for a source spawns the load on its lanes' IO lane
    (`spawn_io`); the read finishes by asking for a decode slot, and the decode runs on the compute
    lane (`spawn_compute`) behind the slots of ADR-0250 §3. `BridgeRuntime`,
    `AssetRegistryBuilder::with_runtime_handle` and the `rt-multi-thread` dependency are gone.
-   `flui_view::background::Background::executor` gives a widget's lanes to the registry;
+   `flui_view::background::Background::executor` gives a widget's lanes to the image cache;
    `ImageProvider::resolve_async` receives the `Background` the `Image` widget holds.
 2. **The registry owns the load.** A spawned load is cancelled by a signal the pending entry holds:
    the last subscriber's drop removes the entry and the signal fires, and the load sees it before
